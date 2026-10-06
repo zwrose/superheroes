@@ -672,6 +672,58 @@ def test_e19g_a_ruling_dropped_from_item_13_refuses(tmp_path):
     assert "2026-10-05-abcdef12-1" not in got["detail"]
 
 
+# axis: emptying item 13 after an earlier run recorded its entries refuses like any other change — wo_a_1646_replaced-ruling
+@pytest.mark.parametrize("blank", ["", "  \n \n"], ids=["empty", "blank"])
+def test_e19g_item_13_emptied_after_an_earlier_run_refuses_and_touches_nothing(tmp_path, blank):
+    w = _world(tmp_path, raw="X is material.")
+    assert _shape(w.migrate())["action"] == "pending-default-branch"
+    head = w.head()
+    CM.write_project_config_item(w.repo, "materialConsequenceLine", blank, root=w.store)
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
+    assert "2026-10-05-abcdef12-1" in got["detail"]
+    assert w.head() == head
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == blank
+
+
+def test_e19g_item_13_emptied_after_the_entries_were_superseded_adopts(tmp_path):
+    w = _world(tmp_path, raw="")
+    old = _migrated_line("2026-10-05-abcdef12-1", "X is material.")
+    new = ("- **2026-10-05-feedbeef-1** · 2026-10-05 · standing · X is craft. · supersedes: "
+           "2026-10-05-abcdef12-1 · owner's words: \"X is craft\" · where: s, time not recorded\n")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n" + old + new)
+    got = _shape(w.migrate())
+    assert got["action"] == "migrated"
+    assert w.item13()["raw"] == _MARKER
+
+
+# axis: differing entries under one id refuse before any count — wo_a_1646_conflicting-ids
+def test_e19h_conflicting_migrated_entries_under_one_id_refuse(tmp_path):
+    w = _world(tmp_path, raw="X is material.\n\nY is craft.")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material.")
+                   + _migrated_line("2026-10-05-abcdef12-1", "Y is craft."))
+    w.land()
+    head = w.head()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+    assert "2026-10-05-abcdef12-1" in got["detail"]
+    assert w.head() == head
+    assert w.item13()["raw"] == "X is material.\n\nY is craft."
+
+
+def test_e19h_the_same_entry_in_both_copies_is_one_entry(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material."))
+    w.land()
+    got = _shape(w.migrate())
+    assert got["action"] == "migrated"
+    assert got["skipped"] == ["2026-10-05-abcdef12-1"]
+
+
 def test_e19g_a_superseded_migrated_entry_does_not_refuse(tmp_path):
     w = _world(tmp_path, raw="X is craft.")
     old = _migrated_line("2026-10-05-abcdef12-1", "X is material.")

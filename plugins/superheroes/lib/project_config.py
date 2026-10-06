@@ -823,8 +823,27 @@ def _entry_fields(line):
 
 
 def _canon_entries(committed_text):
+    """Every entry in the text; refuses when one id is held by differing entries, one a migration's.
+
+    Canon's contract resolves an id shared by differing entries for no reader, so the move neither
+    counts such an entry as recorded nor retires item 13 in favour of it. The same entry in two
+    copies of Canon (this branch and the default branch) is one entry.
+    """
     fields = (_entry_fields(ln) for ln in committed_text.splitlines() if ln.startswith("- **"))
-    return [entry for entry in fields if entry is not None]
+    entries = [entry for entry in fields if entry is not None]
+    by_id = {}
+    for entry in entries:
+        by_id.setdefault(entry["id"], []).append(entry)
+    conflicting = [
+        entry_id for entry_id, held in by_id.items()
+        if any(e["migrated"] for e in held) and any(e != held[0] for e in held)]
+    if conflicting:
+        raise _MigrationRefusal(
+            "canon-id-conflict",
+            "Canon holds differing entries under one id: %s. An id shared by differing entries "
+            "resolves for no reader; give them distinct ids in Canon (Canon's write procedure), "
+            "then run the move again." % ", ".join(conflicting))
+    return entries
 
 
 def _committed_match(rulings, committed_text):
@@ -863,6 +882,31 @@ def _refuse_replaced_migrated_rulings(rulings, committed_text):
             "Either set item 13 back to the recorded text, or record a ruling in Canon that "
             "supersedes them (Canon's write procedure), then run the move again."
             % ", ".join(stale))
+
+
+def _refuse_replaced_in_recorded_canon(cwd, root):
+    """The replaced-ruling guard for an item 13 holding no ruling, which writes nothing to Canon.
+
+    Emptying item 13 drops every ruling an earlier run recorded, so those entries stay active in
+    Canon while the move would retire the prose. A project with no earlier run has no migrated
+    entry in either copy of Canon, so it adopts at once.
+    """
+    import definition_doc
+    import store_core
+
+    try:
+        repo_root = store_core.repo_root(cwd)
+        info = definition_doc.resolve_canon(root=repo_root, cwd=cwd, store_root=root)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+    git_root = info["gitRoot"]
+    rel = os.path.relpath(os.path.realpath(info["path"]), os.path.realpath(git_root))
+    rel = rel.replace(os.sep, "/")
+    default_text = ""
+    if info["home"] == "repo" and info["defaultRef"]:
+        default_text = _canon_copy_at(git_root, info["defaultRef"], rel)
+    # axis: an emptied item 13 meets the same replaced-ruling refusal as a changed one — see bite-proof record wo_a_1646_replaced-ruling
+    _refuse_replaced_migrated_rulings([], _canon_head_copy(git_root, rel) + "\n" + default_text)
 
 
 def _ensure_gitattributes(path):
@@ -1099,6 +1143,8 @@ def _migrate_material_line(cwd, root, session, date, result):
                     "origin default branch holding them. Add an origin remote, land the entries, "
                     "and run the move again.")
             return
+    else:
+        _refuse_replaced_in_recorded_canon(cwd, root)
 
     marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
     # axis: the marker lands only if item 13 still equals the snapshot — see bite-proof record wo_a_1618_cas-compare

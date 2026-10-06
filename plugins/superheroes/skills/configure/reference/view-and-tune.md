@@ -116,7 +116,10 @@ action that owns it, leaving the rest of the calibration untouched:
     two calibration blocks); fix it through configure's fix path, then run the move again.
   - `material-line-changed-since-migration`: item 13 changed after an earlier run of the move
     recorded these entries; either set item 13 back to the recorded text or record a ruling in Canon
-    that supersedes them (Canon's write procedure), then run the move again.
+    that supersedes them (Canon's write procedure), then run the move again. An emptied item 13
+    meets the same refusal while those entries stand.
+  - `canon-id-conflict`: Canon holds differing entries under one id, which resolves for no reader;
+    give them distinct ids in Canon (Canon's write procedure), then run the move again.
 
   The other reasons are `profile-absent`, `profile-unparseable`, `behind`, `malformed-value`,
   `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-commit-failed`, and
