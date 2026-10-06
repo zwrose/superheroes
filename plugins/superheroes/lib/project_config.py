@@ -796,22 +796,73 @@ def _canon_head_copy(git_root, rel):
     return _canon_copy_at(git_root, "HEAD", rel)
 
 
+def _entry_fields(line):
+    """One Canon entry line's id, ruling field, superseded ids and migration origin; None if not an entry.
+
+    The ruling is the field after the scope, exactly: Canon's rule is that a ruling never holds
+    ` · `, so the fields split cleanly on it.
+    """
+    found = _ENTRY_ID_PATTERN.match(line)
+    if not found:
+        return None
+    parts = line.split(" · ")
+    if len(parts) < 4:
+        return None
+    superseded = []
+    for part in parts[4:]:
+        if part.startswith("owner's words:"):
+            break
+        if part.startswith("supersedes: "):
+            superseded.append(part[len("supersedes: "):].strip())
+    return {
+        "id": found.group(1),
+        "ruling": parts[3],
+        "supersedes": superseded,
+        "migrated": parts[-1].startswith("where: " + _MIGRATION_ORIGIN_PHRASE),
+    }
+
+
+def _canon_entries(committed_text):
+    fields = (_entry_fields(ln) for ln in committed_text.splitlines() if ln.startswith("- **"))
+    return [entry for entry in fields if entry is not None]
+
+
 def _committed_match(rulings, committed_text):
     """Split ``rulings`` into (ids of committed matching entries, rulings not yet committed)."""
-    entries = [ln for ln in committed_text.splitlines() if ln.startswith("- **")]
+    entries = [entry for entry in _canon_entries(committed_text) if entry["migrated"]]
     skipped = []
     pending = []
     for ruling in rulings:
-        needle = " · %s · " % ruling
-        hit = [ln for ln in entries if needle in ln and _MIGRATION_ORIGIN_PHRASE in ln]
+        hit = [entry for entry in entries if entry["ruling"] == ruling]
         if hit:
-            for ln in hit:
-                found = _ENTRY_ID_PATTERN.match(ln)
-                if found and found.group(1) not in skipped:
-                    skipped.append(found.group(1))
+            for entry in hit:
+                if entry["id"] not in skipped:
+                    skipped.append(entry["id"])
         else:
             pending.append(ruling)
     return skipped, pending
+
+
+def _refuse_replaced_migrated_rulings(rulings, committed_text):
+    """Refuse when a committed migrated entry holds a ruling item 13 no longer holds.
+
+    Configure never mints a supersession, since that is a ruling in Canon. An entry another
+    entry supersedes is already retired and does not count.
+    """
+    entries = _canon_entries(committed_text)
+    retired = {gone for entry in entries for gone in entry["supersedes"]}
+    stale = []
+    for entry in entries:
+        if (entry["migrated"] and entry["id"] not in retired
+                and entry["ruling"] not in rulings and entry["id"] not in stale):
+            stale.append(entry["id"])
+    if stale:
+        raise _MigrationRefusal(
+            "material-line-changed-since-migration",
+            "Item 13 changed after an earlier run of the move recorded these entries: %s. "
+            "Either set item 13 back to the recorded text, or record a ruling in Canon that "
+            "supersedes them (Canon's write procedure), then run the move again."
+            % ", ".join(stale))
 
 
 def _ensure_gitattributes(path):
@@ -907,7 +958,10 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
     head_text = _canon_head_copy(git_root, rel)
 
     # axis: only a committed entry counts as already recorded — see bite-proof record wo_a_1618_committed-only-dedupe
-    skipped, pending = _committed_match(rulings, head_text + "\n" + default_text)
+    committed_text = head_text + "\n" + default_text
+    # axis: an entry an earlier run recorded for a ruling item 13 no longer holds refuses the move — see bite-proof record wo_a_1646_replaced-ruling
+    _refuse_replaced_migrated_rulings(rulings, committed_text)
+    skipped, pending = _committed_match(rulings, committed_text)
     result["skipped"] = skipped
     # axis: nothing new to append means no commit at all — see bite-proof record wo_a_1618_never-commit-empty
     if not pending:
@@ -999,6 +1053,11 @@ def _migrate_material_line(cwd, root, session, date, result):
     if facts.get("behind"):
         raise _MigrationRefusal("behind")
 
+    # axis: an ambiguous profile refuses before the marker is believed or Canon is touched, since core_md.read picked this item 13 value out of it — see bite-proof record wo_a_1646_structural-before-canon
+    structural = core_md.profile_structural_refusal(cwd, root)
+    if structural is not None:
+        raise _MigrationRefusal("profile-structurally-ambiguous", structural)
+
     raw = _read_project_config_raw(_project_config_mapping(facts), MATERIAL_LINE_SLUG)
     if is_material_line_marker(raw):
         result["action"] = "already-adopted"
@@ -1022,10 +1081,6 @@ def _migrate_material_line(cwd, root, session, date, result):
             raise _MigrationRefusal("date-malformed")
 
     rulings, result["sanitized"] = _split_rulings(raw)
-    # axis: an ambiguous profile refuses before Canon is touched, since core_md.read picked this item 13 value out of it
-    structural = core_md.profile_structural_refusal(cwd, root)
-    if structural is not None:
-        raise _MigrationRefusal("profile-structurally-ambiguous", structural)
     if rulings:
         canon = _write_canon_rulings(cwd, root, rulings, date, session, result)
         # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch

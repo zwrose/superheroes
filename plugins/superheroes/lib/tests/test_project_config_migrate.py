@@ -599,6 +599,111 @@ def test_e19e_structurally_ambiguous_profile_refuses_before_touching_canon(tmp_p
     assert w.head() == head
 
 
+# axis: a marker beside unrecorded prose in a duplicate key refuses instead of reporting adopted — wo_a_1646_structural-before-canon
+def test_e19f_ambiguous_profile_with_the_marker_refuses_instead_of_already_adopted(tmp_path):
+    w = _world(tmp_path, raw=_UNSET)
+    CM.write_project_config_item(w.repo, "materialConsequenceLine", dict(_MARKER), root=w.store)
+    path = CM.core_path(w.repo, w.store)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    key = '"materialConsequenceLine"'
+    assert key in text
+    text = text.replace(key, '"materialConsequenceLine": "- unrecorded prose",\n  ' + key, 1)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    assert w.item13()["raw"] == _MARKER
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "profile-structurally-ambiguous")
+    assert got["entries"] == []
+    assert not os.path.exists(w.canon)
+
+
+# --- E19g: a ruling replaced after its entry was committed refuses ---
+
+def _migrated_line(entry_id, ruling, extra=""):
+    return ("- **%s** · 2026-10-05 · standing · %s%s · owner's words: none recorded · where: "
+            "migrated from configure item 13 on 2026-10-05 (original session unknown), "
+            "time not recorded\n" % (entry_id, ruling, extra))
+
+
+# axis: item 13 changing after an earlier run recorded its entries refuses and touches nothing — wo_a_1646_replaced-ruling
+def test_e19g_item_13_changed_between_steps_refuses_and_touches_nothing(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    first = _shape(w.migrate())
+    assert first["action"] == "pending-default-branch"
+    assert first["entries"] == ["2026-10-05-abcdef12-1"]
+    head = w.head()
+    canon_before = open(w.canon, "rb").read()
+    CM.write_project_config_item(w.repo, "materialConsequenceLine", "X is craft.", root=w.store)
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
+    assert "2026-10-05-abcdef12-1" in got["detail"]
+    assert got["entries"] == []
+    assert got["commit"] is None
+    assert w.head() == head
+    assert open(w.canon, "rb").read() == canon_before
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == "X is craft."
+
+
+def test_e19g_restoring_the_original_text_lets_the_rerun_finish(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    assert _shape(w.migrate())["action"] == "pending-default-branch"
+    CM.write_project_config_item(w.repo, "materialConsequenceLine", "X is craft.", root=w.store)
+    assert _shape(w.migrate())["reason"] == "material-line-changed-since-migration"
+    CM.write_project_config_item(w.repo, "materialConsequenceLine", "X is material.", root=w.store)
+    w.land()
+    got = _shape(w.migrate())
+    assert got["action"] == "migrated"
+    assert got["skipped"] == ["2026-10-05-abcdef12-1"]
+    assert got["entries"] == []
+    assert w.item13()["raw"] == _MARKER
+
+
+def test_e19g_a_ruling_dropped_from_item_13_refuses(tmp_path):
+    w = _world(tmp_path)
+    assert _shape(w.migrate())["action"] == "pending-default-branch"
+    CM.write_project_config_item(
+        w.repo, "materialConsequenceLine", "First ruling, kept whole.", root=w.store)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
+    assert got["detail"].count("2026-10-05-abcdef12-2") == 1
+    assert "2026-10-05-abcdef12-1" not in got["detail"]
+
+
+def test_e19g_a_superseded_migrated_entry_does_not_refuse(tmp_path):
+    w = _world(tmp_path, raw="X is craft.")
+    old = _migrated_line("2026-10-05-abcdef12-1", "X is material.")
+    new = ("- **2026-10-05-feedbeef-1** · 2026-10-05 · standing · X is craft. · supersedes: "
+           "2026-10-05-abcdef12-1 · owner's words: \"X is craft\" · where: s, time not recorded\n")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n" + old + new)
+    got = _shape(w.migrate())
+    assert got["action"] == "pending-default-branch"
+    assert got["entries"] == ["2026-10-05-abcdef12-2"]
+
+
+# axis: only an entry carrying the migration marker, and only an exact ruling field, counts as migrated — wo_a_1646_replaced-ruling
+def test_e19g_a_non_migrated_entry_with_identical_ruling_text_does_not_count(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    other = ("- **2026-10-04-0badcafe-1** · 2026-10-04 · standing · X is material. · owner's "
+             "words: \"X\" · where: s, time not recorded\n")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n" + other)
+    got = _shape(w.migrate())
+    assert got["action"] == "pending-default-branch"
+    assert got["skipped"] == []
+    assert got["entries"] == ["2026-10-05-abcdef12-1"]
+
+
+def test_e19g_a_migrated_entry_with_a_longer_ruling_is_not_a_substring_match(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material. And more."))
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
+    assert got["skipped"] == []
+
+
 # --- E20-E21: the marker write ---
 
 # axis: the marker never overwrites an item 13 that changed after the snapshot — wo_a_1618_cas-compare
