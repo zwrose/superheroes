@@ -272,3 +272,30 @@ def test_prose_script_carries_no_provenance():
     source = SCRIPT.read_text(encoding="utf-8")
     for pattern in PROVENANCE_PATTERNS:
         assert not re.search(pattern, source), "sheet_prose.py matches %s" % pattern
+
+
+# Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the four cross-field rules the schema description lists (or about a valid sheet).
+def test_cross_field_rules_agree_between_page_and_prose():
+    import importlib.util
+    from test_review_template import _run_check_sheet
+
+    spec = importlib.util.spec_from_file_location("sheet_prose_parity", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def mutated(mutate):
+        sheet = _valid_sheet()
+        mutate(sheet)
+        return sheet
+
+    fixtures = [
+        ("valid", _valid_sheet(), False),
+        ("duplicate card id", mutated(lambda s: s["cards"][1].update(id="card-0")), True),
+        ("duplicate option id", mutated(lambda s: s["cards"][0]["options"][1].update(id="yes")), True),
+        ("unsettled names a missing card", mutated(lambda s: s["remainder"].update(unsettled=["no-such-card"])), True),
+        ("recommendation names a missing option", mutated(lambda s: s["cards"][0]["recommendation"].update(optionId="maybe")), True),
+    ]
+    page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
+    for (name, sheet, refused), page_problems in zip(fixtures, page):
+        prose_problems = module.check_sheet(sheet)
+        assert bool(page_problems) == bool(prose_problems) == refused, "%s: page %s, prose %s" % (name, page_problems, prose_problems)

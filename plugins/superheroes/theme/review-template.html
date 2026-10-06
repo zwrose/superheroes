@@ -511,6 +511,8 @@
     const controllers = new Map();
     let store = null;
     let ready = false;
+    // True once the store is known to be unusable here (no store, a non-owner, no answer shape), as opposed to still loading.
+    let cannotSave = false;
     let restoring = false;
     let readStalled = false;
     let readAttempt = 0;
@@ -979,7 +981,9 @@
       const unsavedCards = items.filter(function (item) { return controllers.get(item.id).unsaved(); }).length;
       const failedCards = states.filter(function (state) { return state.save === "failed"; }).length;
       if (!ready) {
-        doneMessage.textContent = "Answers can't be saved in this view, so nothing here was saved.";
+        doneMessage.textContent = cannotSave
+          ? "Answers can't be saved in this view, so nothing here was saved."
+          : "Your saved answers haven't loaded yet, so nothing new was saved here. Answers saved earlier are kept; open this link again to carry on.";
       } else if (failedCards > 0) {
         doneMessage.textContent = failedCards + (failedCards === 1 ? " answer" : " answers")
           + " didn't save. Go back to the sheet and tap Try again on each.";
@@ -1032,6 +1036,8 @@
       }
       gate.replaceChildren(...parts);
       gate.hidden = false;
+      cannotSave = text === SAY.noStore || text === SAY.readOnly;
+      if (done) refreshSheet();
     }
 
     function applyDocument(doc) {

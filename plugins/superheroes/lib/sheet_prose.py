@@ -81,7 +81,12 @@ def _duplicates(ids):
 
 
 def _check_cross_fields(sheet):
-    """The rules the schema cannot express, over a sheet that already fits it."""
+    """The rules the schema cannot express, over a sheet that already fits it.
+
+    Their one home is the top-level "description" of theme/sheet.schema.json; the page's checkSheet
+    implements the same list. test_cross_field_rules_agree_between_page_and_prose (test_sheet_prose.py)
+    runs both readers over shared fixtures and is the guard against drift.
+    """
     problems = []
     card_ids = [card["id"] for card in sheet["cards"]]
     problems += ['Card id "%s" is used more than once.' % i for i in _duplicates(card_ids)]

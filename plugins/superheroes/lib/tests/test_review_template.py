@@ -1993,6 +1993,19 @@ def test_done_for_now_flushes_and_reports_unsaved():
     """, host={"db": "null"})
     assert unsaved == {"message": "Answers can't be saved in this view, so nothing here was saved.", "sets": 0, "hidden": True}
 
+    # While the saved answers are loading, or the read failed or stalled, the store is attached: say so, not "can't save".
+    cannot = "Answers can't be saved in this view, so nothing here was saved."
+    loading = "Your saved answers haven't loaded yet, so nothing new was saved here. Answers saved earlier are kept; open this link again to carry on."
+    scenario = "t.click(t.control(\"done\")); return t.done().message;"
+    for name, host, expected in [
+        ("loading", {"read": "pending"}, loading),
+        ("failed read", {"read": ["reject", "docs"]}, loading),
+        ("non-owner", {"user": "viewer"}, cannot),
+        ("no runtime", {"claude": "missing"}, cannot),
+    ]:
+        page = _run_page(_sample_files(_remainder_of(_named_cards("plan-day"), unsettled=["plan-day"])), host=host, scenario=scenario)
+        assert page["result"] == expected, "%s: %s" % (name, page["result"])
+
 
 # Bites on: Done for now telling the owner to wait after a write was rejected, or Back to the sheet not opening the first card whose save failed so its Try again is in view.
 def test_done_for_now_after_a_rejected_save_points_to_try_again():
