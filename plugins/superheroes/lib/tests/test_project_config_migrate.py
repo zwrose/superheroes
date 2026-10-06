@@ -579,7 +579,15 @@ def test_e19c_first_commit_whose_copy_is_unreadable_refuses(tmp_path, monkeypatc
     assert w.item13()["raw"] == _TWO_RULINGS
 
 
-# --- E19e: a filesystem failure leaves Canon as it was, so a retry starts clean ---
+# --- E19e: a failure after the move began writing leaves Canon's files as the failure left them ---
+
+_LEFT_AS_THEY_ARE = ("Canon's files are left as they are; check `git status` and `git log`, then "
+                     "run the move again.")
+
+
+def _docs_status(w):
+    return _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs")
+
 
 def _commit_attributes(w, text):
     attrs = os.path.join(os.path.dirname(w.canon), ".gitattributes")
@@ -591,7 +599,7 @@ def _commit_attributes(w, text):
     return attrs
 
 
-# axis: a failed write puts Canon and its attributes back and refuses canon-write-failed — wo_a_1646_canon-write-recovery
+# axis: the attributes line is ensured before canon.md is created, so an unwritable one leaves no Canon — wo_a_1646_canon-no-rollback
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file modes")
 def test_e19e_an_unwritable_gitattributes_leaves_no_new_canon_and_a_retry_migrates(tmp_path):
     w = _world(tmp_path)
@@ -602,20 +610,22 @@ def test_e19e_an_unwritable_gitattributes_leaves_no_new_canon_and_a_retry_migrat
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-write-failed")
     assert "PermissionError" in got["detail"]
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
     assert not os.path.exists(w.canon)
     assert open(attrs).read() == "*.png binary\n"
     assert w.head() == head
     assert w.core_bytes() == core_before
     assert w.item13()["raw"] == _TWO_RULINGS
-    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    assert _docs_status(w) == ""
     os.chmod(attrs, 0o644)
     again = _shape(w.migrate_landed())
     assert (again["action"], again["reason"]) == ("migrated", None)
     assert w.item13()["raw"] == _MARKER
 
 
-# axis: a failed write puts Canon and its attributes back and refuses canon-write-failed — wo_a_1646_canon-write-recovery
-def test_e19e_a_failure_during_the_append_restores_canon_bytes(tmp_path, monkeypatch):
+# axis: a failed append refuses canon-write-failed and leaves the bytes the failure produced; the next run refuses canon-dirty — wo_a_1646_canon-no-rollback
+def test_e19e_a_failure_during_the_append_leaves_the_bytes_and_the_next_run_refuses(
+        tmp_path, monkeypatch):
     w = _world(tmp_path)
     w.commit_canon(_SEED)
     before = open(w.canon, "rb").read()
@@ -634,30 +644,59 @@ def test_e19e_a_failure_during_the_append_restores_canon_bytes(tmp_path, monkeyp
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-write-failed")
     assert "No space left on device" in got["detail"]
-    assert open(w.canon, "rb").read() == before
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
+    assert open(w.canon, "rb").read() == before + b"- **half an entry"
     assert w.head() == head
-    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
     monkeypatch.delattr(PC, "open")
-    again = _shape(w.migrate_landed())
-    assert (again["action"], again["reason"]) == ("migrated", None)
+    again = _shape(w.migrate())
+    assert (again["action"], again["reason"]) == ("refused", "canon-dirty")
+    assert open(w.canon, "rb").read() == before + b"- **half an entry"
+    assert w.item13()["raw"] == _TWO_RULINGS
 
 
-# axis: a failed commit puts Canon and its attributes back and un-stages them — wo_a_1646_canon-write-recovery
-def test_e19e_a_rejected_commit_restores_the_files_and_unstages_them(tmp_path):
+# axis: a rejected commit refuses canon-commit-failed and leaves Canon as written; the next run refuses canon-dirty — wo_a_1646_canon-no-rollback
+def test_e19e_a_rejected_commit_leaves_the_files_and_the_next_run_refuses(tmp_path):
     w = _world(tmp_path)
+    head = w.head()
     hook = os.path.join(w.repo, ".git", "hooks", "pre-commit")
     open(hook, "w").write("#!/bin/sh\necho rejected by hook >&2\nexit 1\n")
     os.chmod(hook, 0o755)
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
-    assert not os.path.exists(w.canon)
-    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    assert "rejected by hook" in got["detail"]
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
+    assert w.head() == head
+    assert len(_entry_lines(open(w.canon).read())) == 2
+    written = open(w.canon, "rb").read()
     os.remove(hook)
-    again = _shape(w.migrate_landed())
-    assert again["action"] == "migrated"
+    again = _shape(w.migrate())
+    assert (again["action"], again["reason"]) == ("refused", "canon-dirty")
+    assert open(w.canon, "rb").read() == written
+    assert w.item13()["raw"] == _TWO_RULINGS
 
 
-# axis: a commit that timed out after landing is kept, not undone — wo_a_1646_commit-landed
+# axis: a failed git add refuses canon-commit-failed and leaves the files — wo_a_1646_canon-no-rollback
+def test_e19e_a_failed_git_add_refuses_and_leaves_the_files(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    head = w.head()
+    real = PC._git_run
+
+    def _add_fails(root, reason, *args, **k):
+        if args and args[0] == "add":
+            raise PC._MigrationRefusal(reason, "git could not be run (TimeoutExpired)")
+        return real(root, reason, *args, **k)
+
+    monkeypatch.setattr(PC, "_git_run", _add_fails)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
+    assert w.head() == head
+    assert len(_entry_lines(open(w.canon).read())) == 2
+    monkeypatch.undo()
+    assert _shape(w.migrate())["reason"] == "canon-dirty"
+
+
+# axis: a commit that timed out after landing is kept — wo_a_1646_commit-landed
 def test_e19e_a_commit_that_landed_before_it_timed_out_is_kept(tmp_path, monkeypatch):
     w = _world(tmp_path)
     head = w.head()
@@ -675,11 +714,11 @@ def test_e19e_a_commit_that_landed_before_it_timed_out_is_kept(tmp_path, monkeyp
     assert got["entries"] == ["2026-10-05-abcdef12-1", "2026-10-05-abcdef12-2"]
     assert got["commit"] == w.head() != head
     assert os.path.exists(w.canon)
-    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    assert _docs_status(w) == ""
 
 
-# axis: a commit that timed out without landing is undone — wo_a_1646_commit-landed
-def test_e19e_a_commit_that_timed_out_without_landing_is_undone(tmp_path, monkeypatch):
+# axis: a commit that timed out without landing refuses and leaves the working copy as it was — wo_a_1646_commit-landed
+def test_e19e_a_commit_that_timed_out_without_landing_leaves_the_working_copy(tmp_path, monkeypatch):
     w = _world(tmp_path)
     head = w.head()
     real = PC._git_run
@@ -692,9 +731,45 @@ def test_e19e_a_commit_that_timed_out_without_landing_is_undone(tmp_path, monkey
     monkeypatch.setattr(PC, "_git_run", _timeout)
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
     assert w.head() == head
-    assert not os.path.exists(w.canon)
-    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    assert len(_entry_lines(open(w.canon).read())) == 2
+    written = open(w.canon, "rb").read()
+    monkeypatch.undo()
+    assert _docs_status(w) != ""
+    again = _shape(w.migrate())
+    assert (again["action"], again["reason"]) == ("refused", "canon-dirty")
+    assert open(w.canon, "rb").read() == written
+
+
+# axis: a commit that landed only some of the lines refuses and never touches the working copy — wo_a_1646_commit-landed
+def test_e19e_a_partially_landed_commit_refuses_and_leaves_the_working_copy(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    head = w.head()
+    real = PC._git_run
+    seen = {}
+
+    def _partial(root, reason, *args, **k):
+        if args and args[0] == "commit":
+            full = open(w.canon, "rb").read()
+            seen["full"] = full
+            open(w.canon, "wb").write(full.rstrip(b"\n").rsplit(b"\n", 1)[0] + b"\n")
+            real(root, reason, *args, **k)
+            open(w.canon, "wb").write(full)
+            raise PC._MigrationRefusal(reason, "git could not be run (TimeoutExpired)")
+        return real(root, reason, *args, **k)
+
+    monkeypatch.setattr(PC, "_git_run", _partial)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
+    assert w.head() != head
+    assert len(_entry_lines(w.head_canon())) == 1
+    assert open(w.canon, "rb").read() == seen["full"]
+    assert len(_entry_lines(open(w.canon).read())) == 2
+    monkeypatch.undo()
+    assert _shape(w.migrate())["reason"] == "canon-dirty"
+    assert open(w.canon, "rb").read() == seen["full"]
 
 
 # axis: a commit whose landing git cannot establish keeps the files and says so — wo_a_1646_commit-landed
@@ -722,15 +797,39 @@ def test_e19e_a_commit_whose_landing_git_cannot_say_keeps_the_files(tmp_path, mo
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
     assert "could not say whether the commit landed" in got["detail"]
+    assert got["detail"].endswith(_LEFT_AS_THEY_ARE)
     assert w.head() != head
     assert os.path.exists(w.canon)
     assert w.item13()["raw"] == _TWO_RULINGS
     monkeypatch.undo()
-    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    assert _docs_status(w) == ""
     assert "First ruling, kept whole." in w.head_canon()
 
 
-# axis: an OSError anywhere in the move surfaces as the structured refusal — wo_a_1646_canon-write-recovery
+# axis: the readiness check reads the default-branch copy the recorded-set check read, never a second one — wo_a_1646_single-default-read
+def test_e19e_the_default_branch_canon_is_read_once(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    real = PC._canon_copy_at
+    default_reads = []
+
+    def _moving(git_root, ref, rel):
+        if ref == "HEAD":
+            return real(git_root, ref, rel)
+        default_reads.append(ref)
+        if len(default_reads) == 1:
+            return real(git_root, ref, rel)
+        # a tracking ref that moved since the first read, now holding both rulings
+        return (_migrated_line("2026-10-05-abcdef12-1", "First ruling, kept whole.")
+                + _migrated_line("2026-10-05-abcdef12-2", "Second ruling, spread over two lines."))
+
+    monkeypatch.setattr(PC, "_canon_copy_at", _moving)
+    got = _shape(w.migrate())
+    assert len(default_reads) == 1
+    assert got["action"] == "pending-default-branch"
+    assert w.item13()["raw"] == _TWO_RULINGS
+
+
+# axis: an OSError anywhere in the move surfaces as the structured refusal — wo_a_1646_canon-no-rollback
 def test_e19e_an_os_error_elsewhere_surfaces_as_a_structured_refusal(tmp_path, monkeypatch):
     w = _world(tmp_path)
 

@@ -922,7 +922,8 @@ def _refuse_recorded_in_canon_for_no_rulings(cwd, root, result):
     # axis: an emptied item 13 meets the same recorded-set refusal as a changed one — see bite-proof record wo_a_1646_replaced-ruling
     head_text = _canon_head_copy(git_root, rel)
     _refuse_unless_recorded_set([], head_text + "\n" + default_text)
-    return {"gitRoot": git_root, "rel": rel, "home": info["home"], "defaultRef": info["defaultRef"]}
+    return {"gitRoot": git_root, "rel": rel, "home": info["home"], "defaultRef": info["defaultRef"],
+            "defaultText": default_text}
 
 
 def _ensure_gitattributes(path):
@@ -943,40 +944,10 @@ def _ensure_gitattributes(path):
         fh.write(_GITATTRIBUTES_LINE + "\n")
 
 
-def _file_bytes(path):
-    """The file's exact bytes; None when it does not exist."""
-    try:
-        with open(path, "rb") as fh:
-            return fh.read()
-    except FileNotFoundError:
-        return None
-
-
-def _restore_canon_files(git_root, saved, paths):
-    """Put each file in ``saved`` back to its recorded bytes and un-stage ``paths``.
-
-    A file this run created (recorded as None) is removed. Returns what could not be undone, so the
-    refusal can name it.
-    """
-    problems = []
-    for path, before in saved.items():
-        try:
-            if _file_bytes(path) == before:
-                continue
-            if before is None:
-                os.remove(path)
-            else:
-                with open(path, "wb") as fh:
-                    fh.write(before)
-        except OSError as exc:
-            problems.append("%s: %s: %s" % (path, type(exc).__name__, exc))
-    try:
-        reset = _git_run(git_root, "canon-write-failed", "reset", "-q", "--", *paths)
-        if reset.returncode != 0:
-            problems.append("git reset: %s" % _first_line(reset.stderr, "exit %d" % reset.returncode))
-    except _MigrationRefusal as exc:
-        problems.append("git reset: %s" % exc.detail)
-    return problems
+def _left_as_they_are(detail):
+    """``detail`` with the standing instruction for a failure after Canon's files were touched."""
+    return ("%s; Canon's files are left as they are; check `git status` and `git log`, then run "
+            "the move again." % detail)
 
 
 def _head_sha(git_root):
@@ -1101,30 +1072,27 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
     # axis: nothing new to append means no commit at all — see bite-proof record wo_a_1618_never-commit-empty
     if recorded:
         return {"gitRoot": git_root, "rel": rel, "home": info["home"],
-                "defaultRef": info["defaultRef"]}
+                "defaultRef": info["defaultRef"], "defaultText": default_text}
 
     attributes_path = None
-    saved = {canon_path: _file_bytes(canon_path)}
     if attributes_rel is not None:
         attributes_path = os.path.join(os.path.realpath(git_root), *attributes_rel.split("/"))
-        saved[attributes_path] = _file_bytes(attributes_path)
 
     prefix = "%s-%s-" % (date, session)
     before_head = _head_sha(git_root)
-    # landed is set once a commit is in HEAD, or may be: the files are then never put back
-    landed = False
-    # axis: a failed write or commit puts Canon and its attributes back as they were, so a retry starts clean — see bite-proof record wo_a_1646_canon-write-recovery
+    # axis: once the move begins writing, no Canon file is rewritten, truncated or removed; a failure leaves them as the failure left them and the clean-baseline guard stops the next run — see bite-proof record wo_a_1646_canon-no-rollback
     try:
+        os.makedirs(os.path.dirname(canon_path), exist_ok=True)
+        # the attributes line goes in before canon.md exists, so an unwritable one fails with no Canon created
+        if attributes_path is not None:
+            _ensure_gitattributes(attributes_path)
         working_text = ""
         if os.path.isfile(canon_path):
             with open(canon_path, encoding="utf-8") as fh:
                 working_text = fh.read()
         else:
-            os.makedirs(os.path.dirname(canon_path), exist_ok=True)
             with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
-        if attributes_path is not None:
-            _ensure_gitattributes(attributes_path)
 
         used = re.compile(r"^- \*\*%s(\d+)\*\*" % re.escape(prefix), re.MULTILINE)
         highest = max([int(n) for n in used.findall(working_text + "\n" + default_text)] or [0])
@@ -1139,43 +1107,34 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
             if working_text and not working_text.endswith("\n"):
                 fh.write("\n")
             fh.write("\n".join(lines) + "\n")
+    except OSError as exc:
+        raise _MigrationRefusal(
+            "canon-write-failed", _left_as_they_are("%s: %s" % (type(exc).__name__, exc)))
 
+    try:
         added = _git_run(git_root, "canon-commit-failed", "add", "--", *paths)
-        if added.returncode != 0:
-            raise _MigrationRefusal("canon-commit-failed", added.stderr.strip())
-        commit_refusal = None
-        try:
-            committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
-                                 _MIGRATION_COMMIT_MESSAGE, "--", *paths)
-            if committed.returncode != 0:
-                commit_refusal = _MigrationRefusal(
-                    "canon-commit-failed", (committed.stderr or committed.stdout).strip())
-        except _MigrationRefusal as exc:
-            commit_refusal = exc
-        if commit_refusal is not None:
-            # axis: a commit that errored or timed out is checked against HEAD before any file is put back — see bite-proof record wo_a_1646_commit-landed
-            outcome = _commit_landed(git_root, rel, before_head, lines)
+    except _MigrationRefusal as exc:
+        raise _MigrationRefusal(
+            "canon-commit-failed", _left_as_they_are(exc.detail or exc.reason))
+    if added.returncode != 0:
+        raise _MigrationRefusal(
+            "canon-commit-failed",
+            _left_as_they_are(_first_line(added.stderr, "git add exit %d" % added.returncode)))
+    commit_failure = None
+    try:
+        committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
+                             _MIGRATION_COMMIT_MESSAGE, "--", *paths)
+        if committed.returncode != 0:
+            commit_failure = (committed.stderr or committed.stdout).strip()
+    except _MigrationRefusal as exc:
+        commit_failure = exc.detail or exc.reason
+    if commit_failure is not None:
+        # axis: a commit that errored or timed out continues only when HEAD shows it landed — see bite-proof record wo_a_1646_commit-landed
+        outcome = _commit_landed(git_root, rel, before_head, lines)
+        if outcome is not True:
             if outcome is None:
-                landed = True
-                raise _MigrationRefusal(
-                    "canon-commit-failed",
-                    "%s; git could not say whether the commit landed, so Canon's files were left "
-                    "as they are: check `git log` and `git status` before running the move again"
-                    % (commit_refusal.detail or commit_refusal.reason))
-            if not outcome:
-                raise commit_refusal
-        landed = True
-    except (OSError, _MigrationRefusal) as exc:
-        if landed:
-            raise
-        undo_problems = _restore_canon_files(git_root, saved, paths)
-        if isinstance(exc, _MigrationRefusal):
-            reason, detail = exc.reason, exc.detail
-        else:
-            reason, detail = "canon-write-failed", "%s: %s" % (type(exc).__name__, exc)
-        if undo_problems:
-            detail = "%s; could not undo: %s" % (detail, "; ".join(undo_problems))
-        raise _MigrationRefusal(reason, detail)
+                commit_failure = "%s; git could not say whether the commit landed" % commit_failure
+            raise _MigrationRefusal("canon-commit-failed", _left_as_they_are(commit_failure))
     result["entries"] = ids
 
     shown = _git_run(git_root, "canon-commit-failed", "show", "HEAD:%s" % rel)
@@ -1187,7 +1146,7 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
     head = _git_run(git_root, "canon-commit-failed", "rev-parse", "HEAD")
     result["commit"] = head.stdout.strip() or None
     return {"gitRoot": git_root, "rel": rel, "home": info["home"],
-            "defaultRef": info["defaultRef"]}
+            "defaultRef": info["defaultRef"], "defaultText": default_text}
 
 
 def _rulings_unreachable_from_default(rulings, canon):
@@ -1202,8 +1161,8 @@ def _rulings_unreachable_from_default(rulings, canon):
         return False
     if not canon["defaultRef"]:
         return bool(rulings)
-    default_text = _canon_copy_at(canon["gitRoot"], canon["defaultRef"], canon["rel"])
-    held = {entry["ruling"] for entry in _migrated_entries(default_text)}
+    # axis: the readiness check reads the default-branch copy the recorded-set check read, never a second one — see bite-proof record wo_a_1646_single-default-read
+    held = {entry["ruling"] for entry in _migrated_entries(canon["defaultText"])}
     return not set(rulings) <= held
 
 

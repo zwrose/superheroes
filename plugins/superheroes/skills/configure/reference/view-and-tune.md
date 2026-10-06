@@ -117,7 +117,8 @@ action that owns it, leaving the rest of the calibration untouched:
   - `canon-lock-contended`: another configure change was saving at the same moment, so run the move
     again.
   - `canon-write-failed`: a file could not be written — fix the permission or disk space, then run
-    the move again. The move puts Canon back as it was, so the retry starts clean.
+    the move again. The move leaves Canon's files as they are, and the next run refuses
+    `canon-dirty` until the working copy matches the last commit.
   - `canon-id-conflict`: Canon holds a migrated entry and another entry that share one id but
     carry different rulings (or one is not migrated), so the move leaves item 13 as it is. Report the detail to the owner; the duplicate is
     theirs to settle.
