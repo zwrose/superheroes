@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The thirteen configuration items: one registry, one read contract, one setter per home.
+"""The fourteen configuration items: one registry, one read contract, one setter per home.
 
 Stdlib only. Every item's value is read and written only through this module and the
 ``core_md`` writers it routes to."""
@@ -129,6 +129,14 @@ ITEMS = (
         "plugin_default": None,
     },
     {
+        "number": 14,
+        "slug": "whoItsFor",
+        "name": "Who it's for and what it's for",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "nonEmptyProse",
+        "plugin_default": None,
+    },
+    {
         "number": 11,
         "slug": "guardianStaleness",
         "name": "Guardian staleness",
@@ -167,6 +175,15 @@ def _positive_number(value):
 
 def _validate_prose(value):
     if not isinstance(value, str):
+        return REASON_MALFORMED_VALUE
+    return None
+
+
+def _validate_non_empty_prose(value):
+    # axis: item 14 refuses an empty or whitespace-only value — see bite-proof record wo_a_1618_who-its-for-non-empty
+    if not isinstance(value, str):
+        return REASON_MALFORMED_VALUE
+    if not value.strip():
         return REASON_MALFORMED_VALUE
     return None
 
@@ -272,6 +289,7 @@ def _validate_severity_ladder(value):
 
 _VALIDATORS = {
     "prose": _validate_prose,
+    "nonEmptyProse": _validate_non_empty_prose,
     "proseList": _validate_prose_list,
     "pathList": _validate_path_list,
     "boolean": _validate_boolean,
@@ -533,7 +551,7 @@ def read(cwd, root=None):
 
 
 def view(cwd, root=None):
-    """Return all thirteen items in registry order for display."""
+    """Return all fourteen items in registry order for display."""
     payload = read(cwd, root)
     items = []
     for item_def, item_read in zip(ITEMS, payload["items"]):

@@ -6,16 +6,16 @@
 
 # configure — view & tune path
 
-Reached from `configure` when a project is configured and healthy (FR-1). Renders the whole
+Reached from `configure` when a project is configured and healthy. Renders the whole
 calibration on one screen and offers a small menu of targeted changes. A view-only run on an
-up-to-date project changes nothing (FR-12).
+up-to-date project changes nothing.
 
 `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 Gate write-downs on this path are written down in the run output and are never written into a
 hero layer — their payloads carry machine-local absolute paths that must not reach a collaborator-visible in-repo file, and `write-layer` replaces a layer wholesale.
 
-## 1 — Render the combined view (FR-4) + drift notice (FR-7)
+## 1 — Render the combined view + drift notice
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -35,9 +35,12 @@ layer, the pinned patterns, and the **Model tiers** block — "here is everythin
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
 dismissible reminder on every run** (whether or not it was dismissed before); the owner can act on
 it or dismiss it again for that run. Rendering is read-only — it never confirms a provisional
-calibration (FR-18).
+calibration.
 
-## 2 — The tune menu (FR-5)
+The view also shows the **Spec reviewer seat** block, and lists configuration item 14 right after
+item 10.
+
+## 2 — The tune menu
 
 Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
 action that owns it, leaving the rest of the calibration untouched:
@@ -62,6 +65,27 @@ action that owns it, leaving the rest of the calibration untouched:
   `noop` means the item was saved — surface any other `action` (`refused`, `deferred`, `behind`)
   to the owner with its `reason`; the command exits 0 either way, so check `action`, not exit
   status.
+- **Set who it's for and what it's for (item 14)** → write only item 14, with the answer as a JSON
+  string on stdin. The command touches no other item.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '<the answer as a JSON string>' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd .
+  ```
+
+- **Set or clear the spec-reviewer seat** → write the engine that reviews specs. Empty stdin clears
+  it.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' 'codex' | python3 -B "$ROOT_DIR/lib/core_md.py" write-spec-reviewer --cwd .
+  ```
+
+  The seat names an engine only, never a model, and is separate from the review-panel seats. Unset,
+  the spec checks use a reviewer from an installed engine of a different model family than the
+  spec's author. They fall back to a fresh reviewer from the author's own family only when no such
+  engine is installed. Read the result: `written` or `noop` means the seat was saved. `refused` with
+  `spec-reviewer-unknown-engine` names a value that is not `claude`, `codex`, or `cursor`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
 - **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
   knob you want inside the `guardian-config` JSON fence, and submit the **complete** body (the
@@ -70,7 +94,7 @@ action that owns it, leaving the rest of the calibration untouched:
   fence silently drops every other guardian knob (thresholds, cadence, coverage, vitals,
   `reportCard`, …) and the next sweep still reads `configStatus: healthy`. The fence shape is in
   `skills/guardian/reference/calibration.md`.
-- **Set up a hero skipped at set-up** (FR-6) → list every optional hero not yet set up and not
+- **Set up a hero skipped at set-up** → list every optional hero not yet set up and not
   previously declined, and offer to run each one's set-up from here. Get the list from the lib —
   never guess which heroes apply:
 
@@ -483,7 +507,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
 <!-- /decision-point: id=configure-tune-gate-policy -->
 
-## 3 — Flip the storage mode (FR-10), always showing what will move
+## 3 — Flip the storage mode, always showing what will move
 
 <!-- decision-point: id=configure-tune-storage-flip mode=gate kind=owner-gate default="preview only — no execute without current-turn owner authorization" carrier=run-output -->
 
@@ -520,15 +544,15 @@ Follow-up: `/superheroes:configure`.
   being a definition document. A flip into the repo newly publishes all of it to collaborators —
   say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
   relocated.
-- **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath
+- **In-flight work:** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
   confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the
   execution spine, #478), so `configure_route.work_in_flight('.')` always reports no known in-flight
   work — rely on your own judgment about what's mid-flight before flipping. This is a strong
   warning, not a hard block.
-- **Switch to the mode already in effect (FR-11):** reported as already in that mode; no change.
-- **Destination unwritable (UFR-6):** an `execute` result of `blocked` means the destination could
+- **Switch to the mode already in effect:** reported as already in that mode; no change.
+- **Destination unwritable:** an `execute` result of `blocked` means the destination could
   not be written — report exactly what it needs; the project stays in its prior mode with nothing
   removed from the source.
 - **Interrupted flip:** finished or backed out automatically by the Step-1 `recover` on the next
-  run (UFR-1) — every file ends up in exactly one location.
+  run — every file ends up in exactly one location.

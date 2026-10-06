@@ -110,8 +110,8 @@ def _item_by_slug(payload, slug):
 
 
 def test_registry_has_thirteen_items_in_order():
-    assert len(PC.ITEMS) == 13
-    assert [item["number"] for item in PC.ITEMS] == list(range(1, 14))
+    assert len(PC.ITEMS) == 14
+    assert [item["number"] for item in PC.ITEMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",
         "p0Definition",
@@ -123,6 +123,7 @@ def test_registry_has_thirteen_items_in_order():
         "stackingTool",
         "keepOrRetireReporting",
         "threatModel",
+        "whoItsFor",
         "guardianStaleness",
         "keepList",
         "materialConsequenceLine",
@@ -145,7 +146,7 @@ def test_exactly_five_plugin_defaults():
 def test_view_lists_all_thirteen_unstamped_profile(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     got = PC.view(repo, root=store)
-    assert len(got["items"]) == 13
+    assert len(got["items"]) == 14
     assert [item["slug"] for item in got["items"]] == [item["slug"] for item in PC.ITEMS]
     plugin_default = [item for item in got["items"] if item["source"] == "plugin-default"]
     derived = [item for item in got["items"] if item["source"] == "derived"]
@@ -402,7 +403,7 @@ def test_cli_view(tmp_path, capsys):
     rc = PC.main(["view", "--cwd", repo, "--root", store])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["items"]) == 13
+    assert len(payload["items"]) == 14
 
 
 def test_cli_get_and_set(tmp_path, capsys, monkeypatch):
@@ -424,3 +425,57 @@ def test_cli_dependencies(tmp_path, capsys):
     assert rc == 0
     got = json.loads(capsys.readouterr().out)
     assert "collector" in got
+
+
+
+
+def _split_json_block(text):
+    start = text.index("```json superheroes-core\n") + len("```json superheroes-core\n")
+    end = text.index("\n```", start)
+    return text[:start], json.loads(text[start:end]), text[end:]
+
+
+def test_item_14_unset_reads_unset(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    got = PC.get_item(repo, "whoItsFor", root=store)
+    assert got["source"] == "unset"
+    assert got["raw"] is None
+    assert got["malformed"] is False
+
+
+def test_set_item_14_writes_only_its_own_key(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config(repo, dict(_PROJECT_CFG_SEED), root=store)
+    core = CM.core_path(repo, store)
+    before = open(core, encoding="utf-8").read()
+    prose_before, block_before, tail_before = _split_json_block(before)
+    got = PC.set_item(repo, "whoItsFor", "Home cooks who want one weeknight recipe.", root=store)
+    assert got["action"] == "written"
+    after = open(core, encoding="utf-8").read()
+    prose_after, block_after, tail_after = _split_json_block(after)
+    assert prose_after == prose_before
+    assert tail_after == tail_before
+    cfg_after = block_after.pop("projectConfiguration")
+    cfg_before = block_before.pop("projectConfiguration")
+    assert block_after == block_before
+    assert cfg_after.pop("whoItsFor") == "Home cooks who want one weeknight recipe."
+    assert cfg_after == cfg_before
+    stored = PC.get_item(repo, "whoItsFor", root=store)
+    assert stored["source"] == "stamped"
+    assert stored["raw"] == "Home cooks who want one weeknight recipe."
+
+
+# axis: item 14 refuses an empty or whitespace-only value — wo_a_1618_who-its-for-non-empty
+@pytest.mark.parametrize("value", ["", "   ", "\n\t \n"], ids=["empty", "spaces", "newlines"])
+def test_set_item_14_refuses_empty_and_whitespace(tmp_path, value):
+    repo, store = _setup_repo(tmp_path)
+    core = CM.core_path(repo, store)
+    before = open(core, "rb").read()
+    got = PC.set_item(repo, "whoItsFor", value, root=store)
+    assert got == {"action": "refused", "reason": "malformed-value"}
+    assert open(core, "rb").read() == before
+
+
+def test_set_item_14_refuses_non_string(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    assert PC.set_item(repo, "whoItsFor", ["a"], root=store)["reason"] == "malformed-value"

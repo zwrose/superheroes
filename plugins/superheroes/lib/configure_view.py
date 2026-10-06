@@ -32,7 +32,7 @@ import review_gate_policy  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
-_PROSE_CONFIG_SHAPES = frozenset({"prose"})
+_PROSE_CONFIG_SHAPES = frozenset({"prose", "nonEmptyProse"})
 _PROSE_DISPLAY_MAX = 120
 
 _SPEC_REVIEWER_HEADING = "## Spec reviewer seat"
