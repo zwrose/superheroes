@@ -1436,6 +1436,61 @@ def test_note_field_is_a_theme_part():
         assert re.search(r"(?m)^\s*%s\s*:" % re.escape(name), css), "%s is not a theme token" % name
 
 
+def _schema_without_answers(mutate):
+    schema = copy.deepcopy(SHEET_SCHEMA)
+    mutate(schema)
+    return schema
+
+
+def _drop_answer_definition(schema):
+    del schema["$defs"]["answer"]
+
+
+def _make_answer_enum_malformed(schema):
+    # A non-list enum is refused earlier, by the page's schema check, so the malformed form that reaches the answer reader is a list holding a value that is not text.
+    schema["$defs"]["answer"]["properties"]["answer"]["enum"] = ["aligned", "discuss", "option", 7]
+
+
+def _drop_option_carrying_rule(schema):
+    answer = schema["$defs"]["answer"]
+    answer["allOf"] = [
+        entry for entry in answer["allOf"]
+        if entry["if"]["properties"]["answer"].get("const") != "option"
+    ]
+
+
+# Bites on: a schema that does not say what an answer is (no answer definition, an answer list holding a non-text value, or no value tied to an option id) still getting answer buttons, a live note, or a connection to the store.
+@pytest.mark.parametrize("mutate", [
+    pytest.param(_drop_answer_definition, id="E1-no-answer-definition"),
+    pytest.param(_make_answer_enum_malformed, id="E2-enum-is-malformed"),
+    pytest.param(_drop_option_carrying_rule, id="E3-no-option-carrying-value"),
+])
+def test_a_schema_without_an_answer_shape_keeps_answers_off(mutate):
+    files = _sample_files()
+    files["sheet.schema.json"]["body"] = json.dumps(_schema_without_answers(mutate))
+    page = _run_page(files, scenario="""
+      const ids = t.all(elements["sheet-cards"]).filter((node) => node.tagName === "article").map((node) => node.id.replace("card-", ""));
+      return {
+        buttons: ids.map((id) => t.buttons(id).length),
+        notesDisabled: ids.map((id) => t.note(id).disabled),
+        gate: t.gate().message,
+        gateHidden: t.gate().hidden,
+        uses: t.uses,
+      };
+    """)
+    assert page["settled"], "the page never settled: %s" % page
+    assert page["errors"] == [], page["errors"]
+    sample_cards = json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8"))["cards"]
+    assert len(page["cards"]) == len(sample_cards) > 0, page["cards"]
+    result = page["result"]
+    assert result["buttons"] == [0] * len(sample_cards), result
+    assert result["notesDisabled"] == [True] * len(sample_cards), result
+    assert result["gateHidden"] is False, result
+    assert result["gate"] == "Answers can't be saved in this view.", result
+    assert result["uses"] == [], "the page reached for the store although the schema names no answer shape"
+
+
+# Bites on: JavaScript or other non-markup text sitting outside the page's script and style blocks.
 def test_template_outside_script_and_style_is_only_markup():
     text = _template_text()
     assert text.lstrip().startswith('<meta charset="utf-8">'), text.lstrip()[:60]
