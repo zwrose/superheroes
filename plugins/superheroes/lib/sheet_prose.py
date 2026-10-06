@@ -10,6 +10,7 @@ It refuses a data file it can't trust: one problem per line on stderr, nothing o
 """
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,8 @@ BOARD_NOT_SAVED = "The approved board is not saved with the spec."
 NEXT = ("The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or "
         "gitignored, to the spec where it is kept) and vets it, then one merge word covers both.")
 
+TYPE_NAMES = ("object", "array", "string", "boolean", "null", "integer", "number")
+
 _MARKDOWN_CHARACTERS = re.compile(r"([\\`*_\[\]<>~|&])")
 
 
@@ -51,20 +54,70 @@ def _plural(count, word):
 def _is(kind, value):
     if kind == "integer":
         return (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, float) and value.is_integer())
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     return {"object": dict, "array": list, "string": str, "boolean": bool, "null": type(None)}[kind] is type(value)
+
+
+def _canonical(value):
+    """The value as JSON text, the same for equal data whatever order an object's keys came in; true is never 1."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_canonical(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ",".join("%s:%s" % (json.dumps(key), _canonical(value[key])) for key in sorted(value)) + "}"
+    return json.dumps(value)
 
 
 def _pointer(steps):
     return "#" + "".join("/" + str(step).replace("~", "~0").replace("/", "~1") for step in steps)
 
 
+def _is_number(item):
+    return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
+
+
+def _is_names(item):
+    return isinstance(item, list) and all(isinstance(name, str) for name in item)
+
+
+def _is_pattern(item):
+    if not isinstance(item, str):
+        return False
+    try:
+        re.compile(item)
+    except re.error:
+        return False
+    return True
+
+
+def _is_type(item):
+    return item in TYPE_NAMES if isinstance(item, str) else _is_names(item) and all(name in TYPE_NAMES for name in item)
+
+
+# The form each of these keywords may take for _validate to read it; any other form is refused with the schema.
+READABLE_FORMS = {
+    "type": _is_type,
+    "enum": lambda item: isinstance(item, list),
+    "minLength": _is_number,
+    "minimum": _is_number,
+    "minItems": _is_number,
+    "uniqueItems": lambda item: isinstance(item, bool),
+    "pattern": _is_pattern,
+    "required": _is_names,
+}
+
+
 def _unchecked_rules(schema):
     """Every place the schema uses a keyword, or a form of one, that _validate does not enforce; empty when none.
 
     It walks the root and every sub-schema a keyword holds. A $ref is only ever followed into $defs, which the
-    walk reaches on its own, so it is not followed here.
+    walk reaches on its own, so it is not followed there. A second pass refuses a $ref chain that comes back to
+    itself without descending into a property or an item, since checking a value against it would never end.
     """
     problems = []
+    reached = []
     defs = schema.get("$defs") if isinstance(schema, dict) else None
 
     def refuse(what, steps):
@@ -74,6 +127,7 @@ def _unchecked_rules(schema):
         if not isinstance(node, dict):
             refuse('"%s" with something that is not a schema' % holder, steps)
             return
+        reached.append((node, steps))
         for key, value in node.items():
             if key in ("properties", "$defs", "definitions"):
                 if not isinstance(value, dict):
@@ -101,10 +155,48 @@ def _unchecked_rules(schema):
                 named = re.fullmatch(r"#/\$defs/([^/~%]+)", value) if isinstance(value, str) else None
                 if not named or not isinstance(defs, dict) or named.group(1) not in defs:
                     refuse('"$ref" with %s (it must name an entry under #/$defs/)' % json.dumps(value), steps)
+            elif key in READABLE_FORMS:
+                if not READABLE_FORMS[key](value):
+                    refuse('"%s" with a value this renderer does not read' % key, steps)
             elif key not in ENFORCED and key not in ANNOTATIONS:
                 refuse('the rule "%s"' % key, steps)
 
+    def target(node):
+        """The $defs entry a node's $ref names, with its place; None when it names none."""
+        ref = node.get("$ref")
+        named = re.fullmatch(r"#/\$defs/([^/~%]+)", ref) if isinstance(ref, str) else None
+        if named and isinstance(defs, dict) and isinstance(defs.get(named.group(1)), dict):
+            return defs[named.group(1)], ["$defs", named.group(1)]
+        return None
+
+    state = {}
+
+    def same_value(node, steps):
+        if state.get(id(node)) == 2:
+            return
+        state[id(node)] = 1
+
+        def follow(sub, at):
+            if not isinstance(sub, dict):
+                return
+            if state.get(id(sub)) == 1:
+                refuse('"$ref" that leads back to itself without reading anything', steps)
+            else:
+                same_value(sub, at)
+
+        if target(node):
+            follow(*target(node))
+        for key in ("allOf", "anyOf"):
+            if isinstance(node.get(key), list):
+                for index, sub in enumerate(node[key]):
+                    follow(sub, steps + [key, index])
+        for key in ("not", "if", "then"):
+            follow(node.get(key), steps + [key])
+        state[id(node)] = 2
+
     walk(schema, [], "schema")
+    for node, steps in reached:
+        same_value(node, steps)
     return problems
 
 
@@ -116,13 +208,14 @@ def _validate(schema, value, path, defs):
     kinds = [kinds] if isinstance(kinds, str) else kinds
     if kinds and not any(_is(kind, value) for kind in kinds):
         return problems + ["%s must be %s." % (where, " or ".join(kinds))]
-    if "const" in schema and value != schema["const"]:
+    if "const" in schema and _canonical(value) != _canonical(schema["const"]):
         return problems + ["%s must be %s." % (where, json.dumps(schema["const"]))]
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(_canonical(option) == _canonical(value) for option in schema["enum"]):
         return problems + ["%s must be one of %s." % (where, ", ".join(map(str, schema["enum"])))]
     if isinstance(value, str):
-        if len(value) < schema.get("minLength", 0):
-            problems.append("%s must not be empty." % where)
+        shortest = schema.get("minLength", 0)
+        if len(value) < shortest:
+            problems.append("%s must be at least %s characters long." % (where, shortest) if shortest > 1 else "%s must not be empty." % where)
         if "pattern" in schema and not re.search(schema["pattern"], value):
             problems.append('%s ("%s") is not a lowercase id of letters, digits and hyphens.' % (where, value))
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value < schema.get("minimum", value):
@@ -130,7 +223,7 @@ def _validate(schema, value, path, defs):
     if isinstance(value, list):
         if len(value) < schema.get("minItems", 0):
             problems.append("%s must not be empty." % where)
-        if schema.get("uniqueItems") and len({json.dumps(item) for item in value}) < len(value):
+        if schema.get("uniqueItems") and len({_canonical(item) for item in value}) < len(value):
             problems.append("%s must not repeat an item." % where)
         for position, item in enumerate(value):
             problems += _validate(schema.get("items", {}), item, "%s[%d]" % (path, position), defs)

@@ -400,6 +400,35 @@ def _plant_cards_items_list(schema):
     schema["properties"]["cards"]["items"] = [{"$ref": "#/$defs/card"}]
 
 
+def _plant_option_required_number(schema):
+    schema["$defs"]["option"]["required"] = 5
+
+
+def _plant_id_pattern_not_a_regex(schema):
+    schema["$defs"]["id"]["pattern"] = "["
+
+
+def _plant_kind_enum_string(schema):
+    schema["properties"]["kind"]["enum"] = "abc"
+
+
+def _plant_title_misspelled_type(schema):
+    schema["properties"]["title"]["type"] = "nubmer"
+
+
+def _plant_title_min_length_string(schema):
+    schema["properties"]["title"]["minLength"] = "1"
+
+
+def _plant_cards_unique_items_string(schema):
+    schema["properties"]["cards"]["uniqueItems"] = "yes"
+
+
+def _plant_title_ref_loop(schema):
+    schema["$defs"]["loop"] = {"$ref": "#/$defs/loop"}
+    schema["properties"]["title"] = {"$ref": "#/$defs/loop"}
+
+
 UNENFORCED = [
     ("maxLength", _plant_title_max_length, "maxLength", "#/properties/title"),
     ("format", _plant_image_src_format, "format", "#/$defs/image/properties/src"),
@@ -407,6 +436,13 @@ UNENFORCED = [
     ("outside-ref", _plant_outside_ref, "$ref", "#/properties/kind"),
     ("additionalProperties-schema", _plant_option_extra_schema, "additionalProperties", "#/$defs/option"),
     ("items-list", _plant_cards_items_list, "items", "#/properties/cards"),
+    ("required-not-a-list", _plant_option_required_number, "required", "#/$defs/option"),
+    ("pattern-not-a-regex", _plant_id_pattern_not_a_regex, "pattern", "#/$defs/id"),
+    ("enum-not-a-list", _plant_kind_enum_string, "enum", "#/properties/kind"),
+    ("type-not-a-type", _plant_title_misspelled_type, "type", "#/properties/title"),
+    ("minLength-not-a-number", _plant_title_min_length_string, "minLength", "#/properties/title"),
+    ("uniqueItems-not-a-boolean", _plant_cards_unique_items_string, "uniqueItems", "#/properties/cards"),
+    ("ref-loop", _plant_title_ref_loop, "$ref", "#/$defs/loop"),
 ]
 
 
@@ -456,6 +492,61 @@ def test_prose_and_page_agree_on_ref_siblings_and_conditionals(tmp_path, monkeyp
     prose_problems = module.check_sheet(sample)
     assert page_problems, "the page accepted the sample under the planted schema"
     assert prose_problems, "the prose reader accepted the sample under the planted schema"
+
+
+# Bites on: the prose reader accepting a schema the page refuses (any planted case of the page's own refusal list), or raising instead of refusing.
+def test_prose_and_page_refuse_the_same_planted_schemas(tmp_path, monkeypatch):
+    from test_review_template import _planted, _sheet, _unsupported_rule_cases
+
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+    accepted = []
+    for name, mutate, _keyword, _pointer in _unsupported_rule_cases():
+        planted_path.write_text(json.dumps(_planted(mutate)), encoding="utf-8")
+        try:
+            problems = module.check_sheet(_sheet("plain"))
+        except Exception as error:
+            pytest.fail("%s: the prose reader raised %r instead of refusing" % (name, error))
+        if not problems:
+            accepted.append(name)
+    assert accepted == [], "the prose reader accepted what the page refuses: %s" % accepted
+
+
+# Bites on: const or enum comparing by Python equality (true equal to 1, key order mattering) instead of by JSON content and type, as the page does.
+def test_prose_const_and_enum_compare_by_type(tmp_path, monkeypatch):
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+
+    def problems_for(rule, warning):
+        schema = _planted_schema(lambda s: s["$defs"]["card"]["properties"].update(warning=rule))
+        planted_path.write_text(json.dumps(schema), encoding="utf-8")
+        sheet = _valid_sheet()
+        for card in sheet["cards"]:
+            card["warning"] = warning
+        return module.check_sheet(sheet)
+
+    assert problems_for({"const": True}, True) == []
+    assert problems_for({"const": True}, 1) != []
+    assert problems_for({"enum": [1]}, 1) == []
+    assert problems_for({"enum": [1]}, True) != []
+    assert problems_for({"enum": [{"a": 1, "b": 2}]}, {"b": 2, "a": 1}) == []
+
+
+# Bites on: a minLength above 1 reading "must not be empty", or minLength 1 reading as a length.
+@pytest.mark.parametrize("shortest, expected", [
+    (1, "Title must not be empty."),
+    (5, "Title must be at least 5 characters long."),
+], ids=["one", "five"])
+def test_prose_names_the_length_a_minLength_asks_for(tmp_path, monkeypatch, shortest, expected):
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    planted_path.write_text(json.dumps(_planted_schema(lambda s: s["properties"]["title"].update(minLength=shortest))), encoding="utf-8")
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+    sheet = _valid_sheet()
+    sheet["title"] = ""
+    assert module.check_sheet(sheet) == [expected]
 
 
 # Bites on: Markdown in a sheet's own text (underscores, asterisks, backticks, brackets, angle brackets, tildes, pipes, ampersands, backslashes) printing as formatting, or an escape that loses the original characters.
