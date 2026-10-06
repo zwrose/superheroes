@@ -579,6 +579,98 @@ def test_e19c_first_commit_whose_copy_is_unreadable_refuses(tmp_path, monkeypatc
     assert w.item13()["raw"] == _TWO_RULINGS
 
 
+# --- E19e: a filesystem failure leaves Canon as it was, so a retry starts clean ---
+
+def _commit_attributes(w, text):
+    attrs = os.path.join(os.path.dirname(w.canon), ".gitattributes")
+    os.makedirs(os.path.dirname(attrs), exist_ok=True)
+    with open(attrs, "w") as fh:
+        fh.write(text)
+    _git(w.repo, "add", "--", "docs/superheroes/.gitattributes")
+    _git(w.repo, "commit", "-q", "-m", "attrs", "--", "docs/superheroes/.gitattributes")
+    return attrs
+
+
+# axis: a failed write puts Canon and its attributes back and refuses canon-write-failed — wo_a_1646_canon-write-recovery
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file modes")
+def test_e19e_an_unwritable_gitattributes_leaves_no_new_canon_and_a_retry_migrates(tmp_path):
+    w = _world(tmp_path)
+    attrs = _commit_attributes(w, "*.png binary\n")
+    os.chmod(attrs, 0o444)
+    head = w.head()
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-write-failed")
+    assert "PermissionError" in got["detail"]
+    assert not os.path.exists(w.canon)
+    assert open(attrs).read() == "*.png binary\n"
+    assert w.head() == head
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == _TWO_RULINGS
+    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    os.chmod(attrs, 0o644)
+    again = _shape(w.migrate_landed())
+    assert (again["action"], again["reason"]) == ("migrated", None)
+    assert w.item13()["raw"] == _MARKER
+
+
+# axis: a failed write puts Canon and its attributes back and refuses canon-write-failed — wo_a_1646_canon-write-recovery
+def test_e19e_a_failure_during_the_append_restores_canon_bytes(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    w.commit_canon(_SEED)
+    before = open(w.canon, "rb").read()
+    head = w.head()
+    real_open = open
+
+    def _full_disk(path, mode="r", *a, **k):
+        if mode == "a" and os.path.abspath(path) == os.path.abspath(w.canon):
+            fh = real_open(path, mode, *a, **k)
+            fh.write("- **half an entry")
+            fh.close()
+            raise OSError(28, "No space left on device")
+        return real_open(path, mode, *a, **k)
+
+    monkeypatch.setattr(PC, "open", _full_disk, raising=False)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-write-failed")
+    assert "No space left on device" in got["detail"]
+    assert open(w.canon, "rb").read() == before
+    assert w.head() == head
+    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    monkeypatch.delattr(PC, "open")
+    again = _shape(w.migrate_landed())
+    assert (again["action"], again["reason"]) == ("migrated", None)
+
+
+# axis: a failed commit puts Canon and its attributes back and un-stages them — wo_a_1646_canon-write-recovery
+def test_e19e_a_rejected_commit_restores_the_files_and_unstages_them(tmp_path):
+    w = _world(tmp_path)
+    hook = os.path.join(w.repo, ".git", "hooks", "pre-commit")
+    open(hook, "w").write("#!/bin/sh\necho rejected by hook >&2\nexit 1\n")
+    os.chmod(hook, 0o755)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert not os.path.exists(w.canon)
+    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    os.remove(hook)
+    again = _shape(w.migrate_landed())
+    assert again["action"] == "migrated"
+
+
+# axis: an OSError anywhere in the move surfaces as the structured refusal — wo_a_1646_canon-write-recovery
+def test_e19e_an_os_error_elsewhere_surfaces_as_a_structured_refusal(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+
+    def _boom(*a, **k):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(PC, "_fetch_default_branch", _boom)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-write-failed")
+    assert "Input/output error" in got["detail"]
+    assert not os.path.exists(w.canon)
+
+
 # --- E19d: one writer owns the Canon from baseline through commit ---
 
 # axis: a migration that cannot take the configuration lock leaves Canon and item 13 alone — wo_a_1618_canon-lock
@@ -796,7 +888,7 @@ def test_e19g_a_supersession_only_on_this_branch_still_refuses(tmp_path, raw, he
     assert w.item13()["raw"] == raw
 
 
-# axis: migrated entries sharing an id never decide the move; only the set of their rulings does — wo_a_1646_replaced-ruling
+# axis: migrated entries sharing an id with different rulings refuse before any adoption — wo_a_1646_id-conflict
 def test_e19h_duplicate_ids_among_migrated_entries_whose_ruling_set_differs_refuse(tmp_path):
     w = _world(tmp_path, raw="X is material.")
     w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
@@ -805,26 +897,41 @@ def test_e19h_duplicate_ids_among_migrated_entries_whose_ruling_set_differs_refu
     w.land()
     head = w.head()
     got = _shape(w.migrate())
-    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+    assert "2026-10-05-abcdef12-1" in got["detail"]
     assert '"X is material."' in got["detail"]
     assert '"Y is craft."' in got["detail"]
     assert w.head() == head
     assert w.item13()["raw"] == "X is material."
 
 
-def test_e19h_duplicate_ids_among_migrated_entries_do_not_block_a_matching_item_13(tmp_path):
+# axis: migrated entries sharing an id with different rulings refuse before any adoption — wo_a_1646_id-conflict
+def test_e19h_duplicate_ids_with_different_rulings_refuse_even_when_item_13_holds_both(tmp_path):
     w = _world(tmp_path, raw="X is material.\n\nY is craft.")
     w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
                    + _migrated_line("2026-10-05-abcdef12-1", "X is material.")
                    + _migrated_line("2026-10-05-abcdef12-1", "Y is craft."))
     w.land()
     head = w.head()
+    core_before = w.core_bytes()
     got = _shape(w.migrate())
-    assert (got["action"], got["reason"]) == ("migrated", None)
-    assert got["entries"] == []
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
     assert got["commit"] is None
     assert w.head() == head
-    assert w.item13()["raw"] == _MARKER
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == "X is material.\n\nY is craft."
+
+
+# axis: migrated entries sharing an id with different rulings refuse before any adoption — wo_a_1646_id-conflict
+def test_e19h_a_conflict_between_the_head_and_default_copies_refuses_an_emptied_item_13(tmp_path):
+    w = _world(tmp_path, raw="")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material."))
+    w.land()
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "Y is craft."))
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
 
 
 def test_e19h_the_same_entry_in_both_copies_is_one_entry(tmp_path):

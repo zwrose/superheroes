@@ -821,13 +821,38 @@ def _migrated_entries(committed_text):
     return [entry for entry in fields if entry is not None and entry["migrated"]]
 
 
+def _refuse_conflicting_ids(entries):
+    """Refuse when one id carries two different rulings among the migrated entries.
+
+    The same entry repeated across the HEAD and default-branch copies is one entry. Entries that
+    share an id with different rulings resolve for no reader (``rubric/canon-contract.md``), so the
+    move never retires item 13's prose on top of them.
+    """
+    seen = {}
+    for entry in entries:
+        rulings = seen.setdefault(entry["id"], [])
+        if entry["ruling"] not in rulings:
+            rulings.append(entry["ruling"])
+    for entry_id, rulings in seen.items():
+        if len(rulings) > 1:
+            raise _MigrationRefusal(
+                "canon-id-conflict",
+                "Canon holds migrated entries sharing the id %s with different rulings: %s. "
+                "Entries sharing one id resolve for no reader, and the duplicate goes to the "
+                "owner; item 13 keeps its value until the owner has settled it."
+                % (entry_id, ", ".join('"%s"' % ruling for ruling in rulings)))
+
+
 def _refuse_unless_recorded_set(rulings, entries):
     """Refuse when migrated entries are recorded and ``rulings`` is not exactly their set.
 
     The move accepts one recorded state: no migrated entry yet, or migrated entries whose rulings
     are item 13's rulings, no more and no fewer. Anything else is item 13 changed after an earlier
-    run, which the move never reconciles: Canon's other entries are not read.
+    run, which the move never reconciles: Canon's other entries are not read. Entries that share an
+    id with different rulings refuse first.
     """
+    # axis: migrated entries sharing an id with different rulings refuse before any adoption — see bite-proof record wo_a_1646_id-conflict
+    _refuse_conflicting_ids(entries)
     recorded = []
     for entry in entries:
         if entry["ruling"] not in recorded:
@@ -887,6 +912,42 @@ def _ensure_gitattributes(path):
         if text and not text.endswith("\n"):
             fh.write("\n")
         fh.write(_GITATTRIBUTES_LINE + "\n")
+
+
+def _file_bytes(path):
+    """The file's exact bytes; None when it does not exist."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_canon_files(git_root, saved, paths):
+    """Put each file in ``saved`` back to its recorded bytes and un-stage ``paths``.
+
+    A file this run created (recorded as None) is removed. Returns what could not be undone, so the
+    refusal can name it.
+    """
+    problems = []
+    for path, before in saved.items():
+        try:
+            if _file_bytes(path) == before:
+                continue
+            if before is None:
+                os.remove(path)
+            else:
+                with open(path, "wb") as fh:
+                    fh.write(before)
+        except OSError as exc:
+            problems.append("%s: %s: %s" % (path, type(exc).__name__, exc))
+    try:
+        reset = _git_run(git_root, "canon-write-failed", "reset", "-q", "--", *paths)
+        if reset.returncode != 0:
+            problems.append("git reset: %s" % _first_line(reset.stderr, "exit %d" % reset.returncode))
+    except _MigrationRefusal as exc:
+        problems.append("git reset: %s" % exc.detail)
+    return problems
 
 
 def _fetch_default_branch(repo_root, result):
@@ -986,41 +1047,62 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
         return {"gitRoot": git_root, "rel": rel, "home": info["home"],
                 "defaultRef": info["defaultRef"]}
 
-    working_text = ""
-    if os.path.isfile(canon_path):
-        with open(canon_path, encoding="utf-8") as fh:
-            working_text = fh.read()
-    else:
-        os.makedirs(os.path.dirname(canon_path), exist_ok=True)
-        with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
+    attributes_path = None
+    saved = {canon_path: _file_bytes(canon_path)}
     if attributes_rel is not None:
-        _ensure_gitattributes(os.path.join(os.path.realpath(git_root), *attributes_rel.split("/")))
+        attributes_path = os.path.join(os.path.realpath(git_root), *attributes_rel.split("/"))
+        saved[attributes_path] = _file_bytes(attributes_path)
 
     prefix = "%s-%s-" % (date, session)
-    used = re.compile(r"^- \*\*%s(\d+)\*\*" % re.escape(prefix), re.MULTILINE)
-    highest = max([int(n) for n in used.findall(working_text + "\n" + default_text)] or [0])
-    ids = ["%s%d" % (prefix, highest + 1 + i) for i in range(len(rulings))]
-    lines = [
-        "- **%s** · %s · standing · %s · owner's words: none recorded · where: "
-        "%s on %s (original session unknown), time not recorded"
-        % (entry_id, date, ruling, _MIGRATION_ORIGIN_PHRASE, date)
-        for entry_id, ruling in zip(ids, rulings)
-    ]
-    with open(canon_path, "a", encoding="utf-8", newline="\n") as fh:
-        if working_text and not working_text.endswith("\n"):
-            fh.write("\n")
-        fh.write("\n".join(lines) + "\n")
-    result["entries"] = ids
+    landed = False
+    # axis: a failed write or commit puts Canon and its attributes back as they were, so a retry starts clean — see bite-proof record wo_a_1646_canon-write-recovery
+    try:
+        working_text = ""
+        if os.path.isfile(canon_path):
+            with open(canon_path, encoding="utf-8") as fh:
+                working_text = fh.read()
+        else:
+            os.makedirs(os.path.dirname(canon_path), exist_ok=True)
+            with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
+        if attributes_path is not None:
+            _ensure_gitattributes(attributes_path)
 
-    added = _git_run(git_root, "canon-commit-failed", "add", "--", *paths)
-    if added.returncode != 0:
-        raise _MigrationRefusal("canon-commit-failed", added.stderr.strip())
-    committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
-                         _MIGRATION_COMMIT_MESSAGE, "--", *paths)
-    if committed.returncode != 0:
-        raise _MigrationRefusal(
-            "canon-commit-failed", (committed.stderr or committed.stdout).strip())
+        used = re.compile(r"^- \*\*%s(\d+)\*\*" % re.escape(prefix), re.MULTILINE)
+        highest = max([int(n) for n in used.findall(working_text + "\n" + default_text)] or [0])
+        ids = ["%s%d" % (prefix, highest + 1 + i) for i in range(len(rulings))]
+        lines = [
+            "- **%s** · %s · standing · %s · owner's words: none recorded · where: "
+            "%s on %s (original session unknown), time not recorded"
+            % (entry_id, date, ruling, _MIGRATION_ORIGIN_PHRASE, date)
+            for entry_id, ruling in zip(ids, rulings)
+        ]
+        with open(canon_path, "a", encoding="utf-8", newline="\n") as fh:
+            if working_text and not working_text.endswith("\n"):
+                fh.write("\n")
+            fh.write("\n".join(lines) + "\n")
+
+        added = _git_run(git_root, "canon-commit-failed", "add", "--", *paths)
+        if added.returncode != 0:
+            raise _MigrationRefusal("canon-commit-failed", added.stderr.strip())
+        committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
+                             _MIGRATION_COMMIT_MESSAGE, "--", *paths)
+        if committed.returncode != 0:
+            raise _MigrationRefusal(
+                "canon-commit-failed", (committed.stderr or committed.stdout).strip())
+        landed = True
+    except (OSError, _MigrationRefusal) as exc:
+        if landed:
+            raise
+        undo_problems = _restore_canon_files(git_root, saved, paths)
+        if isinstance(exc, _MigrationRefusal):
+            reason, detail = exc.reason, exc.detail
+        else:
+            reason, detail = "canon-write-failed", "%s: %s" % (type(exc).__name__, exc)
+        if undo_problems:
+            detail = "%s; could not undo: %s" % (detail, "; ".join(undo_problems))
+        raise _MigrationRefusal(reason, detail)
+    result["entries"] = ids
 
     shown = _git_run(git_root, "canon-commit-failed", "show", "HEAD:%s" % rel)
     new_text = shown.stdout if shown.returncode == 0 else ""
@@ -1060,6 +1142,10 @@ def migrate_material_line(cwd, *, root=None, session=None, date=None):
         result["action"] = "refused"
         result["reason"] = refusal.reason
         result["detail"] = refusal.detail
+    except OSError as exc:
+        result["action"] = "refused"
+        result["reason"] = "canon-write-failed"
+        result["detail"] = "%s: %s" % (type(exc).__name__, exc)
     return result
 
 
