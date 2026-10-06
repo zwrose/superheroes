@@ -657,6 +657,46 @@ def test_e19e_a_rejected_commit_restores_the_files_and_unstages_them(tmp_path):
     assert again["action"] == "migrated"
 
 
+# axis: a commit that timed out after landing is kept, not undone — wo_a_1646_commit-landed
+def test_e19e_a_commit_that_landed_before_it_timed_out_is_kept(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    head = w.head()
+    real = PC._git_run
+
+    def _slow_hook(root, reason, *args, **k):
+        done = real(root, reason, *args, **k)
+        if args and args[0] == "commit":
+            raise PC._MigrationRefusal(reason, "git could not be run (TimeoutExpired)")
+        return done
+
+    monkeypatch.setattr(PC, "_git_run", _slow_hook)
+    got = _shape(w.migrate())
+    assert got["action"] == "pending-default-branch"
+    assert got["entries"] == ["2026-10-05-abcdef12-1", "2026-10-05-abcdef12-2"]
+    assert got["commit"] == w.head() != head
+    assert os.path.exists(w.canon)
+    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+
+
+# axis: a commit that timed out without landing is undone — wo_a_1646_commit-landed
+def test_e19e_a_commit_that_timed_out_without_landing_is_undone(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    head = w.head()
+    real = PC._git_run
+
+    def _timeout(root, reason, *args, **k):
+        if args and args[0] == "commit":
+            raise PC._MigrationRefusal(reason, "git could not be run (TimeoutExpired)")
+        return real(root, reason, *args, **k)
+
+    monkeypatch.setattr(PC, "_git_run", _timeout)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert w.head() == head
+    assert not os.path.exists(w.canon)
+    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+
+
 # axis: an OSError anywhere in the move surfaces as the structured refusal — wo_a_1646_canon-write-recovery
 def test_e19e_an_os_error_elsewhere_surfaces_as_a_structured_refusal(tmp_path, monkeypatch):
     w = _world(tmp_path)
@@ -932,6 +972,26 @@ def test_e19h_a_conflict_between_the_head_and_default_copies_refuses_an_emptied_
                    + _migrated_line("2026-10-05-abcdef12-1", "Y is craft."))
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+
+
+# axis: an ordinary entry sharing a migrated entry's id refuses before any adoption — wo_a_1646_id-conflict
+@pytest.mark.parametrize("raw", ["X is material.", ""], ids=["item-13-held", "emptied"])
+def test_e19h_an_ordinary_entry_sharing_a_migrated_id_refuses(tmp_path, raw):
+    w = _world(tmp_path, raw=raw)
+    ordinary = ("- **2026-10-05-abcdef12-1** · 2026-10-05 · standing · Y is craft. · owner's "
+                "words: \"Y\" · where: s, time not recorded\n")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material.") + ordinary)
+    w.land()
+    head = w.head()
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+    assert '"Y is craft." (ordinary)' in got["detail"]
+    assert got["commit"] is None
+    assert w.head() == head
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == raw
 
 
 def test_e19h_the_same_entry_in_both_copies_is_one_entry(tmp_path):

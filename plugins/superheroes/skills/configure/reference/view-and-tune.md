@@ -118,8 +118,8 @@ action that owns it, leaving the rest of the calibration untouched:
     again.
   - `canon-write-failed`: a file could not be written — fix the permission or disk space, then run
     the move again. The move puts Canon back as it was, so the retry starts clean.
-  - `canon-id-conflict`: Canon holds migrated entries that share one id but carry different
-    rulings, so the move leaves item 13 as it is. Report the detail to the owner; the duplicate is
+  - `canon-id-conflict`: Canon holds a migrated entry and another entry that share one id but
+    carry different rulings (or one is not migrated), so the move leaves item 13 as it is. Report the detail to the owner; the duplicate is
     theirs to settle.
   - `profile-structurally-ambiguous`: the project's calibration file is ambiguous (a repeated key or
     two calibration blocks); fix it through configure's fix path, then run the move again.

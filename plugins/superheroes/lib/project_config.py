@@ -815,44 +815,68 @@ def _entry_fields(line):
     }
 
 
+def _canon_entries(committed_text):
+    """Every entry line in the text, migrated or not; a line too short to split keeps its id."""
+    entries = []
+    for line in committed_text.splitlines():
+        if not line.startswith("- **"):
+            continue
+        fields = _entry_fields(line)
+        if fields is None:
+            found = _ENTRY_ID_PATTERN.match(line)
+            if found:
+                fields = {"id": found.group(1), "ruling": line, "migrated": False}
+        if fields is not None:
+            entries.append(fields)
+    return entries
+
+
 def _migrated_entries(committed_text):
-    """The entries in the text that carry the migration marker; no other entry is read."""
-    fields = (_entry_fields(ln) for ln in committed_text.splitlines() if ln.startswith("- **"))
-    return [entry for entry in fields if entry is not None and entry["migrated"]]
+    """The entries in the text that carry the migration marker."""
+    return [entry for entry in _canon_entries(committed_text) if entry["migrated"]]
 
 
 def _refuse_conflicting_ids(entries):
-    """Refuse when one id carries two different rulings among the migrated entries.
+    """Refuse when an id a migrated entry carries is shared by a different entry of any kind.
 
     The same entry repeated across the HEAD and default-branch copies is one entry. Entries that
-    share an id with different rulings resolve for no reader (``rubric/canon-contract.md``), so the
-    move never retires item 13's prose on top of them.
+    share an id with different rulings, or a migrated and an ordinary entry that share one, resolve
+    for no reader (``rubric/canon-contract.md``), so the move never retires item 13's prose on top
+    of them.
     """
+    migrated_ids = {entry["id"] for entry in entries if entry["migrated"]}
     seen = {}
     for entry in entries:
-        rulings = seen.setdefault(entry["id"], [])
-        if entry["ruling"] not in rulings:
-            rulings.append(entry["ruling"])
-    for entry_id, rulings in seen.items():
-        if len(rulings) > 1:
+        if entry["id"] not in migrated_ids:
+            continue
+        held = seen.setdefault(entry["id"], [])
+        kind = (entry["ruling"], entry["migrated"])
+        if kind not in held:
+            held.append(kind)
+    for entry_id, held in seen.items():
+        if len(held) > 1:
             raise _MigrationRefusal(
                 "canon-id-conflict",
-                "Canon holds migrated entries sharing the id %s with different rulings: %s. "
-                "Entries sharing one id resolve for no reader, and the duplicate goes to the "
-                "owner; item 13 keeps its value until the owner has settled it."
-                % (entry_id, ", ".join('"%s"' % ruling for ruling in rulings)))
+                "Canon holds entries sharing the id %s, at least one of them migrated, with "
+                "different rulings or kinds: %s. Entries sharing one id resolve for no reader, "
+                "and the duplicate goes to the owner; item 13 keeps its value until the owner has "
+                "settled it."
+                % (entry_id, ", ".join(
+                    '"%s" (%s)' % (ruling, "migrated" if migrated else "ordinary")
+                    for ruling, migrated in held)))
 
 
-def _refuse_unless_recorded_set(rulings, entries):
+def _refuse_unless_recorded_set(rulings, canon_text):
     """Refuse when migrated entries are recorded and ``rulings`` is not exactly their set.
 
     The move accepts one recorded state: no migrated entry yet, or migrated entries whose rulings
     are item 13's rulings, no more and no fewer. Anything else is item 13 changed after an earlier
-    run, which the move never reconciles: Canon's other entries are not read. Entries that share an
-    id with different rulings refuse first.
+    run, which the move never reconciles: Canon's other entries are read only for an id a migrated
+    entry carries, and an entry sharing one refuses first. Returns the migrated entries.
     """
-    # axis: migrated entries sharing an id with different rulings refuse before any adoption — see bite-proof record wo_a_1646_id-conflict
-    _refuse_conflicting_ids(entries)
+    # axis: an entry sharing a migrated entry's id, migrated or not, refuses before any adoption — see bite-proof record wo_a_1646_id-conflict
+    _refuse_conflicting_ids(_canon_entries(canon_text))
+    entries = _migrated_entries(canon_text)
     recorded = []
     for entry in entries:
         if entry["ruling"] not in recorded:
@@ -863,6 +887,7 @@ def _refuse_unless_recorded_set(rulings, entries):
             "Item 13 changed after an earlier run of the move recorded these entries: %s. Set "
             "item 13 back to exactly this text, finish the move, then record any change in Canon "
             "as a new ruling." % ", ".join('"%s"' % ruling for ruling in recorded))
+    return entries
 
 
 def _refuse_recorded_in_canon_for_no_rulings(cwd, root, result):
@@ -892,7 +917,7 @@ def _refuse_recorded_in_canon_for_no_rulings(cwd, root, result):
         default_text = _canon_copy_at(git_root, info["defaultRef"], rel)
     # axis: an emptied item 13 meets the same recorded-set refusal as a changed one — see bite-proof record wo_a_1646_replaced-ruling
     head_text = _canon_head_copy(git_root, rel)
-    _refuse_unless_recorded_set([], _migrated_entries(head_text + "\n" + default_text))
+    _refuse_unless_recorded_set([], head_text + "\n" + default_text)
     return {"gitRoot": git_root, "rel": rel, "home": info["home"], "defaultRef": info["defaultRef"]}
 
 
@@ -948,6 +973,29 @@ def _restore_canon_files(git_root, saved, paths):
     except _MigrationRefusal as exc:
         problems.append("git reset: %s" % exc.detail)
     return problems
+
+
+def _head_sha(git_root):
+    """HEAD's commit id; None when HEAD is unborn."""
+    head = _git_run(git_root, "canon-commit-failed", "rev-parse", "--verify", "--quiet", "HEAD")
+    return head.stdout.strip() if head.returncode == 0 else None
+
+
+def _commit_landed(git_root, rel, before_head, lines):
+    """Whether the commit this run made is in HEAD: True, False, or None when git cannot say.
+
+    A commit that errored or timed out may still have landed, since a hook after it can outlast the
+    timeout. It landed when HEAD moved off ``before_head`` and the committed Canon holds ``lines``.
+    """
+    try:
+        if _head_sha(git_root) == before_head:
+            return False
+        shown = _git_run(git_root, "canon-commit-failed", "show", "HEAD:%s" % rel)
+    except _MigrationRefusal:
+        return None
+    if shown.returncode != 0:
+        return False
+    return set(lines) <= set(shown.stdout.splitlines())
 
 
 def _fetch_default_branch(repo_root, result):
@@ -1038,9 +1086,8 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
     head_text = _canon_head_copy(git_root, rel)
 
     # axis: only a committed entry counts as already recorded — see bite-proof record wo_a_1618_committed-only-dedupe
-    recorded = _migrated_entries(head_text + "\n" + default_text)
     # axis: migrated entries an earlier run recorded refuse the move unless they are exactly item 13's rulings — see bite-proof record wo_a_1646_replaced-ruling
-    _refuse_unless_recorded_set(rulings, recorded)
+    recorded = _refuse_unless_recorded_set(rulings, head_text + "\n" + default_text)
     result["skipped"] = list(dict.fromkeys(entry["id"] for entry in recorded))
     # axis: nothing new to append means no commit at all — see bite-proof record wo_a_1618_never-commit-empty
     if recorded:
@@ -1054,6 +1101,8 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
         saved[attributes_path] = _file_bytes(attributes_path)
 
     prefix = "%s-%s-" % (date, session)
+    before_head = _head_sha(git_root)
+    # landed is set once a commit is in HEAD, or may be: the files are then never put back
     landed = False
     # axis: a failed write or commit puts Canon and its attributes back as they were, so a retry starts clean — see bite-proof record wo_a_1646_canon-write-recovery
     try:
@@ -1085,11 +1134,27 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
         added = _git_run(git_root, "canon-commit-failed", "add", "--", *paths)
         if added.returncode != 0:
             raise _MigrationRefusal("canon-commit-failed", added.stderr.strip())
-        committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
-                             _MIGRATION_COMMIT_MESSAGE, "--", *paths)
-        if committed.returncode != 0:
-            raise _MigrationRefusal(
-                "canon-commit-failed", (committed.stderr or committed.stdout).strip())
+        commit_refusal = None
+        try:
+            committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
+                                 _MIGRATION_COMMIT_MESSAGE, "--", *paths)
+            if committed.returncode != 0:
+                commit_refusal = _MigrationRefusal(
+                    "canon-commit-failed", (committed.stderr or committed.stdout).strip())
+        except _MigrationRefusal as exc:
+            commit_refusal = exc
+        if commit_refusal is not None:
+            # axis: a commit that errored or timed out is checked against HEAD before any file is put back — see bite-proof record wo_a_1646_commit-landed
+            outcome = _commit_landed(git_root, rel, before_head, lines)
+            if outcome is None:
+                landed = True
+                raise _MigrationRefusal(
+                    "canon-commit-failed",
+                    "%s; git could not say whether the commit landed, so Canon's files were left "
+                    "as they are: check `git log` and `git status` before running the move again"
+                    % (commit_refusal.detail or commit_refusal.reason))
+            if not outcome:
+                raise commit_refusal
         landed = True
     except (OSError, _MigrationRefusal) as exc:
         if landed:
