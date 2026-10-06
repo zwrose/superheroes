@@ -264,10 +264,10 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
-        "spec-content-fr25-no-rulings-ledger",
+        "spec-content-fr25-canon-pointer",
         _SPEC_CONTENT_REF,
         "## Rulings live where they were made (FR-25)",
-        "no separate rulings ledger",
+        "recorded in the project's Canon",
         "literal",
     ),
     (
@@ -554,7 +554,7 @@ _CLAUSE_IDS = frozenset({
     "spec-content-fr24-named-finding-class",
     "spec-content-fr25-no-count-age-size",
     "spec-content-fr25-no-mechanical-trigger",
-    "spec-content-fr25-no-rulings-ledger",
+    "spec-content-fr25-canon-pointer",
     "spec-content-fr25-recorded-judgment",
     "template-amendments-before-coverage",
     "template-amendments-entry-fields",

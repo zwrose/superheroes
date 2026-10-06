@@ -68,9 +68,7 @@ via an amendment, not in an annex.
 
 ## Rulings live where they were made (FR-25)
 
-**Specs are the decision store.** A ruling lives at the place it was made and is cited from there.
-The plugin maintains **no separate rulings ledger** — the showrunner charter carries why (the
-Anchor citation is the reverse index).
+**A spec holds the requirements it was approved with; the owner rulings themselves are recorded in the project's Canon** (`../../../rubric/canon-contract.md`), and a ruling is cited from where it is recorded. The Anchor citation stays the reverse index for affected work.
 
 **Absorption is a judgment call, never a trigger.** When a surface has accumulated enough rulings
 that it has quietly become a decision store of its own, it may be **absorbed into a spec** — and

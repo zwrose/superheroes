@@ -2852,8 +2852,10 @@ def test_superseded_ruling_notice_duty_in_showrunner_charter():
         "showrunner superseded-ruling notice paragraph missing reverse-index clause "
         "(moved or reworded?)"
     )
-    assert _anchor_whitespace_normalize("no rulings ledger") in notice_norm, (
-        "showrunner superseded-ruling notice paragraph missing no-rulings-ledger clause "
+    assert _anchor_whitespace_normalize(
+        "the rulings themselves are recorded in the project's Canon"
+    ) in notice_norm, (
+        "showrunner superseded-ruling notice paragraph missing Canon-pointer clause "
         "(moved or reworded?)"
     )
     assert _anchor_whitespace_normalize("registers for embedded copies") in notice_norm, (
