@@ -156,7 +156,8 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 ```
 
 Launch with a short slice, such as 60 seconds. Then run the same command again on the same run
-directory, with a slice of up to 540 seconds, until the result is terminal. `--repo-root` is the
+directory, with a slice of up to 540 seconds, until the result is terminal. Reuse a run directory only to poll an unfinished run: a terminal
+result in a directory is replayed, not re-run. `--repo-root` is the
 repository for gap review and the source check. For grounding it is the grounding base.
 
 ### The source check's inputs
@@ -176,7 +177,9 @@ record.
 A result is real when it is terminal, `ok` is true, `attempts` is at least 1, and its engagement
 read is `engaged`. Exit status zero alone is not evidence.
 
-Re-dispatch a result that falls short, once. When the re-dispatch also falls short, that check is
+Re-dispatch a result that falls short, once, in a fresh run directory (and, when the seat
+changed, with the replacement reviewer). A terminal result that falls short is replayed from its
+old directory, so a retry there launches no reviewer. When the re-dispatch also falls short, that check is
 not run this round, and the record says why. A check that did not run is never clean.
 
 ## What a reviewer may do
