@@ -24,8 +24,8 @@ A decision point phrased entirely outside the forbidden-primitive vocabulary bel
 detected. There is no runtime chokepoint for skill prose; this closed-world prohibition list is
 the strongest available construction, and the limitation is disclosed rather than hidden. A skill
 file that cannot be read as UTF-8 text is **silently skipped** by both prohibition and block
-censuses — it is outside this guarantee (see §1d). Carrier delivery is not checked at all — by
-owner ruling 2026-08-25 (`a`-and-stop).
+censuses — it is outside this guarantee (see §1d). Carrier delivery is not checked at all
+(`a`-and-stop).
 
 ## 1a — Decision block grammar
 
@@ -111,25 +111,18 @@ Each `carrier=` value must resolve to a registry key. The census checks the name
 carrier is an error from the block parser.
 
 The `carrier` names the **intended durable home** of the disclosure. It is a **declaration, not a
-verified guarantee**: no test asserts that a disclosure reaches its writer. Owner ruling 2026-08-25
-(`a`-and-stop) declined the mechanical-carrier redesign with a registry trigger — a field case where
+verified guarantee**: no test asserts that a disclosure reaches its writer. The mechanical-carrier
+redesign was declined (`a`-and-stop), with a registry trigger — a field case where
 a silently-taken provisional default actually costs the owner something reopens it.
 
 | key | artifact | writer | census assertion |
 | --- | --- | --- | --- |
 | `review-crew-layer` | `## Setup disclosures` in the review-crew layer | `core_md.py write-layer --hero review-crew` | registry key only; no delivery assertion |
 | `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | registry key only; no delivery assertion |
-| `review-spec-receipt` | `$SESSION_DIR/receipt.md` | review-spec's own assembly step | registry key only; no delivery assertion |
 | `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | registry key only; no delivery assertion |
 | `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | registry key only; no delivery assertion |
 | `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | registry key only; no delivery assertion |
 | `run-output` | the run's own report to the owner | the run itself | registry key only; no file writer — use where a decision is reported to the owner in the session, in particular where a **gate hands back before any writer executes** |
-
-**Carrier note:**
-
-- **`review-spec-receipt`** — lives in a `mktemp` `$SESSION_DIR` and is persisted only by an issue
-  post conditional on a linked issue and a working `gh`; that is a known property of this carrier,
-  not a census gap awaiting another work order.
 
 ## 1d — Structural exemptions — and nothing else
 

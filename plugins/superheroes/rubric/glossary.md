@@ -32,20 +32,29 @@ rulings. See [Canon's contract](canon-contract.md).
 A sitting in which the owner takes batched decisions, from the command or from a conversation.
 "Walk" alone means this.
 
+### Owner-vs-craft line
+
+The one line that sorts every call a session meets into a [craft call](#craft-call) or an
+[owner call](#owner-call): ten owner categories, a sorting rule, an always-craft list, the
+consequence rule, and errors that are not decisions. It is the same in every project.
+See [the owner-vs-craft line](owner-vs-craft-line.md).
+
 ### Craft call
 
-A decision the advisor decides, executes, and records for the owner's veto.
+A call the [owner-vs-craft line](#owner-vs-craft-line) sorts as craft. An agent decides it, executes
+it, and records it for the owner's veto.
 
 ### Owner call
 
-A decision that waits for the owner's word. Doubt resolves to an [owner call](#owner-call).
+A call the [owner-vs-craft line](#owner-vs-craft-line) sorts as the owner's. It waits for the owner's
+word. Doubt resolves to an [owner call](#owner-call).
 
 ### Material consequence
 
-The line between a [craft call](#craft-call) and an [owner call](#owner-call): a change with a
-material consequence is the owner's to accept. Each project configures the line as a plugin default
-illustrated by the project's own examples, evolves it by the owner's [rulings](#ruling) at walks,
-and never checks it by tool.
+An owner consequence that a change or a craft choice carries: one that touches a category of the
+[owner-vs-craft line](#owner-vs-craft-line). It goes to the owner as its own decision under the
+line's [consequence rule](owner-vs-craft-line.md#a-craft-choice-that-carries-an-owner-consequence).
+Nothing checks it by tool.
 
 ### Priority tiers
 
