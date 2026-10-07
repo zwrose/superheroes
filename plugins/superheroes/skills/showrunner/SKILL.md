@@ -377,7 +377,7 @@ above).
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context. Each `FU` id gets its own keyed
      disposition in the receipt's field 7. Which kind a follow-up is gets sorted by the
-   [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md). At a
+     [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md). At a
      [craft call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#craft-call) you execute it now and record
      the determination, dated and reasoned, for cheap owner veto; at an
      [owner call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#owner-call) it is the owner's word, via the

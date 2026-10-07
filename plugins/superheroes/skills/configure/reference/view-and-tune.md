@@ -488,7 +488,7 @@ action that owns it, leaving the rest of the calibration untouched:
   seat's default model). It feeds the review-code panel's `seat_map compose --pins`; a pin the
   account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
   grounding/strong-seat independence break) **stays loud** — the shipped seat-map machinery
-  (#510/#603) emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
+  emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
   review receipt and the seat falls back to rotation. The loader does structural validation only; a
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
@@ -611,7 +611,7 @@ Follow-up: `/superheroes:configure`.
 - **In-flight work:** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
   confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the
-  execution spine, #478), so `configure_route.work_in_flight('.')` always reports no known in-flight
+  execution spine), so `configure_route.work_in_flight('.')` always reports no known in-flight
   work — rely on your own judgment about what's mid-flight before flipping. This is a strong
   warning, not a hard block.
 - **Switch to the mode already in effect:** reported as already in that mode; no change.
