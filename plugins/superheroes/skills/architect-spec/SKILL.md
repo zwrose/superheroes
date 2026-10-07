@@ -129,14 +129,14 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - **Ambiguity:** any requirement readable two ways? Pick one, make it explicit;
      repeat concrete nouns instead of "it/this".
 
-6. **Return to `discovery`** with the path. Discovery owns the `review-spec` gate
+6. **Return to `discovery`** with the path. Discovery runs the spec checks
+   (`skills/architect-discovery/reference/spec-checks.md`) and owns the gate
    and the owner's final approval; this skill stops at "spec written and
    self-reviewed."
 
 ## Weight never changes the artifact class
 
-A spec reviewed at `light` weight and a spec reviewed at `full` weight are **the same artifact
-class**. Four equivalences hold, always:
+A light spec and a full spec are **the same artifact class**. Four equivalences hold, always:
 
 1. **Same template.** Both are filled from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`.
    **There is no light template.**
@@ -150,9 +150,8 @@ class**. Four equivalences hold, always:
 4. **Same owner approval authority.** Both are approved by the owner, recorded through the same
    `set-gate` call. **There is no lighter approval.**
 
-What weight changes is the **process around** the artifact — how many review seats read it, how
-heavy the vet is, whether the owner's approval is asked in-channel or scheduled. It never
-changes the artifact.
+Every spec gets the same three spec checks whatever its size, and a spec's size changes only which
+sections it carries. The advisor may size its own vet of it. None of this changes the artifact.
 
 **Empty sections are omitted, never filled.** A light spec is shorter because it **deletes** the
 sections that genuinely do not apply — not because it keeps a heading and writes "N/A", "None",
@@ -174,7 +173,7 @@ empty-sections rule above.
 | "A little tech detail clarifies it" | Tech is the build's *how*. Keep the spec to the *what*. |
 | "Owner approved the idea, I'll author straight off" | Author only from the *approved requirements*. If they weren't approved, back to `discovery`. |
 | "I'll just assert the repo does X, everyone knows it" | A load-bearing mirror-fact needs a resolving `[cite: …]` to its repo source. A fabricated repo fact is the #205 class — cite it or don't assert it. |
-| "It's a light spec, I'll use a lighter format" | Weight changes the process around the artifact, never the artifact class: same template, same home, same anchor power, same owner approval authority. |
+| "It's a light spec, I'll use a lighter format" | A spec's size changes only which sections it carries, never the artifact class: same template, same home, same anchor power, same owner approval authority. |
 | "I'll keep the heading and write N/A under it" | Empty sections are omitted, never filled. A heading with nothing real under it is a defect at either weight — delete it. |
 | "The Amendments section is empty, I'll delete it like any empty section" | `## Amendments` is always rendered; its zero state is the explicit no-amendments line — that is real content, not an empty section. |
-| "This annex just spells out what the spec meant" | An annex elaborates decisions the core already makes; a new opinion amends the core. Annex smuggling is a named review-spec finding class. |
+| "This annex just spells out what the spec meant" | An annex elaborates decisions the core already makes; a new opinion amends the core. Annex smuggling is a named spec-check finding class. |

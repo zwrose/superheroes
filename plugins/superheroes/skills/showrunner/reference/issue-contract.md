@@ -257,25 +257,19 @@ Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the forward shar
 
 The **[craft call](../../../rubric/glossary.md#craft-call)** and **[owner
 call](../../../rubric/glossary.md#owner-call)** are the owner-decisions contract's two routing
-calls; **the names in this section are the ones every surface uses**. The **[material
-consequence](../../../rubric/glossary.md#material-consequence)** line routes a decision between
-them. **Doubt resolves to an owner call.**
+calls; **the names in this section are the ones every surface uses**. The
+**[owner-vs-craft line](../../../rubric/owner-vs-craft-line.md)** routes a decision between them
+— its [ten owner categories](../../../rubric/owner-vs-craft-line.md#the-ten-owner-categories) and
+its [sorting rule](../../../rubric/owner-vs-craft-line.md#how-a-call-is-sorted) — and a
+**[material consequence](../../../rubric/glossary.md#material-consequence)** is an owner consequence
+a change carries, raised under the line's consequence rule. **Doubt resolves to an owner call.**
 
-**The plugin's default, which each project extends.**
+**How a project's answers accumulate.** A project never extends or narrows the line; its own
+answers accumulate as standing rulings and ceded calls in its Canon, written by
+[Canon's write procedure](../../../rubric/canon-contract.md#writing-a-ruling), and a later call
+those rulings answer is already answered (the line's first sorting step).
 
-- **Material** is: anything a user or a consuming project would see differently; scope outside the
-  issue's named surfaces; a disclosed tradeoff; a change to what a review's evidence covers; a change
-  to a mechanism's fail direction; and anything a plausible product preference could distinguish.
-- **Craft** is: a base update, a rename, a test fix on the diff's own behavior, an integration fix
-  that makes a union build, and their kin.
-- **Doubt resolves to an owner call.**
-
-**How a project extends it.** Each project adds its own examples in its configure profile, **mined
-from its own ruling record** the way its severity ladder is, never from recent memory. **The default
-is never narrowed, only illustrated.** It evolves one way: when the owner says at a walk that a call
-the advisor made was material, or was craft, **that example lands in the profile**.
-
-**How it is used.** **The advisor cites the line when making the call**, on the pull request's owner
+**How it is used.** **The advisor cites the owner-vs-craft line when making the call**, on the pull request's owner
 half or in the thread. **Nothing checks it**, and a classifier for it is declined at the door.
 
 **What reads it.** The scope exception and the red-train fix in the merge doctrine, the fold rule at
