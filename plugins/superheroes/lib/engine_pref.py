@@ -251,6 +251,67 @@ def classify_spec_reviewer(value):
     return {"state": "invalid", "reason": "spec-reviewer-unknown-engine"}
 
 
+SPEC_REVIEWER_SOURCES = ("configured", "cross-family-installed", "same-family-fallback")
+SPEC_REVIEWER_ROLE = "brief-check"
+
+
+def resolve_spec_reviewer_seat(prefs, author_engine, live_engines):
+    """Pure resolution of the spec checks' reviewer seat from a load_engine_prefs-shaped dict: the
+    configured engine when it is a different family from the author's and live, else the first
+    live engine of a different family in registry vendor order, else the author's own engine
+    (same family). Reads no disk and no PATH; raises ValueError only for an unknown author engine."""
+    if author_engine not in ENGINES:
+        raise ValueError(
+            "unknown author engine %r; expected one of %s" % (author_engine, ", ".join(ENGINES)))
+    live = set(live_engines)
+    author_family = model_registry.family_for(SPEC_REVIEWER_ROLE, author_engine)
+    prefs = prefs if isinstance(prefs, dict) else {}
+    configured = None
+    state, reason = "unset", None
+    read_error = prefs.get("readError")
+    invalid = prefs.get("invalidSpecReviewer")
+    if read_error:
+        state, reason = "unreadable", str(read_error).split(":", 1)[0].strip()
+    elif isinstance(invalid, dict):
+        state, reason = "invalid", invalid.get("reason")
+    elif prefs.get(SPEC_REVIEWER_KEY) in ENGINES:
+        state, configured = "valid", prefs[SPEC_REVIEWER_KEY]
+    engine, source = None, None
+    if state == "valid":
+        if model_registry.family_for(SPEC_REVIEWER_ROLE, configured) == author_family:
+            reason = "configured-same-family"
+        elif configured not in live:
+            reason = "configured-unavailable"
+        else:
+            engine, source = configured, "configured"
+    if engine is None:
+        for vendor in model_registry.vendors():
+            if (model_registry.family_for(SPEC_REVIEWER_ROLE, vendor) != author_family
+                    and vendor in live):
+                engine, source = vendor, "cross-family-installed"
+                break
+    if engine is None:
+        engine, source = author_engine, "same-family-fallback"
+    family = model_registry.family_for(SPEC_REVIEWER_ROLE, engine)
+    model, effort = model_registry.matrix_config(SPEC_REVIEWER_ROLE, engine)
+    return {
+        "ok": True,
+        "engine": engine,
+        "model": model,
+        "effort": effort,
+        "family": family,
+        "authorEngine": author_engine,
+        "authorFamily": author_family,
+        "sameFamily": family == author_family,
+        "source": source,
+        "configured": configured,
+        "configuredState": state,
+        "configuredReason": reason,
+        "seat": {"vendor": engine, "model": model, "effort": effort,
+                 "role": SPEC_REVIEWER_ROLE},
+    }
+
+
 def resolve_builder_dispatch_tier(prefs):
     """Pure resolution of builder dispatch tier from a load_engine_prefs-shaped dict."""
     default = BUILDER_DISPATCH_TIER_DEFAULT

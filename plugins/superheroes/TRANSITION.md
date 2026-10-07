@@ -30,6 +30,12 @@ belongs to and lists every change with its replacement.
 - `core_md` confirm now keeps `enginePreferences` when it confirms a provisional calibration. Before, it dropped them.
 - New `core_md.write_project_config_item_if`, a compare-and-swap write of a single item. It refuses with `item-changed` when the item no longer holds the expected value.
 
+### The three spec checks
+
+- New reference doc `skills/architect-discovery/reference/spec-checks.md`: the three checks discovery runs on a written spec, their reviewer seat, their rounds and their running record.
+- New verb `core_md.py spec-reviewer-seat --cwd . --author-engine <engine>` (optionally `--root R`). It is read-only and prints one JSON line with the keys `ok`, `engine`, `model`, `effort`, `family`, `authorEngine`, `authorFamily`, `sameFamily`, `source`, `configured`, `configuredState`, `configuredReason` and `seat`. `source` is `configured`, `cross-family-installed` or `same-family-fallback`. `model` and `effort` are the registry's brief-check cell for `engine`, and `seat` is the bundle to pass to `dispatch-review --mode brief-check` as `--seat`. An unknown `--author-engine` is a usage error (exit 2).
+- New verb `definition_doc.py grounding-base --root <root> --dest <dir>`. It fetches the project's default branch and adds a detached worktree at its tip in a new directory. Success prints `ok`, `ref`, `sha` and `path` and exits 0. A refusal prints `ok` (false), `reason` and `detail` on stdout, exits 1 and creates nothing. Its seven refusal reasons are `grounding-base-not-a-repo`, `grounding-base-no-origin`, `grounding-base-default-unknown`, `grounding-base-fetch-failed`, `grounding-base-dest-exists`, `grounding-base-dest-inside-repo` and `grounding-base-worktree-failed`. Release the worktree afterwards with plain `git -C <root> worktree remove <dir>`.
+
 ### Guardian dead-code ids are repo-relative
 
 - Dead-code candidate ids and their stored `path` no longer carry the checkout's absolute path, so a sweep from a different checkout no longer reports every carried dead-code hit as new.
