@@ -1,8 +1,5 @@
 # Contents
 
-- [The three boards](#the-three-boards)
-- [What the build board holds](#what-the-build-board-holds)
-- [Never less detailed than the chat](#never-less-detailed-than-the-chat)
 - [Frame and product](#frame-and-product)
 - [Where the design system comes from](#where-the-design-system-comes-from)
 - [Claude Design choices in Canon](#claude-design-choices-in-canon)
@@ -10,34 +7,12 @@
 - [Hosts that cannot show an HTML artifact](#hosts-that-cannot-show-an-html-artifact)
 - [Saving the approved build board](#saving-the-approved-build-board)
 - [Syncing to Claude Design](#syncing-to-claude-design)
-- [Skipping the board](#skipping-the-board)
-- [The board wins](#the-board-wins)
-- [Redraws after approval](#redraws-after-approval)
+- [Skipping the board, the board winning, and redraws](#skipping-the-board-the-board-winning-and-redraws)
 
 # Boards
 
-A board is a drawing of the work, made before the spec is written. Discovery draws three boards
-in order. The owner comments and rules on each one before the next.
-
-## The three boards
-
-1. The journeys or flows. This board shows how a person moves through the work.
-2. The open choices, drawn side by side. Each option is drawn, so the owner compares them by
-   looking.
-3. The build board. It holds the settled design.
-
-Any visual that communicates counts: screens, storyboards, flow charts, diagrams.
-
-## What the build board holds
-
-- It holds only the settled design. No open alternative appears on it.
-- It uses the product's real wording. Placeholder copy never appears on it.
-- Everything that can reasonably be drawn is drawn. Prose does not stand in for a drawing.
-
-## Never less detailed than the chat
-
-A board is the higher-resolution record of the work. Anything the chat settled appears on the
-board.
+A board is a drawing of the work, made before the spec is written. Step 5 of the skill owns which
+boards discovery draws and what they hold. This reference holds how a board is made.
 
 ## Frame and product
 
