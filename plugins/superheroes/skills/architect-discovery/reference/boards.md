@@ -63,17 +63,18 @@ The stylesheet's own containment rules carry into every board:
 The skeleton of a board page:
 
 ```html
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Build board: the feature's name</title>
-  <link rel="stylesheet" href="comic-panel.css">
-  <link rel="stylesheet" href="design-system/tokens.css">
-  <link rel="stylesheet" href="design-system/components.css">
-</head>
-<body>
-  <div class="sh-theme">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Watering reminders build board</title>
+<link rel="stylesheet" href="comic-panel.css">
+<link rel="stylesheet" href="design-system/tokens.css">
+<link rel="stylesheet" href="design-system/components.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .board { display: grid; gap: 20px; padding-inline: 16px; padding-block: 24px; }
+</style>
+<div class="sh-theme">
+  <div class="board">
     <div class="sh-card">
       <h2 class="sh-heading">Screen title</h2>
       <p class="sh-label">Screen 1 of 4</p>
@@ -83,11 +84,10 @@ The skeleton of a board page:
       <p class="sh-caption">What the owner sees here, and when.</p>
     </div>
   </div>
-</body>
-</html>
+</div>
 ```
 
-The two design-system links are examples. Link the files the project has.
+The two design-system links are examples. Link the files the project has. The page has no doctype and no `html`, `head` or `body` tags, like the review template, because the Artifact host wraps a published page in its own document, and the same file still opens in a browser from a folder. The page's own `style` block holds layout only, such as spacing and grid, and never a colour, font or part value. The title is a short name for the board, with no colon and no explanation after it.
 
 ## Where the design system comes from
 
