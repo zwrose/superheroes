@@ -4,6 +4,7 @@
 - [A merge train's "green" includes post-merge `main` CI](#a-merge-trains-green-includes-post-merge-main-ci)
 - [Union fixes ride the last *open* PR, disclosed](#union-fixes-ride-the-last-open-pr-disclosed)
 - [Merging a stack](#merging-a-stack)
+- [Merging a spec PR](#merging-a-spec-pr)
 - [Selecting the run to watch](#selecting-the-run-to-watch)
 
 # The merge train
@@ -162,6 +163,28 @@ saw. Nothing in the tooling closes that gap; this rule does.
    owner enumerated (full-stack equality only when merging by stack number), that no member within
    that scope is unexpected, and that the stack's `baseRefName` matches the planned or owner-approved
    base.
+
+## Merging a spec PR
+
+The rule is not here. One merge word covers a spec and its breakdown, and the approval is never the
+merge word: that is duty 1 and duty 6 of `skills/showrunner/SKILL.md`.
+
+Before you execute, confirm four things:
+
+1. The approval is recorded with its date.
+2. The breakdown's vet record is clean.
+3. Where the package read applies, its verification pass and filing dry-run are recorded against this
+   head.
+4. Duty 6's three preconditions hold.
+
+Then merge the PR, and file the issues from the merged breakdown at once, under the same word. Wire
+each issue as duty 2 says.
+
+If filing fails partway, report it in the thread that gave the word and finish filing. Never re-merge
+or revert to retry. If the merge does not happen, nothing files.
+
+Where the stored spec stands in for the PR, there is nothing to merge: the owner's word at that step
+files the issues.
 
 ## Selecting the run to watch
 

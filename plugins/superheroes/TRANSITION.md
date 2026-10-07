@@ -14,6 +14,7 @@ belongs to and lists every change with its replacement.
 - A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
 - A caller that invokes `/superheroes:review-spec` or the deleted `spec_loop_plan` module must switch to discovery's spec checks.
 - **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
+- A spec already in review when a project adopts this release finishes on the path it started on unless the owner says otherwise.
 
 ### Canon: the record of the owner's decisions
 
@@ -43,6 +44,13 @@ belongs to and lists every change with its replacement.
 - Removed lib modules, with nothing replacing them as CLIs: `lib/spec_loop_plan.py` (its `plan`, `record` and `decide` verbs) and `lib/doc_focus_flags.py`. Both are deleted.
 - The spec review weight call is gone: no light-or-full call decides how a spec is reviewed. Package reads keep their weight call. Code review's light, full and micro lanes are unchanged.
 - The spec's review gate keeps `pending`, `changes-requested` and `passed`. Discovery now records `changes-requested` when the owner asks for changes, and the stale-approval reset (`gate_write.py --mode reset`) is called from spec-checks.md § The review gate. Only the owner's approval writes `passed`.
+- Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
+
+### The advisor's spec vet hands findings back; discovery asks for approval
+
+- The advisor no longer tells the owner a spec is "ready for your approval". Its vet checks the spec against the repo, the other approved specs and Canon, never edits the spec, and returns every finding to discovery in a vet record: a comment on the spec PR marked `<!-- superheroes:spec-vet -->`, or `vet-record.md` beside a stored spec. Discovery's final sheet asks for approval.
+- After the owner approves and says the final sheet is done, the advisor adds the breakdown to the same spec PR (or beside the stored spec) and vets it; one merge word covers both, and the issues file as it merges.
+- An owner ruling the advisor receives goes to Canon on a pull request it has open; with none open, it is held in a comment marked `<!-- superheroes:canon-held -->` on the project's standing proposals collector until the next pull request the advisor opens.
 - Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
 
 ### Guardian dead-code ids are repo-relative

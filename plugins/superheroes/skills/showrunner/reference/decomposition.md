@@ -10,6 +10,7 @@
 - [Re-entry after a substantive amendment](#re-entry-after-a-substantive-amendment)
 - [Reciprocal cross-epic seams](#reciprocal-cross-epic-seams)
 - [The child-PR register vet row](#the-child-pr-register-vet-row)
+- [The breakdown rides the spec PR](#the-breakdown-rides-the-spec-pr)
 - [The single-issue fast path](#the-single-issue-fast-path)
 
 # Epic decomposition
@@ -353,6 +354,22 @@ to. A deliberate departure from a register entry is **disclosure**, not silence 
 whether the handback names the drift or the implementation matches.
 
 **Undisclosed drift found at vet** holds the handback until the drift is disclosed or repaired.
+
+## The breakdown rides the spec PR
+
+When the spec was approved on a spec PR, the coverage map, the contract register, the package-read
+audit trail and the child bodies are committed to that same PR's branch, in the work item's folder
+beside the spec. Where the project keeps specs out of the repo or gitignored, they sit beside the
+stored spec.
+
+When the breakdown starts is duty 1's, in `skills/showrunner/SKILL.md`. So is the vet you run on it,
+whose mechanism is in `skills/showrunner/reference/spec-vet.md` § Vetting the breakdown.
+
+The adversarial package read still runs where it applies, on that PR, before any child files. Its
+filing dry-run runs against that PR's head.
+
+Single-issue work keeps the fast path below: no register and no package read. The single child's
+proposed body is the breakdown.
 
 ## The single-issue fast path
 
