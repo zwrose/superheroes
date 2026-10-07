@@ -162,6 +162,24 @@ def test_usage_doc_states_the_reading_rule_for_a_final_sheet():
         assert retired not in section, "the reading rule still names %r" % retired
 
 
+# Bites on: the doc no longer saying that tapping the picked answer or the chosen verdict again clears it (saved as null, note kept), or no longer reading a cleared answer or a cleared verdict as unanswered.
+def test_usage_doc_says_a_second_tap_clears_and_a_cleared_answer_is_unanswered():
+    answers = _squeezed(_section(_doc(), "How answers come back"))
+    for phrase in (
+        "tapping the picked answer again clears it",
+        "the cleared answer (null) saves the same way, with the note kept",
+        "a stored answer of null (a cleared pick)",
+        "a verdict of null (a cleared verdict) is unanswered",
+    ):
+        assert phrase in answers, "the answers section doesn't say %r" % phrase
+    final = _squeezed(_section(_doc(), "A final sheet"))
+    for phrase in (
+        "Tapping the chosen one again clears the verdict, saved as null with the note kept.",
+        "a cleared verdict",
+    ):
+        assert phrase in final, "the final-sheet section doesn't say %r" % phrase
+
+
 # Bites on: "A final sheet" going back to a Send verdict button or draft paths, losing the verdict's path and schema definition, the digest rule (exact bytes, a byte-order mark included, equal to `sheet`), the restore rule for this revision only, the no-`crypto.subtle` line, the next-step line below the last card, or the no-cards case.
 def test_usage_doc_describes_the_final_sheet():
     section = _squeezed(_section(_doc(), "A final sheet"))

@@ -157,9 +157,9 @@ below it and the next box work as usual.
 
 A tap saves at once into the sheet's own store, and the owner can change it; tapping the picked
 answer again clears it, and the cleared answer (null) saves the same way, with the note kept. The
-last tap counts. Each card's stored document has the shape `sheet.schema.json` defines at
-`$defs/answer`. Anyone but the owner who opens a shared sheet sees it with the answer controls turned
-off.
+last tap counts. Each card's stored document has the shape
+`sheet.schema.json` defines at `$defs/answer`. Anyone but the owner who opens a shared sheet sees it
+with the answer controls turned off.
 
 A save that fails says so on the card and offers Try again.
 
