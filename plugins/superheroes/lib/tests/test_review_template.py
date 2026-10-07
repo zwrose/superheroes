@@ -3745,6 +3745,16 @@ def test_the_fold_row_is_padded_and_its_chips_line_up_with_the_label():
     assert "flex" not in chips[0], "the chips line still claims a full flex line"
 
 
+# Bites on: the item row's badge shrinking or wrapping onto broken lines beside the question and its pill.
+def test_a_rows_not_saved_badge_never_shrinks_or_wraps():
+    rules = _style_rules(_template_text())
+    badge = [pairs for selector, pairs in rules if selector == ".sheet-page .sheet-row > .sh-badge"]
+    assert len(badge) == 1, "the item row's badge is not one rule"
+    declared = dict(badge[0])
+    assert declared.get("flex") == "none", "the item row's badge can shrink"
+    assert declared.get("white-space") == "nowrap", "the item row's badge can wrap onto broken lines"
+
+
 # Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▶), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.
 def test_the_declines_cue_follows_the_toggle():
     result = _sheet_page(_sample_final(), CUE_SCENARIO + """
