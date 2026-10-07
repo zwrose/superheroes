@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from provenance_patterns import PROVENANCE_PATTERNS
+
 THEME = Path(__file__).resolve().parents[2] / "theme"
 SCHEMA_PATH = THEME / "sheet.schema.json"
 SAMPLE_PATH = THEME / "sample-sheet.json"
@@ -224,17 +226,6 @@ def test_final_and_plain_sheets_validate():
     }
     assert errors_for(final) == []
     assert errors_for(plain) == []
-
-
-PROVENANCE_PATTERNS = [
-    r"\b(?:U?FR|NFR)-?\d",
-    r"\bR\d{1,2}\b",
-    r"\bC\d(?:-L\d)?\b",
-    r"[Rr]uling \d",
-    r"#\d{2,}",
-    r"HANDOFF",
-    r"discovery-notes",
-]
 
 
 @pytest.mark.parametrize("path", [SCHEMA_PATH, SAMPLE_PATH], ids=lambda p: p.name)
