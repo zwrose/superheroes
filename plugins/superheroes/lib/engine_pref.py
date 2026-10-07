@@ -259,7 +259,8 @@ def resolve_spec_reviewer_seat(prefs, author_engine, live_engines):
     """Pure resolution of the spec checks' reviewer seat from a load_engine_prefs-shaped dict: the
     configured engine when it is a different family from the author's and live, else the first
     live engine of a different family in registry vendor order, else the author's own engine
-    (same family). Reads no disk and no PATH; raises ValueError only for an unknown author engine."""
+    (same family) when that engine is itself live; with no live engine left it returns
+    {"ok": False, "reason": "no-usable-reviewer", ...} instead of an excluded engine. Reads no disk and no PATH; raises ValueError only for an unknown author engine."""
     if author_engine not in ENGINES:
         raise ValueError(
             "unknown author engine %r; expected one of %s" % (author_engine, ", ".join(ENGINES)))
@@ -290,6 +291,16 @@ def resolve_spec_reviewer_seat(prefs, author_engine, live_engines):
                     and vendor in live):
                 engine, source = vendor, "cross-family-installed"
                 break
+    if engine is None and author_engine not in live:
+        return {
+            "ok": False,
+            "reason": "no-usable-reviewer",
+            "authorEngine": author_engine,
+            "authorFamily": author_family,
+            "configured": configured,
+            "configuredState": state,
+            "configuredReason": reason,
+        }
     if engine is None:
         engine, source = author_engine, "same-family-fallback"
     family = model_registry.family_for(SPEC_REVIEWER_ROLE, engine)

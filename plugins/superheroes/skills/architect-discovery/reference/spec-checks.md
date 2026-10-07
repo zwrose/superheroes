@@ -76,7 +76,10 @@ The verb is read-only. It prints one JSON object and exits 0. The keys you need 
 The verb applies this rule. A configured seat is configure's spec-reviewer seat, which names an
 engine and no model. The verb uses it when it is a different model family from the author's and is
 installed. Otherwise it takes an installed engine of a different family. Only when none is
-installed does it take the same-family path. Claude counts as always installed. The model and the
+installed does it take the same-family path, and only when the author's own engine is still
+installed. Claude counts as always installed, until you exclude it. When no usable engine remains,
+the verb prints `"ok": false` with `"reason": "no-usable-reviewer"` and none of the seat keys; stop
+and tell the owner no reviewer can run. The model and the
 effort come from the plugin's model registry. This doc never names them.
 
 All three checks use that one seat. Each check is its own dispatch.

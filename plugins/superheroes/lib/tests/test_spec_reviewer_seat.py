@@ -245,3 +245,19 @@ def test_verb_refuses_an_unknown_author_engine_as_a_usage_error(tmp_path):
          "--author-engine", "gemini"],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 2
+
+
+def test_no_live_author_engine_refuses_instead_of_returning_an_excluded_engine():
+    # Bites on: the same-family fallback returning an engine absent from the live set
+    got = _resolve("claude", [])
+    assert got["ok"] is False
+    assert got["reason"] == "no-usable-reviewer"
+    assert "engine" not in got and "seat" not in got
+
+
+def test_verb_exclude_claude_for_a_claude_author_with_no_other_cli_refuses(tmp_path):
+    # Bites on: --exclude-engine claude still yielding claude via the same-family fallback
+    proc = _verb(tmp_path, fake_binaries=[], extra_args=["--exclude-engine", "claude"])
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    assert got["ok"] is False and got["reason"] == "no-usable-reviewer"
