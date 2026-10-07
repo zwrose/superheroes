@@ -55,6 +55,9 @@ a grounding base and was checked against this session's branch only. That output
 default-branch evidence: an empty `[]` proves nothing about the default branch, and that round's
 citation result counts toward nothing clean while grounding is not run.
 
+Each citation-check finding is a finding like any other. Sort it into one of the three piles and
+record it in that round's findings table under the grounding check.
+
 ## The spec-reviewer seat
 
 Resolve the seat once, at round 1. The author engine is the engine your own session runs on:
@@ -234,6 +237,10 @@ already in the owner's queue, or after round 4, whichever comes first.
 
 A check is clean in a round when its result is real, it confirmed every previous fix and accepted
 every decline, and it raised no new finding that is not already queued.
+
+Grounding is not clean in a round while a citation-check finding from that round is neither fixed,
+queued nor declined with its proof. A citation run with no grounding base counts toward nothing
+clean.
 
 After round 4, every finding still open joins the owner's queue. That includes a fix round 4 could
 not confirm and a check that was not run. Mark each one "the review didn't settle this".

@@ -2,6 +2,7 @@
 """`definition_doc.py grounding-base`: a detached worktree at the freshly fetched default-branch tip."""
 import json
 import os
+import stat
 import subprocess
 import sys
 
@@ -85,6 +86,28 @@ def test_stale_branch_materializes_the_fetched_default_tip(stale):
     finally:
         _git(session, "worktree", "remove", str(dest))
     assert not dest.exists()
+
+
+def test_failing_post_checkout_hook_cannot_break_or_dirty_the_grounding_worktree(stale):
+    # Bites on: dropping the `-c core.hooksPath=/dev/null` / `-c core.fsmonitor=` pair from _git_step
+    # (a consuming project's post-checkout hook would fail `worktree add` or dirty the grounding tree)
+    session, dest = stale["session"], stale["dest"]
+    hooks_dir = os.path.join(str(session), ".git", "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+    # Pin core.hooksPath to THIS repo's hooks dir so an ambient global hooksPath cannot hide the axis.
+    _git(session, "config", "core.hooksPath", hooks_dir)
+    hook = os.path.join(hooks_dir, "post-checkout")
+    with open(hook, "w") as fh:
+        fh.write("#!/bin/sh\ntouch hook-ran.marker\nexit 1\n")
+    os.chmod(hook, os.stat(hook).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    res = definition_doc.grounding_base(root=str(session), dest=str(dest))
+    try:
+        assert res["ok"] is True
+        assert res["sha"] == stale["new_tip"]
+        assert _git(dest, "rev-parse", "HEAD") == stale["new_tip"]
+        assert not (dest / "hook-ran.marker").exists()
+    finally:
+        _git(session, "worktree", "remove", "--force", str(dest))
 
 
 def test_fetch_failure_refuses_and_creates_nothing(stale):
