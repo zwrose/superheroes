@@ -373,7 +373,7 @@ tripwire fired** and name the seam problem, so the advisor is grading a declared
 inferring it from provenance. Where the builder cannot say with confidence that the lane has
 converged, the park branch binds — the permissive branch is available only on a lane the builder can
 affirmatively call converged. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — stop with receipts; lifting the park is owner- or advisor-ruled
-rather than the builder's own call. When the advisor lifts a tripwire or a park and sets a bound, a hit on that bound parks back to the advisor, who applies the owner-decisions filter; the owner gets the question only when a real taste, trade or commitment, or a material consequence, arises. Two field specimens deviated from the letter while honouring
+rather than the builder's own call. When the advisor lifts a tripwire or a park and sets a bound, a hit on that bound parks back to the advisor, who applies the owner-decisions filter; the owner gets the question only when the owner-vs-craft line (`rubric/owner-vs-craft-line.md`) sorts it as the owner's. Two field specimens deviated from the letter while honouring
 the substance, which is what prompted the ruling.
 
 ### Continuation and the advisor-resolution valve
