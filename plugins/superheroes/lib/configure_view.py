@@ -43,7 +43,8 @@ _SPEC_REVIEWER_FALLBACK = (
 _SPEC_REVIEWER_UNSET = "spec reviewer — unset (no model named). " + _SPEC_REVIEWER_FALLBACK
 _SPEC_REVIEWER_VALID = (
     "spec reviewer — %(engine)s (no model named). When %(engine)s is the spec author's own model "
-    "family, the checks use an installed engine of a different family instead.")
+    "family, the checks use an installed engine of a different family instead; when none is "
+    "installed, they use a fresh reviewer from the author's own family.")
 _SPEC_REVIEWER_INVALID = (
     "spec reviewer — unset: the recorded value %s is not an engine and is not applied ⚠")
 def _read(path):
@@ -228,11 +229,25 @@ def _one_line_prose(text, limit=_PROSE_DISPLAY_MAX):
     return line[: limit - 1] + "…"
 
 
-def _config_item_display(item_def, entry):
+def _canon_pointer_display(repo_root, cwd, store_root):
+    """The item-13 pointer row: where Canon lives, or that its lookup failed. Never raises."""
+    try:
+        import definition_doc
+
+        where = definition_doc.resolve_canon(
+            root=repo_root, cwd=cwd, store_root=store_root)["path"]
+    except Exception as exc:
+        where = "Canon lookup failed: %s" % type(exc).__name__
+    return "points to the project's Canon standing rulings (%s) — no value of its own" % where
+
+
+def _config_item_display(item_def, entry, canon_args=None):
     """Format one configuration row for the one-screen view. Read-only."""
     if entry.get("malformed"):
         return "malformed (stamped value not applied)"
     source = entry.get("source")
+    if source == "canon-pointer":
+        return _canon_pointer_display(*(canon_args or (None, None, None)))
     slug = item_def["slug"]
     shape = item_def.get("shape")
     effective = entry.get("effective")
@@ -267,6 +282,13 @@ def _project_config_lines(cwd, root):
         payload = project_config.view(cwd, root)
     except Exception:
         return ["(not available)"]
+    try:
+        import store_core
+
+        repo_root = store_core.repo_root(cwd)
+    except Exception:
+        repo_root = None
+    canon_args = (repo_root, cwd, root)
     lines = []
     if payload.get("profileUnparseable"):
         lines.append("profile: core.md unreadable — no stamped values shown")
@@ -291,7 +313,7 @@ def _project_config_lines(cwd, root):
             entry["malformed"] = False
         number = item_def["number"]
         name = item_def["name"]
-        value = _config_item_display(item_def, entry)
+        value = _config_item_display(item_def, entry, canon_args)
         lines.append("%d. %s — %s" % (number, name, value))
     try:
         deps = project_config.dependencies(cwd, root)

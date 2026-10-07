@@ -226,3 +226,37 @@ def test_item_14_stamped_shows_as_one_line_of_prose(tmp_path):
     block = _project_config_section(CV.render(repo, root=store))
     row = next(r for r in block if r.startswith("14. "))
     assert row == "14. Who it's for and what it's for — Home cooks who want a weeknight recipe."
+
+
+def test_adopted_item_13_row_points_to_canon(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    subprocess.run(["git", "-C", repo, "remote", "remove", "origin"], check=True)
+    CM.write_project_config_item(
+        repo, "materialConsequenceLine",
+        {"canon": "standing-rulings", "migratedOn": "2026-10-05"}, root=store)
+    block = _project_config_section(CV.render(repo, root=store))
+    row = next(r for r in block if r.startswith("13. "))
+    import definition_doc
+
+    canon_path = definition_doc.resolve_canon(root=repo, cwd=repo, store_root=store)["path"]
+    assert row == (
+        "13. Material consequence line — points to the project's Canon standing rulings (%s)"
+        " — no value of its own" % canon_path)
+
+
+def test_adopted_item_13_row_survives_a_failed_canon_lookup(tmp_path, monkeypatch):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config_item(
+        repo, "materialConsequenceLine",
+        {"canon": "standing-rulings", "migratedOn": "2026-10-05"}, root=store)
+    import definition_doc
+
+    def _boom(**kwargs):
+        raise definition_doc.CanonLookupError("no default ref")
+
+    monkeypatch.setattr(definition_doc, "resolve_canon", _boom)
+    block = _project_config_section(CV.render(repo, root=store))
+    row = next(r for r in block if r.startswith("13. "))
+    assert row == (
+        "13. Material consequence line — points to the project's Canon standing rulings"
+        " (Canon lookup failed: CanonLookupError) — no value of its own")

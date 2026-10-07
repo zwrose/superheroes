@@ -831,6 +831,27 @@ def test_render_spec_reviewer_valid_in_core_present_view(tmp_path):
     assert block.startswith("spec reviewer — codex (no model named). ")
 
 
+def test_render_spec_reviewer_valid_line_names_the_own_family_fallback(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": "codex"})
+    screen = cv.render(str(tmp_path), root=root)
+    block = _spec_reviewer_block(screen).strip()
+    assert block.startswith("spec reviewer — codex (no model named). ")
+    assert ("when none is installed, they use a fresh reviewer from the author's own family"
+            in block)
+
+
+def test_render_spec_reviewer_invalid_echo_is_bounded(tmp_path):
+    import engine_pref as ep
+
+    raw = "x" * 300
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": raw})
+    screen = cv.render(str(tmp_path), root=root)
+    bounded = ep.safe_config_echo(raw)
+    assert bounded != raw
+    assert raw not in screen
+    assert _spec_reviewer_block(screen).strip() == _invalid_expected(bounded)
+
+
 def test_render_spec_reviewer_invalid_in_core_present_view(tmp_path):
     root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": "gemini"})
     screen = cv.render(str(tmp_path), root=root)

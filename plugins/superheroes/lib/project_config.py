@@ -4,9 +4,13 @@
 Stdlib only. Every item's value is read and written only through this module and the
 ``core_md`` writers it routes to."""
 import argparse
+import datetime
 import json
 import math
 import os
+import re
+import secrets
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +34,11 @@ REASON_LADDER_CITATION_REQUIRED = "ladder-example-citation-required"
 REASON_PROFILE_ABSENT = "profile-absent"
 REASON_PROFILE_UNPARSEABLE = "profile-unparseable"
 REASON_SET_MISMATCH = "set-read-mismatch"
+REASON_MATERIAL_LINE_IN_CANON = "material-line-in-canon"
+
+MATERIAL_LINE_SLUG = "materialConsequenceLine"
+MATERIAL_LINE_MARKER_CANON = "standing-rulings"
+_MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
 _DEPENDENCY_FALLBACKS = {
     "launchLedger": "lanes are counted by hand beside the launch word",
@@ -186,6 +195,22 @@ def _validate_non_empty_prose(value):
     if not value.strip():
         return REASON_MALFORMED_VALUE
     return None
+
+
+def is_material_line_marker(raw):
+    """True when ``raw`` is exactly the item-13 Canon pointer: two keys, a valid ISO ``migratedOn``."""
+    # axis: only the exact two-key marker counts as adopted — see bite-proof record wo_a_1618_marker-shape
+    if not isinstance(raw, dict) or set(raw) != {"canon", "migratedOn"}:
+        return False
+    if raw["canon"] != MATERIAL_LINE_MARKER_CANON:
+        return False
+    stamp = raw["migratedOn"]
+    if not isinstance(stamp, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(stamp).isoformat() == stamp
+    except ValueError:
+        return False
 
 
 def _validate_threat_model(value):
@@ -457,6 +482,14 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
             "malformed": malformed,
         }
 
+    if slug == MATERIAL_LINE_SLUG and is_material_line_marker(raw):
+        return {
+            "raw": raw,
+            "effective": _MATERIAL_LINE_POINTER_EFFECTIVE,
+            "source": "canon-pointer",
+            "malformed": False,
+        }
+
     if raw is None:
         default = item["plugin_default"]
         if default is not None:
@@ -595,11 +628,30 @@ def _values_equal(stored, expected):
     return json.dumps(stored, sort_keys=True) == json.dumps(expected, sort_keys=True)
 
 
+def _material_line_in_canon_refusal():
+    return {
+        "action": "refused",
+        "reason": REASON_MATERIAL_LINE_IN_CANON,
+        "detail": (
+            "Item 13 now points to the project's Canon standing rulings and holds no "
+            "value of its own. Record a new example in Canon as a standing ruling, "
+            "by Canon's write procedure."
+        ),
+    }
+
+
 def set_item(cwd, slug, value, root=None):
     """Validate and write one item to its home only."""
     item = _item_by_slug(slug)
     if item is None:
         return {"action": "refused", "reason": REASON_UNKNOWN_SLUG}
+
+    if slug == MATERIAL_LINE_SLUG:
+        # axis: an adopted item 13 refuses a set before the value is looked at — see bite-proof record wo_a_1618_adopted-set-refusal
+        current = core_md.read(cwd, root)
+        stored = _read_project_config_raw(_project_config_mapping(current), slug)
+        if is_material_line_marker(stored):
+            return _material_line_in_canon_refusal()
 
     reason = validate_item_value(item, value)
     if reason is not None:
@@ -617,6 +669,14 @@ def set_item(cwd, slug, value, root=None):
         write_result = core_md.write_threat_model(cwd, value, root=root)
     elif item["home"] == HOME_GUARDIAN_CADENCE:
         write_result = core_md.write_guardian_cadence(cwd, value, root=root)
+    elif slug == MATERIAL_LINE_SLUG:
+        # axis: the adoption check and the write share one lock, so a set never undoes a migration — see bite-proof record wo_a_1618_set-cas
+        write_result = core_md.write_project_config_item_if(
+            cwd, slug, value, expected=stored, root=root)
+        if write_result.get("reason") == "item-changed":
+            if is_material_line_marker(write_result.get("observed")):
+                return _material_line_in_canon_refusal()
+            return write_result
     else:
         # axis: sibling keys in projectConfiguration survive a single-item set — wo_b_1276_one-home
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
@@ -635,6 +695,579 @@ def set_item(cwd, slug, value, root=None):
             "observed": reread.get("raw"),
         }
     return write_result
+
+
+_CANON_HEADER = (
+    "This file is the project's Canon, the record of the owner's decisions. Its rules live in the\n"
+    "superheroes plugin's `rubric/canon-contract.md`. Entries are appended one per line at the end\n"
+    "and are never edited or deleted."
+)
+_GITATTRIBUTES_LINE = "canon.md merge=union"
+_MIGRATION_COMMIT_MESSAGE = "docs: record configure item 13 in Canon as standing rulings"
+_MIGRATION_ORIGIN_PHRASE = "migrated from configure item 13"
+_SESSION_PATTERN = re.compile(r"^[0-9a-z]{8}$")
+_ENTRY_ID_PATTERN = re.compile(r"^- \*\*(.+?)\*\* · ")
+
+
+class _MigrationRefusal(Exception):
+    def __init__(self, reason, detail=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def _migration_result():
+    return {
+        "action": "refused",
+        "reason": None,
+        "detail": None,
+        "entries": [],
+        "skipped": [],
+        "canonPath": None,
+        "canonHome": None,
+        "commit": None,
+        "fetch": "not-needed",
+        "sanitized": False,
+    }
+
+
+def _git_run(root, reason, *args, timeout=10):
+    """Run ``git -C root args``; a git that cannot run is a refusal named ``reason``."""
+    try:
+        return subprocess.run(["git", "-C", root, *args], capture_output=True,
+                              encoding="utf-8", timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise _MigrationRefusal(
+            reason, "git could not be run (%s: %s)" % (type(exc).__name__, exc))
+
+
+def _first_line(text, fallback):
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return fallback
+
+
+def _split_rulings(raw):
+    """Item 13's prose as one ruling per paragraph, ` · ` replaced; returns (rulings, sanitized)."""
+    if not isinstance(raw, str) or not raw.strip():
+        return [], False
+    paragraphs = []
+    current = []
+    for line in raw.splitlines():
+        if line.strip():
+            current.append(line.strip())
+        elif current:
+            paragraphs.append(" ".join(current))
+            current = []
+    if current:
+        paragraphs.append(" ".join(current))
+    sanitized = False
+    rulings = []
+    for text in paragraphs:
+        while " · " in text:
+            text = text.replace(" · ", "; ")
+            sanitized = True
+        if text.strip():
+            rulings.append(text.strip())
+    return rulings, sanitized
+
+
+def _canon_copy_at(git_root, ref, rel):
+    """Canon's text at ``ref``; empty when the path is not in that tree."""
+    reason = "canon-default-probe-failed"
+    tree = _git_run(git_root, reason, "ls-tree", ref, "--", rel)
+    if tree.returncode != 0:
+        raise _MigrationRefusal(reason, _first_line(tree.stderr, "git exit %d" % tree.returncode))
+    if not tree.stdout.strip():
+        return ""
+    shown = _git_run(git_root, reason, "show", "%s:%s" % (ref, rel))
+    if shown.returncode != 0:
+        raise _MigrationRefusal(reason, _first_line(shown.stderr, "git exit %d" % shown.returncode))
+    return shown.stdout
+
+
+def _canon_head_copy(git_root, rel):
+    """Canon's text at HEAD; empty when HEAD is unborn or the path is not in HEAD."""
+    unborn = _git_run(git_root, "canon-default-probe-failed",
+                      "rev-parse", "--verify", "--quiet", "HEAD")
+    if unborn.returncode != 0:
+        return ""
+    return _canon_copy_at(git_root, "HEAD", rel)
+
+
+def _entry_fields(line):
+    """One Canon entry line's id, scope, ruling, migration origin and whole line; None if not one.
+
+    The ruling is the field after the scope, exactly: Canon's rule is that a ruling never holds
+    ` · `, so the fields split cleanly on it.
+    """
+    found = _ENTRY_ID_PATTERN.match(line)
+    if not found:
+        return None
+    parts = line.split(" · ")
+    if len(parts) < 4:
+        return None
+    return {
+        "id": found.group(1),
+        "scope": parts[2],
+        "ruling": parts[3],
+        "migrated": parts[-1].startswith("where: " + _MIGRATION_ORIGIN_PHRASE),
+        "line": line.strip(),
+    }
+
+
+def _canon_entries(committed_text):
+    """Every entry line in the text, migrated or not; a line too short to split keeps its id."""
+    entries = []
+    for line in committed_text.splitlines():
+        if not line.startswith("- **"):
+            continue
+        fields = _entry_fields(line)
+        if fields is None:
+            found = _ENTRY_ID_PATTERN.match(line)
+            if found:
+                fields = {"id": found.group(1), "scope": None, "ruling": line, "migrated": False,
+                          "line": line.strip()}
+        if fields is not None:
+            entries.append(fields)
+    return entries
+
+
+def _migrated_entries(committed_text):
+    """The entries in the text that carry the migration marker."""
+    return [entry for entry in _canon_entries(committed_text) if entry["migrated"]]
+
+
+def _refuse_conflicting_ids(entries):
+    """Refuse when an id a migrated entry carries is shared by a different entry of any kind.
+
+    The same entry line repeated across the HEAD and default-branch copies is one entry. Entries
+    that share an id and differ in any field (ruling, scope, supersession, provenance), or a
+    migrated and an ordinary entry that share one, resolve for no reader
+    (``rubric/canon-contract.md``), so the move never retires item 13's prose on top of them.
+    """
+    migrated_ids = {entry["id"] for entry in entries if entry["migrated"]}
+    seen = {}
+    for entry in entries:
+        if entry["id"] not in migrated_ids:
+            continue
+        held = seen.setdefault(entry["id"], [])
+        if entry["line"] not in {other["line"] for other in held}:
+            held.append(entry)
+    for entry_id, held in seen.items():
+        if len(held) > 1:
+            raise _MigrationRefusal(
+                "canon-id-conflict",
+                "Canon holds entries sharing the id %s, at least one of them migrated, with "
+                "different fields: %s. Entries sharing one id resolve for no reader, "
+                "and the duplicate goes to the owner; item 13 keeps its value until the owner has "
+                "settled it."
+                % (entry_id, ", ".join(
+                    '"%s" (%s) scoped %s' % (
+                        entry["ruling"], "migrated" if entry["migrated"] else "ordinary",
+                        entry["scope"] or "unreadable")
+                    for entry in held)))
+
+
+def _refuse_unless_recorded_set(rulings, canon_text):
+    """Refuse when migrated entries are recorded and ``rulings`` is not exactly their set.
+
+    The move accepts one recorded state: no migrated entry yet, or migrated entries whose rulings
+    are item 13's rulings, no more and no fewer. Anything else is item 13 changed after an earlier
+    run, which the move never reconciles: Canon's other entries are read only for an id a migrated
+    entry carries, and an entry sharing one refuses first. Returns the migrated entries.
+    """
+    # axis: an entry sharing a migrated entry's id, migrated or not, refuses before any adoption — see bite-proof record wo_a_1646_id-conflict
+    _refuse_conflicting_ids(_canon_entries(canon_text))
+    entries = _migrated_entries(canon_text)
+    recorded = []
+    for entry in entries:
+        if entry["ruling"] not in recorded:
+            recorded.append(entry["ruling"])
+    if recorded and set(recorded) != set(rulings):
+        raise _MigrationRefusal(
+            "material-line-changed-since-migration",
+            "Item 13 changed after an earlier run of the move recorded these entries: %s. Set "
+            "item 13 back to exactly this text, finish the move, then record any change in Canon "
+            "as a new ruling." % ", ".join('"%s"' % ruling for ruling in recorded))
+    return entries
+
+
+def _refuse_recorded_in_canon_for_no_rulings(cwd, root, result):
+    """The recorded-set guard for an item 13 holding no ruling, which writes nothing to Canon.
+
+    Emptying item 13 drops every ruling an earlier run recorded, so those entries stay in Canon
+    while the move would retire the prose. A project with no earlier run has no migrated entry in
+    either copy of Canon, so it adopts at once. Returns where Canon lives, for the readiness check.
+    """
+    import definition_doc
+    import store_core
+
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+    _fetch_default_branch(repo_root, result)
+    try:
+        info = definition_doc.resolve_canon(root=repo_root, cwd=cwd, store_root=root)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+    git_root = info["gitRoot"]
+    rel = os.path.relpath(os.path.realpath(info["path"]), os.path.realpath(git_root))
+    rel = rel.replace(os.sep, "/")
+    default_text = ""
+    if info["home"] == "repo" and info["defaultRef"]:
+        default_text = _canon_copy_at(git_root, info["defaultRef"], rel)
+    # axis: an emptied item 13 meets the same recorded-set refusal as a changed one — see bite-proof record wo_a_1646_replaced-ruling
+    head_text = _canon_head_copy(git_root, rel)
+    _refuse_unless_recorded_set([], head_text + "\n" + default_text)
+    return {"gitRoot": git_root, "rel": rel, "home": info["home"], "defaultRef": info["defaultRef"],
+            "defaultText": default_text}
+
+
+def _ensure_gitattributes(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        text = None
+    if text is None:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(_GITATTRIBUTES_LINE + "\n")
+        return
+    if _GITATTRIBUTES_LINE in [ln.strip() for ln in text.splitlines()]:
+        return
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        if text and not text.endswith("\n"):
+            fh.write("\n")
+        fh.write(_GITATTRIBUTES_LINE + "\n")
+
+
+def _left_as_they_are(detail):
+    """``detail`` with the standing instruction for a failure after Canon's files were touched."""
+    return ("%s; Canon's files are left as they are; check `git status` and `git log`, then run "
+            "the move again." % detail)
+
+
+def _head_sha(git_root):
+    """HEAD's commit id; None when HEAD is unborn; a probe that failed otherwise is a refusal."""
+    head = _git_run(git_root, "canon-commit-failed", "rev-parse", "--verify", "--quiet", "HEAD")
+    if head.returncode == 0:
+        return head.stdout.strip()
+    # an unborn HEAD is `--quiet`'s exit 1 with nothing said; any other failure is a read error
+    if head.returncode == 1 and not head.stderr.strip():
+        return None
+    raise _MigrationRefusal(
+        "canon-commit-failed", _first_line(head.stderr, "git exit %d" % head.returncode))
+
+
+def _commit_landed(git_root, rel, before_head, lines):
+    """Whether the commit this run made is in HEAD: True, False, or None when git cannot say.
+
+    A commit that errored or timed out may still have landed, since a hook after it can outlast the
+    timeout. It landed when HEAD moved off ``before_head`` and the committed Canon holds ``lines``.
+    A git read that fails is no evidence either way, so it is None, never False.
+    """
+    try:
+        if _head_sha(git_root) == before_head:
+            return False
+        committed = _canon_copy_at(git_root, "HEAD", rel)
+    except _MigrationRefusal:
+        return None
+    return set(lines) <= set(committed.splitlines())
+
+
+def _fetch_default_branch(repo_root, result):
+    """Refresh the remote refs before Canon is read; records the outcome in ``result["fetch"]``."""
+    origin = _git_run(repo_root, "canon-lookup-refused", "remote", "get-url", "origin")
+    if origin.returncode != 0:
+        result["fetch"] = "no-origin"
+    else:
+        try:
+            fetched = _git_run(repo_root, "canon-lookup-refused", "fetch", "origin", timeout=60)
+            if fetched.returncode == 0:
+                result["fetch"] = "ok"
+            else:
+                result["fetch"] = "failed: %s" % _first_line(
+                    fetched.stderr, "git exit %d" % fetched.returncode)
+        except _MigrationRefusal as exc:
+            result["fetch"] = "failed: %s" % (exc.detail or exc.reason)
+
+
+def _is_git_top_level(git_root):
+    """True when ``git_root`` is the top level of a git repository; any failure is False.
+
+    ``store_core.repo_root`` answers ``realpath(cwd)`` for a plain directory (greenfield), so a
+    ``.git`` entry at or above ``git_root`` — or ``GIT_DIR``/``GIT_WORK_TREE`` pointing git at an
+    external git directory — is required as well.
+    """
+    import store_core
+
+    try:
+        git_root_real = os.path.realpath(git_root)
+        if store_core.repo_root(git_root) != git_root_real:
+            return False
+        return (store_core.git_dot_entry_ancestor(git_root) is not None
+                or bool(os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE")))
+    except Exception:
+        return False
+
+
+def _write_canon_rulings(cwd, root, rulings, raw, date, session, result):
+    """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal.
+
+    ``raw`` is the item 13 value the rulings were split from; it is read again under the lock.
+    """
+    import definition_doc
+    import store_core
+
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+
+    _fetch_default_branch(repo_root, result)
+
+    try:
+        info = definition_doc.resolve_canon(root=repo_root, cwd=cwd, store_root=root)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+    canon_path = info["path"]
+    git_root = info["gitRoot"]
+    result["canonPath"] = canon_path
+    result["canonHome"] = info["home"]
+
+    if not _is_git_top_level(git_root):
+        raise _MigrationRefusal(
+            "canon-git-root-not-a-repo",
+            "%s is not the top level of a git repository" % git_root)
+
+    rel = os.path.relpath(os.path.realpath(canon_path), os.path.realpath(git_root))
+    rel = rel.replace(os.sep, "/")
+    paths = [rel]
+    attributes_rel = None
+    if info["home"] == "repo":
+        attributes_rel = "/".join(rel.split("/")[:-1] + [".gitattributes"])
+        paths.append(attributes_rel)
+
+    # axis: one writer at a time owns the Canon from baseline read through commit — see bite-proof record wo_a_1618_canon-lock
+    with core_md.mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            raise _MigrationRefusal(
+                "canon-lock-contended",
+                "another writer holds the project store's configuration lock; run the move again")
+        # axis: item 13 is read again under the lock, so a set that landed during the fetch is never recorded as a standing ruling — see bite-proof record wo_a_1646_locked-recheck
+        facts = core_md.read(cwd, root)
+        current = _read_project_config_raw(_project_config_mapping(facts), MATERIAL_LINE_SLUG)
+        if current != raw:
+            raise _MigrationRefusal("material-line-changed-during-migration")
+        return _append_canon_rulings(
+            result, info, git_root, rel, paths, attributes_rel, rulings, date, session)
+
+
+def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, rulings, date,
+                          session):
+    """The locked half of Canon's write procedure: baseline, append, commit, prefix check."""
+    canon_path = info["path"]
+    # axis: a Canon with uncommitted changes is never built on — see bite-proof record wo_a_1618_clean-baseline
+    status = _git_run(git_root, "canon-dirty", "status", "--porcelain",
+                      "--untracked-files=all", "--", *paths)
+    if status.returncode != 0:
+        raise _MigrationRefusal("canon-dirty", _first_line(status.stderr, "git status failed"))
+    if status.stdout.strip():
+        raise _MigrationRefusal("canon-dirty", status.stdout.rstrip("\n"))
+
+    default_text = ""
+    if info["home"] == "repo" and info["defaultRef"]:
+        default_text = _canon_copy_at(git_root, info["defaultRef"], rel)
+    head_text = _canon_head_copy(git_root, rel)
+
+    # axis: only a committed entry counts as already recorded — see bite-proof record wo_a_1618_committed-only-dedupe
+    # axis: migrated entries an earlier run recorded refuse the move unless they are exactly item 13's rulings — see bite-proof record wo_a_1646_replaced-ruling
+    recorded = _refuse_unless_recorded_set(rulings, head_text + "\n" + default_text)
+    result["skipped"] = list(dict.fromkeys(entry["id"] for entry in recorded))
+    # axis: nothing new to append means no commit at all — see bite-proof record wo_a_1618_never-commit-empty
+    if recorded:
+        return {"gitRoot": git_root, "rel": rel, "home": info["home"],
+                "defaultRef": info["defaultRef"], "defaultText": default_text}
+
+    attributes_path = None
+    if attributes_rel is not None:
+        attributes_path = os.path.join(os.path.realpath(git_root), *attributes_rel.split("/"))
+
+    prefix = "%s-%s-" % (date, session)
+    before_head = _head_sha(git_root)
+    # axis: once the move begins writing, no Canon file is rewritten, truncated or removed; a failure leaves them as the failure left them and the clean-baseline guard stops the next run — see bite-proof record wo_a_1646_canon-no-rollback
+    try:
+        os.makedirs(os.path.dirname(canon_path), exist_ok=True)
+        # the attributes line goes in before canon.md exists, so an unwritable one fails with no Canon created
+        if attributes_path is not None:
+            _ensure_gitattributes(attributes_path)
+        working_text = ""
+        if os.path.isfile(canon_path):
+            with open(canon_path, encoding="utf-8") as fh:
+                working_text = fh.read()
+        else:
+            with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
+
+        used = re.compile(r"^- \*\*%s(\d+)\*\*" % re.escape(prefix), re.MULTILINE)
+        highest = max([int(n) for n in used.findall(working_text + "\n" + default_text)] or [0])
+        ids = ["%s%d" % (prefix, highest + 1 + i) for i in range(len(rulings))]
+        lines = [
+            "- **%s** · %s · standing · %s · owner's words: none recorded · where: "
+            "%s on %s (original session unknown), time not recorded"
+            % (entry_id, date, ruling, _MIGRATION_ORIGIN_PHRASE, date)
+            for entry_id, ruling in zip(ids, rulings)
+        ]
+        with open(canon_path, "a", encoding="utf-8", newline="\n") as fh:
+            if working_text and not working_text.endswith("\n"):
+                fh.write("\n")
+            fh.write("\n".join(lines) + "\n")
+    except OSError as exc:
+        raise _MigrationRefusal(
+            "canon-write-failed", _left_as_they_are("%s: %s" % (type(exc).__name__, exc)))
+
+    try:
+        added = _git_run(git_root, "canon-commit-failed", "add", "--", *paths)
+    except _MigrationRefusal as exc:
+        raise _MigrationRefusal(
+            "canon-commit-failed", _left_as_they_are(exc.detail or exc.reason))
+    if added.returncode != 0:
+        raise _MigrationRefusal(
+            "canon-commit-failed",
+            _left_as_they_are(_first_line(added.stderr, "git add exit %d" % added.returncode)))
+    commit_failure = None
+    try:
+        committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
+                             _MIGRATION_COMMIT_MESSAGE, "--", *paths)
+        if committed.returncode != 0:
+            commit_failure = (committed.stderr or committed.stdout).strip()
+    except _MigrationRefusal as exc:
+        commit_failure = exc.detail or exc.reason
+    if commit_failure is not None:
+        # axis: a commit that errored or timed out continues only when HEAD shows it landed — see bite-proof record wo_a_1646_commit-landed
+        outcome = _commit_landed(git_root, rel, before_head, lines)
+        if outcome is not True:
+            if outcome is None:
+                commit_failure = "%s; git could not say whether the commit landed" % commit_failure
+            raise _MigrationRefusal("canon-commit-failed", _left_as_they_are(commit_failure))
+    result["entries"] = ids
+
+    shown = _git_run(git_root, "canon-commit-failed", "show", "HEAD:%s" % rel)
+    new_text = shown.stdout if shown.returncode == 0 else ""
+    # axis: the commit extends the prior HEAD copy and holds every appended line — see bite-proof record wo_a_1618_prefix-check
+    if not new_text.startswith(head_text) or not set(lines) <= set(new_text.splitlines()):
+        raise _MigrationRefusal(
+            "canon-commit-failed", "the committed Canon does not hold the appended entries")
+    head = _git_run(git_root, "canon-commit-failed", "rev-parse", "HEAD")
+    result["commit"] = head.stdout.strip() or None
+    return {"gitRoot": git_root, "rel": rel, "home": info["home"],
+            "defaultRef": info["defaultRef"], "defaultText": default_text}
+
+
+def _rulings_unreachable_from_default(rulings, canon):
+    """True when the default branch's Canon does not yet hold every migrated ruling.
+
+    Only a Canon in the repository rides a branch; the project store's Canon is one shared copy,
+    so it adopts in one step. The marker is written when every ruling is in the default-branch
+    copy, wherever core.md lives. With no default ref (no origin remote) nothing shows that
+    another branch or worktree reads the entries, so the move stays pending.
+    """
+    if canon["home"] != "repo":
+        return False
+    if not canon["defaultRef"]:
+        return bool(rulings)
+    # axis: the readiness check reads the default-branch copy the recorded-set check read, never a second one — see bite-proof record wo_a_1646_single-default-read
+    held = {entry["ruling"] for entry in _migrated_entries(canon["defaultText"])}
+    return not set(rulings) <= held
+
+
+def migrate_material_line(cwd, *, root=None, session=None, date=None):
+    """Move item 13's rulings into committed Canon, then swap item 13 for the Canon pointer."""
+    result = _migration_result()
+    try:
+        _migrate_material_line(cwd, root, session, date, result)
+    except _MigrationRefusal as refusal:
+        result["action"] = "refused"
+        result["reason"] = refusal.reason
+        result["detail"] = refusal.detail
+    except OSError as exc:
+        result["action"] = "refused"
+        result["reason"] = "canon-write-failed"
+        result["detail"] = "%s: %s" % (type(exc).__name__, exc)
+    return result
+
+
+def _migrate_material_line(cwd, root, session, date, result):
+    facts = core_md.read(cwd, root)
+    if facts is None:
+        if core_md.gate_config_profile_is_absent(cwd, root):
+            raise _MigrationRefusal(REASON_PROFILE_ABSENT)
+        raise _MigrationRefusal(REASON_PROFILE_UNPARSEABLE)
+    if facts.get("behind"):
+        raise _MigrationRefusal("behind")
+
+    # axis: an ambiguous profile refuses before the marker is believed or Canon is touched, since core_md.read picked this item 13 value out of it — see bite-proof record wo_a_1646_structural-before-canon
+    structural = core_md.profile_structural_refusal(cwd, root)
+    if structural is not None:
+        raise _MigrationRefusal("profile-structurally-ambiguous", structural)
+
+    raw = _read_project_config_raw(_project_config_mapping(facts), MATERIAL_LINE_SLUG)
+    if is_material_line_marker(raw):
+        result["action"] = "already-adopted"
+        return
+    if raw is not None and not isinstance(raw, str):
+        raise _MigrationRefusal(REASON_MALFORMED_VALUE)
+
+    if session is None:
+        session = secrets.token_hex(4)
+    else:
+        session = str(session).strip().lower()[:8]
+        if not _SESSION_PATTERN.match(session):
+            raise _MigrationRefusal("session-id-malformed")
+    if date is None:
+        date = datetime.date.today().isoformat()
+    else:
+        try:
+            if datetime.date.fromisoformat(date).isoformat() != date:
+                raise ValueError(date)
+        except (TypeError, ValueError):
+            raise _MigrationRefusal("date-malformed")
+
+    rulings, result["sanitized"] = _split_rulings(raw)
+    if rulings:
+        canon = _write_canon_rulings(cwd, root, rulings, raw, date, session, result)
+    else:
+        canon = _refuse_recorded_in_canon_for_no_rulings(cwd, root, result)
+    # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch
+    if _rulings_unreachable_from_default(rulings, canon):
+        result["action"] = "pending-default-branch"
+        if canon["defaultRef"]:
+            result["detail"] = (
+                "Canon on this branch holds entries the default branch does not (the recorded "
+                "rulings), and item 13 keeps its value until they reach the default branch. "
+                "Run the move again after the branch lands to finish it.")
+        else:
+            result["detail"] = (
+                "The Canon entries are committed on this branch, but this repository has no "
+                "origin remote, so nothing shows that other branches and worktrees can read "
+                "them. Item 13 keeps its value; the move finishes once the repository has an "
+                "origin default branch holding them. Add an origin remote, land the entries, "
+                "and run the move again.")
+        return
+
+    marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
+    # axis: the marker lands only if item 13 still equals the snapshot — see bite-proof record wo_a_1618_cas-compare
+    written = core_md.write_project_config_item_if(
+        cwd, MATERIAL_LINE_SLUG, marker, expected=raw, root=root)
+    if written.get("action") not in ("written", "noop"):
+        if written.get("reason") == "item-changed":
+            raise _MigrationRefusal("material-line-changed-during-migration")
+        raise _MigrationRefusal(
+            "marker-write-failed", str(written.get("reason") or written.get("action")))
+    result["action"] = "migrated"
 
 
 def _detect_launch_ledger(cwd, root):
@@ -787,6 +1420,12 @@ def main(argv):
     dp.add_argument("--cwd", default=".")
     dp.add_argument("--root", default=None)
 
+    mp = sub.add_parser("migrate-material-line")
+    mp.add_argument("--cwd", default=".")
+    mp.add_argument("--root", default=None)
+    mp.add_argument("--session", default=None)
+    mp.add_argument("--date", default=None)
+
     decl = sub.add_parser("declare")
     decl.add_argument("--dependency", required=True)
     decl.add_argument("--cwd", default=".")
@@ -806,6 +1445,9 @@ def main(argv):
             out = {"action": "refused", "reason": "input-unparseable"}
         else:
             out = set_item(args.cwd, args.item, value, root=args.root)
+    elif args.cmd == "migrate-material-line":
+        out = migrate_material_line(
+            args.cwd, root=args.root, session=args.session, date=args.date)
     elif args.cmd == "declare":
         raw = sys.stdin.read()
         try:

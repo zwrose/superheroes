@@ -112,6 +112,20 @@ and go on. The configure view shows item 14 as unset until it is set.
 Keep this one sitting. Ask any other question about who the project serves or what it is for here,
 together with this one, and not in a later step.
 
+Then record that item 13 lives in Canon:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" migrate-material-line --cwd .
+```
+
+Read the result's `action`. On a project with no item-13 value, the command moves nothing and only
+marks item 13 as pointing to the project's Canon standing rulings
+([Canon's contract](../../../rubric/canon-contract.md)). A project that already has a value has it
+moved into Canon as standing rulings (view-and-tune § 2, "Move item 13 into Canon"). Report a
+`refused` result to the owner with its `reason`, and never work around it. Only `migrated` and
+`already-adopted` mean item 13 is in Canon.
+
 ## 4 — Optional heavier heroes — provisional defaults disclose
 
 <!-- decision-point: id=configure-setup-optional-heroes mode=notify kind=ask-user-question default="do not set up optional heroes" carrier=review-crew-layer -->
