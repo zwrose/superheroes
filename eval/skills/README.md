@@ -31,7 +31,7 @@ regenerated and every skill is `pass` (or `carved-out` with owner approval).
 
 ## Procedure
 
-### 1. Load all 19 skill descriptions
+### 1. Load all 18 skill descriptions
 
 Before judging any fixture phrase, read the `description:` frontmatter field of every
 skill SKILL.md in `plugins/superheroes/skills/`:
@@ -41,7 +41,6 @@ plugins/superheroes/skills/adopt-version/SKILL.md
 plugins/superheroes/skills/architect-discovery/SKILL.md
 plugins/superheroes/skills/architect-init/SKILL.md
 plugins/superheroes/skills/architect-spec/SKILL.md
-plugins/superheroes/skills/audit-debt/SKILL.md
 plugins/superheroes/skills/checkpoint/SKILL.md
 plugins/superheroes/skills/configure/SKILL.md
 plugins/superheroes/skills/detective/SKILL.md
@@ -58,7 +57,7 @@ plugins/superheroes/skills/test-pilot-plan/SKILL.md
 plugins/superheroes/skills/workhorse/SKILL.md
 ```
 
-Judgment must be made in the context of ALL 19 descriptions simultaneously — not in
+Judgment must be made in the context of ALL 18 descriptions simultaneously — not in
 isolation — because activation is a selection among competing skills.
 
 ### 2. Load fixtures

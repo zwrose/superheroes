@@ -54,14 +54,6 @@ are the frozen ground truth. Fix the implementation, or add a new fixture.
 
 ### [Phase 2a-core] Escalation calibration
 
-- **Layer 1 — routing-logic (deterministic, HARD GATE).** `escalation.py`'s floor-classifier,
-  `route()` truth-table, `route()` fail-closed, and the loop_state
-  disposition-pipeline property must match the frozen fixture
-  `plugins/superheroes/eval/escalation/expected.json` exactly (see
-  `plugins/superheroes/eval/tests/test_escalation_eval.py` and `…/lib/tests/test_loop_state.py`).
-  A change must clear this before it lands. The fixture is frozen ground truth — fix the code, never
-  weaken the fixture.
-- **Layer 2 — axis-assignment calibration (model-in-loop, TRACKED).** The model's ability to assign
-  the rubric's axes on realistic scenarios (`…/eval/escalation/calibration.json`) is tracked as an
-  escalation-accuracy measure (false-negative + false-positive escalations), not a deterministic
-  blocking gate; it deepens with the producer/test-pilot harness.
+The deterministic escalation routing table and its frozen fixture are retired. Whose call a choice
+is comes from `plugins/superheroes/rubric/owner-vs-craft-line.md`, and the escalation rubric keeps
+only the disclosure modes, so this phase has no gate.
