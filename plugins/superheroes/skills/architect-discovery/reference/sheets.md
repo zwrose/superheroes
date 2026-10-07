@@ -63,19 +63,9 @@ To change a sheet, republish to the same link, as that doc says in its section U
 
 ## Reading the answers
 
-Read the answers only once the owner says in the chat that the sheet is done. Read every answer
-together, as `theme/review-template.md` says in its section How answers come back. Never act on a
-single tap.
-
-Ask about these in the chat:
-
-- A card answered Discuss or Something else. Both leave the call open for chat, so treat the two
-  alike. Neither is ever read as agreement.
-- An unanswered card. That includes an answer saved under a control the card no longer offers,
-  which the template doc counts as unanswered.
-- A card whose note disagrees with its answer.
-
-The template doc holds how each answer is stored. This doc names no stored value.
+Follow `theme/review-template.md` in its section How answers come back: when to read, how, and
+what to ask about. This doc names no stored value. One discovery-specific point: a card answered
+Discuss or Something else is open for chat and is asked about, the two treated alike.
 
 Then record each ruling in Canon as `rubric/canon-contract.md` says in its section Writing a ruling.
 Apply the answers to the spec first. Keep the sheet `open` in the `sheets.md` log until they are
