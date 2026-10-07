@@ -24,6 +24,7 @@ package covers both because Spec A relies on Spec B's sheets and theme, and the 
 - [`epic.md`](epic.md): the epic issue body, as it would be filed.
 - `children/C1.md` to `children/C8.md`: the child (feature) issue bodies, as they would be filed.
 - `children/C4-L1.md` to `C4-L4.md`, `C5-L1.md`, `C5-L2.md`, `C7-L1.md`, `C7-L2.md`, `C8-L1.md` to `C8-L4.md`: the twelve layer sub-issue bodies of the four stacked children.
+- **The `children/` files are the bodies as drafted for filing on 2026-10-05.** The filed issues are the live orders and are kept current in place; the drafts are not. Spec B's Amendments 1 and 2 (2026-10-07: "Done for now" and "Send verdict" retired) reached the filed bodies of C8 (#1623, its layer 5 #1658), C4 (#1619) and C6 (#1621), and the coverage map above; the drafts of C4, C4-L4, C8 and C8-L1 to C8-L3 still describe the retired controls and the earlier R18.
 - [`package-read-audit.md`](package-read-audit.md): the independent package read's audit trail (converged at round 3, trail conforming) and the filing dry-run.
 
 ## The children
