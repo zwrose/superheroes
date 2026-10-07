@@ -170,3 +170,11 @@ def test_docs_name_the_reset_and_the_changes_requested_record():
     assert 'gate_write.py" --mode reset' in checks
     # axis: discovery records the owner's change request before the re-run
     assert "--review changes-requested" in discovery
+
+
+def test_reset_snippet_binds_spec_path_from_definition_doc_path():
+    with open(_SPEC_CHECKS, encoding="utf-8") as fh:
+        checks = fh.read()
+    # axis: the reset snippet is self-contained, so SPEC_PATH is never an unassigned variable
+    assert 'SPEC_PATH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" path' in checks
+    assert checks.index('SPEC_PATH=$(') < checks.index('gate_write.py" --mode reset')

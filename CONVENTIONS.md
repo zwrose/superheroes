@@ -23,9 +23,10 @@ that design — or add machinery — to guarantee standalone-equivalence**; a he
 outside the band carries **no warranty** (an individual hero may still have standalone
 utility — e.g. `review-code`, test-pilot's browser runs — but that is not a contract).
 A missing band member **degrades, it does not crash**: the spec review gate
-never self-certifies — the `spec` is always **owner-gated** — so a missing reviewer
-simply leaves the spec for the owner to approve directly, never silently waved
-through. This is the superheroes-internal analog of "the review plugin is an assumed
+never self-certifies — the `spec` is always **owner-gated** — so when no reviewer
+can run the spec checks, the draft parks as an unapproved draft and the owner is told
+plainly that no review ran; the gate is never written `passed` by anyone but the owner,
+and a spec is never silently waved through. This is the superheroes-internal analog of "the review plugin is an assumed
 dependency."
 
 **Section numbers are stable permalinks**, cited across the codebase (skills, rubric,

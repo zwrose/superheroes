@@ -270,11 +270,13 @@ back to the owner.
 
 When a fix changes content the owner already approved (`gates.review: passed`), reset the gate to
 `pending`. Do it only when a fix actually changed the spec. An unchanged spec keeps its approval.
-`$SPEC_PATH` is the spec's path and `$WORK_ITEM` is its work-item.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 ROOT=$(git rev-parse --show-toplevel)
+WORK_ITEM="<work-item>"
+SPEC_PATH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" path \
+  --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
 REVIEWED_HASH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SPEC_PATH")
 python3 -B "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
   --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT" \
@@ -283,6 +285,10 @@ python3 -B "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
 
 The command prints `reset:pending`, `noop:not-approved`, `skipped:noncanonical`,
 `skipped:unreadable`, `recorded:stale` or `failed:set-gate`. It never writes `passed`.
+
+Only `reset:pending` and `noop:not-approved` are good outcomes. On any other output
+(`skipped:noncanonical`, `skipped:unreadable`, `recorded:stale`, `failed:set-gate`), stop and treat
+the spec as unapproved. Tell the owner the approval could not be revoked and must not be relied on.
 
 Amendments after approval follow the amendments path,
 `skills/showrunner/reference/amendments.md`. The three checks do not run on them.
