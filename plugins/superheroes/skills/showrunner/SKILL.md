@@ -524,7 +524,10 @@ above).
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when a spec's last child closes or its validation run fails.**
    **Calibration home:** a project's own answers are its Canon's standing rulings and ceded calls
    (`${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md`), never a configuration value; the line itself is
-   the same in every project.
+   the same in every project. One transition applies, defined in
+   `${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md` (§ The same line in every project): while a
+   project's "material consequence line" configuration item still holds its own prose, read that
+   prose alongside Canon.
    **About to deliver open decisions to the owner → read
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` first** —
    the full contract lives there. Without it, delivery drifts both ways — short of full rigor, or
