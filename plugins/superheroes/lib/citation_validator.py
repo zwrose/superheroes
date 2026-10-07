@@ -4,7 +4,7 @@
 The provenance pincer's review-side deterministic leg. The-architect's authoring rule
 (CONVENTIONS §3.2) requires load-bearing **mirror-facts** — spec statements the repo could
 contradict — to carry an inline **citation** naming the repo source. This module is the
-review-spec compile step's check that every such citation **resolves**: the cited path
+spec checks' grounding-round check that every such citation **resolves**: the cited path
 exists, and (when an anchor is given) the anchor text occurs in that file. A citation that
 points at nothing — a fabricated or superseded source — is the #205 fabricated-fact class
 made mechanically catchable, so this check **fails closed**: a dangling citation, an
@@ -12,14 +12,14 @@ unreadable spec, or a citation the parser cannot resolve all yield a blocking fi
 a silent clean.
 
 An emitted finding is a **blocking-class** (Important) finding surfaced to the
-**owner-gated** review-spec loop — not a mechanical gate (review-spec never auto-writes
+**owner-gated** spec checks — not a mechanical gate (the spec checks never auto-write
 `passed`). This reconciles the "blocking" wording here with CONVENTIONS/LEDGERS' "never
-blocks": the finding is blocking-class in the rubric, but only the owner-gated loop, not
+blocks": the finding is blocking-class in the rubric, but only the owner-gated gate, not
 this check, decides the verdict.
 
 This is the deterministic half only. **Content-match — does the cited source actually SAY
-what the spec claims — stays verifier judgment** (the Grounding seat,
-`skills/review-spec/reference/provenance.md`); this module never reads intent, only existence.
+what the spec claims — stays verifier judgment** (the grounding check,
+`skills/architect-discovery/reference/spec-checks.md`); this module never reads intent, only existence.
 
 Citation grammar (the §11 cross-boundary fact — this module's `CITATION_RE` is its one
 authoritative home; the template/skill examples are drift-tested against it):
@@ -32,7 +32,8 @@ substring the reader can find in the file (a symbol, heading, or quoted phrase).
 `<anchor>` must be a simple substring that does NOT contain `]` or a newline — the grammar
 truncates the anchor at the first `]` / end of line.
 
-Consumer: the review-spec compile step (SKILL §4). Ledger: LEDGERS.md §1. stdlib only.
+Consumer: the spec checks' grounding round
+(`skills/architect-discovery/reference/spec-checks.md`). Ledger: LEDGERS.md §1. stdlib only.
 """
 import argparse
 import json
@@ -90,7 +91,7 @@ def check(spec_path, root):
         with open(spec_path, encoding="utf-8") as fh:
             text = fh.read()
     except (OSError, UnicodeDecodeError) as exc:
-        # line=1 (not None): review-spec §4 step 1 drops any finding with line == null,
+        # line=1 (not None): a finding with line == null can be dropped downstream,
         # so a null-line fail-closed finding would silently vanish. Anchor it at line 1.
         f = _finding(1, 1,
                      "Citation validator could not read the spec",

@@ -476,9 +476,8 @@ def test_check_runner_registers_as_itself_and_is_absent_from_every_reviewer_rost
     its registered name is exactly `check-runner`, it matches no `*-reviewer`
     pattern, and it is absent from every panel-roster source this test suite already
     reads elsewhere, per CONVENTIONS §11:
-    - `lib/spec_loop_plan.py`'s `DIMENSIONS` (imported directly, as
+    - `lib/round_driver.py`'s reviewer roster (`DIMENSIONS`, imported directly, as
       `test_dispatch_tables.py` does).
-    - `lib/round_driver.py`'s reviewer roster (`DIMENSIONS`, imported the same way).
     - The skill dispatch tables' first-column cells, parsed slug-agnostically by
       `_FIRST_COL_RE` above (item 4a, #719 round 2 confirmation) — deliberately NOT
       `test_dispatch_tables._table_rows`, whose `ROW_RE` matches only slugs ending
@@ -506,17 +505,12 @@ def test_check_runner_registers_as_itself_and_is_absent_from_every_reviewer_rost
         % name)
 
     import round_driver
-    import spec_loop_plan
     assert "check-runner" not in round_driver.DIMENSIONS, (
         "check-runner is present in round_driver.DIMENSIONS (the code-leg reviewer "
         "roster). check-runner is not a review seat and must never be dispatched as "
         "one.")
-    assert "check-runner" not in spec_loop_plan.DIMENSIONS, (
-        "check-runner is present in spec_loop_plan.DIMENSIONS (the spec-leg reviewer "
-        "roster). check-runner is not a review seat and must never be dispatched as "
-        "one.")
 
-    for skill in ("review-code", "review-spec", "audit-debt"):
+    for skill in ("review-code", "audit-debt"):
         text = _read_required(
             os.path.join(PLUGIN, "skills", skill, "SKILL.md"),
             "the %s dispatch table (item 4a, #719 round 2 confirmation)" % skill)

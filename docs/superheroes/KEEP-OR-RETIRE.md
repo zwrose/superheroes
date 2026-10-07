@@ -1182,14 +1182,14 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### E4 — Citation/exact-text validators
 
 - **Component.** The dangling-citation detector (`lib/citation_validator.py` and its exact-text
-  checker script); it is cheap, wired in review-spec compile, and guards the #205 fabricated-fact
+  checker script); it is cheap, wired in the spec checks' grounding round, and guards the #205 fabricated-fact
   class with zero live catches recorded.
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite the
   citation-validator rule's substance — zero catches mean the class may still be live, not that the
   detector is idle. On firing, a proposal to the owner at a gardening pass.
-- **Last demonstrated benefit.** Made dangling spec citations mechanically catchable in review-spec
-  compile (#517).
+- **Last demonstrated benefit.** Made dangling spec citations mechanically catchable in the spec checks'
+  grounding round (#517).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — guards spec provenance existence; no platform doc-citation validator
@@ -1495,10 +1495,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — the A1–D11 contract is load-bearing orchestration machinery; churn
   evidence observed on engine-7-class dispatches at weekly-eats (the assessment record, C1/H2).
 
-#### H3 — Other heroes (architect, discovery, detective, review-spec, audit-debt, checkpoint…)
+#### H3 — Other heroes (architect, discovery, detective, audit-debt, checkpoint…)
 
 - **Component.** The other-heroes embedded machinery (not their skill front doors): architect,
-  discovery, detective, review-spec, audit-debt, and checkpoint skills plus supporting lib hooks. It
+  discovery, detective, audit-debt, and checkpoint skills plus supporting lib hooks. It
   costs loaded prose mass across the skill tree.
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
@@ -1507,7 +1507,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** mixed — review-spec and architect discovery are structural product surfaces;
+- **Notes.** mixed — architect discovery is a structural product surface (the review-spec skill
+  retired 2026-10 into discovery's spec checks, see S29);
   thin-evidence members (#541 landed) wait on Change-3 conditions per member.
 
 #### H4 — Eval harness
@@ -2147,6 +2148,43 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — Claude Code 2.1.284 creates the staging dir under the shell's working
   directory; observed on the anthropic family's sandboxed implementer.
+
+#### S29 — `review-spec` skill (retired)
+
+- **Component.** Not a census row. The callable `/superheroes:review-spec` skill, its six-seat spec
+  panel and its revision rounds, and the lib modules only it called (`spec_loop_plan.py`,
+  `doc_focus_flags.py`). Retired 2026-10 (#1629): discovery's spec checks (S30) are the one home of
+  spec review, and every spec now gets the same three checks with no light-or-full weight call.
+- **Start date.** 2026-10-07.
+- **Condition.** Usage-based: the retirement condition that **reopens** it is *"the spec checks cannot
+  carry a review that the owner needs a separate callable panel for"*, at which point the panel is
+  rebuilt as its own child, never patched back.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** retired — the skill, its two lib modules, their tests, and its eval fixture were
+  deleted; the spec's review gate keeps its states and passes only on the owner's approval, recorded
+  by discovery.
+- **Notes.** structural — spec review is discovery's step, not a separate hero; the stale-approval
+  reset (`lib/gate_write.py --mode reset`) is now called from spec-checks.md's gate section.
+
+#### S30 — The spec checks (`spec-checks.md`) and their two helper verbs
+
+- **Component.** Not a census row. `plugins/superheroes/skills/architect-discovery/reference/spec-checks.md`,
+  the one home of the three spec checks discovery runs on every spec (gap review, the source check
+  both ways, grounding), and the two read-only helper verbs it calls: `core_md.py
+  spec-reviewer-seat` (resolves the reviewer seat) and `definition_doc.py grounding-base` (builds
+  the grounding base from the default branch). It costs loaded prose mass in discovery and one
+  reviewer dispatch per round.
+- **Start date.** 2026-10-07.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite a spec
+  check finding (or its absence) as the reason a spec's claim was caught or missed. Zero citations
+  mean specs are holding, not that the checks are idle. On firing, a proposal to the owner at a
+  gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the source check and grounding guard a spec against statements nothing
+  backs; no change of host or model removes the need.
 
 
 ## The workaround-marker inventory

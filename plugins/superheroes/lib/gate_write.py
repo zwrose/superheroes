@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The trio's gate-write handshake — ONE tested place (was inlined bash in 3 skills).
 
-review-crew's review-spec (mode **reset**) records a definition-doc's review gate via
-the definition-doc lib; mode **certify** is legacy support for the plan/tasks legs
+The spec checks' stale-approval reset (mode **reset**, spec-checks.md § The review gate)
+records a definition-doc's review gate via the definition-doc lib; mode **certify** is legacy support for the plan/tasks legs
 retired in S1 train 2 (#469), kept because the shared seam stays whole. This helper
 performs the whole guarded handshake so a fix lives in one place — the previous
 near-verbatim duplication across the three SKILL.md files let a fix miss one copy and
@@ -20,7 +20,7 @@ The handshake:
     parent doc isn't approved), then `set-gate <review>`
   → **reset** (spec only): revoke a *stale* owner approval — read the gate; if it is
     `passed`, `set-gate pending`; otherwise no-op. It **never** writes `passed` (the
-    advisory invariant: review-spec revokes, the owner grants).
+    advisory invariant: the spec checks revoke, the owner grants).
 
 It **degrades, it does not crash**: every path prints a clear message to stderr and a short
 outcome token on stdout (the calling skill surfaces it in its terminal summary). It never
@@ -142,7 +142,7 @@ def certify(doc, work_item, reviewed_path, review, parent_doc, root, *, expected
 
 
 def reset(doc, work_item, reviewed_path, root, *, expected_hash, run_id, lease=None):
-    """review-spec stale-approval reset: if the spec is currently `passed`, revoke it to
+    """The spec checks' stale-approval reset (spec-checks.md § The review gate): if the spec is currently `passed`, revoke it to
     `pending` (the owner must re-approve the changed content). Never grants `passed`."""
     if not _same_file(reviewed_path, _canonical(root, work_item, doc)):
         _say("⚠ spec was revised but the gate could not be reset (the doc is outside the "

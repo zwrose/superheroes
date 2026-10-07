@@ -23,8 +23,8 @@ that design — or add machinery — to guarantee standalone-equivalence**; a he
 outside the band carries **no warranty** (an individual hero may still have standalone
 utility — e.g. `review-code`, test-pilot's browser runs — but that is not a contract).
 A missing band member **degrades, it does not crash**: the spec review gate
-(`review-spec`) never self-certifies — the `spec` is always **owner-gated** — so its
-absence simply leaves the spec for the owner to approve directly, never silently waved
+never self-certifies — the `spec` is always **owner-gated** — so a missing reviewer
+simply leaves the spec for the owner to approve directly, never silently waved
 through. This is the superheroes-internal analog of "the review plugin is an assumed
 dependency."
 
@@ -95,12 +95,13 @@ still produced by The Architect.
   vet; never edits the diagnosed surface, never fixes. (Its authoritative definition lives
   in `skills/detective/SKILL.md`.)
 - **The Architect** — turns fuzzy intent into an owner-approved `spec` (discovery → spec
-  → `review-spec`). Narrowed in v2: it produces the `spec` only — no `plan`, no `tasks`
+  → the spec checks). Narrowed in v2: it produces the `spec` only — no `plan`, no `tasks`
   (retired, #479).
-- **Review Crew** — the multi-model review layer: the spec panel (`review-spec`) and
-  `review-code`'s cross-vendor build review. The **spec panel runs six doc-native lenses**
-  (Clarity, Verifiability, Failure-Mode, Coherence, Safety & access, Grounding) while
-  `review-code` runs its five code reviewers — the honest doc-native identities that
+- **Review Crew** — the multi-model review layer: `review-code`'s cross-vendor build
+  review, and the spec checks discovery runs on a spec
+  (`skills/architect-discovery/reference/spec-checks.md`). The **spec checks' reviewer labels
+  its findings with six doc-native lenses** (Clarity, Verifiability, Failure-Mode, Coherence,
+  Safety & access, Grounding) while `review-code` runs its five code reviewers — the honest doc-native identities that
   replaced the "five code costumes" (#514 D1). (#34 proposed merging the code and test seats
   as the weakest, on ~70% zero-finding early small-N data; at N=37 those are the two
   strongest seats — Verifiability has the most blocking findings of any seat — and the
@@ -343,8 +344,8 @@ authoritative machine home is `plugins/superheroes/lib/citation_validator.py`
 (`CITATION_RE`); `templates/spec.md` carries the canonical example as the §11 drift witness, and
 this section describes the rule rather than restating a second machine-parseable literal. A
 deterministic **dangling-citation validator** (existence + anchor resolution, fail-closed) runs in
-`review-spec`'s compile step and is **advisory** — review-spec is owner-gated, so the validator
-produces findings the owner adjudicates and never blocks or writes `passed`. **Content-match** —
+the spec checks' grounding round and is **advisory** — the spec gate is owner-gated, so the
+validator produces findings the owner adjudicates and never blocks or writes `passed`. **Content-match** —
 whether the cited source actually *says* what the spec claims — stays the Grounding verifier's
 judgment, not the deterministic check's.
 
@@ -1075,23 +1076,19 @@ copy-holders are the **showrunner** charter only, because micro is the showrunne
 
 *Worked example 2 — the reviewer roster (sanctioned-subset invariant).* The set of
 `agents/*-reviewer` files is the single home of the **sanctioned reviewer universe** — now
-six, including `grounding-reviewer`. The two dispatching legs each run a **sanctioned
-subset** of that universe, not the whole of it: the **code leg** (`code_loop_plan.DIMENSIONS`)
-is the five code reviewers, and the **spec leg** (`spec_loop_plan.DIMENSIONS`) is all six
-(`grounding-reviewer` is **spec-leg-only** — the doc-provenance seat with no review-code
-agent). `lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
-reads the `agents/` directory listing, derives each leg's sanctioned roster from it
-(`universe − grounding-reviewer` for the code leg, `universe` for the spec leg), and asserts
-**exact per-leg equality** against each hand-maintained copy — `code_loop_plan.DIMENSIONS`,
-`spec_loop_plan.DIMENSIONS`, and the same rosters re-keyed as `AGENT_SUFFIX` in both modules.
-The check is fail-closed and duplicate-sensitive (a copy that duplicates one slug while
-dropping another cannot pass by set-collapsing), and a partition guard pins the spec leg as
-exactly the code leg plus the spec-only `grounding-reviewer` seat (`spec_roster − code_roster
+six, including `grounding-reviewer`. The one dispatching leg, the **code leg**, runs a
+**sanctioned subset** of that universe, not the whole of it: its roster homes in
+`round_driver.DIMENSIONS` and the same roster re-keyed as `round_driver.AGENT_SUFFIX`, and is the
+five code reviewers. `grounding-reviewer` stays a **spec-only** agent — the doc-provenance seat
+with no review-code agent — excluded from the code leg.
+`lib/tests/test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents`
+reads the `agents/` directory listing, derives the code roster from it
+(`universe − grounding-reviewer`), and asserts **exact equality** against each hand-maintained
+copy. The check is fail-closed and duplicate-sensitive (a copy that duplicates one slug while
+dropping another cannot pass by set-collapsing), and a partition guard pins the universe as
+exactly the code roster plus the spec-only `grounding-reviewer` seat (`universe − code_roster
 == {grounding-reviewer}`). Adding, removing, renaming, or mis-legging a reviewer agent breaks CI in
-the affected copy until it is updated to match. Separately, the runtime
-`spec_loop_plan.sanction_dimensions` guard enforces the same invariant at dispatch time: a
-leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimensions` input is
-dropped, never widening or corrupting the roster.
+the affected copy until it is updated to match.
 
 *Worked example 3 — the issue-contract vocabulary (retired).* The authoritative home is
 `plugins/superheroes/lib/issue_contract.py`. The reference doc's `## Vocabulary` section now

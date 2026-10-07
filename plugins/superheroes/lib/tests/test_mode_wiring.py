@@ -9,7 +9,7 @@ _SKILLS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills")
 
 BOOTSTRAP_NO_RECONCILE_SKILLS = [
-    "review-init", "review-spec", "review-code", "audit-debt", "test-pilot-init",
+    "review-init", "review-code", "audit-debt", "test-pilot-init",
 ]
 NUDGE_SKILLS = ["review-init", "review-code", "audit-debt",
                 "test-pilot-init", "test-pilot-plan", "test-pilot-execute"]

@@ -1,7 +1,7 @@
 """Drift guards for the spec-content doctrine (issue #936, child C5).
 
 Enforces mechanical presence of spec-content doctrine clauses across the template,
-architect-spec reference, discovery/showrunner/review-spec charters, and the epic
+architect-spec reference, discovery/showrunner charters, and the epic
 register pin — section-scoped so partial drift reddens exactly one guard.
 """
 # What this file does and does not guard (issue #936, child C5).
@@ -24,8 +24,6 @@ _SPEC_CONTENT_REF = "skills/architect-spec/reference/spec-content.md"
 _ARCHITECT_SPEC_CHARTER = "skills/architect-spec/SKILL.md"
 _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _DISCOVERY_CHARTER = "skills/architect-discovery/SKILL.md"
-_REVIEW_SPEC_CHARTER = "skills/review-spec/SKILL.md"
-_REVIEW_SPEC_DETAIL = "skills/review-spec/reference/spec-detail.md"
 
 _EPIC_REGISTER_REL = os.path.normpath(
     os.path.join("..", "..", "docs", "superheroes",
@@ -74,8 +72,6 @@ _DOCTRINE_SURFACES = [
     os.path.join(_PLUGIN_ROOT, _ARCHITECT_SPEC_CHARTER),
     os.path.join(_PLUGIN_ROOT, _SHOWRUNNER_CHARTER),
     os.path.join(_PLUGIN_ROOT, _DISCOVERY_CHARTER),
-    os.path.join(_PLUGIN_ROOT, _REVIEW_SPEC_CHARTER),
-    os.path.join(_PLUGIN_ROOT, _REVIEW_SPEC_DETAIL),
 ]
 
 # Axis disclosure — each kind token names what reddens when the guarded fact drifts:
@@ -189,105 +185,105 @@ _CLAUSE_ENTRIES = [
     (
         "spec-content-fr23-five-amendments",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "five amendments since its last full approval",
         "literal",
     ),
     (
         "spec-content-fr23-next-touch",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "obligation attaches to the touch **after** it",
         "literal",
     ),
     (
         "spec-content-fr23-guideline-not-tripline",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "guideline, never a trip-line",
         "literal",
     ),
     (
         "spec-content-fr23-nothing-blocks",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "Nothing blocks at five",
         "literal",
     ),
     (
         "spec-content-fr23-owner-restamp",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "re-stamp is the owner's",
         "literal",
     ),
     (
         "spec-content-fr23-carry-forward-restamp",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "every subsequent touch restates it",
         "literal",
     ),
     (
         "spec-content-fr23-cannot-substitute",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "cannot be substituted, delegated, or inferred from silence",
         "literal",
     ),
     (
         "spec-content-fr23-records-who-owes",
         _SPEC_CONTENT_REF,
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "names who owes it",
         "literal",
     ),
     (
         "spec-content-fr24-elaborates-never-opinion",
         _SPEC_CONTENT_REF,
-        "## Annexes (FR-24)",
+        "## Annexes",
         "never introduces a new",
         "literal",
     ),
     (
         "spec-content-fr24-elaborates-decisions",
         _SPEC_CONTENT_REF,
-        "## Annexes (FR-24)",
+        "## Annexes",
         "elaborates decisions its core spec **already makes**",
         "literal",
     ),
     (
         "spec-content-fr24-named-finding-class",
         _SPEC_CONTENT_REF,
-        "## Annexes (FR-24)",
-        "named review-spec finding class",
+        "## Annexes",
+        "a finding the spec checks raise",
         "literal",
     ),
     (
         "spec-content-fr25-canon-pointer",
         _SPEC_CONTENT_REF,
-        "## Rulings live where they were made (FR-25)",
+        "## Rulings live where they were made",
         "recorded in the project's Canon",
         "literal",
     ),
     (
         "spec-content-fr25-recorded-judgment",
         _SPEC_CONTENT_REF,
-        "## Rulings live where they were made (FR-25)",
+        "## Rulings live where they were made",
         "recorded advisor judgment",
         "literal",
     ),
     (
         "spec-content-fr25-no-mechanical-trigger",
         _SPEC_CONTENT_REF,
-        "## Rulings live where they were made (FR-25)",
+        "## Rulings live where they were made",
         "no mechanical absorption trigger",
         "literal",
     ),
     (
         "spec-content-fr25-no-count-age-size",
         _SPEC_CONTENT_REF,
-        "## Rulings live where they were made (FR-25)",
+        "## Rulings live where they were made",
         "no count of rulings, no age, no size, no threshold",
         "literal",
     ),
@@ -339,98 +335,98 @@ _CLAUSE_ENTRIES = [
     (
         "discovery-fr19-admission-rule",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "the owner was asked, and cared",
         "literal",
     ),
     (
         "discovery-fr19-only-admission-rule",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "That is the **only** admission rule",
         "literal",
     ),
     (
         "discovery-fr19-exclude-mechanisms",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "**Mechanisms**",
         "literal",
     ),
     (
         "discovery-fr19-exclude-limits",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "**Limits the owner would not enforce**",
         "literal",
     ),
     (
         "discovery-fr19-exclude-vacuous-quality",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "**Vacuous quality lines**",
         "literal",
     ),
     (
         "discovery-fr19-exclude-design-handoff",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "**Design-handoff transcription**",
         "literal",
     ),
     (
         "discovery-fr19-exclude-test-obligations",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "**Test obligations**",
         "literal",
     ),
     (
         "discovery-fr19-exclude-mirror-facts",
         _DISCOVERY_CHARTER,
-        "#### The elicitation test (FR-19)",
+        "#### The elicitation test",
         "**Non-load-bearing mirror-facts**",
         "literal",
     ),
     (
         "discovery-fr20-specify-builder-defect",
         _DISCOVERY_CHARTER,
-        "#### Failure semantics (FR-20)",
+        "#### Failure semantics",
         "builder defect",
         "literal",
     ),
     (
         "discovery-fr20-show-it-handback",
         _DISCOVERY_CHARTER,
-        "#### Failure semantics (FR-20)",
+        "#### Failure semantics",
         "handback omission",
         "literal",
     ),
     (
         "discovery-fr20-defer-new-ruling",
         _DISCOVERY_CHARTER,
-        "#### Failure semantics (FR-20)",
+        "#### Failure semantics",
         "ruling, never a defect**",
         "literal",
     ),
     (
         "discovery-fr21-asked-and-deferred",
         _DISCOVERY_CHARTER,
-        "#### The learning loop (FR-21)",
+        "#### The learning loop",
         "Asked and deferred",
         "literal",
     ),
     (
         "discovery-fr21-never-asked",
         _DISCOVERY_CHARTER,
-        "#### The learning loop (FR-21)",
+        "#### The learning loop",
         "Never asked",
         "literal",
     ),
     (
         "discovery-fr21-growth-duty",
         _DISCOVERY_CHARTER,
-        "#### The learning loop (FR-21)",
+        "#### The learning loop",
         "coverage checklist in this charter and to the template's Dispositions table",
         "literal",
     ),
@@ -440,49 +436,6 @@ _CLAUSE_ENTRIES = [
         "### 3. Requirements dialogue (one question at a time)",
         "",
         "coverage_tables_equal",
-    ),
-    # F. review-spec
-    (
-        "review-spec-coherence-annex",
-        _REVIEW_SPEC_CHARTER,
-        "## Per-dimension framing (you are reviewing REQUIREMENTS — six doc-native lenses)",
-        "annex that introduces a new opinion",
-        "literal",
-    ),
-    (
-        "review-spec-amendments-section",
-        _REVIEW_SPEC_CHARTER,
-        "## Spec-Content Requirements (Opinionated)",
-        "`## Amendments` section",
-        "literal",
-    ),
-    (
-        "review-spec-nine-unhappy-path-areas",
-        _REVIEW_SPEC_CHARTER,
-        "## Spec-Content Requirements (Opinionated)",
-        "currently nine unhappy-path areas",
-        "literal",
-    ),
-    (
-        "review-spec-both-axes",
-        _REVIEW_SPEC_CHARTER,
-        "## Spec-Content Requirements (Opinionated)",
-        "each row has `Disposition` (Specify / Defer-to-build / N-A) and `Show-it?`",
-        "literal",
-    ),
-    (
-        "review-spec-detail-annex-opinion-section",
-        _REVIEW_SPEC_DETAIL,
-        "## Annex opinion (finding class)",
-        "annex that introduces a new opinion",
-        "literal",
-    ),
-    (
-        "review-spec-detail-annex-recognition-test",
-        _REVIEW_SPEC_DETAIL,
-        "## Annex opinion (finding class)",
-        "If a builder reading only the core would build something different",
-        "literal",
     ),
     # G. pinned register
     (
@@ -532,12 +485,6 @@ _CLAUSE_IDS = frozenset({
     "discovery-fr21-growth-duty",
     "discovery-fr21-never-asked",
     "register-r4-pin",
-    "review-spec-amendments-section",
-    "review-spec-both-axes",
-    "review-spec-coherence-annex",
-    "review-spec-detail-annex-opinion-section",
-    "review-spec-detail-annex-recognition-test",
-    "review-spec-nine-unhappy-path-areas",
     "spec-content-fr23-carry-forward-restamp",
     "showrunner-spec-content-pointer",
     "spec-content-amendments-never-deleted-reason",
@@ -1030,7 +977,7 @@ def test_clause_entries_are_well_formed():
 
 def test_negative_literal_in_section_fails():
     synthetic = "\n".join([
-        "## Consolidation re-read (FR-23)",
+        "## Consolidation re-read",
         "body without the pinned clause",
     ])
 
@@ -1042,7 +989,7 @@ def test_negative_literal_in_section_fails():
     _expect_assertion_error(
         lambda: _assert_literal_in_section(
             _SPEC_CONTENT_REF,
-            "## Consolidation re-read (FR-23)",
+            "## Consolidation re-read",
             "five amendments since its last full approval",
             read_text=read_text,
         ),

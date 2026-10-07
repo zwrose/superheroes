@@ -9,8 +9,8 @@ sync with the bundled agents and the rubric's dimension list.
   silently change it.
 - Every dimension label used in a table row appears backticked in the rubric's
   Dimensions declaration.
-- The reviewer roster re-typed in code (`round_driver`/`spec_loop_plan` DIMENSIONS and
-  AGENT_SUFFIX) matches the same
+- The reviewer roster re-typed in code (`round_driver` DIMENSIONS and AGENT_SUFFIX)
+  matches the same
   agents/ home — a CONVENTIONS §11 single-source-of-truth drift guard, fail-closed
   so a renamed literal cannot pass vacuously.
 """
@@ -28,8 +28,8 @@ ORIGINAL_FOUR = {
 }
 
 # The sanctioned-subset invariant (#515): the panel of `*-reviewer` agents is the sanctioned
-# universe. `grounding-reviewer` is a SPEC-LEG-ONLY seat (doc provenance) — it is in the
-# review-spec roster but deliberately absent from the review-code / audit-debt code roster.
+# universe. `grounding-reviewer` is a SPEC-ONLY seat (doc provenance) — it is deliberately
+# absent from the review-code / audit-debt code roster.
 SPEC_ONLY = {"grounding-reviewer"}
 
 ROW_RE = re.compile(
@@ -84,41 +84,36 @@ def _js_const_str_list(rel, name):
 
 def test_code_reviewer_rosters_match_bundled_agents():
     """CONVENTIONS §11 + the sanctioned-subset invariant (#515): the reviewer roster is a
-    cross-boundary fact re-typed as a hand-maintained copy in Python (`code_loop_plan` /
-    `spec_loop_plan` DIMENSIONS, and the same roster re-keyed as AGENT_SUFFIX). The
-    authoritative home is the set of `agents/*-reviewer` files (the sanctioned universe), but
-    the two legs sanction DIFFERENT subsets of it: the code leg runs the FIVE shared reviewers
-    (`CODE_ROSTER = universe − SPEC_ONLY`), the spec leg runs all SIX (`SPEC_ROSTER = universe`)
-    because `grounding-reviewer` is a spec-leg-only doc-provenance seat. Each copy must equal
-    its leg's sanctioned roster EXACTLY (not a union check that could mask a dropped reviewer),
-    so adding/removing/renaming/mis-legging a reviewer breaks CI in the copy-holder rather than
-    letting them silently diverge (the PR #205 class). A NEW copy must be added here (§11.2).
+    cross-boundary fact re-typed as a hand-maintained copy in Python (`round_driver`
+    DIMENSIONS, and the same roster re-keyed as AGENT_SUFFIX). The authoritative home is the
+    set of `agents/*-reviewer` files (the sanctioned universe), and the code leg runs the FIVE
+    shared reviewers (`CODE_ROSTER = universe − SPEC_ONLY`) because `grounding-reviewer` is a
+    spec-only doc-provenance seat. Each copy must equal the code roster EXACTLY (not a union
+    check that could mask a dropped reviewer), so adding/removing/renaming a reviewer breaks CI
+    in the copy-holder rather than letting them silently diverge (the PR #205 class). A NEW
+    copy must be added here (§11.2).
     """
     universe = _agent_slugs()
     code_roster = universe - SPEC_ONLY
-    spec_roster = universe
-    # secondary guard: pin the actual partition — the spec leg is EXACTLY the code leg
-    # plus the spec-only seat(s). (The old `code_roster | spec_roster == universe` was
-    # vacuous: spec_roster IS universe, so the union always equalled it.)
-    assert spec_roster - code_roster == SPEC_ONLY
+    # secondary guard: pin the actual partition — the universe is EXACTLY the code roster
+    # plus the spec-only seat(s), so a missing grounding-reviewer file or a spec-only slug
+    # leaking into the code roster fails here.
+    assert universe - code_roster == SPEC_ONLY
 
-    # #507: the code-leg roster now homes in round_driver (the ONE entrypoint that absorbed
-    # code_loop_plan's plan/record/decide); the spec leg still homes in spec_loop_plan.
+    # #507: the code-leg roster homes in round_driver (the ONE entrypoint that absorbed
+    # code_loop_plan's plan/record/decide).
     import round_driver
-    import spec_loop_plan
     rosters = {
-        "round_driver.DIMENSIONS": (list(round_driver.DIMENSIONS), code_roster),
-        "spec_loop_plan.DIMENSIONS": (list(spec_loop_plan.DIMENSIONS), spec_roster),
+        "round_driver.DIMENSIONS": list(round_driver.DIMENSIONS),
         # AGENT_SUFFIX is the same roster re-keyed — its keys are a copy too.
-        "round_driver.AGENT_SUFFIX": (list(round_driver.AGENT_SUFFIX), code_roster),
-        "spec_loop_plan.AGENT_SUFFIX": (list(spec_loop_plan.AGENT_SUFFIX), spec_roster),
+        "round_driver.AGENT_SUFFIX": list(round_driver.AGENT_SUFFIX),
     }
-    for label, (roster, expected) in rosters.items():
+    for label, roster in rosters.items():
         # duplicate-sensitive: set() alone would let a copy that duplicates one slug
         # while dropping another pass (sizes coincide once the set collapses the dup).
         assert len(roster) == len(set(roster)), "%s has a duplicate entry: %r" % (label, roster)
-        # exact per-leg equality — NOT a union check that could mask a dropped reviewer.
-        assert set(roster) == expected, "%s drifted from its leg's sanctioned roster" % label
+        # exact equality — NOT a union check that could mask a dropped reviewer.
+        assert set(roster) == code_roster, "%s drifted from the code roster" % label
 
 
 @pytest.mark.parametrize("text, name, match", [
@@ -151,19 +146,16 @@ def test_agent_suffix_values_are_derivable_and_match_skill_tables():
     `slug - '-reviewer'` fails, and the values stay single-homed in the keys.
     """
     import round_driver
-    import spec_loop_plan
-    for label, mapping in [("round_driver", round_driver.AGENT_SUFFIX),
-                           ("spec_loop_plan", spec_loop_plan.AGENT_SUFFIX)]:
-        for slug, suffix in mapping.items():
-            assert slug.endswith(_REVIEWER_SUFFIX), "%s: unexpected key %r" % (label, slug)
-            assert suffix == slug[:-len(_REVIEWER_SUFFIX)], (
-                "%s.AGENT_SUFFIX[%r] = %r is not the derivable slug-minus-'-reviewer'"
-                % (label, slug, suffix))
+    for slug, suffix in round_driver.AGENT_SUFFIX.items():
+        assert slug.endswith(_REVIEWER_SUFFIX), "round_driver: unexpected key %r" % slug
+        assert suffix == slug[:-len(_REVIEWER_SUFFIX)], (
+            "round_driver.AGENT_SUFFIX[%r] = %r is not the derivable slug-minus-'-reviewer'"
+            % (slug, suffix))
 
     # The SKILL.md dispatch tables' middle column (the findings filename stem) is the
     # same derived suffix — guard the doc copy too (test_full_crew_table already pins the
     # slug column; this pins the previously-unasserted findings column).
-    for skill in ["review-code", "review-spec", "audit-debt"]:
+    for skill in ["review-code", "audit-debt"]:
         for slug, findings_stem, _dim in _table_rows(os.path.join("skills", skill, "SKILL.md")):
             assert findings_stem == slug[:-len(_REVIEWER_SUFFIX)], (
                 "%s: findings-column %r != %r (slug minus '-reviewer')"
@@ -177,13 +169,10 @@ def _rubric_dimensions():
     return set(re.findall(r"`([A-Za-z-]+)`", m.group(1)))
 
 
-@pytest.mark.parametrize("skill", ["review-code", "review-spec"])
-def test_full_crew_table_has_one_row_per_agent(skill):
-    rows = _table_rows(os.path.join("skills", skill, "SKILL.md"))
-    # leg-aware (#515): review-code's table is the 5-seat CODE_ROSTER; review-spec's is the
-    # 6-seat SPEC_ROSTER (grounding-reviewer is spec-leg-only).
-    universe = _agent_slugs()
-    expected_set = universe if skill == "review-spec" else universe - SPEC_ONLY
+def test_full_crew_table_has_one_row_per_agent():
+    rows = _table_rows(os.path.join("skills", "review-code", "SKILL.md"))
+    # review-code's table is the 5-seat CODE_ROSTER (grounding-reviewer is spec-only).
+    expected_set = _agent_slugs() - SPEC_ONLY
     slugs = [slug for slug, _, _ in rows]
     assert sorted(slugs) == sorted(expected_set)
 
@@ -196,20 +185,17 @@ def test_audit_debt_table_lists_exactly_the_original_four():
 
 @pytest.mark.parametrize("skill,expected_slugs", [
     ("review-code", "CODE"),
-    ("review-spec", "SPEC"),
     ("audit-debt", "FOUR"),
 ])
 def test_specialists_to_dispatch_prose_enumeration(skill, expected_slugs):
     text = _read(os.path.join("skills", skill, "SKILL.md"))
-    # leg-aware (#515): review-spec enumerates the full 6-seat SPEC_ROSTER (incl.
-    # grounding-reviewer); review-code the 5-seat CODE_ROSTER; audit-debt the ORIGINAL_FOUR.
-    want = {"CODE": _agent_slugs() - SPEC_ONLY, "SPEC": _agent_slugs(),
-            "FOUR": ORIGINAL_FOUR}[expected_slugs]
+    # review-code enumerates the 5-seat CODE_ROSTER; audit-debt the ORIGINAL_FOUR.
+    want = {"CODE": _agent_slugs() - SPEC_ONLY, "FOUR": ORIGINAL_FOUR}[expected_slugs]
     enumerated = set(re.findall(r"^\s*-\s*`([a-z][a-z-]*-reviewer)`\s*→", text, re.M))
     assert enumerated == want
 
 
-@pytest.mark.parametrize("skill", ["review-code", "review-spec", "audit-debt"])
+@pytest.mark.parametrize("skill", ["review-code", "audit-debt"])
 def test_table_dimensions_exist_in_rubric(skill):
     dims = _rubric_dimensions()
     for slug, _findings, dimension in _table_rows(os.path.join("skills", skill, "SKILL.md")):
