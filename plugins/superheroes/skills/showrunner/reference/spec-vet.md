@@ -108,7 +108,7 @@ After approval (duty 1), the breakdown you add to the same PR, or beside the sto
 You fix its findings yourself.
 
 Record that vet in a vet record of the same shape, on the same PR or in the same file. Its rounds
-count on from the spec's. Its spec hash is unchanged, because the breakdown never edits the spec.
+count on from the spec's. The record's spec hash is recomputed on the spec as approved, because recording the approval rewrites the file even though the breakdown never edits the spec.
 The record's header line reads `**Breakdown vet, round <n>**` in place of `**Spec vet, round <n>**`,
 and its owner-call list reads `None`. The breakdown carries no owner calls; a breakdown finding that
 needs the owner goes to the owner through the merge-word conversation, not the final sheet.

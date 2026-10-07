@@ -49,6 +49,7 @@ belongs to and lists every change with its replacement.
 ### The advisor's spec vet hands findings back; discovery asks for approval
 
 - The advisor no longer tells the owner a spec is "ready for your approval". Its vet checks the spec against the repo, the other approved specs and Canon, never edits the spec, and returns every finding to discovery in a vet record: a comment on the spec PR marked `<!-- superheroes:spec-vet -->`, or `vet-record.md` beside a stored spec. Discovery's final sheet asks for approval.
+- Discovery's step 8 now waits for the advisor's newest vet record to be clean for the current spec, as `skills/showrunner/reference/spec-vet.md` § How discovery learns the vet is done says, instead of waiting for "ready for your approval".
 - After the owner approves and says the final sheet is done, the advisor adds the breakdown to the same spec PR (or beside the stored spec) and vets it; one merge word covers both, and the issues file as it merges.
 - An owner ruling the advisor receives goes to Canon on a pull request it has open; with none open, it is held in a comment marked `<!-- superheroes:canon-held -->` on the project's standing proposals collector until the next pull request the advisor opens.
 - Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
