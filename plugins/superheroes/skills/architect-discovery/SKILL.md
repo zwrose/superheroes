@@ -430,7 +430,8 @@ Nothing is drawn before this gate: no design prompt, sketch, or board comes befo
 approves the framing.
 
 Present a compact **decision brief** the owner can digest in under a minute — not a replay
-of every requirement (that is the spec, which they review at step 8):
+of every requirement (the requirements live in the spec, and what still needs the owner comes
+back as cards on the sheets in step 8):
 - **One line each:** what this is and the `size` you're assigning.
 - **Who it's for** — the user stories you captured in step 3.
 - **Load-bearing decisions** — the handful of calls that shape the work: the
@@ -441,8 +442,9 @@ of every requirement (that is the spec, which they review at step 8):
 
 Ask: *"Does this framing look right? Anything to change before I write it up?"* **Do not
 proceed past this gate until the owner approves the framing.** Revise and re-present as
-needed. The full, requirement-by-requirement review happens **once**, on the authored spec
-(step 8) — not twice. Then continue to step 5, which either draws the boards or records the skip.
+needed. After this gate the owner sees only what still needs them, as cards on the sheets in
+step 8, so they never review the same thing twice. Then continue to step 5, which either draws
+the boards or records the skip.
 
 Decide one thing here **yourself** — never make the owner pick it:
 - **`size`** (`small | medium | large`) — infer it from the scope of the approved
