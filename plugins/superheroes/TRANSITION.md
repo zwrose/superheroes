@@ -13,7 +13,7 @@ belongs to and lists every change with its replacement.
 
 - A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
 - A caller that invokes `/superheroes:review-spec` or the deleted `spec_loop_plan` module must switch to discovery's spec checks.
-- A caller that invokes `/superheroes:audit-debt` must switch to `/superheroes:guardian`, which replaced it; the reviewer agents no longer take a whole-repo audit mode.
+- A caller that invokes `/superheroes:audit-debt` must switch to `/superheroes:guardian`, which replaced it; the reviewer agents no longer take a whole-repo audit mode. The guardian's dependency lens scans Node and Python projects only; a Rust or Go project must run `cargo audit` or `govulncheck` itself, which `audit-debt` used to run when installed.
 - A caller that imports `lib/escalation.py` or runs `lib/escalation_resolve.py` must stop; both are deleted.
 - **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
 
@@ -50,7 +50,7 @@ belongs to and lists every change with its replacement.
 ### audit-debt retires
 
 - The `audit-debt` skill is removed, along with its entry in the Codex manifest's skills list. `/superheroes:guardian` is the repo-health sweep that replaced it.
-- The reviewer agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `test-reviewer`) no longer carry an `audit-debt` mode bullet, and `premortem-reviewer` no longer notes that `audit-debt` does not dispatch it. The full dependency CVE and advisory sweep that `security-reviewer` deferred now points to `/superheroes:guardian`.
+- The reviewer agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `test-reviewer`) no longer carry an `audit-debt` mode bullet, and `premortem-reviewer` no longer notes that `audit-debt` does not dispatch it. The full dependency CVE and advisory sweep that `security-reviewer` deferred now points to `/superheroes:guardian`, which covers Node and Python dependencies only.
 - The `audit-report` decision-point carrier is removed from the carrier registry.
 
 ### The escalation rubric defers to the owner-vs-craft line
