@@ -21,7 +21,7 @@ their crash recovery) live entirely in `lib/mode_migrate.py`.
 ## Step 1 — Recover first (every run)
 
 Before sensing or rendering anything, settle any flip or rebind interrupted by an earlier crash —
-this is what makes the storage switch safe (UFR-1/UFR-10). `route`/`render` are read-only and can
+this is what makes the storage switch safe. `route`/`render` are read-only and can
 never be the recovery trigger.
 
 ```bash
@@ -46,7 +46,7 @@ print(json.dumps(configure_route.route('.')))
 
 Read the `path` and surface the plain-language `reasons`. There is no presence flag — the libs
 always take the provisional / out-of-repo / strict posture, and storage is never flipped without
-the owner's explicit authorization in this turn (FR-14/FR-17). **FR-14 is preserved but its shape
+the owner's explicit authorization in this turn. **The owner's-authorization rule is preserved but its shape
 changed:** `lib/mode_migrate.py` no longer takes a presence boolean; it takes an explicit owner
 authorization that **defaults to refusing**. `configure` passes that authorization only when the
 owner asked for the migration in the current turn — the owner's words being the hearing event.
@@ -56,8 +56,8 @@ Then run the matching path:
 - **`fix`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/fix.md`.
 - **`view`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/view-and-tune.md`.
 
-A run that only views an up-to-date project changes nothing (FR-12). A provisional calibration
-is confirmed only when the owner explicitly confirms it on the fix path (FR-18) — never by viewing.
+A run that only views an up-to-date project changes nothing. A provisional calibration
+is confirmed only when the owner explicitly confirms it on the fix path — never by viewing.
 
 Engine onboarding (Codex/Cursor per role — reviewer, implementer, brief-check reviewer, pilot;
 availability, preference, show-authorization, test-dispatch) lives in `set-up.md` §4.5 and is
@@ -69,6 +69,6 @@ tunable via `view-and-tune.md` §2. Model-tier overrides (including explicit `fa
 | Mistake | Fix |
 | --- | --- |
 | Skipping the Step-1 recover | A crashed flip is invisible until recover runs first — run it every time. |
-| Re-deciding a recorded storage mode during set-up/fix | The mode is sticky (FR-11); only the explicit, confirmed flip on the tune menu changes it. |
+| Re-deciding a recorded storage mode during set-up/fix | The mode is sticky; only the explicit, confirmed flip on the tune menu changes it. |
 | Flipping storage unattended | A storage flip happens only with the owner's explicit authorization in the current turn; without it the flip is recorded un-applied and the run continues. |
-| Editing the owner's build config to add a verify command | Propose it for the owner to add — `configure` never edits their build config (UFR-5). |
+| Editing the owner's build config to add a verify command | Propose it for the owner to add — `configure` never edits their build config. |

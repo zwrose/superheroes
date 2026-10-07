@@ -6,16 +6,16 @@
 
 # configure — view & tune path
 
-Reached from `configure` when a project is configured and healthy (FR-1). Renders the whole
+Reached from `configure` when a project is configured and healthy. Renders the whole
 calibration on one screen and offers a small menu of targeted changes. A view-only run on an
-up-to-date project changes nothing (FR-12).
+up-to-date project changes nothing.
 
 `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 Gate write-downs on this path are written down in the run output and are never written into a
 hero layer — their payloads carry machine-local absolute paths that must not reach a collaborator-visible in-repo file, and `write-layer` replaces a layer wholesale.
 
-## 1 — Render the combined view (FR-4) + drift notice (FR-7)
+## 1 — Render the combined view + drift notice
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -35,9 +35,12 @@ layer, the pinned patterns, and the **Model tiers** block — "here is everythin
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
 dismissible reminder on every run** (whether or not it was dismissed before); the owner can act on
 it or dismiss it again for that run. Rendering is read-only — it never confirms a provisional
-calibration (FR-18).
+calibration.
 
-## 2 — The tune menu (FR-5)
+The view also shows the **Spec reviewer seat** block, and lists configuration item 14 right after
+item 10.
+
+## 2 — The tune menu
 
 Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
 action that owns it, leaving the rest of the calibration untouched:
@@ -62,6 +65,91 @@ action that owns it, leaving the rest of the calibration untouched:
   `noop` means the item was saved — surface any other `action` (`refused`, `deferred`, `behind`)
   to the owner with its `reason`; the command exits 0 either way, so check `action`, not exit
   status.
+- **Set who it's for and what it's for (item 14)** → write only item 14, with the answer as a JSON
+  string on stdin. The command touches no other item.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd . <<'SUPERHEROES_ANSWER'
+  <the answer as a one-line JSON string>
+  SUPERHEROES_ANSWER
+  ```
+
+  The answer is free text, so it goes in through a quoted here-document, never inside shell single
+  quotes: an apostrophe would break the command and a `$(...)` would run. Write the JSON on one
+  line, flush left, with no indent before the closing `SUPERHEROES_ANSWER` line. Read the result
+  the same way as the `stackingTool` write above: only `written` or `noop` means it was saved.
+
+- **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
+  own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a
+  new example of what counts as a material consequence in Canon as a standing ruling, by
+  [Canon's contract](../../../rubric/canon-contract.md). Before the move, set item 13 as before.
+- **Move item 13 into Canon** → run the move from the branch it should ride when Canon lives in the
+  repository. The command commits only Canon's files there. When Canon lives in the project store,
+  the command commits in the store. Pass `--session <this session's id>` to record the session.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" migrate-material-line --cwd .
+  ```
+
+  Once the first step has run, item 13's examples cannot change until the move finishes. Finish
+  the move first, then record any change in Canon as a new ruling.
+
+  Each paragraph of the item-13 value becomes one standing ruling. Each ruling is marked as migrated
+  from configure item 13 on that date, with its original session and time unknown. Then item 13
+  points to Canon. The result's `action` is `migrated`, `already-adopted`, `pending-default-branch`,
+  or `refused` with a `reason`. Only `migrated` and `already-adopted` mean done.
+  `pending-default-branch` is the first of two steps. When Canon lives in the repository, the move
+  always finishes in two steps, wherever the project's calibration lives, unless the default branch
+  already holds every ruling. The
+  entries are committed on this branch, and item 13 keeps its value so other branches still see the
+  examples. Land the branch, then run the move again. That second run commits nothing new and
+  writes the pointer. A repository with no origin default branch stays
+  pending until it has one holding the entries. When Canon lives in the project store, there is one
+  shared copy and the move finishes in one step. Report a `refused` result to the owner with its
+  `reason`, and never work around it. Nine reasons are ones the owner can act on:
+  - `canon-dirty`: commit or discard local edits to `canon.md`, then run the move again.
+  - `canon-git-root-not-a-repo`: run configure's set-up for the project store.
+  - `material-line-changed-during-migration`: item 13 changed while it was moving, so run the move
+    again.
+  - `canon-default-probe-failed`: the default branch could not be read, so fetch and retry.
+  - `canon-lock-contended`: another configure change was saving at the same moment, so run the move
+    again.
+  - `canon-write-failed`: a file could not be written — fix the permission or disk space, then run
+    the move again. The move leaves Canon's files as they are, and the next run refuses
+    `canon-dirty` until the working copy matches the last commit.
+  - `canon-id-conflict`: Canon holds a migrated entry and another entry that share one id but
+    carry different rulings (or one is not migrated), so the move leaves item 13 as it is. Report the detail to the owner; the duplicate is
+    theirs to settle.
+  - `profile-structurally-ambiguous`: the project's calibration file is ambiguous (a repeated key or
+    two calibration blocks); fix it through configure's fix path, then run the move again.
+  - `material-line-changed-since-migration`: item 13 changed after an earlier run of the move
+    recorded these entries. Set item 13 back to exactly the text the detail lists, finish the
+    move, then record any change in Canon as a new ruling. An emptied item 13 meets the same
+    refusal while those entries stand.
+
+  The other reasons are `profile-absent`, `profile-unparseable`, `behind`, `malformed-value`,
+  `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-commit-failed`, and
+  `marker-write-failed`. Report the `reason` and the `detail` as they stand.
+- **Set or clear the spec-reviewer seat** → write the engine that reviews specs. Empty stdin clears
+  it.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' 'codex' | python3 -B "$ROOT_DIR/lib/core_md.py" write-spec-reviewer --cwd .
+  ```
+
+  The seat names an engine only, never a model, and is separate from the review-panel seats. What
+  the spec checks do while it is unset is the `## Spec reviewer seat` block of the rendered view
+  (`lib/configure_view.py` owns that wording) — point the owner at that block rather than
+  restating it. Read the result, don't assume success: `write-spec-reviewer` returns `{action,
+  reason?}` and exits 0 either way, so only `written` or `noop` means the seat was saved. Surface
+  `refused` (`spec-reviewer-unknown-engine` names a value that is not `claude`, `codex`, or
+  `cursor`; `spec-reviewer-round-trip-refused`), `deferred` (`lock-contended`, `store-unwritable`,
+  `spec-reviewer-write-failed`, `repo-root-unavailable`, `spec-reviewer-cli-failed`), and `behind`
+  (`core-schema-behind`) to the
+  owner with the `reason`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
 - **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
   knob you want inside the `guardian-config` JSON fence, and submit the **complete** body (the
@@ -70,7 +158,7 @@ action that owns it, leaving the rest of the calibration untouched:
   fence silently drops every other guardian knob (thresholds, cadence, coverage, vitals,
   `reportCard`, …) and the next sweep still reads `configStatus: healthy`. The fence shape is in
   `skills/guardian/reference/calibration.md`.
-- **Set up a hero skipped at set-up** (FR-6) → list every optional hero not yet set up and not
+- **Set up a hero skipped at set-up** → list every optional hero not yet set up and not
   previously declined, and offer to run each one's set-up from here. Get the list from the lib —
   never guess which heroes apply:
 
@@ -483,7 +571,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
 <!-- /decision-point: id=configure-tune-gate-policy -->
 
-## 3 — Flip the storage mode (FR-10), always showing what will move
+## 3 — Flip the storage mode, always showing what will move
 
 <!-- decision-point: id=configure-tune-storage-flip mode=gate kind=owner-gate default="preview only — no execute without current-turn owner authorization" carrier=run-output -->
 
@@ -520,15 +608,15 @@ Follow-up: `/superheroes:configure`.
   being a definition document. A flip into the repo newly publishes all of it to collaborators —
   say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
   relocated.
-- **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath
+- **In-flight work:** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
   confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the
   execution spine, #478), so `configure_route.work_in_flight('.')` always reports no known in-flight
   work — rely on your own judgment about what's mid-flight before flipping. This is a strong
   warning, not a hard block.
-- **Switch to the mode already in effect (FR-11):** reported as already in that mode; no change.
-- **Destination unwritable (UFR-6):** an `execute` result of `blocked` means the destination could
+- **Switch to the mode already in effect:** reported as already in that mode; no change.
+- **Destination unwritable:** an `execute` result of `blocked` means the destination could
   not be written — report exactly what it needs; the project stays in its prior mode with nothing
   removed from the source.
 - **Interrupted flip:** finished or backed out automatically by the Step-1 `recover` on the next
-  run (UFR-1) — every file ends up in exactly one location.
+  run — every file ends up in exactly one location.

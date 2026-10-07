@@ -800,3 +800,123 @@ def test_collect_fallopen_default_tiers_when_calibration_resolve_unimportable(tm
     assert data["modelTierOverrides"] == {}
     assert data["modelTiers"]["implementer"] == "sonnet"
     assert data["modelTierRefusal"] is None
+
+
+# ---------------------------------------------------------------------------
+# `## Spec reviewer seat` — its own block, never a Dispatch-calibration row
+# ---------------------------------------------------------------------------
+
+def _spec_reviewer_block(screen):
+    assert cv._SPEC_REVIEWER_HEADING in screen
+    after = screen.split(cv._SPEC_REVIEWER_HEADING + "\n", 1)[1]
+    return after.split("\n## ", 1)[0]
+
+
+def _invalid_expected(raw):
+    return "\n".join((cv._SPEC_REVIEWER_INVALID % raw, cv._SPEC_REVIEWER_FALLBACK))
+
+
+def test_render_spec_reviewer_unset_in_core_present_view(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"reviewer": "codex"})
+    screen = cv.render(str(tmp_path), root=root)
+    assert _spec_reviewer_block(screen).strip() == cv._SPEC_REVIEWER_UNSET
+    assert cv._SPEC_REVIEWER_UNSET.startswith("spec reviewer — unset (no model named). ")
+
+
+def test_render_spec_reviewer_valid_in_core_present_view(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": "Codex"})
+    screen = cv.render(str(tmp_path), root=root)
+    block = _spec_reviewer_block(screen).strip()
+    assert block == cv._SPEC_REVIEWER_VALID % {"engine": "codex"}
+    assert block.startswith("spec reviewer — codex (no model named). ")
+
+
+def test_render_spec_reviewer_valid_line_names_the_own_family_fallback(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": "codex"})
+    screen = cv.render(str(tmp_path), root=root)
+    block = _spec_reviewer_block(screen).strip()
+    assert block.startswith("spec reviewer — codex (no model named). ")
+    assert ("when none is installed, they use a fresh reviewer from the author's own family"
+            in block)
+
+
+def test_render_spec_reviewer_invalid_echo_is_bounded(tmp_path):
+    import engine_pref as ep
+
+    raw = "x" * 300
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": raw})
+    screen = cv.render(str(tmp_path), root=root)
+    bounded = ep.safe_config_echo(raw)
+    assert bounded != raw
+    assert raw not in screen
+    assert _spec_reviewer_block(screen).strip() == _invalid_expected(bounded)
+
+
+def test_render_spec_reviewer_invalid_in_core_present_view(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": "gemini"})
+    screen = cv.render(str(tmp_path), root=root)
+    assert _spec_reviewer_block(screen).strip() == _invalid_expected("gemini")
+    assert "is not an engine and is not applied ⚠" in screen
+
+
+def test_render_spec_reviewer_is_not_a_dispatch_calibration_row(tmp_path):
+    root = _seed_core_and_layer(tmp_path, engine_preferences={"specReviewer": "cursor"})
+    screen = cv.render(str(tmp_path), root=root)
+    dispatch = screen.split("## Dispatch calibration", 1)[1].split("\n## ", 1)[0]
+    assert "spec reviewer" not in dispatch
+    assert cv._SPEC_REVIEWER_HEADING not in dispatch
+
+
+def _render_core_absent(tmp_path, monkeypatch, spec_reviewer=None):
+    # git unavailable → no core is resolvable, so the core-absent branch renders.
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    real_run_git = sc.run_git_result
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return real_run_git(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    if spec_reviewer is not None:
+        real_collect = cv.collect
+
+        def collect(cwd, root=None):
+            data = real_collect(cwd, root)
+            data["enginePrefs"] = {"specReviewer": spec_reviewer}
+            return data
+
+        monkeypatch.setattr(cv, "collect", collect)
+    return cv.render(str(tmp_path), root=root)
+
+
+def test_render_spec_reviewer_unset_when_core_absent(tmp_path, monkeypatch):
+    screen = _render_core_absent(tmp_path, monkeypatch)
+    assert "## Core\n(no core calibration yet)" in screen
+    assert _spec_reviewer_block(screen).strip() == cv._SPEC_REVIEWER_UNSET
+    assert screen.index(cv._SPEC_REVIEWER_HEADING) < screen.index("## Review gate policy")
+
+
+def test_render_spec_reviewer_valid_when_core_absent(tmp_path, monkeypatch):
+    screen = _render_core_absent(tmp_path, monkeypatch, spec_reviewer="claude")
+    assert "## Core\n(no core calibration yet)" in screen
+    assert _spec_reviewer_block(screen).strip() == cv._SPEC_REVIEWER_VALID % {"engine": "claude"}
+
+
+def test_render_spec_reviewer_invalid_when_core_absent(tmp_path, monkeypatch):
+    # The view reads the validated prefs; an invalid raw value arrives as `invalidSpecReviewer`.
+    root = str(tmp_path / "store")
+    real_collect = cv.collect
+
+    def collect(cwd, root=None):
+        data = real_collect(cwd, root)
+        data["core"] = None
+        data["enginePrefs"] = {"invalidSpecReviewer": {
+            "value": "gemini", "reason": "spec-reviewer-unknown-engine"}}
+        return data
+
+    monkeypatch.setattr(cv, "collect", collect)
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Core\n(no core calibration yet)" in screen
+    assert _spec_reviewer_block(screen).strip() == _invalid_expected("gemini")

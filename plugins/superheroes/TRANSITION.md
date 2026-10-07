@@ -11,7 +11,8 @@ belongs to and lists every change with its replacement.
 
 ### Before you upgrade
 
-- Nothing to do. A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
+- A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
+- **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
 
 ### Canon: the record of the owner's decisions
 
@@ -19,6 +20,15 @@ belongs to and lists every change with its replacement.
 - New verb `definition_doc.py canon --root <root>`. It prints one JSON line with five keys: `path`, `home`, `gitRoot`, `exists` and `defaultRef`.
 - The issue contract's ruling anchor may now cite a Canon entry by its id.
 - Owner stamp for the anchor-resolution amendment: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
+
+### Configure: who it's for, item 13 in Canon, the spec-reviewer seat
+
+- New configuration item 14, slug `whoItsFor` (in `projectConfiguration`), "Who it's for and what it's for". It has no plugin default and is listed after item 10. Set-up asks for it as its own step.
+- Item 13 (`materialConsequenceLine`) can hold the marker `{"canon": "standing-rulings", "migratedOn": "<date>"}`. A read of it reports `source: "canon-pointer"`, and `set` on it then refuses `material-line-in-canon`. To record a new example, write a standing ruling in Canon.
+- New verb `project_config.py migrate-material-line --cwd . [--root R] [--session ID] [--date YYYY-MM-DD]`. Its result keys are `action` (`migrated`, `already-adopted`, `pending-default-branch`, or `refused`), `reason`, `detail`, `entries`, `skipped`, `canonPath`, `canonHome`, `commit`, `fetch` and `sanitized`. Its refusal reasons are `profile-absent`, `profile-unparseable`, `profile-structurally-ambiguous`, `behind`, `malformed-value`, `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-git-root-not-a-repo`, `canon-dirty`, `canon-default-probe-failed`, `canon-commit-failed`, `canon-write-failed`, `canon-id-conflict`, `material-line-changed-during-migration`, `material-line-changed-since-migration`, `canon-lock-contended` and `marker-write-failed`. The action `pending-default-branch` has a null `reason`. It means the Canon entries are committed on the current branch and the default branch does not yet hold every ruling, so item 13 keeps its value. When Canon lives in the repository the move always finishes in two steps, wherever the project's calibration lives, unless the entries are already on the default branch; a repository with no origin default branch stays pending until it has one holding them. Run the move again after the branch lands to write the marker; that run commits nothing new. When Canon lives in the project store, the move finishes in one step. Once the first step has run, item 13's examples cannot change until the move finishes: finish the move first, then record any change in Canon as a new ruling.
+- New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`; its own write failures report `spec-reviewer-round-trip-refused` and `spec-reviewer-write-failed`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
+- `core_md` confirm now keeps `enginePreferences` when it confirms a provisional calibration. Before, it dropped them.
+- New `core_md.write_project_config_item_if`, a compare-and-swap write of a single item. It refuses with `item-changed` when the item no longer holds the expected value.
 
 ### Guardian dead-code ids are repo-relative
 
