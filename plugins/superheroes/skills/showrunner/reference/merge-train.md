@@ -175,8 +175,9 @@ Before you execute, confirm four things:
 2. The breakdown's vet record is clean, and every file it pins still hashes to the pinned value
    ([spec-vet.md](spec-vet.md#vetting-the-breakdown)). This check also runs where the stored spec
    stands in for the PR.
-3. Where the package read applies, its verification pass and filing dry-run are recorded against this
-   head.
+3. Where the package read applies, its verification pass and filing dry-run are recorded in the
+   audit trail, and the only change between the head they ran against and this head is that record
+   itself (`git diff --stat <that head> HEAD` lists only the audit-trail file).
 4. Duty 6's three preconditions hold.
 
 Then merge the PR, and file the issues from the merged breakdown at once, under the same word. Wire

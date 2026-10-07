@@ -425,10 +425,13 @@ substitute** — step 6's self-review is the author's own pass and was never ind
 ### 8. Owner review & final approval (terminal gate)
 
 **Before the owner is asked, the advisor vets the spec.** Hand the spec's path and the path of its
-`checks-record.md` to the advisor for its vet, whatever the checks found. Ask the owner only after
-the vet reports "ready for your approval". When the vet asks for changes, apply them and run the
-checks again on the changed parts as `spec-checks.md` says in its After rulings section, then hand
-it back for the vet. When discovery runs with no advisor reachable, the draft waits for the vet; if
+`checks-record.md` to the advisor for its vet, whatever the checks found. The advisor's vet record
+is the notice that the vet is done: read the newest record by round number, and act on it only when
+the hash on its `Vet done:` line equals the spec's content hash now (a stale record means the spec
+needs a new vet; the record's shape is in the advisor's `spec-vet.md`). Ask the owner only after a
+hash-matching record reads `clean`, and add that record's owner calls to the owner's queue below.
+When the vet asks for changes, apply them and run the checks again on the changed parts as
+`spec-checks.md` says in its After rulings section, then hand it back for the vet. When discovery runs with no advisor reachable, the draft waits for the vet; if
 that cannot be resolved, the discovery parks (Exit C) with the draft marked unapproved.
 
 Then ask the owner to review the written spec. **Tell them the truth about which review ran** —

@@ -705,7 +705,11 @@ above).
    branch the ruling rides, that Canon never gets a pull request of its own, and when the commit
    happens. This charter adds only how you hold a ruling when no pull request of yours is open.
 
-   **Holding a ruling until that pull request exists.** At receipt, write the ruling's complete
+   **Project-store Canon is never held.** When Canon's `home` is `"project-store"`, commit the
+   ruling at once to the store's own repository by the contract's write procedure; there is no
+   pull request to wait for, and the commit binds every session sharing the store.
+
+   **Holding a ruling until that pull request exists (repository-backed Canon only).** At receipt, write the ruling's complete
    Canon entry line, id included, into one comment on the project's standing proposals
    [collector](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#collector) whose first line is an
    HTML comment naming `superheroes:canon-held`. Create the comment when none exists, and edit it in place. Mint
