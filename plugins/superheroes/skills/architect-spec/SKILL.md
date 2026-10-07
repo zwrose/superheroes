@@ -68,12 +68,11 @@ work-item's `board/` folder) **or the recorded skip**, **the owner's rulings for
 4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`: replace the
    `{{frontmatter}}` line with the emitted block, set the `# {{Title}}`, and fill
    every section from the approved inputs. Honor the template's contract:
-   - **Every statement ends with its source tag**, plain text at the end of the statement:
-     `(source: board · <artboard>)`, `(source: Canon <entry id>)`, `(source: framing)` or
-     `(source: craft, for your veto)`. A statement with two sources names both. Fill "How to read
-     this spec" with only the sources this spec uses. A tag never cites transcript line numbers.
-     Tags are for the owner and for the source check, an agent reading plain files; no script or
-     validator reads them.
+   - **Every statement ends with its source tag**, plain text at the end of the statement. The
+     template's "How to read this spec" section is the one home for the kinds of source and how a
+     statement with two sources reads; fill it with only the sources this spec uses. A tag never
+     cites transcript line numbers. Tags are for the owner and for the source check, an agent
+     reading plain files; no script or validator reads them.
    - **Write from the approved board and the rulings.** Where the spec and the approved board
      disagree, the board wins: correct the spec.
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1

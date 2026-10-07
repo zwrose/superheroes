@@ -550,7 +550,11 @@ about wording quality. file is the spec path and line is the line in the after v
 When the meaning check reports any shift, you may redo the pass once, leaving each shifted statement
 as it stood before the pass, and run the meaning check again on the whole result. A second shift,
 or a meaning check with no real result after one re-dispatch, discards the whole pass: the spec as
-it stood before the pass stands. No text reaches the owner that the meaning check did not clear.
+it stood before the pass stands. A real result still has to cover every changed statement: before
+keeping the pass, reconcile the findings against the statements the diff changes. A changed
+statement with no finding, a statement with two findings, or a finding that matches no changed
+statement counts as no real result and takes the same path: one re-dispatch, then discard. No text
+reaches the owner that the meaning check did not clear.
 
 Record the pass in `checks-record.md`, under a "Writing pass" section: what the pass changed, in a
 sentence; each meaning check's run directory, result and findings; and whether the pass was kept or
