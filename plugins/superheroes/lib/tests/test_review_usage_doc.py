@@ -101,6 +101,17 @@ def test_usage_doc_describes_the_sheet_layout():
     assert "Done for now" not in _doc(), "the doc still names Done for now"
 
 
+# Bites on: the layout section no longer saying Previous and Next also sit below the open card, that the folded "Answered" row and "Declined findings" show ▸ closed and ▾ open, or that pinching a laptop trackpad zooms the picture.
+def test_usage_doc_describes_the_cues_the_second_stepper_and_the_trackpad_pinch():
+    section = _squeezed(_section(_doc(), "How a sheet is laid out"))
+    for phrase in (
+        "Previous and Next also sit below the open card",
+        'The folded "Answered" row, and a final sheet\'s "Declined findings", show ▸ when closed and ▾ when open.',
+        "On a laptop, pinching the trackpad zooms the open picture about the pointer, as a phone pinch does.",
+    ):
+        assert phrase in section, "the layout section doesn't say %r" % phrase
+
+
 # Bites on: the fallback section no longer pointing at the prose renderer, or pointing at a script that isn't there.
 def test_usage_doc_names_the_prose_renderer():
     section = " ".join(_section(_doc(), "When the host can't show a sheet").split())

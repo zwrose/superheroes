@@ -93,16 +93,19 @@ A yellow app bar sits at the top with the review's name. Once the saved answers 
 says "A of N answered", and how many of those are marked to discuss. Until they are read, it says
 "N items · answers not loaded" instead, so a sheet never claims a count it hasn't checked.
 
-One item is open at a time, with Previous and Next to move between them. Below it, the list of items
-shows each one's state: Aligned, Discuss, Picked or Open. An item whose save didn't land carries a
-red Not saved badge.
+One item is open at a time, with Previous and Next to move between them. The same Previous and Next
+also sit below the open card, so the owner doesn't have to scroll back up after reading it. Below it,
+the list of items shows each one's state: Aligned, Discuss, Picked or Open. An item whose save didn't
+land carries a red Not saved badge.
 
 On a phone, a remainder sheet folds the items that are answered into one row, with their Aligned,
 Discuss and Picked counts. An answer whose save failed or stalled never folds, so it stays in the list where it
-can be seen and retried. On a desktop, every item is listed beside the open card.
+can be seen and retried. On a desktop, every item is listed beside the open card. The folded
+"Answered" row, and a final sheet's "Declined findings", show ▸ when closed and ▾ when open.
 
 Tap a picture on a card to open it on its own, large. Pinch or double-tap to zoom, and drag to look
-around. The view holds that one picture and has no way to move to another. Close returns to the card.
+around. On a laptop, pinching the trackpad zooms the open picture about the pointer, as a phone pinch
+does. The view holds that one picture and has no way to move to another. Close returns to the card.
 A picture that can't load says "This picture is missing" and its description, and the rest of the card,
 its answers and its note stay in place, so the card can still be answered.
 

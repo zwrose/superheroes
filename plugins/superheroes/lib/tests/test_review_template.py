@@ -161,6 +161,7 @@ class Node {
     this.value = "";
     this.attributes = {};
     this.listeners = {};
+    this.listenerOptions = {};
     this.focusCount = 0;
     this.captured = [];
     this.clientWidth = 0;
@@ -192,8 +193,10 @@ class Node {
   removeAttribute(name) {
     delete this.attributes[name];
   }
-  addEventListener(type, listener) {
+  addEventListener(type, listener, options) {
     (this.listeners[type] = this.listeners[type] || []).push(listener);
+    // The options each listener was registered with, in step with `listeners`.
+    (this.listenerOptions[type] = this.listenerOptions[type] || []).push(options);
   }
   appendChild(child) {
     if (child.tagName === "#fragment") {
@@ -214,7 +217,7 @@ class Node {
 }
 const elements = {};
 ["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title",
-  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer",
+  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-stepper-bottom", "sheet-footer",
   "sheet-history", "sheet-final"].forEach((id) => {
   elements[id] = new Node("div");
   elements[id].id = id;
@@ -224,8 +227,8 @@ elements["sheet-gate"].hidden = true;
 elements["sheet-error"].hidden = true;
 elements["sheet-title"].textContent = "Review sheet";
 // The sheet's own parts start hidden, with the classes the markup gives them, until a sheet is drawn.
-const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-history": "sh-box" };
-["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-history", "sheet-final"].forEach((id) => {
+const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-stepper-bottom": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-history": "sh-box" };
+["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-stepper-bottom", "sheet-footer", "sheet-history", "sheet-final"].forEach((id) => {
   elements[id].hidden = true;
   elements[id].className = markupClasses[id] || "";
 });
@@ -441,8 +444,15 @@ function* walk(node) {
 }
 const hasClass = (node, name) => node.className.split(/\s+/).includes(name);
 const fire = (node, type, fields) => {
-  const event = Object.assign({ type: type, target: node, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, fields);
-  (node.listeners[type] || []).forEach((listener) => listener(event));
+  // A browser ignores preventDefault from a listener registered passive.
+  let passiveNow = false;
+  const event = Object.assign({ type: type, target: node, defaultPrevented: false, preventDefault() { if (!passiveNow) this.defaultPrevented = true; } }, fields);
+  (node.listeners[type] || []).forEach((listener, index) => {
+    const options = (node.listenerOptions[type] || [])[index];
+    passiveNow = Boolean(options && typeof options === "object" && options.passive);
+    listener(event);
+  });
+  passiveNow = false;
   return event;
 };
 const tools = {
@@ -475,7 +485,8 @@ const tools = {
     fakeNow = target;
     await new Promise((resolve) => realSetTimeout(resolve, 0));
   },
-  text: (node) => [...walk(node)].filter((item) => item.children.length === 0).map((item) => item.textContent).filter((item) => item !== "").join(" "),
+  // The words a person reads: the open/closed cue is a drawn mark (aria-hidden), not part of a control's words.
+  text: (node) => [...walk(node)].filter((item) => item.children.length === 0 && !hasClass(item, "sheet-cue")).map((item) => item.textContent).filter((item) => item !== "").join(" "),
   card: (id) => elements["sheet-cards"].children.find((article) => article.id === "card-" + id),
   buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
   note: (id) => tools.card(id).children.find((child) => child.tagName === "textarea"),
@@ -543,7 +554,7 @@ const tools = {
       type: node.getAttribute("type"),
       className: node.className,
       text: tools.text(node),
-      parts: node.children.map((child) => [child.className, child.textContent]),
+      parts: node.children.filter((child) => !hasClass(child, "sheet-cue")).map((child) => [child.className, child.textContent]),
     };
   },
   count: () => elements["sheet-count"].textContent,
@@ -561,6 +572,17 @@ const tools = {
       nextDisabled: named("Next ›").disabled,
     };
   },
+  // The Previous and Next pair below the open card, as `stepper` reads the top one.
+  bottomStepper: () => {
+    const parts = elements["sheet-stepper-bottom"].children;
+    const named = (label) => parts.find((child) => child.tagName === "button" && child.textContent === label);
+    return {
+      hidden: elements["sheet-stepper-bottom"].hidden,
+      labels: parts.map((child) => child.textContent),
+      prevDisabled: named("‹ Previous").disabled,
+      nextDisabled: named("Next ›").disabled,
+    };
+  },
   why: () => ({
     hidden: elements["sheet-why"].hidden,
     heading: elements["sheet-why"].children.find((child) => child.tagName === "h2").textContent,
@@ -572,6 +594,8 @@ const tools = {
     return {
       previous: () => among(elements["sheet-stepper"], "‹ Previous"),
       next: () => among(elements["sheet-stepper"], "Next ›"),
+      bottomPrevious: () => among(elements["sheet-stepper-bottom"], "‹ Previous"),
+      bottomNext: () => among(elements["sheet-stepper-bottom"], "Next ›"),
       fold: () => elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold")),
       declines: () => elements["sheet-history"].children.find((child) => child.tagName === "button"),
     }[name]();
@@ -589,7 +613,7 @@ const tools = {
       className: box.className,
       heading: heading ? heading.textContent : null,
       paragraphs: kids.filter((child) => child.tagName === "p").map((child) => child.textContent),
-      toggle: toggle ? { text: toggle.textContent, aria: toggle.getAttribute("aria-expanded"), type: toggle.getAttribute("type"), className: toggle.className } : null,
+      toggle: toggle ? { text: tools.text(toggle), aria: toggle.getAttribute("aria-expanded"), type: toggle.getAttribute("type"), className: toggle.className } : null,
       listHidden: list ? list.hidden : null,
       items: list ? list.children.map((item) => [item.tagName, item.textContent]) : [],
     };
@@ -3382,3 +3406,231 @@ def test_final_sheet_wording_has_one_home():
     publishing = USAGE_DOC.read_text(encoding="utf-8").split("## Publishing a sheet", 1)[1]
     assert '"sheet-words.json": "<staged sheet-words.json>"' in publishing
     assert "`sheet-words.json`" in publishing
+
+
+# The open/closed cue on the folded row and the declines toggle, and the Previous and Next pair below the open card.
+CUE_SCENARIO = """
+  const cueOf = (control) => {
+    const first = control.children[0];
+    return {
+      tag: first.tagName,
+      className: first.className,
+      text: first.textContent,
+      hidden: first.getAttribute("aria-hidden"),
+      expanded: control.getAttribute("aria-expanded"),
+      classes: control.className.split(/\\s+/),
+    };
+  };
+"""
+
+
+# Bites on: the folded row's cue not following the toggle (stuck on ▸, or not redrawn on the second click), a cue that is not the button's first child, one a screen reader would read (no aria-hidden), one that disagrees with aria-expanded, or the row losing its theme button class.
+def test_the_fold_cue_follows_the_toggle():
+    docs = [{"id": "plan-day", "data": _doc("aligned")}, {"id": "fridge-check", "data": _doc("discuss")}]
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), CUE_SCENARIO + """
+      const fold = t.control("fold");
+      const out = { closed: cueOf(fold), hiddenRow: t.fold().hidden };
+      t.click(fold);
+      out.opened = cueOf(t.control("fold"));
+      t.click(t.control("fold"));
+      out.closedAgain = cueOf(t.control("fold"));
+      return out;
+    """, host={"docs": docs})
+    assert result["hiddenRow"] is False, "the fold row was hidden, so the test proves nothing"
+    classes = ["sh-button", "sheet-fold"]
+    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▸", "hidden": "true", "expanded": "false", "classes": classes}
+    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▾", "hidden": "true", "expanded": "true", "classes": classes}
+    assert result["closedAgain"] == result["closed"]
+
+
+# Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▸), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.
+def test_the_declines_cue_follows_the_toggle():
+    result = _sheet_page(_sample_final(), CUE_SCENARIO + """
+      const state = () => Object.assign(cueOf(t.control("declines")), { listHidden: t.history().listHidden });
+      const out = { closed: state() };
+      t.click(t.control("declines"));
+      out.opened = state();
+      t.click(t.control("declines"));
+      out.closedAgain = state();
+      return out;
+    """)
+    classes = ["sh-button"]
+    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▸", "hidden": "true", "expanded": "false", "classes": classes, "listHidden": True}
+    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▾", "hidden": "true", "expanded": "true", "classes": classes, "listHidden": False}
+    assert result["closedAgain"] == result["closed"]
+
+
+# Bites on: the second Previous and Next missing, not theme buttons, placed anywhere but between the cards and the footer, wired to the wrong step, left enabled at an end when the top pair is off (or the reverse), carrying an item label, or shown on a sheet with no cards.
+def test_the_bottom_stepper_steps_like_the_top_one():
+    text = _template_text()
+    bottom = re.search(r'<div id="sheet-stepper-bottom" class="sheet-stepper" hidden></div>', text)
+    assert bottom, "the template has no hidden #sheet-stepper-bottom with the stepper class"
+    assert text.index('<main id="sheet-cards"></main>') < bottom.start() < text.index('<div id="sheet-footer"')
+
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card"), """
+      const bottom = () => t.bottomStepper();
+      const shape = () => ({
+        open: t.openCard(),
+        label: t.stepper().label,
+        top: [t.stepper().prevDisabled, t.stepper().nextDisabled],
+        bottom: [bottom().prevDisabled, bottom().nextDisabled],
+        hidden: [t.stepper().hidden, bottom().hidden],
+      });
+      const buttonsOf = (host) => t.all(elements[host]).filter((node) => node.tagName === "button").map((node) => [node.textContent, node.className, node.getAttribute("type")]);
+      const out = { first: shape(), labels: bottom().labels, buttons: [buttonsOf("sheet-stepper"), buttonsOf("sheet-stepper-bottom")] };
+      out.stepOne = t.click(t.control("bottomNext")) && shape();
+      out.stepTwo = t.click(t.control("next")) && shape();
+      out.stepThree = t.click(t.control("bottomPrevious")) && shape();
+      t.click(t.control("bottomNext"));
+      out.last = shape();
+      out.pastEnd = [t.click(t.control("bottomNext")), t.click(t.control("next"))];
+      t.click(t.control("previous"));
+      t.click(t.control("bottomPrevious"));
+      out.back = shape();
+      out.pastStart = [t.click(t.control("bottomPrevious")), t.click(t.control("previous"))];
+      return out;
+    """)
+    assert result["first"] == {"open": "plan-day", "label": "Item 1 of 3", "top": [True, False], "bottom": [True, False], "hidden": [False, False]}
+    assert result["labels"] == ["‹ Previous", "Next ›"], "the bottom stepper carries more than the two buttons"
+    pair = [["‹ Previous", "sh-button", "button"], ["Next ›", "sh-button", "button"]]
+    assert result["buttons"] == [pair, pair]
+    assert result["stepOne"] == {"open": "fridge-check", "label": "Item 2 of 3", "top": [False, False], "bottom": [False, False], "hidden": [False, False]}
+    assert result["stepTwo"] == {"open": "third-card", "label": "Item 3 of 3", "top": [False, True], "bottom": [False, True], "hidden": [False, False]}
+    assert result["stepThree"] == result["stepOne"]
+    assert result["last"]["open"] == "third-card" and result["last"]["bottom"] == result["last"]["top"] == [False, True]
+    assert result["pastEnd"] == [False, False]
+    assert result["back"] == result["first"]
+    assert result["pastStart"] == [False, False]
+
+    # A sheet with one card has nowhere to step, on either pair.
+    single = _answer_page(_named_cards("plan-day"), "return { top: t.stepper(), bottom: t.bottomStepper() };")
+    assert single["top"] == {"hidden": False, "label": "Item 1 of 1", "prevDisabled": True, "nextDisabled": True}
+    assert single["bottom"] == {"hidden": False, "labels": ["‹ Previous", "Next ›"], "prevDisabled": True, "nextDisabled": True}
+
+    # A final sheet with no cards shows neither.
+    empty = _sheet_page(_sample_final(cards=[]), "return { top: t.stepper().hidden, bottom: t.bottomStepper().hidden };")
+    assert empty == {"top": True, "bottom": True}
+
+
+# A picture's share at the frame point (250, 150), for the zoom tests: how far across and down the picture that point sits.
+SHARE = """
+  const share = (shown) => [
+    (shown.left + 250 - Math.max(0, (400 - shown.width) / 2)) / shown.width,
+    (shown.top + 150 - Math.max(0, (300 - shown.height) / 2)) / shown.height,
+  ];
+"""
+# A ctrl wheel (a trackpad pinch) at the frame point (250, 150), the frame's corner being at (10, 20).
+WHEEL = """
+  view.frame.rect = { left: 10, top: 20 };
+  const wheel = (fields) => t.fire(view.frame, "wheel", Object.assign({ ctrlKey: true, deltaMode: 0, deltaY: 0, clientX: 260, clientY: 170 }, fields));
+"""
+FIT = {"width": 400, "height": 200, "left": 0, "top": 0}
+
+
+# Bites on: a wheel listener that is passive (so the browser's own page zoom cannot be cancelled), a ctrl wheel that is not cancelled, a zoom that is not exp(-deltaY / 100) of the current size, one that slides the picture point under the pointer (including zooming about the frame's corner), that passes the 1 to 4 limits, that reads a line or page delta as pixels, or that acts while the view is shut or the picture has no size.
+def test_a_ctrl_wheel_zooms_about_the_pointer():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + WHEEL + """
+      const out = { options: view.frame.listenerOptions.wheel.map((options) => (options ? options.passive : null)), fit: t.shown() };
+      const zoom = wheel({ deltaY: -100 });
+      out.prevented = zoom.defaultPrevented;
+      out.zoomed = t.shown();
+      out.shareBefore = share(out.fit);
+      out.shareAfter = share(out.zoomed);
+      wheel({ deltaY: -100000 });
+      out.top = t.shown();
+      wheel({ deltaY: 100000 });
+      out.bottom = t.shown();
+      // A line delta counts 16 px a line, and a page delta the frame's height (300 px).
+      const lines = wheel({ deltaMode: 1, deltaY: -5 });
+      out.lines = [lines.defaultPrevented, t.shown()];
+      wheel({ deltaY: 100000 });
+      wheel({ deltaY: -80 });
+      out.pixels = t.shown();
+      wheel({ deltaY: 100000 });
+      wheel({ deltaMode: 2, deltaY: -0.5 });
+      out.pages = t.shown();
+      wheel({ deltaY: 100000 });
+      wheel({ deltaY: -150 });
+      out.pagePixels = t.shown();
+      wheel({ deltaY: 100000 });
+      const none = wheel({ deltaY: 0 });
+      out.none = [none.defaultPrevented, t.shown()];
+      // With the view shut, or open with no picture sized, a wheel is left alone.
+      t.click(view.close);
+      const shut = wheel({ deltaY: -100 });
+      t.click(t.pictures("pic-card")[0]);
+      const unsized = wheel({ deltaY: -100 });
+      out.left = [shut.defaultPrevented, unsized.defaultPrevented, t.shown().width];
+      return out;
+    """)
+    assert result["options"] == [False], "the wheel listener is not registered with passive: false"
+    assert result["fit"] == FIT
+    assert result["prevented"] is True
+    assert abs(result["zoomed"]["width"] - 400 * 2.718281828) <= 1 and abs(result["zoomed"]["height"] - 200 * 2.718281828) <= 1
+    assert result["shareBefore"] == [0.625, 0.5]
+    assert all(abs(after - before) < 0.005 for after, before in zip(result["shareAfter"], result["shareBefore"])), result["shareAfter"]
+    assert (result["top"]["width"], result["top"]["height"]) == (1600, 800), "a large pinch out went past the zoom limit"
+    assert result["bottom"] == FIT, "a large pinch in went below fit"
+    assert result["lines"][0] is True and result["lines"][1]["width"] > 400 and result["lines"][1] == result["pixels"], "a line delta did not count as 16 px"
+    assert result["pages"]["width"] > 400 and result["pages"] == result["pagePixels"], "a page delta did not count as the frame's height"
+    assert result["none"] == [True, FIT]
+    assert result["left"] == [False, False, 0]
+
+
+# Bites on: a wheel without ctrlKey being cancelled or zooming the picture, so a plain scroll or two-finger drag no longer pans the frame.
+def test_a_plain_wheel_does_not_zoom():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + WHEEL + """
+      wheel({ deltaY: -100 });
+      const zoomed = t.shown();
+      const plain = wheel({ ctrlKey: false, deltaY: -100 });
+      const bare = t.fire(view.frame, "wheel", { deltaY: -100, deltaMode: 0, clientX: 260, clientY: 170 });
+      return { zoomed: zoomed, afterPlain: t.shown(), plain: plain.defaultPrevented, bare: bare.defaultPrevented };
+    """)
+    assert result["zoomed"]["width"] > 400, "the ctrl wheel did not zoom, so the test proves nothing"
+    assert result["afterPlain"] == result["zoomed"], "a plain wheel zoomed the picture"
+    assert result["plain"] is False and result["bare"] is False, "a plain wheel was cancelled"
+
+
+# Bites on: a Safari pinch that multiplies each change into the current zoom instead of the zoom the gesture began at, that does not zoom about the pointer, that is not cancelled, that carries one gesture's start into the next, that zooms with no gesture begun (also after Close and reopen), or that works while the view is shut.
+def test_a_safari_gesture_zooms_from_where_it_began():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { fit: t.shown(), prevented: [] };
+      const gesture = (type, fields) => t.fire(view.frame, type, Object.assign({ clientX: 260, clientY: 170 }, fields));
+      const sent = (type, fields) => {
+        const event = gesture(type, fields);
+        out.prevented.push(event.defaultPrevented);
+      };
+      sent("gesturestart", { scale: 1 });
+      sent("gesturechange", { scale: 1.1 });
+      out.first = t.shown();
+      sent("gesturechange", { scale: 1.2 });
+      out.second = t.shown();
+      out.shareAfter = share(out.second);
+      sent("gestureend", { scale: 1.2 });
+      sent("gesturestart", { scale: 1 });
+      sent("gesturechange", { scale: 1.5 });
+      out.third = t.shown();
+      sent("gestureend", { scale: 1.5 });
+      gesture("gesturechange", { scale: 2 });
+      out.lone = t.shown();
+      // A gesture left unfinished when the view closes does not carry over to the next picture.
+      sent("gesturestart", { scale: 1 });
+      t.click(view.close);
+      t.click(t.pictures("pic-card")[0]);
+      t.loadView([800, 400], [400, 300]);
+      gesture("gesturechange", { scale: 2 });
+      out.reopened = t.shown();
+      t.click(view.close);
+      out.shut = gesture("gesturestart", { scale: 1 }).defaultPrevented;
+      return out;
+    """)
+    assert result["fit"] == FIT
+    assert result["first"]["width"] == 440
+    assert result["second"]["width"] == 480, "the second change was counted on top of the first (528)"
+    assert result["shareAfter"] == pytest.approx([0.625, 0.5], abs=0.005)
+    assert result["third"]["width"] == 720, "a new gesture did not start from the zoom the last one ended at (1.2 x 1.5 = 1.8)"
+    assert result["prevented"] == [True] * 8, result["prevented"]
+    assert result["lone"] == result["third"], "a gesture change with no gesture begun zoomed"
+    assert result["reopened"] == FIT, "a gesture begun before Close zoomed the next picture"
+    assert result["shut"] is False

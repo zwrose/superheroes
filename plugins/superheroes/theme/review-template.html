@@ -17,6 +17,7 @@
   .sheet-page .sheet-row, .sheet-page .sheet-fold { align-items: center; display: flex; gap: 8px; max-width: 100%; text-align: left; }
   .sheet-page .sheet-row { justify-content: space-between; }
   .sheet-page .sheet-fold { flex-wrap: wrap; }
+  .sheet-page .sheet-cue { display: inline-block; margin-inline-end: 4px; text-align: center; width: 1em; }
   .sheet-page .sheet-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
   .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
@@ -76,6 +77,7 @@
       <div class="sheet-main">
         <div id="sheet-stepper" class="sheet-stepper" hidden></div>
         <main id="sheet-cards"></main>
+        <div id="sheet-stepper-bottom" class="sheet-stepper" hidden></div>
         <div id="sheet-footer" class="sheet-footer" hidden></div>
       </div>
       <div class="sheet-side">
@@ -468,6 +470,7 @@
     const itemsHost = document.getElementById("sheet-items");
     const stepperHost = document.getElementById("sheet-stepper");
     const footerHost = document.getElementById("sheet-footer");
+    const bottomStepperHost = document.getElementById("sheet-stepper-bottom");
     const historyBox = document.getElementById("sheet-history");
     const finalHost = document.getElementById("sheet-final");
 
@@ -639,6 +642,8 @@
     let gesture = { moved: false, multi: false };
     let lastTap = null;
     let sizeWatcher = null;
+    // The zoom a Safari trackpad pinch began at; its scale is counted from there.
+    let gestureStart = null;
 
     function missingLine(alt) {
       const line = textElement("p", "sh-caption", MISSING_PICTURE + alt);
@@ -709,6 +714,12 @@
       pinch = null;
       gesture = { moved: false, multi: false };
       lastTap = null;
+      gestureStart = null;
+    }
+
+    // Whether a picture is shown and sized, so a zoom has something to act on.
+    function pictureReady() {
+      return !viewer.hidden && natural.w > 0 && natural.h > 0;
     }
 
     // A pointer that is gone (lifted, cancelled or no longer captured). A pinch that loses one ends, and the
@@ -782,6 +793,34 @@
       dropPointer(event);
     });
     viewerFrame.addEventListener("lostpointercapture", dropPointer);
+
+    // A trackpad pinch arrives as a wheel event with ctrlKey set (Chrome, Firefox, Edge). A wheel without it keeps
+    // scrolling the frame. The listener is not passive, so the browser's own page zoom can be cancelled.
+    viewerFrame.addEventListener("wheel", function (event) {
+      if (!event.ctrlKey || !pictureReady()) return;
+      event.preventDefault();
+      const dy = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewerFrame.clientHeight : 1);
+      const point = framePoint(event.clientX, event.clientY);
+      zoomTo(scale * Math.exp(-dy * 0.01), point.x, point.y);
+    }, { passive: false });
+
+    // Safari sends its own gesture events for a trackpad pinch; each one's scale counts from the gesture's start.
+    viewerFrame.addEventListener("gesturestart", function (event) {
+      if (!pictureReady()) return;
+      event.preventDefault();
+      gestureStart = scale;
+    });
+    viewerFrame.addEventListener("gesturechange", function (event) {
+      if (!pictureReady() || gestureStart === null) return;
+      event.preventDefault();
+      const point = framePoint(event.clientX, event.clientY);
+      zoomTo(gestureStart * event.scale, point.x, point.y);
+    });
+    viewerFrame.addEventListener("gestureend", function (event) {
+      if (viewer.hidden) return;
+      event.preventDefault();
+      gestureStart = null;
+    });
 
     viewerPicture.addEventListener("dragstart", function (event) {
       event.preventDefault();
@@ -1259,11 +1298,34 @@
       refreshSheet();
     }
 
-    const stepLabel = textElement("span", "sh-label", "");
-    const prevButton = actionButton("‹ Previous", function () { openAt(openIndex - 1); });
-    const nextButton = actionButton("Next ›", function () { openAt(openIndex + 1); });
-    stepperHost.replaceChildren(stepLabel, prevButton, nextButton);
+    // One Previous and Next pair; the sheet has one above the open card and one below it.
+    function stepPair() {
+      return {
+        previous: actionButton("‹ Previous", function () { openAt(openIndex - 1); }),
+        next: actionButton("Next ›", function () { openAt(openIndex + 1); }),
+      };
+    }
 
+    const stepLabel = textElement("span", "sh-label", "");
+    const topSteps = stepPair();
+    const bottomSteps = stepPair();
+    const stepPairs = [topSteps, bottomSteps];
+    stepperHost.replaceChildren(stepLabel, topSteps.previous, topSteps.next);
+    bottomStepperHost.replaceChildren(bottomSteps.previous, bottomSteps.next);
+
+    // The ▸ or ▾ that opens a folding control's text. It is drawn from the same state that sets aria-expanded.
+    function cueElement() {
+      const cue = textElement("span", "sheet-cue", "▸");
+      cue.setAttribute("aria-hidden", "true");
+      return cue;
+    }
+
+    function showOpenState(control, cue, open) {
+      cue.textContent = open ? "▾" : "▸";
+      control.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    const foldCue = cueElement();
     const foldButton = actionButton("", function () {
       expanded = !expanded;
       refreshSheet();
@@ -1344,6 +1406,7 @@
       const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
       const notSaved = states.filter(function (state, index) { return state.answer !== null && index !== openIndex && notSavedKind(state); }).length;
       const foldParts = [
+        foldCue,
         textElement("span", "", "Answered · " + foldedStates.length),
         textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
         textElement("span", PICK_PILLS.discuss[0], foldedWith("discuss") + " Discuss"),
@@ -1352,15 +1415,18 @@
       if (notSaved > 0) foldParts.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
       foldButton.replaceChildren(...foldParts);
       foldButton.hidden = foldedStates.length === 0;
-      foldButton.setAttribute("aria-expanded", expanded ? "true" : "false");
+      showOpenState(foldButton, foldCue, expanded);
       itemsHost.className = expanded ? "sheet-list is-expanded" : "sheet-list";
 
       stepLabel.textContent = "Item " + (openIndex + 1) + " of " + total;
-      prevButton.disabled = openIndex === 0;
-      nextButton.disabled = openIndex === total - 1;
+      stepPairs.forEach(function (pair) {
+        pair.previous.disabled = openIndex === 0;
+        pair.next.disabled = openIndex === total - 1;
+      });
 
       footerHost.hidden = false;
       stepperHost.hidden = total === 0;
+      bottomStepperHost.hidden = total === 0;
       itemsHost.hidden = total === 0;
       cardsHost.hidden = total === 0;
       whyBox.hidden = sheetKind !== "remainder";
@@ -1411,11 +1477,13 @@
         declined.forEach(function (finding) {
           list.appendChild(textElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
         });
-        const toggle = actionButton(finalWords.declinedHeading + " · " + declined.length, function () {
+        const declinedCue = cueElement();
+        const toggle = actionButton("", function () {
           list.hidden = !list.hidden;
-          toggle.setAttribute("aria-expanded", list.hidden ? "false" : "true");
+          showOpenState(toggle, declinedCue, !list.hidden);
         });
-        toggle.setAttribute("aria-expanded", "false");
+        toggle.replaceChildren(declinedCue, textElement("span", "", finalWords.declinedHeading + " · " + declined.length));
+        showOpenState(toggle, declinedCue, !list.hidden);
         parts.push(toggle, list);
       } else {
         parts.push(textElement("p", "", finalWords.noDeclines));
