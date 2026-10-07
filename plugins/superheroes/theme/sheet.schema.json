@@ -198,10 +198,10 @@
       ]
     },
     "verdict": {
-      "description": "The one document a final sheet stores at verdict/final when the owner taps Send verdict. It is the only document that counts as the owner's verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores, as a new document of its own at verdict/<digest>/sends/<sendId>, each time the owner taps Send verdict: <digest> is its own sheet field and <sendId> is 32 lowercase hex characters the page draws at random, so one send can never replace another. Sends are the only documents that count as the owner's verdict; exactly one send, or several that say the same thing, is the verdict, and several that differ mean the owner is asked which one counts. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["verdict", "note"],
+      "required": ["verdict", "note", "sheet", "answers"],
       "properties": {
         "verdict": {
           "description": "What the owner decided: approve the spec or not yet.",
@@ -210,14 +210,40 @@
         "note": {
           "description": "The owner's note with the verdict, an empty string when there is none.",
           "type": "string"
+        },
+        "sheet": {
+          "description": "The sheet revision this verdict answers: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. A verdict whose digest differs from the current file's is not a verdict on this sheet.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "answers": {
+          "description": "The owner's answers on every card, in the sheet's card order, frozen at the moment the verdict was sent. The reading session takes the answers from here and nowhere else.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/sentAnswer"}
+        }
+      }
+    },
+    "sentAnswer": {
+      "description": "One card's entry in the sent verdict: the card's id and the answer document stored for it when the verdict was sent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["card", "answer"],
+      "properties": {
+        "card": {
+          "description": "The card's identifier.",
+          "$ref": "#/$defs/id"
+        },
+        "answer": {
+          "description": "The card's stored answer document, in the shape of $defs/answer.",
+          "$ref": "#/$defs/answer"
         }
       }
     },
     "draftVerdict": {
-      "description": "The document a final sheet stores at draft-verdict/final the moment the owner taps a verdict or edits its note. It never counts as a verdict and is put back when the sheet reopens. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores at draft-verdict/<digest>, where <digest> is its own sheet field, the moment the owner taps a verdict or edits its note. It never counts as a verdict and is put back when the sheet reopens. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["verdict", "note"],
+      "required": ["verdict", "note", "sheet"],
       "properties": {
         "verdict": {
           "description": "What the owner has tapped so far: approve, not yet, or null when only a note was saved.",
@@ -226,6 +252,11 @@
         "note": {
           "description": "The owner's note so far, an empty string when there is none.",
           "type": "string"
+        },
+        "sheet": {
+          "description": "The sheet revision this draft belongs to: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. A draft for another revision is ignored when the sheet reopens.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },

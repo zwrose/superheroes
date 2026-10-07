@@ -1,0 +1,16 @@
+{
+  "historyHeading": "How the spec got here",
+  "history": "The review ran {rounds} and fixed {fixes} itself. The vet: {vet}",
+  "roundNoun": "round",
+  "thingNoun": "thing",
+  "declinedHeading": "Declined findings",
+  "declinedItem": "{summary} (why declined: {reason})",
+  "noDeclines": "No findings were declined.",
+  "approveHeading": "Approve the spec?",
+  "tracesBoard": "Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto.",
+  "tracesNoBoard": "Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto.",
+  "boardSaved": "The approved board is saved with the spec.",
+  "boardNotSaved": "The approved board is not saved with the spec.",
+  "nextHeading": "What happens next",
+  "next": "The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both."
+}
