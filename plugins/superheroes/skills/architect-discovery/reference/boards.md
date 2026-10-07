@@ -172,26 +172,14 @@ sync again on later edits.
 Where the host has no Claude Design path, tell the owner that the sync did not happen and why.
 Never claim a sync that did not run.
 
-## Skipping the board
+## Skipping the board, the board winning, and redraws
 
-A piece of work may skip the board when it is small and has nothing to draw. Both conditions must
-hold. A small screen or a small flow still gets a board.
+Step 5 of the skill owns when a board may be skipped, which wins when the spec and the approved
+board disagree, and when a redraw is needed. This reference holds only the file format of a redraw.
 
-Say so at the framing. The spec is then written from the framing and the rulings.
+Save the files again after a redraw, as in Saving the approved build board.
 
-## The board wins
-
-Where the spec and the approved board disagree, the board wins. Correct the spec in the same pass
-that finds the disagreement.
-
-The correction is a change to the spec like any other. The checks run again on the changed parts.
-
-## Redraws after approval
-
-A ruling can change something an approved board shows. When one does, redraw the affected part and
-republish it to the same link. Save the files again, as in Saving the approved build board.
-
-Record the redraw in `board/redraws.md`, one entry per redraw. Each entry holds:
+`board/redraws.md` holds one entry per redraw. Each entry holds:
 
 - the date,
 - the ruling, by its Canon entry,
@@ -199,7 +187,5 @@ Record the redraw in `board/redraws.md`, one entry per redraw. Each entry holds:
 - the board's link,
 - `sent: no`.
 
-The owner's next sheet shows every entry still marked `sent: no`. Mark an entry `sent: yes` once a
-sheet carries it.
-
-Any later discovery session on this spec reads `redraws.md` first. The board stays the truth.
+Mark an entry `sent: yes` once a sheet carries it. Any later discovery session on this spec reads
+`redraws.md` first. The board stays the truth.
