@@ -554,7 +554,14 @@ const tools = {
       type: node.getAttribute("type"),
       className: node.className,
       text: tools.text(node),
-      parts: node.children.filter((child) => !hasClass(child, "sheet-cue")).map((child) => [child.className, child.textContent]),
+      // The label, then each chip: the chips' wrapper is read through, and `chips` says where it sits.
+      parts: node.children.filter((child) => !hasClass(child, "sheet-cue")).flatMap((child) => (
+        hasClass(child, "sheet-fold-chips") ? child.children.map((chip) => [chip.className, chip.textContent]) : [[child.className, child.textContent]]
+      )),
+      chips: (() => {
+        const index = node.children.findIndex((child) => hasClass(child, "sheet-fold-chips"));
+        return index < 0 ? null : { className: node.children[index].className, index };
+      })(),
     };
   },
   count: () => elements["sheet-count"].textContent,
@@ -1937,6 +1944,178 @@ def test_leaving_the_sheet_is_guarded_only_while_an_answer_is_unconfirmed():
     assert result["savedText"] == "Saved"
     assert result["saved"] is False, "the guard stayed on after the write was confirmed"
     assert result["noteTimer"] is True, "a note waiting for its pause was not guarded"
+
+
+# Bites on: tapping the picked answer (a plain answer, an option or Discuss) leaving it pressed or writing it again instead of clearing it, the cleared document losing the note or not fitting the answer schema, a pressed button left after the clear, a save line that does not end on Saved, or the leave-guard staying on once the cleared write resolves.
+def test_tapping_the_picked_answer_again_clears_it_and_keeps_the_note():
+    result = _answer_page([_card("plan-day")], """
+      const out = { cleared: [] };
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.type(t.note("plan-day"), "keep me", "input");
+      await t.advance(1000);
+      await settle();
+      for (const label of ["Aligned", "Yes", "Discuss"]) {
+        t.click(t.button("plan-day", label));
+        await settle();
+        const picked = t.state("plan-day").pressed;
+        t.click(t.button("plan-day", label));
+        await settle();
+        const log = t.setLog();
+        out.cleared.push({ label: label, picked: picked, state: t.state("plan-day"), save: t.saveText("plan-day"), guarded: t.unload(), last: log[log.length - 1] });
+      }
+      out.writes = t.setLog().length;
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["writes"] == 7, "each pick and each clear is one write after the note's"
+    assert [entry["label"] for entry in result["cleared"]] == ["Aligned", "Yes", "Discuss"]
+    for entry in result["cleared"]:
+        label = entry["label"]
+        assert entry["picked"].count("true") == 1, label
+        assert entry["last"] == {"path": "answers/plan-day", "body": {"answer": None, "optionId": None, "note": "keep me"}}, label
+        ANSWER_VALIDATOR.validate(entry["last"]["body"])
+        assert entry["state"]["pressed"] == ["false"] * 4, label
+        assert entry["state"]["note"] == "keep me", label
+        assert entry["save"] == "Saved", label
+        assert entry["guarded"] is False, label
+
+
+# Bites on: a cleared answer still counting as answered, still showing an Aligned or Discuss pill on its row, still folded, or still counted in the fold's label.
+def test_a_cleared_answer_drops_out_of_the_count_the_pill_and_the_fold():
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+      const settle = async (index) => {
+        t.sets[index].resolve();
+        await t.tick();
+      };
+      const shape = () => ({ count: t.count(), pills: t.rows().map((row) => row.pill[1]), folded: t.rows().map((row) => row.folded), label: t.fold().parts[0][1] });
+      const out = {};
+      t.open("plan-day");
+      t.click(t.button("plan-day", "Aligned"));
+      t.open("fridge-check");
+      t.click(t.button("fridge-check", "Discuss"));
+      await settle(0);
+      await settle(1);
+      t.open("third-card");
+      out.before = shape();
+      t.open("plan-day");
+      t.click(t.button("plan-day", "Aligned"));
+      await settle(2);
+      t.open("third-card");
+      out.after = shape();
+      return out;
+    """, host={"set": "pending"})
+    assert result["before"] == {"count": "2 of 3 answered · 1 to discuss", "pills": ["Aligned", "Discuss", "Open"], "folded": [True, True, False], "label": "Answered · 2"}
+    assert result["after"]["count"] == "1 of 3 answered · 1 to discuss"
+    assert result["after"]["pills"] == ["Open", "Discuss", "Open"]
+    assert result["after"]["folded"] == [False, True, False]
+    assert result["after"]["label"] == "Answered · 1"
+
+
+# Bites on: a clear tapped while the pick's write is still in flight being dropped (the store keeping the pick), a second write starting before the first resolved, or the save line not ending on Saved.
+def test_a_clear_tapped_while_the_pick_is_saving_ends_cleared():
+    result = _answer_page([_card("plan-day")], """
+      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("plan-day", "Aligned"));
+      const early = { sets: t.sets.length, save: t.saveText("plan-day"), pressed: t.state("plan-day").pressed };
+      t.sets[0].resolve();
+      await t.tick();
+      const queued = { sets: t.sets.length, save: t.saveText("plan-day") };
+      t.sets[1].resolve();
+      await t.tick();
+      return { early: early, queued: queued, sets: t.setLog(), save: t.saveText("plan-day"), guarded: t.unload() };
+    """, host={"set": "pending"})
+    assert result["early"] == {"sets": 1, "save": "Saving…", "pressed": ["false"] * 4}
+    assert result["queued"] == {"sets": 2, "save": "Saving…"}
+    assert result["sets"] == [_write("plan-day", "aligned", None, ""), _write("plan-day", None, None, "")]
+    assert result["save"] == "Saved"
+    assert result["guarded"] is False
+
+
+# Bites on: tapping the chosen verdict again leaving it pressed or writing it again, the cleared verdict losing the note, not fitting the verdict schema or not carrying the digest, a pressed button left on the last card, or a save line that does not end on Saved.
+def test_tapping_the_chosen_verdict_again_clears_it_and_keeps_the_note():
+    result = _sheet_page(_sample_final(), """
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.click(t.lastButton("Approve"));
+      await settle();
+      t.type(t.lastNote(), "Looks right", "input");
+      await t.advance(1000);
+      await settle();
+      t.click(t.lastButton("Approve"));
+      await settle();
+      return { sets: t.setLog(), last: t.lastState(), save: t.lastSaveText(), guarded: t.unload(), count: t.count() };
+    """, host={"fakeTimers": True, "set": "pending"})
+    digest = _sheet_digest(_sample_final())
+    assert result["sets"] == [_verdict_write("approve"), _verdict_write("approve", "Looks right"), _verdict_write(None, "Looks right")]
+    cleared = result["sets"][-1]
+    assert cleared["path"] == "verdict/" + digest
+    assert cleared["body"] == {"verdict": None, "note": "Looks right", "sheet": digest}
+    VERDICT_VALIDATOR.validate(cleared["body"])
+    assert result["last"]["pressed"] == ["false", "false"] and result["last"]["note"] == "Looks right"
+    assert result["save"] == "Saved"
+    assert result["guarded"] is False
+    assert result["count"] == "0 of 2 answered"
+
+
+# Bites on: a cleared answer or verdict that comes back pressed after a reopen (as when the second tap writes the pick again), a reopen that loses the note or writes anything, or a restored cleared answer counting as answered.
+def test_a_reopen_restores_a_cleared_answer_and_verdict():
+    first = _answer_page([_card("plan-day")], """
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.type(t.note("plan-day"), "keep me", "input");
+      await t.advance(1000);
+      await settle();
+      t.click(t.button("plan-day", "Aligned"));
+      await settle();
+      t.click(t.button("plan-day", "Aligned"));
+      await settle();
+      return t.setLog();
+    """, host={"set": "pending", "fakeTimers": True})
+    answer = [call for call in first if call["path"] == "answers/plan-day"][-1]["body"]
+    assert answer == {"answer": None, "optionId": None, "note": "keep me"}
+
+    reopened = _answer_page([_card("plan-day")], """
+      await t.advance(200);
+      return { state: t.state("plan-day"), sets: t.setLog(), count: t.count(), save: t.saveText("plan-day") };
+    """, host={"fakeTimers": True, "docs": [{"id": "plan-day", "data": answer}]})
+    assert reopened["state"]["pressed"] == ["false"] * 4
+    assert reopened["state"]["note"] == "keep me"
+    assert reopened["sets"] == [], "reopening wrote something"
+    assert reopened["count"] == "0 of 1 answered"
+    assert reopened["save"] == "Saved"
+
+    second = _sheet_page(_sample_final(), """
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.click(t.lastButton("Approve"));
+      await settle();
+      t.type(t.lastNote(), "Looks right", "input");
+      await t.advance(1000);
+      await settle();
+      t.click(t.lastButton("Approve"));
+      await settle();
+      return t.setLog();
+    """, host={"fakeTimers": True, "set": "pending"})
+    verdict = [call for call in second if call["path"] == "verdict/" + _sheet_digest(_sample_final())][-1]["body"]
+    assert verdict == _verdict(None, "Looks right")
+
+    again = _sheet_page(_sample_final(), """
+      await t.advance(200);
+      return { last: t.lastState(), sets: t.setLog(), count: t.count(), save: t.lastSaveText() };
+    """, host={"fakeTimers": True, "collections": {"verdict": [_final_doc(verdict)]}})
+    assert again["last"]["pressed"] == ["false", "false"]
+    assert again["last"]["note"] == "Looks right"
+    assert again["sets"] == [], "reopening wrote something"
+    assert again["count"] == "0 of 2 answered"
+    assert again["save"] == "Saved"
 
 
 # Bites on: a rejected write being hidden, a retry that does not send the latest state, or an older write's failure speaking for a newer one.
@@ -3523,6 +3702,30 @@ def test_the_fold_cue_follows_the_toggle():
     assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▶︎", "hidden": "true", "expanded": "false", "classes": classes}
     assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▼", "hidden": "true", "expanded": "true", "classes": classes}
     assert result["closedAgain"] == result["closed"]
+
+
+# Bites on: the folded row's count chips not sitting in one block that starts its own line after the label (chips beside the label, or loose in the button), that block not taking the full line width or not wrapping with even gaps, or the row's content not being left-aligned.
+def test_the_fold_puts_its_chips_on_their_own_left_aligned_line():
+    ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+    ]
+    fold = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), "return t.fold();", host={"docs": docs})
+    assert fold["chips"] == {"className": "sheet-fold-chips", "index": 2}, "the chips are not one block after the cue and the label"
+    assert fold["parts"] == [
+        ["", "Answered · 3"],
+        ["sh-pill sh-pill--aligned", "1 Aligned"],
+        ["sh-pill sh-pill--discuss", "1 Discuss"],
+        ["sh-pill sh-pill--aligned", "1 Picked"],
+    ]
+
+    rules = _style_rules(_template_text())
+    chips = dict(pair for selector, pairs in rules if selector == ".sheet-page .sheet-fold-chips" for pair in pairs)
+    assert (chips.get("display"), chips.get("flex"), chips.get("flex-wrap"), chips.get("gap")) == ("flex", "1 0 100%", "wrap", "8px")
+    row = [dict(pairs) for selector, pairs in rules if selector == ".sheet-page .sheet-fold" and any(name == "flex-wrap" for name, _ in pairs)]
+    assert len(row) == 1 and row[0].get("justify-content") == "flex-start", "the folded row is not left-aligned"
 
 
 # Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▶), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.

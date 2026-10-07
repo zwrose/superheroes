@@ -16,7 +16,8 @@
   .sheet-page .sheet-list { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
   .sheet-page .sheet-row, .sheet-page .sheet-fold { align-items: center; display: flex; gap: 8px; max-width: 100%; text-align: left; }
   .sheet-page .sheet-row { justify-content: space-between; }
-  .sheet-page .sheet-fold { flex-wrap: wrap; }
+  .sheet-page .sheet-fold { flex-wrap: wrap; justify-content: flex-start; }
+  .sheet-page .sheet-fold-chips { display: flex; flex: 1 0 100%; flex-wrap: wrap; gap: 8px; }
   .sheet-page .sheet-cue { display: inline-block; margin-inline-end: 4px; text-align: center; width: 1em; }
   .sheet-page .sheet-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
@@ -1009,7 +1010,11 @@
         button.disabled = true;
         button.addEventListener("click", function () {
           if (!spec.live()) return;
-          setLatest({ answer: choice.answer, optionId: choice.optionId, note: latest.note });
+          // Tapping the pick again clears it; the note stays.
+          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
+          setLatest(picked
+            ? { answer: null, optionId: null, note: latest.note }
+            : { answer: choice.answer, optionId: choice.optionId, note: latest.note });
           save();
         });
         row.appendChild(button);
@@ -1423,15 +1428,17 @@
       };
       const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
       const notSaved = states.filter(function (state, index) { return state.answer !== null && index !== openIndex && notSavedKind(state); }).length;
-      const foldParts = [
-        foldCue,
-        textElement("span", "", "Answered · " + foldedStates.length),
+      const foldChips = [
         textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
         textElement("span", PICK_PILLS.discuss[0], foldedWith("discuss") + " Discuss"),
       ];
-      if (foldedPicks > 0) foldParts.push(textElement("span", PICK_PILLS.picked[0], foldedPicks + " Picked"));
-      if (notSaved > 0) foldParts.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
-      foldButton.replaceChildren(...foldParts);
+      if (foldedPicks > 0) foldChips.push(textElement("span", PICK_PILLS.picked[0], foldedPicks + " Picked"));
+      if (notSaved > 0) foldChips.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
+      // The chips are one block that always starts its own line under the label.
+      const foldChipsLine = document.createElement("span");
+      foldChipsLine.className = "sheet-fold-chips";
+      foldChipsLine.replaceChildren(...foldChips);
+      foldButton.replaceChildren(foldCue, textElement("span", "", "Answered · " + foldedStates.length), foldChipsLine);
       foldButton.hidden = foldedStates.length === 0;
       showOpenState(foldButton, foldCue, expanded);
       itemsHost.className = expanded ? "sheet-list is-expanded" : "sheet-list";

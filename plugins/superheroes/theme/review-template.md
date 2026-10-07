@@ -130,8 +130,9 @@ the Approve and Not yet buttons and a note. There is no Send verdict button.
 A tap on Approve or Not yet, and the note, save at once at `verdict/<digest>`, in the shape
 `sheet.schema.json` defines at `$defs/verdict`, the same way an answer saves: every tap and every
 pause in the note writes the whole document, the last write counts, and the last card shows the same
-Saving…, Saved, Not saved and Try again as a card does. It comes back when the owner opens the link
-again, and it is not counted as an answer.
+Saving…, Saved, Not saved and Try again as a card does. Tapping the chosen one again clears the
+verdict, saved as null with the note kept. It comes back when the owner opens the link again, and it
+is not counted as an answer.
 
 `<digest>` is the SHA-256, in lowercase hex, of the exact bytes of the published `sheet.json` as the
 page fetched them (the bytes themselves, so a file with a byte-order mark hashes with it), and the
@@ -139,10 +140,10 @@ document's `sheet` equals it. Each revision of the sheet has its own document, s
 sheet has a new digest and starts unsigned, and a page showing an older revision never touches a newer
 one. When the sheet reopens, the page reads only the document whose id is its own digest, and restores
 the pick and note only when that document fits `$defs/verdict` and its `sheet` equals the digest.
-Another revision's document is ignored. A verdict of null (a note saved before any pick) restores only
-the note. A browser that cannot compute the digest (no `crypto.subtle`) leaves the last card's
-controls off, with a plain line on the card saying it can't tell which version of the sheet this is,
-and reads and writes nothing under `verdict`.
+Another revision's document is ignored. A verdict of null (a note saved before any pick, or a
+cleared verdict) restores only the note. A browser that cannot compute the digest (no
+`crypto.subtle`) leaves the last card's controls off, with a plain line on the card saying it can't
+tell which version of the sheet this is, and reads and writes nothing under `verdict`.
 
 Directly below the last card, a line tells the owner to come back to the chat once every answer shows
 it is saved, and say they're done; its words are in `sheet-words.json`, the same file the chat prose
@@ -154,9 +155,11 @@ below it and the next box work as usual.
 
 ## How answers come back
 
-A tap saves at once into the sheet's own store, and the owner can change it. The last tap
-counts. Each card's stored document has the shape `sheet.schema.json` defines at `$defs/answer`. Anyone but the
-owner who opens a shared sheet sees it with the answer controls turned off.
+A tap saves at once into the sheet's own store, and the owner can change it; tapping the picked
+answer again clears it, and the cleared answer (null) saves the same way, with the note kept. The
+last tap counts. Each card's stored document has the shape `sheet.schema.json` defines at
+`$defs/answer`. Anyone but the owner who opens a shared sheet sees it with the answer controls turned
+off.
 
 A save that fails says so on the card and offers Try again.
 
@@ -166,9 +169,10 @@ sheet is done, and never acts on a single tap.
 On a final sheet the session reads `answers` and `verdict/<digest>` together, where `<digest>` is the
 SHA-256 of the `sheet.json` it published (for example `shasum -a 256 sheet.json`). It reads only that
 document and uses it only when its `sheet` equals that digest, so a republished final sheet starts
-unsigned because its digest is new. A card with no stored answer, a final sheet with no verdict
-document, or a verdict of null is unanswered: the session asks rather than assuming. A saved Approve
-never counts as approval on its own; the owner's word in the chat does.
+unsigned because its digest is new. A card with no stored answer or a stored answer of null (a
+cleared pick), a final sheet with no verdict document, or a verdict of null (a cleared verdict) is
+unanswered: the session asks rather than assuming. A saved Approve never counts as approval on its
+own; the owner's word in the chat does.
 
 A card whose note disagrees with its answer is read as Discuss: ask the owner about it.
 
