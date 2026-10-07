@@ -119,8 +119,8 @@ action that owns it, leaving the rest of the calibration untouched:
   - `canon-write-failed`: a file could not be written — fix the permission or disk space, then run
     the move again. The move leaves Canon's files as they are, and the next run refuses
     `canon-dirty` until the working copy matches the last commit.
-  - `canon-id-conflict`: Canon holds a migrated entry and another entry that share one id but
-    carry different rulings (or one is not migrated), so the move leaves item 13 as it is. Report the detail to the owner; the duplicate is
+  - `canon-id-conflict`: Canon holds a migrated entry and another entry that share one id and
+    differ in any field (ruling, scope, supersession or provenance), or a migrated and an ordinary entry that share one id, so the move leaves item 13 as it is. Report the detail to the owner; the duplicate is
     theirs to settle.
   - `profile-structurally-ambiguous`: the project's calibration file is ambiguous (a repeated key or
     two calibration blocks); fix it through configure's fix path, then run the move again.
