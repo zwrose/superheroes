@@ -9,6 +9,7 @@
 - [What a reviewer may do](#what-a-reviewer-may-do)
 - [Sorting findings into three piles](#sorting-findings-into-three-piles)
 - [Rounds, and when they stop](#rounds-and-when-they-stop)
+- [The review gate](#the-review-gate)
 - [The running record](#the-running-record)
 - [The reviewer's prompt](#the-reviewers-prompt)
 
@@ -252,6 +253,40 @@ rounds of their own and the same stopping rule. Each check's prompt carries the 
 spec before and after the rulings. The reviewer reviews only those parts, and reads whatever
 surrounding text it needs to judge them. The same reviewers continue.
 
+## The review gate
+
+The spec's review gate is `gates.review` in its frontmatter. It has three states.
+
+- `pending`. The spec is a draft.
+- `changes-requested`. The owner asked for changes.
+- `passed`. The owner approved.
+
+The gate passes only when the owner approves. Discovery records that approval in its step 8. The
+checks never write `passed`.
+
+When the owner asks for changes, discovery records `changes-requested`, applies the changes, and
+runs the checks again on the changed parts (see [After rulings](#after-rulings)) before it goes
+back to the owner.
+
+When a fix changes content the owner already approved (`gates.review: passed`), reset the gate to
+`pending`. Do it only when a fix actually changed the spec. An unchanged spec keeps its approval.
+`$SPEC_PATH` is the spec's path and `$WORK_ITEM` is its work-item.
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+ROOT=$(git rev-parse --show-toplevel)
+REVIEWED_HASH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SPEC_PATH")
+python3 -B "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
+  --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT" \
+  --expected-hash "$REVIEWED_HASH" --run-id "spec-checks-$WORK_ITEM"
+```
+
+The command prints `reset:pending`, `noop:not-approved`, `skipped:noncanonical`,
+`skipped:unreadable`, `recorded:stale` or `failed:set-gate`. It never writes `passed`.
+
+Amendments after approval follow the amendments path,
+`skills/showrunner/reference/amendments.md`. The three checks do not run on them.
+
 ## The running record
 
 Keep one running record per spec. It is a plain markdown file named `checks-record.md`, in the
@@ -300,6 +335,11 @@ this session's branch only; proves nothing about the default branch; counts towa
 
 - <id>: <finding>. Recommendation: <text>. Marks: <contested, or "the review didn't settle this">
 ```
+
+A finding id is unique across the whole record, every cycle and every round. A confirmation reuses
+the previous finding's id on purpose, and that is not a clash. When a reviewer gives a **new**
+finding an id already in the record, rename it on the clash, for example with a suffix. Keep the
+reviewer's original id in a note in that row.
 
 Discovery builds each remainder sheet's items and its "why only these" facts from this record. It
 builds the final sheet's history and folded declines from it too.

@@ -36,11 +36,19 @@ _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 
 # Pinned register literals (epic register is home of record; duplicated here because
 # lib/tests/ ships inside the plugin to projects that do not carry the register file).
-R5_WEIGHT_VOCABULARY = (
-    "A weight call names `light` or `full`, states its measurables (gradable-line count "
-    "for a spec draft; child count and register-entry count for a package read), names a "
-    "round ceiling when it governs a read loop, and may be overridden in either direction "
-    "by one stated sentence; the numeric bars are guidelines, never gates."
+PACKAGE_WEIGHT_VOCABULARY = (
+    "A weight call names `light` or `full`, states its measurables (child count and "
+    "register-entry count for a package read), names a round ceiling when it governs a "
+    "read loop, and may be overridden in either direction by one stated sentence; the "
+    "numeric bars are guidelines, never gates."
+)
+
+_SPEC_CHECKS_REF = "skills/architect-discovery/reference/spec-checks.md"
+
+# The same-family sentence discovery passes to the owner is spec-checks.md's, word for word.
+_SAME_FAMILY_SENTENCE = (
+    "The reviewer is from the same model family as the author. It is a fresh reviewer that "
+    "never saw the conversation that wrote the spec."
 )
 
 R7_PARK_SURFACE = (
@@ -164,28 +172,30 @@ _DISCOVERY_SECTION_CLAUSES = {
         "never re-present the same list demanding a single selection",
         "Re-forcing the choice after a clarifying answer is the failure this rule names.",
     ],
-    "### 7. The weight call, then review at that weight": [
-        R5_WEIGHT_VOCABULARY,
-        "The weight call is the advisor's — always.",
-        "the completed draft waits for the advisor's call",
-        "Gradable requirement lines",
-        "Interlocking sections",
-        "At or under 10 gradable requirement lines with no interlocking sections calls `light`; above calls `full`.",
-        "Both inputs must hold for `light`",
-        "An override is valid only when stated, and one stated sentence is enough",
-        "The 10-line bar is a guideline, never a gate.",
-        "item parks (Exit C) with the draft left at the spec path `resolve-write --doc spec` reports, `status: draft`,",
+    "### 7. Run the three spec checks": [
+        "Every spec draft gets the three spec checks.",
+        "`skills/architect-discovery/reference/spec-checks.md`",
+        "This charter does not restate its rules.",
+        "Every spec gets the same three checks.",
+        "When the seat verb reports that no reviewer can run, the draft parks (Exit C).",
+        "the spec path `resolve-write --doc spec` reports, `status: draft`, and the park note marks it unapproved.",
+        "The owner is told, in plain language, that no review ran.",
+        "Self-review is never the substitute",
+        "Never fabricate a review result.",
     ],
     "### 8. Owner review & final approval (terminal gate)": [
-        "How you ask depends on the weight called in step 7.",
+        "Send one message: \"Spec written to `<spec path>` and through the three spec checks.",
+        "Present each queued item with its recommendation and its marks from `checks-record.md`.",
+        "Ask for approval one way, for every spec.",
+        "do not press for a verdict in the moment",
+        "If the owner requests changes, record the gate as `changes-requested` first.",
+        "--review changes-requested",
+        "owner-changes-$WORK_ITEM",
+        "There is no path from `changes-requested` to `passed` without that re-run.",
         "Exit A is done — report and hand back.",
         "Report the exit to the advisor",
-        "At `light` weight:",
-        "At `full` weight:",
-        "There is no fourth message.",
+        "and the path of its `checks-record.md`",
         "never offer them a spec that had none",
-        "re-review the revised draft at its effective weight",
-        "without a re-review at the effective weight",
     ],
 }
 
@@ -214,13 +224,13 @@ _DUTY1_CLAUSES = [
     R7_PARK_SURFACE,
     "nothing elicited is mistaken for approved content",
     "Silence is not a disposition",
-    "The review weight on a completed spec draft is yours to call.",
-    R5_WEIGHT_VOCABULARY,
-    "a discovery session",
-    "never weighs its own draft",
+    "Every spec draft gets the three spec checks.",
+    "discovery runs the checks on every draft, by `skills/architect-discovery/reference/spec-checks.md`.",
+    "You may still size your own vet of a spec; say the size you chose and why.",
+    PACKAGE_WEIGHT_VOCABULARY,
 ]
 
-_WEIGHT_SECTION = "### 7. The weight call, then review at that weight"
+_CHECKS_SECTION = "### 7. Run the three spec checks"
 
 
 def _load_definition_doc():
@@ -463,7 +473,7 @@ def test_census_tables_are_populated():
         "### Exit C — the park note",
         "### 2. The consent gate — investigation spend is the owner's to authorize",
         "### 3. Requirements dialogue (one question at a time)",
-        "### 7. The weight call, then review at that weight",
+        "### 7. Run the three spec checks",
         "### 8. Owner review & final approval (terminal gate)",
     }
     assert set(_DISCOVERY_SECTION_CLAUSES) == expected_discovery_keys
@@ -805,20 +815,20 @@ def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
     )
 
 
-def _synthetic_weight_section(*, classification_rule=None):
-    rule = classification_rule or "Both inputs must hold for `light`"
+def _synthetic_checks_section(*, rule=None):
+    rule = rule or "Every spec draft gets the three spec checks."
     lines = [
-        _WEIGHT_SECTION,
+        _CHECKS_SECTION,
         "",
         rule,
     ]
     return "\n".join(lines)
 
 
-def test_negative_weight_table_inverted_classification_rule_fails():
-    synthetic_path = "synthetic/weight-rule.md"
-    synthetic_text = _synthetic_weight_section(
-        classification_rule="Both inputs must hold for `full`",
+def test_negative_checks_section_without_the_every_draft_rule_fails():
+    synthetic_path = "synthetic/checks-rule.md"
+    synthetic_text = _synthetic_checks_section(
+        rule="Some spec drafts get the three spec checks.",
     )
 
     def read_text(rel):
@@ -830,14 +840,30 @@ def test_negative_weight_table_inverted_classification_rule_fails():
         lambda: _assert_section_clauses(
             synthetic_path,
             {
-                _WEIGHT_SECTION: [
-                    "Both inputs must hold for `light`",
+                _CHECKS_SECTION: [
+                    "Every spec draft gets the three spec checks.",
                 ],
             },
             read_text,
         ),
-        match=r"clause missing from section '### 7\. The weight call, then review at that weight'",
+        match=r"clause missing from section '### 7\. Run the three spec checks'",
     )
+
+
+def test_discovery_charter_names_no_weight():
+    text = _read_plugin(_DISCOVERY_CHARTER)
+    # axis: no weight call decides how a spec is reviewed, so the charter never says weight
+    assert not re.search(r"weight", text, re.IGNORECASE), (
+        "%s: the word 'weight' is back in the charter" % _DISCOVERY_CHARTER
+    )
+
+
+def test_discovery_charter_same_family_sentence_matches_spec_checks():
+    # axis: the sentence discovery gives the owner is spec-checks.md's own, word for word
+    assert _SAME_FAMILY_SENTENCE in _file_section(
+        _DISCOVERY_CHARTER, "### 8. Owner review & final approval (terminal gate)"
+    )
+    assert _SAME_FAMILY_SENTENCE in _normalized(_read_plugin(_SPEC_CHECKS_REF))
 
 
 def test_negative_set_gate_without_gates_line_fails(tmp_path):
