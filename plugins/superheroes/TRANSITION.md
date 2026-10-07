@@ -20,6 +20,12 @@ belongs to and lists every change with its replacement.
 - The issue contract's ruling anchor may now cite a Canon entry by its id.
 - Owner stamp for the anchor-resolution amendment: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
 
+### Configure: who it's for, and the spec-reviewer seat
+
+- New configuration item 14, slug `whoItsFor` (in `projectConfiguration`), "Who it's for and what it's for". It has no plugin default and is listed after item 10. Set-up asks for it as its own step.
+- New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`; its own write failures report `spec-reviewer-round-trip-refused` and `spec-reviewer-write-failed`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
+- `core_md` confirm now keeps `enginePreferences` when it confirms a provisional calibration. Before, it dropped them.
+
 ### Guardian dead-code ids are repo-relative
 
 - Dead-code candidate ids and their stored `path` no longer carry the checkout's absolute path, so a sweep from a different checkout no longer reports every carried dead-code hit as new.
