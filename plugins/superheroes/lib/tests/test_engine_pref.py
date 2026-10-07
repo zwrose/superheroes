@@ -1629,3 +1629,72 @@ def test_builder_tier_sources_cover_all_resolution_sources():
     explicit = launcher._resolve_model("sonnet", ".")
     assert explicit["ok"]
     assert explicit["resolution"]["source"] in sources
+
+
+# ---------------------------------------------------------------------------
+# specReviewer — the spec-check reviewer seat (engine token only, never a default)
+# ---------------------------------------------------------------------------
+
+def test_spec_reviewer_in_engine_pref_keys_not_role_keys():
+    assert EP.SPEC_REVIEWER_KEY == "specReviewer"
+    assert "specReviewer" in EP.ENGINE_PREF_KEYS
+    assert "specReviewer" not in EP.ENGINE_ROLE_KEYS
+    assert "specReviewer" not in EP._ROLE_KEY.values()
+
+
+@pytest.mark.parametrize("unset", (None, "", "   ", "\t"))
+def test_classify_spec_reviewer_unset(unset):
+    assert EP.classify_spec_reviewer(unset) == {"state": "unset"}
+
+
+@pytest.mark.parametrize("raw,engine", (
+    ("claude", "claude"), ("codex", "codex"), ("cursor", "cursor"),
+    ("Codex", "codex"), ("  CURSOR ", "cursor")))
+def test_classify_spec_reviewer_valid(raw, engine):
+    assert EP.classify_spec_reviewer(raw) == {"state": "valid", "engine": engine}
+
+
+@pytest.mark.parametrize("bad", ("gemini", "opus", 5, True, [], {}, ["codex"], {"engine": "codex"}))
+def test_classify_spec_reviewer_invalid(bad):
+    assert EP.classify_spec_reviewer(bad) == {
+        "state": "invalid", "reason": "spec-reviewer-unknown-engine"}
+
+
+def test_normalize_spec_reviewer_absent_and_empty_carry_neither_key():
+    for prefs in ({}, {"specReviewer": None}, {"specReviewer": ""}, {"specReviewer": "  "}):
+        out = EP._normalize_engine_preferences_block(prefs)
+        assert "specReviewer" not in out
+        assert "invalidSpecReviewer" not in out
+
+
+def test_normalize_spec_reviewer_valid_is_canonical_lowercase():
+    out = EP._normalize_engine_preferences_block({"specReviewer": "Codex"})
+    assert out["specReviewer"] == "codex"
+    assert "invalidSpecReviewer" not in out
+
+
+def test_normalize_spec_reviewer_invalid_is_surfaced_not_defaulted():
+    out = EP._normalize_engine_preferences_block({"specReviewer": "gemini"})
+    assert "specReviewer" not in out
+    assert out["invalidSpecReviewer"] == {
+        "value": "gemini", "reason": "spec-reviewer-unknown-engine"}
+    out = EP._normalize_engine_preferences_block({"specReviewer": 5})
+    assert "specReviewer" not in out
+    assert out["invalidSpecReviewer"] == {
+        "value": "5", "reason": "spec-reviewer-unknown-engine"}
+    out = EP._normalize_engine_preferences_block({"specReviewer": ["codex"]})
+    assert out["invalidSpecReviewer"]["value"] == repr(["codex"])
+
+
+def test_spec_reviewer_leaves_dispatch_calibration_rows_unchanged():
+    base = EP.dispatch_calibration_rows({"reviewer": "codex"}, _CALIBRATION_TIERS)
+    with_seat = EP.dispatch_calibration_rows(
+        {"reviewer": "codex", "specReviewer": "cursor"}, _CALIBRATION_TIERS)
+    assert with_seat == base
+
+
+def test_degenerate_and_refusal_prefs_carry_no_spec_reviewer():
+    for prefs in (EP.degenerate_engine_prefs(), EP.refusal_engine_prefs(),
+                  EP.refusal_engine_prefs("boom")):
+        assert "specReviewer" not in prefs
+        assert "invalidSpecReviewer" not in prefs
