@@ -53,8 +53,9 @@ value it delivers. One short paragraph.}}
 
 ## Who it's for
 
-{{The people who use this — a lightweight persona or two (role + what they're
-trying to get done). Anchors every requirement to a real user.}}
+{{One or more user stories in the form "As a …, I want …, so I can …" that evoke the
+core need without listing every detail. Edge cases go in the requirements (the
+unhappy-path section), never in the stories.}}
 
 ## Functional requirements
 
