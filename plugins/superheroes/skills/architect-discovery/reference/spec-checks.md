@@ -292,6 +292,8 @@ The seat's working directory is a sanitized copy of the repository. In a consumi
 copy does not contain this plugin. So copy the template below verbatim into each prompt file, and do
 not point the reviewer at this doc. Fill the `<like this>` placeholders. Keep the one lens paragraph
 for the check being run. Keep the continuation paragraph from round 2 on, and delete it in round 1.
+Keep the after-rulings paragraph only in a re-run after owner rulings, where the continuation
+paragraph is kept too, and delete it otherwise.
 
 ```text
 You are reviewing a requirements spec. A requirements spec says what the product does, in plain
@@ -321,6 +323,11 @@ findings, verbatim, each with the disposition the author gave it, and the diff o
 you last read it. First confirm each fix and answer each decline. Only then look for new problems.
 Previous findings and dispositions: <the findings, verbatim, with dispositions>
 Spec diff since you last read it: <the diff>
+
+After the owner's rulings, for a re-run on the changed parts. The owner has ruled since your last
+round, and the spec diff above shows what changed. Review only the parts the diff changes, reading
+the surrounding text you need to judge them. Do not raise new findings on text the diff leaves
+unchanged.
 
 Output rules. Return a findings list. Each finding has these fields: id, severity, dimension,
 taxonomy, title, file, line, body, suggestion, evidence, confidence, tradeoff.
