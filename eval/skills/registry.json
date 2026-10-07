@@ -1,18 +1,12 @@
 {
   "bodyCeilings": {
-    "superheroes/review-code": 400,
-    "superheroes/audit-debt": 459
+    "superheroes/review-code": 400
   },
   "requiredPhrases": {
     "superheroes/adopt-version": [
       "adopt it in place, no handoff and resume",
       "runs TRANSITION's checklist",
       "Not checkpoint or resume"
-    ],
-    "superheroes/audit-debt": [
-      "periodically sweeping a whole repository",
-      "accumulated technical, security, and architectural debt",
-      "rather than reviewing a single change"
     ],
     "superheroes/review-code": [
       "reviewing code changes on a local branch or an open pull request",

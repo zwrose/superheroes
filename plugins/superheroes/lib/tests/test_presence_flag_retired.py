@@ -73,7 +73,6 @@ _CONVERSATION_DRIVEN_DISCLOSURE_SURFACES = frozenset({
 
 # Cross-doc literal-agreement pin: carrier noun is the only per-surface variable.
 _DISCLOSURE_CARRIER_BY_SURFACE = {
-    "skills/audit-debt/SKILL.md": "audit report",
     "skills/review-init/SKILL.md": "review-crew layer body",
     "skills/review-code/reference/setup.md": "dispatch summary",
     "skills/test-pilot-init/SKILL.md": "test-pilot layer body",
@@ -82,21 +81,6 @@ _DISCLOSURE_CARRIER_BY_SURFACE = {
 
 # Byte-for-byte pins from shipped prose (multi-line where the skill wraps the sentence).
 _DISCLOSURE_PIN_BY_SURFACE = {
-    "skills/audit-debt/SKILL.md": (
-        "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "
-        "`in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from: "
-        "`env` (environment override `REVIEW_CREW_STORAGE` for this run only; never recorded), "
-        "`registry` (a mode the owner recorded; authoritative), `backfilled` (a mode inferred from "
-        "consistent existing evidence and then recorded), `provisional` (nothing recorded and no "
-        "consistent evidence; the lib's default, re-taken next run); `.provisional` is `true` when "
-        "the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when "
-        "configured, else the lib's provisional default). Bootstrap blocks never record — an "
-        "unrecorded mode is re-taken next run. **Disclosure.** Write into the **audit report** "
-        "(`$SESSION_DIR/report.md`): the storage mode taken, its source, whether it is provisional, "
-        "and that `/superheroes:configure` changes it. When `.provisional` is `true`, also state "
-        "that it is a provisional default rather than an owner choice and will be re-taken on the "
-        "next run when not recorded. **Follow-up:** `/superheroes:configure`.\n"
-    ),
     "skills/review-init/SKILL.md": (
         "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "
         "`in-repo` or\n"

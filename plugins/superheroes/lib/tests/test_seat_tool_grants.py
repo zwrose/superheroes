@@ -510,7 +510,7 @@ def test_check_runner_registers_as_itself_and_is_absent_from_every_reviewer_rost
         "roster). check-runner is not a review seat and must never be dispatched as "
         "one.")
 
-    for skill in ("review-code", "audit-debt"):
+    for skill in ("review-code",):
         text = _read_required(
             os.path.join(PLUGIN, "skills", skill, "SKILL.md"),
             "the %s dispatch table (item 4a, #719 round 2 confirmation)" % skill)

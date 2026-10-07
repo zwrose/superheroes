@@ -70,7 +70,7 @@ version or hand-cut a release.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/). Scope to `superheroes`.
 
-- `feat(superheroes): add audit-debt command`
+- `feat(superheroes): add guardian sweep`
 - `fix(superheroes): correct severity gate in score.py`
 - `feat(superheroes)!: ...` or a `BREAKING CHANGE:` footer for breaking changes.
 - Repo-wide changes (CI, license, governance): `chore:`, `ci:`, `docs:` with no
