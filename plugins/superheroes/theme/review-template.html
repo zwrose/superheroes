@@ -1313,15 +1313,19 @@
     stepperHost.replaceChildren(stepLabel, topSteps.previous, topSteps.next);
     bottomStepperHost.replaceChildren(bottomSteps.previous, bottomSteps.next);
 
-    // The ▸ or ▾ that opens a folding control's text. It is drawn from the same state that sets aria-expanded.
+    // The ▶ or ▼ that opens a folding control's text. It is drawn from the same state that sets aria-expanded.
+    // The closed ▶ carries U+FE0E so no platform draws it as an emoji.
+    const CUE_CLOSED = "▶︎";
+    const CUE_OPEN = "▼";
+
     function cueElement() {
-      const cue = textElement("span", "sheet-cue", "▸");
+      const cue = textElement("span", "sheet-cue", CUE_CLOSED);
       cue.setAttribute("aria-hidden", "true");
       return cue;
     }
 
     function showOpenState(control, cue, open) {
-      cue.textContent = open ? "▾" : "▸";
+      cue.textContent = open ? CUE_OPEN : CUE_CLOSED;
       control.setAttribute("aria-expanded", open ? "true" : "false");
     }
 

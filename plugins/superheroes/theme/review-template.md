@@ -101,7 +101,7 @@ land carries a red Not saved badge.
 On a phone, a remainder sheet folds the items that are answered into one row, with their Aligned,
 Discuss and Picked counts. An answer whose save failed or stalled never folds, so it stays in the list where it
 can be seen and retried. On a desktop, every item is listed beside the open card. The folded
-"Answered" row, and a final sheet's "Declined findings", show ▸ when closed and ▾ when open.
+"Answered" row, and a final sheet's "Declined findings", show ▶ when closed and ▼ when open.
 
 Tap a picture on a card to open it on its own, large. Pinch or double-tap to zoom, and drag to look
 around. On a laptop, pinching the trackpad zooms the open picture about the pointer, as a phone pinch

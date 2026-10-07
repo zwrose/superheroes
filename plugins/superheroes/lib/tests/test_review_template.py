@@ -3424,7 +3424,7 @@ CUE_SCENARIO = """
 """
 
 
-# Bites on: the folded row's cue not following the toggle (stuck on ▸, or not redrawn on the second click), a cue that is not the button's first child, one a screen reader would read (no aria-hidden), one that disagrees with aria-expanded, or the row losing its theme button class.
+# Bites on: the folded row's cue not following the toggle (stuck on ▶, or not redrawn on the second click), a closed cue missing its text-presentation selector (U+FE0E), a cue that is not the button's first child, one a screen reader would read (no aria-hidden), one that disagrees with aria-expanded, or the row losing its theme button class.
 def test_the_fold_cue_follows_the_toggle():
     docs = [{"id": "plan-day", "data": _doc("aligned")}, {"id": "fridge-check", "data": _doc("discuss")}]
     result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), CUE_SCENARIO + """
@@ -3438,12 +3438,12 @@ def test_the_fold_cue_follows_the_toggle():
     """, host={"docs": docs})
     assert result["hiddenRow"] is False, "the fold row was hidden, so the test proves nothing"
     classes = ["sh-button", "sheet-fold"]
-    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▸", "hidden": "true", "expanded": "false", "classes": classes}
-    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▾", "hidden": "true", "expanded": "true", "classes": classes}
+    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▶︎", "hidden": "true", "expanded": "false", "classes": classes}
+    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▼", "hidden": "true", "expanded": "true", "classes": classes}
     assert result["closedAgain"] == result["closed"]
 
 
-# Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▸), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.
+# Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▶), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.
 def test_the_declines_cue_follows_the_toggle():
     result = _sheet_page(_sample_final(), CUE_SCENARIO + """
       const state = () => Object.assign(cueOf(t.control("declines")), { listHidden: t.history().listHidden });
@@ -3455,8 +3455,8 @@ def test_the_declines_cue_follows_the_toggle():
       return out;
     """)
     classes = ["sh-button"]
-    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▸", "hidden": "true", "expanded": "false", "classes": classes, "listHidden": True}
-    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▾", "hidden": "true", "expanded": "true", "classes": classes, "listHidden": False}
+    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▶︎", "hidden": "true", "expanded": "false", "classes": classes, "listHidden": True}
+    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▼", "hidden": "true", "expanded": "true", "classes": classes, "listHidden": False}
     assert result["closedAgain"] == result["closed"]
 
 
