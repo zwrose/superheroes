@@ -179,7 +179,10 @@ Before you execute, confirm four things:
    audit trail, and the only change between the head they ran against and this head is that record
    itself. With a spec PR, `git diff --stat <that head> HEAD` lists only the audit-trail file; for a
    stored spec outside Git there is no head, so the pinned file hashes in item 2 are the freshness
-   check.
+   check, and they bind the verification only when the audit trail's verification and dry-run
+   entries name the content hash of each body they ran against and those hashes equal the pins. A
+   body changed after those entries means the affected checks run again, and the entries are
+   rewritten with the new hashes, before the breakdown is vetted and pinned.
 4. With a spec PR, duty 6's three preconditions hold. A stored spec has no PR, so the PR-lane
    review evidence, the recorded-head CI and the branch-current check do not apply to it; items 1
    to 3 are its whole gate.
