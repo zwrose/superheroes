@@ -26,7 +26,6 @@ def _validator_for(definition):
 
 
 # Every document the page may write, by where it goes. A write anywhere else fails the test that made it.
-DRAFT_VERDICT_VALIDATOR = _validator_for("draftVerdict")
 VERDICT_VALIDATOR = _validator_for("verdict")
 
 FORBIDDEN_PROPERTIES = (
@@ -162,6 +161,7 @@ class Node {
     this.value = "";
     this.attributes = {};
     this.listeners = {};
+    this.listenerOptions = {};
     this.focusCount = 0;
     this.captured = [];
     this.clientWidth = 0;
@@ -193,8 +193,10 @@ class Node {
   removeAttribute(name) {
     delete this.attributes[name];
   }
-  addEventListener(type, listener) {
+  addEventListener(type, listener, options) {
     (this.listeners[type] = this.listeners[type] || []).push(listener);
+    // The options each listener was registered with, in step with `listeners`.
+    (this.listenerOptions[type] = this.listenerOptions[type] || []).push(options);
   }
   appendChild(child) {
     if (child.tagName === "#fragment") {
@@ -215,7 +217,7 @@ class Node {
 }
 const elements = {};
 ["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title",
-  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done",
+  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-stepper-bottom", "sheet-footer",
   "sheet-history", "sheet-final"].forEach((id) => {
   elements[id] = new Node("div");
   elements[id].id = id;
@@ -225,8 +227,8 @@ elements["sheet-gate"].hidden = true;
 elements["sheet-error"].hidden = true;
 elements["sheet-title"].textContent = "Review sheet";
 // The sheet's own parts start hidden, with the classes the markup gives them, until a sheet is drawn.
-const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-done": "sh-box", "sheet-history": "sh-box" };
-["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done", "sheet-history", "sheet-final"].forEach((id) => {
+const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-stepper-bottom": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-history": "sh-box" };
+["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-stepper-bottom", "sheet-footer", "sheet-history", "sheet-final"].forEach((id) => {
   elements[id].hidden = true;
   elements[id].className = markupClasses[id] || "";
 });
@@ -322,7 +324,7 @@ Object.keys(host.readByCollection || {}).forEach((name) => { namedModes[name] = 
 const nextMode = (queue) => (queue.length > 1 ? queue.shift() : queue[0]);
 const readCounts = {};
 // `host.later` gives a collection's documents from its second read on, as another open copy of the sheet would have written them in between.
-// A collection name may be nested (`verdict/<digest>/sends`), as the store's paths are: a document path has an even
+// A collection name may be nested, as the store's paths are: a document path has an even
 // number of segments and a collection path an odd number. Documents the page (or a scenario) wrote and the store
 // accepted are read back from the collection their path sits directly under, as a real store would give them.
 const written = {};
@@ -442,8 +444,15 @@ function* walk(node) {
 }
 const hasClass = (node, name) => node.className.split(/\s+/).includes(name);
 const fire = (node, type, fields) => {
-  const event = Object.assign({ type: type, target: node, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, fields);
-  (node.listeners[type] || []).forEach((listener) => listener(event));
+  // A browser ignores preventDefault from a listener registered passive.
+  let passiveNow = false;
+  const event = Object.assign({ type: type, target: node, defaultPrevented: false, preventDefault() { if (!passiveNow) this.defaultPrevented = true; } }, fields);
+  (node.listeners[type] || []).forEach((listener, index) => {
+    const options = (node.listenerOptions[type] || [])[index];
+    passiveNow = Boolean(options && typeof options === "object" && options.passive);
+    listener(event);
+  });
+  passiveNow = false;
   return event;
 };
 const tools = {
@@ -476,7 +485,8 @@ const tools = {
     fakeNow = target;
     await new Promise((resolve) => realSetTimeout(resolve, 0));
   },
-  text: (node) => [...walk(node)].filter((item) => item.children.length === 0).map((item) => item.textContent).filter((item) => item !== "").join(" "),
+  // The words a person reads: the open/closed cue is a drawn mark (aria-hidden), not part of a control's words.
+  text: (node) => [...walk(node)].filter((item) => item.children.length === 0 && !hasClass(item, "sheet-cue")).map((item) => item.textContent).filter((item) => item !== "").join(" "),
   card: (id) => elements["sheet-cards"].children.find((article) => article.id === "card-" + id),
   buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
   note: (id) => tools.card(id).children.find((child) => child.tagName === "textarea"),
@@ -544,7 +554,14 @@ const tools = {
       type: node.getAttribute("type"),
       className: node.className,
       text: tools.text(node),
-      parts: node.children.map((child) => [child.className, child.textContent]),
+      // The label, then each chip: the chips' wrapper is read through, and `chips` says where it sits.
+      parts: node.children.filter((child) => !hasClass(child, "sheet-cue")).flatMap((child) => (
+        hasClass(child, "sheet-fold-chips") ? child.children.map((chip) => [chip.className, chip.textContent]) : [[child.className, child.textContent]]
+      )),
+      chips: (() => {
+        const index = node.children.findIndex((child) => hasClass(child, "sheet-fold-chips"));
+        return index < 0 ? null : { className: node.children[index].className, index };
+      })(),
     };
   },
   count: () => elements["sheet-count"].textContent,
@@ -562,21 +579,21 @@ const tools = {
       nextDisabled: named("Next ›").disabled,
     };
   },
+  // The Previous and Next pair below the open card, as `stepper` reads the top one.
+  bottomStepper: () => {
+    const parts = elements["sheet-stepper-bottom"].children;
+    const named = (label) => parts.find((child) => child.tagName === "button" && child.textContent === label);
+    return {
+      hidden: elements["sheet-stepper-bottom"].hidden,
+      labels: parts.map((child) => child.textContent),
+      prevDisabled: named("‹ Previous").disabled,
+      nextDisabled: named("Next ›").disabled,
+    };
+  },
   why: () => ({
     hidden: elements["sheet-why"].hidden,
     heading: elements["sheet-why"].children.find((child) => child.tagName === "h2").textContent,
     text: elements["sheet-why"].children.find((child) => child.tagName === "p").textContent,
-  }),
-  done: () => ({
-    hidden: elements["sheet-done"].hidden,
-    message: elements["sheet-done"].children.find((child) => child.tagName === "p").textContent,
-    body: {
-      stepper: elements["sheet-stepper"].hidden,
-      items: elements["sheet-items"].hidden,
-      cards: elements["sheet-cards"].hidden,
-      why: elements["sheet-why"].hidden,
-      footer: elements["sheet-footer"].hidden,
-    },
   }),
   // The page's own controls by name, so a scenario can press them as a person would.
   control: (name) => {
@@ -584,13 +601,13 @@ const tools = {
     return {
       previous: () => among(elements["sheet-stepper"], "‹ Previous"),
       next: () => among(elements["sheet-stepper"], "Next ›"),
+      bottomPrevious: () => among(elements["sheet-stepper-bottom"], "‹ Previous"),
+      bottomNext: () => among(elements["sheet-stepper-bottom"], "Next ›"),
       fold: () => elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold")),
-      done: () => among(elements["sheet-footer"], "Done for now"),
-      back: () => among(elements["sheet-done"], "Back to the sheet"),
       declines: () => elements["sheet-history"].children.find((child) => child.tagName === "button"),
     }[name]();
   },
-  footer: () => ({ hidden: elements["sheet-footer"].hidden, caption: elements["sheet-footer"].children[0].textContent }),
+  footer: () => ({ hidden: elements["sheet-footer"].hidden, caption: elements["sheet-footer"].children[0].textContent, captions: elements["sheet-footer"].children.map((child) => child.textContent) }),
   // The final sheet's parts: the history box (heading, paragraphs, the declines toggle and its list) and the last card.
   history: () => {
     const box = elements["sheet-history"];
@@ -603,7 +620,7 @@ const tools = {
       className: box.className,
       heading: heading ? heading.textContent : null,
       paragraphs: kids.filter((child) => child.tagName === "p").map((child) => child.textContent),
-      toggle: toggle ? { text: toggle.textContent, aria: toggle.getAttribute("aria-expanded"), type: toggle.getAttribute("type"), className: toggle.className } : null,
+      toggle: toggle ? { text: tools.text(toggle), aria: toggle.getAttribute("aria-expanded"), type: toggle.getAttribute("type"), className: toggle.className } : null,
       listHidden: list ? list.hidden : null,
       items: list ? list.children.map((item) => [item.tagName, item.textContent]) : [],
     };
@@ -619,7 +636,8 @@ const tools = {
     if (hasClass(child, "sh-label")) return "label:" + child.textContent;
     return child.tagName + (child.className ? "." + child.className.split(/\s+/).join(".") : "");
   }),
-  lastParagraphs: () => tools.lastCard().children.filter((child) => child.tagName === "p").map((child) => child.textContent),
+  // The card's own paragraphs: the no-digest caption is a caption, kept apart (digestCaption).
+  lastParagraphs: () => tools.lastCard().children.filter((child) => child.tagName === "p" && !hasClass(child, "sh-caption")).map((child) => child.textContent),
   lastHeading: () => tools.lastCard().children.find((child) => child.tagName === "h2").textContent,
   lastButtons: () => tools.lastCard().children.find((child) => hasClass(child, "answer-row")).children,
   lastButton: (label) => tools.lastButtons().find((button) => button.textContent === label),
@@ -634,17 +652,27 @@ const tools = {
     disabled: tools.lastButtons().map((button) => button.disabled).concat([tools.lastNote().disabled]),
     note: tools.lastNote().value,
   }),
-  sendRow: () => tools.lastCard().children.find((child) => hasClass(child, "send-row")),
-  sendButton: () => tools.sendRow().children.find((child) => child.tagName === "button" && child.textContent === "Send verdict"),
-  sendStatus: () => {
-    const status = tools.sendRow().children.find((child) => child.tagName === "span" && hasClass(child, "sh-caption"));
-    return status ? status.textContent : null;
+  // The no-digest caption on the last card: shown only when it and the final sheet are both shown.
+  digestCaption: () => {
+    const node = tools.lastCard().children.find((child) => child.tagName === "p" && hasClass(child, "sh-caption"));
+    return node ? { hidden: node.hidden || elements["sheet-final"].hidden, text: node.textContent } : null;
   },
-  sendTryAgain: () => tools.sendRow().children.find((child) => child.tagName === "button" && child.textContent === "Try again"),
+  // What sits directly below the last card, and the box after it.
+  afterLast: () => {
+    const kids = elements["sheet-final"].children;
+    const at = kids.indexOf(tools.lastCard());
+    const node = kids[at + 1];
+    return node ? { tagName: node.tagName, className: node.className, text: node.textContent, hidden: node.hidden || elements["sheet-final"].hidden } : null;
+  },
   nextBox: () => {
-    const box = elements["sheet-final"].children.find((child) => child !== tools.lastCard());
+    const box = elements["sheet-final"].children.find((child) => hasClass(child, "sh-box"));
     return { className: box.className, label: box.children[0].textContent, labelClass: box.children[0].className, text: box.children[1].textContent };
   },
+  // The order of what the final sheet holds, by tag and class.
+  finalOrder: () => elements["sheet-final"].children.map((child) => child.tagName + (child.className ? "." + child.className.split(/\s+/).join(".") : "")),
+  // Every node anywhere on the page, with its own text, so a scenario can look for words wherever they are drawn.
+  everyText: () => Object.values(elements).flatMap((root) => [...walk(root)]).map((node) => node.textContent).filter((text) => text !== ""),
+  everyClass: () => Object.values(elements).flatMap((root) => [...walk(root)]).map((node) => node.className),
   // Every control a person could press or type in on the cards and the last card, with whether it is off.
   controls: () => [...walk(elements["sheet-cards"]), ...walk(elements["sheet-final"])]
     .filter((node) => node.tagName === "button" || node.tagName === "textarea")
@@ -761,10 +789,7 @@ def _run_page(files, host=None, scenario="return null;"):
         path = recorded["path"]
         if re.fullmatch(r"answers/[a-z0-9][a-z0-9-]*", path):
             ANSWER_VALIDATOR.validate(recorded["body"])
-        elif re.fullmatch(r"draft-verdict/[0-9a-f]{64}", path):
-            DRAFT_VERDICT_VALIDATOR.validate(recorded["body"])
-            assert recorded["body"]["sheet"] == path.split("/")[1], "a draft not stored under its own revision's digest"
-        elif re.fullmatch(r"verdict/[0-9a-f]{64}/sends/[0-9a-f]{32}", path):
+        elif re.fullmatch(r"verdict/[0-9a-f]{64}", path):
             VERDICT_VALIDATOR.validate(recorded["body"])
             assert recorded["body"]["sheet"] == path.split("/")[1], "a verdict not stored under its own revision's digest"
         else:
@@ -1921,6 +1946,178 @@ def test_leaving_the_sheet_is_guarded_only_while_an_answer_is_unconfirmed():
     assert result["noteTimer"] is True, "a note waiting for its pause was not guarded"
 
 
+# Bites on: tapping the picked answer (a plain answer, an option or Discuss) leaving it pressed or writing it again instead of clearing it, the cleared document losing the note or not fitting the answer schema, a pressed button left after the clear, a save line that does not end on Saved, or the leave-guard staying on once the cleared write resolves.
+def test_tapping_the_picked_answer_again_clears_it_and_keeps_the_note():
+    result = _answer_page([_card("plan-day")], """
+      const out = { cleared: [] };
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.type(t.note("plan-day"), "keep me", "input");
+      await t.advance(1000);
+      await settle();
+      for (const label of ["Aligned", "Yes", "Discuss"]) {
+        t.click(t.button("plan-day", label));
+        await settle();
+        const picked = t.state("plan-day").pressed;
+        t.click(t.button("plan-day", label));
+        await settle();
+        const log = t.setLog();
+        out.cleared.push({ label: label, picked: picked, state: t.state("plan-day"), save: t.saveText("plan-day"), guarded: t.unload(), last: log[log.length - 1] });
+      }
+      out.writes = t.setLog().length;
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["writes"] == 7, "each pick and each clear is one write after the note's"
+    assert [entry["label"] for entry in result["cleared"]] == ["Aligned", "Yes", "Discuss"]
+    for entry in result["cleared"]:
+        label = entry["label"]
+        assert entry["picked"].count("true") == 1, label
+        assert entry["last"] == {"path": "answers/plan-day", "body": {"answer": None, "optionId": None, "note": "keep me"}}, label
+        ANSWER_VALIDATOR.validate(entry["last"]["body"])
+        assert entry["state"]["pressed"] == ["false"] * 4, label
+        assert entry["state"]["note"] == "keep me", label
+        assert entry["save"] == "Saved", label
+        assert entry["guarded"] is False, label
+
+
+# Bites on: a cleared answer still counting as answered, still showing an Aligned or Discuss pill on its row, still folded, or still counted in the fold's label.
+def test_a_cleared_answer_drops_out_of_the_count_the_pill_and_the_fold():
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+      const settle = async (index) => {
+        t.sets[index].resolve();
+        await t.tick();
+      };
+      const shape = () => ({ count: t.count(), pills: t.rows().map((row) => row.pill[1]), folded: t.rows().map((row) => row.folded), label: t.fold().parts[0][1] });
+      const out = {};
+      t.open("plan-day");
+      t.click(t.button("plan-day", "Aligned"));
+      t.open("fridge-check");
+      t.click(t.button("fridge-check", "Discuss"));
+      await settle(0);
+      await settle(1);
+      t.open("third-card");
+      out.before = shape();
+      t.open("plan-day");
+      t.click(t.button("plan-day", "Aligned"));
+      await settle(2);
+      t.open("third-card");
+      out.after = shape();
+      return out;
+    """, host={"set": "pending"})
+    assert result["before"] == {"count": "2 of 3 answered · 1 to discuss", "pills": ["Aligned", "Discuss", "Open"], "folded": [True, True, False], "label": "Answered · 2"}
+    assert result["after"]["count"] == "1 of 3 answered · 1 to discuss"
+    assert result["after"]["pills"] == ["Open", "Discuss", "Open"]
+    assert result["after"]["folded"] == [False, True, False]
+    assert result["after"]["label"] == "Answered · 1"
+
+
+# Bites on: a clear tapped while the pick's write is still in flight being dropped (the store keeping the pick), a second write starting before the first resolved, or the save line not ending on Saved.
+def test_a_clear_tapped_while_the_pick_is_saving_ends_cleared():
+    result = _answer_page([_card("plan-day")], """
+      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("plan-day", "Aligned"));
+      const early = { sets: t.sets.length, save: t.saveText("plan-day"), pressed: t.state("plan-day").pressed };
+      t.sets[0].resolve();
+      await t.tick();
+      const queued = { sets: t.sets.length, save: t.saveText("plan-day") };
+      t.sets[1].resolve();
+      await t.tick();
+      return { early: early, queued: queued, sets: t.setLog(), save: t.saveText("plan-day"), guarded: t.unload() };
+    """, host={"set": "pending"})
+    assert result["early"] == {"sets": 1, "save": "Saving…", "pressed": ["false"] * 4}
+    assert result["queued"] == {"sets": 2, "save": "Saving…"}
+    assert result["sets"] == [_write("plan-day", "aligned", None, ""), _write("plan-day", None, None, "")]
+    assert result["save"] == "Saved"
+    assert result["guarded"] is False
+
+
+# Bites on: tapping the chosen verdict again leaving it pressed or writing it again, the cleared verdict losing the note, not fitting the verdict schema or not carrying the digest, a pressed button left on the last card, or a save line that does not end on Saved.
+def test_tapping_the_chosen_verdict_again_clears_it_and_keeps_the_note():
+    result = _sheet_page(_sample_final(), """
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.click(t.lastButton("Approve"));
+      await settle();
+      t.type(t.lastNote(), "Looks right", "input");
+      await t.advance(1000);
+      await settle();
+      t.click(t.lastButton("Approve"));
+      await settle();
+      return { sets: t.setLog(), last: t.lastState(), save: t.lastSaveText(), guarded: t.unload(), count: t.count() };
+    """, host={"fakeTimers": True, "set": "pending"})
+    digest = _sheet_digest(_sample_final())
+    assert result["sets"] == [_verdict_write("approve"), _verdict_write("approve", "Looks right"), _verdict_write(None, "Looks right")]
+    cleared = result["sets"][-1]
+    assert cleared["path"] == "verdict/" + digest
+    assert cleared["body"] == {"verdict": None, "note": "Looks right", "sheet": digest}
+    VERDICT_VALIDATOR.validate(cleared["body"])
+    assert result["last"]["pressed"] == ["false", "false"] and result["last"]["note"] == "Looks right"
+    assert result["save"] == "Saved"
+    assert result["guarded"] is False
+    assert result["count"] == "0 of 2 answered"
+
+
+# Bites on: a cleared answer or verdict that comes back pressed after a reopen (as when the second tap writes the pick again), a reopen that loses the note or writes anything, or a restored cleared answer counting as answered.
+def test_a_reopen_restores_a_cleared_answer_and_verdict():
+    first = _answer_page([_card("plan-day")], """
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.type(t.note("plan-day"), "keep me", "input");
+      await t.advance(1000);
+      await settle();
+      t.click(t.button("plan-day", "Aligned"));
+      await settle();
+      t.click(t.button("plan-day", "Aligned"));
+      await settle();
+      return t.setLog();
+    """, host={"set": "pending", "fakeTimers": True})
+    answer = [call for call in first if call["path"] == "answers/plan-day"][-1]["body"]
+    assert answer == {"answer": None, "optionId": None, "note": "keep me"}
+
+    reopened = _answer_page([_card("plan-day")], """
+      await t.advance(200);
+      return { state: t.state("plan-day"), sets: t.setLog(), count: t.count(), save: t.saveText("plan-day") };
+    """, host={"fakeTimers": True, "docs": [{"id": "plan-day", "data": answer}]})
+    assert reopened["state"]["pressed"] == ["false"] * 4
+    assert reopened["state"]["note"] == "keep me"
+    assert reopened["sets"] == [], "reopening wrote something"
+    assert reopened["count"] == "0 of 1 answered"
+    assert reopened["save"] == "Saved"
+
+    second = _sheet_page(_sample_final(), """
+      const settle = async () => {
+        t.sets[t.sets.length - 1].resolve();
+        await t.tick();
+      };
+      t.click(t.lastButton("Approve"));
+      await settle();
+      t.type(t.lastNote(), "Looks right", "input");
+      await t.advance(1000);
+      await settle();
+      t.click(t.lastButton("Approve"));
+      await settle();
+      return t.setLog();
+    """, host={"fakeTimers": True, "set": "pending"})
+    verdict = [call for call in second if call["path"] == "verdict/" + _sheet_digest(_sample_final())][-1]["body"]
+    assert verdict == _verdict(None, "Looks right")
+
+    again = _sheet_page(_sample_final(), """
+      await t.advance(200);
+      return { last: t.lastState(), sets: t.setLog(), count: t.count(), save: t.lastSaveText() };
+    """, host={"fakeTimers": True, "collections": {"verdict": [_final_doc(verdict)]}})
+    assert again["last"]["pressed"] == ["false", "false"]
+    assert again["last"]["note"] == "Looks right"
+    assert again["sets"] == [], "reopening wrote something"
+    assert again["count"] == "0 of 2 answered"
+    assert again["save"] == "Saved"
+
+
 # Bites on: a rejected write being hidden, a retry that does not send the latest state, or an older write's failure speaking for a newer one.
 def test_failed_save_offers_retry_of_the_latest():
     result = _answer_page([_card("plan-day"), _card("fridge-check"), _card("third-card")], """
@@ -2311,8 +2508,6 @@ def _schema_without_answers(mutate):
 
 
 def _drop_answer_definition(schema):
-    # The sent verdict's answers point at the answer definition; they stop pointing at it so only the answer reader is left without a shape.
-    schema["$defs"]["sentAnswer"]["properties"]["answer"] = {"type": "object"}
     del schema["$defs"]["answer"]
 
 
@@ -2703,91 +2898,6 @@ def test_why_only_these_is_built_from_the_remainder_facts():
         assert _sheet_page(sheet, "return t.why().hidden;") is True
 
 
-# Bites on: Done for now not saving a pending note at once, the message not counting unsaved answers (a write in flight or a stalled one) or claiming a save with no store, the sheet body staying visible, or Back to the sheet not returning to the same open card.
-def test_done_for_now_flushes_and_reports_unsaved():
-    saved = "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done."
-    result = _answer_page(_named_cards("plan-day", "fridge-check"), """
-      const out = {};
-      t.open("fridge-check");
-      t.type(t.note("plan-day"), "later", "input");
-      out.pending = t.sets.length;
-      t.click(t.control("done"));
-      out.flushed = { sets: t.setLog(), done: t.done(), count: t.count(), countHidden: elements["sheet-count"].hidden, footer: t.footer() };
-      t.sets.forEach((call) => call.resolve());
-      await t.tick();
-      out.saved = t.done().message;
-      t.click(t.control("back"));
-      out.back = { done: t.done(), open: t.openCard(), footer: t.footer() };
-      t.click(t.button("fridge-check", "Aligned"));
-      await t.advance(10000);
-      t.type(t.note("plan-day"), "again", "input");
-      t.click(t.control("done"));
-      out.two = { sets: t.sets.length, message: t.done().message };
-      t.sets.forEach((call) => call.resolve());
-      await t.tick();
-      out.settled = t.done().message;
-      return out;
-    """, host={"set": "pending", "fakeTimers": True})
-    assert result["pending"] == 0
-    assert result["flushed"]["sets"] == [_write("plan-day", None, None, "later")], "Done for now left a pending note unwritten"
-    done = result["flushed"]["done"]
-    assert done["hidden"] is False
-    assert done["message"] == "1 answer isn't saved yet. Keep this page open until this says they're saved."
-    assert done["body"] == {"stepper": True, "items": True, "cards": True, "why": True, "footer": True}
-    assert result["flushed"]["countHidden"] is False and result["flushed"]["count"] == "0 of 2 answered"
-    assert result["saved"] == saved
-    assert result["back"]["done"]["hidden"] is True
-    assert result["back"]["done"]["body"] == {"stepper": False, "items": False, "cards": False, "why": True, "footer": False}
-    assert result["back"]["open"] == "fridge-check"
-    assert result["flushed"]["footer"]["caption"] == "Answers save as you tap"
-    assert result["two"] == {"sets": 3, "message": "2 answers aren't saved yet. Keep this page open until this says they're saved."}
-    assert result["settled"] == saved
-
-    # With no store nothing is written and the message says so.
-    unsaved = _answer_page(_named_cards("plan-day"), """
-      t.click(t.control("done"));
-      const message = t.done().message;
-      t.click(t.control("back"));
-      return { message: message, sets: t.sets.length, hidden: t.done().hidden };
-    """, host={"db": "null"})
-    assert unsaved == {"message": "Answers can't be saved in this view, so nothing here was saved.", "sets": 0, "hidden": True}
-
-    # While the saved answers are loading, or the read failed or stalled, the store is attached: say so, not "can't save".
-    cannot = "Answers can't be saved in this view, so nothing here was saved."
-    loading = "Your saved answers haven't loaded yet, so nothing new was saved here. Answers saved earlier are kept; open this link again to carry on."
-    scenario = "t.click(t.control(\"done\")); return t.done().message;"
-    for name, host, expected in [
-        ("loading", {"read": "pending"}, loading),
-        ("failed read", {"read": ["reject", "docs"]}, loading),
-        ("non-owner", {"user": "viewer"}, cannot),
-        ("no runtime", {"claude": "missing"}, cannot),
-    ]:
-        page = _run_page(_sample_files(_remainder_of(_named_cards("plan-day"), unsettled=["plan-day"])), host=host, scenario=scenario)
-        assert page["result"] == expected, "%s: %s" % (name, page["result"])
-
-
-# Bites on: Done for now telling the owner to wait after a write was rejected, or Back to the sheet not opening the first card whose save failed so its Try again is in view.
-def test_done_for_now_after_a_rejected_save_points_to_try_again():
-    result = _answer_page(_named_cards("plan-day", "fridge-check", "garage"), """
-      const out = {};
-      t.click(t.button("plan-day", "Aligned"));
-      t.click(t.button("garage", "Aligned"));
-      t.sets[0].resolve();
-      t.sets[1].reject({ code: "unavailable", message: "no" });
-      await t.tick();
-      t.open("fridge-check");
-      t.click(t.control("done"));
-      out.one = t.done().message;
-      t.click(t.control("back"));
-      out.open = t.openCard();
-      out.retry = t.saveText("garage");
-      return out;
-    """, host={"set": "pending", "fakeTimers": True})
-    assert result["one"] == "1 answer didn't save. Go back to the sheet and tap Try again on each."
-    assert result["open"] == "garage"
-    assert "Try again" in result["retry"]
-
-
 # Bites on: an earlier write settling cutting a note's one-second pause short, so a half-typed note is written early.
 def test_an_earlier_save_settling_keeps_the_note_pause():
     result = _answer_page([_card("plan-day")], """
@@ -2815,19 +2925,19 @@ def test_an_earlier_save_settling_keeps_the_note_pause():
     assert result["final"] == {"sets": 2, "save": "Saved"}
 
 
-# Bites on: a control the page adds (an item row, the fold, Previous, Next, Done for now, Back to the sheet) that is not a theme button, a second desktop breakpoint, a restated outline, or the hidden rule going missing.
+# Bites on: a control the page adds (an item row, the fold, Previous, Next) that is not a theme button, a second desktop breakpoint, a restated outline, or the hidden rule going missing.
 def test_new_controls_are_theme_buttons():
     result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), """
-      const hosts = ["sheet-stepper", "sheet-items", "sheet-footer", "sheet-done"];
+      const hosts = ["sheet-stepper", "sheet-items", "sheet-footer"];
       const own = hosts.flatMap((id) => t.all(elements[id]).filter((node) => node.tagName === "button"));
       return {
         own: own.map((node) => ({ text: t.text(node), className: node.className, type: node.getAttribute("type") })),
         everything: t.allButtons().map((button) => button.className),
       };
     """, host={"docs": [{"id": "plan-day", "data": _doc("aligned")}]})
-    assert len(result["own"]) == 7, result["own"]
+    assert len(result["own"]) == 5, result["own"]
     labels = [button["text"] for button in result["own"]]
-    for label in ("‹ Previous", "Next ›", "Done for now", "Back to the sheet"):
+    for label in ("‹ Previous", "Next ›"):
         assert label in labels, labels
     for button in result["own"]:
         assert "sh-button" in button["className"].split(), button
@@ -2840,15 +2950,10 @@ def test_new_controls_are_theme_buttons():
     assert not re.search(r"(?<![\w-])outline(?:-[a-z-]+)?\s*:", text), "the template declares an outline"
     assert ".sh-theme [hidden] { display: none; }" in text
 
-    # A final sheet's controls (the declines toggle, the verdict buttons, Send verdict, and a Send's Try again) are theme buttons too.
+    # A final sheet's controls (the declines toggle and the verdict buttons, with a verdict save's Try again) are theme buttons too.
     final = _sheet_page(_sample_final(), """
       t.click(t.lastButton("Approve"));
-      t.sets[0].resolve();
-      await t.tick();
-      t.click(t.sendButton());
-      await t.tick();
-      await t.tick();
-      t.sets[1].reject({ code: "unavailable", message: "no" });
+      t.sets[0].reject({ code: "unavailable", message: "no" });
       await t.tick();
       const hosts = ["sheet-history", "sheet-final"];
       return {
@@ -2859,7 +2964,7 @@ def test_new_controls_are_theme_buttons():
       };
     """, host={"set": "pending"})
     assert all("sh-button" in name.split() for name in final["everything"]), final["everything"]
-    assert [control["text"] for control in final["own"]] == ["Declined findings · 2", "Approve", "Not yet", "note", "Send verdict", "Try again"], final
+    assert [control["text"] for control in final["own"]] == ["Declined findings · 2", "Approve", "Not yet", "note", "Try again"], final
     for control in final["own"]:
         if control["tag"] == "button":
             assert "sh-button" in control["className"].split() and control["type"] == "button", control
@@ -2878,9 +2983,11 @@ def test_template_outside_script_and_style_is_only_markup():
         assert not re.search(pattern, prose, re.M), "stray script text outside script/style (%s): %r" % (pattern, prose[:200])
 
 
-# The final sheet: its history, its last card, the draft verdict and the verdict.
+# The final sheet: its history, its last card, the next-step line and the verdict.
 FINAL_SAMPLE = json.loads((THEME / "sample-final-sheet.json").read_text(encoding="utf-8"))
 FIRST_CARD, SECOND_CARD = "leftovers-handling", "saved-plan-history"
+WORDS = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
+DONE_STEP = WORDS["doneStep"]
 
 HISTORY_TEXT = "The review ran 4 rounds and fixed 9 things itself. The vet: The vet found nothing left to fix and raised two calls for you."
 TRACES_BOARD = "Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto."
@@ -2888,22 +2995,19 @@ TRACES_NO_BOARD = "Every statement in the spec traces to your framing, your ruli
 BOARD_SAVED = "The approved board is saved with the spec."
 BOARD_NOT_SAVED = "The approved board is not saved with the spec."
 NEXT_TEXT = (
-    "The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, "
-    "to the spec where it is kept) and vets it, then one merge word covers both."
+    "Once you've chosen Approve and said in the chat that you're done, the advisor adds the breakdown to the same PR "
+    "(or, where the project keeps specs outside the repo or gitignored, beside the spec where it is kept) and vets it, "
+    "and an independent read of the breakdown still runs where it applies. Then one merge word from you covers both, "
+    "and the issues are filed as it merges. If another answer here changes the spec, the spec goes back through its "
+    "checks, a new vet and a new approval first."
 )
 DECLINED_ITEMS = [
     ["li", "Add a calorie count to every recipe on the plan. (why declined: Nothing in your framing asks for nutrition numbers, so adding them would be new scope.)"],
     ["li", "Let two people edit the same plan at once. (why declined: You said the planner is for one household cook, so sharing a plan is out of scope.)"],
 ]
-DRAFT_LINE = "Your verdict is a draft until you send it."
-PICK_FIRST_LINE = "Tap Approve or Not yet first."
-FAILED_SEND_LINE = "The verdict didn't send."
-SLOW_SEND_LINE = "Sending is taking longer than it should. Keep this page open."
-CHECKING_LINE = "Making sure your answers are saved…"
-
-# In a scenario: the verdict writes so far, and every control's off state.
-# Each send is a new document under an id of its own, so a send's path is shown with that id as <id> (its shape is checked on every run).
-VERDICT_WRITES = 'const verdicts = () => t.setLog().filter((call) => call.path.startsWith("verdict/")).map((call) => ({ path: call.path.replace(/[0-9a-f]{32}$/, "<id>"), body: call.body }));'
+NO_DIGEST_LINE = "This browser can't tell which version of the sheet this is, so the verdict can't be saved here."
+LEAVING_LINE = "Once every answer shows it is saved, go back to the chat and say you're done."
+SAVES_LINE = "Answers save as you tap"
 
 
 def _sample_final(cards=None, declined=None, approved=True, saved=True):
@@ -2916,14 +3020,11 @@ def _sample_final(cards=None, declined=None, approved=True, saved=True):
     return sheet
 
 
-def _sends_key(digest=None):
-    """The collection a revision's sends live in (this sample's revision unless a digest is given)."""
-    return "verdict/" + (_sheet_digest(_sample_final()) if digest is None else digest) + "/sends"
-
-
-def _send_doc(data, n=1):
-    """A stored send; each one has an id of its own, as a real send does."""
-    return {"id": ("%x" % n).rjust(32, "a"), "data": data}
+def _republished_final():
+    """The sample final sheet published again with different bytes (a new title), so its digest is new."""
+    sheet = _sample_final()
+    sheet["title"] = sheet["title"] + " (second edition)"
+    return sheet
 
 
 def _final_doc(data, doc_id=None):
@@ -2939,26 +3040,12 @@ def _sheet_digest(sheet=None):
 OTHER_DIGEST = "0" * 64
 
 
-def _draft(verdict, note="", sheet=None):
+def _verdict(verdict, note="", sheet=None):
     return {"verdict": verdict, "note": note, "sheet": _sheet_digest(_sample_final()) if sheet is None else sheet}
 
 
-def _sent(verdict, note="", sheet=None, answers=None):
-    document = _draft(verdict, note, sheet)
-    document["answers"] = [_empty_answer(card["id"]) for card in FINAL_SAMPLE["cards"]] if answers is None else answers
-    return document
-
-
-def _empty_answer(card_id, answer=None, option=None, note=""):
-    return {"card": card_id, "answer": {"answer": answer, "optionId": option, "note": note}}
-
-
-def _verdict_write(verdict, note="", answers=None):
-    return {"path": _sends_key() + "/<id>", "body": _sent(verdict, note, answers=answers)}
-
-
-def _draft_write(verdict, note=""):
-    return {"path": "draft-verdict/" + _sheet_digest(_sample_final()), "body": _draft(verdict, note)}
+def _verdict_write(verdict, note=""):
+    return {"path": "verdict/" + _sheet_digest(_sample_final()), "body": _verdict(verdict, note)}
 
 
 def _all_off(controls):
@@ -2969,7 +3056,7 @@ def _all_on(controls):
     return not any(control["disabled"] for control in controls)
 
 
-# Bites on: a final sheet missing its history, declined findings (collapsed until toggled), last card (traces line, board line only with an approved board and following whether it is saved, answer row, note, save line, send row, no badge) or next line, or any of their words.
+# Bites on: a final sheet missing its history, declined findings (collapsed until toggled), last card (traces line, board line only with an approved board and following whether it is saved, answer row, note, save line, the hidden no-digest caption, no badge, no send row), the next-step line straight below it, or the next box, or any of their words.
 @pytest.mark.parametrize("declines", [True, False], ids=["with-declines", "no-declines"])
 @pytest.mark.parametrize("approved,saved,lines", [
     pytest.param(True, True, [TRACES_BOARD, BOARD_SAVED], id="board-saved"),
@@ -2986,9 +3073,10 @@ def test_final_sheet_draws_its_history_declines_last_card_and_next_line(approved
         parts: t.lastParts(),
         paragraphs: t.lastParagraphs(),
         buttons: t.lastState(),
-        send: [t.sendButton().textContent, t.sendButton().className, t.sendButton().getAttribute("type"), t.sendButton().disabled],
-        status: t.sendStatus(),
+        caption: t.digestCaption(),
       };
+      out.order = t.finalOrder();
+      out.step = t.afterLast();
       out.next = t.nextBox();
       out.parts = t.finalParts();
       if (t.control("declines")) {
@@ -3020,19 +3108,20 @@ def test_final_sheet_draws_its_history_declines_last_card_and_next_line(approved
     assert last["paragraphs"] == lines
     assert last["parts"] == (
         ["h2"] + ["p"] * len(lines)
-        + ["div.answer-row", "label:Note", "textarea.sh-field", "div.save-line", "div.send-row"]
-    ), "the last card's parts, or a badge on it"
+        + ["div.answer-row", "label:Note", "textarea.sh-field", "div.save-line", "p.sh-caption"]
+    ), "the last card's parts, or a badge or a send row on it"
     assert last["buttons"]["labels"] == ["Approve", "Not yet"]
     assert last["buttons"]["pressed"] == ["false", "false"]
-    assert last["send"] == ["Send verdict", "sh-button sh-button--main", "button", True]
-    assert last["status"] == PICK_FIRST_LINE
+    assert last["caption"] == {"hidden": True, "text": NO_DIGEST_LINE}, "the no-digest caption showed although the browser can tell the digest"
+    assert result["order"] == ["article.sh-card", "p.sh-caption", "div.sh-box"]
+    assert result["step"]["text"] == DONE_STEP and result["step"]["hidden"] is False
     assert result["next"] == {"className": "sh-box", "label": "What happens next", "labelClass": "sh-label", "text": NEXT_TEXT}
-    assert result["parts"] == {"historyHidden": False, "historyChildren": 4 if declines else 3, "finalHidden": False, "finalChildren": 2}
+    assert result["parts"] == {"historyHidden": False, "historyChildren": 4 if declines else 3, "finalHidden": False, "finalChildren": 3}
     # The vet's calls are the same cards, count and rows as on any sheet.
     assert result["count"] == "0 of 2 answered"
 
 
-# Bites on: a remainder or plain sheet drawing the final sheet's history, last card, Send or next line, or reading the verdict collections.
+# Bites on: a remainder or plain sheet drawing the final sheet's history, last card or next line, or reading the verdict collection.
 @pytest.mark.parametrize("sheet", [
     pytest.param(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), id="remainder"),
     pytest.param(_sheet(cards=_named_cards("plan-day", "fridge-check")), id="plain"),
@@ -3046,675 +3135,363 @@ def test_final_parts_absent_off_a_final_sheet(sheet):
     assert result["controls"] == 2 * (4 + 1)
 
 
-# Bites on: a verdict tap or its note being written anywhere but draft-verdict/<digest> (as a verdict, or as an answer), a tap not saving at once, a note not waiting for its pause, or the last card feeding the count or the rows.
-def test_a_verdict_tap_saves_a_draft_and_never_a_verdict():
+# Bites on: any sheet kind drawing a Done for now control or heading, a Back to the sheet control, or the old done box, before or after the answers load or an answer is tapped.
+@pytest.mark.parametrize("read", ["docs", "pending"], ids=["loaded", "loading"])
+@pytest.mark.parametrize("sheet,card", [
+    pytest.param(_sheet(cards=_named_cards("plan-day", "fridge-check")), "plan-day", id="plain"),
+    pytest.param(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), "plan-day", id="remainder"),
+    pytest.param(_sample_final(), FIRST_CARD, id="final"),
+])
+def test_no_sheet_draws_done_for_now(sheet, card, read):
+    result = _sheet_page(sheet, """
+      const gone = ["done for now", "back to the sheet"];
+      const snapshot = () => ({
+        text: t.everyText().filter((text) => gone.some((words) => text.toLowerCase().includes(words))),
+        buttons: t.allButtons().map((button) => button.text).filter((text) => gone.some((words) => text.toLowerCase().includes(words))),
+      });
+      const out = { first: snapshot() };
+      t.click(t.buttons("__CARD__")[0]);
+      await t.tick();
+      out.second = snapshot();
+      return out;
+    """.replace("__CARD__", card), host={"read": read})
+    empty = {"text": [], "buttons": []}
+    assert result["first"] == empty and result["second"] == empty, "the page still draws Done for now or Back to the sheet"
+    text = _template_text()
+    assert "sheet-done" not in text and not re.search(r"(?i)done for now|back to the sheet", text)
+
+
+# Bites on: a final sheet, or the theme specimen, drawing a Send verdict control or a send row, in any state (loading, loaded, a pick whose save was rejected, or no digest).
+@pytest.mark.parametrize("host,tap", [
+    pytest.param({"read": "pending"}, False, id="loading"),
+    pytest.param({}, False, id="loaded"),
+    pytest.param({"set": "pending"}, True, id="picked-and-rejected"),
+    pytest.param({"noCrypto": True}, False, id="no-digest"),
+])
+def test_a_final_sheet_has_no_send_verdict(host, tap):
+    result = _sheet_page(_sample_final(), """
+      const snapshot = () => ({
+        buttons: t.allButtons().map((button) => button.text).filter((text) => text.toLowerCase().includes("send")),
+        text: t.everyText().filter((text) => text.toLowerCase().includes("send verdict") || text.toLowerCase().includes("verdict sent")),
+        rows: t.everyClass().filter((name) => name.split(/\\s+/).includes("send-row")),
+      });
+      const out = { first: snapshot() };
+      if (__TAP__) {
+        t.click(t.lastButton("Approve"));
+        out.pending = snapshot();
+        t.sets[0].reject({ code: "unavailable", message: "no" });
+        await t.tick();
+        out.rejected = snapshot();
+      }
+      return out;
+    """.replace("__TAP__", "true" if tap else "false"), host=host)
+    empty = {"buttons": [], "text": [], "rows": []}
+    assert all(snapshot == empty for snapshot in result.values()), result
+    assert "Send verdict" not in _template_text()
+    assert "Send verdict" not in (THEME / "specimen.html").read_text(encoding="utf-8"), "the theme specimen shows a Send verdict button"
+
+
+# Bites on: a verdict tap or its note being written anywhere but verdict/<digest> (a draft path, a sends path, or as an answer), a tap not saving at once, a note not waiting for its pause, a body that does not fit $defs/verdict or whose sheet is not the digest of the served bytes, a save line that says Saved before the write resolved, or the last card feeding the count or the rows.
+def test_a_verdict_tap_and_note_save_at_verdict_digest():
     result = _sheet_page(_sample_final(), """
       const out = { before: { count: t.count(), pills: t.rows().map((row) => row.pill[1]) } };
       t.click(t.lastButton("Approve"));
       await t.tick();
+      out.saving = t.lastSaveText();
+      t.sets[0].resolve();
+      await t.tick();
       t.type(t.lastNote(), "Looks right", "input");
       out.early = t.sets.length;
       await t.advance(1000);
-      t.click(t.lastButton("Not yet"));
+      out.noteSaving = t.lastSaveText();
+      t.sets[1].resolve();
       await t.tick();
       out.sets = t.setLog();
       out.after = { count: t.count(), pills: t.rows().map((row) => row.pill[1]) };
       out.last = t.lastState();
       out.save = t.lastSaveText();
-      out.status = t.sendStatus();
       return out;
-    """, host={"fakeTimers": True})
+    """, host={"fakeTimers": True, "set": "pending"})
+    digest = hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest()
     assert result["early"] == 1, "the note was written before its pause ended"
-    assert result["sets"] == [
-        _draft_write("approve"),
-        _draft_write("approve", "Looks right"),
-        _draft_write("not-yet", "Looks right"),
-    ]
-    assert result["sets"][-1]["body"] == {"verdict": "not-yet", "note": "Looks right", "sheet": _sheet_digest(_sample_final())}
-    assert not [call for call in result["sets"] if call["path"].startswith(("verdict/", "answers/"))]
+    assert result["saving"] == "Saving…", "the save line said more than it knew before the write resolved"
+    assert result["noteSaving"] == "Saving…"
+    assert result["sets"] == [_verdict_write("approve"), _verdict_write("approve", "Looks right")]
+    for call in result["sets"]:
+        assert call["path"] == "verdict/" + digest, "the verdict was not written at verdict/<digest>"
+        assert call["body"]["sheet"] == digest, "the document does not carry the digest of the served bytes"
+        VERDICT_VALIDATOR.validate(call["body"])
+        assert not call["path"].startswith(("draft-verdict", "answers/")) and "/sends" not in call["path"]
     assert result["after"] == result["before"] == {"count": "0 of 2 answered", "pills": ["Open", "Open"]}
-    assert result["last"]["pressed"] == ["false", "true"] and result["last"]["note"] == "Looks right"
+    assert result["last"]["pressed"] == ["true", "false"] and result["last"]["note"] == "Looks right"
     assert result["save"] == "Saved"
-    assert result["status"] == DRAFT_LINE
 
 
-# Bites on: a saved draft verdict not coming back on reopen (its pick or note), a draft counting as a verdict or an answer, a reopen writing anything, a draft that does not fit the schema restoring a pick, or the draft not being read from its own collection.
-def test_a_draft_verdict_is_restored_on_reopen_and_counts_as_nothing():
-    def reopen(draft):
+# Bites on: a saved verdict not coming back on reopen (its pick or note), a stored verdict counting as an answer, a reopen writing anything, a document that does not fit the schema restoring a pick, a null verdict restoring a pick, a note that is not text restoring, or the verdict not being read from the verdict collection alongside the answers.
+def test_a_saved_verdict_is_restored_on_reopen_and_counts_as_nothing():
+    def reopen(document):
         return _sheet_page(_sample_final(), """
           await t.advance(200);
           return {
-            last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), count: t.count(),
-            reads: t.reads.map((read) => read.name).sort(), controls: t.controls(),
+            last: t.lastState(), sets: t.setLog(), count: t.count(), save: t.lastSaveText(),
+            reads: t.reads.map((read) => read.name).sort(), controls: t.controls(), rows: t.rows().map((row) => row.pill[1]),
           };
-        """, host={"fakeTimers": True, "collections": {"draft-verdict": [_final_doc(draft)]}})
+        """, host={"fakeTimers": True, "collections": {"verdict": [_final_doc(document)]}})
 
-    picked = reopen(_draft("not-yet", "Wait for the board"))
+    picked = reopen(_verdict("not-yet", "Wait for the board"))
     assert picked["last"]["pressed"] == ["false", "true"]
     assert picked["last"]["note"] == "Wait for the board"
-    assert picked["status"] == DRAFT_LINE
-    assert picked["send"] is False
     assert picked["sets"] == [], "reopening wrote something"
-    assert picked["count"] == "0 of 2 answered"
-    assert picked["reads"] == sorted(["answers", "draft-verdict", _sends_key()])
+    assert picked["count"] == "0 of 2 answered" and picked["rows"] == ["Open", "Open"]
+    assert picked["save"] == "Saved"
+    assert picked["reads"] == ["answers", "verdict"]
     assert _all_on(picked["controls"])
 
-    noted = reopen(_draft(None, "Only a note"))
+    noted = reopen(_verdict(None, "Only a note"))
     assert noted["last"]["pressed"] == ["false", "false"] and noted["last"]["note"] == "Only a note"
-    assert noted["status"] == PICK_FIRST_LINE and noted["send"] is True
+    assert noted["sets"] == [] and _all_on(noted["controls"])
 
-    for bad in (
-        {"verdict": "maybe", "note": "kept", "sheet": _sheet_digest(_sample_final())},
-        {"verdict": "approve", "note": "kept", "sheet": _sheet_digest(_sample_final()), "extra": 1},
+    digest = _sheet_digest(_sample_final())
+    for name, bad, note in (
+        ("unknown verdict", {"verdict": "maybe", "note": "kept", "sheet": digest}, "kept"),
+        ("extra key", {"verdict": "approve", "note": "kept", "sheet": digest, "extra": 1}, "kept"),
+        ("note that is not text", {"verdict": "approve", "note": 3, "sheet": digest}, ""),
     ):
         unfit = reopen(bad)
-        assert unfit["last"]["pressed"] == ["false", "false"] and unfit["last"]["note"] == "kept"
-        assert unfit["send"] is True and unfit["sets"] == []
+        assert unfit["last"]["pressed"] == ["false", "false"] and unfit["last"]["note"] == note, name
+        assert unfit["sets"] == [], name
 
 
-# Bites on: Send verdict not writing the verdict once (with the pick and note), writing it anywhere else or also writing an answer, saying "sent" before the write resolved, or leaving a control on after it resolved.
-def test_send_verdict_writes_one_verdict_and_shows_sent():
-    result = _sheet_page(_sample_final(), """
-      t.click(t.lastButton("Approve"));
-      t.sets[0].resolve();
-      await t.tick();
-      t.type(t.lastNote(), "Ship it", "change");
-      t.sets[1].resolve();
-      await t.tick();
-      ${VERDICTS}
-      const out = { before: { writes: t.sets.length, status: t.sendStatus(), disabled: t.sendButton().disabled } };
-      t.click(t.sendButton());
-      await t.tick();
-      await t.tick();
-      out.during = { verdicts: verdicts(), status: t.sendStatus(), controls: t.controls(), send: t.sendButton().disabled, last: t.sets[t.sets.length - 1].path };
-      t.sets[t.sets.length - 1].resolve();
-      await t.tick();
-      out.after = { verdicts: verdicts(), status: t.sendStatus(), controls: t.controls(), send: t.sendButton().disabled, last: t.lastState(), retry: t.sendTryAgain() !== undefined };
-      out.paths = t.setLog().map((call) => call.path);
-      return out;
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
-    assert result["before"] == {"writes": 2, "status": DRAFT_LINE, "disabled": False}
-    assert re.fullmatch(re.escape(_sends_key()) + "/[0-9a-f]{32}", result["during"]["last"]), "the verdict was not written as a new document under this revision's sends"
-    assert result["during"]["verdicts"] == [_verdict_write("approve", "Ship it")]
-    assert result["during"]["verdicts"][0]["body"]["sheet"] == hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest(), "the sent document does not carry the digest of the served bytes"
-    assert result["during"]["status"] == "Sending…", "the page said more than it knew before the write resolved"
-    assert result["during"]["send"] is True and _all_off(result["during"]["controls"])
-    assert result["after"]["verdicts"] == [_verdict_write("approve", "Ship it")], "the verdict was not written exactly once"
-    assert result["after"]["status"] == "Verdict sent: Approve"
-    assert result["after"]["send"] is True and _all_off(result["after"]["controls"])
-    assert result["after"]["last"]["pressed"] == ["true", "false"] and result["after"]["last"]["note"] == "Ship it"
-    assert result["after"]["retry"] is False
-    keyed = _sheet_digest(_sample_final())
-    assert result["paths"][:2] == ["draft-verdict/" + keyed, "draft-verdict/" + keyed]
-    assert len(result["paths"]) == 3 and re.fullmatch("verdict/" + keyed + "/sends/[0-9a-f]{32}", result["paths"][2])
+# Bites on: a restored answer or verdict (or a document restoring only a note) showing no save line after a reopen, a saver with nothing stored showing one, or a reopen writing anything.
+def test_a_reopened_sheet_shows_each_restored_answer_and_the_verdict_as_saved():
+    sheet = _sample_final()
+    third = copy.deepcopy(sheet["cards"][0])
+    third["id"] = "third-one"
+    sheet["cards"].append(third)
+    digest = _sheet_digest(sheet)
+    docs = [
+        {"id": "leftovers-handling", "data": _doc("option", "allow-leftovers")},
+        {"id": "saved-plan-history", "data": _doc("aligned", None, "agreed")},
+    ]
+
+    def reopen(verdict):
+        return _sheet_page(sheet, """
+          await t.advance(200);
+          const saves = {};
+          for (const id of ["leftovers-handling", "saved-plan-history", "third-one"]) {
+            t.open(id);
+            saves[id] = t.saveText(id);
+          }
+          return { saves: saves, last: t.lastSaveText(), sets: t.setLog() };
+        """, host={"fakeTimers": True, "collections": {"answers": docs, "verdict": [{"id": digest, "data": verdict}]}})
+
+    signed = reopen(_verdict("approve", "Looks right", sheet=digest))
+    assert signed["saves"] == {"leftovers-handling": "Saved", "saved-plan-history": "Saved", "third-one": ""}
+    assert signed["last"] == "Saved"
+    assert signed["sets"] == [], "reopening wrote something"
+
+    noted = reopen(_verdict(None, "Only a note", sheet=digest))
+    assert noted["last"] == "Saved", "a verdict document that restores only a note showed no save line"
+    assert noted["sets"] == []
 
 
-# Bites on: Send verdict writing while an answer is rejected or still unsaved at the deadline (or sooner than that), saying anything but how many answers and what to do, or leaving the sheet frozen after refusing.
-@pytest.mark.parametrize("count,failed,stalled", [
-    pytest.param(1, "1 answer didn't save. Go back to it and tap Try again, then send again.",
-                 "1 answer isn't saved yet. Keep this page open until it says Saved, then send again.", id="one-answer"),
-    pytest.param(2, "2 answers didn't save. Go back to them and tap Try again, then send again.",
-                 "2 answers aren't saved yet. Keep this page open until they say Saved, then send again.", id="two-answers"),
-])
-def test_send_refuses_while_an_answer_is_unsaved(count, failed, stalled):
-    setup = """
-      const ids = [__IDS__][0];
-      ids.forEach((id) => t.click(t.button(id, "Aligned")));
-      t.click(t.lastButton("Approve"));
-      t.sets[ids.length].resolve();
-      await t.tick();
-      ${VERDICTS}
-    """.replace("${VERDICTS}", VERDICT_WRITES).replace("__IDS__", json.dumps([FIRST_CARD, SECOND_CARD][:count]))
-    rejected = _sheet_page(_sample_final(), setup + """
-      ids.forEach((id, index) => t.sets[index].reject({ code: "unavailable", message: "no" }));
-      await t.tick();
-      t.click(t.sendButton());
-      await t.tick();
-      await t.tick();
-      await t.advance(30000);
-      return { status: t.sendStatus(), verdicts: verdicts(), controls: t.controls(), retry: t.sendTryAgain() !== undefined, open: t.openCard(), send: t.sendButton().disabled };
-    """, host={"set": "pending", "fakeTimers": True})
-    assert rejected["status"] == failed
-    assert rejected["verdicts"] == [], "a verdict was written while an answer was rejected"
-    assert _all_on(rejected["controls"]) and rejected["send"] is False, "the sheet stayed frozen"
-    assert rejected["retry"] is False
-    assert rejected["open"] == FIRST_CARD
+# Bites on: a note typed over and then put back to what the store holds (inside its pause) leaving the save line quiet instead of Saved, a card with nothing stored showing Saved after the same round trip, or that round trip writing anything.
+def test_an_edit_undone_inside_the_pause_still_shows_saved():
+    sheet = _sample_final()
+    third = copy.deepcopy(sheet["cards"][0])
+    third["id"] = "third-one"
+    sheet["cards"].append(third)
+    digest = _sheet_digest(sheet)
+    docs = [{"id": "saved-plan-history", "data": _doc("aligned", None, "agreed")}]
+    collections = {"answers": docs, "verdict": [{"id": digest, "data": _verdict("approve", "Looks right", sheet=digest)}]}
 
-    unsaved = _sheet_page(_sample_final(), setup + """
-      t.click(t.sendButton());
-      await t.tick();
-      await t.advance(9800);
-      const waiting = { status: t.sendStatus(), verdicts: verdicts(), controls: t.controls() };
+    result = _sheet_page(sheet, """
       await t.advance(200);
-      const out = { waiting: waiting, status: t.sendStatus(), verdicts: verdicts(), controls: t.controls(), send: t.sendButton().disabled };
-      await t.advance(30000);
-      out.later = { status: t.sendStatus(), verdicts: verdicts() };
-      return out;
-    """, host={"set": "pending", "fakeTimers": True})
-    assert unsaved["waiting"]["status"] == CHECKING_LINE
-    assert unsaved["waiting"]["verdicts"] == [] and _all_off(unsaved["waiting"]["controls"])
-    assert unsaved["status"] == stalled
-    assert unsaved["verdicts"] == [], "a verdict was written while an answer was still unsaved"
-    assert _all_on(unsaved["controls"]) and unsaved["send"] is False, "the sheet stayed frozen"
-    assert unsaved["later"] == {"status": stalled, "verdicts": []}
-
-
-# Bites on: the sheet changing, or a second write starting, while Send verdict waits for the answers or waits for the verdict write (a card tap, a note, Not yet, a second Send), or the guard living only in a control's disabled flag.
-def test_the_sheet_is_frozen_while_sending():
-    result = _sheet_page(_sample_final(), """
-      t.click(t.button("leftovers-handling", "Aligned"));
-      t.click(t.lastButton("Approve"));
-      t.sets[1].resolve();
-      await t.tick();
-      ${VERDICTS}
-      const snapshot = () => ({
-        sets: t.sets.length,
-        first: t.state("leftovers-handling").pressed,
-        second: t.state("saved-plan-history").pressed,
-        last: t.lastState().pressed,
-        status: t.sendStatus(),
-        count: t.count(),
-        saves: [t.saveText("leftovers-handling"), t.lastSaveText()],
-        controls: t.controls(),
-        doneScreen: t.done().hidden,
-        doneOff: t.control("done").disabled,
-      });
-      const attempt = () => {
-        t.fire(t.control("done"), "click");
-        t.buttons("leftovers-handling").forEach((button) => t.fire(button, "click"));
-        t.buttons("saved-plan-history").forEach((button) => t.fire(button, "click"));
-        for (const note of [t.note("leftovers-handling"), t.note("saved-plan-history"), t.lastNote()]) {
-          const kept = note.value;
-          note.value = "sneaky";
-          t.fire(note, "input");
-          t.fire(note, "change");
-          note.value = kept;
-        }
-        t.lastButtons().forEach((button) => t.fire(button, "click"));
-        t.fire(t.sendButton(), "click");
-      };
       const out = {};
-      t.click(t.sendButton());
-      await t.tick();
-      out.waiting = snapshot();
-      attempt();
+      t.open("saved-plan-history");
+      const note = t.note("saved-plan-history");
+      t.type(note, "agreed!", "input");
+      out.typedOver = t.saveText("saved-plan-history");
+      t.type(note, "agreed", "input");
       await t.advance(1500);
-      out.waitingAfter = snapshot();
-      t.sets[0].resolve();
-      await t.tick();
-      await t.advance(200);
-      out.writing = snapshot();
-      out.writing.verdicts = verdicts();
-      attempt();
+      out.card = t.saveText("saved-plan-history");
+      out.cardSets = t.setLog();
+
+      const verdictNote = t.lastNote();
+      t.type(verdictNote, "Looks right!", "input");
+      t.type(verdictNote, "Looks right", "input");
       await t.advance(1500);
-      out.writingAfter = snapshot();
-      out.writingAfter.verdicts = verdicts();
-      t.sets[t.sets.length - 1].resolve();
-      await t.tick();
-      out.sent = snapshot();
-      attempt();
+      out.verdict = t.lastSaveText();
+      out.verdictSets = t.setLog();
+
+      t.open("third-one");
+      const blank = t.note("third-one");
+      t.type(blank, "x", "input");
+      t.type(blank, "", "input");
       await t.advance(1500);
-      out.sentAfter = snapshot();
-      out.sentAfter.verdicts = verdicts();
+      out.blank = t.saveText("third-one");
+      out.blankSets = t.setLog();
       return out;
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending", "fakeTimers": True})
-    assert result["waiting"]["status"] == CHECKING_LINE and _all_off(result["waiting"]["controls"])
-    assert result["waitingAfter"] == result["waiting"], "the sheet changed while Send verdict waited for the answers"
-    assert result["writing"]["status"] == "Sending…" and _all_off(result["writing"]["controls"])
-    frozen = [_empty_answer("leftovers-handling", "aligned"), _empty_answer("saved-plan-history")]
-    assert result["writing"]["verdicts"] == [_verdict_write("approve", answers=frozen)]
-    assert result["writingAfter"] == result["writing"], "the sheet changed, or a second write started, while the verdict write was pending"
-    assert result["sent"]["status"] == "Verdict sent: Approve" and _all_off(result["sent"]["controls"])
-    assert _all_off(result["sentAfter"]["controls"])
-    assert result["sentAfter"]["sets"] == result["sent"]["sets"] == result["writing"]["sets"]
-    assert result["sentAfter"]["verdicts"] == [_verdict_write("approve", answers=frozen)]
-    assert result["sentAfter"]["status"] == result["sent"]["status"]
-    for stage in ("waiting", "waitingAfter", "writing", "writingAfter", "sent", "sentAfter"):
-        assert result[stage]["doneScreen"] is True and result[stage]["doneOff"] is True, \
-            "Done for now was live (or its screen showed) at the %s stage of a Send" % stage
+    """, host={"fakeTimers": True, "collections": collections})
+    assert result["typedOver"] == "Saving…"
+    assert result["card"] == "Saved", "an edit undone inside the pause left the restored note's save line quiet"
+    assert result["cardSets"] == [], "an edit undone inside the pause was written"
+    assert result["verdict"] == "Saved", "an edit undone inside the pause left the restored verdict's save line quiet"
+    assert result["verdictSets"] == [], "an edit undone inside the pause was written"
+    assert result["blank"] == "", "a card with nothing stored showed Saved after an edit undone"
+    assert result["blankSets"] == [], "a card with nothing stored was written after an edit undone"
 
 
-# Bites on: a rejected verdict write showing sent or offering no Try again, a Try again that does not run the whole Send again from the current state, a stalled write saying sent or offering Try again, a late resolve not showing sent, or a late rejection not showing the rejected state.
-def test_a_failed_or_stalled_verdict_send():
+# Bites on: a verdict written for another revision of the sheet being restored on reopen (by its id or by its sheet field), a republished sheet not starting unsigned, or a page showing one revision writing to another revision's document.
+def test_a_republished_sheet_starts_unsigned_and_never_touches_the_old_revisions_verdict():
+    new_digest = _sheet_digest(_republished_final())
+    old_digest = _sheet_digest(_sample_final())
+    assert new_digest != old_digest
+
+    def reopen(collections, scenario="await t.advance(200);"):
+        return _sheet_page(_republished_final(), scenario + """
+          return { last: t.lastState(), sets: t.setLog(), controls: t.controls(), count: t.count(), reads: t.reads.map((read) => read.name).sort() };
+        """, host={"fakeTimers": True, "collections": collections})
+
+    old = reopen({"verdict": [_final_doc(_verdict("approve", "Old sign-off", sheet=old_digest), doc_id=old_digest)]})
+    assert old["last"]["pressed"] == ["false", "false"] and old["last"]["note"] == "", "another revision's verdict was restored"
+    assert _all_on(old["controls"]) and old["sets"] == []
+    assert old["reads"] == ["answers", "verdict"]
+
+    claimed = reopen({"verdict": [_final_doc(_verdict("approve", "Wrong sheet", sheet=old_digest), doc_id=new_digest)]})
+    assert claimed["last"]["pressed"] == ["false", "false"] and claimed["last"]["note"] == "", "a document naming another revision was restored"
+    assert _all_on(claimed["controls"]) and claimed["sets"] == []
+
+    mine = reopen({"verdict": [
+        _final_doc(_verdict("approve", "Old sign-off", sheet=old_digest), doc_id=old_digest),
+        _final_doc(_verdict("not-yet", "Mine", sheet=new_digest), doc_id=new_digest),
+    ]})
+    assert mine["last"]["pressed"] == ["false", "true"] and mine["last"]["note"] == "Mine"
+
+    tapped = reopen({"verdict": [_final_doc(_verdict("approve", "Old sign-off", sheet=old_digest), doc_id=old_digest)]}, scenario="""
+      await t.advance(200);
+      t.click(t.lastButton("Not yet"));
+      await t.advance(200);
+    """)
+    assert [call["path"] for call in tapped["sets"]] == ["verdict/" + new_digest], "a page showing the new revision wrote somewhere else"
+    assert tapped["sets"][0]["body"] == {"verdict": "not-yet", "note": "", "sheet": new_digest}
+
+
+# Bites on: the next-step line missing, not directly below the last card, retyped in the page instead of read from sheet-words.json, or the next box not following it with its words; on a sheet with cards and on one with none.
+@pytest.mark.parametrize("cards", [None, []], ids=["with-cards", "no-cards"])
+def test_the_next_step_line_sits_below_the_last_card_and_the_next_box_follows(cards):
+    result = _sheet_page(_sample_final(cards=cards), """
+      return { order: t.finalOrder(), step: t.afterLast(), next: t.nextBox(), parts: t.finalParts(), caption: t.digestCaption() };
+    """)
+    assert result["order"] == ["article.sh-card", "p.sh-caption", "div.sh-box"]
+    assert result["step"] == {"tagName": "p", "className": "sh-caption", "text": DONE_STEP, "hidden": False}
+    assert result["next"]["text"] == NEXT_TEXT == WORDS["next"]
+    assert result["next"]["label"] == WORDS["nextHeading"]
+    assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 3
+    assert result["caption"]["hidden"] is True
+
+
+# Bites on: a browser with no crypto.subtle leaving the last card on, saying nothing about why, writing, or reading the verdict collection; or the no-digest caption showing in any other state (loading, a non-owner, a digest present, a schema with no verdict shape).
+def test_without_a_digest_the_last_card_stays_off_and_says_why():
+    result = _sheet_page(_sample_final(), """
+      await t.advance(1500);
+      const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
+      t.lastButtons().forEach(fire);
+      t.lastNote().value = "sneaky";
+      fire(t.lastNote());
+      await t.advance(1500);
+      return { caption: t.digestCaption(), last: t.lastState(), sets: t.setLog(), reads: t.reads.map((read) => read.name), cards: t.state("leftovers-handling").disabled };
+    """, host={"fakeTimers": True, "noCrypto": True})
+    assert result["caption"] == {"hidden": False, "text": NO_DIGEST_LINE}
+    assert all(result["last"]["disabled"]) and result["last"]["pressed"] == ["false", "false"]
+    assert result["sets"] == [], "the last card wrote without a digest"
+    assert result["reads"] == ["answers"], "the page read the verdict collection without a digest"
+    assert result["cards"] == [False] * 5, "the cards stopped working too"
+
+    for name, host in (
+        ("loading", {"read": "pending", "noCrypto": True}),
+        ("non-owner", {"user": "viewer", "noCrypto": True}),
+        ("digest present", {}),
+    ):
+        page = _sheet_page(_sample_final(), "await t.advance(200); return t.digestCaption();", host=dict(host, fakeTimers=True))
+        assert page == {"hidden": True, "text": NO_DIGEST_LINE}, name
+
+
+# Bites on: a rejected verdict write showing Saved or no Try again, a Try again that does not send the latest state, a stalled write saying Saved or offering Try again while it may still land, or a late resolve not showing Saved.
+def test_a_failed_or_stalled_verdict_write_shows_as_a_cards_does():
+    rejected = _sheet_page(_sample_final(), """
+      const out = {};
+      t.click(t.lastButton("Approve"));
+      t.sets[0].reject({ code: "unavailable", message: "no" });
+      await t.tick();
+      out.failed = { save: t.lastSaveText(), retry: t.lastTryAgain() !== undefined, controls: t.controls() };
+      t.click(t.lastButton("Not yet"));
+      await t.tick();
+      out.sets = t.setLog();
+      t.sets[1].resolve();
+      await t.tick();
+      out.fixed = { save: t.lastSaveText(), retry: t.lastTryAgain() !== undefined };
+      t.type(t.lastNote(), "Again", "change");
+      t.sets[2].reject({ code: "unavailable", message: "no" });
+      await t.tick();
+      t.click(t.lastTryAgain());
+      await t.tick();
+      out.again = t.setLog();
+      t.sets[3].resolve();
+      await t.tick();
+      out.final = t.lastSaveText();
+      return out;
+    """, host={"set": "pending"})
+    assert "Not saved" in rejected["failed"]["save"] and rejected["failed"]["retry"] is True
+    assert _all_on(rejected["failed"]["controls"])
+    assert rejected["sets"] == [_verdict_write("approve"), _verdict_write("not-yet")]
+    assert rejected["fixed"] == {"save": "Saved", "retry": False}
+    assert rejected["again"] == [_verdict_write("approve"), _verdict_write("not-yet"), _verdict_write("not-yet", "Again"), _verdict_write("not-yet", "Again")]
+    assert rejected["final"] == "Saved"
+
     for late in ("resolve", "reject"):
         stalled = _sheet_page(_sample_final(), """
           t.click(t.lastButton("Approve"));
-          t.sets[0].resolve();
-          await t.tick();
-          t.click(t.sendButton());
-          await t.tick();
           await t.advance(9999);
-          const out = { early: t.sendStatus() };
+          const out = { early: t.lastSaveText() };
           await t.advance(1);
-          const snapshot = () => ({ status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, controls: t.controls(), send: t.sendButton().disabled });
-          out.stalled = snapshot();
-          t.sets[1].__LATE__({ code: "unavailable", message: "late" });
+          out.stalled = { save: t.lastSaveText(), retry: t.lastTryAgain() !== undefined, guarded: t.unload() };
+          t.sets[0].__LATE__(__ARGS__);
           await t.tick();
-          out.late = snapshot();
+          out.late = { save: t.lastSaveText(), retry: t.lastTryAgain() !== undefined };
           return out;
-        """.replace("__LATE__", late), host={"set": "pending", "fakeTimers": True})
-        assert stalled["early"] == "Sending…"
-        assert stalled["stalled"]["status"] == SLOW_SEND_LINE
-        assert stalled["stalled"]["retry"] is False, "a stalled write offered Try again while it could still land"
-        assert _all_off(stalled["stalled"]["controls"]) and stalled["stalled"]["send"] is True
+        """.replace("__LATE__", late).replace("__ARGS__", "" if late == "resolve" else '{ code: "unavailable", message: "late" }'),
+            host={"set": "pending", "fakeTimers": True})
+        assert stalled["early"] == "Saving…"
+        assert "Not saved" in stalled["stalled"]["save"] and stalled["stalled"]["retry"] is False, "a stalled write offered Try again while it could still land"
+        assert stalled["stalled"]["guarded"] is True
         if late == "resolve":
-            assert stalled["late"]["status"] == "Verdict sent: Approve"
-            assert stalled["late"]["retry"] is False and _all_off(stalled["late"]["controls"])
+            assert stalled["late"] == {"save": "Saved", "retry": False}
         else:
-            assert stalled["late"]["status"] == FAILED_SEND_LINE
-            assert stalled["late"]["retry"] is True and _all_on(stalled["late"]["controls"])
-
-    rejected = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      t.sets[0].resolve();
-      await t.tick();
-      t.click(t.sendButton());
-      await t.tick();
-      await t.tick();
-      t.sets[1].reject({ code: "unavailable", message: "no" });
-      await t.tick();
-      const out = { rejected: { status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, controls: t.controls(), send: t.sendButton().disabled, verdicts: verdicts() } };
-      t.click(t.lastButton("Not yet"));
-      t.sets[2].resolve();
-      await t.tick();
-      t.click(t.sendTryAgain());
-      await t.tick();
-      await t.tick();
-      out.again = { status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, controls: t.controls(), verdicts: verdicts() };
-      t.sets[3].resolve();
-      await t.tick();
-      out.sent = { status: t.sendStatus(), controls: t.controls() };
-      return out;
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
-    assert rejected["rejected"]["status"] == FAILED_SEND_LINE
-    assert rejected["rejected"]["retry"] is True and rejected["rejected"]["send"] is False
-    assert _all_on(rejected["rejected"]["controls"]), "the sheet stayed frozen after a failed send"
-    assert rejected["rejected"]["verdicts"] == [_verdict_write("approve")]
-    assert rejected["again"]["status"] == "Sending…" and rejected["again"]["retry"] is False
-    assert _all_off(rejected["again"]["controls"])
-    assert rejected["again"]["verdicts"] == [_verdict_write("approve"), _verdict_write("not-yet")]
-    assert rejected["sent"]["status"] == "Verdict sent: Not yet" and _all_off(rejected["sent"]["controls"])
-
-
-# Bites on: a sent verdict not coming back on reopen (its status, pressed verdict or note), a reopened sent sheet leaving a control on or writing, a verdict that does not fit the schema counting as sent, or a draft being shown over a sent verdict.
-def test_a_sent_verdict_is_shown_on_reopen():
-    def reopen(collections, poke=False):
-        return _sheet_page(_sample_final(), """
-          await t.advance(200);
-          const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
-          if (__POKE__) {
-            t.lastButtons().forEach(fire);
-            fire(t.lastNote());
-            t.buttons("leftovers-handling").forEach(fire);
-            t.fire(t.sendButton(), "click");
-          }
-          await t.advance(1500);
-          return { last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls() };
-        """.replace("__POKE__", "true" if poke else "false"), host={"fakeTimers": True, "collections": collections})
-
-    sent = reopen({_sends_key(): [_send_doc(_sent("approve", "Good to go"))], "draft-verdict": [_final_doc(_draft("not-yet", "An older draft"))]}, poke=True)
-    assert sent["status"] == "Verdict sent: Approve"
-    assert sent["last"]["pressed"] == ["true", "false"] and sent["last"]["note"] == "Good to go"
-    assert sent["send"] is True and _all_off(sent["controls"])
-    assert sent["sets"] == [], "a sent sheet wrote after reopening"
-    assert reopen({_sends_key(): [_send_doc(_sent("not-yet"))]})["status"] == "Verdict sent: Not yet"
-
-    for name, bad in (
-        ("unknown verdict", dict(_sent("approve"), verdict="maybe")),
-        ("no verdict", dict(_sent("approve"), verdict=None)),
-        ("extra key", dict(_sent("approve"), extra=1)),
-        ("note that is not text", dict(_sent("approve"), note=3)),
-        ("no answers", {key: value for key, value in _sent("approve").items() if key != "answers"}),
-        ("answers that are not answer documents", dict(_sent("approve"), answers=[{"card": "x", "answer": {"answer": "maybe"}}])),
-        ("no sheet digest", {key: value for key, value in _sent("approve").items() if key != "sheet"}),
-        ("malformed sheet digest", dict(_sent("approve"), sheet="ABC")),
-    ):
-        ignored = reopen({_sends_key(): [_send_doc(bad)], "draft-verdict": [_final_doc(_draft("not-yet", "Still a draft"))]})
-        assert ignored["status"] == DRAFT_LINE, name
-        assert ignored["last"]["pressed"] == ["false", "true"] and ignored["last"]["note"] == "Still a draft", name
-        assert ignored["send"] is False and ignored["sets"] == [], name
-    only_bad = reopen({_sends_key(): [_send_doc(dict(_sent("approve"), verdict="maybe"))]})
-    assert only_bad["status"] == PICK_FIRST_LINE and only_bad["send"] is True
-
-
-# Bites on: a verdict or a draft written for another revision of the sheet being restored or locking the sheet on reopen, or a document with no digest counting.
-def test_a_verdict_and_a_draft_for_another_revision_are_ignored_on_reopen():
-    def reopen(collections):
-        return _sheet_page(_sample_final(), """
-          await t.advance(1500);
-          return { last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls() };
-        """, host={"fakeTimers": True, "collections": collections})
-
-    other = reopen({
-        _sends_key(): [_send_doc(_sent("approve", "Old sign-off", sheet=OTHER_DIGEST))],
-        "draft-verdict": [_final_doc(_draft("not-yet", "Old draft", sheet=OTHER_DIGEST))],
-    })
-    assert other["status"] == PICK_FIRST_LINE and other["send"] is True, "a verdict for another revision locked or restored"
-    assert other["last"]["pressed"] == ["false", "false"] and other["last"]["note"] == ""
-    assert _all_on([control for control in other["controls"] if control["text"] != "Send verdict"]), "the sheet stayed locked"
-    assert other["sets"] == []
-    assert reopen({_sends_key(): [_send_doc(_sent("approve", sheet=OTHER_DIGEST))]})["status"] == PICK_FIRST_LINE
-    mixed = reopen({_sends_key(): [_send_doc(_sent("approve", sheet=OTHER_DIGEST))], "draft-verdict": [_final_doc(_draft("not-yet", "Mine"))]})
-    assert mixed["last"]["note"] == "Mine" and mixed["status"] == DRAFT_LINE
-
-
-# Bites on: the sent document or a draft not carrying the digest of the served sheet.json bytes, or the sent answers not equal to the cards' saved answers (including an option pick keeping its option id).
-def test_the_sent_document_carries_the_digest_and_every_cards_answer():
-    result = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.button("saved-plan-history", "Discuss"));
-      t.click(t.button("leftovers-handling", "Let leftovers fill a lunch slot"));
-      t.type(t.note("leftovers-handling"), "Keep it short", "change");
-      t.click(t.lastButton("Not yet"));
-      await t.tick();
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { verdicts: verdicts(), drafts: t.setLog().filter((call) => call.path.startsWith("draft-verdict/")), status: t.sendStatus() };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
-    digest = hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest()
-    assert result["status"] == "Verdict sent: Not yet"
-    assert result["verdicts"] == [{"path": _sends_key() + "/<id>", "body": {
-        "verdict": "not-yet", "note": "", "sheet": digest,
-        "answers": [
-            _empty_answer("leftovers-handling", "option", "allow-leftovers", "Keep it short"),
-            _empty_answer("saved-plan-history", "discuss"),
-        ],
-    }}]
-    assert result["drafts"] and all(call["body"]["sheet"] == digest for call in result["drafts"])
-
-
-# Bites on: Send writing over a verdict another open copy already sent for this revision, not showing that verdict as sent, or leaving the sheet unlocked; and a later answers write changing the sent document.
-def test_a_send_that_finds_a_verdict_for_this_revision_writes_nothing():
-    earlier = _sent("not-yet", "From the other tab", answers=[_empty_answer("leftovers-handling", "discuss"), _empty_answer("saved-plan-history")])
-    result = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      return {
-        verdicts: verdicts(), status: t.sendStatus(), last: t.lastState(), controls: t.controls(),
-        send: t.sendButton().disabled, retry: t.sendTryAgain() !== undefined,
-        reads: t.reads.map((read) => read.name),
-      };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "later": {_sends_key(): [_send_doc(earlier)]}})
-    assert result["verdicts"] == [], "a verdict was written over the one already sent"
-    assert result["status"] == "Verdict sent: Not yet"
-    assert result["last"]["pressed"] == ["false", "true"] and result["last"]["note"] == "From the other tab"
-    assert result["send"] is True and _all_off(result["controls"]) and result["retry"] is False
-    assert result["reads"][-1] == _sends_key(), "Send did not list this revision's sends just before writing"
-
-
-CONFLICT_LINE = "More than one verdict was sent for this sheet from different windows. The session will ask you which one counts."
-
-
-def _send_from_a_fresh_page(pick):
-    """One page, opened with no send yet stored, sends the given pick; gives what it wrote under the sends collection."""
-    result = _sheet_page(_sample_final(), """
-      t.click(t.lastButton("__PICK__"));
-      await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { written: t.written(), status: t.sendStatus() };
-    """.replace("__PICK__", pick), host={"fakeTimers": True, "set": "ok"})
-    return {path: body for path, body in result["written"].items() if path.startswith(_sends_key() + "/")}, result["status"]
-
-
-# Bites on: a Send replacing another window's send for the same revision (one shared document), so two windows that both read no send before either wrote leave one document and lose a verdict; or a send's id not being its own.
-def test_two_sends_from_two_pages_for_one_revision_leave_two_documents_and_neither_changes():
-    first, first_status = _send_from_a_fresh_page("Approve")
-    second, second_status = _send_from_a_fresh_page("Not yet")
-    assert first_status == "Verdict sent: Approve" and second_status == "Verdict sent: Not yet"
-    assert len(first) == 1 and len(second) == 1
-    (first_path, first_body), = first.items()
-    (second_path, second_body), = second.items()
-    assert first_path != second_path, "two windows wrote to the same document, so the later one replaced the earlier"
-    assert re.fullmatch(re.escape(_sends_key()) + "/[0-9a-f]{32}", first_path) and re.fullmatch(re.escape(_sends_key()) + "/[0-9a-f]{32}", second_path)
-    store = {first_path: first_body, second_path: second_body}
-    assert len(store) == 2
-    assert store[first_path]["verdict"] == "approve" and store[second_path]["verdict"] == "not-yet", "a send changed"
-    # Opened again, the two sends are both there and disagree.
-    reopened = _sheet_page(_sample_final(), """
-      await t.advance(1500);
-      return { status: t.sendStatus(), send: t.sendButton().disabled, controls: t.controls(), sets: t.setLog() };
-    """, host={"fakeTimers": True, "collections": {_sends_key(): [{"id": path.rsplit("/", 1)[1], "data": body} for path, body in store.items()]}})
-    assert reopened["status"] == CONFLICT_LINE
-
-
-# Bites on: several sends for one revision that differ (in verdict, note or answers) showing one of them as the verdict or leaving the sheet unlocked, several identical sends not counting as one sent verdict, or a send's key order making two identical sends look different.
-def test_reopening_with_more_than_one_send_locks_on_a_difference_and_shows_sent_otherwise():
-    def reopen(sends):
-        return _sheet_page(_sample_final(), """
-          await t.advance(200);
-          const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
-          t.lastButtons().forEach(fire);
-          fire(t.lastNote());
-          t.buttons("leftovers-handling").forEach(fire);
-          t.fire(t.sendButton(), "click");
-          await t.advance(1500);
-          return { status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls(), last: t.lastState() };
-        """, host={"fakeTimers": True, "collections": {_sends_key(): [_send_doc(body, n) for n, body in enumerate(sends, 1)]}})
-
-    one = reopen([_sent("approve", "Fine")])
-    assert one["status"] == "Verdict sent: Approve" and one["last"]["note"] == "Fine"
-    assert one["send"] is True and _all_off(one["controls"]) and one["sets"] == []
-
-    reordered = dict(reversed(list(_sent("approve", "Fine").items())))
-    assert list(reordered) != list(_sent("approve", "Fine"))
-    same = reopen([_sent("approve", "Fine"), reordered])
-    assert same["status"] == "Verdict sent: Approve" and same["last"]["note"] == "Fine"
-
-    other_answers = [_empty_answer("leftovers-handling", "discuss"), _empty_answer("saved-plan-history")]
-    for name, pair in (
-        ("verdict", [_sent("approve", "Fine"), _sent("not-yet", "Fine")]),
-        ("note", [_sent("approve", "Fine"), _sent("approve", "Other note")]),
-        ("answers", [_sent("approve", "Fine"), _sent("approve", "Fine", answers=other_answers)]),
-    ):
-        conflicted = reopen(pair)
-        assert conflicted["status"] == CONFLICT_LINE, name
-        assert conflicted["send"] is True and _all_off(conflicted["controls"]), name
-        assert conflicted["sets"] == [], name
-
-    # A document that is not a send for this revision does not make a conflict.
-    mixed = reopen([_sent("approve", "Fine"), _sent("not-yet", "Elsewhere", sheet=OTHER_DIGEST)])
-    assert mixed["status"] == "Verdict sent: Approve"
-
-
-# Bites on: a browser with no random source still sending (a send needs an id nobody else will pick) or saying nothing about why.
-def test_without_a_random_source_send_stays_off():
-    result = _sheet_page(_sample_final(), """
-      t.click(t.lastButton("Approve"));
-      await t.advance(1500);
-      t.fire(t.sendButton(), "click");
-      await t.advance(1500);
-      return { status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog().map((call) => call.path) };
-    """, host={"fakeTimers": True, "noRandom": True})
-    assert result["status"] == "This browser can't make a unique id for the verdict, so it can't be sent here."
-    assert result["send"] is True
-    assert not [path for path in result["sets"] if path.startswith("verdict/")]
-
-
-# Bites on: a reopened sent sheet showing a later draft's answers instead of the answers the verdict was sent with.
-def test_a_sent_verdict_shows_the_answers_it_was_sent_with():
-    signed = _sent("approve", "", answers=[_empty_answer("leftovers-handling", "discuss", None, "Signed note"), _empty_answer("saved-plan-history")])
-    later = {"answer": "aligned", "optionId": None, "note": "A later draft"}
-    result = _sheet_page(_sample_final(), """
-      await t.advance(1500);
-      return { state: t.state("leftovers-handling"), status: t.sendStatus() };
-    """, host={"fakeTimers": True, "collections": {_sends_key(): [_send_doc(signed)], "answers": [{"id": "leftovers-handling", "data": later}]}})
-    assert result["status"] == "Verdict sent: Approve"
-    assert result["state"]["note"] == "Signed note"
-    assert result["state"]["pressed"] != ["true"] * len(result["state"]["pressed"])
-    assert result["state"]["labels"][result["state"]["pressed"].index("true")] == "Discuss"
-
-
-# Bites on: an older open copy of the sheet writing its verdict after the sheet was republished.
-def test_a_send_from_a_stale_copy_of_the_sheet_writes_nothing():
-    result = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      files["sheet.json"] = { status: 200, body: files["sheet.json"].body + " " };
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { verdicts: verdicts(), status: t.sendStatus() };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
-    assert result["verdicts"] == []
-    assert result["status"] == "This sheet was updated after you opened it. Reload the page to see the current version before sending."
-
-
-# Bites on: a page showing an older revision of the sheet writing to a document a newer revision's verdict lives in (the verdict and its draft are keyed by the revision they answer, so a delayed old write can only land on the old revision's own document).
-def test_a_delayed_write_from_an_old_revision_leaves_the_newer_verdict_document_alone():
-    newer = hashlib.sha256(b"a newer published sheet.json").hexdigest()
-    newer_verdict = _sent("not-yet", "The current sign-off", sheet=newer)
-    result = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      const written = t.setLog().map((call) => call.path);
-      t.sets.forEach((call) => call.resolve());
-      await t.advance(200);
-      return { written: written, verdicts: verdicts(), status: t.sendStatus() };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={
-        "fakeTimers": True, "set": "pending",
-        "collections": {_sends_key(newer): [_send_doc(newer_verdict)], "draft-verdict": [_final_doc(_draft("not-yet", "Newer draft", sheet=newer), doc_id=newer)]},
-    })
-    own = _sheet_digest(_sample_final())
-    assert own != newer
-    assert result["written"] and all(own in path.split("/") for path in result["written"]), result["written"]
-    assert not [path for path in result["written"] if newer in path], "an old revision wrote to the newer revision's document"
-    assert [call["path"] for call in result["verdicts"]] == [_sends_key(own) + "/<id>"]
-    assert result["status"] == "Verdict sent: Approve"
-    assert newer_verdict["sheet"] == newer, "the newer verdict document was changed"
+            assert "Not saved" in stalled["late"]["save"] and stalled["late"]["retry"] is True
 
 
 # Bites on: the digest hashing text decoded from the response instead of the bytes the file was published with (a byte-order mark is dropped by decoding, so the stored digest would differ from `shasum -a 256 sheet.json`), or the page failing to read a BOM-prefixed sheet.
 def test_the_digest_covers_the_served_bytes_including_a_byte_order_mark():
     files = _sample_files(_sample_final())
-    files["sheet.json"]["body"] = "\ufeff" + files["sheet.json"]["body"]
+    files["sheet.json"]["body"] = "﻿" + files["sheet.json"]["body"]
     served = files["sheet.json"]["body"].encode("utf-8")
     assert served.startswith(b"\xef\xbb\xbf")
     page = _run_page(files, host={"fakeTimers": True}, scenario="""
       t.click(t.lastButton("Approve"));
       await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { verdicts: t.setLog().filter((call) => call.path.startsWith("verdict/")), status: t.sendStatus() };
+      return { verdicts: t.setLog().filter((call) => call.path.startsWith("verdict/")), save: t.lastSaveText() };
     """)
     assert page["settled"] and page["errorHidden"] is True, page["errors"]
     digest = hashlib.sha256(served).hexdigest()
     assert digest != hashlib.sha256(served[3:]).hexdigest()
-    assert page["result"]["status"] == "Verdict sent: Approve"
-    assert [(re.sub(r"[0-9a-f]{32}$", "<id>", call["path"]), call["body"]["sheet"]) for call in page["result"]["verdicts"]] == [(_sends_key(digest) + "/<id>", digest)]
+    assert page["result"]["save"] == "Saved"
+    assert [(call["path"], call["body"]["sheet"]) for call in page["result"]["verdicts"]] == [("verdict/" + digest, digest)]
 
 
-# Bites on: a Send that cannot re-check the published sheet writing anyway, or saying nothing about why and offering no retry.
-def test_a_send_that_cannot_recheck_the_sheet_writes_nothing_and_offers_try_again():
-    result = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      files["sheet.json"] = { reject: true };
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { verdicts: verdicts(), status: t.sendStatus(), retry: t.sendTryAgain() !== undefined };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
-    assert result["verdicts"] == []
-    assert result["status"] == "The sheet could not be checked, so nothing was sent."
-    assert result["retry"] is True
-
-
-# Bites on: a verdict for another revision blocking a Send (it is not a verdict on this sheet), or a pre-read that fails being taken as nothing sent.
-def test_a_send_looks_before_writing_and_a_failed_look_writes_nothing():
-    other = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { verdicts: verdicts(), status: t.sendStatus() };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "set": "pending", "later": {_sends_key(): [_send_doc(_sent("not-yet", sheet=OTHER_DIGEST))]}})
-    assert other["verdicts"] == [_verdict_write("approve")], "a verdict for another revision blocked this one"
-    failed = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      return { verdicts: verdicts(), status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, send: t.sendButton().disabled };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "readByCollection": {_sends_key(): ["docs", "reject"]}})
-    assert failed["verdicts"] == [] and failed["status"] == FAILED_SEND_LINE and failed["retry"] is True
-
-
-# Bites on: a verdict document being changed by anything written to answers/ after it was sent (another open copy's later tap), or the sent page taking such a write into its cards.
-def test_a_later_answer_write_leaves_the_sent_document_unchanged():
-    result = _sheet_page(_sample_final(), """
-      ${VERDICTS}
-      t.click(t.button("leftovers-handling", "Aligned"));
-      t.click(t.lastButton("Approve"));
-      await t.advance(200);
-      t.click(t.sendButton());
-      await t.advance(200);
-      const sentAt = t.setLog().length;
-      const before = { verdicts: JSON.stringify(verdicts()), written: JSON.stringify(t.written()), cards: t.state("leftovers-handling").pressed, status: t.sendStatus() };
-      // Another open copy of the sheet taps a different answer: a write straight into the store, not through this page's locked controls.
-      await fakeStore.doc("answers/leftovers-handling").set({ answer: "discuss", optionId: null, note: "From another window" });
-      await t.advance(1500);
-      return {
-        before: before, sentAt: sentAt,
-        after: { verdicts: JSON.stringify(verdicts()), cards: t.state("leftovers-handling").pressed, status: t.sendStatus() },
-        log: t.setLog(), written: t.written(),
-      };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "set": "ok"})
-    assert result["log"][result["sentAt"]] == {"path": "answers/leftovers-handling", "body": {"answer": "discuss", "optionId": None, "note": "From another window"}}, "the other copy's answer was not written to the store"
-    assert len(result["log"]) == result["sentAt"] + 1, "the sent page wrote something after the answer write"
-    sends = [path for path in result["written"] if path.startswith(_sends_key() + "/")]
-    assert len(sends) == 1
-    assert json.dumps(result["written"][sends[0]]) == json.dumps(json.loads(result["before"]["written"])[sends[0]]), "the stored send changed after the answer write"
-    assert result["written"][sends[0]]["answers"][0] == _empty_answer("leftovers-handling", "aligned"), "the send does not carry the answers it was sent with"
-    assert result["before"]["verdicts"] == result["after"]["verdicts"]
-    assert result["before"]["cards"] == result["after"]["cards"], "the sent page took a later answer into its cards"
-    assert result["before"]["status"] == result["after"]["status"] == "Verdict sent: Approve"
-
-
-# Bites on: a browser with no crypto.subtle leaving the last card or Send on, or saying nothing about why.
-def test_without_a_digest_the_last_card_and_send_stay_off():
-    result = _sheet_page(_sample_final(), """
-      await t.advance(1500);
-      t.fire(t.lastButton("Approve"), "click");
-      t.fire(t.sendButton(), "click");
-      await t.advance(1500);
-      return { status: t.sendStatus(), send: t.sendButton().disabled, last: t.lastState(), sets: t.setLog().map((call) => call.path) };
-    """, host={"fakeTimers": True, "noCrypto": True})
-    assert result["status"] == "This browser can't tell which version of the sheet this is, so the verdict can't be sent here."
-    assert result["send"] is True and all(result["last"]["disabled"]) and result["last"]["pressed"] == ["false", "false"]
-    assert not [path for path in result["sets"] if "verdict" in path], "the last card wrote without a digest"
-
-
-# Bites on: the schema accepting a draft or a sent verdict with no sheet digest or a malformed one, or a sent verdict without its answers.
-def test_the_schema_refuses_a_missing_or_malformed_sheet_digest():
-    digest = "a" * 64
-    answers = [_empty_answer("leftovers-handling")]
-    assert DRAFT_VERDICT_VALIDATOR.is_valid({"verdict": None, "note": "", "sheet": digest})
-    assert VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": answers})
-    assert VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": []})
-    for bad in (None, "", "A" * 64, "a" * 63, "a" * 65, "g" * 64, 5):
-        assert not DRAFT_VERDICT_VALIDATOR.is_valid({"verdict": None, "note": "", "sheet": bad}), bad
-        assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": bad, "answers": answers}), bad
-    assert not DRAFT_VERDICT_VALIDATOR.is_valid({"verdict": None, "note": ""})
-    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "answers": answers})
-    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest})
-    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": [{"card": "x", "answer": {"answer": "option", "optionId": None, "note": ""}}]})
-    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": [{"card": "X Y", "answer": answers[0]["answer"]}]})
-
-
-# Bites on: a final sheet with no cards drawing a stepper, rows or cards, a count that is not "Nothing left to answer", or losing its history, last card, Send or next line.
+# Bites on: a final sheet with no cards drawing a stepper, rows or cards, a count that is not "Nothing left to answer", losing its history, last card, next-step line or next box, or its verdict not saving.
 def test_a_final_sheet_with_no_cards():
     result = _sheet_page(_sample_final(cards=[]), """
-      ${VERDICTS}
       const out = {
         count: [t.count(), elements["sheet-count"].hidden],
         stepperHidden: elements["sheet-stepper"].hidden,
@@ -3723,50 +3500,41 @@ def test_a_final_sheet_with_no_cards():
         cards: elements["sheet-cards"].children.length,
         history: t.history(),
         parts: t.finalParts(),
+        step: t.afterLast().text,
         next: t.nextBox().text,
-        status: t.sendStatus(),
       };
       t.click(t.lastButton("Approve"));
-      t.sets[0].resolve();
       await t.tick();
-      t.click(t.sendButton());
-      await t.tick();
-      await t.tick();
-      out.verdicts = verdicts();
-      t.sets[1].resolve();
-      await t.tick();
-      out.sent = t.sendStatus();
+      out.save = t.lastSaveText();
+      out.sets = t.setLog();
       out.countAfter = t.count();
       return out;
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
+    """, host={"set": "ok"})
     assert result["count"] == ["Nothing left to answer", False]
     assert result["stepperHidden"] is True and result["itemsHidden"] is True
     assert result["rows"] == 0 and result["cards"] == 0
     assert result["history"]["hidden"] is False and result["history"]["paragraphs"][0] == HISTORY_TEXT
-    assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 2
+    assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 3
+    assert result["step"] == DONE_STEP
     assert result["next"] == NEXT_TEXT
-    assert result["status"] == PICK_FIRST_LINE
-    assert result["verdicts"] == [{"path": _sends_key(_sheet_digest(_sample_final(cards=[]))) + "/<id>", "body": {
-        "verdict": "approve", "note": "", "sheet": _sheet_digest(_sample_final(cards=[])), "answers": [],
-    }}]
-    assert result["sent"] == "Verdict sent: Approve"
+    digest = _sheet_digest(_sample_final(cards=[]))
+    assert result["sets"] == [{"path": "verdict/" + digest, "body": {"verdict": "approve", "note": "", "sheet": digest}}]
+    assert result["save"] == "Saved"
     assert result["countAfter"] == "Nothing left to answer"
 
 
-# Bites on: a failed or stalled read of the draft verdict or of the verdict (not only of the answers) being taken as an empty collection, so the controls turn on, or its Try again not reading all three collections again.
+# Bites on: a failed or stalled read of the verdict (not only of the answers) being taken as an empty collection, so the controls turn on, or its Try again not reading both collections again.
 @pytest.mark.parametrize("host,stall", [
-    pytest.param({"readByCollection": {"draft-verdict": ["reject", "docs"]}}, False, id="draft-verdict-rejects"),
-    pytest.param({"readByCollection": {_sends_key(): ["reject", "docs"]}}, False, id="verdict-rejects"),
-    pytest.param({"readByCollection": {_sends_key(): ["pending", "docs"]}, "fakeTimers": True}, True, id="verdict-stalls"),
+    pytest.param({"readByCollection": {"verdict": ["reject", "docs"]}}, False, id="verdict-rejects"),
+    pytest.param({"readByCollection": {"verdict": ["pending", "docs"]}, "fakeTimers": True}, True, id="verdict-stalls"),
     pytest.param({"readByCollection": {"answers": ["reject", "docs"]}}, False, id="answers-reject"),
 ])
 def test_a_failed_verdict_read_keeps_the_sheet_off(host, stall):
     result = _sheet_page(_sample_final(), """
       if (__STALL__) await t.advance(10000);
-      const snapshot = () => ({ gate: t.gate().message, hidden: t.gate().hidden, retry: t.gate().retry !== undefined, controls: t.controls(), send: t.sendButton().disabled, status: t.sendStatus(), reads: t.reads.map((read) => read.name) });
+      const snapshot = () => ({ gate: t.gate().message, hidden: t.gate().hidden, retry: t.gate().retry !== undefined, controls: t.controls(), caption: t.digestCaption().hidden, reads: t.reads.map((read) => read.name) });
       const out = { failed: snapshot() };
       t.fire(t.lastButton("Approve"), "click");
-      t.fire(t.sendButton(), "click");
       out.writes = t.sets.length;
       if (t.gate().retry) {
         t.click(t.gate().retry);
@@ -3779,14 +3547,12 @@ def test_a_failed_verdict_read_keeps_the_sheet_off(host, stall):
     failed = result["failed"]
     assert failed["gate"] == "Your saved answers couldn't be loaded."
     assert failed["hidden"] is False and failed["retry"] is True
-    assert _all_off(failed["controls"]) and failed["send"] is True
-    assert failed["status"] == ""
-    assert failed["reads"] == ["answers", "draft-verdict", _sends_key()]
+    assert _all_off(failed["controls"]) and failed["caption"] is True
+    assert failed["reads"] == ["answers", "verdict"]
     assert result["writes"] == 0
     assert result["recovered"]["hidden"] is True
-    assert result["recovered"]["reads"] == ["answers", "draft-verdict", _sends_key()] * 2, "the retry did not read all three again"
-    assert _all_on([control for control in result["recovered"]["controls"] if control["text"] != "Send verdict"])
-    assert result["recovered"]["send"] is True and result["recovered"]["status"] == PICK_FIRST_LINE
+    assert result["recovered"]["reads"] == ["answers", "verdict"] * 2, "the retry did not read both again"
+    assert _all_on(result["recovered"]["controls"])
 
 
 NON_OWNER_CASES = [
@@ -3800,30 +3566,29 @@ NON_OWNER_CASES = [
 ]
 
 
-# Bites on: a viewer who is not the owner, or a view with no store, getting a working last card or Send verdict, or any write or read.
+# Bites on: a viewer who is not the owner, or a view with no store, getting a working last card, or any write or read.
 @pytest.mark.parametrize("host", NON_OWNER_CASES)
-def test_the_last_card_and_send_are_off_for_a_non_owner_and_with_no_store(host):
+def test_the_last_card_is_off_for_a_non_owner_and_with_no_store(host):
     result = _sheet_page(_sample_final(), """
       const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
       t.lastButtons().forEach(fire);
       t.lastNote().value = "sneaky";
       fire(t.lastNote());
-      fire(t.sendButton());
       await t.advance(1500);
-      return { controls: t.controls(), send: t.sendButton().disabled, sets: t.sets.length, reads: t.reads.length, last: t.lastState(), parts: t.finalParts() };
+      return { controls: t.controls(), sets: t.sets.length, reads: t.reads.length, last: t.lastState(), parts: t.finalParts(), caption: t.digestCaption().hidden };
     """, host=dict(host, fakeTimers=True))
-    assert result["parts"]["finalChildren"] == 2, "the last card did not draw"
-    assert _all_off(result["controls"]) and result["send"] is True
+    assert result["parts"]["finalChildren"] == 3, "the last card did not draw"
+    assert _all_off(result["controls"])
     assert result["sets"] == 0, "a control wrote although the viewer cannot answer"
     assert result["reads"] == 0
     assert result["last"]["pressed"] == ["false", "false"]
+    assert result["caption"] is True
 
 
-# Bites on: a schema that does not say what a verdict is still giving the last card working buttons, or Send verdict.
+# Bites on: a schema that does not say what a verdict is still giving the last card working buttons, or the no-digest caption showing for a reason that is not the digest.
 @pytest.mark.parametrize("mutate", [
-    pytest.param(lambda schema: schema["$defs"].pop("draftVerdict"), id="no-draft-verdict-definition"),
     pytest.param(lambda schema: schema["$defs"].pop("verdict"), id="no-verdict-definition"),
-    pytest.param(lambda schema: schema["$defs"]["draftVerdict"]["properties"]["verdict"].update(enum=["approve", "not-yet", "maybe", None]), id="a-verdict-with-no-words"),
+    pytest.param(lambda schema: schema["$defs"]["verdict"]["properties"]["verdict"].update(enum=["approve", "not-yet", "maybe", None]), id="a-verdict-with-no-words"),
 ])
 def test_a_schema_without_a_verdict_shape_keeps_the_last_card_off(mutate):
     files = _sample_files(_sample_final())
@@ -3833,101 +3598,19 @@ def test_a_schema_without_a_verdict_shape_keeps_the_last_card_off(mutate):
       const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
       t.lastButtons().forEach(fire);
       fire(t.lastNote());
-      fire(t.sendButton());
       await t.advance(1500);
-      return { last: t.lastState(), send: t.sendButton().disabled, sets: t.setLog(), cardControls: t.state("leftovers-handling").disabled, gate: t.gate().hidden };
+      return { last: t.lastState(), sets: t.setLog(), cardControls: t.state("leftovers-handling").disabled, gate: t.gate().hidden, caption: t.digestCaption().hidden };
     """, host={"fakeTimers": True})
     assert page["settled"] and page["errors"] == [], page
     result = page["result"]
     assert result["last"]["disabled"][-1] is True and all(result["last"]["disabled"])
-    assert result["send"] is True and result["sets"] == []
+    assert result["sets"] == []
     assert result["cardControls"] == [False] * 5, "the cards stopped working too"
-    assert result["gate"] is True
+    assert result["gate"] is True and result["caption"] is True
 
 
-# Bites on: Done for now on a final sheet not saying the verdict counts only after Send verdict (or saying it elsewhere), not saving a pending verdict note, or changing its message on a remainder sheet.
-def test_done_for_now_on_a_final_sheet_names_send_verdict():
-    final = _sheet_page(_sample_final(), """
-      t.type(t.lastNote(), "A thought", "input");
-      const pending = t.sets.length;
-      t.click(t.control("done"));
-      const writes = t.setLog();
-      t.sets.forEach((call) => call.resolve());
-      await t.tick();
-      return { pending: pending, writes: writes, message: t.done().message, parts: t.finalParts() };
-    """, host={"set": "pending", "fakeTimers": True})
-    assert final["pending"] == 0
-    assert final["writes"] == [_draft_write(None, "A thought")], "Done for now left the pending verdict note unwritten"
-    assert final["message"] == "Your answers are saved as drafts. Open this link again any time to carry on. Your verdict counts only once you tap Send verdict."
-    assert final["parts"]["historyHidden"] is True and final["parts"]["finalHidden"] is True
-
-    remainder = _sheet_page(_remainder_of(_named_cards("plan-day"), unsettled=["plan-day"]), "t.click(t.control(\"done\")); return t.done().message;")
-    assert remainder == "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done."
-
-
-# Bites on: the usage doc leaving out the final sheet, the draft verdict's and the verdict's paths, Send verdict, or that a draft never counts.
-def test_usage_doc_describes_the_final_sheet():
-    doc = USAGE_DOC.read_text(encoding="utf-8")
-    assert "## A final sheet" in doc
-    section = doc.split("## A final sheet", 1)[1].split("\n## ", 1)[0]
-    for needle in ("`draft-verdict/<digest>`", "`verdict/<digest>/sends/<sendId>`", "`$defs/draftVerdict`", "`$defs/verdict`", "Send verdict"):
-        assert needle in section, needle
-    squeezed = " ".join(section.split())
-    assert "never counts" in squeezed
-    assert "no cards" in squeezed
-    assert doc.index("## How a sheet is laid out") < doc.index("## A final sheet") < doc.index("## How answers come back")
-    answers = doc.split("## How answers come back", 1)[1].split("\n## ", 1)[0]
-    assert "Send verdict" in answers and "`verdict/<SHA-256 of the sheet.json it published>/sends`" in answers
-    assert "and nothing else" in " ".join(answers.split())
-    assert "never acts on a draft" in " ".join(answers.split())
-
-
-# Bites on: a draft verdict that is pending or rejected being reported as saved on the Done screen (the last card is hidden there), or Done for now not sending the owner back to the last card's Try again.
-def test_done_for_now_counts_an_unsaved_verdict_draft():
-    result = _sheet_page(_sample_final(), """
-      const out = {};
-      t.click(t.lastButton("Approve"));
-      t.click(t.control("done"));
-      out.pending = t.done().message;
-      t.sets[0].reject({ code: "unavailable", message: "try later" });
-      await t.tick();
-      out.failed = t.done().message;
-      t.click(t.control("back"));
-      out.back = { done: t.done().hidden, final: t.finalParts().finalHidden, retry: t.lastSaveText() };
-      return out;
-    """, host={"set": "pending"})
-    assert result["pending"] == "1 answer isn't saved yet. Keep this page open until this says they're saved."
-    assert result["failed"] == "1 answer didn't save. Go back to the sheet and tap Try again on each."
-    assert result["back"]["done"] is True and result["back"]["final"] is False
-    assert "Try again" in result["back"]["retry"], "Back to the sheet did not leave the last card offering Try again"
-
-
-# Bites on: a draft verdict write that rejects after the verdict was sent still leaving "Not saved" on the locked last card or the leave-page warning on.
-def test_a_sent_verdict_retires_the_draft_save_state():
-    result = _sheet_page(_sample_final(), """
-      const out = {};
-      t.click(t.lastButton("Approve"));
-      out.beforeSend = t.unload();
-      t.click(t.sendButton());
-      await t.tick();
-      await t.tick();
-      t.sets[t.sets.length - 1].resolve();
-      await t.tick();
-      out.sent = t.sendStatus();
-      t.sets[0].reject({ code: "unavailable", message: "try later" });
-      await t.tick();
-      out.after = { status: t.sendStatus(), save: t.lastSaveText(), guarded: t.unload() };
-      return out;
-    """, host={"set": "pending"})
-    assert result["beforeSend"] is True
-    assert result["sent"] == "Verdict sent: Approve"
-    assert result["after"]["save"] == "", result["after"]
-    assert result["after"]["guarded"] is False, "the leave-page warning stayed on for a verdict already sent"
-    assert result["after"]["status"] == "Verdict sent: Approve"
-
-
-# Bites on: leaving a final sheet going unguarded while its draft verdict (pick or note) is unconfirmed or a Send is in flight, or the guard staying on once the verdict is sent.
-def test_leaving_a_final_sheet_is_guarded_while_the_verdict_is_unconfirmed_or_sending():
+# Bites on: leaving a final sheet going unguarded while its verdict (pick or note) is unconfirmed, rejected or stalled, or the guard staying on once the verdict is saved; and a plain, remainder or final footer saying the wrong things (the leaving line belongs to the first two only).
+def test_leaving_a_final_sheet_is_guarded_while_the_verdict_is_unconfirmed_and_the_footer_says_what_to_do():
     result = _sheet_page(_sample_final(), """
       const out = {};
       out.idle = t.unload();
@@ -3942,32 +3625,417 @@ def test_leaving_a_final_sheet_is_guarded_while_the_verdict_is_unconfirmed_or_se
       t.sets[1].resolve();
       await t.tick();
       out.noteSaved = t.unload();
-      t.click(t.sendButton());
+      t.click(t.lastButton("Not yet"));
+      t.sets[2].reject({ code: "unavailable", message: "no" });
       await t.tick();
+      out.failed = { save: t.lastSaveText(), guarded: t.unload() };
+      t.click(t.lastTryAgain());
+      t.sets[3].resolve();
       await t.tick();
-      out.sending = { status: t.sendStatus(), guarded: t.unload() };
-      t.sets[t.sets.length - 1].resolve();
-      await t.tick();
-      out.sent = { status: t.sendStatus(), guarded: t.unload() };
+      out.retried = { save: t.lastSaveText(), guarded: t.unload() };
+      t.click(t.lastButton("Approve"));
+      await t.advance(10000);
+      out.stalled = { save: t.lastSaveText(), guarded: t.unload() };
+      out.footer = t.footer();
       return out;
-    """, host={"set": "pending"})
+    """, host={"set": "pending", "fakeTimers": True})
     assert result["idle"] is False
-    assert result["pick"] is True, "an unconfirmed draft verdict pick was not guarded"
+    assert result["pick"] is True, "an unconfirmed verdict pick was not guarded"
     assert result["pickSaved"] is False
-    assert result["note"] is True, "a draft verdict note waiting to save was not guarded"
+    assert result["note"] is True, "a verdict note waiting to save was not guarded"
     assert result["noteSaved"] is False
-    assert result["sending"] == {"status": "Sending…", "guarded": True}, "a Send in flight was not guarded"
-    assert result["sent"] == {"status": "Verdict sent: Approve", "guarded": False}
+    assert "Not saved" in result["failed"]["save"] and result["failed"]["guarded"] is True, "a rejected verdict save was not guarded"
+    assert result["retried"] == {"save": "Saved", "guarded": False}
+    assert "Not saved" in result["stalled"]["save"] and result["stalled"]["guarded"] is True, "a stalled verdict save was not guarded"
+    assert result["footer"] == {"hidden": False, "caption": SAVES_LINE, "captions": [SAVES_LINE]}
+
+    for name, sheet in (
+        ("plain", _sheet(cards=_named_cards("plan-day", "fridge-check"))),
+        ("remainder", _remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"])),
+    ):
+        footer = _sheet_page(sheet, "return t.footer();")
+        assert footer == {"hidden": False, "caption": SAVES_LINE, "captions": [SAVES_LINE, LEAVING_LINE]}, name
 
 
 # Bites on: the final sheet's shared wording being retyped in the page or the prose renderer instead of read from sheet-words.json, or the usage doc leaving that file out of the published files.
 def test_final_sheet_wording_has_one_home():
-    words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
     prose_source = (THEME.parent / "lib" / "sheet_prose.py").read_text(encoding="utf-8")
-    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "declinedHeading", "declinedItem", "approveHeading", "nextHeading", "historyHeading"):
+    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "declinedHeading", "declinedItem", "approveHeading", "nextHeading", "historyHeading", "doneStep", "doneStepInChat"):
         for name, text in (("the page", _template_text()), ("sheet_prose.py", prose_source)):
-            assert words[key] not in text, "%s retypes the shared wording %r" % (name, key)
+            assert WORDS[key] not in text, "%s retypes the shared wording %r" % (name, key)
     assert re.search(r"""fetchJson\(\s*['"]sheet-words\.json['"]""", _template_text())
     publishing = USAGE_DOC.read_text(encoding="utf-8").split("## Publishing a sheet", 1)[1]
     assert '"sheet-words.json": "<staged sheet-words.json>"' in publishing
     assert "`sheet-words.json`" in publishing
+
+
+# The open/closed cue on the folded row and the declines toggle, and the Previous and Next pair below the open card.
+CUE_SCENARIO = """
+  const cueOf = (control) => {
+    const first = control.children[0];
+    return {
+      tag: first.tagName,
+      className: first.className,
+      text: first.textContent,
+      hidden: first.getAttribute("aria-hidden"),
+      expanded: control.getAttribute("aria-expanded"),
+      classes: control.className.split(/\\s+/),
+    };
+  };
+"""
+
+
+# Bites on: the folded row's cue not following the toggle (stuck on ▶, or not redrawn on the second click), a closed cue missing its text-presentation selector (U+FE0E), a cue that is not the button's first child, one a screen reader would read (no aria-hidden), one that disagrees with aria-expanded, or the row losing its theme button class.
+def test_the_fold_cue_follows_the_toggle():
+    docs = [{"id": "plan-day", "data": _doc("aligned")}, {"id": "fridge-check", "data": _doc("discuss")}]
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), CUE_SCENARIO + """
+      const fold = t.control("fold");
+      const out = { closed: cueOf(fold), hiddenRow: t.fold().hidden };
+      t.click(fold);
+      out.opened = cueOf(t.control("fold"));
+      t.click(t.control("fold"));
+      out.closedAgain = cueOf(t.control("fold"));
+      return out;
+    """, host={"docs": docs})
+    assert result["hiddenRow"] is False, "the fold row was hidden, so the test proves nothing"
+    classes = ["sh-button", "sheet-fold"]
+    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▶︎", "hidden": "true", "expanded": "false", "classes": classes}
+    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▼", "hidden": "true", "expanded": "true", "classes": classes}
+    assert result["closedAgain"] == result["closed"]
+
+
+# Bites on: the folded row having no block padding or no even gap between its lines, the chips line not sitting in the label's column, the row rule losing to the shared flex rule or beating the rules that hide it, or the chips not being one block after the cue and the label.
+def test_the_fold_row_is_padded_and_its_chips_line_up_with_the_label():
+    ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+    ]
+    fold = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), "return t.fold();", host={"docs": docs})
+    assert fold["chips"] == {"className": "sheet-fold-chips", "index": 2}, "the chips are not one block after the cue and the label"
+    assert fold["parts"] == [
+        ["", "Answered · 3"],
+        ["sh-pill sh-pill--aligned", "1 Aligned"],
+        ["sh-pill sh-pill--discuss", "1 Discuss"],
+        ["sh-pill sh-pill--aligned", "1 Picked"],
+    ]
+
+    rules = _style_rules(_template_text())
+    grid_rules = [i for i, (selector, pairs) in enumerate(rules) if selector == ".sheet-page .sheet-fold" and ("display", "grid") in pairs]
+    assert len(grid_rules) == 1, "the folded row is not one grid rule"
+    index = grid_rules[0]
+    row = dict(rules[index][1])
+    assert row.get("gap") == "8px", "the folded row has no even gap between its lines"
+    assert row.get("grid-template-columns") == "auto minmax(0, 1fr)", "the folded row is not a cue column and a label column"
+    assert row.get("padding-block") == "8px", "the folded row has no block padding"
+    assert "flex-wrap" not in row and "justify-content" not in row, "the folded row still carries flex alignment"
+
+    shared = [i for i, (selector, _) in enumerate(rules) if selector == ".sheet-page .sheet-row, .sheet-page .sheet-fold"]
+    assert len(shared) == 1 and index > shared[0], "the folded row's rule does not come after the shared flex rule"
+    hidden = [i for i, (selector, pairs) in enumerate(rules) if selector == ".sheet-page .sheet-fold" and ("display", "none") in pairs]
+    assert len(hidden) == 1 and index < hidden[0], "the folded row's rule comes after the rule that hides it on wide screens"
+    hidden_attribute = [i for i, (selector, _) in enumerate(rules) if selector == ".sh-theme [hidden]"]
+    assert len(hidden_attribute) == 1 and index < hidden_attribute[0], "the folded row's rule comes after the hidden-attribute rule"
+
+    chips = [dict(pairs) for selector, pairs in rules if selector == ".sheet-page .sheet-fold-chips"]
+    assert len(chips) == 1, "the chips line is not one rule"
+    assert (chips[0].get("display"), chips[0].get("flex-wrap"), chips[0].get("gap")) == ("flex", "wrap", "8px"), "the chips line is not a wrapping row with even gaps"
+    assert chips[0].get("grid-column") == "2", "the chips line does not sit in the label's column"
+    assert "flex" not in chips[0], "the chips line still claims a full flex line"
+
+
+# Bites on: the item row's badge shrinking or wrapping onto broken lines beside the question and its pill.
+def test_a_rows_not_saved_badge_never_shrinks_or_wraps():
+    rules = _style_rules(_template_text())
+    badge = [pairs for selector, pairs in rules if selector == ".sheet-page .sheet-row > .sh-badge"]
+    assert len(badge) == 1, "the item row's badge is not one rule"
+    declared = dict(badge[0])
+    assert declared.get("flex") == "none", "the item row's badge can shrink"
+    assert declared.get("white-space") == "nowrap", "the item row's badge can wrap onto broken lines"
+
+
+# Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▶), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.
+def test_the_declines_cue_follows_the_toggle():
+    result = _sheet_page(_sample_final(), CUE_SCENARIO + """
+      const state = () => Object.assign(cueOf(t.control("declines")), { listHidden: t.history().listHidden });
+      const out = { closed: state() };
+      t.click(t.control("declines"));
+      out.opened = state();
+      t.click(t.control("declines"));
+      out.closedAgain = state();
+      return out;
+    """)
+    classes = ["sh-button"]
+    assert result["closed"] == {"tag": "span", "className": "sheet-cue", "text": "▶︎", "hidden": "true", "expanded": "false", "classes": classes, "listHidden": True}
+    assert result["opened"] == {"tag": "span", "className": "sheet-cue", "text": "▼", "hidden": "true", "expanded": "true", "classes": classes, "listHidden": False}
+    assert result["closedAgain"] == result["closed"]
+
+
+# Bites on: the second Previous and Next missing, not theme buttons, placed anywhere but between the cards and the footer, wired to the wrong step, left enabled at an end when the top pair is off (or the reverse), carrying an item label, or shown on a sheet with no cards.
+def test_the_bottom_stepper_steps_like_the_top_one():
+    text = _template_text()
+    bottom = re.search(r'<div id="sheet-stepper-bottom" class="sheet-stepper" hidden></div>', text)
+    assert bottom, "the template has no hidden #sheet-stepper-bottom with the stepper class"
+    assert text.index('<main id="sheet-cards"></main>') < bottom.start() < text.index('<div id="sheet-footer"')
+
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card"), """
+      const bottom = () => t.bottomStepper();
+      const shape = () => ({
+        open: t.openCard(),
+        label: t.stepper().label,
+        top: [t.stepper().prevDisabled, t.stepper().nextDisabled],
+        bottom: [bottom().prevDisabled, bottom().nextDisabled],
+        hidden: [t.stepper().hidden, bottom().hidden],
+      });
+      const buttonsOf = (host) => t.all(elements[host]).filter((node) => node.tagName === "button").map((node) => [node.textContent, node.className, node.getAttribute("type")]);
+      const out = { first: shape(), labels: bottom().labels, buttons: [buttonsOf("sheet-stepper"), buttonsOf("sheet-stepper-bottom")] };
+      out.stepOne = t.click(t.control("bottomNext")) && shape();
+      out.stepTwo = t.click(t.control("next")) && shape();
+      out.stepThree = t.click(t.control("bottomPrevious")) && shape();
+      t.click(t.control("bottomNext"));
+      out.last = shape();
+      out.pastEnd = [t.click(t.control("bottomNext")), t.click(t.control("next"))];
+      t.click(t.control("previous"));
+      t.click(t.control("bottomPrevious"));
+      out.back = shape();
+      out.pastStart = [t.click(t.control("bottomPrevious")), t.click(t.control("previous"))];
+      return out;
+    """)
+    assert result["first"] == {"open": "plan-day", "label": "Item 1 of 3", "top": [True, False], "bottom": [True, False], "hidden": [False, False]}
+    assert result["labels"] == ["‹ Previous", "Next ›"], "the bottom stepper carries more than the two buttons"
+    pair = [["‹ Previous", "sh-button", "button"], ["Next ›", "sh-button", "button"]]
+    assert result["buttons"] == [pair, pair]
+    assert result["stepOne"] == {"open": "fridge-check", "label": "Item 2 of 3", "top": [False, False], "bottom": [False, False], "hidden": [False, False]}
+    assert result["stepTwo"] == {"open": "third-card", "label": "Item 3 of 3", "top": [False, True], "bottom": [False, True], "hidden": [False, False]}
+    assert result["stepThree"] == result["stepOne"]
+    assert result["last"]["open"] == "third-card" and result["last"]["bottom"] == result["last"]["top"] == [False, True]
+    assert result["pastEnd"] == [False, False]
+    assert result["back"] == result["first"]
+    assert result["pastStart"] == [False, False]
+
+    # A sheet with one card has nowhere to step, on either pair.
+    single = _answer_page(_named_cards("plan-day"), "return { top: t.stepper(), bottom: t.bottomStepper() };")
+    assert single["top"] == {"hidden": False, "label": "Item 1 of 1", "prevDisabled": True, "nextDisabled": True}
+    assert single["bottom"] == {"hidden": False, "labels": ["‹ Previous", "Next ›"], "prevDisabled": True, "nextDisabled": True}
+
+    # A final sheet with no cards shows neither.
+    empty = _sheet_page(_sample_final(cards=[]), "return { top: t.stepper().hidden, bottom: t.bottomStepper().hidden };")
+    assert empty == {"top": True, "bottom": True}
+
+
+# A picture's share at the frame point (250, 150), for the zoom tests: how far across and down the picture that point sits.
+SHARE = """
+  const share = (shown) => [
+    (shown.left + 250 - Math.max(0, (400 - shown.width) / 2)) / shown.width,
+    (shown.top + 150 - Math.max(0, (300 - shown.height) / 2)) / shown.height,
+  ];
+"""
+# A ctrl wheel (a trackpad pinch) at the frame point (250, 150), the frame's corner being at (10, 20).
+WHEEL = """
+  view.frame.rect = { left: 10, top: 20 };
+  const wheel = (fields) => t.fire(view.frame, "wheel", Object.assign({ ctrlKey: true, deltaMode: 0, deltaY: 0, clientX: 260, clientY: 170 }, fields));
+"""
+FIT = {"width": 400, "height": 200, "left": 0, "top": 0}
+
+
+# Bites on: a wheel listener that is passive (so the browser's own page zoom cannot be cancelled), a ctrl wheel that is not cancelled, a zoom that is not exp(-deltaY / 100) of the current size (capped at one step an event), one that slides the picture point under the pointer (including zooming about the frame's corner), that passes the 1 to 4 limits, that reads a line or page delta as pixels, or that acts while the view is shut or the picture has no size.
+def test_a_ctrl_wheel_zooms_about_the_pointer():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + WHEEL + """
+      const out = { options: view.frame.listenerOptions.wheel.map((options) => (options ? options.passive : null)), fit: t.shown() };
+      // One event moves the zoom one capped step, so reaching a limit takes a run of large events.
+      const run = (deltaY) => { for (let i = 0; i < 20; i++) wheel({ deltaY: deltaY }); };
+      const zoom = wheel({ deltaY: -100 });
+      out.prevented = zoom.defaultPrevented;
+      out.zoomed = t.shown();
+      out.shareBefore = share(out.fit);
+      out.shareAfter = share(out.zoomed);
+      run(-100000);
+      out.top = t.shown();
+      run(100000);
+      out.bottom = t.shown();
+      // A line delta counts 16 px a line, and a page delta the frame's height (300 px); both stay under the step cap.
+      const lines = wheel({ deltaMode: 1, deltaY: -1 });
+      out.lines = [lines.defaultPrevented, t.shown()];
+      run(100000);
+      wheel({ deltaY: -16 });
+      out.pixels = t.shown();
+      run(100000);
+      wheel({ deltaMode: 2, deltaY: -0.05 });
+      out.pages = t.shown();
+      run(100000);
+      wheel({ deltaY: -15 });
+      out.pagePixels = t.shown();
+      run(100000);
+      const none = wheel({ deltaY: 0 });
+      out.none = [none.defaultPrevented, t.shown()];
+      // With the view shut, or open with no picture sized, a wheel is left alone.
+      t.click(view.close);
+      const shut = wheel({ deltaY: -100 });
+      t.click(t.pictures("pic-card")[0]);
+      const unsized = wheel({ deltaY: -100 });
+      out.left = [shut.defaultPrevented, unsized.defaultPrevented, t.shown().width];
+      return out;
+    """)
+    assert result["options"] == [False], "the wheel listener is not registered with passive: false"
+    assert result["fit"] == FIT
+    assert result["prevented"] is True
+    assert abs(result["zoomed"]["width"] - 500) <= 1 and abs(result["zoomed"]["height"] - 250) <= 1
+    assert result["shareBefore"] == [0.625, 0.5]
+    assert all(abs(after - before) < 0.005 for after, before in zip(result["shareAfter"], result["shareBefore"])), result["shareAfter"]
+    assert (result["top"]["width"], result["top"]["height"]) == (1600, 800), "a run of large pinches out went past the zoom limit"
+    assert result["bottom"] == FIT, "a run of large pinches in went below fit"
+    assert result["lines"][0] is True and result["lines"][1]["width"] > 400 and result["lines"][1] == result["pixels"], "a line delta did not count as 16 px"
+    assert result["pages"]["width"] > 400 and result["pages"] == result["pagePixels"], "a page delta did not count as the frame's height"
+    assert result["none"] == [True, FIT]
+    assert result["left"] == [False, False, 0]
+
+
+# Bites on: one large wheel event (a mouse notch) zooming by more than one 1.25 step in either direction (a missing upper or lower per-event cap), or the cap changing how a small trackpad-pinch event zooms (a changed small-delta curve, exp(-deltaY / 100)). The zoom-out checks start at the 4x ceiling so none lands on fit or the ceiling.
+def test_one_wheel_notch_zooms_one_step_and_a_trackpad_pinch_is_unchanged():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + WHEEL + """
+      const out = { fit: t.shown() };
+      const run = (deltaY) => { for (let i = 0; i < 20; i++) wheel({ deltaY: deltaY }); };
+      wheel({ deltaY: -100000 });
+      out.notchIn = t.shown().width;
+      run(100000);
+      out.backToFit = t.shown();
+      wheel({ deltaY: -10 });
+      out.pinchIn = t.shown().width;
+      run(-100000);
+      out.ceiling = t.shown().width;
+      wheel({ deltaY: 100000 });
+      out.notchOut = t.shown().width;
+      wheel({ deltaY: 10 });
+      out.pinchOut = t.shown().width;
+      return out;
+    """)
+    assert result["fit"] == FIT
+    assert abs(result["notchIn"] - 500) <= 1, "one large wheel event zoomed by more than one step"
+    assert result["backToFit"] == FIT, "the run back to fit did not reach fit, so the pinch check does not start there"
+    assert abs(result["pinchIn"] - 400 * 2.718281828 ** 0.1) <= 1, "a small pinch event no longer follows exp(-deltaY / 100)"
+    assert result["ceiling"] == 1600, "the run of large events in did not reach the ceiling, so the zoom-out checks do not start there"
+    assert abs(result["notchOut"] - 1600 / 1.25) <= 1, "one large wheel event out was not one step back from the ceiling"
+    assert abs(result["pinchOut"] - 1280 * 2.718281828 ** -0.1) <= 1, "a small pinch out event no longer follows exp(-deltaY / 100)"
+
+
+# Bites on: a wheel without ctrlKey being cancelled or zooming the picture, so a plain scroll or two-finger drag no longer pans the frame.
+def test_a_plain_wheel_does_not_zoom():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + WHEEL + """
+      wheel({ deltaY: -100 });
+      const zoomed = t.shown();
+      const plain = wheel({ ctrlKey: false, deltaY: -100 });
+      const bare = t.fire(view.frame, "wheel", { deltaY: -100, deltaMode: 0, clientX: 260, clientY: 170 });
+      return { zoomed: zoomed, afterPlain: t.shown(), plain: plain.defaultPrevented, bare: bare.defaultPrevented };
+    """)
+    assert result["zoomed"]["width"] > 400, "the ctrl wheel did not zoom, so the test proves nothing"
+    assert result["afterPlain"] == result["zoomed"], "a plain wheel zoomed the picture"
+    assert result["plain"] is False and result["bare"] is False, "a plain wheel was cancelled"
+
+
+# Bites on: a Safari pinch that multiplies each change into the current zoom instead of the zoom the gesture began at, that does not zoom about the pointer, that is not cancelled, that carries one gesture's start into the next, that zooms with no gesture begun (also after Close and reopen), or that works while the view is shut.
+def test_a_safari_gesture_zooms_from_where_it_began():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { fit: t.shown(), prevented: [] };
+      const gesture = (type, fields) => t.fire(view.frame, type, Object.assign({ clientX: 260, clientY: 170 }, fields));
+      const sent = (type, fields) => {
+        const event = gesture(type, fields);
+        out.prevented.push(event.defaultPrevented);
+      };
+      sent("gesturestart", { scale: 1 });
+      sent("gesturechange", { scale: 1.1 });
+      out.first = t.shown();
+      sent("gesturechange", { scale: 1.2 });
+      out.second = t.shown();
+      out.shareAfter = share(out.second);
+      sent("gestureend", { scale: 1.2 });
+      sent("gesturestart", { scale: 1 });
+      sent("gesturechange", { scale: 1.5 });
+      out.third = t.shown();
+      sent("gestureend", { scale: 1.5 });
+      gesture("gesturechange", { scale: 2 });
+      out.lone = t.shown();
+      // A gesture left unfinished when the view closes does not carry over to the next picture.
+      sent("gesturestart", { scale: 1 });
+      t.click(view.close);
+      t.click(t.pictures("pic-card")[0]);
+      t.loadView([800, 400], [400, 300]);
+      gesture("gesturechange", { scale: 2 });
+      out.reopened = t.shown();
+      t.click(view.close);
+      out.shut = gesture("gesturestart", { scale: 1 }).defaultPrevented;
+      return out;
+    """)
+    assert result["fit"] == FIT
+    assert result["first"]["width"] == 440
+    assert result["second"]["width"] == 480, "the second change was counted on top of the first (528)"
+    assert result["shareAfter"] == pytest.approx([0.625, 0.5], abs=0.005)
+    assert result["third"]["width"] == 720, "a new gesture did not start from the zoom the last one ended at (1.2 x 1.5 = 1.8)"
+    assert result["prevented"] == [True] * 8, result["prevented"]
+    assert result["lone"] == result["third"], "a gesture change with no gesture begun zoomed"
+    assert result["reopened"] == FIT, "a gesture begun before Close zoomed the next picture"
+    assert result["shut"] is False
+
+
+# Bites on: a Safari gesture that zooms (or records a start) while a two-finger pointer pinch is down, so one pinch is applied by two formulas; or a ctrl wheel that zooms while a gesture is in flight, so one trackpad pinch is applied by the wheel and the gesture both.
+def test_one_pinch_is_zoomed_by_one_source_only():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { fit: t.shown(), prevented: [] };
+      const gesture = (type, fields) => {
+        const event = t.fire(view.frame, type, Object.assign({ clientX: 260, clientY: 170 }, fields));
+        out.prevented.push(event.defaultPrevented);
+      };
+      // A pointer pinch (fingers 100 px apart come to 200) with gesture events in flight: the pointer formula alone, a zoom of 2.
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 360, 170);
+      gesture("gesturestart", { scale: 1 });
+      p("pointermove", 2, 460, 170);
+      gesture("gesturechange", { scale: 3 });
+      out.pointerPinch = t.shown();
+      p("pointerup", 1, 260, 170);
+      p("pointerup", 2, 460, 170);
+      // The gesture that began under the pinch recorded no start, so a change after the fingers lift zooms nothing.
+      gesture("gesturechange", { scale: 3 });
+      out.afterLift = t.shown();
+      gesture("gestureend", { scale: 3 });
+      // A ctrl wheel during a gesture: the gesture's formula alone, from where it began (2 x 1.5 = 3).
+      gesture("gesturestart", { scale: 1 });
+      t.fire(view.frame, "wheel", { ctrlKey: true, deltaMode: 0, deltaY: -100, clientX: 260, clientY: 170 });
+      gesture("gesturechange", { scale: 1.5 });
+      out.gesture = t.shown();
+      const wheel = t.fire(view.frame, "wheel", { ctrlKey: true, deltaMode: 0, deltaY: -100, clientX: 260, clientY: 170 });
+      out.wheelPrevented = wheel.defaultPrevented;
+      out.afterWheel = t.shown();
+      return out;
+    """)
+    assert result["pointerPinch"]["width"] == 800, "the pointer pinch was zoomed by the gesture as well"
+    assert result["afterLift"] == result["pointerPinch"], "a gesture under a pointer pinch recorded a start"
+    assert result["gesture"]["width"] == 1200, "the ctrl wheel zoomed during a gesture"
+    assert result["wheelPrevented"] is True
+    assert result["afterWheel"] == result["gesture"], "a ctrl wheel zoomed while a gesture was in flight"
+    assert all(result["prevented"]), result["prevented"]
+
+
+# Bites on: a Safari gesture that began before any finger was down zooming a two-finger pointer pinch as well, so one pinch is applied by two formulas.
+def test_a_gesture_begun_before_the_fingers_never_zooms_with_the_pinch():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { prevented: [] };
+      const gesture = (type, fields) => {
+        const event = t.fire(view.frame, type, Object.assign({ clientX: 260, clientY: 170 }, fields));
+        out.prevented.push(event.defaultPrevented);
+      };
+      // The gesture starts with no finger down, so it records a start; the fingers then come down and spread (100 px apart to 200).
+      gesture("gesturestart", { scale: 1 });
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 360, 170);
+      p("pointermove", 2, 460, 170);
+      // The pointer formula alone is a zoom of 2; a gesture change under the pinch zooms nothing more.
+      gesture("gesturechange", { scale: 3 });
+      out.pinch = t.shown();
+      return out;
+    """)
+    assert result["pinch"]["width"] == 800, "a gesture begun before the fingers zoomed the pinch as well"
+    assert len(result["prevented"]) == 2 and all(result["prevented"]), result["prevented"]

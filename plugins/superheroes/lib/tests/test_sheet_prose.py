@@ -603,9 +603,14 @@ def test_prose_letters_options_past_z(tmp_path):
 HISTORY_LINE = "**How the spec got here.** The review ran 3 rounds and fixed 1 thing itself. The vet: The vet found nothing."
 TRACES_BOARD_LINE = "- Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto."
 TRACES_NO_BOARD_LINE = "- Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto."
-NEXT_LINE = ("**What happens next.** The advisor adds the breakdown to the same PR (or, where the project keeps specs outside "
-             "the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both.")
+NEXT_LINE = ("**What happens next.** Once you've chosen Approve and said in the chat that you're done, the advisor adds the "
+             "breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, beside the spec where "
+             "it is kept) and vets it, and an independent read of the breakdown still runs where it applies. Then one merge word "
+             "from you covers both, and the issues are filed as it merges. If another answer here changes the spec, the spec "
+             "goes back through its checks, a new vet and a new approval first.")
 APPROVE_ANSWER_LINE = "- Answer: Approve or Not yet, with any note."
+WORDS = json.loads((PLUGIN / "theme" / "sheet-words.json").read_text(encoding="utf-8"))
+DONE_STEP_LINE = "- " + WORDS["doneStepInChat"]
 TWO_DECLINES = [("Add a counter.", "It is out of scope."), ("Add a theme.", "It costs too much.")]
 DECLINED_LINES = ["**Declined findings (2).**", "- Add a counter. (why declined: It is out of scope.)",
                   "- Add a theme. (why declined: It costs too much.)", ""]
@@ -623,26 +628,26 @@ FINAL_CASES = {
     "board saved, two declines, two cards": (
         _final_sheet(declined=TWO_DECLINES),
         ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES + TWO_CARD_LINES
-        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE,
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE, DONE_STEP_LINE,
            "", NEXT_LINE]),
     "board not saved": (
         _final_sheet(declined=TWO_DECLINES, saved=False),
         ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES + TWO_CARD_LINES
-        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is not saved with the spec.", APPROVE_ANSWER_LINE,
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is not saved with the spec.", APPROVE_ANSWER_LINE, DONE_STEP_LINE,
            "", NEXT_LINE]),
     "no board": (
         _final_sheet(declined=TWO_DECLINES, approved=False, saved=False),
         ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES + TWO_CARD_LINES
-        + ["**Approve the spec?**", TRACES_NO_BOARD_LINE, APPROVE_ANSWER_LINE, "", NEXT_LINE]),
+        + ["**Approve the spec?**", TRACES_NO_BOARD_LINE, APPROVE_ANSWER_LINE, DONE_STEP_LINE, "", NEXT_LINE]),
     "no declines": (
         _final_sheet(),
         ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + NO_DECLINES_LINES + TWO_CARD_LINES
-        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE,
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE, DONE_STEP_LINE,
            "", NEXT_LINE]),
     "zero cards": (
         _final_sheet(declined=TWO_DECLINES, cards=[]),
         ["**Spec review**: 0 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES
-        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE,
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE, DONE_STEP_LINE,
            "", NEXT_LINE]),
 }
 
@@ -656,6 +661,37 @@ def test_prose_renders_a_final_sheet(tmp_path, name):
     assert result.stdout == "\n".join(lines) + "\n"
     assert result.stderr == ""
     assert not [line for line in result.stdout.split("\n") if line != line.rstrip()]
+
+
+# Bites on: the final tail not printing the chat's version of the done step (read from sheet-words.json) on the line straight after the answer line, printing it anywhere else, or printing the page's version.
+@pytest.mark.parametrize("name", sorted(FINAL_CASES))
+def test_prose_prints_the_done_step_for_the_chat_straight_after_the_answer_line(tmp_path, name):
+    sheet, _ = FINAL_CASES[name]
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.split("\n")
+    at = lines.index(APPROVE_ANSWER_LINE)
+    assert lines[at + 1] == "- " + WORDS["doneStepInChat"]
+    assert lines.count("- " + WORDS["doneStepInChat"]) == 1
+    assert WORDS["doneStep"] not in result.stdout, "the prose printed the page's done step"
+
+
+# Bites on: the "What happens next" words dropping a step that follows approval (the trigger, the hold, the breakdown, its independent read, the one merge word, the filed issues).
+def test_the_next_line_says_every_step_after_approval():
+    words = WORDS["next"]
+    steps = [
+        ("chosen Approve", "the Approve choice that starts it"),
+        ("said in the chat that you're done", "the owner saying in the chat they're done"),
+        ("adds the breakdown to the same PR", "the advisor adding the breakdown to the same PR"),
+        ("beside the spec where it is kept", "the breakdown going beside a spec kept outside the PR"),
+        ("vets it", "the advisor vetting the breakdown"),
+        ("an independent read of the breakdown still runs where it applies", "the independent read of the breakdown"),
+        ("one merge word from you covers both", "the one merge word covering both"),
+        ("the issues are filed as it merges", "the issues being filed as it merges"),
+        ("goes back through its checks, a new vet and a new approval first", "the hold when another answer changes the spec"),
+    ]
+    for phrase, step in steps:
+        assert phrase in words, "the next line leaves out " + step
 
 
 def _unescaped(text):

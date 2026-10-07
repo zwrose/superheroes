@@ -362,7 +362,7 @@ def _final_tail(final):
     lines = ["**%s**" % WORDS["approveHeading"], "- " + (TRACES_BOARD if approval["approvedBoard"] else TRACES_NO_BOARD)]
     if approval["approvedBoard"]:
         lines.append("- " + (BOARD_SAVED if approval["boardSavedWithSpec"] else BOARD_NOT_SAVED))
-    return lines + ["- Answer: Approve or Not yet, with any note.", "", "**%s.** %s" % (WORDS["nextHeading"], NEXT), ""]
+    return lines + ["- Answer: Approve or Not yet, with any note.", "- " + WORDS["doneStepInChat"], "", "**%s.** %s" % (WORDS["nextHeading"], NEXT), ""]
 
 
 def render(sheet):
