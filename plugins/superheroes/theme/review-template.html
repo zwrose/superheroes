@@ -622,6 +622,8 @@
     const sheetPage = document.querySelector(".sheet-page");
     const ZOOM_MAX = 4;
     const DOUBLE_TAP_ZOOM = 2.5;
+    // A mouse wheel notch is a large delta, so each wheel event is capped to one step in either direction.
+    const WHEEL_STEP_MAX = 1.25;
     // Two taps make a double-tap when they are this close in time and in distance, with no drag between them.
     const DOUBLE_TAP_MS = 300;
     const DOUBLE_TAP_PX = 24;
@@ -803,7 +805,8 @@
       if (gestureStart !== null) return;
       const dy = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewerFrame.clientHeight : 1);
       const point = framePoint(event.clientX, event.clientY);
-      zoomTo(scale * Math.exp(-dy * 0.01), point.x, point.y);
+      const factor = Math.min(WHEEL_STEP_MAX, Math.max(1 / WHEEL_STEP_MAX, Math.exp(-dy * 0.01)));
+      zoomTo(scale * factor, point.x, point.y);
     }, { passive: false });
 
     // Safari sends its own gesture events for a trackpad pinch; each one's scale counts from the gesture's start.
@@ -1075,6 +1078,11 @@
         refreshSheet();
       }
 
+      // What the line shows for a state the store holds: saved when it carries an answer or a note, quiet otherwise.
+      function heldStatus(state) {
+        return state.answer !== null || state.note !== "" ? "saved" : "idle";
+      }
+
       // Any change to the answer or the note clears what the status said and shows that a save is due.
       function setLatest(next) {
         if (sameAnswer(next, latest)) return;
@@ -1091,7 +1099,7 @@
         if (!ready) return;
         if (inFlight !== null) return;
         if (forced !== true && sameAnswer(latest, acked)) {
-          if (shown === "saving") showStatus("idle");
+          if (shown === "saving") showStatus(heldStatus(acked));
           return;
         }
         send();
@@ -1146,7 +1154,7 @@
           note.value = state.note;
           paint();
           // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
-          showStatus(state.answer !== null || state.note !== "" ? "saved" : "idle");
+          showStatus(heldStatus(state));
         },
         // Turns the controls (and a Try again on the save line) on or off.
         setEnabled: function (on) {

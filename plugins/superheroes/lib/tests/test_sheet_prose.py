@@ -604,9 +604,10 @@ HISTORY_LINE = "**How the spec got here.** The review ran 3 rounds and fixed 1 t
 TRACES_BOARD_LINE = "- Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto."
 TRACES_NO_BOARD_LINE = "- Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto."
 NEXT_LINE = ("**What happens next.** Once you've chosen Approve and said in the chat that you're done, the advisor adds the "
-             "breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, to the spec where it is "
-             "kept) and vets it, then one merge word covers both. If another answer here changes the spec, the spec goes back "
-             "through its checks, a new vet and a new approval first.")
+             "breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, beside the spec where "
+             "it is kept) and vets it, and an independent read of the breakdown still runs where it applies. Then one merge word "
+             "from you covers both, and the issues are filed as it merges. If another answer here changes the spec, the spec "
+             "goes back through its checks, a new vet and a new approval first.")
 APPROVE_ANSWER_LINE = "- Answer: Approve or Not yet, with any note."
 WORDS = json.loads((PLUGIN / "theme" / "sheet-words.json").read_text(encoding="utf-8"))
 DONE_STEP_LINE = "- " + WORDS["doneStepInChat"]
@@ -673,6 +674,24 @@ def test_prose_prints_the_done_step_for_the_chat_straight_after_the_answer_line(
     assert lines[at + 1] == "- " + WORDS["doneStepInChat"]
     assert lines.count("- " + WORDS["doneStepInChat"]) == 1
     assert WORDS["doneStep"] not in result.stdout, "the prose printed the page's done step"
+
+
+# Bites on: the "What happens next" words dropping a step that follows approval (the trigger, the hold, the breakdown, its independent read, the one merge word, the filed issues).
+def test_the_next_line_says_every_step_after_approval():
+    words = WORDS["next"]
+    steps = [
+        ("chosen Approve", "the Approve choice that starts it"),
+        ("said in the chat that you're done", "the owner saying in the chat they're done"),
+        ("adds the breakdown to the same PR", "the advisor adding the breakdown to the same PR"),
+        ("beside the spec where it is kept", "the breakdown going beside a spec kept outside the PR"),
+        ("vets it", "the advisor vetting the breakdown"),
+        ("an independent read of the breakdown still runs where it applies", "the independent read of the breakdown"),
+        ("one merge word from you covers both", "the one merge word covering both"),
+        ("the issues are filed as it merges", "the issues being filed as it merges"),
+        ("goes back through its checks, a new vet and a new approval first", "the hold when another answer changes the spec"),
+    ]
+    for phrase, step in steps:
+        assert phrase in words, "the next line leaves out " + step
 
 
 def _unescaped(text):

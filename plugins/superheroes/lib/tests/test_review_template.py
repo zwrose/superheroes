@@ -2817,9 +2817,10 @@ BOARD_SAVED = "The approved board is saved with the spec."
 BOARD_NOT_SAVED = "The approved board is not saved with the spec."
 NEXT_TEXT = (
     "Once you've chosen Approve and said in the chat that you're done, the advisor adds the breakdown to the same PR "
-    "(or, where the project keeps specs outside the repo or gitignored, to the spec where it is kept) and vets it, "
-    "then one merge word covers both. If another answer here changes the spec, the spec goes back through its checks, "
-    "a new vet and a new approval first."
+    "(or, where the project keeps specs outside the repo or gitignored, beside the spec where it is kept) and vets it, "
+    "and an independent read of the breakdown still runs where it applies. Then one merge word from you covers both, "
+    "and the issues are filed as it merges. If another answer here changes the spec, the spec goes back through its "
+    "checks, a new vet and a new approval first."
 )
 DECLINED_ITEMS = [
     ["li", "Add a calorie count to every recipe on the plan. (why declined: Nothing in your framing asks for nutrition numbers, so adding them would be new scope.)"],
@@ -2981,7 +2982,7 @@ def test_no_sheet_draws_done_for_now(sheet, card, read):
     assert "sheet-done" not in text and not re.search(r"(?i)done for now|back to the sheet", text)
 
 
-# Bites on: a final sheet drawing a Send verdict control or a send row, in any state (loading, loaded, a pick whose save was rejected, or no digest).
+# Bites on: a final sheet, or the theme specimen, drawing a Send verdict control or a send row, in any state (loading, loaded, a pick whose save was rejected, or no digest).
 @pytest.mark.parametrize("host,tap", [
     pytest.param({"read": "pending"}, False, id="loading"),
     pytest.param({}, False, id="loaded"),
@@ -3008,6 +3009,7 @@ def test_a_final_sheet_has_no_send_verdict(host, tap):
     empty = {"buttons": [], "text": [], "rows": []}
     assert all(snapshot == empty for snapshot in result.values()), result
     assert "Send verdict" not in _template_text()
+    assert "Send verdict" not in (THEME / "specimen.html").read_text(encoding="utf-8"), "the theme specimen shows a Send verdict button"
 
 
 # Bites on: a verdict tap or its note being written anywhere but verdict/<digest> (a draft path, a sends path, or as an answer), a tap not saving at once, a note not waiting for its pause, a body that does not fit $defs/verdict or whose sheet is not the digest of the served bytes, a save line that says Saved before the write resolved, or the last card feeding the count or the rows.
@@ -3112,6 +3114,53 @@ def test_a_reopened_sheet_shows_each_restored_answer_and_the_verdict_as_saved():
     noted = reopen(_verdict(None, "Only a note", sheet=digest))
     assert noted["last"] == "Saved", "a verdict document that restores only a note showed no save line"
     assert noted["sets"] == []
+
+
+# Bites on: a note typed over and then put back to what the store holds (inside its pause) leaving the save line quiet instead of Saved, a card with nothing stored showing Saved after the same round trip, or that round trip writing anything.
+def test_an_edit_undone_inside_the_pause_still_shows_saved():
+    sheet = _sample_final()
+    third = copy.deepcopy(sheet["cards"][0])
+    third["id"] = "third-one"
+    sheet["cards"].append(third)
+    digest = _sheet_digest(sheet)
+    docs = [{"id": "saved-plan-history", "data": _doc("aligned", None, "agreed")}]
+    collections = {"answers": docs, "verdict": [{"id": digest, "data": _verdict("approve", "Looks right", sheet=digest)}]}
+
+    result = _sheet_page(sheet, """
+      await t.advance(200);
+      const out = {};
+      t.open("saved-plan-history");
+      const note = t.note("saved-plan-history");
+      t.type(note, "agreed!", "input");
+      out.typedOver = t.saveText("saved-plan-history");
+      t.type(note, "agreed", "input");
+      await t.advance(1500);
+      out.card = t.saveText("saved-plan-history");
+      out.cardSets = t.setLog();
+
+      const verdictNote = t.lastNote();
+      t.type(verdictNote, "Looks right!", "input");
+      t.type(verdictNote, "Looks right", "input");
+      await t.advance(1500);
+      out.verdict = t.lastSaveText();
+      out.verdictSets = t.setLog();
+
+      t.open("third-one");
+      const blank = t.note("third-one");
+      t.type(blank, "x", "input");
+      t.type(blank, "", "input");
+      await t.advance(1500);
+      out.blank = t.saveText("third-one");
+      out.blankSets = t.setLog();
+      return out;
+    """, host={"fakeTimers": True, "collections": collections})
+    assert result["typedOver"] == "Saving…"
+    assert result["card"] == "Saved", "an edit undone inside the pause left the restored note's save line quiet"
+    assert result["cardSets"] == [], "an edit undone inside the pause was written"
+    assert result["verdict"] == "Saved", "an edit undone inside the pause left the restored verdict's save line quiet"
+    assert result["verdictSets"] == [], "an edit undone inside the pause was written"
+    assert result["blank"] == "", "a card with nothing stored showed Saved after an edit undone"
+    assert result["blankSets"] == [], "a card with nothing stored was written after an edit undone"
 
 
 # Bites on: a verdict written for another revision of the sheet being restored on reopen (by its id or by its sheet field), a republished sheet not starting unsigned, or a page showing one revision writing to another revision's document.
@@ -3560,32 +3609,34 @@ WHEEL = """
 FIT = {"width": 400, "height": 200, "left": 0, "top": 0}
 
 
-# Bites on: a wheel listener that is passive (so the browser's own page zoom cannot be cancelled), a ctrl wheel that is not cancelled, a zoom that is not exp(-deltaY / 100) of the current size, one that slides the picture point under the pointer (including zooming about the frame's corner), that passes the 1 to 4 limits, that reads a line or page delta as pixels, or that acts while the view is shut or the picture has no size.
+# Bites on: a wheel listener that is passive (so the browser's own page zoom cannot be cancelled), a ctrl wheel that is not cancelled, a zoom that is not exp(-deltaY / 100) of the current size (capped at one step an event), one that slides the picture point under the pointer (including zooming about the frame's corner), that passes the 1 to 4 limits, that reads a line or page delta as pixels, or that acts while the view is shut or the picture has no size.
 def test_a_ctrl_wheel_zooms_about_the_pointer():
     result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + WHEEL + """
       const out = { options: view.frame.listenerOptions.wheel.map((options) => (options ? options.passive : null)), fit: t.shown() };
+      // One event moves the zoom one capped step, so reaching a limit takes a run of large events.
+      const run = (deltaY) => { for (let i = 0; i < 20; i++) wheel({ deltaY: deltaY }); };
       const zoom = wheel({ deltaY: -100 });
       out.prevented = zoom.defaultPrevented;
       out.zoomed = t.shown();
       out.shareBefore = share(out.fit);
       out.shareAfter = share(out.zoomed);
-      wheel({ deltaY: -100000 });
+      run(-100000);
       out.top = t.shown();
-      wheel({ deltaY: 100000 });
+      run(100000);
       out.bottom = t.shown();
-      // A line delta counts 16 px a line, and a page delta the frame's height (300 px).
-      const lines = wheel({ deltaMode: 1, deltaY: -5 });
+      // A line delta counts 16 px a line, and a page delta the frame's height (300 px); both stay under the step cap.
+      const lines = wheel({ deltaMode: 1, deltaY: -1 });
       out.lines = [lines.defaultPrevented, t.shown()];
-      wheel({ deltaY: 100000 });
-      wheel({ deltaY: -80 });
+      run(100000);
+      wheel({ deltaY: -16 });
       out.pixels = t.shown();
-      wheel({ deltaY: 100000 });
-      wheel({ deltaMode: 2, deltaY: -0.5 });
+      run(100000);
+      wheel({ deltaMode: 2, deltaY: -0.05 });
       out.pages = t.shown();
-      wheel({ deltaY: 100000 });
-      wheel({ deltaY: -150 });
+      run(100000);
+      wheel({ deltaY: -15 });
       out.pagePixels = t.shown();
-      wheel({ deltaY: 100000 });
+      run(100000);
       const none = wheel({ deltaY: 0 });
       out.none = [none.defaultPrevented, t.shown()];
       // With the view shut, or open with no picture sized, a wheel is left alone.
@@ -3599,15 +3650,36 @@ def test_a_ctrl_wheel_zooms_about_the_pointer():
     assert result["options"] == [False], "the wheel listener is not registered with passive: false"
     assert result["fit"] == FIT
     assert result["prevented"] is True
-    assert abs(result["zoomed"]["width"] - 400 * 2.718281828) <= 1 and abs(result["zoomed"]["height"] - 200 * 2.718281828) <= 1
+    assert abs(result["zoomed"]["width"] - 500) <= 1 and abs(result["zoomed"]["height"] - 250) <= 1
     assert result["shareBefore"] == [0.625, 0.5]
     assert all(abs(after - before) < 0.005 for after, before in zip(result["shareAfter"], result["shareBefore"])), result["shareAfter"]
-    assert (result["top"]["width"], result["top"]["height"]) == (1600, 800), "a large pinch out went past the zoom limit"
-    assert result["bottom"] == FIT, "a large pinch in went below fit"
+    assert (result["top"]["width"], result["top"]["height"]) == (1600, 800), "a run of large pinches out went past the zoom limit"
+    assert result["bottom"] == FIT, "a run of large pinches in went below fit"
     assert result["lines"][0] is True and result["lines"][1]["width"] > 400 and result["lines"][1] == result["pixels"], "a line delta did not count as 16 px"
     assert result["pages"]["width"] > 400 and result["pages"] == result["pagePixels"], "a page delta did not count as the frame's height"
     assert result["none"] == [True, FIT]
     assert result["left"] == [False, False, 0]
+
+
+# Bites on: one large wheel event (a mouse notch) zooming by more than one 1.25 step in either direction, or the cap changing how a small trackpad-pinch event zooms (exp(-deltaY / 100)).
+def test_one_wheel_notch_zooms_one_step_and_a_trackpad_pinch_is_unchanged():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + WHEEL + """
+      const out = { fit: t.shown() };
+      wheel({ deltaY: -100000 });
+      out.notchIn = t.shown().width;
+      wheel({ deltaY: 100000 });
+      out.notchOut = t.shown().width;
+      wheel({ deltaY: -10 });
+      out.pinchIn = t.shown().width;
+      wheel({ deltaY: 10 });
+      out.pinchOut = t.shown().width;
+      return out;
+    """)
+    assert result["fit"] == FIT
+    assert abs(result["notchIn"] - 500) <= 1, "one large wheel event zoomed by more than one step"
+    assert abs(result["notchOut"] - 400) <= 1, "one large wheel event out was not one step back"
+    assert abs(result["pinchIn"] - 400 * 2.718281828 ** 0.1) <= 1, "a small pinch event no longer follows exp(-deltaY / 100)"
+    assert abs(result["pinchOut"] - 400) <= 1, "a small pinch out event did not return to fit"
 
 
 # Bites on: a wheel without ctrlKey being cancelled or zooming the picture, so a plain scroll or two-finger drag no longer pans the frame.
@@ -3707,3 +3779,26 @@ def test_one_pinch_is_zoomed_by_one_source_only():
     assert result["wheelPrevented"] is True
     assert result["afterWheel"] == result["gesture"], "a ctrl wheel zoomed while a gesture was in flight"
     assert all(result["prevented"]), result["prevented"]
+
+
+# Bites on: a Safari gesture that began before any finger was down zooming a two-finger pointer pinch as well, so one pinch is applied by two formulas.
+def test_a_gesture_begun_before_the_fingers_never_zooms_with_the_pinch():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { prevented: [] };
+      const gesture = (type, fields) => {
+        const event = t.fire(view.frame, type, Object.assign({ clientX: 260, clientY: 170 }, fields));
+        out.prevented.push(event.defaultPrevented);
+      };
+      // The gesture starts with no finger down, so it records a start; the fingers then come down and spread (100 px apart to 200).
+      gesture("gesturestart", { scale: 1 });
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 360, 170);
+      p("pointermove", 2, 460, 170);
+      // The pointer formula alone is a zoom of 2; a gesture change under the pinch zooms nothing more.
+      gesture("gesturechange", { scale: 3 });
+      out.pinch = t.shown();
+      return out;
+    """)
+    assert result["pinch"]["width"] == 800, "a gesture begun before the fingers zoomed the pinch as well"
+    assert len(result["prevented"]) == 2 and all(result["prevented"]), result["prevented"]
