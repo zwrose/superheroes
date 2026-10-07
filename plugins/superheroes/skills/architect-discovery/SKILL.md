@@ -431,7 +431,11 @@ never claim a review that didn't happen, and never offer them a spec that had no
 hardcoded repo path. `<spec path>` below stands for it.
 
 Send one message: "Spec written to `<spec path>` and through the three spec checks. Please review
-it and tell me if you want any changes before it goes to the build."
+it and tell me if you want any changes before it goes to the build." Send that sentence only when
+all three checks ran in the last round of the review and their results were real. When
+`checks-record.md` shows a check that did not run, do not claim all three: say instead that the
+spec went through the checks that ran, name each check that did not run and why in plain words,
+then ask the same review question.
 
 Add the owner's queue to it. Present each queued item with its recommendation and its marks from
 `checks-record.md`. When the record says the reviewer was from the author's own family, add this

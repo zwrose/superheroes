@@ -185,6 +185,9 @@ _DISCOVERY_SECTION_CLAUSES = {
     ],
     "### 8. Owner review & final approval (terminal gate)": [
         "Send one message: \"Spec written to `<spec path>` and through the three spec checks.",
+        "Send that sentence only when all three checks ran in the last round of the review and their results were real.",
+        "When `checks-record.md` shows a check that did not run, do not claim all three",
+        "name each check that did not run and why in plain words",
         "Present each queued item with its recommendation and its marks from `checks-record.md`.",
         "Ask for approval one way, for every spec.",
         "do not press for a verdict in the moment",
