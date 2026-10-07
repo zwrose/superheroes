@@ -150,7 +150,7 @@ are not run — that exit's own artifact closes the work.
 5. **Confirm the framing → owner approves the *what*** ← HARD GATE
 6. **Author the spec** via the `writing-specs` skill
 7. **Run the three spec checks** (fix craft findings before the owner spends time)
-8. **Owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
+8. **Advisor vet, then owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
 
 ## The steps
 
@@ -424,7 +424,14 @@ substitute** — step 6's self-review is the author's own pass and was never ind
 
 ### 8. Owner review & final approval (terminal gate)
 
-Ask the owner to review the written spec. **Tell them the truth about which review ran** —
+**Before the owner is asked, the advisor vets the spec.** Hand the spec's path and the path of its
+`checks-record.md` to the advisor for its vet, whatever the checks found. Ask the owner only after
+the vet reports "ready for your approval". When the vet asks for changes, apply them and run the
+checks again on the changed parts as `spec-checks.md` says in its After rulings section, then hand
+it back for the vet. When discovery runs with no advisor reachable, the draft waits for the vet; if
+that cannot be resolved, the discovery parks (Exit C) with the draft marked unapproved.
+
+Then ask the owner to review the written spec. **Tell them the truth about which review ran** —
 never claim a review that didn't happen, and never offer them a spec that had none.
 
 **Name the real path** — the one `resolve-write --doc spec` reported for this work-item, never a
