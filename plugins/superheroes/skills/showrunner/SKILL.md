@@ -96,12 +96,11 @@ above).
    **An abandoned child of a spec is the delivery-side twin of an abandoned discovery.** **Re-plan** repairs the coverage map and files a replacement child, so a closure moment exists again; **park** parks the spec to the owner on the park surface above. Park is one of two branches, never the only one.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when a spec's child is abandoned.**
 
-   **The review weight on a completed spec draft is yours to call.** When discovery hands you a
-   finished draft, the weight call is the advisor's and no one else's — a discovery session
-   never weighs its own draft. **A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.** Grade **both** classification inputs — the
-   gradable-line count **and** whether any sections interlock — and state both alongside the
-   resulting weight; `light` needs both to hold. The two review paths and the 10-line guideline
-   live in the discovery charter — read them there rather than restating them here.
+   **Every spec draft gets the three spec checks.** Nothing sizes how a spec is reviewed: discovery
+   runs the checks on every draft, by `skills/architect-discovery/reference/spec-checks.md`. You may
+   still size your own vet of a spec; say the size you chose and why.
+
+   **A weight call names `light` or `full`, states its measurables (child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.**
 
    **Vetting a finished spec is yours; approving it never is.** You vet the spec from its
    artifacts against five checks: **review ran and its findings were dispositioned**; **grounding
@@ -116,8 +115,7 @@ above).
 
    **Done when:** every stopped discovery is parked with its note on the owner's reading surface;
    every spec with an abandoned child is either re-planned (its coverage map repaired and a
-   replacement child filed) or parked with its note on the owner's reading surface; every finished spec draft carries your
-   weight call with its measurables; every spec you vetted reached the owner as "ready for your
+   replacement child filed) or parked with its note on the owner's reading surface; every spec you vetted reached the owner as "ready for your
    approval", and every approval is recorded with its date.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
@@ -269,8 +267,7 @@ above).
    a **product question no approved artifact answers** routes **`discovery`** — the spec-trigger
    test decides it, not how small the follow-up looks.
    **Intake routing records the route and the anchor, nothing more** — no discovery size, no lane,
-   and no review weight are assigned when the route is *chosen*; review weight first appears on the
-   spec draft. The **lane call and the presentation call attach to the build-ready marking**, a
+   and no review weight are assigned when the route is *chosen*. The **lane call and the presentation call attach to the build-ready marking**, a
    later act than route selection: an issue routed to `discovery` has nothing to lane yet.
    **`micro` never reaches a builder** — it is your own hard-line edit above, typed in this session
    and recorded in the PR, and probing-worthy micro work re-routes rather than being typed.

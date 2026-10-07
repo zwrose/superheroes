@@ -148,7 +148,7 @@ def test_cli_compiled_all_blockers_skipped_exits_skipped(tmp_path, capsys):
 
 def test_cli_compiled_skip_count_must_be_cumulative_present(tmp_path, capsys):
     # arch-r2-001 regression: a blocker skipped in an earlier round is RE-FLAGGED in compiled.json
-    # every subsequent round (the specialists don't know it was skipped). The revise loops must
+    # every subsequent round (the specialists don't know it was skipped). Callers of the --compiled path must
     # pass SKIPPED_BLOCKING as the CUMULATIVE count of present-and-skipped blockers, not just those
     # newly skipped this round. With the cumulative count, the lone re-flagged skipped blocker
     # yields exit_skipped...

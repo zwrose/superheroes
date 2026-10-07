@@ -66,7 +66,7 @@ EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
   || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
-# FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
+# Surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
 NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
@@ -413,7 +413,7 @@ End of skill — no code edits, no commits, no posting to PRs, no further checks
 
 ## Learning Loop & Staleness Nudge
 
-These four behaviors are **non-blocking**, run **at end of run** (after filing issues and saving the report), and are **identical across `review-code`, `review-spec`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
+These four behaviors are **non-blocking**, run **at end of run** (after filing issues and saving the report), and are **identical across `review-code` and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
 
 ### Recording decisions (at resolution time)
 

@@ -74,7 +74,6 @@ _CONVERSATION_DRIVEN_DISCLOSURE_SURFACES = frozenset({
 # Cross-doc literal-agreement pin: carrier noun is the only per-surface variable.
 _DISCLOSURE_CARRIER_BY_SURFACE = {
     "skills/audit-debt/SKILL.md": "audit report",
-    "skills/review-spec/SKILL.md": "receipt",
     "skills/review-init/SKILL.md": "review-crew layer body",
     "skills/review-code/reference/setup.md": "dispatch summary",
     "skills/test-pilot-init/SKILL.md": "test-pilot layer body",
@@ -97,19 +96,6 @@ _DISCLOSURE_PIN_BY_SURFACE = {
         "and that `/superheroes:configure` changes it. When `.provisional` is `true`, also state "
         "that it is a provisional default rather than an owner choice and will be re-taken on the "
         "next run when not recorded. **Follow-up:** `/superheroes:configure`.\n"
-    ),
-    "skills/review-spec/SKILL.md": (
-        "**Storage location.** `decide-location` JSON: `.mode` (`in-repo`|`global`; `ask` gone), "
-        "`.source`\n"
-        "(`env` — `REVIEW_CREW_STORAGE` override this run, never recorded; `registry` — "
-        "owner-recorded; `backfilled` — inferred then recorded; `provisional` — lib default, "
-        "re-taken next run), `.provisional` (`true` when not owner-recorded). **Default:**\n"
-        "returned `.mode`. Bootstrap blocks never record — unrecorded modes re-taken next run.\n"
-        "**Disclosure.** Write into `$SESSION_DIR/receipt.md` (assembled in §6): mode, source, "
-        "provisional\n"
-        "status, and `/superheroes:configure` follow-up; when `.provisional` is `true`, note it is "
-        "a\n"
-        "provisional default and will be re-taken next run when not recorded.\n"
     ),
     "skills/review-init/SKILL.md": (
         "**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is "

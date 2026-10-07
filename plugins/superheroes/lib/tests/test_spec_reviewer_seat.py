@@ -77,6 +77,15 @@ def test_configured_engine_not_live_is_passed_over():
     assert got["sameFamily"] is True
 
 
+def test_configured_engine_not_live_walks_on_to_another_cross_family_vendor():
+    # Bites on: rule 2's vendor walk skipped once a valid configured engine is unavailable (cursor configured, live [claude, codex] -> codex)
+    got = _resolve("claude", ["claude", "codex"], configured="cursor")
+    assert (got["engine"], got["source"]) == ("codex", "cross-family-installed")
+    assert (got["configuredState"], got["configuredReason"]) == ("valid", "configured-unavailable")
+    assert got["sameFamily"] is False
+    _assert_cell(got)
+
+
 def test_unset_only_claude_live_falls_back_to_same_family():
     # Bites on: rule 2 dropping the family-differs condition (live [claude] must reach same-family-fallback)
     got = _resolve("claude", ["claude"])
@@ -199,6 +208,15 @@ def test_verb_honors_a_configured_spec_reviewer_loaded_from_disk(tmp_path):
     assert proc.returncode == 0, proc.stderr
     got = json.loads(proc.stdout)
     assert (got["engine"], got["source"]) == ("cursor", "configured")
+
+
+def test_verb_configured_engine_without_a_cli_walks_on_to_another_vendor(tmp_path):
+    # Bites on: the verb's vendor walk skipped when the configured engine has no CLI (cursor configured, only codex on PATH -> codex)
+    proc = _verb(tmp_path, fake_binaries=["codex"], configured="cursor")
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    assert (got["engine"], got["source"]) == ("codex", "cross-family-installed")
+    assert (got["configured"], got["configuredReason"]) == ("cursor", "configured-unavailable")
 
 
 def test_verb_does_not_count_a_signed_out_cli_as_live(tmp_path):

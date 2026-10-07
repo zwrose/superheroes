@@ -216,7 +216,7 @@ small the diff or how it was built (direct build, external engine, fix PR,
 fast-follow):
 
 - **Work driven through the review skills reviews itself** — the cross-vendor review
-  panels (review-code, and the spec panel) are the review.
+  panel (review-code's, and for a spec the spec checks) is the review.
 - **The full lane** ends a direct build with `/superheroes:review-code` (the full panel
   and fix loop) before handback. An **explicit owner-directed review** remains a valid
   ending, and it is **recorded as a cited skip of the driver loop with the owner's

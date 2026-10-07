@@ -131,20 +131,19 @@ specifying; or a park note, when it stops before reaching an answer — never si
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:architect-discovery` | Turn an idea into an owner-approved requirements **spec**. |
-| `/superheroes:review-spec` | Red-team a draft spec before the owner gives final approval. |
 
 ## Review Crew
 
 **The multi-model, cross-vendor review layer.** It checks the build brief before any code
-is written, reviews code with an auto-fix loop (`review-code`), red-teams specs
-(`review-spec`), and periodically sweeps a whole repo for accumulated debt (`audit-debt`).
+is written, reviews code with an auto-fix loop (`review-code`), and periodically sweeps a whole repo
+for accumulated debt (`audit-debt`). A spec is reviewed by the three spec checks Discovery
+runs — gap review, the source check both ways, and grounding (see the-architect, above).
 Panels are composed to be vendor-complementary — models that didn't write the code (or the
 brief, or the spec) are the ones reviewing it.
 
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
-| `/superheroes:review-spec` | Red-team a draft spec and report a readiness verdict. |
 | `/superheroes:audit-debt` | Periodically sweep a whole repo for accumulated debt → a prioritized set of GitHub issues. |
 
 ## Test-Pilot

@@ -9,6 +9,7 @@
 - [What a reviewer may do](#what-a-reviewer-may-do)
 - [Sorting findings into three piles](#sorting-findings-into-three-piles)
 - [Rounds, and when they stop](#rounds-and-when-they-stop)
+- [The review gate](#the-review-gate)
 - [The running record](#the-running-record)
 - [The reviewer's prompt](#the-reviewers-prompt)
 
@@ -26,13 +27,15 @@ stop](#rounds-and-when-they-stop)). The existing citation check runs beside grou
 Gap review reads the spec for clarity, testability, contradictions between statements, and safety
 and access. It also reads for missing unhappy paths within the project's threat model. The threat
 model is configure's threat-model item. An unhappy path outside it is not a gap.
+An annex may only spell out what the core already decides. When an annex sentence decides something the core does not, report it as a finding with dimension Coherence and severity Important or higher; the test is whether a builder reading only the core would build something different.
 
 The source check runs both ways.
 
-- Forward. Every statement in the spec has a source and matches it, and the approved board is the
-  first source to look in. Nothing in the spec belongs to another piece of work.
+- Forward. Every statement in the spec has a source and matches it. When the piece has an approved
+  board, the board is the first source to look in. Nothing in the spec belongs to another piece of
+  work.
 - Backward. Every ruling for this piece is in the spec and written down right. So is every element
-  of the approved board that belongs to this piece, and so is the framing.
+  of the approved board that belongs to this piece, when the piece has one, and so is the framing.
 
 The source check is an agent reading plain files. No script reads a source tag.
 
@@ -168,14 +171,21 @@ repository for gap review and the source check. For grounding it is the groundin
 ### The source check's inputs
 
 Stage each of these into the source check's prompt, with a label on each: the spec, Canon, the
-approved board's files, the framing brief, and the rulings for this piece.
+approved board's files when the piece has an approved board, the framing brief, and the rulings for
+this piece.
+
+When the piece has no approved board, the source check still runs, on the other sources: Canon,
+the framing brief and the rulings. Record the backward direction's board element as "no approved
+board for this piece", and say so in that round's record. A missing board is never by itself a
+reason the check did not run.
 
 Read Canon as `rubric/canon-contract.md` § "Reading Canon" says. Stage the default-branch copy and
 this branch's copy, and label each copy with the sessions it binds. That section holds the
 procedure, so follow it there.
 
 When a required input cannot be read, the source check is not run that round. Put the reason in the
-record.
+record. An approved board that exists but cannot be read is such an input; a piece with no approved
+board is not.
 
 ### A result counts only when it is real
 
@@ -252,6 +262,46 @@ rounds of their own and the same stopping rule. Each check's prompt carries the 
 spec before and after the rulings. The reviewer reviews only those parts, and reads whatever
 surrounding text it needs to judge them. The same reviewers continue.
 
+## The review gate
+
+The spec's review gate is `gates.review` in its frontmatter. It has three states.
+
+- `pending`. The spec is a draft.
+- `changes-requested`. The owner asked for changes.
+- `passed`. The owner approved.
+
+The gate passes only when the owner approves. Discovery records that approval in its step 8. The
+checks never write `passed`.
+
+When the owner asks for changes, discovery records `changes-requested`, applies the changes, and
+runs the checks again on the changed parts (see [After rulings](#after-rulings)) before it goes
+back to the owner.
+
+When a fix changes content the owner already approved (`gates.review: passed`), reset the gate to
+`pending`. Do it only when a fix actually changed the spec. An unchanged spec keeps its approval.
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+ROOT=$(git rev-parse --show-toplevel)
+WORK_ITEM="<work-item>"
+SPEC_PATH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" path \
+  --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
+REVIEWED_HASH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SPEC_PATH")
+python3 -B "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
+  --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT" \
+  --expected-hash "$REVIEWED_HASH" --run-id "spec-checks-$WORK_ITEM"
+```
+
+The command prints `reset:pending`, `noop:not-approved`, `skipped:noncanonical`,
+`skipped:unreadable`, `recorded:stale` or `failed:set-gate`. It never writes `passed`.
+
+Only `reset:pending` and `noop:not-approved` are good outcomes. On any other output
+(`skipped:noncanonical`, `skipped:unreadable`, `recorded:stale`, `failed:set-gate`), stop and treat
+the spec as unapproved. Tell the owner the approval could not be revoked and must not be relied on.
+
+Amendments after approval follow the amendments path,
+`skills/showrunner/reference/amendments.md`. The three checks do not run on them.
+
 ## The running record
 
 Keep one running record per spec. It is a plain markdown file named `checks-record.md`, in the
@@ -281,6 +331,7 @@ block for each of the three checks.
 - Run directory: <path>
 - Result: <real, or not run and why>
 - Grounding base, for grounding: <ref>, <sha>
+- Approved board, for the source check: <its path, or "no approved board for this piece">
 - Confirmations: <previous finding id> -> <fixed, not-fixed, fix-introduced-problem,
   decline-accepted, or decline-contested>
 
@@ -300,6 +351,11 @@ this session's branch only; proves nothing about the default branch; counts towa
 
 - <id>: <finding>. Recommendation: <text>. Marks: <contested, or "the review didn't settle this">
 ```
+
+A finding id is unique across the whole record, every cycle and every round. A confirmation reuses
+the previous finding's id on purpose, and that is not a clash. When a reviewer gives a **new**
+finding an id already in the record, rename it on the clash, for example with a suffix. Keep the
+reviewer's original id in a note in that row.
 
 Discovery builds each remainder sheet's items and its "why only these" facts from this record. It
 builds the final sheet's history and folded declines from it too.
@@ -325,12 +381,16 @@ Your lens for this check:
 Gap review. Read the spec for clarity, testability, missing unhappy paths, contradictions between
 statements, and safety and access. An unhappy path counts as missing only when it is inside the
 project's threat model: <the threat-model entries>.
+An annex may only spell out what the core already decides. When an annex sentence decides something the core
+does not, report it as a finding with dimension Coherence and severity Important or higher. The test: would a
+builder reading only the core build something different?
 
 Source check. Read the spec against its sources, which follow, each labelled. Forward: every
-statement in the spec must have a source and match it, the approved board first, and nothing in the
-spec may belong to another piece of work. Backward: every ruling for this piece, every element of
-the approved board that belongs to this piece, and the framing must be in the spec and written down
-right. Sources: <the labelled inputs>
+statement in the spec must have a source and match it, the approved board first when the sources
+include one, and nothing in the spec may belong to another piece of work. Backward: every ruling for
+this piece, every element of the approved board that belongs to this piece (when the sources include
+no approved board, write "no approved board for this piece" for that element), and the framing must
+be in the spec and written down right. Sources: <the labelled inputs>
 
 Grounding. Check every claim the spec makes about the product or the repository against the
 repository in your working directory. That repository is the project's default branch. Report each
