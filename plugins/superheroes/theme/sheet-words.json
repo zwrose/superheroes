@@ -12,5 +12,7 @@
   "boardSaved": "The approved board is saved with the spec.",
   "boardNotSaved": "The approved board is not saved with the spec.",
   "nextHeading": "What happens next",
-  "next": "The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both."
+  "next": "Once you've chosen Approve and said in the chat that you're done, the advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both. If another answer here changes the spec, the spec goes back through its checks, a new vet and a new approval first.",
+  "doneStep": "Once every answer shows it is saved, go back to the chat and say you're done. The session then reads your answers and your verdict together.",
+  "doneStepInChat": "Answer each item and the approval here in the chat, then say you're done. The session reads your answers and your verdict together."
 }

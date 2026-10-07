@@ -291,26 +291,33 @@ def document_errors(name, document):
     return list(Draft202012Validator(schema).iter_errors(document))
 
 
-def test_verdict_document_accepts_only_a_taken_verdict():
-    # Axis: the stored verdict is approve or not-yet with a note, the sheet digest it answers and every card's answer, and nothing else, so a draft's null verdict never counts as one.
+def test_verdict_document_holds_a_pick_or_none_a_note_and_the_digest():
+    # Axis: the stored verdict is approve, not-yet or null (a note saved before any pick) with a note and the sheet digest it answers, and nothing else.
     digest = "a" * 64
-    full = {"verdict": "approve", "note": "", "sheet": digest, "answers": []}
-    for good in [full, dict(full, verdict="not-yet", note="n"),
-                 dict(full, answers=[{"card": "c1", "answer": {"answer": "aligned", "optionId": None, "note": ""}}])]:
-        assert document_errors("verdict", good) == [], good
-    for bad in [dict(full, verdict=None), dict(full, verdict="maybe"), {"verdict": "approve", "sheet": digest, "answers": []},
-                dict(full, extra=1), {k: v for k, v in full.items() if k != "sheet"}, {k: v for k, v in full.items() if k != "answers"},
-                dict(full, sheet="A" * 64), dict(full, sheet="a" * 63)]:
-        assert document_errors("verdict", bad) != [], bad
+    for verdict in ("approve", "not-yet", None):
+        for note in ("", "a note"):
+            good = {"verdict": verdict, "note": note, "sheet": digest}
+            assert document_errors("verdict", good) == [], good
 
 
-def test_draft_verdict_document_also_accepts_a_null_verdict():
-    # Axis: the stored draft may hold a note with no verdict yet, still carries the sheet digest, and still refuses an unknown verdict or an extra key.
+def test_verdict_document_refuses_what_is_not_a_verdict_on_one_revision():
+    # Axis: a missing note or sheet, an extra key, an upper-case, short, long or non-hex digest, and an unknown verdict are all refused.
     digest = "a" * 64
-    for good in [{"verdict": None, "note": "only a note", "sheet": digest}, {"verdict": "approve", "note": "", "sheet": digest},
-                 {"verdict": "not-yet", "note": "n", "sheet": digest}]:
-        assert document_errors("draftVerdict", good) == [], good
-    for bad in [{"verdict": "maybe", "note": "", "sheet": digest}, {"verdict": None, "sheet": digest},
-                {"verdict": None, "note": "", "sheet": digest, "extra": 1}, {"verdict": None, "note": ""},
-                {"verdict": None, "note": "", "sheet": "xyz"}]:
-        assert document_errors("draftVerdict", bad) != [], bad
+    full = {"verdict": "approve", "note": "n", "sheet": digest}
+    bad = [{key: value for key, value in full.items() if key != "note"},
+           {key: value for key, value in full.items() if key != "sheet"},
+           {key: value for key, value in full.items() if key != "verdict"},
+           dict(full, extra=1), dict(full, answers=[]),
+           dict(full, sheet="A" * 64), dict(full, sheet="a" * 63), dict(full, sheet="a" * 65), dict(full, sheet="g" * 64),
+           dict(full, sheet=None), dict(full, sheet=5),
+           dict(full, verdict="maybe"), dict(full, verdict="Approve"), dict(full, note=None), dict(full, note=3)]
+    for document in bad:
+        assert document_errors("verdict", document) != [], document
+
+
+def test_the_retired_verdict_definitions_are_gone():
+    # Axis: the schema has one verdict document, so no draft definition and no sent-answer definition remain, and nothing points at them.
+    schema = load_schema()
+    assert "draftVerdict" not in schema["$defs"] and "sentAnswer" not in schema["$defs"]
+    text = SCHEMA_PATH.read_text(encoding="utf-8")
+    assert "draftVerdict" not in text and "sentAnswer" not in text and "/sends" not in text and "draft-verdict" not in text

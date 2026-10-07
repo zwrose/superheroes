@@ -110,8 +110,9 @@ A remainder sheet also shows a "Why only these" box. It is built only from the `
 rounds run, fixes made and unsettled list, so it says how many items are here and why, and nothing
 else.
 
-"Done for now" saves any note that is still pausing, shows whether every answer is saved, and returns
-to the same sheet. To come back to a sheet, open the same link.
+Every answer saves as it is tapped and comes back when the same link is opened again, so leaving
+needs no button. The footer says "Answers save as you tap", and on a plain or remainder sheet it also
+tells the owner to go back to the chat and say they're done once every answer shows it is saved.
 
 ## A final sheet
 
@@ -121,71 +122,50 @@ review declined are folded behind a "Declined findings" button, each with the re
 when there were none, the sheet says so. The vet's calls are the cards, listed as rows and counted
 exactly as on any other sheet. After them comes a last card, "Approve the spec?", with what the spec
 traces to, whether the approved board is saved with it (shown only when there is an approved board),
-the Approve and Not yet buttons, a note and a Send verdict button. A box under it says what happens
-next.
+the Approve and Not yet buttons and a note. There is no Send verdict button.
 
-A tap on Approve or Not yet, and the note, save at once as a draft verdict at `draft-verdict/<digest>`,
-in the shape `sheet.schema.json` defines at `$defs/draftVerdict`. A draft never counts as a verdict.
-It comes back when the owner opens the link again, and it is not counted as an answer.
+A tap on Approve or Not yet, and the note, save at once at `verdict/<digest>`, in the shape
+`sheet.schema.json` defines at `$defs/verdict`, the same way an answer saves: every tap and every
+pause in the note writes the whole document, the last write counts, and the last card shows the same
+Saving…, Saved, Not saved and Try again as a card does. It comes back when the owner opens the link
+again, and it is not counted as an answer.
 
-Every stored verdict, draft or sent, carries `sheet`: the SHA-256, in lowercase hex, of the exact
-bytes of the published `sheet.json` as the page fetched them (the bytes themselves, so a file with a
-byte-order mark hashes with it). That digest, written `<digest>` here, is the draft's id:
-the draft is stored at `draft-verdict/<digest>` and each sent verdict at `verdict/<digest>/sends/<sendId>`,
-so each revision of the sheet has its own draft and its own sends, and `sheet` equals the `<digest>`
-in the path. The page reads and writes only its own revision's documents; a delayed write from a page
-showing an older revision lands among that older revision's sends and can never touch a newer revision's verdict. A republished final sheet
-has a new digest, so it starts unsigned. A stored document counts only when its `sheet` equals the `<digest>` in its path (the draft's id; for a
-send, the segment between `verdict/` and `/sends/`). Any other is ignored: nothing
-is restored and nothing locks. A browser that cannot compute the digest
-(no `crypto.subtle`) leaves the last card and Send verdict off, with a plain line saying so.
+`<digest>` is the SHA-256, in lowercase hex, of the exact bytes of the published `sheet.json` as the
+page fetched them (the bytes themselves, so a file with a byte-order mark hashes with it), and the
+document's `sheet` equals it. Each revision of the sheet has its own document, so a republished final
+sheet has a new digest and starts unsigned, and a page showing an older revision never touches a newer
+one. When the sheet reopens, the page reads only the document whose id is its own digest, and restores
+the pick and note only when that document fits `$defs/verdict` and its `sheet` equals the digest.
+Another revision's document is ignored. A verdict of null (a note saved before any pick) restores only
+the note. A browser that cannot compute the digest (no `crypto.subtle`) leaves the last card's
+controls off, with a plain line on the card saying it can't tell which version of the sheet this is,
+and reads and writes nothing under `verdict`.
 
-Send verdict is off until a verdict is picked. Once tapped, it freezes the sheet, saves any note that
-is still pausing and waits for every card's answer to be saved. If an answer didn't save, or is still
-unsaved after ten seconds, it says how many and what to do, writes nothing and unfreezes the sheet.
-When every answer is saved it lists `verdict/<digest>/sends` once more. If a valid send for this sheet
-revision is already there (another open copy sent it), it writes nothing, shows that verdict as sent and
-locks the sheet. Otherwise it creates a new document of its own at `verdict/<digest>/sends/<sendId>`, where
-`<sendId>` is 32 lowercase hex characters from the browser's random source (a browser without one leaves
-Send verdict off, with a plain line saying so, like a missing digest), in the shape `$defs/verdict`. Sends are
-the only documents that count as the owner's verdict. That document holds the verdict, its note, the `sheet` digest and
-`answers`: one entry per card in sheet order, each `{card, answer}` with the card's stored answer
-document, frozen at the moment of sending. The page says "Verdict sent" only after that write has landed.
-Because every send is its own document, no send can replace another.
-If the write is refused, the page says the verdict didn't send and offers Try again, and the sheet
-unfreezes so the owner may change things first. If the write is slow, the page asks the owner to keep
-the page open and offers no Try again while the write may still land.
-
-A sent verdict locks the sheet: it shows the verdict that was sent, and every control stays off,
-including when the owner opens the link again; any valid send means sent. A document under
-`verdict/<digest>/sends` that does not fit `$defs/verdict`, or whose `sheet` is not that `<digest>`, is
-ignored, so it never counts as sent. If more than one valid send exists and they differ in verdict, note
-or answers, the status says "More than one verdict was sent for this sheet from different windows. The
-session will ask you which one counts." and the sheet stays locked.
+Directly below the last card, a line tells the owner to come back to the chat once every answer shows
+it is saved, and say they're done; its words are in `sheet-words.json`, the same file the chat prose
+reads. Under it, a box says what happens next.
 
 A final sheet may have no cards, when the review left no calls. It then shows "Nothing left to
-answer" in place of the count, the list and the stepper, and the history, the last card, Send verdict
-and the next line work as usual.
-
-"Done for now" on a final sheet saves any pending note, including the verdict's, and says the owner's
-verdict counts only once they tap Send verdict.
+answer" in place of the count, the list and the stepper, and the history, the last card, the line
+below it and the next box work as usual.
 
 ## How answers come back
 
-A tap saves at once, as a draft the owner can change, into the sheet's own store. The last tap
+A tap saves at once into the sheet's own store, and the owner can change it. The last tap
 counts. Each card's stored document has the shape `sheet.schema.json` defines at `$defs/answer`. Anyone but the
 owner who opens a shared sheet sees it with the answer controls turned off.
 
 A save that fails says so on the card and offers Try again.
 
-The session that sent the sheet reads every answer together once the owner says the sheet is done,
-and never acts on a single tap.
+The session that sent the sheet reads every answer together once the owner says in the chat that the
+sheet is done, and never acts on a single tap.
 
-On a final sheet, once the owner taps Send verdict, the session lists `verdict/<SHA-256 of the sheet.json it published>/sends` and nothing else for the verdict: exactly one send,
-or several identical ones, is the verdict, and it takes the verdict, its note and the
-answers from it; several that differ mean it asks the owner which one counts and treats the sheet as Discuss. It never acts on a draft and never reads `answers/` for the verdict. It uses
-a send only when its `sheet` equals that same SHA-256 (for
-example `shasum -a 256 sheet.json`); a republished final sheet starts unsigned because its digest is new.
+On a final sheet the session reads `answers` and `verdict/<digest>` together, where `<digest>` is the
+SHA-256 of the `sheet.json` it published (for example `shasum -a 256 sheet.json`). It reads only that
+document and uses it only when its `sheet` equals that digest, so a republished final sheet starts
+unsigned because its digest is new. A card with no stored answer, a final sheet with no verdict
+document, or a verdict of null is unanswered: the session asks rather than assuming. A saved Approve
+never counts as approval on its own; the owner's word in the chat does.
 
 A card whose note disagrees with its answer is read as Discuss: ask the owner about it.
 
