@@ -3,9 +3,9 @@
 # Contents
 
 - [What this file is](#what-this-file-is)
-- [Consolidation re-read (FR-23)](#consolidation-re-read-fr-23)
-- [Annexes (FR-24)](#annexes-fr-24)
-- [Rulings live where they were made (FR-25)](#rulings-live-where-they-were-made-fr-25)
+- [Consolidation re-read](#consolidation-re-read)
+- [Annexes](#annexes)
+- [Rulings live where they were made](#rulings-live-where-they-were-made)
 - [The Amendments section is never deleted](#the-amendments-section-is-never-deleted)
 
 # Spec content and how it changes
@@ -19,7 +19,7 @@ showrunner charter points here when the advisor schedules consolidation or absor
 written only where nobody stands is doctrine nobody reads — pointers at those surfaces stay short;
 this file carries the behavior.
 
-## Consolidation re-read (FR-23)
+## Consolidation re-read
 
 When a spec reaches **five amendments since its last full approval**, the **next touch** of that
 spec carries a **consolidation re-read**: read the spec body end to end as a whole and ask whether
@@ -49,7 +49,7 @@ Entries are counted **since the last full approval**, not since the spec was cre
 The advisor's job on the touch after five is to **schedule the owner's re-stamp** — only the
 owner can give it. The re-read itself may be done by whoever makes that touch.
 
-## Annexes (FR-24)
+## Annexes
 
 An **annex** elaborates decisions its core spec **already makes**. It **never introduces a new
 opinion**. Post-approval opinion **amends the core** — that is what amendments are for.
@@ -58,15 +58,15 @@ Annexes are an attractive place to smuggle a decision the owner never made, beca
 reads as detail rather than as a decision. That is exactly why the rule is absolute rather than a
 matter of degree.
 
-An annex introducing a new opinion is a **named review-spec finding class** — this file carries the
-rule; `review-spec/reference/spec-detail.md` carries how a seat applies it.
+An annex introducing a new opinion is a finding the spec checks raise — this file carries the
+rule.
 
 **Elaboration, not decision.** Examples, edge-case walkthroughs, and worked scenarios that follow
 from a decision the core already states are annex material. A sentence that would change what a
 builder could build differently against the core is a new opinion — it belongs in the core body
 via an amendment, not in an annex.
 
-## Rulings live where they were made (FR-25)
+## Rulings live where they were made
 
 **A spec holds the requirements it was approved with; the owner rulings themselves are recorded in the project's Canon** (`../../../rubric/canon-contract.md`), and a ruling is cited from where it is recorded. The Anchor citation stays the reverse index for affected work.
 
