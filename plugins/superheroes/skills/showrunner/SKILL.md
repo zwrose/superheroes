@@ -531,9 +531,9 @@ above).
    **About to deliver open decisions to the owner → read
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` first** —
    the full contract lives there. Without it, delivery drifts both ways — short of full rigor, or
-   over-filtered — and the owner becomes the backstop for delivery quality. Apply this duty's two
-   tests per item as the filter's *why it is yours* ground, **written down**, not re-derived
-   silently. Three further shapes are that file's, not this one's: **how you derive
+   over-filtered — and the owner becomes the backstop for delivery quality. Name each item's
+   *why it is yours* ground from the owner-vs-craft line, as the filter says, **written down**,
+   not re-derived silently. Three further shapes are that file's, not this one's: **how you derive
    an item's tier and its craft-or-owner classification** rather than inheriting it, **the batches
    the walk runs and what the last of them carries**, and **the recap each sitting carries for the
    owner**.
