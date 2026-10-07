@@ -27,6 +27,7 @@ stop](#rounds-and-when-they-stop)). The existing citation check runs beside grou
 Gap review reads the spec for clarity, testability, contradictions between statements, and safety
 and access. It also reads for missing unhappy paths within the project's threat model. The threat
 model is configure's threat-model item. An unhappy path outside it is not a gap.
+An annex may only spell out what the core already decides. When an annex sentence decides something the core does not, report it as a finding with dimension Coherence and severity Important or higher; the test is whether a builder reading only the core would build something different.
 
 The source check runs both ways.
 
@@ -371,6 +372,9 @@ Your lens for this check:
 Gap review. Read the spec for clarity, testability, missing unhappy paths, contradictions between
 statements, and safety and access. An unhappy path counts as missing only when it is inside the
 project's threat model: <the threat-model entries>.
+An annex may only spell out what the core already decides. When an annex sentence decides something the core
+does not, report it as a finding with dimension Coherence and severity Important or higher. The test: would a
+builder reading only the core build something different?
 
 Source check. Read the spec against its sources, which follow, each labelled. Forward: every
 statement in the spec must have a source and match it, the approved board first, and nothing in the

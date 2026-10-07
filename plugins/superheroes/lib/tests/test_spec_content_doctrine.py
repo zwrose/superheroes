@@ -260,6 +260,23 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
+        "spec-checks-annex-test-gap-review",
+        "skills/architect-discovery/reference/spec-checks.md",
+        "## The three checks",
+        "the test is whether a builder reading only the core would build something different",
+        "literal",
+    ),
+    (
+        "spec-checks-annex-test-prompt-template",
+        "skills/architect-discovery/reference/spec-checks.md",
+        "## The reviewer's prompt",
+        "An annex may only spell out what the core already decides. When an annex "
+        "sentence decides something the core does not, report it as a finding with "
+        "dimension Coherence and severity Important or higher. The test: would a "
+        "builder reading only the core build something different?",
+        "literal",
+    ),
+    (
         "spec-content-fr25-canon-pointer",
         _SPEC_CONTENT_REF,
         "## Rulings live where they were made",
@@ -499,6 +516,8 @@ _CLAUSE_IDS = frozenset({
     "spec-content-fr24-elaborates-decisions",
     "spec-content-fr24-elaborates-never-opinion",
     "spec-content-fr24-named-finding-class",
+    "spec-checks-annex-test-gap-review",
+    "spec-checks-annex-test-prompt-template",
     "spec-content-fr25-no-count-age-size",
     "spec-content-fr25-no-mechanical-trigger",
     "spec-content-fr25-canon-pointer",
