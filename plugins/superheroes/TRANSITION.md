@@ -12,6 +12,7 @@ belongs to and lists every change with its replacement.
 ### Before you upgrade
 
 - A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
+- A caller that invokes `/superheroes:review-spec` or the deleted `spec_loop_plan` module must switch to discovery's spec checks.
 - **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
 
 ### Canon: the record of the owner's decisions
@@ -29,6 +30,20 @@ belongs to and lists every change with its replacement.
 - New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`; its own write failures report `spec-reviewer-round-trip-refused` and `spec-reviewer-write-failed`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
 - `core_md` confirm now keeps `enginePreferences` when it confirms a provisional calibration. Before, it dropped them.
 - New `core_md.write_project_config_item_if`, a compare-and-swap write of a single item. It refuses with `item-changed` when the item no longer holds the expected value.
+
+### The three spec checks
+
+- New reference doc `skills/architect-discovery/reference/spec-checks.md`: the three checks discovery runs on a written spec, their reviewer seat, their rounds and their running record.
+- New verb `core_md.py spec-reviewer-seat --cwd . --author-engine <engine>` (optionally `--root R`). It is read-only and prints one JSON line with the keys `ok`, `engine`, `model`, `effort`, `family`, `authorEngine`, `authorFamily`, `sameFamily`, `source`, `configured`, `configuredState`, `configuredReason` and `seat`. `source` is `configured`, `cross-family-installed` or `same-family-fallback`. `model` and `effort` are the registry's brief-check cell for `engine`, and `seat` is the bundle to pass to `dispatch-review --mode brief-check` as `--seat`. When `--exclude-engine` (repeatable) leaves no usable engine, it prints `{"ok": false, "reason": "no-usable-reviewer", ...}` with no `engine` or `seat` rather than returning an excluded engine. An unknown `--author-engine` is a usage error (exit 2).
+- New verb `definition_doc.py grounding-base --root <root> --dest <dir>`. It fetches the project's default branch and adds a detached worktree at its tip in a new directory. Success prints `ok`, `ref`, `sha` and `path` and exits 0. A refusal prints `ok` (false), `reason` and `detail` on stdout, exits 1 and creates nothing. Its seven refusal reasons are `grounding-base-not-a-repo`, `grounding-base-no-origin`, `grounding-base-default-unknown`, `grounding-base-fetch-failed`, `grounding-base-dest-exists`, `grounding-base-dest-inside-repo` and `grounding-base-worktree-failed`. Release the worktree afterwards with plain `git -C <root> worktree remove <dir>`.
+
+### review-spec retires; every spec gets the three spec checks
+
+- `/superheroes:review-spec` is removed. Discovery runs the three spec checks on every spec (`skills/architect-discovery/reference/spec-checks.md`); there is no separate spec-review command to call.
+- Removed lib modules, with nothing replacing them as CLIs: `lib/spec_loop_plan.py` (its `plan`, `record` and `decide` verbs) and `lib/doc_focus_flags.py`. Both are deleted.
+- The spec review weight call is gone: no light-or-full call decides how a spec is reviewed. Package reads keep their weight call. Code review's light, full and micro lanes are unchanged.
+- The spec's review gate keeps `pending`, `changes-requested` and `passed`. Discovery now records `changes-requested` when the owner asks for changes, and the stale-approval reset (`gate_write.py --mode reset`) is called from spec-checks.md § The review gate. Only the owner's approval writes `passed`.
+- Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
 
 ### Guardian dead-code ids are repo-relative
 

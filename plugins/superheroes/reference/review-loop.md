@@ -1,7 +1,7 @@
 <!-- review-loop-version: 3 -->
 ## Learning Loop & Staleness Nudge
 
-These four behaviors are **non-blocking**, run **at end of run** (after the terminal summary), and are **identical across `review-code`, `review-spec`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
+These four behaviors are **non-blocking**, run **at end of run** (after the terminal summary), and are **identical across `review-code` and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
 
 ### Recording decisions (at resolution time)
 
@@ -51,6 +51,8 @@ The staleness nudge, the learning-loop proposal, and the provisional-profile con
 
 ## Convergent Shared Review Loop
 
+Spec review does not run this loop — it follows `skills/architect-discovery/reference/spec-checks.md`.
+
 Round 1 is always a full `reviewer-deep` panel. Intermediate rounds may skip only dimensions with a high-confidence clean result whose subject area was not touched; unknown subject impact runs all dimensions. Intermediate run dimensions start at `reviewer` and escalate to `reviewer-deep` whenever the result is missing or unparseable (transport failure).
 
 Recurring blocking classes are detected from durable round memory and passed only to the reviser/fix step as `generalizeRequired`. Reviewers never receive prior-round finding lists. Any dismissal or class-covering principle is recorded as a visible coverage decision and is passed to every later reviewer as a challengeable claim.
@@ -69,7 +71,7 @@ ceiling** (`maxRoundsAbsolute`, default **10**) bounds the **round counter** —
 the loop refuses to begin the next — terminal `halted` with certification withheld (reason token `round-ceiling`); it is
 the unconditional cost backstop in the same `circuit_breaker`, binding before the cap when `maxRounds` exceeds it. The
 **confirmation-panel budget is separate**: at most **two** full panels per loop (`MAX_CONFIRMATIONS = 2` in
-`review_round_policy`); doc-mode confirmations at that budget park rather than scoped-certifying. FR-8's
+`review_round_policy`); doc-mode confirmations at that budget park rather than scoped-certifying. The
 any-open-blocker trigger stacks on the cross-cutting/unknown-surface trigger — below the confirmation-panel cap unknown
 surface still fails closed on the doc leg; at the cap with nothing blocking open, the doc leg certifies as code review
 does. The earlier three-round phrasing conflated these caps and is retired. Everything else in
@@ -79,11 +81,10 @@ receipts — is identical. The re-arm/park **rule** lives once in
 numbers live once each — the `7` in the deciders' `--max-rounds` default (the skills' operative
 `--max-rounds 7` arg), the `2` in `MAX_CONFIRMATIONS`. Do not restate either elsewhere.
 
-**Post-halt spec edits are a named violation (#518).** That cap park is a whistle: **after the
+**Post-halt document edits are a named violation (#518).** That cap park is a whistle: **after the
 halt, any write to the reviewed document invalidates the loop's terminal claim** — the verdict
 covered the pre-halt content, so an edit after the whistle is an unreviewed change wearing a
 reviewed document's clothes. The receipt says so: a post-halt edit voids the READY/REVISE claim
-and the document is unreviewed until the loop re-runs. review-spec states the same at its
-receipt (§6).
+and the document is unreviewed until the loop re-runs.
 
 Telemetry records rounds, run/skip/tier counts, per-leaf token usage completeness, and benchmark validity. Telemetry failure does not change the review terminal, but incomplete benchmark telemetry cannot satisfy the cost comparison.

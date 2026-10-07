@@ -99,9 +99,6 @@ _SPELLING_ALLOWLIST = {
         "reason": "review-memory round-record schema v2, not the driver state/receipt version",
         "max_count": 2,
     },
-    ("spec_loop_plan.py", '"schemaVersion": 1'): {
-        "reason": "spec-loop-plan manifest schema, not the driver state/receipt version",
-    },
     ("state.py", "SCHEMA_VERSION = 1"): {
         "reason": "generic state manifest schema, not the driver state/receipt version",
     },

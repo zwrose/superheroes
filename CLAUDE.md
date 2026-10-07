@@ -161,7 +161,7 @@ Every PR that touches `plugins/superheroes/**` gets a real review before handbac
 no matter how small the diff or how it was built (direct build, external engine,
 fix PR, fast-follow):
 
-- Work driven through the review skills reviews itself — the cross-vendor review panels (review-code, the spec panel) are the review.
+- Work driven through the review skills reviews itself — the cross-vendor review panel (review-code's, and for a spec the spec checks) is the review.
 - **A direct build ends with `/superheroes:review-code`** (or an explicit
   owner/owner-agent review) before the PR is handed back. The loop is cheap on
   small diffs (scoped rounds, capped confirmations) — "too small to review" is
