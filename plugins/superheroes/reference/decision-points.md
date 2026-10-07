@@ -11,7 +11,7 @@
 
 Every skill-surface site that takes a default or would otherwise wait for an owner answer must
 be wrapped in a declared **decision block**. Owner-decision primitives are **forbidden outside**
-such a block. This contract implements `rubric/escalation-base.md` (`escalation-version: 3`) at
+such a block. This contract implements `rubric/escalation-base.md` (`escalation-version: 5`) at
 each site: NOTIFY **discloses without waiting**; GATE — stop, write the decision down, and hand
 back — **never wait for an answer**.
 
