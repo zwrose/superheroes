@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from provenance_patterns import PROVENANCE_PATTERNS
+
 THEME = Path(__file__).resolve().parents[2] / "theme"
 SCHEMA_PATH = THEME / "sheet.schema.json"
 SAMPLE_PATH = THEME / "sample-sheet.json"
@@ -226,20 +228,96 @@ def test_final_and_plain_sheets_validate():
     assert errors_for(plain) == []
 
 
-PROVENANCE_PATTERNS = [
-    r"\b(?:U?FR|NFR)-?\d",
-    r"\bR\d{1,2}\b",
-    r"\bC\d(?:-L\d)?\b",
-    r"[Rr]uling \d",
-    r"#\d{2,}",
-    r"HANDOFF",
-    r"discovery-notes",
-]
-
-
 @pytest.mark.parametrize("path", [SCHEMA_PATH, SAMPLE_PATH], ids=lambda p: p.name)
 def test_shipped_files_carry_no_provenance(path):
     # Axis: shipped text names no requirement, ruling, issue, handoff or work-item tokens.
     text = path.read_text(encoding="utf-8")
     for pattern in PROVENANCE_PATTERNS:
         assert re.search(pattern, text) is None, f"{path.name} matches {pattern}"
+
+
+def final_sheet(cards=None, approved=True, saved=False):
+    card = copy.deepcopy(load_sample()["cards"][2])
+    return {
+        "schema": "superheroes-sheet/1",
+        "kind": "final",
+        "title": "Weekly meal planner spec review",
+        "final": {
+            "history": {"reviewRounds": 4, "fixesMade": 9, "vet": "The vet found nothing to fix."},
+            "declinedFindings": [],
+            "approval": {"approvedBoard": approved, "boardSavedWithSpec": saved},
+        },
+        "cards": [card] if cards is None else cards,
+    }
+
+
+def test_final_sheet_may_have_no_cards():
+    # Axis: a final sheet whose review left no calls is accepted by the schema and by the page's check.
+    sheet = final_sheet(cards=[])
+    assert errors_for(sheet) == []
+    assert check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("kind", ["remainder", "plain"])
+def test_remainder_and_plain_sheets_need_a_card(kind):
+    # Axis: only a final sheet may have empty cards; a remainder or plain sheet with none is refused by both readers.
+    sheet = copy.deepcopy(load_sample())
+    sheet["kind"] = kind
+    sheet["cards"] = []
+    if kind == "plain":
+        del sheet["remainder"]
+    else:
+        sheet["remainder"]["unsettled"] = []
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+@pytest.mark.parametrize("approved, saved, accepted", [
+    (False, True, False),
+    (False, False, True),
+    (True, False, True),
+    (True, True, True),
+])
+def test_board_is_saved_with_the_spec_only_when_there_is_an_approved_board(approved, saved, accepted):
+    # Axis: a final sheet cannot say the board is saved with the spec when it has no approved board, in both readers.
+    sheet = final_sheet(approved=approved, saved=saved)
+    assert (errors_for(sheet) == []) is accepted
+    assert (check_sheet_problems(sheet) == []) is accepted
+
+
+def document_errors(name, document):
+    schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", "$defs": load_schema()["$defs"],
+              "$ref": "#/$defs/" + name}
+    return list(Draft202012Validator(schema).iter_errors(document))
+
+
+def test_verdict_document_holds_a_pick_or_none_a_note_and_the_digest():
+    # Axis: the stored verdict is approve, not-yet or null (a note saved before any pick) with a note and the sheet digest it answers, and nothing else.
+    digest = "a" * 64
+    for verdict in ("approve", "not-yet", None):
+        for note in ("", "a note"):
+            good = {"verdict": verdict, "note": note, "sheet": digest}
+            assert document_errors("verdict", good) == [], good
+
+
+def test_verdict_document_refuses_what_is_not_a_verdict_on_one_revision():
+    # Axis: a missing note or sheet, an extra key, an upper-case, short, long or non-hex digest, and an unknown verdict are all refused.
+    digest = "a" * 64
+    full = {"verdict": "approve", "note": "n", "sheet": digest}
+    bad = [{key: value for key, value in full.items() if key != "note"},
+           {key: value for key, value in full.items() if key != "sheet"},
+           {key: value for key, value in full.items() if key != "verdict"},
+           dict(full, extra=1), dict(full, answers=[]),
+           dict(full, sheet="A" * 64), dict(full, sheet="a" * 63), dict(full, sheet="a" * 65), dict(full, sheet="g" * 64),
+           dict(full, sheet=None), dict(full, sheet=5),
+           dict(full, verdict="maybe"), dict(full, verdict="Approve"), dict(full, note=None), dict(full, note=3)]
+    for document in bad:
+        assert document_errors("verdict", document) != [], document
+
+
+def test_the_retired_verdict_definitions_are_gone():
+    # Axis: the schema has one verdict document, so no draft definition and no sent-answer definition remain, and nothing points at them.
+    schema = load_schema()
+    assert "draftVerdict" not in schema["$defs"] and "sentAnswer" not in schema["$defs"]
+    text = SCHEMA_PATH.read_text(encoding="utf-8")
+    assert "draftVerdict" not in text and "sentAnswer" not in text and "/sends" not in text and "draft-verdict" not in text

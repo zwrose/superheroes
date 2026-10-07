@@ -150,6 +150,24 @@
   transform: translate(var(--sh-shadow-button), var(--sh-shadow-button));
 }
 
+.sh-field {
+  background: var(--sh-white);
+  border: var(--sh-line-small) solid var(--sh-ink);
+  border-radius: var(--sh-radius-small);
+  box-sizing: border-box;
+  color: var(--sh-ink);
+  font-family: var(--sh-font-body);
+  font-size: 16px;
+  min-height: var(--sh-touch);
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.sh-field:focus-visible {
+  outline: var(--sh-line) solid var(--sh-blue);
+  outline-offset: 2px;
+}
+
 .sh-appbar {
   align-items: center;
   background: var(--sh-yellow);

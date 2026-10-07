@@ -66,6 +66,48 @@
       },
       "images": [],
       "options": []
+    },
+    {
+      "id": "week-start-day",
+      "callKind": "Wording to confirm",
+      "warning": false,
+      "question": "Which day should a weekly plan start on?",
+      "context": {
+        "now": "The spec says a plan covers seven days in a row but does not say which day the week begins on.",
+        "whyOwner": "The first day decides where a plan ends and the next one begins, and households disagree about it.",
+        "exactText": "A weekly plan covers seven consecutive days."
+      },
+      "images": [],
+      "options": [
+        {
+          "id": "monday-start",
+          "label": "Start the week on Monday",
+          "consequence": "Plans line up with the working week, but a household that shops on a Sunday plans across two weeks."
+        },
+        {
+          "id": "sunday-start",
+          "label": "Start the week on Sunday",
+          "consequence": "A Sunday shop covers the week ahead, but plans no longer line up with the working week."
+        }
+      ],
+      "recommendation": {
+        "text": "Start the week on Monday.",
+        "reason": "Most calendars and work schedules begin on Monday, so plans match how people already think about the week.",
+        "optionId": "monday-start"
+      }
+    },
+    {
+      "id": "dietary-needs",
+      "callKind": "Scope note",
+      "warning": false,
+      "question": "Should a plan remember a household's dietary needs?",
+      "context": {
+        "now": "The spec lets a person pick any recipe for any slot and says nothing about allergies or diets.",
+        "whyOwner": "Remembering dietary needs adds a settings screen and a filter on every recipe list, so it is a scope decision.",
+        "exactText": null
+      },
+      "images": [],
+      "options": []
     }
   ]
 }

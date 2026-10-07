@@ -63,8 +63,9 @@ the sheet is done, and shall never act on a single tap. (source: ruling 49; boar
 template)
   - *Acceptance (rule):* no extra submission machinery is built for this; a saved draft plus the
     owner's word is enough. (source: ruling 49)
-  - *Acceptance (rule):* on a final sheet, the owner's "Send verdict" (FR-18) is that word.
-    (source: ruling 49; board · Final sheet · phone)
+  - *Acceptance (rule):* on a final sheet too, the owner's word in the chat is that word; no
+    button on the sheet stands in for it (FR-18). (source: ruling 49; owner's comment on the
+    final-sheet sample, 2026-10-07)
 
 ### The card
 
@@ -123,8 +124,9 @@ ran, how many things it fixed itself, and that everything else traces to the own
 rulings, apart from any finding marked as not settled by the review. (source: board · Spec review ·
 desktop; ruling 16)
 
-**FR-16.** The owner shall be able to leave a sheet unfinished with "Done for now" and come back to
-it. (source: board · Spec review · phone)
+**FR-16.** The owner shall be able to leave a sheet unfinished and come back to it; every answer
+is already saved, so leaving needs no button. (source: board · Spec review · phone; owner's
+comment on the review-sheet sample, 2026-10-07)
 
 **FR-17.** A final sheet shall open with how the spec got there (the review rounds, the fixes, the
 vet), list the declined findings folded away, show the vet's calls as rows with their answers,
@@ -136,11 +138,12 @@ where there is an approved board, that it is saved with it, and offers Approve a
     to the spec where it's kept) and vets it, then one merge word covers both. (source: board ·
     Final sheet · phone; ruling 47; craft, for your veto: gitignored specs treated the same way)
 
-**FR-18.** The owner shall send a final sheet's verdict, and with it the sheet's answers, with one
-"Send verdict" action; a verdict
-tapped but not sent is saved as a draft and does not count as approval; once sent, the sheet
-shows plainly, next to the button, that the verdict was sent. (source: board · Final
-sheet · phone; owner's note on the final sheet, 2026-10-05)
+**FR-18.** A final sheet's verdict (Approve or Not yet) and its note shall save as the owner taps
+and types, like any answer, and shall not count as approval on their own. Below the last card,
+the sheet shall say plainly what to do next: once every answer shows it is saved, go back to the
+chat and say you're done, and the session then reads the answers and the verdict together. The sheet has no "Send verdict" button.
+(source: board · Final sheet · phone; owner's note on the final sheet, 2026-10-05; owner's
+comment on the final-sheet sample, 2026-10-07)
 
 ### The theme
 
@@ -218,9 +221,21 @@ template produces a sheet with the same card and theme. (source: rulings 31, 34)
 - **Card:** one call for the owner on a sheet, with the parts in FR-5. (source: ruling 34)
 - **Sheet:** a set of cards sent to the owner at one time. (source: ruling 8)
 
+## Delivery
+
+**Delivered, accepted in full by the owner on 2026-10-07** (collector #695 item 46 = a, in chat: "46 a, you can merge the stack"; option a read "keep everything and accept Spec B as delivered"). The acceptance rests on the closure receipt carried at PR #1659's vet 404 and amended at vets 409 and 410. C7 shipped as stack #1642, and C8 as stack #1650, with this spec's Amendments 1 and 2 below. Every one of the spec's criteria is delivered, as amended; none is deferred or declined.
+
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-07 (owner-stamped, substantive):** retired the "Done for now" button. Every answer
+  already saves as it is tapped and comes back when the sheet reopens, so leaving a sheet needs no
+  button; the owner, live-checking the sample sheet, found the button and its status page
+  unnecessary (collector #695 item 47, ruled "a" in chat). Sections touched: FR-16.
+- **2026-10-07 (owner-stamped, substantive):** retired the "Send verdict" button. A sheet cannot
+  reach the chat session that sent it, so the button looked like it set Claude working when it did
+  not. A final sheet's verdict and note now save like any answer, the sheet says plainly to go back
+  to the chat and say you're done, and the owner's word in the chat is what the session reads
+  (collector #695 item 48, ruled "a" in chat). Sections touched: FR-4a, FR-18.
 
 ## Coverage
 
@@ -239,7 +254,7 @@ where it gives a reason instead, the reason is the author's, recorded for the ow
 | Conflicting / simultaneous use | N-A | — | One owner answers each sheet (source: craft) |
 | Misuse & abuse | N-A | — | Malicious input is outside the plugin's threat model (source: craft) |
 | Reach (i18n / a11y) | Specify | Yes | Readability, touch and colour requirements above (source: craft) |
-| Wording & tone | Specify | Yes | Button words Aligned, Discuss, Approve, Not yet, Done for now, Send verdict (source: craft) |
+| Wording & tone | Specify | Yes | Button words Aligned, Discuss, Approve, Not yet (source: craft; Done for now and Send verdict retired, Amendments 1 and 2) |
 | Workflow shape | Specify | Yes | FR-12 to FR-18 (source: as the requirement named) |
 | Placement & prominence | Specify | Yes | FR-5 card order; FR-12 app bar (source: as the requirement named) |
 | Limits & defaults | N-A | — | No limits the owner sets (source: craft) |

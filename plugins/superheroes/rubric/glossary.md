@@ -336,3 +336,14 @@ Part structural, part capability-gap. The entry names which part is which so a
 [proposal](#proposal) can split it. Example: the seat canary, whose engagement axis is structural
 (a silent transport, read from telemetry) and whose plant-detection axis is a competence test
 sampled by a probe.
+
+## Review sheets
+
+### Card
+
+One call for the owner on a [sheet](#sheet): the kind of call, the question, its context, any
+images and options, a recommendation, and the owner's answer and note.
+
+### Sheet
+
+A set of [cards](#card) sent to the owner at one time, drawn by the plugin's review template.
