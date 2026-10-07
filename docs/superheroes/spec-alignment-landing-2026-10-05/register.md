@@ -62,7 +62,7 @@ approval handoff · C7 the theme and the template shell · C8 cards, sheets, ima
 **R8 — The line's one home.** The owner-vs-craft line (the ten owner categories, each with its description, a real example and a "not yours when" note; the sorting rule; the always-craft list; the rule for a craft choice that carries an owner consequence; and the rule that errors are not decisions) lives in one new rubric file, `plugins/superheroes/rubric/owner-vs-craft-line.md`. Every place that states a version of it today is rewritten to point there: showrunner duty 5's two tests and `skills/showrunner/reference/perceivability.md`; `skills/showrunner/reference/owner-decisions.md` § "Craft calls and owner calls"; the glossary's craft-call, owner-call and material-consequence entries; and the issue contract's craft-call section with its material-consequence default. No later child restates any part of the line.
 *Source:* Spec A FR-1, second bullet (the list of current homes); FR-2; FR-3 to FR-7.
 *Status:* decided.
-*Consumers:* C2, C3, C4 (C4-L1), C5 (C5-L1), C6.
+*Consumers:* C2, C3, C4 (C4-L1), C5 (C5-L1), C6, C9.
 
 **R9 — Pointing at the line and at a project's answers.** A surface that needs the line names it "the owner-vs-craft line" and links its home (with the section anchor when it cites one part); a surface that needs a project's own answers points at the project's Canon (its standing rulings and ceded calls), never at a configuration value, so no per-project setting moves the line.
 *Source:* Spec A FR-8 and its bullet ("the plugin has no per-project setting that moves the line"); FR-2's bullet.
