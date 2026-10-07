@@ -129,11 +129,13 @@ rendered, from the same data file.
 
 In that mode the sheet has no store. So write each answer into an `answers.md` file in that sheet's
 folder, as the owner gives it: the card id, the answer in the owner's words, the note and the date.
-Write a final sheet's verdict there the same way. Put the data file's digest on every line, as
-`theme/review-template.md` names the digest for the saved verdict. A republish changes the digest,
-so an earlier line, an old Approve included, no longer matches and counts as unanswered. A session
-that takes the sheet over reads `answers.md` with the data file and accepts only lines carrying the
-current digest.
+Write a final sheet's verdict there the same way. Put the data file's digest on the verdict line
+only, as `theme/review-template.md` names the digest for the saved verdict; an answer line is keyed
+by its card id alone, as in the template. A republish changes the digest, so an earlier verdict, an
+old Approve included, no longer matches and counts as unanswered, while an answer to a card whose
+call is unchanged still stands. A session that takes the sheet over reads `answers.md` with the data
+file, keeps the answers to unchanged cards, and accepts only a verdict line carrying the current
+digest.
 
 The same three conditions for approval hold. The owner's chat words stand in for the saved verdict.
 
