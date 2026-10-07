@@ -177,8 +177,12 @@ Before you execute, confirm four things:
    stands in for the PR.
 3. Where the package read applies, its verification pass and filing dry-run are recorded in the
    audit trail, and the only change between the head they ran against and this head is that record
-   itself (`git diff --stat <that head> HEAD` lists only the audit-trail file).
-4. Duty 6's three preconditions hold.
+   itself. With a spec PR, `git diff --stat <that head> HEAD` lists only the audit-trail file; for a
+   stored spec outside Git there is no head, so the pinned file hashes in item 2 are the freshness
+   check.
+4. With a spec PR, duty 6's three preconditions hold. A stored spec has no PR, so the PR-lane
+   review evidence, the recorded-head CI and the branch-current check do not apply to it; items 1
+   to 3 are its whole gate.
 
 Then merge the PR, and file the issues from the merged breakdown at once, under the same word. Wire
 each issue as duty 2 says.
@@ -186,8 +190,8 @@ each issue as duty 2 says.
 If filing fails partway, report it in the thread that gave the word and finish filing. Never re-merge
 or revert to retry. If the merge does not happen, nothing files.
 
-Where the stored spec stands in for the PR, there is nothing to merge: the owner's word at that step
-files the issues.
+Where the stored spec stands in for the PR, there is nothing to merge and no PR-specific
+precondition to meet: once items 1 to 3 hold, the owner's word at that step files the issues.
 
 ## Selecting the run to watch
 
