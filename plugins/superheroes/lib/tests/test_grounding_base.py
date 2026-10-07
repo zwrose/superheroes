@@ -213,3 +213,24 @@ def test_cli_refusal_prints_exactly_the_contract_keys_on_stdout(stale):
     assert list(got) == ["ok", "reason", "detail"]
     assert got["ok"] is False and got["reason"] == "grounding-base-dest-exists"
     assert _worktrees(session) == before
+
+
+def test_inherited_git_routing_does_not_redirect_the_grounding_base(stale, monkeypatch):
+    # Bites on: a git child (fetch, probes, worktree add, repo_root) inheriting GIT_DIR / GIT_WORK_TREE
+    # and acting on another checkout instead of the --root it was given
+    session, dest, tmp = stale["session"], stale["dest"], stale["tmp"]
+    other = tmp / "other"
+    subprocess.run(["git", *_ID, "init", "-q", str(other)], check=True, capture_output=True)
+    _commit_file(other, "other.txt")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+    res = definition_doc.grounding_base(root=str(session), dest=str(dest))
+    monkeypatch.undo()
+    try:
+        assert res["sha"] == stale["new_tip"]
+        assert (dest / "new-on-main.txt").is_file()
+        assert not (dest / "other.txt").exists()
+        assert str(dest) in _worktrees(session) or os.path.realpath(str(dest)) in _worktrees(session)
+    finally:
+        _git(session, "worktree", "remove", str(dest))

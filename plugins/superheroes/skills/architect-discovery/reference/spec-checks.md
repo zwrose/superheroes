@@ -51,7 +51,9 @@ python3 -B "$ROOT_DIR/lib/citation_validator.py" check --spec <spec> --root <roo
 branch](#grounding-against-the-default-branch)). The command prints JSON findings. Put the output
 in that round's record, including an empty `[]`. When no grounding base could be built that round,
 run the check with `--root` set to the repository root, and write in the record that it ran without
-a grounding base.
+a grounding base and was checked against this session's branch only. That output is not
+default-branch evidence: an empty `[]` proves nothing about the default branch, and that round's
+citation result counts toward nothing clean while grounding is not run.
 
 ## The spec-reviewer seat
 
@@ -280,7 +282,8 @@ block for each of the three checks.
 | <id> | <check> | <finding> | <craft, owner's, or declined> | <text> | <status> |
 
 #### Citation check
-<the JSON output, including [], and whether it ran without a grounding base>
+<the JSON output, including []. When it ran without a grounding base, mark it: "checked against
+this session's branch only; proves nothing about the default branch; counts toward nothing clean">
 
 ## After rulings 1
 

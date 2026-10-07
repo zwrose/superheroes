@@ -124,10 +124,18 @@ class CanonLookupError(RuntimeError):
 _CANON_REMEDY = "run `git remote set-head origin --auto` (or fetch origin) and retry"
 
 
+def _scrubbed_git_env():
+    """The ambient environment minus every git routing variable (git_routing.GIT_ROUTING_VARS, the
+    one home of the list), so a git child acts on the repository it was given, never on an inherited
+    GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE."""
+    from git_routing import GIT_ROUTING_VARS
+    return {k: v for k, v in os.environ.items() if k not in GIT_ROUTING_VARS}
+
+
 def _git(root, *args):
     try:
         return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                              timeout=10)
+                              timeout=10, env=_scrubbed_git_env())
     except (OSError, subprocess.SubprocessError) as exc:
         raise CanonLookupError("git could not be run (%s: %s)" % (type(exc).__name__, exc))
 
@@ -226,7 +234,7 @@ def _git_step(top, *args):
         # project's post-checkout hook must neither fail nor dirty the grounding worktree.
         return subprocess.run(["git", "-C", top, "-c", "core.hooksPath=/dev/null",
                                "-c", "core.fsmonitor=", *args], capture_output=True, text=True,
-                              timeout=60), None
+                              timeout=60, env=_scrubbed_git_env()), None
     except (OSError, subprocess.SubprocessError) as exc:
         return None, "%s: %s" % (type(exc).__name__, exc)
 
@@ -237,7 +245,7 @@ def grounding_base(*, root, dest):
     token) and creates nothing on any refusal. The dest checks run before the fetch."""
     import store_core
     try:
-        top = store_core.repo_root(os.path.abspath(root))
+        top = store_core.repo_root(os.path.abspath(root), env=_scrubbed_git_env())
     except store_core.RepoRootUnavailable as exc:
         raise GroundingBaseError("grounding-base-not-a-repo",
                                  "could not resolve the repository root: %s" % exc)
