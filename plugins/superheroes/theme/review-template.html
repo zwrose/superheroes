@@ -49,6 +49,13 @@
     .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: flex; }
     .sheet-page .sheet-fold { display: none; }
   }
+  .sheet-page .sheet-figure img[role="button"] { cursor: pointer; }
+  .sheet-viewer { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); position: fixed; z-index: 2; }
+  .sheet-viewer-bar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
+  .sheet-viewer-bar .sheet-viewer-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .sheet-viewer-frame { display: flex; overflow: auto; overscroll-behavior: contain; touch-action: none; }
+  .sheet-viewer-frame img { display: block; flex: none; margin: auto; max-height: none; max-width: none; }
+  .sheet-viewer-frame p { margin: auto; padding: 16px; }
   .sh-theme [hidden] { display: none; }
 </style>
 
@@ -78,6 +85,16 @@
     </div>
     <div id="sheet-final" hidden></div>
     <div id="sheet-done" class="sh-box" hidden></div>
+  </div>
+  <div id="sheet-viewer" class="sh-theme sheet-viewer" role="dialog" aria-modal="true" hidden>
+    <div class="sheet-viewer-bar">
+      <span id="sheet-viewer-caption" class="sh-label sheet-viewer-caption"></span>
+      <span class="sh-caption">Pinch or double-tap to zoom.</span>
+      <button id="sheet-viewer-close" class="sh-button" type="button">Close</button>
+    </div>
+    <div id="sheet-viewer-frame" class="sheet-viewer-frame">
+      <img id="sheet-viewer-picture" alt="">
+    </div>
   </div>
 </div>
 
@@ -618,6 +635,255 @@
       return element;
     }
 
+    // The image view: one picture, large, on its own. Nothing in it moves to another picture. The size, the zoom
+    // and the look-around all live here: the picture is sized only through its width and height attributes, and
+    // it is moved only through the frame's scroll position.
+    const viewer = document.getElementById("sheet-viewer");
+    const viewerCaption = document.getElementById("sheet-viewer-caption");
+    const viewerClose = document.getElementById("sheet-viewer-close");
+    const viewerFrame = document.getElementById("sheet-viewer-frame");
+    const viewerPicture = document.getElementById("sheet-viewer-picture");
+    const sheetPage = document.querySelector(".sheet-page");
+    const ZOOM_MAX = 4;
+    const DOUBLE_TAP_ZOOM = 2.5;
+    // Two taps make a double-tap when they are this close in time and in distance, with no drag between them.
+    const DOUBLE_TAP_MS = 300;
+    const DOUBLE_TAP_PX = 24;
+    // A finger that has travelled further than this since it went down is dragging, not tapping.
+    const TAP_SLOP_PX = 10;
+    const MISSING_PICTURE = "This picture is missing: ";
+
+    // The card picture the view was opened from, which gets the focus back on Close.
+    let viewerOpener = null;
+    // The view picture's own size, the zoom that fits it in the frame, and the zoom on top of that (1 to ZOOM_MAX).
+    let natural = { w: 0, h: 0 };
+    let fit = 1;
+    let scale = 1;
+    // The fingers (or mouse) now down on the frame, by pointer id, the pinch they make while two are down, and
+    // the state of the touch for telling a tap from a drag.
+    const touches = new Map();
+    let pinch = null;
+    let gesture = { moved: false, multi: false };
+    let lastTap = null;
+    let sizeWatcher = null;
+
+    function missingLine(alt) {
+      const line = textElement("p", "sh-caption", MISSING_PICTURE + alt);
+      line.setAttribute("tabindex", "-1");
+      return line;
+    }
+
+    function clamp(value, low, high) {
+      return Math.min(Math.max(value, low), high);
+    }
+
+    // Moves the frame to the given scroll position, held inside what the picture leaves to scroll.
+    function placeScroll(left, top) {
+      viewerFrame.scrollLeft = clamp(left, 0, Math.max(0, viewerFrame.scrollWidth - viewerFrame.clientWidth));
+      viewerFrame.scrollTop = clamp(top, 0, Math.max(0, viewerFrame.scrollHeight - viewerFrame.clientHeight));
+    }
+
+    // The picture's size at a zoom, in whole pixels.
+    function sizeAt(zoom) {
+      return { w: Math.round(natural.w * fit * zoom), h: Math.round(natural.h * fit * zoom) };
+    }
+
+    function showSize() {
+      const size = sizeAt(scale);
+      viewerPicture.setAttribute("width", String(size.w));
+      viewerPicture.setAttribute("height", String(size.h));
+    }
+
+    // Where the frame must scroll so the picture point under (px, py), a point in the frame, stays under it when
+    // the picture goes from one size to another. `view` is the frame's scroll position and size. While the picture
+    // is smaller than the frame it sits centred, so the room on each side is counted in.
+    function zoomedScroll(view, from, to, px, py) {
+      const room = function (space, size) { return Math.max(0, (space - size) / 2); };
+      return {
+        left: (view.left + px - room(view.w, from.w)) * (to.w / from.w) + room(view.w, to.w) - px,
+        top: (view.top + py - room(view.h, from.h)) * (to.h / from.h) + room(view.h, to.h) - py,
+      };
+    }
+
+    // Every zoom goes through here: the new zoom (held to 1 through ZOOM_MAX), about a point in the frame.
+    function zoomTo(next, px, py) {
+      const from = { w: Number(viewerPicture.getAttribute("width")), h: Number(viewerPicture.getAttribute("height")) };
+      if (!(from.w > 0 && from.h > 0)) return;
+      // The frame's scroll position is read before the size changes: a smaller picture can make the browser clamp it.
+      const view = { left: viewerFrame.scrollLeft, top: viewerFrame.scrollTop, w: viewerFrame.clientWidth, h: viewerFrame.clientHeight };
+      scale = clamp(next, 1, ZOOM_MAX);
+      showSize();
+      const target = zoomedScroll(view, from, sizeAt(scale), px, py);
+      placeScroll(target.left, target.top);
+    }
+
+    // Works out the fit from the frame as it is now, keeps the zoom and holds the scroll inside the new size.
+    // Nothing happens while the picture has not loaded or the view is shut.
+    function refit() {
+      if (viewer.hidden || natural.w === 0 || natural.h === 0 || viewerFrame.clientWidth === 0 || viewerFrame.clientHeight === 0) return;
+      fit = Math.min(viewerFrame.clientWidth / natural.w, viewerFrame.clientHeight / natural.h);
+      showSize();
+      placeScroll(viewerFrame.scrollLeft, viewerFrame.scrollTop);
+    }
+
+    function framePoint(clientX, clientY) {
+      const box = viewerFrame.getBoundingClientRect();
+      return { x: clientX - box.left, y: clientY - box.top };
+    }
+
+    function clearGestures() {
+      touches.clear();
+      pinch = null;
+      gesture = { moved: false, multi: false };
+      lastTap = null;
+    }
+
+    // A pointer that is gone (lifted, cancelled or no longer captured). A pinch that loses one ends, and the
+    // pointer left carries on as a drag from where it is now.
+    function dropPointer(event) {
+      if (!touches.has(event.pointerId)) return;
+      touches.delete(event.pointerId);
+      pinch = null;
+    }
+
+    viewerFrame.addEventListener("pointerdown", function (event) {
+      if (touches.size >= 2) return;
+      if (typeof viewerFrame.setPointerCapture === "function") {
+        try {
+          viewerFrame.setPointerCapture(event.pointerId);
+        } catch (error) {
+          // A pointer that has already gone cannot be captured; the touch still counts.
+        }
+      }
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY });
+      if (touches.size === 1) {
+        gesture = { moved: false, multi: false };
+        return;
+      }
+      gesture.multi = true;
+      lastTap = null;
+      const both = Array.from(touches.values());
+      pinch = { distance: Math.max(1, Math.hypot(both[0].x - both[1].x, both[0].y - both[1].y)), scale: scale };
+    });
+
+    viewerFrame.addEventListener("pointermove", function (event) {
+      const touch = touches.get(event.pointerId);
+      if (touch === undefined) return;
+      if (pinch !== null) {
+        touch.x = event.clientX;
+        touch.y = event.clientY;
+        const both = Array.from(touches.values());
+        const middle = framePoint((both[0].x + both[1].x) / 2, (both[0].y + both[1].y) / 2);
+        gesture.moved = true;
+        zoomTo(pinch.scale * (Math.hypot(both[0].x - both[1].x, both[0].y - both[1].y) / pinch.distance), middle.x, middle.y);
+        return;
+      }
+      const dx = event.clientX - touch.x;
+      const dy = event.clientY - touch.y;
+      touch.x = event.clientX;
+      touch.y = event.clientY;
+      if (Math.hypot(touch.x - touch.startX, touch.y - touch.startY) > TAP_SLOP_PX) gesture.moved = true;
+      placeScroll(viewerFrame.scrollLeft - dx, viewerFrame.scrollTop - dy);
+    });
+
+    viewerFrame.addEventListener("pointerup", function (event) {
+      if (!touches.has(event.pointerId)) return;
+      dropPointer(event);
+      if (touches.size > 0) return;
+      if (gesture.moved || gesture.multi) {
+        lastTap = null;
+        return;
+      }
+      const tap = { time: event.timeStamp, x: event.clientX, y: event.clientY };
+      if (lastTap !== null && tap.time - lastTap.time <= DOUBLE_TAP_MS && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) <= DOUBLE_TAP_PX) {
+        lastTap = null;
+        const point = framePoint(tap.x, tap.y);
+        zoomTo(scale > 1 ? 1 : DOUBLE_TAP_ZOOM, point.x, point.y);
+      } else {
+        lastTap = tap;
+      }
+    });
+
+    viewerFrame.addEventListener("pointercancel", function (event) {
+      lastTap = null;
+      dropPointer(event);
+    });
+    viewerFrame.addEventListener("lostpointercapture", dropPointer);
+
+    viewerPicture.addEventListener("dragstart", function (event) {
+      event.preventDefault();
+    });
+
+    viewerPicture.addEventListener("load", function () {
+      natural = { w: viewerPicture.naturalWidth, h: viewerPicture.naturalHeight };
+      scale = 1;
+      refit();
+    });
+
+    // A picture that cannot load says so in the frame, and Close still works.
+    viewerPicture.addEventListener("error", function () {
+      if (viewer.hidden) return;
+      natural = { w: 0, h: 0 };
+      clearGestures();
+      viewerFrame.replaceChildren(missingLine(viewerPicture.getAttribute("alt")));
+    });
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("resize", refit);
+    }
+
+    function openViewer(image, opener) {
+      clearGestures();
+      natural = { w: 0, h: 0 };
+      fit = 1;
+      scale = 1;
+      viewerCaption.textContent = image.alt;
+      viewer.setAttribute("aria-label", image.alt);
+      viewerFrame.replaceChildren(viewerPicture);
+      viewerFrame.scrollLeft = 0;
+      viewerFrame.scrollTop = 0;
+      viewerPicture.removeAttribute("width");
+      viewerPicture.removeAttribute("height");
+      viewerPicture.setAttribute("alt", image.alt);
+      viewerPicture.setAttribute("draggable", "false");
+      viewerOpener = opener;
+      viewer.hidden = false;
+      sheetPage.setAttribute("inert", "");
+      viewerPicture.setAttribute("src", image.src);
+      if (typeof ResizeObserver !== "undefined") {
+        sizeWatcher = new ResizeObserver(refit);
+        sizeWatcher.observe(viewerFrame);
+      }
+      viewerClose.focus();
+    }
+
+    function closeViewer() {
+      if (viewer.hidden) return;
+      viewer.hidden = true;
+      sheetPage.removeAttribute("inert");
+      viewerPicture.removeAttribute("src");
+      clearGestures();
+      natural = { w: 0, h: 0 };
+      scale = 1;
+      if (sizeWatcher !== null) {
+        sizeWatcher.disconnect();
+        sizeWatcher = null;
+      }
+      const back = viewerOpener;
+      viewerOpener = null;
+      if (back !== null) back.focus();
+    }
+
+    viewerClose.addEventListener("click", closeViewer);
+    // Escape closes the view wherever focus is: a click in the frame moves focus to the page body, so the view itself never hears the key.
+    if (typeof document.addEventListener === "function") {
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") closeViewer();
+      });
+    }
+
+    // A card's pictures. Each opens the image view by tap, Enter or Space; one that cannot load becomes a line
+    // saying so, with the card's other parts and the picture's caption left alone.
     function buildImages(images) {
       const wrap = document.createElement("div");
       wrap.className = "sheet-images";
@@ -625,8 +891,31 @@
         const figure = document.createElement("figure");
         figure.className = "sheet-figure";
         const picture = document.createElement("img");
+        let missing = false;
+        const open = function () {
+          if (!missing) openViewer(image, picture);
+        };
+        picture.addEventListener("error", function () {
+          missing = true;
+          const line = missingLine(image.alt);
+          figure.replaceChildren(line, ...Array.from(figure.children).filter(function (child) { return child !== picture; }));
+          if (viewerOpener === picture) viewerOpener = line;
+        });
+        picture.addEventListener("click", open);
+        picture.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          if (event.key === "Enter" && event.repeat !== true) open();
+        });
+        // Space acts when the key comes up, as it does on a button, so the key coming up never lands on Close.
+        picture.addEventListener("keyup", function (event) {
+          if (event.key === " ") open();
+        });
         picture.setAttribute("src", image.src);
         picture.setAttribute("alt", image.alt);
+        picture.setAttribute("tabindex", "0");
+        picture.setAttribute("role", "button");
+        picture.setAttribute("aria-label", "Open picture: " + image.alt);
         figure.appendChild(picture);
         if (typeof image.caption === "string" && image.caption !== "") {
           figure.appendChild(textElement("figcaption", "sh-caption", image.caption));

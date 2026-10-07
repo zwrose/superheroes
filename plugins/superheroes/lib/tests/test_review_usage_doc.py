@@ -104,3 +104,21 @@ def test_usage_doc_names_the_prose_renderer():
     assert "lib/sheet_prose.py" in section, "the fallback section doesn't name lib/sheet_prose.py"
     assert "render --sheet" in section, "the fallback section doesn't show the render command"
     assert (PLUGIN / "lib" / "sheet_prose.py").is_file(), "plugins/superheroes/lib/sheet_prose.py doesn't exist"
+
+
+# Bites on: the publishing section dropping pictures from the staged folder or from `files` (the example call included), the rule that a changed picture is published under a new path, or the rule that a final sheet's pictures are never published by URL; or the layout section no longer telling the owner how a picture opens, zooms and goes missing.
+def test_usage_doc_publishes_pictures_with_the_sheet():
+    section = " ".join(_section(_doc(), "Publishing a sheet").split())
+    for phrase in (
+        "Copy every picture a card names by a relative `src` into the staged folder at that same relative path, and add it to `files` under that path.",
+        '"plan.png": "<staged plan.png>"',
+        "A picture whose `src` is a URL loads from that URL",
+        "the sheet shows it as missing",
+    ):
+        assert phrase in section, "the publishing section doesn't say %r" % phrase
+    assert "A changed picture is published under a new path (a new name), so changing a picture always changes `sheet.json` and, on a final sheet, starts it unsigned." in section
+    assert "A final sheet's pictures are published with the sheet, never by URL, because a URL picture can change without the sheet changing." in section
+
+    layout = " ".join(_section(_doc(), "How a sheet is laid out").split())
+    for phrase in ("Tap a picture on a card to open it on its own", "Pinch or double-tap to zoom", "Close returns to the card", "This picture is missing", "can still be answered"):
+        assert phrase in layout, "the layout section doesn't say %r" % phrase
