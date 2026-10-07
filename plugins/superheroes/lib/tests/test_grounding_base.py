@@ -88,6 +88,38 @@ def test_stale_branch_materializes_the_fetched_default_tip(stale):
     assert not dest.exists()
 
 
+def test_default_branch_not_named_main_is_grounded_from_origin_head(tmp_path):
+    # Bites on: the default branch being read from origin/HEAD rather than assumed to be `main`
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", *_ID, "init", "-q", "--bare", "-b", "trunk", str(origin)], check=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", *_ID, "clone", "-q", str(origin), str(seed)], check=True,
+                   capture_output=True)
+    _git(seed, "symbolic-ref", "HEAD", "refs/heads/trunk")
+    _commit_file(seed, "a.txt")
+    _git(seed, "push", "-q", "origin", "trunk")
+    session = tmp_path / "session"
+    subprocess.run(["git", *_ID, "clone", "-q", str(origin), str(session)], check=True,
+                   capture_output=True)
+    _commit_file(seed, "new-on-trunk.txt")
+    _git(seed, "push", "-q", "origin", "trunk")
+    new_tip = _git(origin, "rev-parse", "trunk")
+    assert _git(session, "rev-parse", "origin/HEAD") != new_tip
+    assert _git(session, "rev-parse", "--abbrev-ref", "origin/HEAD") == "origin/trunk"
+    assert "main" not in _git(origin, "branch", "--list").split()
+    dest = tmp_path / "view"
+    res = definition_doc.grounding_base(root=str(session), dest=str(dest))
+    try:
+        assert res["ok"] is True
+        assert res["ref"] == "origin/trunk"
+        assert res["sha"] == new_tip
+        assert _git(dest, "rev-parse", "HEAD") == new_tip
+        assert _git(dest, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+        assert (dest / "new-on-trunk.txt").is_file()
+    finally:
+        _git(session, "worktree", "remove", str(dest))
+
+
 def test_failing_post_checkout_hook_cannot_break_or_dirty_the_grounding_worktree(stale):
     # Bites on: dropping the `-c core.hooksPath=/dev/null` / `-c core.fsmonitor=` pair from _git_step
     # (a consuming project's post-checkout hook would fail `worktree add` or dirty the grounding tree)
