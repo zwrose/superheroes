@@ -204,7 +204,7 @@ are not run — that exit's own artifact closes the work.
   This check splits off only the obvious bundles. Help the owner pick the **first** piece.
   Each piece gets its own spec. The full split check runs later, when the spec is written.
   Recursion is one level. Don't decompose a decomposition.
-- **Pick the title and mint the slug before the first question.** Choose a concise, accurate
+- **Pick the title and mint the slug before the first requirements question.** Choose a concise, accurate
   title for the piece. It is the sole input to the *frozen* work-item slug, so choose it
   deliberately: it cannot change later. Never ask the owner to pick or confirm it. Mint with the
   guarded form, and stop on a non-zero exit or an empty result:
@@ -218,7 +218,8 @@ are not run — that exit's own artifact closes the work.
   ```
 
   Minting writes nothing. The slug is frozen from here on, and the Canon entry of every ruling
-  for this piece names it.
+  for this piece names it. When the scope check had the owner pick which piece comes first, record
+  that pick in Canon right after the mint, naming the slug.
 
 ### 2. The consent gate — investigation spend is the owner's to authorize
 
@@ -240,7 +241,7 @@ feasibility read of an unfamiliar domain. It has one rule, and this is it:
   never a spend request.
 
 **Offer investigation only when an unknown blocks the requirements.** You cannot write a
-requirement without settling it. Offer it only after the owner consents to a named cost. These
+requirement without settling it. Spend on it only after the owner consents to a named cost. These
 are signs that an unknown may be blocking: the work is novel, it is in an unfamiliar domain, the
 requirements are vague, or it is a user-facing "what do other products do here?" call. **A
 confident owner is not an automatic skip when an unknown blocks** — confidence isn't correctness,
