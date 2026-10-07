@@ -44,6 +44,7 @@ _DECOMPOSITION_H2_HEADINGS = [
     "Re-entry after a substantive amendment",
     "Reciprocal cross-epic seams",
     "The child-PR register vet row",
+    "The breakdown rides the spec PR",
     "The single-issue fast path",
 ]
 
