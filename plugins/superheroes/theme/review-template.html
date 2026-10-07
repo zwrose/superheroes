@@ -1145,7 +1145,8 @@
           acked = state;
           note.value = state.note;
           paint();
-          showStatus("idle");
+          // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
+          showStatus(state.answer !== null || state.note !== "" ? "saved" : "idle");
         },
         // Turns the controls (and a Try again on the save line) on or off.
         setEnabled: function (on) {

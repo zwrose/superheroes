@@ -3062,7 +3062,7 @@ def test_a_saved_verdict_is_restored_on_reopen_and_counts_as_nothing():
     assert picked["last"]["note"] == "Wait for the board"
     assert picked["sets"] == [], "reopening wrote something"
     assert picked["count"] == "0 of 2 answered" and picked["rows"] == ["Open", "Open"]
-    assert picked["save"] == ""
+    assert picked["save"] == "Saved"
     assert picked["reads"] == ["answers", "verdict"]
     assert _all_on(picked["controls"])
 
@@ -3079,6 +3079,39 @@ def test_a_saved_verdict_is_restored_on_reopen_and_counts_as_nothing():
         unfit = reopen(bad)
         assert unfit["last"]["pressed"] == ["false", "false"] and unfit["last"]["note"] == note, name
         assert unfit["sets"] == [], name
+
+
+# Bites on: a restored answer or verdict (or a document restoring only a note) showing no save line after a reopen, a saver with nothing stored showing one, or a reopen writing anything.
+def test_a_reopened_sheet_shows_each_restored_answer_and_the_verdict_as_saved():
+    sheet = _sample_final()
+    third = copy.deepcopy(sheet["cards"][0])
+    third["id"] = "third-one"
+    sheet["cards"].append(third)
+    digest = _sheet_digest(sheet)
+    docs = [
+        {"id": "leftovers-handling", "data": _doc("option", "allow-leftovers")},
+        {"id": "saved-plan-history", "data": _doc("aligned", None, "agreed")},
+    ]
+
+    def reopen(verdict):
+        return _sheet_page(sheet, """
+          await t.advance(200);
+          const saves = {};
+          for (const id of ["leftovers-handling", "saved-plan-history", "third-one"]) {
+            t.open(id);
+            saves[id] = t.saveText(id);
+          }
+          return { saves: saves, last: t.lastSaveText(), sets: t.setLog() };
+        """, host={"fakeTimers": True, "collections": {"answers": docs, "verdict": [{"id": digest, "data": verdict}]}})
+
+    signed = reopen(_verdict("approve", "Looks right", sheet=digest))
+    assert signed["saves"] == {"leftovers-handling": "Saved", "saved-plan-history": "Saved", "third-one": ""}
+    assert signed["last"] == "Saved"
+    assert signed["sets"] == [], "reopening wrote something"
+
+    noted = reopen(_verdict(None, "Only a note", sheet=digest))
+    assert noted["last"] == "Saved", "a verdict document that restores only a note showed no save line"
+    assert noted["sets"] == []
 
 
 # Bites on: a verdict written for another revision of the sheet being restored on reopen (by its id or by its sheet field), a republished sheet not starting unsigned, or a page showing one revision writing to another revision's document.

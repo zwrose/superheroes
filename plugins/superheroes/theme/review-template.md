@@ -113,8 +113,8 @@ A remainder sheet also shows a "Why only these" box. It is built only from the `
 rounds run, fixes made and unsettled list, so it says how many items are here and why, and nothing
 else.
 
-Every answer saves as it is tapped and comes back when the same link is opened again, so leaving
-needs no button. The footer says "Answers save as you tap", and on a plain or remainder sheet it also
+Every answer saves as it is tapped and comes back when the same link is opened again, marked Saved, so
+leaving needs no button. The footer says "Answers save as you tap", and on a plain or remainder sheet it also
 tells the owner to go back to the chat and say they're done once every answer shows it is saved.
 
 ## A final sheet
