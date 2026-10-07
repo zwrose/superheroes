@@ -109,6 +109,9 @@ You fix its findings yourself.
 
 Record that vet in a vet record of the same shape, on the same PR or in the same file. Its rounds
 count on from the spec's. Its spec hash is unchanged, because the breakdown never edits the spec.
+The record's header line reads `**Breakdown vet, round <n>**` in place of `**Spec vet, round <n>**`,
+and its owner-call list reads `None`. The breakdown carries no owner calls; a breakdown finding that
+needs the owner goes to the owner through the merge-word conversation, not the final sheet.
 
 Where the package read applies, it runs as
 [decomposition.md](decomposition.md#the-adversarial-package-read) says. This vet does not replace

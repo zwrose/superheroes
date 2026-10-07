@@ -707,8 +707,8 @@ above).
 
    **Holding a ruling until that pull request exists.** At receipt, write the ruling's complete
    Canon entry line, id included, into one comment on the project's standing proposals
-   [collector](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#collector) that carries the marker
-   `<!-- superheroes:canon-held -->`. Create the comment when none exists, and edit it in place. Mint
+   [collector](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#collector) whose first line is an
+   HTML comment naming `superheroes:canon-held`. Create the comment when none exists, and edit it in place. Mint
    the id by the contract's id rule, counting the held lines as already present, so a later
    take-back can name it in its `supersedes:` field. When you next open a pull request, append the
    held lines to Canon on its branch byte for byte, by the contract's write procedure, skipping any
