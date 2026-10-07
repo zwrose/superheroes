@@ -160,7 +160,7 @@ are not run — that exit's own artifact closes the work.
 5. **Draw it before writing it** → journeys, then choices, then the build board for the owner's approval (or skip: small with nothing to draw)
 6. **Author the spec** via the `writing-specs` skill, once the build board is approved, every statement tagged with its source
 7. **Run the three spec checks** (fix craft findings before the owner spends time), then the writing pass and its meaning check
-8. **Advisor vet, then owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
+8. **Remainder sheets, ready for vet, the advisor's vet, then the final sheet & the owner's approval** ← terminal gate for Exit A; the approved spec is the ready artifact
 
 ## The steps
 
@@ -562,41 +562,57 @@ discarded.
 
 ### 8. Owner review & final approval (terminal gate)
 
-**Before the owner is asked, the advisor vets the spec.** Hand the spec's path and the path of its
-`checks-record.md` to the advisor for its vet, whatever the checks found. The advisor's vet record
-is the notice that the vet is done; how to pick the record and tell a stale one from a current one
-is in `skills/showrunner/reference/spec-vet.md` § How discovery learns the vet is done — read it
-there, and act on a record only as it says. Ask the owner only after a current record reads
-`clean`, and add that record's owner calls to the owner's queue below.
-When the vet asks for changes, apply them and run the checks again on the changed parts as
-`spec-checks.md` says in its After rulings section, then hand it back for the vet. When discovery runs with no advisor reachable, the draft waits for the vet; if
-that cannot be resolved, the discovery parks (Exit C) with the draft marked unapproved.
+The owner never reads the spec end to end. Every call that needs them arrives as a card on a sheet.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/architect-discovery/reference/sheets.md` when you build, send, read or take over a sheet.**
 
-Then ask the owner to review the written spec. **Tell them the truth about which review ran** —
-never claim a review that didn't happen, and never offer them a spec that had none.
+**Tell them the truth about which review ran** — never claim a review that didn't happen, and never
+offer them a spec that had none.
 
-**Name the real path** — the one `resolve-write --doc spec` reported for this work-item, never a
-hardcoded repo path. `<spec path>` below stands for it.
+1. **Remainder sheets first.** After step 7, send the owner
+   [remainder sheets](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#remainder-sheet), built from
+   `checks-record.md` as `sheets.md` says. They hold only what no board, ruling or earlier answer
+   covers, plus findings the review didn't settle and declines the reviewer still contests. A
+   statement with no source that decides product behaviour goes on the next remainder sheet with a
+   recommendation, never kept or cut by discovery. Record each ruling in Canon and apply the answers.
+   Run the checks again on the changed parts as `spec-checks.md` says in its After rulings section,
+   then send the next remainder sheet. Repeat until nothing is left. When nothing is left after step
+   7, send no remainder sheet.
+2. **Then ask whether the spec is
+   [ready for vet](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#ready-for-vet).** It is its own word,
+   separate from approval. Ask it only once no remainder item is left. Never take a remainder
+   sheet's answers, or silence, as that word.
+3. **On the word, hand the spec to the advisor's vet.** Open the spec PR: the spec,
+   `checks-record.md`, the saved board and the `sheets/` folder on a branch. Where the project keeps
+   its specs out of the repo, or in the repo but gitignored, hand over the stored spec instead. It
+   stands in for the PR, with the same vet, approval and merge-word steps. The project's
+   definition-doc policy (`definition_doc.py` resolves it) says which applies, and `sheets.md`
+   carries the how. The advisor files issues at the merge word.
+4. **Wait for the vet record.** The advisor's vet record is the notice that the vet is done; how to
+   pick the record and tell a stale one from a current one is in
+   `skills/showrunner/reference/spec-vet.md` § How discovery learns the vet is done — read it there,
+   and act on a record only as it says. Ask the owner only after a current record reads `clean`.
+   Fix every craft finding the vet raises, run the checks again on the changed parts, and hand the
+   spec back for the next vet. Owner calls in a record go to the final sheet. When discovery runs
+   with no advisor reachable, the draft waits for the vet; if that cannot be resolved, the discovery
+   parks (Exit C) with the draft marked unapproved.
+5. **The final sheet.** After a current clean record, send the final sheet as `sheets.md` says: the
+   vet's owner calls, the declined findings folded away, the plain disclosure when the record says
+   the reviewer was from the author's own family, the line about the writing pass, and the approval
+   card. When `checks-record.md` shows a check that did not run, say so on the sheet: name each
+   check that did not run and why in plain words. Ask for approval one way, for every spec. Name
+   when you will come back to the sheet, and do not press for a verdict in the moment.
 
-Send one message: "Spec written to `<spec path>` and through the three spec checks. Please review
-it and tell me if you want any changes before it goes to the build." Send that sentence only when
-all three checks ran in the last round of the review and their results were real. When
-`checks-record.md` shows a check that did not run, do not claim all three: say instead that the
-spec went through the checks that ran, name each check that did not run and why in plain words,
-then ask the same review question.
+**The owner approves only when all three hold.** The verdict saved for the published revision of the
+final sheet reads Approve, the owner says in the chat that the sheet is done, and no other answer on
+that sheet changes the spec. A saved Approve alone, a Not yet, a cleared verdict, or no verdict is
+not approval: ask. `theme/review-template.md` says how the verdict is read.
 
-Add the owner's queue to it. Present each queued item with its recommendation and its marks from
-`checks-record.md`. When the record says the reviewer was from the author's own family, add this
-sentence: "The reviewer is from the same model family as the author. It is a fresh reviewer that
-never saw the conversation that wrote the spec."
-
-Ask for approval one way, for every spec. Hand the spec over, name when you will come back to it,
-and do not press for a verdict in the moment.
-
-- **If the owner requests changes, record the gate as `changes-requested` first.** Then apply the
-  changes, run the checks again on the changed parts as `spec-checks.md` says in its After rulings
-  section, and only then go back to the owner. Record it the same way as the approval block below
-  records `passed`:
+- **If the owner requests changes, record the gate as `changes-requested` first.** An answer on the
+  final sheet that changes the spec holds approval the same way. Then apply the changes, run the
+  checks again on the changed parts as `spec-checks.md` says in its After rulings section, and hand
+  the spec back to the advisor's vet. Only then go back to the owner, with a new final sheet. It is
+  a republish, so it starts unsigned, and its new last card asks for approval. Record it the same
+  way as the approval block below records `passed`:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -613,8 +629,9 @@ and do not press for a verdict in the moment.
   **There is no path from `changes-requested` to `passed` without that re-run.** A revised draft
   is a draft.
 - **The owner's approval is the terminal gate** — the checks advise, the owner
-  decides. **Only once the owner explicitly approves**, record their decision so the
-  work-item is ready to build:
+  decides. It runs only after the three conditions above hold.
+  **Only once the owner explicitly approves**, record their decision so the work-item is ready to
+  build:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -637,8 +654,13 @@ and do not press for a verdict in the moment.
   owner says yes, never before.
 - **Exit A is done — report and hand back.** With the spec approved, this path is complete: the
   owner-approved spec is the ready artifact. **Report the exit to the advisor** — the
-  work-item, the spec's path, and the path of its `checks-record.md` — exactly as Exits B and C
-  report theirs. Do **not** start a build yourself — hand back to the owner, who routes the
+  work-item, the spec's path, the path of the sheet folder, and the path of its `checks-record.md` —
+  exactly as Exits B and C report theirs. A ruling that changes an approved board but reaches the
+  advisor after this discovery session has ended is appended by the advisor to the piece's
+  `redraws.md` (in the work item's `board` folder), in the format
+  `skills/architect-discovery/reference/boards.md` § Skipping the board, the board winning, and
+  redraws gives, marked `sent: no`. The next discovery session on the piece redraws from it before
+  anything else. Do **not** start a build yourself — hand back to the owner, who routes the
   approved work-item to a build session. The spec's approval gate is the authoritative signal.
   **Breaking the spec into issues, filing those issues and wiring the project board are the
   advisor's, after approval.** Discovery does none of them.
@@ -655,7 +677,7 @@ and do not press for a verdict in the moment.
 | "The owner's sure, skip research" | Confidence isn't correctness. Offer a quick prior-art check on an unknown that blocks the requirements. |
 | "The checks came back clean, that's done" | The checks advise; the **owner** has the final say (step 8). |
 | "Owner approved the idea, start building" | The HARD GATE needs explicit approval of the *what*, then the written spec, before the build. |
-| "Restate every requirement so they can approve" | Step 4 is a compact decision brief, not a spec replay. The requirement-by-requirement review is the spec (step 8) — don't double-review. |
+| "Restate every requirement so they can approve" | Step 4 is a compact decision brief, not a spec replay. What the owner still has to rule on arrives later as cards on a sheet (step 8) — don't double-review. |
 | "They can infer the trade-offs from the options" | A real choice carries its own why-it-matters, per-option consequences, and a recommendation (step 3) — in plain language, before the ask. |
 | "It's just a spike — I'll investigate and skip the gate" | There is no spike surface. "Spike" is the informal name of discovery's investigation phase; when it ends, an exit is still ahead. |
 | "The owner ruled on this already, so I'll run discovery anyway to be safe" | A recorded dated ruling is already the *what* — it needs no discovery. Decline the work; what it routes to is the advisor's call, not yours. |
@@ -671,8 +693,11 @@ and do not press for a verdict in the moment.
 | "The spec says it differently from the board — I'll keep the spec" | The board wins. Correct the spec and run the checks again on the changed parts (step 5). |
 | "I'll describe the screen in chat; the board can be lighter" | A board is never less detailed than the chat. Anything the chat settled appears on the board (step 5). |
 | "This looks small, I'll run the light version of discovery" | There is no up-front ceremony choice. Probe each opinion-bearing dimension and stop when the spec's dispositions table (`## Coverage`) is satisfied — a small surface closes early on its own. |
-| "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Record `changes-requested`, run the checks again on the changed parts, then go back to the owner. There is no path from `changes-requested` to `set-gate … passed` without that (step 8). |
+| "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Record `changes-requested`, run the checks again on the changed parts, hand the spec back for the vet, then send a new final sheet. There is no path from `changes-requested` to `set-gate … passed` without that (step 8). |
 | "We're parking — I'll paste the draft into the park note so nothing is lost" | The draft is already durable at the spec path `resolve-write --doc spec` reports. The note carries the **path** and the unapproved mark, never a second copy — one artifact per home (Exit C). |
 | "The spec is long — I'll stop writing until it's split" | Length alone never stops the work. Past about 300 to 400 lines, raise splitting with the owner; when they keep one spec, write on (step 6). |
 | "The writing pass only touched wording, so the meaning can't have moved" | Every pass that changed text gets the meaning check before the owner sees it. A shift the check does not clear discards the pass (step 7). |
 | "The spec is approved — I'll break it into issues and file them" | Breaking a spec into issues, filing them and wiring the board are the advisor's, after approval (step 8). |
+| "They answered the remainder sheet, so the spec is ready for vet" | Ready for vet is its own word. Ask it once no remainder item is left. Answers and silence never stand in for it (step 8). |
+| "The final sheet shows Approve, so I'll record the approval" | A saved Approve alone is not approval. It takes the verdict for the published revision, the owner's word in the chat that the sheet is done, and no other answer that changes the spec (step 8). |
+| "This statement has no source, but it reads fine — I'll keep it" | A statement with no source that decides product behaviour goes on a remainder sheet with a recommendation. Discovery never keeps or cuts it (step 8). |

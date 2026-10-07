@@ -45,12 +45,6 @@ PACKAGE_WEIGHT_VOCABULARY = (
 
 _SPEC_CHECKS_REF = "skills/architect-discovery/reference/spec-checks.md"
 
-# The same-family sentence discovery passes to the owner is spec-checks.md's, word for word.
-_SAME_FAMILY_SENTENCE = (
-    "The reviewer is from the same model family as the author. It is a fresh reviewer that "
-    "never saw the conversation that wrote the spec."
-)
-
 R7_PARK_SURFACE = (
     "A park lands the full park note — what was elicited or found so far, explicitly "
     "marked unapproved — on the owner's reading surface at park time: in the advisor's "
@@ -184,11 +178,7 @@ _DISCOVERY_SECTION_CLAUSES = {
         "Never fabricate a review result.",
     ],
     "### 8. Owner review & final approval (terminal gate)": [
-        "Send one message: \"Spec written to `<spec path>` and through the three spec checks.",
-        "Send that sentence only when all three checks ran in the last round of the review and their results were real.",
-        "When `checks-record.md` shows a check that did not run, do not claim all three",
         "name each check that did not run and why in plain words",
-        "Present each queued item with its recommendation and its marks from `checks-record.md`.",
         "Ask for approval one way, for every spec.",
         "do not press for a verdict in the moment",
         "If the owner requests changes, record the gate as `changes-requested` first.",
@@ -854,14 +844,6 @@ def test_discovery_charter_names_no_weight():
     assert not re.search(r"weight", text, re.IGNORECASE), (
         "%s: the word 'weight' is back in the charter" % _DISCOVERY_CHARTER
     )
-
-
-def test_discovery_charter_same_family_sentence_matches_spec_checks():
-    # axis: the sentence discovery gives the owner is spec-checks.md's own, word for word
-    assert _SAME_FAMILY_SENTENCE in _file_section(
-        _DISCOVERY_CHARTER, "### 8. Owner review & final approval (terminal gate)"
-    )
-    assert _SAME_FAMILY_SENTENCE in _normalized(_read_plugin(_SPEC_CHECKS_REF))
 
 
 def test_negative_set_gate_without_gates_line_fails(tmp_path):
