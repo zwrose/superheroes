@@ -156,22 +156,30 @@ def test_every_resolved_seat_passes_the_dispatch_review_brief_check_entry(author
 
 # --- the verb --------------------------------------------------------------
 
-def _verb(tmp_path, *, fake_binaries, author="claude"):
-    """Run the verb with PATH holding only a `git` passthrough and the named fake CLIs."""
+def _verb(tmp_path, *, fake_binaries, author="claude", configured=None, extra_args=(),
+          signed_out=()):
+    """Run the verb with PATH holding only a `git` passthrough and the named fake CLIs.
+    A fake CLI exits 0 (signed in) unless named in `signed_out` (exits 1, as a signed-out CLI does)."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     real_git = shutil.which("git")
     (bindir / "git").write_text('#!/bin/sh\nexec "%s" "$@"\n' % real_git)
     (bindir / "git").chmod(0o755)
     for name in fake_binaries:
-        (bindir / name).write_text("#!/bin/sh\nexit 0\n")
+        (bindir / name).write_text("#!/bin/sh\nexit %d\n" % (1 if name in signed_out else 0))
         (bindir / name).chmod(0o755)
     project = tmp_path / "project"
     project.mkdir()
+    if configured is not None:
+        import core_md
+        core_md.write(str(project), {"verifyCommand": "npm test", "stackTags": ["node"],
+                                     "threatModel": "single-user", "patterns": "- x: a.ts:1",
+                                     "enginePreferences": {"specReviewer": configured}},
+                      "confirmed", root=str(tmp_path / "store"), now="2026-06-26")
     env = {"PATH": str(bindir), "HOME": str(tmp_path / "home")}
     proc = subprocess.run(
         [sys.executable, "-B", _CORE_MD, "spec-reviewer-seat", "--cwd", str(project),
-         "--root", str(tmp_path / "store"), "--author-engine", author],
+         "--root", str(tmp_path / "store"), "--author-engine", author, *extra_args],
         capture_output=True, text=True, env=env, timeout=60)
     return proc
 
@@ -183,6 +191,34 @@ def test_verb_picks_codex_when_a_codex_cli_is_on_path(tmp_path):
     got = json.loads(proc.stdout)
     assert (got["engine"], got["source"]) == ("codex", "cross-family-installed")
     _assert_cell(got)
+
+
+def test_verb_honors_a_configured_spec_reviewer_loaded_from_disk(tmp_path):
+    # Bites on: the verb not loading core.md's specReviewer (resolving with empty prefs)
+    proc = _verb(tmp_path, fake_binaries=["cursor-agent"], configured="cursor")
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    assert (got["engine"], got["source"]) == ("cursor", "configured")
+
+
+def test_verb_does_not_count_a_signed_out_cli_as_live(tmp_path):
+    # Bites on: liveness by PATH presence alone (a signed-out codex must not be picked)
+    proc = _verb(tmp_path, fake_binaries=["codex"], signed_out=["codex"])
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    assert (got["engine"], got["source"]) == ("claude", "same-family-fallback")
+
+
+def test_verb_exclude_engine_drops_a_live_engine_so_a_re_resolve_falls_through(tmp_path):
+    # Bites on: --exclude-engine ignored (the dead engine would be returned again)
+    (tmp_path / "a").mkdir()
+    first = json.loads(_verb(tmp_path / "a", fake_binaries=["codex"]).stdout)
+    assert first["engine"] == "codex"
+    (tmp_path / "b").mkdir()
+    proc = _verb(tmp_path / "b", fake_binaries=["codex"], extra_args=["--exclude-engine", "codex"])
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    assert (got["engine"], got["source"]) == ("claude", "same-family-fallback")
 
 
 def test_verb_falls_back_to_claude_with_no_other_cli(tmp_path):

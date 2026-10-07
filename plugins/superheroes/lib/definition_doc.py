@@ -222,7 +222,10 @@ def _git_step(top, *args):
     """Run git for the grounding base: (CompletedProcess, None), or (None, the failure text) when
     git could not be run or timed out. Its own 60 s timeout, apart from the Canon lookup's `_git`."""
     try:
-        return subprocess.run(["git", "-C", top, *args], capture_output=True, text=True,
+        # The checkout hooks are switched off (the pair engine_dispatch._git_scrubbed uses): a
+        # project's post-checkout hook must neither fail nor dirty the grounding worktree.
+        return subprocess.run(["git", "-C", top, "-c", "core.hooksPath=/dev/null",
+                               "-c", "core.fsmonitor=", *args], capture_output=True, text=True,
                               timeout=60), None
     except (OSError, subprocess.SubprocessError) as exc:
         return None, "%s: %s" % (type(exc).__name__, exc)

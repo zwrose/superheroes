@@ -130,7 +130,9 @@ The reviewer's first task is to confirm last round's fixes and answer each decli
 it look for new problems. The confirmation vocabulary is in [The reviewer's
 prompt](#the-reviewers-prompt).
 
-When the seat's engine can no longer run, resolve a new seat with the same verb. Note on the record
+When the seat's engine can no longer run, resolve a new seat with the same verb, passing
+`--exclude-engine <the engine that stopped running>` (repeat the flag for each engine that has
+failed). Note on the record
 that the reviewer changed and why. Hand the new reviewer the previous round anyway, and ask it for
 the confirmations.
 
@@ -329,10 +331,11 @@ round, and the spec diff above shows what changed. Review only the parts the dif
 the surrounding text you need to judge them. Do not raise new findings on text the diff leaves
 unchanged.
 
-Output rules. Return a findings list. Each finding has these fields: id, severity, dimension,
-taxonomy, title, file, line, body, suggestion, evidence, confidence, tradeoff.
+Output rules. Return the findings object the dispatch asks for: {"findings": [...],
+"investigated": [...]}. Never a bare list. The finding fields and the severity values are the ones
+in the example block appended after this prompt; do not restate them.
 
-- severity is Critical, Important, Minor, or Nit. file is the spec path and line is the line in it.
+- file is the spec path and line is the line in it. investigated lists the paths you actually read.
 - dimension is one of Clarity, Verifiability, Failure-Mode, Coherence, Safety-access, Grounding.
 - Confirmations come first in the list, one for each previous finding and each decline. Its id is
   the previous id. Its taxonomy is one of confirm:fixed, confirm:not-fixed,
@@ -342,5 +345,6 @@ taxonomy, title, file, line, body, suggestion, evidence, confidence, tradeoff.
 - New findings follow the confirmations. The taxonomy of a new finding names the check: gap,
   source:forward, source:backward, or grounding. When the only fix would add product behaviour, end
   the taxonomy with ;adds-behaviour.
-- When you have no findings and owe no confirmations, return an empty list.
+- When you have no findings and owe no confirmations, "findings" is [] and "investigated" still
+  lists what you read.
 ```

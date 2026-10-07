@@ -2959,6 +2959,7 @@ def main(argv):
     ssp.add_argument("--cwd", default=".")
     ssp.add_argument("--root", default=None)
     ssp.add_argument("--author-engine", choices=engine_pref.ENGINES, required=True)
+    ssp.add_argument("--exclude-engine", action="append", default=[], choices=engine_pref.ENGINES)
     epp = sub.add_parser("write-engine-pins")  # enginePreferences.codexModels / seatPins
     epp.add_argument("--key", choices=ENGINE_PREF_PIN_KEYS, required=True)
     epp.add_argument("--cwd", default=".")
@@ -3083,8 +3084,13 @@ def main(argv):
     elif args.cmd == "spec-reviewer-seat":
         import engine_detect
         prefs = engine_pref.load_engine_prefs(args.cwd, args.root)
-        live = set(engine_detect.installed_engines())
-        live.add("claude")  # the native in-session seat is always live (as panel composition treats it)
+        # Live = installed AND authenticated (engine_detect's readiness probe, as panel composition
+        # reads it), never PATH presence alone; claude is always live. --exclude-engine drops an
+        # engine that already stopped running, so a re-resolve falls through. The resolver stays pure.
+        ready = engine_detect.probe(args.cwd)
+        live = {e for e in ("codex", "cursor") if engine_detect.decide(ready, e)[0]}
+        live.add("claude")
+        live -= set(args.exclude_engine)
         sys.stdout.write(json.dumps(
             engine_pref.resolve_spec_reviewer_seat(prefs, args.author_engine, live)) + "\n")
         return 0
