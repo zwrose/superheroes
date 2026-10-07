@@ -32,8 +32,21 @@ import review_gate_policy  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
-_PROSE_CONFIG_SHAPES = frozenset({"prose"})
+_PROSE_CONFIG_SHAPES = frozenset({"prose", "nonEmptyProse"})
 _PROSE_DISPLAY_MAX = 120
+
+_SPEC_REVIEWER_HEADING = "## Spec reviewer seat"
+_SPEC_REVIEWER_FALLBACK = (
+    "The spec checks use a reviewer from an installed engine of a different model family than "
+    "the spec's author; when none is installed, they use a fresh reviewer from the author's own "
+    "family.")
+_SPEC_REVIEWER_UNSET = "spec reviewer — unset (no model named). " + _SPEC_REVIEWER_FALLBACK
+_SPEC_REVIEWER_VALID = (
+    "spec reviewer — %(engine)s (no model named). When %(engine)s is the spec author's own model "
+    "family, the checks use an installed engine of a different family instead; when none is "
+    "installed, they use a fresh reviewer from the author's own family.")
+_SPEC_REVIEWER_INVALID = (
+    "spec reviewer — unset: the recorded value %s is not an engine and is not applied ⚠")
 def _read(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -216,11 +229,25 @@ def _one_line_prose(text, limit=_PROSE_DISPLAY_MAX):
     return line[: limit - 1] + "…"
 
 
-def _config_item_display(item_def, entry):
+def _canon_pointer_display(repo_root, cwd, store_root):
+    """The item-13 pointer row: where Canon lives, or that its lookup failed. Never raises."""
+    try:
+        import definition_doc
+
+        where = definition_doc.resolve_canon(
+            root=repo_root, cwd=cwd, store_root=store_root)["path"]
+    except Exception as exc:
+        where = "Canon lookup failed: %s" % type(exc).__name__
+    return "points to the project's Canon standing rulings (%s) — no value of its own" % where
+
+
+def _config_item_display(item_def, entry, canon_args=None):
     """Format one configuration row for the one-screen view. Read-only."""
     if entry.get("malformed"):
         return "malformed (stamped value not applied)"
     source = entry.get("source")
+    if source == "canon-pointer":
+        return _canon_pointer_display(*(canon_args or (None, None, None)))
     slug = item_def["slug"]
     shape = item_def.get("shape")
     effective = entry.get("effective")
@@ -255,6 +282,13 @@ def _project_config_lines(cwd, root):
         payload = project_config.view(cwd, root)
     except Exception:
         return ["(not available)"]
+    try:
+        import store_core
+
+        repo_root = store_core.repo_root(cwd)
+    except Exception:
+        repo_root = None
+    canon_args = (repo_root, cwd, root)
     lines = []
     if payload.get("profileUnparseable"):
         lines.append("profile: core.md unreadable — no stamped values shown")
@@ -279,7 +313,7 @@ def _project_config_lines(cwd, root):
             entry["malformed"] = False
         number = item_def["number"]
         name = item_def["name"]
-        value = _config_item_display(item_def, entry)
+        value = _config_item_display(item_def, entry, canon_args)
         lines.append("%d. %s — %s" % (number, name, value))
     try:
         deps = project_config.dependencies(cwd, root)
@@ -592,6 +626,23 @@ def _append_builder_dispatch_row(out, cwd, root):
             out.append("  %s" % display)
 
 
+def _spec_reviewer_lines(eng):
+    """The `## Spec reviewer seat` block from the validated prefs (`load_engine_prefs` output) — the
+    seat is its own block, never a Dispatch-calibration row. Absent/invalid reads as unset."""
+    eng = eng if isinstance(eng, dict) else {}
+    lines = [_SPEC_REVIEWER_HEADING]
+    engine = eng.get(engine_pref.SPEC_REVIEWER_KEY)
+    invalid = eng.get("invalidSpecReviewer")
+    if isinstance(engine, str) and engine in engine_pref.ENGINES:
+        lines.append(_SPEC_REVIEWER_VALID % {"engine": engine})
+    elif isinstance(invalid, dict):
+        lines.append(_SPEC_REVIEWER_INVALID % engine_pref.safe_config_echo(invalid.get("value")))
+        lines.append(_SPEC_REVIEWER_FALLBACK)
+    else:
+        lines.append(_SPEC_REVIEWER_UNSET)
+    return lines
+
+
 def render(cwd, *, root=None):
     """One plain-text screen — 'here is everything superheroes knows about this project'.
     Read-only; the FR-7 drift notice (if any) trails the profile, re-shown on every run."""
@@ -615,6 +666,9 @@ def render(cwd, *, root=None):
             out.append(line)
         out.append("")
         for line in _size_exclude_view_lines(data.get("sizeExclude")):
+            out.append(line)
+        out.append("")
+        for line in _spec_reviewer_lines(data.get("enginePrefs")):
             out.append(line)
         out.append("")
         out.append("## Review gate policy")
@@ -708,6 +762,9 @@ def render(cwd, *, root=None):
             out.append("Rejected seat pins (not applied — seat falls back to rotation):")
             for seat, reason in sorted(rejected_seats.items()):
                 out.append(f"  {seat}: {reason} ⚠")
+        out.append("")
+        for line in _spec_reviewer_lines(eng):
+            out.append(line)
         out.append("")
         out.append("## Review gate policy")
         for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
