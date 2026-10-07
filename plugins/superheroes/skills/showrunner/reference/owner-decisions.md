@@ -48,24 +48,24 @@ the advisor's actual thinking, the shape is wrong and the thinking wins.
 
 ## The filter — what is the owner's, and on what grounds
 
-Each delivered item **names why it is the owner's** — a **taste, trade, or commitment** call, never a
-craft call a review lens already owns. The two tests that discriminate owner calls from craft calls
-are showrunner duty 5's; cite that duty rather than restating the tests here.
+Each delivered item **names why it is the owner's** — **which of the line's ten owner categories the
+item touches, the owner consequence it carries, or that the sort ended at unsure** — never a craft call a review lens already owns.
+Whether an item is the owner's is sorted by the
+[owner-vs-craft line](../../../rubric/owner-vs-craft-line.md); cite it rather than restating it here.
 
 **List filtered items with a one-line reason** — never swallow them. **Present filtered items in a
 separate short list before batch 1** — so the owner sees disposition rather than absence. The
 inverse failure is over-filtering, and a filter nobody can see is indistinguishable from a quiet
 week.
 
-**State grounds per item, not once per batch.** A single preamble that says "these are all taste
+**State grounds per item, not once per batch.** A single preamble that says "these are all owner
 calls" does not substitute for naming the ground on each item.
 
-**Grade at delivery.** Duty 5's two tests, and the project's [material-consequence](../../../rubric/glossary.md#material-consequence) line (the plugin default when the project sets none), are applied at the moment of delivery, to the item as it stands then — not as it stood when it was filed or routed.
+**Grade at delivery.** The [owner-vs-craft line](../../../rubric/owner-vs-craft-line.md) is applied at the moment of delivery, to the item as it stands then — not as it stood when it was filed or routed.
 
 **The advisor derives the grading, and never inherits it.** An item's tier, and whether it is a
-craft call or an owner call, is the advisor's own read of the ratified text — this filter, the two
-tests it cites, and the project's
-[material-consequence](../../../rubric/glossary.md#material-consequence) line — applied to the item
+craft call or an owner call, is the advisor's own read of the ratified text — this filter and the
+[owner-vs-craft line](../../../rubric/owner-vs-craft-line.md) — applied to the item
 in front of them. How the item was **framed by whoever raised it** — a builder's follow-up line, a
 reviewer's severity word, an issue title that calls something a decision — is **input to that read,
 never the grading itself**. Earlier routing is input in the same way, **the advisor's own included**: a bound the advisor wrote ("park for the owner"), a collector entry appended as an owner call, a builder's or a review driver's "owner gate" — each is evidence about the item, re-graded at delivery, never the grading. A grading inherited from the raiser is how a craft call arrives at the
@@ -74,14 +74,14 @@ directions the owner pays for someone else's framing. The framing is still worth
 evidence about the item, and where it disagrees with the advisor's own read, saying so in the item's
 *why it is yours* is more useful to the owner than a silent re-grade.
 
-**"Why it is yours" names the ground.** It names the specific taste, trade or commitment, or the consequence that crosses the material-consequence line. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list.
+**"Why it is yours" names the ground.** It names which of the line's ten owner categories the item touches, the [material consequence](../../../rubric/glossary.md#material-consequence) it carries, or that the line's sort ended at its last step, unsure, which keeps the call the owner's. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list. An item that ended at unsure stays on the owner's list until a category or consequence can be named.
 
 ## The per-item spine
 
 Five parts, in this order, on every item that passes the filter:
 
-1. **Why it is yours** — the ground from the filter: which taste, trade, or commitment call this is,
-   stated for this item alone.
+1. **Why it is yours** — the ground from the filter: which of the line's ten owner categories the item
+   touches, the owner consequence it carries, or that the line's sort ended at unsure, stated for this item alone.
 2. **Context** — what happened, in plain language, enough that the owner does not have to reconstruct
    anything. Too little context is the failure here; the floor is that the owner can rule without
    opening another artifact.
@@ -194,7 +194,9 @@ declined with a trigger by default.
    carrying its grading** — band, evidence tier, and resulting tier — and it files when the owner's
    word for that filing lands. The word is recorded where the owner gave it. Everything else about
    the standing contract holds: the owner-absent collector still appends, the append-always clause
-   still binds, and the venue ladder still applies.
+   still binds, and the venue ladder still applies. This is a case of the
+   [owner-vs-craft line](../../../rubric/owner-vs-craft-line.md): a new filing commits the owner's
+   attention, which is [category 6](../../../rubric/owner-vs-craft-line.md#the-ten-owner-categories).
 
    **Venue-3 filings are always owner calls.** A new issue spends board attention, a commitment
    call by definition, even when its content is craft.
@@ -211,6 +213,10 @@ declined with a trigger by default.
    child that carries only that child's approved criteria files the same way; anything beyond them
    waits for the word. A repair issue for a failing validation run files at the owner's decision to
    repair ([closure.md](closure.md)).
+
+   **A scope change waits on the owner's word too.** Whether a thing should exist at all is
+   category 4 of the owner-vs-craft line, so a change to committed scope is an owner call
+   ([Craft calls and owner calls](#craft-calls-and-owner-calls)).
 3. **The no-ladder rider, stated as a fail direction.** With no stamped severity ladder there is no
    band to cite, so no P0 or P1 can be claimed and no item can be graded P2 through the door.
    Cleared items **queue at the door for the owner's word**. Missing configuration fails closed for
@@ -376,7 +382,7 @@ finding, a follow-up idea, or a hardening proposal.
 
 ## Craft calls and owner calls
 
-[Craft call](../../../rubric/glossary.md#craft-call) and [owner call](../../../rubric/glossary.md#owner-call) are defined in the glossary, and the line between them, the [material consequence](../../../rubric/glossary.md#material-consequence), has its plugin default in [issue-contract.md](issue-contract.md).
+[Craft call](../../../rubric/glossary.md#craft-call) and [owner call](../../../rubric/glossary.md#owner-call) are defined in the glossary, and what sorts a call into one or the other is the [owner-vs-craft line](../../../rubric/owner-vs-craft-line.md) (its [ten owner categories](../../../rubric/owner-vs-craft-line.md#the-ten-owner-categories) and its [sorting rule](../../../rubric/owner-vs-craft-line.md#how-a-call-is-sorted)); a [material consequence](../../../rubric/glossary.md#material-consequence) is the line's consequence rule.
 
 Residuals that once carried a separate disposition test now route through the door's one decision:
 classify the item's kind as machinery or product, apply the evidence bar and the grid where the kind
@@ -393,7 +399,7 @@ passed only at continuation cost; the door yields eligibility for the continue a
 explicitly droppable, never a ticket.
 
 Venue-1 continuations and craft declines are craft calls. The advisor executes and records for veto.
-Venue-2 scope changes, product declines (any decline that trades away something a product reading
+Venue-2 scope changes (category 4), product declines (category 4; any decline that trades away something a product reading
 could want), and items whose door grading is uncertain are owner calls.
 
 **The standing order is always on.** The advisor decides craft calls itself **at every hour**,
@@ -715,7 +721,7 @@ or reports the malformed region, rather than deleting anything.
 
 **Read trigger:** about to deliver open decisions → read that file first.
 
-**Filter (duty 5):** each item names why it is the owner's (taste, trade, or commitment). Filtered,
+**Filter (duty 5):** each item names why it is the owner's (which of the line's ten owner categories it touches, the owner consequence it carries, or that the sort ended at unsure). Filtered,
 never swallowed — separate short list before batch 1 with a one-line reason each; grounds per item,
 not per batch. Tier and craft-or-owner grading are derived by the advisor from the ratified text —
 whoever raised the item framed it, and that framing is input, never the grading.
