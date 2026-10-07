@@ -106,21 +106,15 @@ When a check did not run in the last round, the sheet says so and names the chec
 
 ## What the final sheet's answers mean
 
-Approval needs all three conditions in step 8: the verdict for the published revision reads Approve,
-the owner says in the chat that the sheet is done, and no other answer changes the spec.
+Step 8 of the charter holds the approval conditions and the changes-requested path; this section
+adds only what is specific to sheets.
 
-An answer that changes the spec holds approval. Do these in order:
+When the re-run checks put anything new in the owner's queue, settle it on a remainder sheet, as in
+Building a remainder sheet, before the spec goes back to the vet. Repeat until the queue holds
+nothing unsettled. Items settled that way do not go on the republished final sheet.
 
-1. Record `changes-requested`, as step 8 shows.
-2. Apply the change.
-3. Run the checks on the changed parts.
-4. When the checks put anything new in the owner's queue, send a remainder sheet for it and settle
-   it as in Building a remainder sheet. Repeat steps 2 to 4 until the queue holds nothing unsettled.
-5. Hand the spec back for the vet.
-6. Republish the final sheet with a new last card, and add a card for every item the checks queued.
-
-The republished sheet starts unsigned, because its data file changed. When a changed answer redraws
-the board, put the redraw on that republished sheet.
+The republished final sheet starts unsigned, because its data file changed. When a changed answer
+redraws the board, put the redraw on that republished sheet.
 
 ## When the host can't show a sheet
 
