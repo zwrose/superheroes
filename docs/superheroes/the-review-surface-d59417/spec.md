@@ -221,6 +221,10 @@ template produces a sheet with the same card and theme. (source: rulings 31, 34)
 - **Card:** one call for the owner on a sheet, with the parts in FR-5. (source: ruling 34)
 - **Sheet:** a set of cards sent to the owner at one time. (source: ruling 8)
 
+## Delivery
+
+**Delivered, accepted in full by the owner on 2026-10-07** (collector #695 item 46 = a, in chat: "46 a, you can merge the stack"; option a read "keep everything and accept Spec B as delivered"). The acceptance rests on the closure receipt carried at PR #1659's vet 404 and amended at vets 409 and 410. C7 shipped as stack #1642, and C8 as stack #1650, with this spec's Amendments 1 and 2 below. Every one of the spec's criteria is delivered, as amended; none is deferred or declined.
+
 ## Amendments
 
 - **2026-10-07 (owner-stamped, substantive):** retired the "Done for now" button. Every answer
