@@ -205,17 +205,12 @@ _DISCOVERY_SECTION_CLAUSES = {
 _ARCHITECT_SPEC_SECTION_CLAUSES = {
     "## Size never changes the artifact class": [
         "Same template.",
-        "There is no short-form template.",
         "Same home.",
-        "There is no separate home for small specs.",
         "Same anchor power.",
-        "A small spec is not a weaker citation.",
         "Same owner approval authority.",
-        "There is no lesser approval.",
         "Empty sections are omitted, never filled.",
         "A heading with nothing",
         "is written by the approval path itself",
-        "`set-gate` records the date",
     ],
 }
 

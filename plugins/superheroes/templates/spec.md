@@ -55,7 +55,7 @@
   (source: craft, for your veto). A statement with two sources names both. A tag never cites
   transcript line numbers. No script or validator reads tags: they are for the owner and for the
   source check, an agent reading plain files. Keep in the list below only the sources this spec
-  uses. Where this spec and the approved board disagree, the board wins: correct the spec. -->
+  uses. Where this spec and the approved board disagree, follow discovery's step 5. -->
 
 Every statement ends with its source in plain text. The sources are:
 

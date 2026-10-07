@@ -74,7 +74,7 @@ work-item's `board/` folder) **or the recorded skip**, **the owner's rulings for
      cites transcript line numbers. Tags are for the owner and for the source check, an agent
      reading plain files; no script or validator reads them.
    - **Write from the approved board and the rulings.** Where the spec and the approved board
-     disagree, the board wins: correct the spec.
+     disagree, follow discovery's step 5.
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1
      acceptance criterion (Given-When-Then for flows, rule bullets for constraints).
    - **Significant unhappy paths as If/Then EARS**, driven by the coverage checklist;
@@ -126,7 +126,7 @@ work-item's `board/` folder) **or the recorded skip**, **the owner's rulings for
      definitions do NOT carry one — a citation-dense spec is leaking the build's *how*.
    - **Source tags:** does every statement end with a plain-text source tag that names a source
      listed in "How to read this spec", and does no tag cite a transcript line number? Does the
-     spec agree with the approved board? Where it does not, the board wins: correct the spec.
+     spec agree with the approved board? Where it does not, follow discovery's step 5.
    - **No tech leaked:** any implementation detail (libraries, schemas, APIs) that
      belongs to the build's *how*? Move it out — the spec is the *what*. (A `[cite: …]`
      provenance marker is a sanctioned spec construct (CONVENTIONS §3.2), not leaked
@@ -190,5 +190,5 @@ empty-sections rule above.
 | "I'll keep the heading and write N/A under it" | Empty sections are omitted, never filled. A heading with nothing real under it is a defect at any size — delete it. |
 | "The Amendments section is empty, I'll delete it like any empty section" | `## Amendments` is always rendered; its zero state is the explicit no-amendments line — that is real content, not an empty section. |
 | "This annex just spells out what the spec meant" | An annex elaborates decisions the core already makes; a new opinion amends the core. Annex smuggling is a named spec-check finding class. |
-| "The chat said it more clearly than the board, so I'll write it the chat's way" | Write from the approved board and the rulings. Where the spec and the board disagree, the board wins: correct the spec. |
+| "The chat said it more clearly than the board, so I'll write it the chat's way" | Write from the approved board and the rulings. Where the spec and the board disagree, follow discovery's step 5. |
 | "I'll cite the transcript line so the source is exact" | A tag never cites transcript line numbers. Name the board, the Canon entry, the framing, or craft. |
