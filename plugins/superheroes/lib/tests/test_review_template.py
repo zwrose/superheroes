@@ -178,7 +178,8 @@ class Node {
   }
 }
 const elements = {};
-["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title"].forEach((id) => {
+["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title",
+  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done"].forEach((id) => {
   elements[id] = new Node("div");
   elements[id].id = id;
 });
@@ -186,6 +187,12 @@ elements["sheet-status"].hidden = false;
 elements["sheet-gate"].hidden = true;
 elements["sheet-error"].hidden = true;
 elements["sheet-title"].textContent = "Review sheet";
+// The sheet's own parts start hidden, with the classes the markup gives them, until a sheet is drawn.
+const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-done": "sh-box" };
+["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done"].forEach((id) => {
+  elements[id].hidden = true;
+  elements[id].className = markupClasses[id] || "";
+});
 const document = {
   title: "Review sheet",
   getElementById: (id) => elements[id],
@@ -333,6 +340,8 @@ const tools = {
   buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
   note: (id) => tools.card(id).children.find((child) => child.tagName === "textarea"),
   saveLine: (id) => tools.card(id).children.find((child) => hasClass(child, "save-line")),
+  // Nothing hidden is ever read as shown: a card's save line counts only while the card list, the card and the line are all shown.
+  visible: (id, node) => [elements["sheet-cards"], tools.card(id), tools.saveLine(id)].some((item) => item.hidden) ? null : node,
   saveText: (id) => [elements["sheet-cards"], tools.card(id), tools.saveLine(id)].some((node) => node.hidden) ? "" : tools.text(tools.saveLine(id)),
   tryAgain: (id) => tools.saveLine(id).children.find((child) => child.tagName === "button"),
   click: (node) => {
@@ -364,6 +373,88 @@ const tools = {
     return { hidden: line.hidden, message: line.children.length ? line.children[0].textContent : "", retry: retry };
   },
   setLog: () => setLog.map((call) => ({ path: call.path, body: call.body })),
+  rowNodes: () => elements["sheet-items"].children.filter((child) => hasClass(child, "sheet-row")),
+  open: (id) => {
+    const index = elements["sheet-cards"].children.findIndex((article) => article.id === "card-" + id);
+    const row = tools.rowNodes()[index];
+    return row === undefined ? false : tools.click(row);
+  },
+  rows: () => tools.rowNodes().map((row) => {
+    const described = (node) => (node ? [node.className, node.textContent] : null);
+    const text = row.children.find((child) => hasClass(child, "sheet-row-text"));
+    return {
+      text: text ? text.textContent : null,
+      pill: described(row.children.find((child) => hasClass(child, "sh-pill"))),
+      badge: described(row.children.find((child) => hasClass(child, "sh-badge"))),
+      current: row.getAttribute("aria-current") === "true" && hasClass(row, "is-current"),
+      ariaCurrent: row.getAttribute("aria-current"),
+      folded: hasClass(row, "is-folded"),
+      className: row.className,
+    };
+  }),
+  fold: () => {
+    const node = elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold"));
+    return {
+      hidden: node.hidden,
+      expanded: node.getAttribute("aria-expanded") === "true",
+      aria: node.getAttribute("aria-expanded"),
+      listExpanded: hasClass(elements["sheet-items"], "is-expanded"),
+      first: elements["sheet-items"].children[0] === node,
+      type: node.getAttribute("type"),
+      className: node.className,
+      text: tools.text(node),
+      parts: node.children.map((child) => [child.className, child.textContent]),
+    };
+  },
+  count: () => elements["sheet-count"].textContent,
+  openCard: () => {
+    const shown = elements["sheet-cards"].children.filter((article) => article.tagName === "article" && !article.hidden).map((article) => article.id.replace("card-", ""));
+    return shown.length === 1 ? shown[0] : shown;
+  },
+  stepper: () => {
+    const parts = elements["sheet-stepper"].children;
+    const named = (label) => parts.find((child) => child.tagName === "button" && child.textContent === label);
+    return {
+      hidden: elements["sheet-stepper"].hidden,
+      label: parts[0].textContent,
+      prevDisabled: named("‹ Previous").disabled,
+      nextDisabled: named("Next ›").disabled,
+    };
+  },
+  why: () => ({
+    hidden: elements["sheet-why"].hidden,
+    heading: elements["sheet-why"].children.find((child) => child.tagName === "h2").textContent,
+    text: elements["sheet-why"].children.find((child) => child.tagName === "p").textContent,
+  }),
+  done: () => ({
+    hidden: elements["sheet-done"].hidden,
+    message: elements["sheet-done"].children.find((child) => child.tagName === "p").textContent,
+    body: {
+      stepper: elements["sheet-stepper"].hidden,
+      items: elements["sheet-items"].hidden,
+      cards: elements["sheet-cards"].hidden,
+      why: elements["sheet-why"].hidden,
+      footer: elements["sheet-footer"].hidden,
+    },
+  }),
+  // The page's own controls by name, so a scenario can press them as a person would.
+  control: (name) => {
+    const among = (host, label) => host.children.find((child) => child.tagName === "button" && child.textContent === label);
+    return {
+      previous: () => among(elements["sheet-stepper"], "‹ Previous"),
+      next: () => among(elements["sheet-stepper"], "Next ›"),
+      fold: () => elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold")),
+      done: () => among(elements["sheet-footer"], "Done for now"),
+      back: () => among(elements["sheet-done"], "Back to the sheet"),
+    }[name]();
+  },
+  footer: () => ({ hidden: elements["sheet-footer"].hidden, caption: elements["sheet-footer"].children[0].textContent }),
+  // Every button node anywhere on the page, for the checks on what a control wears.
+  allButtons: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "button"))].map((node) => ({
+    text: tools.text(node),
+    className: node.className,
+    type: node.getAttribute("type"),
+  })),
 };
 const scenario = async (t) => {
 __SCENARIO__
@@ -393,6 +484,7 @@ __SCENARIO__
     errors: elements["sheet-error-list"].children.map((item) => item.textContent),
     cards: cards,
     recordedSets: tools.setLog(),
+    count: elements["sheet-count"].textContent,
   }));
   process.exit(0);
 })();
@@ -1100,7 +1192,7 @@ def test_failed_save_offers_retry_of_the_latest():
       t.sets[0].reject(failure);
       await t.tick();
       const described = (node) => (node ? [node.className, node.textContent] : null);
-      out.failed = { text: t.saveText("plan-day"), badge: described(badgeOf("plan-day")), retry: described(t.tryAgain("plan-day")) };
+      out.failed = { text: t.saveText("plan-day"), badge: described(t.visible("plan-day", badgeOf("plan-day"))), retry: described(t.visible("plan-day", t.tryAgain("plan-day"))) };
       if (!t.tryAgain("plan-day")) return out;
       t.click(t.tryAgain("plan-day"));
       out.retried = { sets: t.sets.length, body: t.sets[1].body, path: t.sets[1].path, save: t.saveText("plan-day") };
@@ -1115,6 +1207,7 @@ def test_failed_save_offers_retry_of_the_latest():
       await t.tick();
       const held = t.tryAgain("fridge-check");
       t.type(t.note("fridge-check"), "later", "input");
+      t.open("fridge-check");
       out.moved = { save: t.saveText("fridge-check"), retry: t.tryAgain("fridge-check") !== undefined };
       t.fire(held, "click");
       out.heldRetry = { sets: t.sets.length, write: t.setLog()[3] };
@@ -1125,6 +1218,7 @@ def test_failed_save_offers_retry_of_the_latest():
       t.click(t.button("third-card", "Discuss"));
       t.sets[4].reject(failure);
       await t.tick();
+      t.open("third-card");
       out.afterOlder = { sets: t.sets.length, write: t.setLog()[5], save: t.saveText("third-card") };
       t.sets[5].reject({ code: "revoked", message: "gone" });
       await t.tick();
@@ -1227,6 +1321,7 @@ def test_stalled_save_is_single_flight_and_the_latest_state_lands_last():
       await t.advance(10000);
       t.sets[2].reject({ code: "unavailable", message: "late" });
       await t.tick();
+      t.open("fridge-check");
       out.failed = { sets: t.sets.length, text: t.saveText("fridge-check"), retry: t.tryAgain("fridge-check") !== undefined };
       t.click(t.tryAgain("fridge-check"));
       out.retried = { sets: t.sets.length, write: t.setLog()[3] };
@@ -1400,6 +1495,7 @@ def test_a_revert_after_a_failed_write_is_sent_again():
       t.click(t.button("plan-day", "Aligned"));
       t.sets[0].reject({ code: "unavailable", message: "lost ack" });
       await t.tick();
+      t.open("plan-day");
       const during = t.saveText("plan-day");
       t.sets[1].resolve();
       await t.tick();
@@ -1420,6 +1516,7 @@ def test_a_revert_after_a_settled_rejection_is_sent_and_saved_only_after_it_reso
       t.click(t.button("plan-day", "Discuss"));
       t.sets[0].reject({ code: "unavailable", message: "lost ack" });
       await t.tick();
+      t.open("plan-day");
       const failed = t.saveText("plan-day");
       t.click(t.button("plan-day", "Aligned"));
       const during = t.saveText("plan-day");
@@ -1519,6 +1616,487 @@ def test_a_schema_without_an_answer_shape_keeps_answers_off(mutate):
     assert result["gateHidden"] is False, result
     assert result["gate"] == "Answers can't be saved in this view.", result
     assert result["uses"] == [], "the page reached for the store although the schema names no answer shape"
+
+
+def _doc(answer, option_id=None, note=""):
+    return {"answer": answer, "optionId": option_id, "note": note}
+
+
+def _named_cards(*ids):
+    return [_card(card_id, question="Question %d" % (index + 1)) for index, card_id in enumerate(ids)]
+
+
+def _remainder_of(cards, rounds=2, fixes=3, unsettled=()):
+    return _sheet("remainder", cards=cards, remainder={"roundsRun": rounds, "fixesMade": fixes, "unsettled": list(unsettled)})
+
+
+def _sheet_page(sheet, scenario, host=None):
+    page = _run_page(_sample_files(sheet), host=host, scenario=scenario)
+    assert page["settled"], "the page never settled: %s" % page
+    assert len(page["cards"]) == len(sheet["cards"]), page["cards"]
+    return page["result"]
+
+
+# Bites on: the answered count reading anything but each card's latest answer (an unconfirmed pick left out, a note counted as an answer, a discuss pick not counted separately, a restored answer missed, or a restored document that does not fit counted).
+def test_sheet_count_follows_the_latest_answers():
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card"), """
+      const out = {};
+      const failure = { code: "unavailable", message: "try later" };
+      out.start = t.count();
+      t.type(t.note("plan-day"), "just a note", "input");
+      out.noteOnly = t.count();
+      t.click(t.button("plan-day", "Aligned"));
+      out.aligned = t.count();
+      t.click(t.button("plan-day", "Discuss"));
+      out.changed = t.count();
+      t.click(t.button("fridge-check", "Yes"));
+      out.picked = t.count();
+      t.click(t.button("plan-day", "Aligned"));
+      out.changedBack = t.count();
+      t.sets[1].reject(failure);
+      await t.tick();
+      out.failed = t.count();
+      t.click(t.button("third-card", "Discuss"));
+      await t.advance(10000);
+      out.stalled = t.count();
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["start"] == "0 of 4 answered"
+    assert result["noteOnly"] == "0 of 4 answered", "a note alone was counted as an answer"
+    assert result["aligned"] == "1 of 4 answered", "an unconfirmed pick was left out of the count"
+    assert result["changed"] == "1 of 4 answered · 1 to discuss"
+    assert result["picked"] == "2 of 4 answered · 1 to discuss"
+    assert result["changedBack"] == "2 of 4 answered"
+    assert result["failed"] == "2 of 4 answered"
+    assert result["stalled"] == "3 of 4 answered · 1 to discuss"
+
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+        {"id": "fourth-card", "data": _doc("maybe", None, "kept")},
+    ]
+    restored = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card"), "return t.count();", host={"docs": docs})
+    assert restored == "3 of 4 answered · 1 to discuss"
+
+
+# Bites on: the sheet claiming "0 of N answered" or "Open" while the saved answers are not known (loading, a failed or stalled read, no store, a non-owner, no answer shape), or a retried read that succeeds not turning the count and pills on.
+@pytest.mark.parametrize("host,advance,drop_shape,retry,card_ids", [
+    pytest.param({"read": "pending"}, 0, False, False, ["plan-day", "fridge-check"], id="loading"),
+    pytest.param({"read": ["reject", "docs"], "docs": [{"id": "plan-day", "data": _doc("aligned")}]}, 0, False, True, ["plan-day", "fridge-check"], id="failed-read"),
+    pytest.param({"read": "pending", "fakeTimers": True}, 10000, False, False, ["plan-day", "fridge-check"], id="stalled-read"),
+    pytest.param({"claude": "missing"}, 0, False, False, ["plan-day", "fridge-check"], id="no-runtime"),
+    pytest.param({"db": "null"}, 0, False, False, ["plan-day", "fridge-check"], id="no-store"),
+    pytest.param({"user": "viewer"}, 0, False, False, ["plan-day", "fridge-check"], id="non-owner"),
+    pytest.param({}, 0, True, False, ["plan-day", "fridge-check"], id="no-answer-shape"),
+    pytest.param({"read": "pending"}, 0, False, False, ["plan-day"], id="one-card"),
+])
+def test_sheet_makes_no_answer_claim_until_answers_are_read(host, advance, drop_shape, retry, card_ids):
+    files = _sample_files(_remainder_of(_named_cards(*card_ids), unsettled=card_ids[-1:]))
+    if drop_shape:
+        files["sheet.schema.json"]["body"] = json.dumps(_schema_without_answers(_drop_answer_definition))
+    page = _run_page(files, host=host, scenario="""
+      if (__ADVANCE__ > 0) await t.advance(__ADVANCE__);
+      const snapshot = () => ({ count: t.count(), rows: t.rows(), fold: t.fold() });
+      const out = { before: snapshot() };
+      if (__RETRY__) {
+        t.click(t.gate().retry);
+        await t.tick();
+        out.after = snapshot();
+      }
+      return out;
+    """.replace("__ADVANCE__", str(advance)).replace("__RETRY__", "true" if retry else "false"))
+    assert page["settled"], "the page never settled: %s" % page
+    before = page["result"]["before"]
+    assert before["count"] == "%d item%s · answers not loaded" % (len(card_ids), "" if len(card_ids) == 1 else "s")
+    assert [row["pill"] for row in before["rows"]] == [None] * len(card_ids), "a row claimed a state before the answers were known"
+    assert before["fold"]["hidden"] is True
+    if retry:
+        after = page["result"]["after"]
+        assert after["count"] == "1 of 2 answered"
+        assert [row["pill"] for row in after["rows"]] == [
+            ["sh-pill sh-pill--aligned", "Aligned"], ["sh-pill sh-pill--open", "Open"],
+        ]
+
+
+# Bites on: a row that is not a button, is out of card order, or shows the wrong text, pill or open-card marks, a row click that does not open its card, or a card with only a note reading as answered.
+def test_rows_show_each_cards_state():
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+        {"id": "fourth-card", "data": _doc("maybe", None, "only a note")},
+    ]
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card"), """
+      const out = { nodes: t.rowNodes().map((row) => [row.tagName, row.getAttribute("type")]), rows: t.rows(), open: t.openCard() };
+      t.click(t.control("next"));
+      out.stepped = t.openCard();
+      out.clicked = t.open("fridge-check");
+      out.afterClick = { open: t.openCard(), current: t.rows().map((row) => row.current), aria: t.rows().map((row) => row.ariaCurrent) };
+      return out;
+    """, host={"docs": docs})
+    assert result["nodes"] == [["button", "button"]] * 4
+    assert [row["text"] for row in result["rows"]] == ["1 · Question 1", "2 · Question 2", "3 · Question 3", "4 · Question 4"]
+    assert [row["pill"] for row in result["rows"]] == [
+        ["sh-pill sh-pill--aligned", "Aligned"],
+        ["sh-pill sh-pill--discuss", "Discuss"],
+        ["sh-pill sh-pill--aligned", "Picked"],
+        ["sh-pill sh-pill--open", "Open"],
+    ]
+    assert [row["badge"] for row in result["rows"]] == [None] * 4
+    assert [row["folded"] for row in result["rows"]] == [False] * 4, "a plain sheet folded a row"
+    assert result["open"] == "fourth-card"
+    assert [row["current"] for row in result["rows"]] == [False, False, False, True]
+    assert result["rows"][3]["className"] == "sh-button sh-button--main sheet-row is-current"
+    assert result["rows"][0]["className"] == "sh-button sheet-row"
+    assert result["clicked"] is True
+    assert result["afterClick"] == {"open": "fridge-check", "current": [False, True, False, False], "aria": ["false", "true", "false", "false"]}
+
+
+# Bites on: a card whose save failed or stalled not showing "Not saved" on its row, a saved or untouched card showing it, or the mark staying after a retry lands.
+def test_row_shows_not_saved_for_a_failed_or_stalled_save():
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card"), """
+      const out = {};
+      const failure = { code: "unavailable", message: "try later" };
+      const badges = () => t.rows().map((row) => row.badge);
+      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("fridge-check", "Yes"));
+      t.click(t.button("third-card", "Discuss"));
+      t.sets[2].resolve();
+      t.sets[0].reject(failure);
+      await t.tick();
+      out.failed = { badges: badges(), pills: t.rows().map((row) => row.pill) };
+      await t.advance(10000);
+      out.stalled = badges();
+      t.open("plan-day");
+      t.click(t.tryAgain("plan-day"));
+      t.sets[3].resolve();
+      await t.tick();
+      out.recovered = badges();
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    warning = ["sh-badge sh-badge--warning", "Not saved"]
+    assert result["failed"]["badges"] == [warning, None, None]
+    assert result["failed"]["pills"][0] == ["sh-pill sh-pill--aligned", "Aligned"]
+    assert result["stalled"] == [warning, warning, None]
+    assert result["recovered"] == [None, warning, None]
+
+
+# Bites on: more or fewer than one card shown, the first draw or a restore not landing on the right card, Previous or Next stepping wrongly or staying enabled at an end, the stepper label, or the open row's class.
+def test_one_card_is_open_and_previous_next_step_through():
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card"), """
+      const out = { first: { open: t.openCard(), stepper: t.stepper() } };
+      const shape = () => ({ open: t.openCard(), stepper: t.stepper(), classes: t.rows().map((row) => row.className), aria: t.rows().map((row) => row.ariaCurrent) });
+      out.firstRows = shape();
+      t.click(t.control("next"));
+      out.second = shape();
+      t.click(t.control("next"));
+      out.third = shape();
+      out.pastEnd = t.click(t.control("next"));
+      t.click(t.control("previous"));
+      t.click(t.control("previous"));
+      out.back = { open: t.openCard(), pastStart: t.click(t.control("previous")) };
+      t.open("third-card");
+      out.viaRow = t.openCard();
+      return out;
+    """)
+    assert result["first"] == {"open": "plan-day", "stepper": {"hidden": False, "label": "Item 1 of 3", "prevDisabled": True, "nextDisabled": False}}
+    current = "sh-button sh-button--main sheet-row is-current"
+    plain = "sh-button sheet-row"
+    assert result["firstRows"]["classes"] == [current, plain, plain]
+    assert result["firstRows"]["aria"] == ["true", "false", "false"]
+    assert result["second"]["open"] == "fridge-check"
+    assert result["second"]["stepper"] == {"hidden": False, "label": "Item 2 of 3", "prevDisabled": False, "nextDisabled": False}
+    assert result["second"]["classes"] == [plain, current, plain]
+    assert result["second"]["aria"] == ["false", "true", "false"]
+    assert result["third"]["open"] == "third-card"
+    assert result["third"]["stepper"] == {"hidden": False, "label": "Item 3 of 3", "prevDisabled": False, "nextDisabled": True}
+    assert result["pastEnd"] is False
+    assert result["back"] == {"open": "plan-day", "pastStart": False}
+    assert result["viaRow"] == "third-card"
+
+    # While the answers are still loading the first card is open.
+    loading = _answer_page(_named_cards("plan-day", "fridge-check"), "return t.openCard();", host={"read": "pending"})
+    assert loading == "plan-day"
+
+    # A restore lands on the first card still waiting for an answer, or on the first when every card is answered.
+    ids = ("plan-day", "fridge-check", "third-card")
+    partly = [{"id": "plan-day", "data": _doc("aligned")}, {"id": "fridge-check", "data": _doc("discuss")}]
+    landed = _answer_page(_named_cards(*ids), "return { open: t.openCard(), label: t.stepper().label };", host={"docs": partly})
+    assert landed == {"open": "third-card", "label": "Item 3 of 3"}
+    everything = partly + [{"id": "third-card", "data": _doc("option", "no")}]
+    landed = _answer_page(_named_cards(*ids), "return { open: t.openCard(), label: t.stepper().label };", host={"docs": everything})
+    assert landed == {"open": "plan-day", "label": "Item 1 of 3"}
+
+    # A sheet with one card has nowhere to step.
+    single = _answer_page(_named_cards("plan-day"), "return { open: t.openCard(), stepper: t.stepper(), fold: t.fold().hidden };")
+    assert single == {"open": "plan-day", "stepper": {"hidden": False, "label": "Item 1 of 1", "prevDisabled": True, "nextDisabled": True}, "fold": True}
+
+
+# Bites on: the fold missing an answered item, miscounting its pills, showing a Picked pill when none was picked, folding the open card, folding on a plain or final sheet, or its toggle not flipping aria-expanded and the list's expanded class.
+def test_remainder_fold_counts_answered_items():
+    ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+    ]
+    scenario = """
+      const out = { rows: t.rows().map((row) => row.folded), fold: t.fold(), open: t.openCard() };
+      t.click(t.control("fold"));
+      out.expanded = { aria: t.fold().aria, list: t.fold().listExpanded };
+      t.click(t.control("fold"));
+      out.collapsed = { aria: t.fold().aria, list: t.fold().listExpanded };
+      return out;
+    """
+    result = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), scenario, host={"docs": docs})
+    assert result["open"] == "fourth-card"
+    assert result["rows"] == [True, True, True, False]
+    fold = result["fold"]
+    assert (fold["hidden"], fold["first"], fold["type"], fold["aria"]) == (False, True, "button", "false")
+    assert fold["className"] == "sh-button sheet-fold"
+    assert fold["parts"] == [
+        ["", "Answered · 3"],
+        ["sh-pill sh-pill--aligned", "1 Aligned"],
+        ["sh-pill sh-pill--discuss", "1 Discuss"],
+        ["sh-pill sh-pill--aligned", "1 Picked"],
+    ]
+    assert result["expanded"] == {"aria": "true", "list": True}
+    assert result["collapsed"] == {"aria": "false", "list": False}
+
+    # No pick, no Picked pill.
+    two = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), scenario, host={"docs": docs[:1]})
+    assert [part[1] for part in two["fold"]["parts"]] == ["Answered · 1", "1 Aligned", "0 Discuss"]
+
+    # The open card is never folded or counted, even when every card is answered.
+    everything = docs + [{"id": "fourth-card", "data": _doc("aligned")}]
+    full = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), scenario, host={"docs": everything})
+    assert full["open"] == "plan-day"
+    assert full["rows"] == [False, True, True, True]
+    assert full["fold"]["parts"][0] == ["", "Answered · 3"]
+
+    # Plain and final sheets never fold.
+    for sheet in (_sheet(cards=_named_cards("plan-day", "fridge-check")), _final_sheet()):
+        plain = _sheet_page(sheet, scenario, host={"docs": docs[:1]})
+        assert plain["rows"] == [False, False]
+        assert plain["fold"]["hidden"] is True
+
+
+# Bites on: an answer whose save failed or stalled folding away with the rest, losing its Not saved mark, going missing from the fold's "not saved" count, or the open card (already in full view) being counted in that number.
+def test_an_unsaved_answer_never_folds():
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+      const out = {};
+      const failure = { code: "unavailable", message: "try later" };
+      const shape = () => ({ folded: t.rows().map((row) => row.folded), badges: t.rows().map((row) => row.badge), fold: t.fold() });
+      t.click(t.button("plan-day", "Aligned"));
+      t.open("fridge-check");
+      t.click(t.button("fridge-check", "Discuss"));
+      t.sets[1].resolve();
+      await t.tick();
+      t.open("third-card");
+      out.saving = shape();
+      t.sets[0].reject(failure);
+      await t.tick();
+      out.failed = shape();
+      t.open("plan-day");
+      out.openFailed = shape();
+      t.click(t.tryAgain("plan-day"));
+      t.sets[2].resolve();
+      await t.tick();
+      t.open("third-card");
+      out.recovered = shape();
+      return out;
+    """, host={"set": "pending"})
+    warning = ["sh-badge sh-badge--warning", "Not saved"]
+    # An answer still being written folds; one whose write failed does not, though the owner has moved on.
+    assert result["saving"]["folded"] == [True, True, False]
+    assert [part[1] for part in result["saving"]["fold"]["parts"]] == ["Answered · 2", "1 Aligned", "1 Discuss"]
+    assert result["failed"]["folded"] == [False, True, False]
+    assert result["failed"]["badges"] == [warning, None, None]
+    assert result["failed"]["fold"]["hidden"] is False
+    assert result["failed"]["fold"]["parts"] == [
+        ["", "Answered · 1"],
+        ["sh-pill sh-pill--aligned", "0 Aligned"],
+        ["sh-pill sh-pill--discuss", "1 Discuss"],
+        ["sh-badge sh-badge--warning", "1 not saved"],
+    ]
+    # The open card is in full view with its own save line, so the fold does not count it.
+    assert result["openFailed"]["folded"] == [False, True, False]
+    assert [part[1] for part in result["openFailed"]["fold"]["parts"]] == ["Answered · 1", "0 Aligned", "1 Discuss"]
+    assert result["recovered"]["folded"] == [True, True, False]
+    assert result["recovered"]["badges"] == [None, None, None]
+
+
+# Bites on: an answer whose write stalled folding away with the rest, losing its Not saved mark, or going missing from the fold's "not saved" count.
+def test_a_stalled_answer_never_folds():
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+      t.click(t.button("plan-day", "Aligned"));
+      t.open("fridge-check");
+      t.click(t.button("fridge-check", "Discuss"));
+      t.sets[1].resolve();
+      await t.tick();
+      t.open("third-card");
+      await t.advance(10000);
+      return { folded: t.rows().map((row) => row.folded), badges: t.rows().map((row) => row.badge), fold: t.fold() };
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["folded"] == [False, True, False]
+    assert result["badges"] == [["sh-badge sh-badge--warning", "Not saved"], None, None]
+    assert [part[1] for part in result["fold"]["parts"]] == ["Answered · 1", "0 Aligned", "1 Discuss", "1 not saved"]
+
+
+# Bites on: the "why only these" line built from anything but the review's own rounds, fixes and unsettled count, the card count, or shown on a plain or final sheet.
+def test_why_only_these_is_built_from_the_remainder_facts():
+    ending = " Everything else traces to your board or your rulings, so it isn't here."
+    cases = [
+        (2, 3, ["fridge-check"], ["plan-day", "fridge-check"],
+         "The review ran 2 rounds and fixed 3 things itself." + ending + " 1 item here is a finding the review didn't settle."),
+        (1, 1, [], ["plan-day", "fridge-check", "third-card"], "The review ran 1 round and fixed 1 thing itself." + ending),
+        (4, 0, ["plan-day", "third-card"], ["plan-day", "fridge-check", "third-card"],
+         "The review ran 4 rounds and fixed 0 things itself." + ending + " 2 items here are findings the review didn't settle."),
+    ]
+    for rounds, fixes, unsettled, ids, text in cases:
+        why = _sheet_page(_remainder_of(_named_cards(*ids), rounds, fixes, unsettled), "return t.why();")
+        assert why == {"hidden": False, "heading": "Why only these %d" % len(ids), "text": text}
+    for sheet in (_sheet(), _final_sheet()):
+        assert _sheet_page(sheet, "return t.why().hidden;") is True
+
+
+# Bites on: Done for now not saving a pending note at once, the message not counting unsaved answers (a write in flight or a stalled one) or claiming a save with no store, the sheet body staying visible, or Back to the sheet not returning to the same open card.
+def test_done_for_now_flushes_and_reports_unsaved():
+    saved = "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done."
+    result = _answer_page(_named_cards("plan-day", "fridge-check"), """
+      const out = {};
+      t.open("fridge-check");
+      t.type(t.note("plan-day"), "later", "input");
+      out.pending = t.sets.length;
+      t.click(t.control("done"));
+      out.flushed = { sets: t.setLog(), done: t.done(), count: t.count(), countHidden: elements["sheet-count"].hidden, footer: t.footer() };
+      t.sets.forEach((call) => call.resolve());
+      await t.tick();
+      out.saved = t.done().message;
+      t.click(t.control("back"));
+      out.back = { done: t.done(), open: t.openCard(), footer: t.footer() };
+      t.click(t.button("fridge-check", "Aligned"));
+      await t.advance(10000);
+      t.type(t.note("plan-day"), "again", "input");
+      t.click(t.control("done"));
+      out.two = { sets: t.sets.length, message: t.done().message };
+      t.sets.forEach((call) => call.resolve());
+      await t.tick();
+      out.settled = t.done().message;
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["pending"] == 0
+    assert result["flushed"]["sets"] == [_write("plan-day", None, None, "later")], "Done for now left a pending note unwritten"
+    done = result["flushed"]["done"]
+    assert done["hidden"] is False
+    assert done["message"] == "1 answer isn't saved yet. Keep this page open until this says they're saved."
+    assert done["body"] == {"stepper": True, "items": True, "cards": True, "why": True, "footer": True}
+    assert result["flushed"]["countHidden"] is False and result["flushed"]["count"] == "0 of 2 answered"
+    assert result["saved"] == saved
+    assert result["back"]["done"]["hidden"] is True
+    assert result["back"]["done"]["body"] == {"stepper": False, "items": False, "cards": False, "why": True, "footer": False}
+    assert result["back"]["open"] == "fridge-check"
+    assert result["flushed"]["footer"]["caption"] == "Answers save as you tap"
+    assert result["two"] == {"sets": 3, "message": "2 answers aren't saved yet. Keep this page open until this says they're saved."}
+    assert result["settled"] == saved
+
+    # With no store nothing is written and the message says so.
+    unsaved = _answer_page(_named_cards("plan-day"), """
+      t.click(t.control("done"));
+      const message = t.done().message;
+      t.click(t.control("back"));
+      return { message: message, sets: t.sets.length, hidden: t.done().hidden };
+    """, host={"db": "null"})
+    assert unsaved == {"message": "Answers can't be saved in this view, so nothing here was saved.", "sets": 0, "hidden": True}
+
+    # While the saved answers are loading, or the read failed or stalled, the store is attached: say so, not "can't save".
+    cannot = "Answers can't be saved in this view, so nothing here was saved."
+    loading = "Your saved answers haven't loaded yet, so nothing new was saved here. Answers saved earlier are kept; open this link again to carry on."
+    scenario = "t.click(t.control(\"done\")); return t.done().message;"
+    for name, host, expected in [
+        ("loading", {"read": "pending"}, loading),
+        ("failed read", {"read": ["reject", "docs"]}, loading),
+        ("non-owner", {"user": "viewer"}, cannot),
+        ("no runtime", {"claude": "missing"}, cannot),
+    ]:
+        page = _run_page(_sample_files(_remainder_of(_named_cards("plan-day"), unsettled=["plan-day"])), host=host, scenario=scenario)
+        assert page["result"] == expected, "%s: %s" % (name, page["result"])
+
+
+# Bites on: Done for now telling the owner to wait after a write was rejected, or Back to the sheet not opening the first card whose save failed so its Try again is in view.
+def test_done_for_now_after_a_rejected_save_points_to_try_again():
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "garage"), """
+      const out = {};
+      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("garage", "Aligned"));
+      t.sets[0].resolve();
+      t.sets[1].reject({ code: "unavailable", message: "no" });
+      await t.tick();
+      t.open("fridge-check");
+      t.click(t.control("done"));
+      out.one = t.done().message;
+      t.click(t.control("back"));
+      out.open = t.openCard();
+      out.retry = t.saveText("garage");
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["one"] == "1 answer didn't save. Go back to the sheet and tap Try again on each."
+    assert result["open"] == "garage"
+    assert "Try again" in result["retry"]
+
+
+# Bites on: an earlier write settling cutting a note's one-second pause short, so a half-typed note is written early.
+def test_an_earlier_save_settling_keeps_the_note_pause():
+    result = _answer_page([_card("plan-day")], """
+      const out = {};
+      t.click(t.button("plan-day", "Aligned"));
+      t.type(t.note("plan-day"), "the note", "input");
+      t.sets[0].resolve();
+      await t.tick();
+      out.afterSettle = { sets: t.sets.length, save: t.saveText("plan-day") };
+      await t.advance(999);
+      out.beforePause = t.sets.length;
+      await t.advance(1);
+      out.atPause = { sets: t.setLog(), save: t.saveText("plan-day") };
+      t.sets[1].resolve();
+      await t.tick();
+      out.final = { sets: t.sets.length, save: t.saveText("plan-day") };
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["afterSettle"] == {"sets": 1, "save": "Saving…"}, "an earlier write settling sent the note before its pause ended"
+    assert result["beforePause"] == 1
+    assert result["atPause"] == {
+        "sets": [_write("plan-day", "aligned", None, ""), _write("plan-day", "aligned", None, "the note")],
+        "save": "Saving…",
+    }
+    assert result["final"] == {"sets": 2, "save": "Saved"}
+
+
+# Bites on: a control the page adds (an item row, the fold, Previous, Next, Done for now, Back to the sheet) that is not a theme button, a second desktop breakpoint, a restated outline, or the hidden rule going missing.
+def test_new_controls_are_theme_buttons():
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), """
+      const hosts = ["sheet-stepper", "sheet-items", "sheet-footer", "sheet-done"];
+      const own = hosts.flatMap((id) => t.all(elements[id]).filter((node) => node.tagName === "button"));
+      return {
+        own: own.map((node) => ({ text: t.text(node), className: node.className, type: node.getAttribute("type") })),
+        everything: t.allButtons().map((button) => button.className),
+      };
+    """, host={"docs": [{"id": "plan-day", "data": _doc("aligned")}]})
+    assert len(result["own"]) == 7, result["own"]
+    labels = [button["text"] for button in result["own"]]
+    for label in ("‹ Previous", "Next ›", "Done for now", "Back to the sheet"):
+        assert label in labels, labels
+    for button in result["own"]:
+        assert "sh-button" in button["className"].split(), button
+        assert button["type"] == "button", button
+    assert all("sh-button" in name.split() for name in result["everything"]), result["everything"]
+
+    text = _template_text()
+    queries = [query.strip() for block in _style_blocks(text) for query in re.findall(r"@media([^{]*)\{", block)]
+    assert queries == ["(min-width: 900px)"], queries
+    assert not re.search(r"(?<![\w-])outline(?:-[a-z-]+)?\s*:", text), "the template declares an outline"
+    assert ".sh-theme [hidden] { display: none; }" in text
 
 
 # Bites on: JavaScript or other non-markup text sitting outside the page's script and style blocks.

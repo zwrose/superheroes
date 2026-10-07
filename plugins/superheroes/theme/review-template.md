@@ -71,6 +71,27 @@ A card's `warning` follows the rule in `sheet.schema.json` (`$defs/card/properti
 draws the red badge. Every other card draws a plain badge naming its kind
 of call.
 
+## How a sheet is laid out
+
+A yellow app bar sits at the top with the review's name. Once the saved answers are read, it also
+says "A of N answered", and how many of those are marked to discuss. Until they are read, it says
+"N items · answers not loaded" instead, so a sheet never claims a count it hasn't checked.
+
+One item is open at a time, with Previous and Next to move between them. Below it, the list of items
+shows each one's state: Aligned, Discuss, Picked or Open. An item whose save didn't land carries a
+red Not saved badge.
+
+On a phone, a remainder sheet folds the items that are answered into one row, with their Aligned,
+Discuss and Picked counts. An answer whose save failed or stalled never folds, so it stays in the list where it
+can be seen and retried. On a desktop, every item is listed beside the open card.
+
+A remainder sheet also shows a "Why only these" box. It is built only from the `remainder` block's
+rounds run, fixes made and unsettled list, so it says how many items are here and why, and nothing
+else.
+
+"Done for now" saves any note that is still pausing, shows whether every answer is saved, and returns
+to the same sheet. To come back to a sheet, open the same link.
+
 ## How answers come back
 
 A tap saves at once, as a draft the owner can change, into the sheet's own store. The last tap
@@ -106,3 +127,7 @@ same link.
 
 Where the host can't show a sheet, the session puts the same cards to the owner as numbered chat
 prose, each with its context, options and recommendation, built from the same data file.
+
+Render the prose with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/sheet_prose.py" render --sheet <the data file>`
+and paste its output. It runs on a plain Python, with nothing to install. It refuses a data file it
+can't trust, and lists what is wrong one problem to a line.
