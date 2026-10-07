@@ -567,9 +567,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 #### D5 — Circuit breaker + escalation
 
-- **Component.** The review auto-fix loop circuit breaker and its escalation resolver
-  (`circuit_breaker.py`, `escalation.py`, `escalation_resolve.py`); it costs recurrence tracking on
-  every round and halts stuck loops that stop making progress.
+- **Component.** The review auto-fix loop circuit breaker (`circuit_breaker.py`); it costs
+  recurrence tracking on every round and halts stuck loops that stop making progress.
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
   circuit-breaker trips or escalation halts on a review loop that would otherwise have continued
@@ -581,6 +580,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — stuck-loop detection guards loop integrity independent of vendor. The
   fixer file-scope guard that used to ride on `escalation.py` / `escalation_resolve.py` is retired;
   receipt: https://github.com/zwrose/superheroes/pull/1305; condition: owner's ruling.
+  `escalation.py` and `escalation_resolve.py` were deleted on 2026-10-07 (no caller after
+  review-spec retired).
 
 #### D6 — Handback gate
 

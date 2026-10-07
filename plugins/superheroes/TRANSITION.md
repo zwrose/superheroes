@@ -14,6 +14,7 @@ belongs to and lists every change with its replacement.
 - A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
 - A caller that invokes `/superheroes:review-spec` or the deleted `spec_loop_plan` module must switch to discovery's spec checks.
 - A caller that invokes `/superheroes:audit-debt` must switch to `/superheroes:guardian`, which replaced it; the reviewer agents no longer take a whole-repo audit mode.
+- A caller that imports `lib/escalation.py` or runs `lib/escalation_resolve.py` must stop; both are deleted.
 - **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
 
 ### Canon: the record of the owner's decisions
@@ -51,6 +52,12 @@ belongs to and lists every change with its replacement.
 - The `audit-debt` skill is removed, along with its entry in the Codex manifest's skills list. `/superheroes:guardian` is the repo-health sweep that replaced it.
 - The reviewer agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `test-reviewer`) no longer carry an `audit-debt` mode bullet, and `premortem-reviewer` no longer notes that `audit-debt` does not dispatch it. The full dependency CVE and advisory sweep that `security-reviewer` deferred now points to `/superheroes:guardian`.
 - The `audit-report` decision-point carrier is removed from the carrier registry.
+
+### The escalation rubric defers to the owner-vs-craft line
+
+- `rubric/escalation-base.md` (escalation-version 5) points at `rubric/owner-vs-craft-line.md` for whose call a choice is, and keeps PROCEED / NOTIFY / GATE as how a call is disclosed: PROCEED and NOTIFY are a craft call recorded for the owner's veto (NOTIFY keeps its undo path and expiry); GATE is an owner call or a hard-floor action, written down and handed back. The hard floor list is unchanged.
+- The rubric's routing grounds of its own (where the ground truth lives, reversibility × confidence) and its precedence over a skill's prose are removed.
+- `lib/escalation.py` and `lib/escalation_resolve.py` are deleted with their tests and the `eval/escalation/` fixtures. A caller of `escalation_resolve.py` must read the rubric instead.
 
 ### Guardian dead-code ids are repo-relative
 
