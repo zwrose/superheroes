@@ -188,12 +188,37 @@ def test_prose_why_line_is_absent_off_a_remainder_sheet(tmp_path, kind):
     result = _render(tmp_path, sheet)
     assert result.returncode == 0, result.stderr
     assert "Why only" not in result.stdout
-    assert result.stdout.startswith("**Spec review**: 1 item for you.\n\n1. **")
+    if kind == "final":
+        assert result.stdout.startswith("**Spec review**: 1 item for you.\n\n**How the spec got here.** ")
+    else:
+        assert result.stdout.startswith("**Spec review**: 1 item for you.\n\n1. **")
+
+
+def _final_sheet(declined=(), approved=True, saved=True, cards=None):
+    return {
+        "schema": "superheroes-sheet/1",
+        "kind": "final",
+        "title": "Spec review",
+        "final": {
+            "history": {"reviewRounds": 3, "fixesMade": 1, "vet": "The vet found nothing."},
+            "declinedFindings": [{"summary": summary, "reason": reason} for summary, reason in declined],
+            "approval": {"approvedBoard": approved, "boardSavedWithSpec": saved},
+        },
+        "cards": [_card("card-0"), _card("card-1", question="Another call?")] if cards is None else cards,
+    }
 
 
 def _mutated(change):
     def build():
         sheet = _valid_sheet()
+        change(sheet)
+        return sheet
+    return build
+
+
+def _mutated_final(change):
+    def build():
+        sheet = _final_sheet()
         change(sheet)
         return sheet
     return build
@@ -242,6 +267,8 @@ REFUSALS = {
                                                "The data file holds a part this kind of sheet must not have."),
     "card with an unknown property": (_mutated(lambda s: _set(s, 1, "cards", 0, "bogus")),
                                       "Cards[0] has bogus, which the sheet does not use."),
+    "board saved with no approved board": (_mutated_final(lambda s: s["final"]["approval"].update(approvedBoard=False)),
+                                           "boardSavedWithSpec must be false."),
     "duplicate card id": (_mutated(lambda s: _set(s, "card-0", "cards", 1, "id")), 'Card id "card-0" is used more than once'),
     "duplicate option id": (_mutated(lambda s: _set(s, "yes", "cards", 0, "options", 1, "id")),
                             'Card "card-0" has the option id "yes" more than once'),
@@ -329,3 +356,285 @@ def test_cross_field_rules_agree_between_page_and_prose():
     for (name, sheet, refused), page_problems in zip(fixtures, page):
         prose_problems = module.check_sheet(sheet)
         assert bool(page_problems) == bool(prose_problems) == refused, "%s: page %s, prose %s" % (name, page_problems, prose_problems)
+
+
+SCHEMA_FILE = PLUGIN / "theme" / "sheet.schema.json"
+
+
+def _load_prose_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sheet_prose_planted", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _planted_schema(plant):
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    plant(schema)
+    return schema
+
+
+def _plant_title_max_length(schema):
+    schema["properties"]["title"]["maxLength"] = 5
+
+
+def _plant_image_src_format(schema):
+    schema["$defs"]["image"]["properties"]["src"]["format"] = "uri"
+
+
+def _plant_options_max_items(schema):
+    schema["$defs"]["card"]["properties"]["options"]["maxItems"] = 3
+
+
+def _plant_outside_ref(schema):
+    schema["properties"]["kind"]["$ref"] = "#/properties/title"
+
+
+def _plant_option_extra_schema(schema):
+    schema["$defs"]["option"]["additionalProperties"] = {"type": "string"}
+
+
+def _plant_cards_items_list(schema):
+    schema["properties"]["cards"]["items"] = [{"$ref": "#/$defs/card"}]
+
+
+def _plant_option_required_number(schema):
+    schema["$defs"]["option"]["required"] = 5
+
+
+def _plant_id_pattern_not_a_regex(schema):
+    schema["$defs"]["id"]["pattern"] = "["
+
+
+def _plant_kind_enum_string(schema):
+    schema["properties"]["kind"]["enum"] = "abc"
+
+
+def _plant_title_misspelled_type(schema):
+    schema["properties"]["title"]["type"] = "nubmer"
+
+
+def _plant_title_min_length_string(schema):
+    schema["properties"]["title"]["minLength"] = "1"
+
+
+def _plant_cards_unique_items_string(schema):
+    schema["properties"]["cards"]["uniqueItems"] = "yes"
+
+
+def _plant_title_ref_loop(schema):
+    schema["$defs"]["loop"] = {"$ref": "#/$defs/loop"}
+    schema["properties"]["title"] = {"$ref": "#/$defs/loop"}
+
+
+UNENFORCED = [
+    ("maxLength", _plant_title_max_length, "maxLength", "#/properties/title"),
+    ("format", _plant_image_src_format, "format", "#/$defs/image/properties/src"),
+    ("maxItems", _plant_options_max_items, "maxItems", "#/$defs/card/properties/options"),
+    ("outside-ref", _plant_outside_ref, "$ref", "#/properties/kind"),
+    ("additionalProperties-schema", _plant_option_extra_schema, "additionalProperties", "#/$defs/option"),
+    ("items-list", _plant_cards_items_list, "items", "#/properties/cards"),
+    ("required-not-a-list", _plant_option_required_number, "required", "#/$defs/option"),
+    ("pattern-not-a-regex", _plant_id_pattern_not_a_regex, "pattern", "#/$defs/id"),
+    ("enum-not-a-list", _plant_kind_enum_string, "enum", "#/properties/kind"),
+    ("type-not-a-type", _plant_title_misspelled_type, "type", "#/properties/title"),
+    ("minLength-not-a-number", _plant_title_min_length_string, "minLength", "#/properties/title"),
+    ("uniqueItems-not-a-boolean", _plant_cards_unique_items_string, "uniqueItems", "#/properties/cards"),
+    ("ref-loop", _plant_title_ref_loop, "$ref", "#/$defs/loop"),
+]
+
+
+# Bites on: the renderer checking a sheet against a schema that uses a keyword, or a form of one, it does not enforce, instead of refusing that schema.
+@pytest.mark.parametrize("plant, keyword, place", [case[1:] for case in UNENFORCED], ids=[case[0] for case in UNENFORCED])
+def test_prose_refuses_a_schema_keyword_it_does_not_enforce(tmp_path, monkeypatch, capsys, plant, keyword, place):
+    planted = tmp_path / "planted.schema.json"
+    planted.write_text(json.dumps(_planted_schema(plant)), encoding="utf-8")
+    module = _load_prose_module()
+    monkeypatch.setattr(module, "SCHEMA", planted)
+    assert module.main(["render", "--sheet", str(SAMPLE)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"%s"' % keyword in captured.err, captured.err
+    assert " at %s, " % place in captured.err, captured.err
+    assert all(line.strip() for line in captured.err.splitlines())
+
+
+def _plant_ref_with_sibling(schema):
+    schema["properties"]["title"] = {"$ref": "#/$defs/nonEmpty", "minLength": 500}
+    schema["$defs"]["nonEmpty"] = {"type": "string", "minLength": 1}
+
+
+def _plant_standalone_conditional(schema):
+    schema["if"] = {"properties": {"kind": {"const": "remainder"},
+                                   "title": {"const": "Weekly meal planner spec review"}},
+                    "required": ["kind", "title"]}
+    schema["then"] = {"properties": {"title": {"const": "x"}}}
+
+
+# Bites on: the prose reader and the page reading a $ref's sibling keywords, or an if/then outside allOf, differently.
+@pytest.mark.parametrize("plant", [_plant_ref_with_sibling, _plant_standalone_conditional], ids=["ref-siblings", "standalone-if-then"])
+def test_prose_and_page_agree_on_ref_siblings_and_conditionals(tmp_path, monkeypatch, plant):
+    from test_review_template import _run_check_sheet
+
+    sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
+    planted = _planted_schema(plant)
+    planted_path = tmp_path / "planted.schema.json"
+    planted_path.write_text(json.dumps(planted), encoding="utf-8")
+    module = _load_prose_module()
+
+    assert _run_check_sheet([sample]) == [[]]
+    assert module.check_sheet(sample) == []
+
+    page_problems = _run_check_sheet([sample], schema=planted)[0]
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+    prose_problems = module.check_sheet(sample)
+    assert page_problems, "the page accepted the sample under the planted schema"
+    assert prose_problems, "the prose reader accepted the sample under the planted schema"
+
+
+# Bites on: the prose reader accepting a schema the page refuses (any planted case of the page's own refusal list), or raising instead of refusing.
+def test_prose_and_page_refuse_the_same_planted_schemas(tmp_path, monkeypatch):
+    from test_review_template import _planted, _sheet, _unsupported_rule_cases
+
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+    accepted = []
+    for name, mutate, _keyword, _pointer in _unsupported_rule_cases():
+        planted_path.write_text(json.dumps(_planted(mutate)), encoding="utf-8")
+        try:
+            problems = module.check_sheet(_sheet("plain"))
+        except Exception as error:
+            pytest.fail("%s: the prose reader raised %r instead of refusing" % (name, error))
+        if not problems:
+            accepted.append(name)
+    assert accepted == [], "the prose reader accepted what the page refuses: %s" % accepted
+
+
+# Bites on: const or enum comparing by Python equality (true equal to 1, key order mattering) instead of by JSON content and type, as the page does.
+def test_prose_const_and_enum_compare_by_type(tmp_path, monkeypatch):
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+
+    def problems_for(rule, warning):
+        schema = _planted_schema(lambda s: s["$defs"]["card"]["properties"].update(warning=rule))
+        planted_path.write_text(json.dumps(schema), encoding="utf-8")
+        sheet = _valid_sheet()
+        for card in sheet["cards"]:
+            card["warning"] = warning
+        return module.check_sheet(sheet)
+
+    assert problems_for({"const": True}, True) == []
+    assert problems_for({"const": True}, 1) != []
+    assert problems_for({"enum": [1]}, 1) == []
+    assert problems_for({"enum": [1]}, True) != []
+    assert problems_for({"enum": [{"a": 1, "b": 2}]}, {"b": 2, "a": 1}) == []
+
+
+# Bites on: a minLength above 1 reading "must not be empty", or minLength 1 reading as a length.
+@pytest.mark.parametrize("shortest, expected", [
+    (1, "Title must not be empty."),
+    (5, "Title must be at least 5 characters long."),
+], ids=["one", "five"])
+def test_prose_names_the_length_a_minLength_asks_for(tmp_path, monkeypatch, shortest, expected):
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    planted_path.write_text(json.dumps(_planted_schema(lambda s: s["properties"]["title"].update(minLength=shortest))), encoding="utf-8")
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+    sheet = _valid_sheet()
+    sheet["title"] = ""
+    assert module.check_sheet(sheet) == [expected]
+
+
+# Bites on: Markdown in a sheet's own text (underscores, asterisks, backticks, brackets, angle brackets, tildes, pipes, ampersands, backslashes) printing as formatting, or an escape that loses the original characters.
+def test_prose_escapes_markdown_in_sheet_text(tmp_path):
+    question = "Rename __init__ to **x**?"
+    now = "`code` [link](u) <b> a|b ~c~ & d\\e"
+    sheet = _valid_sheet()
+    sheet["cards"][0]["question"] = question
+    sheet["cards"][0]["context"]["now"] = now
+    sheet["cards"][0]["options"][0]["label"] = "_x_"
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    for escaped in [r"\_\_init\_\_", r"\*\*x\*\*", r"\`code\`", r"\[link\]", r"\<b\>", r"a\|b", r"\~c\~", r"\&", r"d\\e", r"\_x\_"]:
+        assert escaped in result.stdout, escaped
+    unescaped = re.sub(r"\\([\\`*_\[\]<>~|&])", r"\1", result.stdout)
+    for original in [question, now, "_x_"]:
+        assert original in unescaped, original
+
+
+# Bites on: a card with more than 26 options getting a character past z, or the option list, recommendation and answer line lettering differently.
+def test_prose_letters_options_past_z(tmp_path):
+    sheet = _valid_sheet()
+    card = sheet["cards"][0]
+    card["options"] = [{"id": "opt-%d" % n, "label": "Option %d" % n, "consequence": "Happens."} for n in range(28)]
+    card["recommendation"] = {"text": "Take the last.", "reason": "It is last.", "optionId": "opt-27"}
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    letters = [chr(ord("a") + n) for n in range(26)] + ["aa", "ab"]
+    lines = result.stdout.split("\n")
+    assert [line for line in lines if line.startswith("     - ")] == ["     - %s. Option %d: Happens." % (letter, n) for n, letter in enumerate(letters)]
+    assert "   - Recommendation: Take the last. It is last. (option ab)" in lines
+    assert "   - Answer: Aligned, Discuss, or " + ", ".join(letters) in lines
+    assert [line for line in lines if line.startswith("   - Answer: Aligned, Discuss, or ")][0].endswith(", z, aa, ab")
+
+
+HISTORY_LINE = "**How the spec got here.** The review ran 3 rounds and fixed 1 thing itself. The vet: The vet found nothing."
+TRACES_BOARD_LINE = "- Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto."
+TRACES_NO_BOARD_LINE = "- Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto."
+NEXT_LINE = ("**What happens next.** The advisor adds the breakdown to the same PR (or, where the project keeps specs outside "
+             "the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both.")
+APPROVE_ANSWER_LINE = "- Answer: Approve or Not yet, with any note."
+TWO_DECLINES = [("Add a counter.", "It is out of scope."), ("Add a theme.", "It costs too much.")]
+DECLINED_LINES = ["**Declined findings (2).**", "- Add a counter. (why declined: It is out of scope.)",
+                  "- Add a theme. (why declined: It costs too much.)", ""]
+NO_DECLINES_LINES = ["**Declined findings.** No findings were declined.", ""]
+
+
+def _plain_card_lines(number, question):
+    return ["%d. **%s**" % (number, question), "   - Kind of call: Wording to confirm", "   - What's true now: It reads one way.",
+            "   - Why it needs you: Only you know.", "   - Answer: Aligned, Discuss", ""]
+
+
+TWO_CARD_LINES = _plain_card_lines(1, "Is this what you meant?") + _plain_card_lines(2, "Another call?")
+
+FINAL_CASES = {
+    "board saved, two declines, two cards": (
+        _final_sheet(declined=TWO_DECLINES),
+        ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES + TWO_CARD_LINES
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE,
+           "", NEXT_LINE]),
+    "board not saved": (
+        _final_sheet(declined=TWO_DECLINES, saved=False),
+        ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES + TWO_CARD_LINES
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is not saved with the spec.", APPROVE_ANSWER_LINE,
+           "", NEXT_LINE]),
+    "no board": (
+        _final_sheet(declined=TWO_DECLINES, approved=False, saved=False),
+        ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES + TWO_CARD_LINES
+        + ["**Approve the spec?**", TRACES_NO_BOARD_LINE, APPROVE_ANSWER_LINE, "", NEXT_LINE]),
+    "no declines": (
+        _final_sheet(),
+        ["**Spec review**: 2 items for you.", "", HISTORY_LINE, ""] + NO_DECLINES_LINES + TWO_CARD_LINES
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE,
+           "", NEXT_LINE]),
+    "zero cards": (
+        _final_sheet(declined=TWO_DECLINES, cards=[]),
+        ["**Spec review**: 0 items for you.", "", HISTORY_LINE, ""] + DECLINED_LINES
+        + ["**Approve the spec?**", TRACES_BOARD_LINE, "- The approved board is saved with the spec.", APPROVE_ANSWER_LINE,
+           "", NEXT_LINE]),
+}
+
+
+# Bites on: a change to the final sheet's prose (its history, declined findings, board line, approval box or closing line), or to which of them show only when present.
+@pytest.mark.parametrize("name", sorted(FINAL_CASES))
+def test_prose_renders_a_final_sheet(tmp_path, name):
+    sheet, lines = FINAL_CASES[name]
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "\n".join(lines) + "\n"
+    assert result.stderr == ""
+    assert not [line for line in result.stdout.split("\n") if line != line.rstrip()]

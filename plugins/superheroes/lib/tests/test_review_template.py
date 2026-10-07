@@ -777,6 +777,7 @@ def _unsupported_rule_cases():
         schema["properties"]["title"] = {"$ref": "#/examples/0"}
 
     declined = ("properties", "final", "properties", "declinedFindings")
+    planted_index = len(SHEET_SCHEMA["allOf"])
     return [
         ("E1-root", _plant_at(maxLength=3), "maxLength", "#"),
         ("E2-defs-member", _plant_at("$defs", "id", maxLength=3), "maxLength", "#/$defs/id"),
@@ -784,8 +785,8 @@ def _unsupported_rule_cases():
         ("E4-properties", _plant_at("properties", "title", maxLength=3), "maxLength", "#/properties/title"),
         ("E4-nested-properties", _plant_at("$defs", "card", "properties", "question", maxLength=3), "maxLength", "#/$defs/card/properties/question"),
         ("E5-items", _plant_at(*declined, "items", maxLength=3), "maxLength", "#/properties/final/properties/declinedFindings/items"),
-        ("E6-allOf-member", all_of, "maxLength", "#/allOf/3"),
-        ("E7-anyOf-member", any_of, "maxLength", "#/allOf/3/anyOf/1"),
+        ("E6-allOf-member", all_of, "maxLength", "#/allOf/%d" % planted_index),
+        ("E7-anyOf-member", any_of, "maxLength", "#/allOf/%d/anyOf/1" % planted_index),
         ("E8-if", _plant_at("allOf", 0, "if", maxLength=3), "maxLength", "#/allOf/0/if"),
         ("E9-then", _plant_at("allOf", 0, "then", maxLength=3), "maxLength", "#/allOf/0/then"),
         ("E10-not", _plant_at("allOf", 0, "then", "not", maxLength=3), "maxLength", "#/allOf/0/then/not"),

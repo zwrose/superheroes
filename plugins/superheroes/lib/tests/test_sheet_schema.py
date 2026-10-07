@@ -234,3 +234,75 @@ def test_shipped_files_carry_no_provenance(path):
     text = path.read_text(encoding="utf-8")
     for pattern in PROVENANCE_PATTERNS:
         assert re.search(pattern, text) is None, f"{path.name} matches {pattern}"
+
+
+def final_sheet(cards=None, approved=True, saved=False):
+    card = copy.deepcopy(load_sample()["cards"][2])
+    return {
+        "schema": "superheroes-sheet/1",
+        "kind": "final",
+        "title": "Weekly meal planner spec review",
+        "final": {
+            "history": {"reviewRounds": 4, "fixesMade": 9, "vet": "The vet found nothing to fix."},
+            "declinedFindings": [],
+            "approval": {"approvedBoard": approved, "boardSavedWithSpec": saved},
+        },
+        "cards": [card] if cards is None else cards,
+    }
+
+
+def test_final_sheet_may_have_no_cards():
+    # Axis: a final sheet whose review left no calls is accepted by the schema and by the page's check.
+    sheet = final_sheet(cards=[])
+    assert errors_for(sheet) == []
+    assert check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("kind", ["remainder", "plain"])
+def test_remainder_and_plain_sheets_need_a_card(kind):
+    # Axis: only a final sheet may have empty cards; a remainder or plain sheet with none is refused by both readers.
+    sheet = copy.deepcopy(load_sample())
+    sheet["kind"] = kind
+    sheet["cards"] = []
+    if kind == "plain":
+        del sheet["remainder"]
+    else:
+        sheet["remainder"]["unsettled"] = []
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+@pytest.mark.parametrize("approved, saved, accepted", [
+    (False, True, False),
+    (False, False, True),
+    (True, False, True),
+    (True, True, True),
+])
+def test_board_is_saved_with_the_spec_only_when_there_is_an_approved_board(approved, saved, accepted):
+    # Axis: a final sheet cannot say the board is saved with the spec when it has no approved board, in both readers.
+    sheet = final_sheet(approved=approved, saved=saved)
+    assert (errors_for(sheet) == []) is accepted
+    assert (check_sheet_problems(sheet) == []) is accepted
+
+
+def document_errors(name, document):
+    schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", "$defs": load_schema()["$defs"],
+              "$ref": "#/$defs/" + name}
+    return list(Draft202012Validator(schema).iter_errors(document))
+
+
+def test_verdict_document_accepts_only_a_taken_verdict():
+    # Axis: the stored verdict is approve or not-yet with a note and nothing else, so a draft's null verdict never counts as one.
+    for good in [{"verdict": "approve", "note": ""}, {"verdict": "not-yet", "note": "n"}]:
+        assert document_errors("verdict", good) == [], good
+    for bad in [{"verdict": None, "note": ""}, {"verdict": "maybe", "note": ""}, {"verdict": "approve"},
+                {"verdict": "approve", "note": "", "extra": 1}]:
+        assert document_errors("verdict", bad) != [], bad
+
+
+def test_draft_verdict_document_also_accepts_a_null_verdict():
+    # Axis: the stored draft may hold a note with no verdict yet, and still refuses an unknown verdict or an extra key.
+    for good in [{"verdict": None, "note": "only a note"}, {"verdict": "approve", "note": ""}, {"verdict": "not-yet", "note": "n"}]:
+        assert document_errors("draftVerdict", good) == [], good
+    for bad in [{"verdict": "maybe", "note": ""}, {"verdict": None}, {"verdict": None, "note": "", "extra": 1}]:
+        assert document_errors("draftVerdict", bad) != [], bad

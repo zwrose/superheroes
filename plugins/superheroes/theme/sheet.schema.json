@@ -110,14 +110,20 @@
               "description": "True when the approved board is saved with the spec.",
               "type": "boolean"
             }
-          }
+          },
+          "allOf": [
+            {
+              "description": "The board can be saved with the spec only when there is an approved board.",
+              "if": {"properties": {"approvedBoard": {"const": false}}, "required": ["approvedBoard"]},
+              "then": {"properties": {"boardSavedWithSpec": {"const": false}}}
+            }
+          ]
         }
       }
     },
     "cards": {
-      "description": "The calls the owner has to make, one card each.",
+      "description": "The calls the owner has to make, one card each. A remainder sheet or a plain sheet has at least one; a final sheet may have none when the review left no calls.",
       "type": "array",
-      "minItems": 1,
       "items": {"$ref": "#/$defs/card"}
     }
   },
@@ -136,6 +142,11 @@
       "description": "A plain sheet must carry neither the remainder block nor the final block.",
       "if": {"properties": {"kind": {"const": "plain"}}, "required": ["kind"]},
       "then": {"not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}]}}
+    },
+    {
+      "description": "A remainder sheet or a plain sheet must have at least one card.",
+      "if": {"properties": {"kind": {"enum": ["remainder", "plain"]}}, "required": ["kind"]},
+      "then": {"properties": {"cards": {"minItems": 1}}}
     }
   ],
   "$defs": {
@@ -185,6 +196,38 @@
           }
         }
       ]
+    },
+    "verdict": {
+      "description": "The one document a final sheet stores at verdict/final when the owner taps Send verdict. It is the only document that counts as the owner's verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "note"],
+      "properties": {
+        "verdict": {
+          "description": "What the owner decided: approve the spec or not yet.",
+          "enum": ["approve", "not-yet"]
+        },
+        "note": {
+          "description": "The owner's note with the verdict, an empty string when there is none.",
+          "type": "string"
+        }
+      }
+    },
+    "draftVerdict": {
+      "description": "The document a final sheet stores at draft-verdict/final the moment the owner taps a verdict or edits its note. It never counts as a verdict and is put back when the sheet reopens. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "note"],
+      "properties": {
+        "verdict": {
+          "description": "What the owner has tapped so far: approve, not yet, or null when only a note was saved.",
+          "enum": ["approve", "not-yet", null]
+        },
+        "note": {
+          "description": "The owner's note so far, an empty string when there is none.",
+          "type": "string"
+        }
+      }
     },
     "card": {
       "description": "One call the owner has to make, with the question, what is true now, and the options and recommendation if there are any.",
