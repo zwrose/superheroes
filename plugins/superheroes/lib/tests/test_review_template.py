@@ -3661,25 +3661,32 @@ def test_a_ctrl_wheel_zooms_about_the_pointer():
     assert result["left"] == [False, False, 0]
 
 
-# Bites on: one large wheel event (a mouse notch) zooming by more than one 1.25 step in either direction, or the cap changing how a small trackpad-pinch event zooms (exp(-deltaY / 100)).
+# Bites on: one large wheel event (a mouse notch) zooming by more than one 1.25 step in either direction (a missing upper or lower per-event cap), or the cap changing how a small trackpad-pinch event zooms (a changed small-delta curve, exp(-deltaY / 100)). The zoom-out checks start at the 4x ceiling so none lands on fit or the ceiling.
 def test_one_wheel_notch_zooms_one_step_and_a_trackpad_pinch_is_unchanged():
     result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + SHARE + WHEEL + """
       const out = { fit: t.shown() };
+      const run = (deltaY) => { for (let i = 0; i < 20; i++) wheel({ deltaY: deltaY }); };
       wheel({ deltaY: -100000 });
       out.notchIn = t.shown().width;
-      wheel({ deltaY: 100000 });
-      out.notchOut = t.shown().width;
+      run(100000);
+      out.backToFit = t.shown();
       wheel({ deltaY: -10 });
       out.pinchIn = t.shown().width;
+      run(-100000);
+      out.ceiling = t.shown().width;
+      wheel({ deltaY: 100000 });
+      out.notchOut = t.shown().width;
       wheel({ deltaY: 10 });
       out.pinchOut = t.shown().width;
       return out;
     """)
     assert result["fit"] == FIT
     assert abs(result["notchIn"] - 500) <= 1, "one large wheel event zoomed by more than one step"
-    assert abs(result["notchOut"] - 400) <= 1, "one large wheel event out was not one step back"
+    assert result["backToFit"] == FIT, "the run back to fit did not reach fit, so the pinch check does not start there"
     assert abs(result["pinchIn"] - 400 * 2.718281828 ** 0.1) <= 1, "a small pinch event no longer follows exp(-deltaY / 100)"
-    assert abs(result["pinchOut"] - 400) <= 1, "a small pinch out event did not return to fit"
+    assert result["ceiling"] == 1600, "the run of large events in did not reach the ceiling, so the zoom-out checks do not start there"
+    assert abs(result["notchOut"] - 1600 / 1.25) <= 1, "one large wheel event out was not one step back from the ceiling"
+    assert abs(result["pinchOut"] - 1280 * 2.718281828 ** -0.1) <= 1, "a small pinch out event no longer follows exp(-deltaY / 100)"
 
 
 # Bites on: a wheel without ctrlKey being cancelled or zooming the picture, so a plain scroll or two-finger drag no longer pans the frame.
