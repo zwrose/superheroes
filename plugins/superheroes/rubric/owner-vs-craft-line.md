@@ -185,6 +185,11 @@ for how rulings and ceded calls are recorded.
 No configuration value moves the line. A project's own answers live in its Canon's standing rulings
 and ceded calls.
 
+One transition applies. While a project's "material consequence line" configuration item still holds
+its own prose, because the move of those examples into Canon has not finished (including on a branch
+where the move waits on the default branch), read that prose as the owner's rulings about what
+counts as a material consequence, alongside Canon. Once that item points to Canon, read Canon alone.
+
 ## Worked examples
 
 1. A reviewer finds the spec never says what a new person sees before any terms exist. Nothing

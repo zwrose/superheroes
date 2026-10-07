@@ -49,7 +49,7 @@ the advisor's actual thinking, the shape is wrong and the thinking wins.
 ## The filter — what is the owner's, and on what grounds
 
 Each delivered item **names why it is the owner's** — **which of the line's ten owner categories the
-item touches, or the owner consequence it carries** — never a craft call a review lens already owns.
+item touches, the owner consequence it carries, or that the sort ended at unsure** — never a craft call a review lens already owns.
 Whether an item is the owner's is sorted by the
 [owner-vs-craft line](../../../rubric/owner-vs-craft-line.md); cite it rather than restating it here.
 
@@ -74,14 +74,14 @@ directions the owner pays for someone else's framing. The framing is still worth
 evidence about the item, and where it disagrees with the advisor's own read, saying so in the item's
 *why it is yours* is more useful to the owner than a silent re-grade.
 
-**"Why it is yours" names the ground.** It names which of the line's ten owner categories the item touches, or the [material consequence](../../../rubric/glossary.md#material-consequence) it carries. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list.
+**"Why it is yours" names the ground.** It names which of the line's ten owner categories the item touches, the [material consequence](../../../rubric/glossary.md#material-consequence) it carries, or that the line's sort ended at its last step, unsure, which keeps the call the owner's. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list. An item that ended at unsure stays on the owner's list until a category or consequence can be named.
 
 ## The per-item spine
 
 Five parts, in this order, on every item that passes the filter:
 
 1. **Why it is yours** — the ground from the filter: which of the line's ten owner categories the item
-   touches, or the owner consequence it carries, stated for this item alone.
+   touches, the owner consequence it carries, or that the line's sort ended at unsure, stated for this item alone.
 2. **Context** — what happened, in plain language, enough that the owner does not have to reconstruct
    anything. Too little context is the failure here; the floor is that the owner can rule without
    opening another artifact.
@@ -721,7 +721,7 @@ or reports the malformed region, rather than deleting anything.
 
 **Read trigger:** about to deliver open decisions → read that file first.
 
-**Filter (duty 5):** each item names why it is the owner's (which of the line's ten owner categories it touches, or the owner consequence it carries). Filtered,
+**Filter (duty 5):** each item names why it is the owner's (which of the line's ten owner categories it touches, the owner consequence it carries, or that the sort ended at unsure). Filtered,
 never swallowed — separate short list before batch 1 with a one-line reason each; grounds per item,
 not per batch. Tier and craft-or-owner grading are derived by the advisor from the ratified text —
 whoever raised the item framed it, and that framing is input, never the grading.
