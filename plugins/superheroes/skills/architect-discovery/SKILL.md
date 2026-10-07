@@ -311,10 +311,9 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   owner's answer is a new ruling. When it replaces the earlier one, it names that entry's id, as
   [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#append-only-and-supersession)
   says.
-- **Record every ruling in Canon at once.** Every answer that decides something is appended to
-  Canon and committed, as
-  [the contract defines it](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling),
-  before your next step, the next question included. Go-words are never written.
+- **Record every ruling in Canon at once.** Every ruling you receive is appended to Canon and
+  committed before your next step, per
+  [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling).
 - **Capture who the piece is for as user stories.** Write one or more in the form "As a …, I
   want …, so I can …" that evoke the core need without listing every detail. Edge cases are
   requirements (the unhappy paths), never user stories.
