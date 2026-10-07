@@ -1,7 +1,7 @@
 <!-- review-loop-version: 3 -->
 ## Learning Loop & Staleness Nudge
 
-These four behaviors are **non-blocking**, run **at end of run** (after the terminal summary), and are **identical across `review-code` and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
+These four behaviors are **non-blocking**, run **at end of run** (after the terminal summary), in `review-code`. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
 
 ### Recording decisions (at resolution time)
 

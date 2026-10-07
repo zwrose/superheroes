@@ -10,7 +10,6 @@
     "architect-discovery",
     "architect-init",
     "architect-spec",
-    "audit-debt",
     "configure",
     "checkpoint",
     "detective",

@@ -7,7 +7,23 @@
   .sh-theme { padding-block: 16px 40px; padding-inline: 16px; }
   .sheet-page { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 720px; overflow-wrap: anywhere; }
   .sheet-page .sh-appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; }
-  .sheet-page > main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sh-appbar { flex-wrap: wrap; }
+  .sheet-page main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-layout { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-main, .sheet-side { align-content: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-stepper { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page .sheet-stepper .sh-label { flex: 1 1 auto; margin: 0; }
+  .sheet-page .sheet-list { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-row, .sheet-page .sheet-fold { align-items: center; display: flex; gap: 8px; max-width: 100%; text-align: left; }
+  .sheet-page .sheet-row { justify-content: space-between; }
+  .sheet-page .sheet-fold { display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr); padding-block: 8px; }
+  .sheet-page .sheet-fold-chips { display: flex; flex-wrap: wrap; gap: 8px; grid-column: 2; }
+  .sheet-page .sheet-cue { display: inline-block; margin-inline-end: 4px; text-align: center; width: 1em; }
+  .sheet-page .sheet-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sheet-page .sheet-row > .sh-badge { flex: none; white-space: nowrap; }
+  .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
+  .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
+  .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
   .sheet-page :is(h2, p, ul, blockquote) { margin: 0; }
   .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
   .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
@@ -15,6 +31,34 @@
   .sheet-page .sh-card > .sh-label + * { margin-top: 4px; }
   .sheet-page .sh-box h2 { font-size: 22px; }
   .sheet-page .sh-box ul { padding-left: 20px; }
+  .sheet-page .sh-card > label.sh-label { display: block; }
+  .sheet-page .sh-card ul { padding-left: 20px; }
+  .sheet-page .sheet-consequence { display: block; }
+  .sheet-page .sheet-recommendation > * + * { margin-top: 4px; }
+  .sheet-page .sheet-images { display: grid; gap: 12px; }
+  .sheet-page .sheet-figure { margin: 0; }
+  .sheet-page .sheet-figure img { display: block; height: auto; max-width: 100%; }
+  .sheet-page .sheet-figure figcaption { margin-top: 4px; }
+  .sheet-page .answer-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page .answer-row .sh-button { max-width: 100%; padding-block: 8px; text-align: center; white-space: normal; }
+  .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page #sheet-final > * + * { margin-top: 16px; }
+  .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
+  @media (min-width: 900px) {
+    .sheet-page { max-width: 1200px; }
+    .sheet-layout { grid-template-columns: 340px minmax(0, 1fr); }
+    .sheet-side { grid-column: 1; grid-row: 1; }
+    .sheet-main { grid-column: 2; grid-row: 1; }
+    .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: flex; }
+    .sheet-page .sheet-fold { display: none; }
+  }
+  .sheet-page .sheet-figure img[role="button"] { cursor: pointer; }
+  .sheet-viewer { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); position: fixed; z-index: 2; }
+  .sheet-viewer-bar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
+  .sheet-viewer-bar .sheet-viewer-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .sheet-viewer-frame { display: flex; overflow: auto; overscroll-behavior: contain; touch-action: none; }
+  .sheet-viewer-frame img { display: block; flex: none; margin: auto; max-height: none; max-width: none; }
+  .sheet-viewer-frame p { margin: auto; padding: 16px; }
   .sh-theme [hidden] { display: none; }
 </style>
 
@@ -22,13 +66,38 @@
   <div class="sheet-page">
     <header class="sh-appbar">
       <span class="sh-appbar__name" id="sheet-title">Review sheet</span>
+      <span id="sheet-count" hidden></span>
     </header>
     <p id="sheet-status" class="sh-caption">Loading the sheet…</p>
+    <p id="sheet-gate" class="sh-caption sheet-gate" hidden></p>
     <div id="sheet-error" class="sh-box" role="alert" hidden>
       <h2>This sheet can't be shown</h2>
       <ul id="sheet-error-list"></ul>
     </div>
-    <main id="sheet-cards"></main>
+    <div id="sheet-history" class="sh-box" hidden></div>
+    <div class="sheet-layout">
+      <div class="sheet-main">
+        <div id="sheet-stepper" class="sheet-stepper" hidden></div>
+        <main id="sheet-cards"></main>
+        <div id="sheet-stepper-bottom" class="sheet-stepper" hidden></div>
+        <div id="sheet-footer" class="sheet-footer" hidden></div>
+      </div>
+      <div class="sheet-side">
+        <div id="sheet-why" class="sh-box" hidden></div>
+        <div id="sheet-items" class="sheet-list" role="group" aria-label="Items" hidden></div>
+      </div>
+    </div>
+    <div id="sheet-final" hidden></div>
+  </div>
+  <div id="sheet-viewer" class="sh-theme sheet-viewer" role="dialog" aria-modal="true" hidden>
+    <div class="sheet-viewer-bar">
+      <span id="sheet-viewer-caption" class="sh-label sheet-viewer-caption"></span>
+      <span class="sh-caption">Pinch or double-tap to zoom.</span>
+      <button id="sheet-viewer-close" class="sh-button" type="button">Close</button>
+    </div>
+    <div id="sheet-viewer-frame" class="sheet-viewer-frame">
+      <img id="sheet-viewer-picture" alt="">
+    </div>
   </div>
 </div>
 
@@ -248,10 +317,17 @@
 
     if (typeof value === "string") {
       if (schema.minLength !== undefined && [...value].length < schema.minLength) {
-        problems.push(where + " must not be empty.");
+        problems.push(where + (schema.minLength > 1 ? " must be at least " + schema.minLength + " characters long." : " must not be empty."));
       }
       if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
-        problems.push(where + ' has the value "' + value + '", which is not a valid id (lowercase letters, digits and hyphens).');
+        // The id wording belongs to the schema's own id rule; any other pattern is named by its description.
+        const idRule = isObject(root.$defs) && isObject(root.$defs.id) ? root.$defs.id.pattern : undefined;
+        if (schema.pattern === idRule) {
+          problems.push(where + ' has the value "' + value + '", which is not a valid id (lowercase letters, digits and hyphens).');
+        } else {
+          const rule = typeof schema.description === "string" && schema.description !== "" ? schema.description : "it must match the pattern " + schema.pattern;
+          problems.push(where + ' has the value "' + value + '", which does not fit its rule: ' + rule);
+        }
       }
     }
     if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) {
@@ -390,6 +466,133 @@
     const errorList = document.getElementById("sheet-error-list");
     const cardsHost = document.getElementById("sheet-cards");
     const titleHost = document.getElementById("sheet-title");
+    const gate = document.getElementById("sheet-gate");
+    const countHost = document.getElementById("sheet-count");
+    const whyBox = document.getElementById("sheet-why");
+    const itemsHost = document.getElementById("sheet-items");
+    const stepperHost = document.getElementById("sheet-stepper");
+    const footerHost = document.getElementById("sheet-footer");
+    const bottomStepperHost = document.getElementById("sheet-stepper-bottom");
+    const historyBox = document.getElementById("sheet-history");
+    const finalHost = document.getElementById("sheet-final");
+
+    // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
+    // has no words here leaves the answer controls off. The option value takes its words from the card.
+    const ANSWER_LABELS = { aligned: "Aligned", discuss: "Discuss" };
+
+    // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
+    // kinds lists the values in the order the schema gives them, and carriesOption marks the one the schema
+    // ties to a string optionId. Null until the schema was read, and left null when it is not in that shape.
+    let answerShape = null;
+
+    function readAnswerShape(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const rule = isObject(schema.$defs) ? schema.$defs.answer : undefined;
+      if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.answer)) return null;
+      const listed = rule.properties.answer.enum;
+      if (!Array.isArray(listed)) return null;
+      const values = listed.filter(function (item) { return item !== null; });
+      if (values.length === 0 || values.some(function (item) { return typeof item !== "string"; })) return null;
+      const carrying = [];
+      (Array.isArray(rule.allOf) ? rule.allOf : []).forEach(function (entry) {
+        if (!isObject(entry) || !isObject(entry.if) || !isObject(entry.then)) return;
+        const picked = isObject(entry.if.properties) ? entry.if.properties.answer : undefined;
+        const named = isObject(entry.then.properties) ? entry.then.properties.optionId : undefined;
+        if (isObject(picked) && typeof picked.const === "string" && isObject(named) && named.type === "string") {
+          carrying.push(picked.const);
+        }
+      });
+      if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
+      const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
+      if (kinds.some(function (kind) { return !kind.carriesOption && typeof ANSWER_LABELS[kind.value] !== "string"; })) return null;
+      return { root: schema, rule: rule, kinds: kinds };
+    }
+
+    // True when the stored document fits the given rule of the schema (answer or verdict).
+    function fitsRule(root, rule, data) {
+      const problems = [];
+      try {
+        validateAgainstSchema(root, rule, data, "", problems);
+      } catch (error) {
+        if (error instanceof UncheckableSchema) return false;
+        throw error;
+      }
+      return problems.length === 0;
+    }
+
+    function fitsAnswerRule(data) {
+      return fitsRule(answerShape.root, answerShape.rule, data);
+    }
+
+    // The words on the final sheet's verdict buttons, by the value a stored verdict takes.
+    const VERDICT_LABELS = { approve: "Approve", "not-yet": "Not yet" };
+
+    // What the sheet's schema says a verdict is (its $defs.verdict): { root, rule, values }, where values lists
+    // the non-null verdicts in the order the schema gives them. Null until the schema was read, and left null
+    // when it is not in that shape: the last card's controls stay off.
+    let verdictShape = null;
+
+    // The SHA-256 (lowercase hex) of the exact bytes the page fetched as sheet.json: the revision the stored
+    // verdict is bound to, and the id of its document (verdict/<digest>). Null until worked out, and left null
+    // when the browser can't compute it.
+    let sheetDigest = null;
+
+    function readVerdictShape(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const rule = isObject(schema.$defs) ? schema.$defs.verdict : undefined;
+      if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.verdict)) return null;
+      const listed = rule.properties.verdict.enum;
+      if (!Array.isArray(listed)) return null;
+      const values = listed.filter(function (item) { return item !== null; });
+      if (values.length === 0 || values.some(function (item) { return typeof item !== "string" || typeof VERDICT_LABELS[item] !== "string"; })) return null;
+      return { root: schema, rule: rule, values: values };
+    }
+
+    const SAY = {
+      noStore: "Answers can't be saved in this view.",
+      readOnly: "This sheet is read-only for you. Only its owner can answer.",
+      loading: "Loading your saved answers…",
+      readFailed: "Your saved answers couldn't be loaded.",
+      connectStalled: "The sheet's store isn't answering.",
+      writeStalled: "Your latest answer isn't saved yet. Keep this page open: it saves when the sheet's store answers. Reloading shows only what was saved.",
+      verdictNoDigest: "This browser can't tell which version of the sheet this is, so the verdict can't be saved here.",
+      leaving: "Once every answer shows it is saved, go back to the chat and say you're done.",
+    };
+    const NOTE_PAUSE_MS = 1000;
+    // How long a save or a read of the saved answers may stay unanswered before the page says so.
+    const STALL_MS = 10000;
+    // Every card's controls, by card id. Nothing can be answered until ready is true, which happens
+    // only once the store, the owner check and the read of the saved answers have all succeeded.
+    const controllers = new Map();
+    // The final sheet's last card, kept apart from the cards: it never feeds the count or the rows.
+    let verdictController = null;
+    let store = null;
+    let ready = false;
+    // True once the store is known to be unusable here (no store, a non-owner, no answer shape), as opposed to still loading.
+    let cannotSave = false;
+    let restoring = false;
+    let readStalled = false;
+    let readAttempt = 0;
+    let readTimer = null;
+    let connectAttempt = 0;
+    const DEADLINE = { stalled: true };
+
+    // Waits for one step of getting the store and the owner check, but no longer than STALL_MS. A step
+    // that stays unanswered is rejected with DEADLINE so the caller can offer a retry.
+    function withDeadline(start) {
+      return new Promise(function (resolve, reject) {
+        const timer = setTimeout(function () { reject(DEADLINE); }, STALL_MS);
+        let pending;
+        try {
+          pending = Promise.resolve(start());
+        } catch (error) {
+          clearTimeout(timer);
+          reject(error);
+          return;
+        }
+        pending.then(function (value) { clearTimeout(timer); resolve(value); }, function (error) { clearTimeout(timer); reject(error); });
+      });
+    }
 
     function showErrors(problems) {
       errorList.replaceChildren();
@@ -410,6 +613,654 @@
       return element;
     }
 
+    // The image view: one picture, large, on its own. Nothing in it moves to another picture. The size, the zoom
+    // and the look-around all live here: the picture is sized only through its width and height attributes, and
+    // it is moved only through the frame's scroll position.
+    const viewer = document.getElementById("sheet-viewer");
+    const viewerCaption = document.getElementById("sheet-viewer-caption");
+    const viewerClose = document.getElementById("sheet-viewer-close");
+    const viewerFrame = document.getElementById("sheet-viewer-frame");
+    const viewerPicture = document.getElementById("sheet-viewer-picture");
+    const sheetPage = document.querySelector(".sheet-page");
+    const ZOOM_MAX = 4;
+    const DOUBLE_TAP_ZOOM = 2.5;
+    // A mouse wheel notch is a large delta, so each wheel event is capped to one step in either direction.
+    const WHEEL_STEP_MAX = 1.25;
+    // Two taps make a double-tap when they are this close in time and in distance, with no drag between them.
+    const DOUBLE_TAP_MS = 300;
+    const DOUBLE_TAP_PX = 24;
+    // A finger that has travelled further than this since it went down is dragging, not tapping.
+    const TAP_SLOP_PX = 10;
+    const MISSING_PICTURE = "This picture is missing: ";
+
+    // The card picture the view was opened from, which gets the focus back on Close.
+    let viewerOpener = null;
+    // The view picture's own size, the zoom that fits it in the frame, and the zoom on top of that (1 to ZOOM_MAX).
+    let natural = { w: 0, h: 0 };
+    let fit = 1;
+    let scale = 1;
+    // The fingers (or mouse) now down on the frame, by pointer id, the pinch they make while two are down, and
+    // the state of the touch for telling a tap from a drag.
+    const touches = new Map();
+    let pinch = null;
+    let gesture = { moved: false, multi: false };
+    let lastTap = null;
+    let sizeWatcher = null;
+    // The zoom a Safari trackpad pinch began at; its scale is counted from there.
+    let gestureStart = null;
+
+    function missingLine(alt) {
+      const line = textElement("p", "sh-caption", MISSING_PICTURE + alt);
+      line.setAttribute("tabindex", "-1");
+      return line;
+    }
+
+    function clamp(value, low, high) {
+      return Math.min(Math.max(value, low), high);
+    }
+
+    // Moves the frame to the given scroll position, held inside what the picture leaves to scroll.
+    function placeScroll(left, top) {
+      viewerFrame.scrollLeft = clamp(left, 0, Math.max(0, viewerFrame.scrollWidth - viewerFrame.clientWidth));
+      viewerFrame.scrollTop = clamp(top, 0, Math.max(0, viewerFrame.scrollHeight - viewerFrame.clientHeight));
+    }
+
+    // The picture's size at a zoom, in whole pixels.
+    function sizeAt(zoom) {
+      return { w: Math.round(natural.w * fit * zoom), h: Math.round(natural.h * fit * zoom) };
+    }
+
+    function showSize() {
+      const size = sizeAt(scale);
+      viewerPicture.setAttribute("width", String(size.w));
+      viewerPicture.setAttribute("height", String(size.h));
+    }
+
+    // Where the frame must scroll so the picture point under (px, py), a point in the frame, stays under it when
+    // the picture goes from one size to another. `view` is the frame's scroll position and size. While the picture
+    // is smaller than the frame it sits centred, so the room on each side is counted in.
+    function zoomedScroll(view, from, to, px, py) {
+      const room = function (space, size) { return Math.max(0, (space - size) / 2); };
+      return {
+        left: (view.left + px - room(view.w, from.w)) * (to.w / from.w) + room(view.w, to.w) - px,
+        top: (view.top + py - room(view.h, from.h)) * (to.h / from.h) + room(view.h, to.h) - py,
+      };
+    }
+
+    // Every zoom goes through here: the new zoom (held to 1 through ZOOM_MAX), about a point in the frame.
+    function zoomTo(next, px, py) {
+      const from = { w: Number(viewerPicture.getAttribute("width")), h: Number(viewerPicture.getAttribute("height")) };
+      if (!(from.w > 0 && from.h > 0)) return;
+      // The frame's scroll position is read before the size changes: a smaller picture can make the browser clamp it.
+      const view = { left: viewerFrame.scrollLeft, top: viewerFrame.scrollTop, w: viewerFrame.clientWidth, h: viewerFrame.clientHeight };
+      scale = clamp(next, 1, ZOOM_MAX);
+      showSize();
+      const target = zoomedScroll(view, from, sizeAt(scale), px, py);
+      placeScroll(target.left, target.top);
+    }
+
+    // Works out the fit from the frame as it is now, keeps the zoom and holds the scroll inside the new size.
+    // Nothing happens while the picture has not loaded or the view is shut.
+    function refit() {
+      if (viewer.hidden || natural.w === 0 || natural.h === 0 || viewerFrame.clientWidth === 0 || viewerFrame.clientHeight === 0) return;
+      fit = Math.min(viewerFrame.clientWidth / natural.w, viewerFrame.clientHeight / natural.h);
+      showSize();
+      placeScroll(viewerFrame.scrollLeft, viewerFrame.scrollTop);
+    }
+
+    function framePoint(clientX, clientY) {
+      const box = viewerFrame.getBoundingClientRect();
+      return { x: clientX - box.left, y: clientY - box.top };
+    }
+
+    function clearGestures() {
+      touches.clear();
+      pinch = null;
+      gesture = { moved: false, multi: false };
+      lastTap = null;
+      gestureStart = null;
+    }
+
+    // Whether a picture is shown and sized, so a zoom has something to act on.
+    function pictureReady() {
+      return !viewer.hidden && natural.w > 0 && natural.h > 0;
+    }
+
+    // A pointer that is gone (lifted, cancelled or no longer captured). A pinch that loses one ends, and the
+    // pointer left carries on as a drag from where it is now.
+    function dropPointer(event) {
+      if (!touches.has(event.pointerId)) return;
+      touches.delete(event.pointerId);
+      pinch = null;
+    }
+
+    viewerFrame.addEventListener("pointerdown", function (event) {
+      if (touches.size >= 2) return;
+      if (typeof viewerFrame.setPointerCapture === "function") {
+        try {
+          viewerFrame.setPointerCapture(event.pointerId);
+        } catch (error) {
+          // A pointer that has already gone cannot be captured; the touch still counts.
+        }
+      }
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY });
+      if (touches.size === 1) {
+        gesture = { moved: false, multi: false };
+        return;
+      }
+      gesture.multi = true;
+      lastTap = null;
+      const both = Array.from(touches.values());
+      pinch = { distance: Math.max(1, Math.hypot(both[0].x - both[1].x, both[0].y - both[1].y)), scale: scale };
+    });
+
+    viewerFrame.addEventListener("pointermove", function (event) {
+      const touch = touches.get(event.pointerId);
+      if (touch === undefined) return;
+      if (pinch !== null) {
+        touch.x = event.clientX;
+        touch.y = event.clientY;
+        const both = Array.from(touches.values());
+        const middle = framePoint((both[0].x + both[1].x) / 2, (both[0].y + both[1].y) / 2);
+        gesture.moved = true;
+        zoomTo(pinch.scale * (Math.hypot(both[0].x - both[1].x, both[0].y - both[1].y) / pinch.distance), middle.x, middle.y);
+        return;
+      }
+      const dx = event.clientX - touch.x;
+      const dy = event.clientY - touch.y;
+      touch.x = event.clientX;
+      touch.y = event.clientY;
+      if (Math.hypot(touch.x - touch.startX, touch.y - touch.startY) > TAP_SLOP_PX) gesture.moved = true;
+      placeScroll(viewerFrame.scrollLeft - dx, viewerFrame.scrollTop - dy);
+    });
+
+    viewerFrame.addEventListener("pointerup", function (event) {
+      if (!touches.has(event.pointerId)) return;
+      dropPointer(event);
+      if (touches.size > 0) return;
+      if (gesture.moved || gesture.multi) {
+        lastTap = null;
+        return;
+      }
+      const tap = { time: event.timeStamp, x: event.clientX, y: event.clientY };
+      if (lastTap !== null && tap.time - lastTap.time <= DOUBLE_TAP_MS && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) <= DOUBLE_TAP_PX) {
+        lastTap = null;
+        const point = framePoint(tap.x, tap.y);
+        zoomTo(scale > 1 ? 1 : DOUBLE_TAP_ZOOM, point.x, point.y);
+      } else {
+        lastTap = tap;
+      }
+    });
+
+    viewerFrame.addEventListener("pointercancel", function (event) {
+      lastTap = null;
+      dropPointer(event);
+    });
+    viewerFrame.addEventListener("lostpointercapture", dropPointer);
+
+    // A trackpad pinch arrives as a wheel event with ctrlKey set (Chrome, Firefox, Edge). A wheel without it keeps
+    // scrolling the frame. The listener is not passive, so the browser's own page zoom can be cancelled.
+    viewerFrame.addEventListener("wheel", function (event) {
+      if (!event.ctrlKey || !pictureReady()) return;
+      event.preventDefault();
+      // One zoom source at a time: a Safari gesture in flight already zooms this pinch.
+      if (gestureStart !== null) return;
+      const dy = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewerFrame.clientHeight : 1);
+      const point = framePoint(event.clientX, event.clientY);
+      const factor = Math.min(WHEEL_STEP_MAX, Math.max(1 / WHEEL_STEP_MAX, Math.exp(-dy * 0.01)));
+      zoomTo(scale * factor, point.x, point.y);
+    }, { passive: false });
+
+    // Safari sends its own gesture events for a trackpad pinch; each one's scale counts from the gesture's start.
+    viewerFrame.addEventListener("gesturestart", function (event) {
+      if (!pictureReady()) return;
+      event.preventDefault();
+      // On iOS a finger pinch fires pointer events too; the pointer pinch zooms, so the gesture records nothing.
+      if (pinch !== null || touches.size >= 2) return;
+      gestureStart = scale;
+    });
+    viewerFrame.addEventListener("gesturechange", function (event) {
+      if (!pictureReady()) return;
+      event.preventDefault();
+      if (gestureStart === null || pinch !== null || touches.size >= 2) return;
+      const point = framePoint(event.clientX, event.clientY);
+      zoomTo(gestureStart * event.scale, point.x, point.y);
+    });
+    viewerFrame.addEventListener("gestureend", function (event) {
+      if (viewer.hidden) return;
+      event.preventDefault();
+      gestureStart = null;
+    });
+
+    viewerPicture.addEventListener("dragstart", function (event) {
+      event.preventDefault();
+    });
+
+    viewerPicture.addEventListener("load", function () {
+      natural = { w: viewerPicture.naturalWidth, h: viewerPicture.naturalHeight };
+      scale = 1;
+      refit();
+    });
+
+    // A picture that cannot load says so in the frame, and Close still works.
+    viewerPicture.addEventListener("error", function () {
+      if (viewer.hidden) return;
+      natural = { w: 0, h: 0 };
+      clearGestures();
+      viewerFrame.replaceChildren(missingLine(viewerPicture.getAttribute("alt")));
+    });
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("resize", refit);
+    }
+
+    function openViewer(image, opener) {
+      clearGestures();
+      natural = { w: 0, h: 0 };
+      fit = 1;
+      scale = 1;
+      viewerCaption.textContent = image.alt;
+      viewer.setAttribute("aria-label", image.alt);
+      viewerFrame.replaceChildren(viewerPicture);
+      viewerFrame.scrollLeft = 0;
+      viewerFrame.scrollTop = 0;
+      viewerPicture.removeAttribute("width");
+      viewerPicture.removeAttribute("height");
+      viewerPicture.setAttribute("alt", image.alt);
+      viewerPicture.setAttribute("draggable", "false");
+      viewerOpener = opener;
+      viewer.hidden = false;
+      sheetPage.setAttribute("inert", "");
+      viewerPicture.setAttribute("src", image.src);
+      if (typeof ResizeObserver !== "undefined") {
+        sizeWatcher = new ResizeObserver(refit);
+        sizeWatcher.observe(viewerFrame);
+      }
+      viewerClose.focus();
+    }
+
+    function closeViewer() {
+      if (viewer.hidden) return;
+      viewer.hidden = true;
+      sheetPage.removeAttribute("inert");
+      viewerPicture.removeAttribute("src");
+      clearGestures();
+      natural = { w: 0, h: 0 };
+      scale = 1;
+      if (sizeWatcher !== null) {
+        sizeWatcher.disconnect();
+        sizeWatcher = null;
+      }
+      const back = viewerOpener;
+      viewerOpener = null;
+      if (back !== null) back.focus();
+    }
+
+    viewerClose.addEventListener("click", closeViewer);
+    // Escape closes the view wherever focus is: a click in the frame moves focus to the page body, so the view itself never hears the key.
+    if (typeof document.addEventListener === "function") {
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") closeViewer();
+      });
+    }
+
+    // A card's pictures. Each opens the image view by tap, Enter or Space; one that cannot load becomes a line
+    // saying so, with the card's other parts and the picture's caption left alone.
+    function buildImages(images) {
+      const wrap = document.createElement("div");
+      wrap.className = "sheet-images";
+      images.forEach(function (image) {
+        const figure = document.createElement("figure");
+        figure.className = "sheet-figure";
+        const picture = document.createElement("img");
+        let missing = false;
+        const open = function () {
+          if (!missing) openViewer(image, picture);
+        };
+        picture.addEventListener("error", function () {
+          missing = true;
+          const line = missingLine(image.alt);
+          figure.replaceChildren(line, ...Array.from(figure.children).filter(function (child) { return child !== picture; }));
+          if (viewerOpener === picture) viewerOpener = line;
+        });
+        picture.addEventListener("click", open);
+        picture.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          if (event.key === "Enter" && event.repeat !== true) open();
+        });
+        // Space acts when the key comes up, as it does on a button, so the key coming up never lands on Close.
+        picture.addEventListener("keyup", function (event) {
+          if (event.key === " ") open();
+        });
+        picture.setAttribute("src", image.src);
+        picture.setAttribute("alt", image.alt);
+        picture.setAttribute("tabindex", "0");
+        picture.setAttribute("role", "button");
+        picture.setAttribute("aria-label", "Open picture: " + image.alt);
+        figure.appendChild(picture);
+        if (typeof image.caption === "string" && image.caption !== "") {
+          figure.appendChild(textElement("figcaption", "sh-caption", image.caption));
+        }
+        wrap.appendChild(figure);
+      });
+      return wrap;
+    }
+
+    function buildOptions(options) {
+      const list = document.createElement("ul");
+      options.forEach(function (option) {
+        const item = document.createElement("li");
+        item.appendChild(textElement("strong", "", option.label));
+        item.appendChild(textElement("span", "sheet-consequence", option.consequence));
+        list.appendChild(item);
+      });
+      return list;
+    }
+
+    function buildRecommendation(recommendation) {
+      const wrap = document.createElement("div");
+      wrap.className = "sheet-recommendation";
+      wrap.appendChild(textElement("p", "", recommendation.text));
+      wrap.appendChild(textElement("p", "", recommendation.reason));
+      return wrap;
+    }
+
+    function sameAnswer(one, other) {
+      return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note;
+    }
+
+    // Nothing on the sheet may be edited before the saved answers are read.
+    function canEdit() {
+      return ready;
+    }
+
+    // The answer row, the note and the save line of one saver: a card's answers, or the final sheet's verdict.
+    // The spec says what differs: the choices, the document's path, how a state becomes a document
+    // and a stored document becomes a state, the id of the note, whether the controls may be used now, and
+    // where the controller is kept. Every write goes through save(), which
+    // keeps at most one write in flight per saver, so the store receives writes in tap order and the last
+    // tap is the last write. A write that stays unanswered past STALL_MS shows "Not saved" with no Try
+    // again (a second write now could land out of order); later taps wait, and when the stalled write
+    // settles the newest answer goes out next. The acknowledged answer is trusted only after a write
+    // resolved: from the moment a write starts until it resolves it is unknown, so a rejected or stalled
+    // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
+    // A state is always { answer, optionId, note }: a verdict is the answer, with no option.
+    function addSaver(spec, article) {
+      const choices = spec.choices;
+      const none = { answer: null, optionId: null, note: "" };
+      let latest = none;
+      const unknown = { answer: undefined, optionId: undefined, note: undefined };
+      let acked = none;
+      let inFlight = null;
+      let stalled = false;
+      let stallTimer = null;
+      let shown = "idle";
+      let timer = null;
+      let switchedOn = false;
+      let retryButton = null;
+
+      const row = document.createElement("div");
+      row.className = "answer-row";
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", spec.rowLabel);
+      const buttons = choices.map(function (choice) {
+        const button = textElement("button", "sh-button", choice.label);
+        button.setAttribute("type", "button");
+        button.setAttribute("aria-pressed", "false");
+        button.disabled = true;
+        button.addEventListener("click", function () {
+          if (!spec.live()) return;
+          // Tapping the pick again clears it; the note stays.
+          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
+          setLatest(picked
+            ? { answer: null, optionId: null, note: latest.note }
+            : { answer: choice.answer, optionId: choice.optionId, note: latest.note });
+          save();
+        });
+        row.appendChild(button);
+        return button;
+      });
+
+      const noteLabel = textElement("label", "sh-label", "Note");
+      noteLabel.setAttribute("for", spec.noteId);
+      const note = document.createElement("textarea");
+      note.id = spec.noteId;
+      note.className = "sh-field";
+      note.setAttribute("rows", "3");
+      note.disabled = true;
+      note.addEventListener("input", function () {
+        if (!spec.live()) return;
+        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        clearTimeout(timer);
+        timer = setTimeout(save, NOTE_PAUSE_MS);
+      });
+      note.addEventListener("change", function () {
+        if (!spec.live()) return;
+        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        save();
+      });
+
+      const saveLine = document.createElement("div");
+      saveLine.className = "save-line";
+      saveLine.setAttribute("aria-live", "polite");
+      saveLine.hidden = true;
+
+      function paint() {
+        buttons.forEach(function (button, index) {
+          const choice = choices[index];
+          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
+          button.className = picked ? "sh-button sh-button--main" : "sh-button";
+          button.setAttribute("aria-pressed", picked ? "true" : "false");
+        });
+        refreshSheet();
+      }
+
+      function showStatus(kind) {
+        shown = kind;
+        retryButton = null;
+        const parts = [];
+        if (kind === "saving") {
+          parts.push(textElement("span", "sh-caption", "Saving…"));
+        } else if (kind === "saved") {
+          parts.push(textElement("span", "sh-caption", "Saved"));
+        } else if (kind === "stalled") {
+          parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
+          parts.push(textElement("span", "sh-caption", SAY.writeStalled));
+        } else if (kind === "failed") {
+          parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
+          parts.push(textElement("span", "sh-caption", "That answer didn't reach the sheet."));
+          retryButton = textElement("button", "sh-button", "Try again");
+          retryButton.setAttribute("type", "button");
+          retryButton.disabled = !switchedOn;
+          retryButton.addEventListener("click", function () {
+            if (!spec.live()) return;
+            save(true);
+          });
+          parts.push(retryButton);
+        }
+        saveLine.replaceChildren(...parts);
+        saveLine.hidden = kind === "idle";
+        refreshSheet();
+      }
+
+      // What the line shows for a state the store holds: saved when it carries an answer or a note, quiet otherwise.
+      function heldStatus(state) {
+        return state.answer !== null || state.note !== "" ? "saved" : "idle";
+      }
+
+      // Any change to the answer or the note clears what the status said and shows that a save is due.
+      function setLatest(next) {
+        if (sameAnswer(next, latest)) return;
+        latest = next;
+        paint();
+        if (!stalled) showStatus("saving");
+      }
+
+      // The one place a write is started. While a write is in flight nothing else is sent; settle() sends
+      // the newest state once it answers. Try again (forced) only exists when nothing is in flight.
+      function save(forced) {
+        clearTimeout(timer);
+        timer = null;
+        if (!ready) return;
+        if (inFlight !== null) return;
+        if (forced !== true && sameAnswer(latest, acked)) {
+          if (shown === "saving") showStatus(heldStatus(acked));
+          return;
+        }
+        send();
+      }
+
+      function send() {
+        const body = latest;
+        inFlight = body;
+        // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
+        acked = unknown;
+        stalled = false;
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(function () {
+          if (inFlight === null) return;
+          stalled = true;
+          showStatus("stalled");
+        }, STALL_MS);
+        showStatus("saving");
+        let request;
+        try {
+          // The document written here has the shape the schema defines for this saver's path.
+          request = Promise.resolve(store.doc(spec.path).set(spec.document(body)));
+        } catch (error) {
+          request = Promise.reject(error);
+        }
+        request.then(function () { settle(body, true); }, function () { settle(body, false); });
+      }
+
+      function settle(body, saved) {
+        inFlight = null;
+        stalled = false;
+        clearTimeout(stallTimer);
+        if (saved) acked = body;
+        // A note's pause is still running: it sends the newest state itself when it ends.
+        if (timer !== null) {
+          showStatus("saving");
+          return;
+        }
+        if (!sameAnswer(latest, body)) {
+          send();
+          return;
+        }
+        showStatus(saved ? "saved" : "failed");
+      }
+
+      spec.keep({
+        // A stored document restores what the spec's rule lets it restore.
+        restore: function (data) {
+          const state = spec.state(data);
+          latest = state;
+          acked = state;
+          note.value = state.note;
+          paint();
+          // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
+          showStatus(heldStatus(state));
+        },
+        // Turns the controls (and a Try again on the save line) on or off.
+        setEnabled: function (on) {
+          switchedOn = on;
+          buttons.forEach(function (button) { button.disabled = !on; });
+          note.disabled = !on;
+          if (retryButton !== null) retryButton.disabled = !on;
+        },
+        // True while this saver holds an answer or note the store has not confirmed: a write in flight, a
+        // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
+        unsaved: function () {
+          return inFlight !== null || timer !== null || !sameAnswer(latest, acked);
+        },
+        // The latest pick (what the pressed button shows) and the kind the save line shows now.
+        state: function () {
+          return { answer: latest.answer, optionId: latest.optionId, save: shown };
+        },
+        // The latest pick and note, as they stand now.
+        current: function () {
+          return { answer: latest.answer, optionId: latest.optionId, note: latest.note };
+        },
+        // Cuts a note's pause short: the pending save runs now.
+        flush: function () {
+          if (timer !== null) save();
+        },
+      });
+
+      article.appendChild(row);
+      article.appendChild(noteLabel);
+      article.appendChild(note);
+      article.appendChild(saveLine);
+    }
+
+    // A card's answers: the schema's answer kinds, one button per option for the kind tied to an option, and a
+    // document written whole at answers/<card id>.
+    function addAnswerParts(card, article) {
+      const choices = [];
+      (answerShape === null ? [] : answerShape.kinds).forEach(function (kind) {
+        if (kind.carriesOption) {
+          card.options.forEach(function (option) {
+            choices.push({ label: option.label, answer: kind.value, optionId: option.id });
+          });
+        } else {
+          choices.push({ label: ANSWER_LABELS[kind.value], answer: kind.value, optionId: null });
+        }
+      });
+      const optionIds = new Set(card.options.map(function (option) { return option.id; }));
+      addSaver({
+        choices: choices,
+        rowLabel: "Your answer",
+        noteId: "note-" + card.id,
+        path: "answers/" + card.id,
+        live: canEdit,
+        document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
+        // A stored document restores a pick only when it fits the schema's answer rule and, for an option
+        // pick, names an option the card offers. A document that does not fit restores only its note, and
+        // only when that is text.
+        state: function (data) {
+          const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
+          const kind = answerShape !== null && fitsAnswerRule(data)
+            ? answerShape.kinds.find(function (entry) { return entry.value === data.answer; })
+            : undefined;
+          if (kind && !kind.carriesOption) {
+            state.answer = kind.value;
+          } else if (kind && optionIds.has(data.optionId)) {
+            state.answer = kind.value;
+            state.optionId = data.optionId;
+          }
+          return state;
+        },
+        keep: function (controller) { controllers.set(card.id, controller); },
+      }, article);
+    }
+
+    // The final sheet's last card: the verdict's buttons and note, written whole at verdict/<digest> as the owner
+    // taps, like an answer. The one document of this revision is the verdict, and it never counts as approval on
+    // its own.
+    function addVerdictParts(article) {
+      addSaver({
+        choices: verdictShape === null ? [] : verdictShape.values.map(function (value) {
+          return { label: VERDICT_LABELS[value], answer: value, optionId: null };
+        }),
+        rowLabel: "Your verdict",
+        noteId: "verdict-note",
+        path: "verdict/" + sheetDigest,
+        live: function () { return canEdit() && verdictShape !== null && sheetDigest !== null; },
+        document: function (body) { return { verdict: body.answer, note: body.note, sheet: sheetDigest }; },
+        // A stored document restores a pick only when it fits the schema's verdict rule and answers this
+        // revision; one that does not fit restores only its note, and only when that is text.
+        state: function (data) {
+          const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
+          if (verdictShape !== null && fitsRule(verdictShape.root, verdictShape.rule, data) && verdictShape.values.includes(data.verdict)) {
+            state.answer = data.verdict;
+          }
+          return state;
+        },
+        keep: function (controller) { verdictController = controller; },
+      }, article);
+    }
+
     function buildCard(card) {
       const article = document.createElement("article");
       article.className = "sh-card";
@@ -424,21 +1275,423 @@
         article.appendChild(textElement("p", "sh-label", "The exact text"));
         article.appendChild(textElement("blockquote", "", card.context.exactText));
       }
+      if (card.images.length > 0) {
+        article.appendChild(buildImages(card.images));
+      }
+      if (card.options.length > 0) {
+        article.appendChild(textElement("p", "sh-label", "Options"));
+        article.appendChild(buildOptions(card.options));
+      }
+      if (card.recommendation) {
+        article.appendChild(textElement("p", "sh-label", "Recommendation"));
+        article.appendChild(buildRecommendation(card.recommendation));
+      }
+      addAnswerParts(card, article);
       return article;
+    }
+
+    // The sheet around the cards. Everything it shows (the count, the item rows and their pills, the fold,
+    // the stepper and the why box) is worked out again from the cards' current states by
+    // refreshSheet() and from nothing else, so no display can drift from what the cards hold.
+    const PICK_PILLS = {
+      aligned: ["sh-pill sh-pill--aligned", "Aligned"],
+      discuss: ["sh-pill sh-pill--discuss", "Discuss"],
+      picked: ["sh-pill sh-pill--aligned", "Picked"],
+      open: ["sh-pill sh-pill--open", "Open"],
+    };
+    // One entry per card, in card order: { id, question, article, row }.
+    let items = [];
+    let sheetKind = "plain";
+    let openIndex = 0;
+    let expanded = false;
+
+    function actionButton(text, onClick) {
+      const button = textElement("button", "sh-button", text);
+      button.setAttribute("type", "button");
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function openAt(index) {
+      if (index < 0 || index >= items.length) return;
+      openIndex = index;
+      refreshSheet();
+    }
+
+    // One Previous and Next pair; the sheet has one above the open card and one below it.
+    function stepPair() {
+      return {
+        previous: actionButton("‹ Previous", function () { openAt(openIndex - 1); }),
+        next: actionButton("Next ›", function () { openAt(openIndex + 1); }),
+      };
+    }
+
+    const stepLabel = textElement("span", "sh-label", "");
+    const topSteps = stepPair();
+    const bottomSteps = stepPair();
+    const stepPairs = [topSteps, bottomSteps];
+    stepperHost.replaceChildren(stepLabel, topSteps.previous, topSteps.next);
+    bottomStepperHost.replaceChildren(bottomSteps.previous, bottomSteps.next);
+
+    // The ▶ or ▼ that opens a folding control's text. It is drawn from the same state that sets aria-expanded.
+    // The closed ▶ carries U+FE0E so no platform draws it as an emoji.
+    const CUE_CLOSED = "▶︎";
+    const CUE_OPEN = "▼";
+
+    function cueElement() {
+      const cue = textElement("span", "sheet-cue", CUE_CLOSED);
+      cue.setAttribute("aria-hidden", "true");
+      return cue;
+    }
+
+    function showOpenState(control, cue, open) {
+      cue.textContent = open ? CUE_OPEN : CUE_CLOSED;
+      control.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    const foldCue = cueElement();
+    const foldButton = actionButton("", function () {
+      expanded = !expanded;
+      refreshSheet();
+    });
+    foldButton.className = "sh-button sheet-fold";
+    foldButton.setAttribute("aria-expanded", "false");
+    foldButton.hidden = true;
+
+    const whyHeading = textElement("h2", "", "");
+    const whyText = textElement("p", "", "");
+    whyBox.replaceChildren(whyHeading, whyText);
+
+    const savesCaption = textElement("p", "sh-caption", "Answers save as you tap");
+    // A plain or remainder sheet's footer also says what to do once every answer is saved; a final sheet says it
+    // below the last card instead.
+    const leavingCaption = textElement("p", "sh-caption", SAY.leaving);
+
+    function whySentence(remainder) {
+      const rounds = remainder.roundsRun;
+      const fixes = remainder.fixesMade;
+      const unsettled = remainder.unsettled.length;
+      let text = "The review ran " + rounds + (rounds === 1 ? " round" : " rounds") + " and fixed " + fixes
+        + (fixes === 1 ? " thing" : " things") + " itself. Everything else traces to your board or your rulings, so it isn't here.";
+      if (unsettled === 1) {
+        text += " 1 item here is a finding the review didn't settle.";
+      } else if (unsettled > 1) {
+        text += " " + unsettled + " items here are findings the review didn't settle.";
+      }
+      return text;
+    }
+
+    function pillOf(state) {
+      if (state.answer === null) return PICK_PILLS.open;
+      if (state.optionId !== null) return PICK_PILLS.picked;
+      return PICK_PILLS[state.answer] || PICK_PILLS.aligned;
+    }
+
+    function pillElement(pill) {
+      return textElement("span", pill[0], pill[1]);
+    }
+
+    function refreshSheet() {
+      const total = items.length;
+      const states = items.map(function (item) { return controllers.get(item.id).state(); });
+      const notSavedKind = function (state) { return state.save === "failed" || state.save === "stalled"; };
+      const answered = states.filter(function (state) { return state.answer !== null; });
+      const discussing = answered.filter(function (state) { return state.answer === "discuss"; });
+
+      // A final sheet may have no cards: there is then nothing to count, step through or list.
+      countHost.textContent = total === 0
+        ? "Nothing left to answer"
+        : ready
+          ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
+          : total + (total === 1 ? " item" : " items") + " · answers not loaded";
+      countHost.hidden = false;
+
+      // A card folds away only when it is answered, is not the open card and has nothing unsaved.
+      const folding = ready && sheetKind === "remainder";
+      const folded = states.map(function (state, index) {
+        return folding && state.answer !== null && index !== openIndex && !notSavedKind(state);
+      });
+      items.forEach(function (item, index) {
+        const state = states[index];
+        const current = index === openIndex;
+        item.article.hidden = !current;
+        item.row.className = "sh-button" + (current ? " sh-button--main sheet-row is-current" : " sheet-row") + (folded[index] ? " is-folded" : "");
+        item.row.setAttribute("aria-current", current ? "true" : "false");
+        const parts = [textElement("span", "sheet-row-text", (index + 1) + " · " + item.question)];
+        if (ready) parts.push(pillElement(pillOf(state)));
+        if (notSavedKind(state)) parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
+        item.row.replaceChildren(...parts);
+      });
+
+      const foldedStates = states.filter(function (state, index) { return folded[index]; });
+      const foldedWith = function (answer) {
+        return foldedStates.filter(function (state) { return state.answer === answer && state.optionId === null; }).length;
+      };
+      const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
+      const notSaved = states.filter(function (state, index) { return state.answer !== null && index !== openIndex && notSavedKind(state); }).length;
+      const foldChips = [
+        textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
+        textElement("span", PICK_PILLS.discuss[0], foldedWith("discuss") + " Discuss"),
+      ];
+      if (foldedPicks > 0) foldChips.push(textElement("span", PICK_PILLS.picked[0], foldedPicks + " Picked"));
+      if (notSaved > 0) foldChips.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
+      // The chips are one block that always starts its own line under the label.
+      const foldChipsLine = document.createElement("span");
+      foldChipsLine.className = "sheet-fold-chips";
+      foldChipsLine.replaceChildren(...foldChips);
+      foldButton.replaceChildren(foldCue, textElement("span", "", "Answered · " + foldedStates.length), foldChipsLine);
+      foldButton.hidden = foldedStates.length === 0;
+      showOpenState(foldButton, foldCue, expanded);
+      itemsHost.className = expanded ? "sheet-list is-expanded" : "sheet-list";
+
+      stepLabel.textContent = "Item " + (openIndex + 1) + " of " + total;
+      stepPairs.forEach(function (pair) {
+        pair.previous.disabled = openIndex === 0;
+        pair.next.disabled = openIndex === total - 1;
+      });
+
+      footerHost.hidden = false;
+      stepperHost.hidden = total === 0;
+      bottomStepperHost.hidden = total === 0;
+      itemsHost.hidden = total === 0;
+      cardsHost.hidden = total === 0;
+      whyBox.hidden = sheetKind !== "remainder";
+      historyBox.hidden = sheetKind !== "final";
+      finalHost.hidden = sheetKind !== "final";
+      // The no-digest caption shows only once the sheet is ready, the schema says what a verdict is and this
+      // browser can't work out which revision the sheet is: the last card's controls are then off, and this says why.
+      if (digestCaption !== null) digestCaption.hidden = !(ready && verdictShape !== null && sheetDigest === null);
+    }
+
+    // The words a final sheet shares with the chat prose (lib/sheet_prose.py) live in one file, sheet-words.json,
+    // which both read; the page fetches it before drawing a final sheet. Nothing here retypes them.
+    let finalWords = null;
+    function plural(count, noun) {
+      return count + " " + noun + (count === 1 ? "" : "s");
+    }
+    function fill(template, values) {
+      return template.replace(/\{(\w+)\}/g, function (whole, name) { return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : whole; });
+    }
+
+    function historySentence(rounds, fixes, vet) {
+      return finalWords.history.replace("{rounds}", function () { return plural(rounds, finalWords.roundNoun); })
+        .replace("{fixes}", function () { return plural(fixes, finalWords.thingNoun); })
+        .replace("{vet}", function () { return vet; });
+    }
+
+    // The caption on the last card that says why its controls are off when this browser can't work out the
+    // sheet's digest, once the sheet is drawn.
+    let digestCaption = null;
+
+    // Controls are on only when the sheet allows edits; the last card's also need a schema that says what a verdict is.
+    function syncControls() {
+      const on = canEdit();
+      controllers.forEach(function (controller) { controller.setEnabled(on); });
+      if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null && sheetDigest !== null);
+    }
+
+    function buildFinal(final) {
+      const history = final.history;
+      const declined = final.declinedFindings;
+      const parts = [
+        textElement("h2", "", finalWords.historyHeading),
+        textElement("p", "", historySentence(history.reviewRounds, history.fixesMade, history.vet)),
+      ];
+      if (declined.length > 0) {
+        const list = document.createElement("ul");
+        list.hidden = true;
+        declined.forEach(function (finding) {
+          list.appendChild(textElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
+        });
+        const declinedCue = cueElement();
+        const toggle = actionButton("", function () {
+          list.hidden = !list.hidden;
+          showOpenState(toggle, declinedCue, !list.hidden);
+        });
+        toggle.replaceChildren(declinedCue, textElement("span", "", finalWords.declinedHeading + " · " + declined.length));
+        showOpenState(toggle, declinedCue, !list.hidden);
+        parts.push(toggle, list);
+      } else {
+        parts.push(textElement("p", "", finalWords.noDeclines));
+      }
+      historyBox.replaceChildren(...parts);
+
+      const approval = final.approval;
+      const article = document.createElement("article");
+      article.className = "sh-card";
+      article.id = "sheet-approval";
+      article.appendChild(textElement("h2", "", finalWords.approveHeading));
+      article.appendChild(textElement("p", "", approval.approvedBoard ? finalWords.tracesBoard : finalWords.tracesNoBoard));
+      if (approval.approvedBoard) {
+        article.appendChild(textElement("p", "", approval.boardSavedWithSpec ? finalWords.boardSaved : finalWords.boardNotSaved));
+      }
+      addVerdictParts(article);
+      digestCaption = textElement("p", "sh-caption", SAY.verdictNoDigest);
+      digestCaption.hidden = true;
+      article.appendChild(digestCaption);
+
+      const next = document.createElement("div");
+      next.className = "sh-box";
+      next.appendChild(textElement("p", "sh-label", finalWords.nextHeading));
+      next.appendChild(textElement("p", "", finalWords.next));
+      finalHost.replaceChildren(article, textElement("p", "sh-caption", finalWords.doneStep), next);
     }
 
     function render(sheet) {
       const fragment = document.createDocumentFragment();
-      sheet.cards.forEach(function (card) {
-        fragment.appendChild(buildCard(card));
+      controllers.clear();
+      verdictController = null;
+      digestCaption = null;
+      historyBox.replaceChildren();
+      finalHost.replaceChildren();
+      items = sheet.cards.map(function (card, index) {
+        const article = buildCard(card);
+        fragment.appendChild(article);
+        return { id: card.id, question: card.question, article: article, row: actionButton("", function () { openAt(index); }) };
       });
+      sheetKind = sheet.kind;
+      footerHost.replaceChildren(savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption]));
+      openIndex = 0;
+      expanded = false;
+      whyHeading.textContent = "Why only these " + sheet.cards.length;
+      whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
+      if (sheetKind === "final") buildFinal(sheet.final);
+      itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
       cardsHost.replaceChildren(fragment);
       status.hidden = true;
+      refreshSheet();
     }
 
-    async function fetchJson(name, label) {
+    // The line under the app bar that says why the controls are off; a retry button rides along
+    // when there is something to ask again (the function it runs).
+    function say(text, onRetry) {
+      const parts = [textElement("span", "", text)];
+      if (onRetry) {
+        const retry = textElement("button", "sh-button", "Try again");
+        retry.setAttribute("type", "button");
+        retry.addEventListener("click", function () { onRetry(); });
+        parts.push(retry);
+      }
+      gate.replaceChildren(...parts);
+      gate.hidden = false;
+      cannotSave = text === SAY.noStore || text === SAY.readOnly;
+    }
+
+    // A stored document's data when it is an object, else null.
+    function documentData(doc) {
+      const data = doc === undefined || doc.exists === false ? undefined : doc.data();
+      return data === undefined || data === null || typeof data !== "object" || Array.isArray(data) ? null : data;
+    }
+
+    function applyDocument(doc) {
+      const controller = controllers.get(doc.id);
+      const data = documentData(doc);
+      if (controller === undefined || data === null) return;
+      controller.restore(data);
+    }
+
+    // The last card's saved verdict puts its pick and note back, and counts as nothing on the sheet. Only this
+    // revision's own document is looked at (the one under its digest, and only when its own sheet field says
+    // the same): another revision's document is never read, so nothing of it is restored.
+    function applyVerdict(verdicts) {
+      if (verdictController === null) return;
+      const stored = documentData(verdicts.docs.find(function (doc) { return doc.id === sheetDigest; }));
+      if (stored !== null && typeof stored.sheet === "string" && stored.sheet === sheetDigest) verdictController.restore(stored);
+    }
+
+    // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
+    // read is never an empty sheet: the controls stay off and the owner can ask again. A retry may
+    // overlap a stalled read; the first read to succeed is applied once and any later one is ignored.
+    async function restore() {
+      if (ready || (restoring && !readStalled)) return;
+      readAttempt += 1;
+      const attempt = readAttempt;
+      restoring = true;
+      readStalled = false;
+      clearTimeout(readTimer);
+      say(SAY.loading, false);
+      readTimer = setTimeout(function () {
+        if (ready || attempt !== readAttempt) return;
+        readStalled = true;
+        say(SAY.readFailed, restore);
+      }, STALL_MS);
+      try {
+        // A final sheet also reads its verdict; a failed or stalled read of either is a failed read. The verdict
+        // lives under this revision's digest, so without a digest there is nothing of this revision to read.
+        const names = sheetKind === "final" && sheetDigest !== null ? ["answers", "verdict"] : ["answers"];
+        const [saved, verdicts] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
+        if (ready) return;
+        saved.docs.forEach(applyDocument);
+        if (verdicts !== undefined) applyVerdict(verdicts);
+      } catch (error) {
+        if (ready || attempt !== readAttempt) return;
+        clearTimeout(readTimer);
+        restoring = false;
+        readStalled = false;
+        say(SAY.readFailed, restore);
+        return;
+      }
+      clearTimeout(readTimer);
+      restoring = false;
+      readStalled = false;
+      ready = true;
+      syncControls();
+      gate.hidden = true;
+      // The owner lands on the first call still waiting for an answer, or on the first when none is.
+      const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
+      openIndex = waiting === -1 ? 0 : waiting;
+      refreshSheet();
+    }
+
+    // Only the sheet's owner may answer, so every step that is missing or fails leaves the controls off.
+    async function connect() {
+      const host = typeof window === "undefined" ? undefined : window.claude;
+      if (!host || typeof host.use !== "function") {
+        say(SAY.noStore, false);
+        return;
+      }
+      connectAttempt += 1;
+      const attempt = connectAttempt;
+      say(SAY.loading, false);
+      let db = null;
+      try {
+        db = await withDeadline(function () { return host.use("db"); });
+      } catch (error) {
+        if (error === DEADLINE) {
+          if (attempt === connectAttempt) say(SAY.connectStalled, connect);
+          return;
+        }
+        db = null;
+      }
+      if (attempt !== connectAttempt) return;
+      if (!db) {
+        say(SAY.noStore, false);
+        return;
+      }
+      let owner = false;
+      try {
+        const user = await withDeadline(function () { return host.use("user"); });
+        owner = Boolean(user) && (await withDeadline(function () { return user.isOwner(); })) === true;
+      } catch (error) {
+        if (error === DEADLINE) {
+          if (attempt === connectAttempt) say(SAY.connectStalled, connect);
+          return;
+        }
+        owner = false;
+      }
+      if (attempt !== connectAttempt) return;
+      if (!owner) {
+        say(SAY.readOnly, false);
+        return;
+      }
+      store = db;
+      await restore();
+    }
+
+    // The fetched file's exact bytes, the text decoded from them, and what that parses to.
+    async function fetchFile(name, label) {
       let response;
       try {
         response = await fetch(name, { cache: "no-store" });
@@ -448,24 +1701,44 @@
       if (!response.ok) {
         throw [label + " could not be loaded (HTTP " + response.status + ")."];
       }
+      let bytes;
       let text;
       try {
-        text = await response.text();
+        bytes = new Uint8Array(await response.arrayBuffer());
+        // The text is decoded from a separate view of the same bytes; the bytes themselves are what a digest covers.
+        text = new TextDecoder().decode(bytes);
       } catch (error) {
         throw [label + " could not be loaded."];
       }
       try {
-        return JSON.parse(text);
+        return { bytes: bytes, text: text, data: JSON.parse(text) };
       } catch (error) {
         throw [label + " isn't valid JSON."];
       }
     }
 
+    async function fetchJson(name, label) {
+      return (await fetchFile(name, label)).data;
+    }
+
+    // The SHA-256 of the bytes, in lowercase hex; null when this browser can't compute it.
+    async function digestOf(bytes) {
+      try {
+        if (typeof crypto === "undefined" || crypto === null || !crypto.subtle || typeof crypto.subtle.digest !== "function") return null;
+        const hashed = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+        return Array.from(hashed, function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+      } catch (error) {
+        return null;
+      }
+    }
+
     async function load() {
+      let sheetFile;
       let sheet;
       let schema;
       try {
-        sheet = await fetchJson("sheet.json", "The sheet's data file");
+        sheetFile = await fetchFile("sheet.json", "The sheet's data file");
+        sheet = sheetFile.data;
         schema = await fetchJson("sheet.schema.json", "The sheet's schema file");
       } catch (problems) {
         showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
@@ -476,7 +1749,42 @@
         showErrors(problems);
         return;
       }
+      if (sheet.kind === "final") {
+        try {
+          finalWords = await fetchJson("sheet-words.json", "The sheet's wording file");
+        } catch (problems) {
+          showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
+          return;
+        }
+      }
+      sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.bytes) : null;
+      answerShape = readAnswerShape(schema);
+      verdictShape = readVerdictShape(schema);
       render(sheet);
+      if (answerShape === null) {
+        // The schema does not say what an answer is, so nothing could be saved or read back.
+        say(SAY.noStore, false);
+        return;
+      }
+      // The cards are already drawn: whatever goes wrong from here only leaves the controls off.
+      connect().catch(function () {
+        say(SAY.noStore, false);
+      });
+    }
+
+    // One guard for the page: leaving or reloading while any card (or the last card) holds an unconfirmed
+    // answer, note or verdict makes the browser ask first. When every card is saved or idle it does nothing.
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("beforeunload", function (event) {
+        let pending = false;
+        controllers.forEach(function (controller) {
+          if (controller.unsaved()) pending = true;
+        });
+        if (verdictController !== null && verdictController.unsaved()) pending = true;
+        if (!pending) return;
+        event.preventDefault();
+        event.returnValue = "";
+      });
     }
 
     load().catch(function () {

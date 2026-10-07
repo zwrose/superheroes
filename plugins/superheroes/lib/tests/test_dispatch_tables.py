@@ -4,9 +4,6 @@ sync with the bundled agents and the rubric's dimension list.
 - review-code dispatches every bundled REVIEWER agent: its substitution table
   has exactly one row per `*-reviewer` file in agents/, and its "Specialists to
   dispatch" prose enumeration names every reviewer slug.
-- audit-debt intentionally dispatches only the ORIGINAL FOUR (Failure-Mode
-  whole-repo sweep deferred) — guarded here so a four->five sweep cannot
-  silently change it.
 - Every dimension label used in a table row appears backticked in the rubric's
   Dimensions declaration.
 - The reviewer roster re-typed in code (`round_driver` DIMENSIONS and AGENT_SUFFIX)
@@ -23,13 +20,9 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 
-ORIGINAL_FOUR = {
-    "architecture-reviewer", "code-reviewer", "security-reviewer", "test-reviewer",
-}
-
 # The sanctioned-subset invariant (#515): the panel of `*-reviewer` agents is the sanctioned
 # universe. `grounding-reviewer` is a SPEC-ONLY seat (doc provenance) — it is deliberately
-# absent from the review-code / audit-debt code roster.
+# absent from the review-code code roster.
 SPEC_ONLY = {"grounding-reviewer"}
 
 ROW_RE = re.compile(
@@ -155,7 +148,7 @@ def test_agent_suffix_values_are_derivable_and_match_skill_tables():
     # The SKILL.md dispatch tables' middle column (the findings filename stem) is the
     # same derived suffix — guard the doc copy too (test_full_crew_table already pins the
     # slug column; this pins the previously-unasserted findings column).
-    for skill in ["review-code", "audit-debt"]:
+    for skill in ["review-code"]:
         for slug, findings_stem, _dim in _table_rows(os.path.join("skills", skill, "SKILL.md")):
             assert findings_stem == slug[:-len(_REVIEWER_SUFFIX)], (
                 "%s: findings-column %r != %r (slug minus '-reviewer')"
@@ -177,25 +170,18 @@ def test_full_crew_table_has_one_row_per_agent():
     assert sorted(slugs) == sorted(expected_set)
 
 
-def test_audit_debt_table_lists_exactly_the_original_four():
-    rows = _table_rows(os.path.join("skills", "audit-debt", "SKILL.md"))
-    slugs = [slug for slug, _, _ in rows]
-    assert sorted(slugs) == sorted(ORIGINAL_FOUR)
-
-
 @pytest.mark.parametrize("skill,expected_slugs", [
     ("review-code", "CODE"),
-    ("audit-debt", "FOUR"),
 ])
 def test_specialists_to_dispatch_prose_enumeration(skill, expected_slugs):
     text = _read(os.path.join("skills", skill, "SKILL.md"))
-    # review-code enumerates the 5-seat CODE_ROSTER; audit-debt the ORIGINAL_FOUR.
-    want = {"CODE": _agent_slugs() - SPEC_ONLY, "FOUR": ORIGINAL_FOUR}[expected_slugs]
+    # review-code enumerates the 5-seat CODE_ROSTER.
+    want = {"CODE": _agent_slugs() - SPEC_ONLY}[expected_slugs]
     enumerated = set(re.findall(r"^\s*-\s*`([a-z][a-z-]*-reviewer)`\s*→", text, re.M))
     assert enumerated == want
 
 
-@pytest.mark.parametrize("skill", ["review-code", "audit-debt"])
+@pytest.mark.parametrize("skill", ["review-code"])
 def test_table_dimensions_exist_in_rubric(skill):
     dims = _rubric_dimensions()
     for slug, _findings, dimension in _table_rows(os.path.join("skills", skill, "SKILL.md")):

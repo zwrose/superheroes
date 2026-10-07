@@ -13,7 +13,10 @@ belongs to and lists every change with its replacement.
 
 - A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
 - A caller that invokes `/superheroes:review-spec` or the deleted `spec_loop_plan` module must switch to discovery's spec checks.
+- A caller that invokes `/superheroes:audit-debt` must switch to `/superheroes:guardian`, which replaced it; the reviewer agents no longer take a whole-repo audit mode. The guardian's dependency lens scans Node and Python projects only; a Rust or Go project must run `cargo audit` or `govulncheck` itself, which `audit-debt` used to run when installed.
+- A caller that imports `lib/escalation.py` or runs `lib/escalation_resolve.py` must stop; both are deleted.
 - **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
+- A spec already in review when a project adopts this release finishes on the path it started on unless the owner says otherwise.
 
 ### Canon: the record of the owner's decisions
 
@@ -44,6 +47,26 @@ belongs to and lists every change with its replacement.
 - The spec review weight call is gone: no light-or-full call decides how a spec is reviewed. Package reads keep their weight call. Code review's light, full and micro lanes are unchanged.
 - The spec's review gate keeps `pending`, `changes-requested` and `passed`. Discovery now records `changes-requested` when the owner asks for changes, and the stale-approval reset (`gate_write.py --mode reset`) is called from spec-checks.md § The review gate. Only the owner's approval writes `passed`.
 - Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
+
+### The advisor's spec vet hands findings back; discovery asks for approval
+
+- The advisor no longer tells the owner a spec is "ready for your approval". Its vet checks the spec against the repo, the other approved specs and Canon, never edits the spec, and returns every finding to discovery in a vet record: a comment on the spec PR marked `<!-- superheroes:spec-vet -->`, or `vet-record.md` beside a stored spec. Discovery's final sheet asks for approval.
+- Discovery's step 8 now waits for the advisor's newest vet record to be clean for the current spec, as `skills/showrunner/reference/spec-vet.md` § How discovery learns the vet is done says, instead of waiting for "ready for your approval".
+- After the owner approves and says the final sheet is done, the advisor adds the breakdown to the same spec PR (or beside the stored spec) and vets it; one merge word covers both, and the issues file as it merges.
+- An owner ruling the advisor receives goes to Canon on a pull request it has open; with none open, it is held in a comment marked `<!-- superheroes:canon-held -->` on the project's standing proposals collector until the next pull request the advisor opens.
+- Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
+
+### audit-debt retires
+
+- The `audit-debt` skill is removed, along with its entry in the Codex manifest's skills list. `/superheroes:guardian` is the repo-health sweep that replaced it.
+- The reviewer agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `test-reviewer`) no longer carry an `audit-debt` mode bullet, and `premortem-reviewer` no longer notes that `audit-debt` does not dispatch it. The full dependency CVE and advisory sweep that `security-reviewer` deferred now points to `/superheroes:guardian`, which covers Node and Python dependencies only.
+- The `audit-report` decision-point carrier is removed from the carrier registry.
+
+### The escalation rubric defers to the owner-vs-craft line
+
+- `rubric/escalation-base.md` (escalation-version 5) points at `rubric/owner-vs-craft-line.md` for whose call a choice is, and keeps PROCEED / NOTIFY / GATE as how a call is disclosed: PROCEED and NOTIFY are a craft call recorded for the owner's veto (NOTIFY keeps its undo path and expiry); GATE is an owner call or a hard-floor action, written down and handed back. The hard floor list is unchanged.
+- The rubric's routing grounds of its own (where the ground truth lives, reversibility × confidence) and its precedence over a skill's prose are removed.
+- `lib/escalation.py` and `lib/escalation_resolve.py` are deleted with their tests and the `eval/escalation/` fixtures. A caller of `escalation_resolve.py` must read the rubric instead.
 
 ### Guardian dead-code ids are repo-relative
 

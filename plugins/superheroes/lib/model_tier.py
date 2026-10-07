@@ -1,14 +1,13 @@
 """Band-wide model-tier policy: role -> dispatch model name (the cost/perf knob).
 
-Pure + deterministic. review-code and audit-debt are the wired
-consumers (guarded by test_model_tier_wiring.py).
+Pure + deterministic. review-code is the wired
+consumer (guarded by test_model_tier_wiring.py).
 Returns the short names the Agent/Skill dispatch layer
 accepts ("sonnet"/"opus"/"haiku"), or None to inherit the session model.
 
 Fail-OPEN to the capable default — a wrong/absent tier is a cost concern, never a
-safety one (contrast escalation.py, which fails CLOSED). Defaults below apply when
-the profile is silent; a caller may pass {role: model} overrides from the project
-calibration profile.
+safety one. Defaults below apply when the profile is silent; a caller may pass
+{role: model} overrides from the project calibration profile.
 """
 import json
 import os

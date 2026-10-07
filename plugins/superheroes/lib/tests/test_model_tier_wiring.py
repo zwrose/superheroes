@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
 # The in-scope registry: review-crew skills that dispatch specialists and must be wired.
-WIRED = ("review-code", "audit-debt")
+WIRED = ("review-code",)
 
 # A skill that dispatches specialists carries this section heading.
 DISPATCH_MARKER = "Dispatch Specialists"
