@@ -2,7 +2,7 @@
 
 Enforces: (1) the old spec-only exit vocabulary is gone from architect-discovery;
 (2) the new doctrine clauses are present section-scoped in discovery, architect-spec,
-and showrunner duty-1; (3) a light-weight spec is the same artifact class as a full spec.
+and showrunner duty-1; (3) a small spec is the same artifact class as a large spec.
 """
 # What this file does and does not guard (owner ruling 21-d, issue #935; byte-literal floor 2026-08-17).
 #
@@ -203,19 +203,19 @@ _DISCOVERY_SECTION_CLAUSES = {
 }
 
 _ARCHITECT_SPEC_SECTION_CLAUSES = {
-    "## Weight never changes the artifact class": [
+    "## Size never changes the artifact class": [
         "Same template.",
-        "There is no light template.",
+        "There is no short-form template.",
         "Same home.",
-        "There is no light home.",
+        "There is no separate home for small specs.",
         "Same anchor power.",
-        "A light spec is not a weaker citation.",
+        "A small spec is not a weaker citation.",
         "Same owner approval authority.",
-        "There is no lighter approval.",
+        "There is no lesser approval.",
         "Empty sections are omitted, never filled.",
         "A heading with nothing",
         "is written by the approval path itself",
-        "[#1062](https://github.com/zwrose/superheroes/issues/1062), shipped in PR #1069",
+        "`set-gate` records the date",
     ],
 }
 
@@ -480,7 +480,7 @@ def test_census_tables_are_populated():
         "### 8. Owner review & final approval (terminal gate)",
     }
     assert set(_DISCOVERY_SECTION_CLAUSES) == expected_discovery_keys
-    expected_architect_spec_keys = {"## Weight never changes the artifact class"}
+    expected_architect_spec_keys = {"## Size never changes the artifact class"}
     assert set(_ARCHITECT_SPEC_SECTION_CLAUSES) == expected_architect_spec_keys
     for clauses in _DISCOVERY_SECTION_CLAUSES.values():
         assert len(clauses) >= 3
@@ -527,9 +527,9 @@ def test_discovery_charter_section_clauses(heading, clauses):
 # --- 1c. Section-scoped presence, architect-spec ---------------------------
 
 
-def test_architect_spec_weight_equivalence_clauses():
+def test_architect_spec_size_equivalence_clauses():
     _assert_section_clauses(_ARCHITECT_SPEC_CHARTER, _ARCHITECT_SPEC_SECTION_CLAUSES)
-    labels = _ARCHITECT_SPEC_SECTION_CLAUSES["## Weight never changes the artifact class"]
+    labels = _ARCHITECT_SPEC_SECTION_CLAUSES["## Size never changes the artifact class"]
     for label in ("Same template.", "Same home.", "Same anchor power.", "Same owner approval authority."):
         assert label in labels, "missing equivalence label %r in table" % label
 

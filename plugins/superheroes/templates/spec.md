@@ -46,6 +46,25 @@
   tech-leak, a path reference, or `{{…}}`/TBD noise.
 -->
 
+## How to read this spec
+
+<!-- AUTHOR GUIDANCE (source tags) — DELETE this whole comment before delivering.
+
+  Every statement in this spec ends with its source tag, in plain text at the end of the
+  statement: (source: board · <artboard>), (source: Canon <entry id>), (source: framing), or
+  (source: craft, for your veto). A statement with two sources names both. A tag never cites
+  transcript line numbers. No script or validator reads tags: they are for the owner and for the
+  source check, an agent reading plain files. Keep in the list below only the sources this spec
+  uses. Where this spec and the approved board disagree, the board wins: correct the spec. -->
+
+Every statement ends with its source in plain text. The sources are:
+
+- **board · <artboard>**: the approved build board, saved in `board/` beside this spec,
+  {{its link and the date the owner approved it}}.
+- **Canon <entry id>**: an owner ruling recorded in the project's Canon.
+- **framing**: the framing the owner approved, {{its date}}.
+- **craft, for your veto**: a choice the author made, recorded for the owner's veto.
+
 ## Purpose
 
 {{Why this work exists, in the owner's words: the problem or opportunity, and the
@@ -66,11 +85,11 @@ behavior. No tech. Each requirement carries ≥1 acceptance criterion: a
 Given-When-Then scenario for a behavioral flow, or a rule bullet for a simple
 constraint (limit, format).}}
 
-**FR-1.** {{When &lt;trigger&gt;, the system shall &lt;observable response&gt;.}}
-  - *Acceptance (Given-When-Then):* Given {{context}}, when {{action}}, then {{observable result}}.
+**FR-1.** {{When &lt;trigger&gt;, the system shall &lt;observable response&gt;.}} (source: {{source}})
+  - *Acceptance (Given-When-Then):* Given {{context}}, when {{action}}, then {{observable result}}. (source: {{source}})
 
-**FR-2.** {{The system shall &lt;response&gt;.}}
-  - *Acceptance (rule):* {{a single pass/fail rule — e.g. "a title of more than 100 characters is rejected"}}
+**FR-2.** {{The system shall &lt;response&gt;.}} (source: {{source}})
+  - *Acceptance (rule):* {{a single pass/fail rule — e.g. "a title of more than 100 characters is rejected"}} (source: {{source}})
 
 ## When things go wrong (significant unhappy paths)
 
@@ -106,8 +125,8 @@ a failure costs money, data, safety, trust, or legal standing. One representativ
 not a matrix. Record each area's disposition (Specify / Defer-to-build / N-A) in the `## Coverage`
 table at the end — do NOT inline a tag list here; this section is requirements, not the audit record.}}
 
-**UFR-1.** {{If &lt;bad thing&gt;, then the system shall &lt;observable response&gt;.}}
-  - *Acceptance:* Given {{context}}, when {{the bad thing}}, then {{what the user sees / can do}}.
+**UFR-1.** {{If &lt;bad thing&gt;, then the system shall &lt;observable response&gt;.}} (source: {{source}})
+  - *Acceptance:* Given {{context}}, when {{the bad thing}}, then {{what the user sees / can do}}. (source: {{source}})
 
 ## Non-functional requirements
 
@@ -122,11 +141,10 @@ section if there are none worth stating.}}
 
 ## UI / UX
 
-{{For user-facing work, the design is created in **Claude Design**: Discovery hands
-the owner a design prompt built from these requirements, the owner creates/iterates
-the design, and its **handoff output is referenced here** — not re-described from
-memory. Link or embed the Claude Design handoff (component structure, key screens,
-states, tone). Omit this section entirely if the work is not user-facing.}}
+{{The approved build board is the design. Point at it: its saved path, `board/` beside this spec,
+and its link, naming the artboards that matter. Never re-describe a screen in prose. When the board
+was skipped, say so in one sentence with its source. Omit this section entirely if the work is not
+user-facing.}}
 
 ## Definition of done / success
 
@@ -189,7 +207,7 @@ Show-it? presentation is a handback omission, not a build defect.
 The six happy-path dimensions below are the initial seed list; the learning loop grows this
 list when a handback review finds a dimension the owner was never asked about.
 
-The build reads the `Defer-to-build` rows as its handoff list. Keep every row (an unconsidered
+The build reads the `Defer-to-build` rows as the list of choices it makes. Keep every row (an unconsidered
 area is itself a finding).}}
 
 | Area | Disposition | Show-it? | Where / why |

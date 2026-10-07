@@ -322,7 +322,7 @@ _CLAUSE_ENTRIES = [
     (
         "architect-spec-amendments-exception",
         _ARCHITECT_SPEC_CHARTER,
-        "## Weight never changes the artifact class",
+        "## Size never changes the artifact class",
         "Exception — `## Amendments`",
         "literal",
     ),
@@ -385,10 +385,10 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
-        "discovery-fr19-exclude-design-handoff",
+        "discovery-fr19-exclude-board-transcription",
         _DISCOVERY_CHARTER,
         "#### The elicitation test",
-        "**Design-handoff transcription**",
+        "**Board transcription**",
         "literal",
     ),
     (
@@ -477,6 +477,168 @@ _CLAUSE_ENTRIES = [
         _OLD_COVERAGE_TABLE_HEADER,
         "banned_file",
     ),
+    # F. spec-writing doctrine: source tags, the board, splits, the writing pass
+    (
+        "template-how-to-read-section",
+        "templates/spec.md",
+        "## How to read this spec",
+        "",
+        "section_exists",
+    ),
+    (
+        "template-how-to-read-before-purpose",
+        "templates/spec.md",
+        "## How to read this spec||## Purpose",
+        "",
+        "section_order",
+    ),
+    (
+        "template-source-tag-plain-text",
+        "templates/spec.md",
+        "## How to read this spec",
+        "Every statement ends with its source in plain text.",
+        "literal",
+    ),
+    (
+        "template-source-tag-no-line-numbers",
+        "templates/spec.md",
+        "## How to read this spec",
+        "A tag never cites transcript line numbers.",
+        "literal",
+    ),
+    (
+        "template-source-tag-nothing-reads",
+        "templates/spec.md",
+        "## How to read this spec",
+        "No script or validator reads tags",
+        "literal",
+    ),
+    (
+        "template-board-wins",
+        "templates/spec.md",
+        "## How to read this spec",
+        "the board wins: correct the spec",
+        "literal",
+    ),
+    (
+        "template-ui-ux-board",
+        "templates/spec.md",
+        "## UI / UX",
+        "The approved build board is the design.",
+        "literal",
+    ),
+    (
+        "architect-spec-source-tag-rule",
+        _ARCHITECT_SPEC_CHARTER,
+        "## Flow",
+        "Every statement ends with its source tag",
+        "literal",
+    ),
+    (
+        "architect-spec-source-tag-no-line-numbers",
+        _ARCHITECT_SPEC_CHARTER,
+        "## Flow",
+        "A tag never cites transcript line numbers.",
+        "literal",
+    ),
+    (
+        "architect-spec-source-tag-nothing-reads",
+        _ARCHITECT_SPEC_CHARTER,
+        "## Flow",
+        "no script or validator reads them",
+        "literal",
+    ),
+    (
+        "architect-spec-board-wins",
+        _ARCHITECT_SPEC_CHARTER,
+        "## Flow",
+        "the board wins: correct the spec",
+        "literal",
+    ),
+    (
+        "architect-spec-ui-ux-board",
+        _ARCHITECT_SPEC_CHARTER,
+        "## Flow",
+        "UI/UX points at the approved build board's saved path",
+        "literal",
+    ),
+    (
+        "discovery-write-after-board",
+        _DISCOVERY_CHARTER,
+        "### 6. Author the spec via `writing-specs`",
+        "Write the spec only once the owner has approved the build board",
+        "literal",
+    ),
+    (
+        "discovery-source-tag",
+        _DISCOVERY_CHARTER,
+        "### 6. Author the spec via `writing-specs`",
+        "Every statement ends with its source tag",
+        "literal",
+    ),
+    (
+        "discovery-one-piece",
+        _DISCOVERY_CHARTER,
+        "### 6. Author the spec via `writing-specs`",
+        "One spec covers one piece the owner could approve and ship on its own.",
+        "literal",
+    ),
+    (
+        "discovery-split-owner-rules",
+        _DISCOVERY_CHARTER,
+        "### 6. Author the spec via `writing-specs`",
+        "propose a split to the owner",
+        "literal",
+    ),
+    (
+        "discovery-length-conversation",
+        _DISCOVERY_CHARTER,
+        "### 6. Author the spec via `writing-specs`",
+        "When the spec passes about 300 to 400 lines, raise splitting with the owner.",
+        "literal",
+    ),
+    (
+        "discovery-length-never-stops",
+        _DISCOVERY_CHARTER,
+        "### 6. Author the spec via `writing-specs`",
+        "Length alone never stops the work",
+        "literal",
+    ),
+    (
+        "discovery-writing-pass",
+        _DISCOVERY_CHARTER,
+        "### 7. Run the three spec checks",
+        "run one writing pass over the spec to",
+        "literal",
+    ),
+    (
+        "discovery-writing-pass-standard",
+        _DISCOVERY_CHARTER,
+        "### 7. Run the three spec checks",
+        "rubric/prose-standard.md",
+        "literal",
+    ),
+    (
+        "discovery-meaning-check",
+        _DISCOVERY_CHARTER,
+        "### 7. Run the three spec checks",
+        "Then check that no meaning shifted.",
+        "literal",
+    ),
+    (
+        "discovery-meaning-check-discards",
+        _DISCOVERY_CHARTER,
+        "### 7. Run the three spec checks",
+        "discards the whole pass",
+        "literal",
+    ),
+    (
+        "discovery-advisor-breakdown",
+        _DISCOVERY_CHARTER,
+        "### 8. Owner review & final approval (terminal gate)",
+        "Breaking the spec into issues, filing those issues and wiring the project board are the advisor's, after approval.",
+        "literal",
+    ),
 ]
 
 
@@ -484,11 +646,17 @@ _CLAUSE_IDS = frozenset({
     "architect-spec-amendments-exception",
     "architect-spec-coverage-row-composition",
     "architect-spec-spec-content-pointer",
+    "architect-spec-board-wins",
+    "architect-spec-source-tag-no-line-numbers",
+    "architect-spec-source-tag-nothing-reads",
+    "architect-spec-source-tag-rule",
+    "architect-spec-ui-ux-board",
     "banned-old-coverage-header",
     "banned-shared-contract",
+    "discovery-advisor-breakdown",
     "discovery-coverage-tables-match",
     "discovery-fr19-admission-rule",
-    "discovery-fr19-exclude-design-handoff",
+    "discovery-fr19-exclude-board-transcription",
     "discovery-fr19-exclude-limits",
     "discovery-fr19-exclude-mechanisms",
     "discovery-fr19-exclude-mirror-facts",
@@ -501,6 +669,16 @@ _CLAUSE_IDS = frozenset({
     "discovery-fr21-asked-and-deferred",
     "discovery-fr21-growth-duty",
     "discovery-fr21-never-asked",
+    "discovery-length-conversation",
+    "discovery-length-never-stops",
+    "discovery-meaning-check",
+    "discovery-meaning-check-discards",
+    "discovery-one-piece",
+    "discovery-source-tag",
+    "discovery-split-owner-rules",
+    "discovery-write-after-board",
+    "discovery-writing-pass",
+    "discovery-writing-pass-standard",
     "register-r4-pin",
     "spec-content-fr23-carry-forward-restamp",
     "showrunner-spec-content-pointer",
@@ -531,10 +709,17 @@ _CLAUSE_IDS = frozenset({
     "template-amendments-oldest-first",
     "template-amendments-section",
     "template-amendments-zero-state",
+    "template-board-wins",
     "template-coverage-fifteen-rows",
     "template-coverage-header",
     "template-coverage-initial-seed",
     "template-coverage-show-it-handback",
+    "template-how-to-read-before-purpose",
+    "template-how-to-read-section",
+    "template-source-tag-no-line-numbers",
+    "template-source-tag-nothing-reads",
+    "template-source-tag-plain-text",
+    "template-ui-ux-board",
 })
 
 
@@ -989,6 +1174,59 @@ def test_clause_entries_are_well_formed():
             assert literal, f"{clause_id}: register_r4 entry needs a pinned literal"
         if kind == "banned_surfaces":
             assert literal, f"{clause_id}: banned_surfaces entry needs a banned string"
+
+
+# The three files the spec-writing doctrine lives in state their rules without a spec-review
+# weight call, without a pointer to the retired spec-review skill, and without project provenance
+# (ruling, requirement, register or issue numbers, or design-handoff and discovery-note references).
+_WRITING_DOCTRINE_SURFACES = (
+    _DISCOVERY_CHARTER,
+    _ARCHITECT_SPEC_CHARTER,
+    "templates/spec.md",
+)
+_WRITING_DOCTRINE_BANNED = (
+    ("retired-review-skill-pointer", r"review[-_]spec"),
+    ("review-weight-call", r"[Ww]eigh|\blight spec\b|\bfull spec\b|light-or-full"),
+    ("ruling-number", r"\brulings? [0-9]"),
+    ("requirement-or-register-number", r"\bU?FR-[0-9]{2,}|\bR[0-9]{1,2}\b"),
+    (
+        "handoff-reference",
+        r"Claude Design handoff|[Dd]esign-handoff|handoff (output|list)|HANDOFF|discovery-notes",
+    ),
+    ("issue-or-pr-number", r"#[0-9]{2,}"),
+)
+
+
+def _banned_pattern_hits(pattern, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    hits = []
+    for rel in _WRITING_DOCTRINE_SURFACES:
+        for line_no, line in enumerate(read_text(rel).splitlines(), start=1):
+            match = re.search(pattern, line)
+            if match:
+                hits.append(f"{rel}:{line_no}: {match.group(0)!r}")
+    return hits
+
+
+@pytest.mark.parametrize(
+    "name,pattern",
+    _WRITING_DOCTRINE_BANNED,
+    ids=[name for name, _ in _WRITING_DOCTRINE_BANNED],
+)
+def test_writing_doctrine_surfaces_carry_no_banned_reference(name, pattern):
+    # axis: a banned weight-call, retired-pointer or provenance pattern on any line of the three
+    # spec-writing surfaces
+    hits = _banned_pattern_hits(pattern)
+    assert not hits, f"{name} found: {hits}"
+
+
+def test_negative_writing_doctrine_banned_reference_detected():
+    def read_text(rel):
+        return "clean line\nsee review-spec for more\n" if rel == _DISCOVERY_CHARTER else ""
+
+    hits = _banned_pattern_hits(r"review[-_]spec", read_text)
+    assert hits == [f"{_DISCOVERY_CHARTER}:2: 'review-spec'"]
 
 
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
