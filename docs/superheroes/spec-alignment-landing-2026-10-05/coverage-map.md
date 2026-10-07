@@ -48,7 +48,7 @@ and C8).
 | A | Amends | 2 (showrunner duty 1) | The advisor's spec vet (showrunner duty 1): the advisor's vet sends findings back to discovery… | **C6** |
 | A | Amends | 3 (review-spec) | review-spec: retires (FR-49, FR-49b). | **C5** |
 | A | Amends | 4 (anchor resolution) | The issue contract's anchor resolution: a `ruling` anchor may point to a Canon entry… | **C1** |
-| A | FR-1 | bullet 1 | no skill or reference in the plugin states a second, different line. | **C2** |
+| A | FR-1 | bullet 1 | no skill or reference in the plugin states a second, different line. | **C9** (moved from C2 on 2026-10-07: C2 met it for the four named terms, PR #1660; the escalation rubric remained, collector #695 item 49 = a, issue #1664) |
 | A | FR-1 | bullet 2 | each place that states a version of the line today is rewritten to point to this one… | **C2** |
 | A | FR-1 | bullet 3 | the advisor's existing door rules stay as they are, as cases of the line… | **C2** |
 | A | FR-2 | bullet 1 | the glossary's material-consequence entry and the issue contract's craft-call section point to… | **C2** |
