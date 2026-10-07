@@ -27,9 +27,11 @@ ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
 # the §11 drift guard reads so no test re-types the list. `codexModels`/`seatPins`/`effort`/
-# `builderDispatchTier` are the non-role keys load_engine_prefs honors.
+# `builderDispatchTier`/`specReviewer` are the non-role keys load_engine_prefs honors. `specReviewer`
+# is the spec-check reviewer seat's engine token — a seat of its own, never a code-review role.
+SPEC_REVIEWER_KEY = "specReviewer"
 ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + (
-    "codexModels", "seatPins", "effort", "builderDispatchTier",
+    "codexModels", "seatPins", "effort", "builderDispatchTier", SPEC_REVIEWER_KEY,
 )
 
 BUILDER_DISPATCH_TIER_KEY = "builderDispatchTier"
@@ -233,6 +235,20 @@ def classify_builder_dispatch_tier(value):
             "reason": "builder-tier-not-sanctioned:%s" % stripped,
         }
     return {"state": "valid", "tier": stripped, "reason": None}
+
+
+def classify_spec_reviewer(value):
+    """Pure classifier for specReviewer (axis: which ENGINE the spec checks' reviewer seat runs on;
+    absent/empty/invalid is unset, never a default engine) — never raises."""
+    if value is None:
+        return {"state": "unset"}
+    if isinstance(value, str):
+        stripped = value.strip().lower()
+        if not stripped:
+            return {"state": "unset"}
+        if stripped in ENGINES:
+            return {"state": "valid", "engine": stripped}
+    return {"state": "invalid", "reason": "spec-reviewer-unknown-engine"}
 
 
 def resolve_builder_dispatch_tier(prefs):
@@ -639,6 +655,13 @@ def _normalize_engine_preferences_block(prefs):
             "value": raw,
             "reason": tier_class["reason"],
         }
+    reviewer_value = prefs.get(SPEC_REVIEWER_KEY)
+    reviewer_class = classify_spec_reviewer(reviewer_value)
+    if reviewer_class["state"] == "valid":
+        out[SPEC_REVIEWER_KEY] = reviewer_class["engine"]
+    elif reviewer_class["state"] == "invalid":
+        raw = reviewer_value if isinstance(reviewer_value, str) else repr(reviewer_value)
+        out["invalidSpecReviewer"] = {"value": raw, "reason": reviewer_class["reason"]}
     return out
 
 
