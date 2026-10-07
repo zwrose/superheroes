@@ -799,6 +799,8 @@
     viewerFrame.addEventListener("wheel", function (event) {
       if (!event.ctrlKey || !pictureReady()) return;
       event.preventDefault();
+      // One zoom source at a time: a Safari gesture in flight already zooms this pinch.
+      if (gestureStart !== null) return;
       const dy = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewerFrame.clientHeight : 1);
       const point = framePoint(event.clientX, event.clientY);
       zoomTo(scale * Math.exp(-dy * 0.01), point.x, point.y);
@@ -808,11 +810,14 @@
     viewerFrame.addEventListener("gesturestart", function (event) {
       if (!pictureReady()) return;
       event.preventDefault();
+      // On iOS a finger pinch fires pointer events too; the pointer pinch zooms, so the gesture records nothing.
+      if (pinch !== null || touches.size >= 2) return;
       gestureStart = scale;
     });
     viewerFrame.addEventListener("gesturechange", function (event) {
-      if (!pictureReady() || gestureStart === null) return;
+      if (!pictureReady()) return;
       event.preventDefault();
+      if (gestureStart === null || pinch !== null || touches.size >= 2) return;
       const point = framePoint(event.clientX, event.clientY);
       zoomTo(gestureStart * event.scale, point.x, point.y);
     });

@@ -3634,3 +3634,43 @@ def test_a_safari_gesture_zooms_from_where_it_began():
     assert result["lone"] == result["third"], "a gesture change with no gesture begun zoomed"
     assert result["reopened"] == FIT, "a gesture begun before Close zoomed the next picture"
     assert result["shut"] is False
+
+
+# Bites on: a Safari gesture that zooms (or records a start) while a two-finger pointer pinch is down, so one pinch is applied by two formulas; or a ctrl wheel that zooms while a gesture is in flight, so one trackpad pinch is applied by the wheel and the gesture both.
+def test_one_pinch_is_zoomed_by_one_source_only():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { fit: t.shown(), prevented: [] };
+      const gesture = (type, fields) => {
+        const event = t.fire(view.frame, type, Object.assign({ clientX: 260, clientY: 170 }, fields));
+        out.prevented.push(event.defaultPrevented);
+      };
+      // A pointer pinch (fingers 100 px apart come to 200) with gesture events in flight: the pointer formula alone, a zoom of 2.
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 360, 170);
+      gesture("gesturestart", { scale: 1 });
+      p("pointermove", 2, 460, 170);
+      gesture("gesturechange", { scale: 3 });
+      out.pointerPinch = t.shown();
+      p("pointerup", 1, 260, 170);
+      p("pointerup", 2, 460, 170);
+      // The gesture that began under the pinch recorded no start, so a change after the fingers lift zooms nothing.
+      gesture("gesturechange", { scale: 3 });
+      out.afterLift = t.shown();
+      gesture("gestureend", { scale: 3 });
+      // A ctrl wheel during a gesture: the gesture's formula alone, from where it began (2 x 1.5 = 3).
+      gesture("gesturestart", { scale: 1 });
+      t.fire(view.frame, "wheel", { ctrlKey: true, deltaMode: 0, deltaY: -100, clientX: 260, clientY: 170 });
+      gesture("gesturechange", { scale: 1.5 });
+      out.gesture = t.shown();
+      const wheel = t.fire(view.frame, "wheel", { ctrlKey: true, deltaMode: 0, deltaY: -100, clientX: 260, clientY: 170 });
+      out.wheelPrevented = wheel.defaultPrevented;
+      out.afterWheel = t.shown();
+      return out;
+    """)
+    assert result["pointerPinch"]["width"] == 800, "the pointer pinch was zoomed by the gesture as well"
+    assert result["afterLift"] == result["pointerPinch"], "a gesture under a pointer pinch recorded a start"
+    assert result["gesture"]["width"] == 1200, "the ctrl wheel zoomed during a gesture"
+    assert result["wheelPrevented"] is True
+    assert result["afterWheel"] == result["gesture"], "a ctrl wheel zoomed while a gesture was in flight"
+    assert all(result["prevented"]), result["prevented"]
