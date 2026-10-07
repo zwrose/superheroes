@@ -25,9 +25,9 @@ get their fixtures as the loop is built.
 
 - **[Phase 1] End-to-end completion.** The work-item reaches Ship and produces a PR
   whose diff satisfies the `spec`'s acceptance criteria.
-- **[Phase 1] Gates actually block.** Each review gate (review-spec / review-plan /
+- **[Phase 1] Gates actually block.** Each review gate (review-plan /
   review-tasks) is shown to **stop** a seeded-bad artifact (a deliberately flawed
-  spec/plan/tasks fixture must not pass review), not just rubber-stamp.
+  plan/tasks fixture must not pass review), not just rubber-stamp.
 - **[Phase 1] Behavioral proof.** test-pilot exercises the change and the run leads with
   "here's it working" before the human spot-check.
 

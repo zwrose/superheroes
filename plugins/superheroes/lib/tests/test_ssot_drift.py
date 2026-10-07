@@ -2326,6 +2326,12 @@ def test_launcher_stack_gate_refusal_tokens_in_copy_holders():
 # plugin to projects that do not carry the register, so the literals are pinned here; the
 # pin is validated against the home whenever the home is reachable, so a register edit in
 # this repo turns the guard red instead of leaving two copies agreeing about the wrong text.
+#
+# R5 is dated history: the register and the child docs still hold the original sentence, and
+# R5_WEIGHT_VOCABULARY stays pinned to them. No spec draft is weighed any more, so the plugin
+# no longer carries that sentence. Its one plugin copy-holder is the showrunner, which holds
+# PACKAGE_WEIGHT_VOCABULARY — the same sentence without the spec-draft measurable — and the
+# original must occur zero times in the discovery charter and the showrunner.
 _EPIC_REGISTER_REL = os.path.normpath(
     os.path.join("..", "..", "docs", "superheroes",
                  "front-half-sdlc-core-6181ee", "register.md")
@@ -2338,6 +2344,13 @@ R5_WEIGHT_VOCABULARY = (
     "by one stated sentence; the numeric bars are guidelines, never gates."
 )
 
+PACKAGE_WEIGHT_VOCABULARY = (
+    "A weight call names `light` or `full`, states its measurables (child count and "
+    "register-entry count for a package read), names a round ceiling when it governs a "
+    "read loop, and may be overridden in either direction by one stated sentence; the "
+    "numeric bars are guidelines, never gates."
+)
+
 R7_PARK_SURFACE = (
     "A park lands the full park note — what was elicited or found so far, explicitly "
     "marked unapproved — on the owner's reading surface at park time: in the advisor's "
@@ -2348,6 +2361,11 @@ R7_PARK_SURFACE = (
 )
 
 _R5_PLUGIN_COPY_HOLDERS = (
+    "skills/showrunner/SKILL.md",
+)
+
+# The plugin files that must not carry the original R5 sentence: no spec draft is weighed.
+_R5_PLUGIN_ABSENT_FROM = (
     "skills/architect-discovery/SKILL.md",
     "skills/showrunner/SKILL.md",
 )
@@ -2463,10 +2481,21 @@ def test_r7_pinned_literal_exactly_once_in_epic_register_when_reachable():
     _assert_literal_exactly_once_if_reachable(R7_PARK_SURFACE, _EPIC_REGISTER_REL)
 
 
-def test_r5_weight_vocabulary_exactly_once_in_plugin_copy_holders():
-    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated plugin copy-holder."""
+def test_package_weight_vocabulary_exactly_once_in_plugin_copy_holders():
+    """§11.2: the package-read weight-call vocabulary is byte-identical in its plugin copy-holder."""
     for rel in _R5_PLUGIN_COPY_HOLDERS:
-        _assert_literal_exactly_once(R5_WEIGHT_VOCABULARY, rel)
+        # axis: the vocabulary sentence keeps one home in the showrunner, byte for byte
+        _assert_literal_exactly_once(PACKAGE_WEIGHT_VOCABULARY, rel)
+
+
+def test_r5_weight_vocabulary_absent_from_plugin_charters():
+    """The original R5 sentence names a spec-draft measurable; no plugin charter carries it."""
+    for rel in _R5_PLUGIN_ABSENT_FROM:
+        # axis: no plugin surface lets a weight call decide a spec's review
+        count = _read(rel).count(R5_WEIGHT_VOCABULARY)
+        assert count == 0, (
+            "%s: the original R5 sentence occurs %d times, expected 0" % (rel, count)
+        )
 
 
 def test_r7_park_surface_exactly_once_in_plugin_copy_holders():

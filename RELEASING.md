@@ -36,8 +36,8 @@ verification already happened upstream, one PR at a time.
 The pre-release evidence **is the advisor's per-PR vet, accumulated**. In the v2 loop every PR
 that lands on `main` has passed two independent checks before it merged:
 
-- **Review crew** — the cross-vendor `review-code` build review (and, for spec'd work, the
-  `review-spec` panel), composed to complement the builder's vendor.
+- **Review crew** — the cross-vendor `review-code` build review, composed to complement the
+  builder's vendor.
 - **Advisor vet** — the Showrunner vets every PR from its artifacts against the issue/spec and
   the build brief, and posts a **durable vet receipt** on the PR (verdict plus what it probed).
 

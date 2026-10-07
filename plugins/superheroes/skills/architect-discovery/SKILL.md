@@ -149,8 +149,8 @@ are not run — that exit's own artifact closes the work.
 4. **UI/UX** when relevant (hand the owner a Claude Design prompt)
 5. **Confirm the framing → owner approves the *what*** ← HARD GATE
 6. **Author the spec** via the `writing-specs` skill
-7. **The weight call, then review at that weight** (the advisor's call; fix findings before the owner spends time)
-8. **Owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
+7. **Run the three spec checks** (fix craft findings before the owner spends time)
+8. **Advisor vet, then owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
 
 ## The steps
 
@@ -293,7 +293,7 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   page they wait on responds within 2 seconds", "only the owner can see their
   data"), never as mechanisms.
 
-#### The elicitation test (FR-19)
+#### The elicitation test
 
 **The admission rule.** A line earns its place in a spec by **the elicitation
 test**: *the owner was asked, and cared.* That is the **only** admission rule. A
@@ -313,7 +313,7 @@ about.**
 5. **Test obligations** — that something will be tested. Tests are the build's contract.
 6. **Non-load-bearing mirror-facts** — repo facts the build does not rely on being true.
 
-#### Failure semantics (FR-20)
+#### Failure semantics
 
 When a row in `## Coverage` is violated, the consequence rides the **decision
 axis** — the disposition determines what kind of failure it is:
@@ -329,7 +329,7 @@ axis** — the disposition determines what kind of failure it is:
   anything wrong by choosing; they are deciding now.** Nobody is charged with a
   defect for a deferred choice the owner later dislikes.
 
-#### The learning loop (FR-21)
+#### The learning loop
 
 Handback findings close the loop between one discovery and the next — and two
 different failures are **not** graded the same way:
@@ -405,99 +405,73 @@ out-of-scope, and `size`.** That skill owns the on-disk artifact; you own the
 dialogue that feeds it. What it writes is a **draft** — `status: draft` until the owner approves it at step 8, and if
 the discovery parks before then, the draft stays exactly where this step put it (Exit C).
 
-### 7. The weight call, then review at that weight
+### 7. Run the three spec checks
 
-**The weight call is the advisor's — always.** It is made **on the completed draft**, never
-before: you cannot weigh a spec you have not written. **When discovery runs with no advisor in
-the loop, the completed draft waits for the advisor's call** — you do not weigh your own draft,
-and you do not proceed to review at a weight you picked. If that wait cannot be resolved, the
-item **parks (Exit C)** with the draft left at the spec path `resolve-write --doc spec` reports,
-`status: draft`,
-and explicitly marked unapproved in the park note.
+Every spec draft gets the three spec checks. Run them exactly as
+`skills/architect-discovery/reference/spec-checks.md` says. This charter does not restate its
+rules.
 
-**A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.**
+Nothing sizes the review. No one, the advisor included, picks a lighter or a heavier review for a
+spec. Every spec gets the same three checks.
 
-Grade **both** classification inputs on the draft, and state both:
+Fix the craft pile before the owner sees the spec. The owner's queue goes to the owner in step 8.
+**Never fabricate a review result.**
 
-- **Gradable requirement lines** — the requirement sentences a reviewer could grade a change
-  against: every numbered functional requirement and every significant-unhappy-path requirement.
-  Acceptance criteria, prose sections and the Coverage table are **not** gradable lines.
-- **Interlocking sections** — sections that **cite or constrain one another** (one requirement's
-  behavior is defined by another's, or a section names another as its bound). A draft whose
-  sections stand alone has none.
-
-**At or under 10 gradable requirement lines with no interlocking sections calls `light`; above
-calls `full`.** **Both inputs must hold for `light`** — 6 gradable lines with two interlocking
-sections is `full`.
-
-| Weight | Review | Vet | Owner approval |
-| --- | --- | --- | --- |
-| `light` | **one independent review seat** over the draft — a single fresh-context reviewer, cross-vendor where one is configured; not `review-spec`'s panel | a **light vet**: the advisor reads the draft and that seat's findings, and rules in-channel | **in-channel** — ask in the conversation and record the answer when it comes |
-| `full` | **`review-spec`'s panel** | the **full spec vet** | **scheduled owner review** — hand the spec over and agree a time; never press for an answer in the moment |
-
-**Record the call:** name the gradable-line count, whether any sections interlock, and the
-resulting weight. **An override is valid only when stated, and one stated sentence is enough** —
-"calling this full despite 7 lines: the two limits sections define each other" — in either
-direction.
-
-**The 10-line bar is a guideline, never a gate.** Nothing in this skill, and no gate anywhere,
-turns it into a hard block: a 40-line draft may be called `light` with one stated sentence, and
-a 4-line draft may be called `full` the same way. If you find yourself saying "the number won't
-let me", the number has been misread.
-
-Address the review's findings **before** asking the owner to spend their time — the review
-catches ambiguity, missing coverage and tech leakage the owner would otherwise have to. Fix what
-it raises (or, where it is a judgment call, note it for the owner). **Never fabricate a review
-result.**
-
-**If `review-spec` is not available in this project**, that is not an exemption from review —
-handle it by weight. On `light`, `review-spec` was never the reviewer: the **one independent
-seat still runs**, because a fresh-context reviewer needs no skill to be installed. On `full`,
-the panel cannot run, so either the advisor **calls it down to `light` with the one stated
-sentence** an override needs and the single seat runs, or the draft **parks (Exit C)** marked
-unapproved. **Self-review is never the substitute** — step 6's self-review is the author's own
-pass and was never independent. Whichever way it goes, the owner is told, in plain language,
-what did not run.
+**When the seat verb reports that no reviewer can run, the draft parks (Exit C).** It stays at the
+spec path `resolve-write --doc spec` reports, `status: draft`, and the park note marks it
+unapproved. The owner is told, in plain language, that no review ran. **Self-review is never the
+substitute** — step 6's self-review is the author's own pass and was never independent.
 
 ### 8. Owner review & final approval (terminal gate)
 
-Ask the owner to review the written spec. **Tell them the truth about which review ran** —
-never claim a review that didn't happen, and never offer them a spec that had none. The
-message follows the weight called in step 7.
+**Before the owner is asked, the advisor vets the spec.** Hand the spec's path and the path of its
+`checks-record.md` to the advisor for its vet, whatever the checks found. Ask the owner only after
+the vet reports "ready for your approval". When the vet asks for changes, apply them and run the
+checks again on the changed parts as `spec-checks.md` says in its After rulings section, then hand
+it back for the vet. When discovery runs with no advisor reachable, the draft waits for the vet; if
+that cannot be resolved, the discovery parks (Exit C) with the draft marked unapproved.
+
+Then ask the owner to review the written spec. **Tell them the truth about which review ran** —
+never claim a review that didn't happen, and never offer them a spec that had none.
 
 **Name the real path** — the one `resolve-write --doc spec` reported for this work-item, never a
 hardcoded repo path. `<spec path>` below stands for it.
 
-> *At `light` weight:* "Spec written to `<spec path>` and read by
-> one independent reviewer. Please review it and tell me if you want any changes before it
-> goes to the build."
->
-> *At `full` weight:* "Spec written to `<spec path>` and through
-> `review-spec`'s panel. Please review it and tell me if you want any changes before it
-> goes to the build."
->
-> *At `full` weight, overridden down because the panel could not run:* "Spec written to
-> `<spec path>`. `review-spec`'s panel isn't available on this
-> project, so this was called down to light weight and read by one independent reviewer
-> instead. Please review it and tell me if you want any changes before it goes to the build."
+Send one message: "Spec written to `<spec path>` and through the three spec checks. Please review
+it and tell me if you want any changes before it goes to the build." Send that sentence only when
+all three checks ran in the last round of the review and their results were real. When
+`checks-record.md` shows a check that did not run, do not claim all three: say instead that the
+spec went through the checks that ran, name each check that did not run and why in plain words,
+then ask the same review question.
 
-**There is no fourth message.** `review-spec` being unavailable is not a reason to hand the
-owner an unreviewed spec at either weight — step 7 rules that out, and a draft that can reach
-neither review path **parks (Exit C)** rather than arriving here.
+Add the owner's queue to it. Present each queued item with its recommendation and its marks from
+`checks-record.md`. When the record says the reviewer was from the author's own family, add this
+sentence: "The reviewer is from the same model family as the author. It is a fresh reviewer that
+never saw the conversation that wrote the spec."
 
-**How you ask depends on the weight called in step 7.** On `light`, ask **in-channel** — put it
-in the conversation and record the answer when it comes. On `full`, agree a **scheduled owner
-review**: hand the spec over, name when you will come back to it, and do not press for a verdict
-in the moment. Weight changes how the approval is scheduled; it never changes who approves.
+Ask for approval one way, for every spec. Hand the spec over, name when you will come back to it,
+and do not press for a verdict in the moment.
 
-- **If the owner requests changes, apply them and re-review the revised draft at its effective
-  weight before coming back to them.** On `light`, the one independent seat reads it again; on
-  `full`, `review-spec`'s panel runs again; on a draft called down to `light` because the panel
-  could not run, the one independent seat reads it again. **There is no path from "changes
-  requested" to `set-gate … passed` without a re-review at the effective weight** — a revised
-  draft is a draft, and step 7's rule that no draft reaches the owner unreviewed applies to it
-  exactly as it applied the first time.
-- **The owner's approval is the terminal gate** — review-crew advises, the owner
+- **If the owner requests changes, record the gate as `changes-requested` first.** Then apply the
+  changes, run the checks again on the changed parts as `spec-checks.md` says in its After rulings
+  section, and only then go back to the owner. Record it the same way as the approval block below
+  records `passed`:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  ROOT=$(git rev-parse --show-toplevel)
+  WORK_ITEM="<work-item>"
+  DOC_PATH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" path \
+    --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
+  HASH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$DOC_PATH")
+  python3 -B "$ROOT_DIR/lib/definition_doc.py" set-gate \
+    --doc spec --work-item "$WORK_ITEM" --review changes-requested --root "$ROOT" \
+    --expected-hash "$HASH" --run-id "owner-changes-$WORK_ITEM"
+  ```
+
+  **There is no path from `changes-requested` to `passed` without that re-run.** A revised draft
+  is a draft.
+- **The owner's approval is the terminal gate** — the checks advise, the owner
   decides. **Only once the owner explicitly approves**, record their decision so the
   work-item is ready to build:
 
@@ -514,14 +488,15 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
   ```
 
   This writes `gates.review: passed` (and derives `status: approved`) — the
-  machine-readable signal that the spec is approved (and the only thing that flips the gate
-  when `review-spec` isn't wired yet). Recording the **owner's** explicit decision is
-  **not** self-approval — the HARD-GATE forbids *you* rubber-stamping your own
-  un-reviewed work, not recording the owner's call. Run this **after** the owner says
-  yes, never before.
+  machine-readable signal that the spec is approved. The owner's approval is the only thing that
+  writes `passed`. The gate's rules, its three states and the reset of a stale approval, are in
+  `skills/architect-discovery/reference/spec-checks.md` under The review gate. Recording the
+  **owner's** explicit decision is **not** self-approval — the HARD-GATE forbids *you*
+  rubber-stamping your own un-reviewed work, not recording the owner's call. Run this **after** the
+  owner says yes, never before.
 - **Exit A is done — report and hand back.** With the spec approved, this path is complete: the
   owner-approved spec is the ready artifact. **Report the exit to the advisor** — the
-  work-item, the spec's path, and the weight the review ran at — exactly as Exits B and C
+  work-item, the spec's path, and the path of its `checks-record.md` — exactly as Exits B and C
   report theirs. Do **not** start a build yourself — hand back to the owner, who routes the
   approved work-item to a build session. The spec's approval gate is the authoritative signal.
 
@@ -535,7 +510,7 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
 | "Happy path is enough" | The significant unhappy paths are the anti-slop core. Run the coverage checklist. |
 | "I'll research to be thorough" | Research is consented — offer it, name the time/usage cost, let the owner choose. |
 | "The owner's sure, skip research" | Confidence isn't correctness. Offer a quick prior-art check on consequential calls. |
-| "review-spec passed, that's done" | review-crew advises; the **owner** has the final say (step 8). |
+| "The checks came back clean, that's done" | The checks advise; the **owner** has the final say (step 8). |
 | "Owner approved the idea, start building" | The HARD GATE needs explicit approval of the *what*, then the written spec, before the build. |
 | "Restate every requirement so they can approve" | Step 5 is a compact decision brief, not a spec replay. The requirement-by-requirement review is the spec (step 8) — don't double-review. |
 | "They can infer the trade-offs from the options" | A consequential question carries its own why-it-matters, per-option pro/con, and a recommendation (step 3) — in plain language, before the ask. |
@@ -550,8 +525,5 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
 | "A pick-one widget is faster than writing the options out" | Options are prose in the conversation. A widget forces the owner into your labels — and they may not be in your labels. |
 | "They answered with a question instead of picking one — I'll re-ask the list" | That is re-forcing the choice. Answer the question and carry the dialogue forward. |
 | "This looks small, I'll run the light version of discovery" | There is no up-front ceremony choice. Probe each opinion-bearing dimension and stop when the spec's dispositions table (`## Coverage`) is satisfied — a small surface closes early on its own. |
-| "No advisor is around, so I'll call the weight myself" | The weight call is the advisor's. The completed draft waits for it; if the wait can't be resolved, the item parks (Exit C). |
-| "Only 7 gradable lines, so it's light" | Both inputs are graded. Interlocking sections make it `full` whatever the count says. |
-| "It's 12 lines, so the guideline blocks light" | The bar is a guideline, never a gate. Override in either direction with one stated sentence. |
-| "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Re-review at the effective weight before going back to the owner; there is no path from "changes requested" to `set-gate … passed` without one (step 8). |
+| "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Record `changes-requested`, run the checks again on the changed parts, then go back to the owner. There is no path from `changes-requested` to `set-gate … passed` without that (step 8). |
 | "We're parking — I'll paste the draft into the park note so nothing is lost" | The draft is already durable at the spec path `resolve-write --doc spec` reports. The note carries the **path** and the unapproved mark, never a second copy — one artifact per home (Exit C). |

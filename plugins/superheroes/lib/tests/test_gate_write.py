@@ -3,7 +3,7 @@
 This is the unit coverage the gate machinery never had while it was inlined SKILL bash —
 the exact behaviors the old manual harnesses proved: canonical-only writes, the parent-gate
 precondition (downgrade passed→changes-requested), fail-closed when the frontmatter writer
-errors, and the review-spec reset (revoke a stale `passed`→`pending`, never grant). Driven
+errors, and the spec checks' reset (revoke a stale `passed`→`pending`, never grant). Driven
 through `main()` (the CLI the skills call), against a temp root. In the consolidated tree
 gate_write imports `definition_doc` directly (same-tree sibling) — no the-architect symlink
 fixture is needed; docs stay isolated in the temp root.
@@ -205,7 +205,7 @@ def test_reset_stale_expected_hash_does_not_record(tmp_path, capsys):
     assert _gate(root, "spec") == "passed"
 
 
-# --- reset (review-spec stale approval) -----------------------------------
+# --- reset (the spec checks' stale approval) -----------------------------------
 
 def test_reset_revokes_stale_approval(tmp_path, capsys):
     root = _docs_root(tmp_path)

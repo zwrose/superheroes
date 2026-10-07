@@ -2,7 +2,7 @@
 
 The provenance pincer's review-side deterministic leg. The-architect authors an inline
 `[cite: <path> § <anchor>]` provenance marker on every load-bearing **mirror-fact**
-(CONVENTIONS §3.2); this validator is review-spec's compile-step check that each such
+(CONVENTIONS §3.2); this validator is the spec checks' grounding-round check that each such
 citation **resolves** — the cited path exists, and (when given) the anchor text occurs in
 that file. It fails closed: a dangling path, an absent anchor, or an unreadable spec all
 yield a blocking finding, never a silent clean.
@@ -69,7 +69,7 @@ def _run_cli(spec_path, root):
 def _assert_schema_complete(f, require_line=True):
     """Every emitted finding is base-rubric-schema-complete. A per-citation finding
     carries a real non-null line; the fail-closed (unreadable/missing-spec) finding now
-    carries line == 1 (NOT null) so it survives review-spec §4's `line == null` drop —
+    carries line == 1 (NOT null) so it survives a downstream `line == null` drop —
     callers pass require_line=False for it and this asserts the anchored line == 1."""
     assert f["severity"] == "Important"
     assert f["dimension"] == "Grounding"
