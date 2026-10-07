@@ -111,7 +111,7 @@ _BANNED_DISCOVERY_STRINGS = [
 _DOCS_BASE_LITERAL = "docs/superheroes"
 
 _DISCOVERY_HARD_GATE_CLAUSES = [
-    "do NOT author the spec, write any code, mint a work-item, or hand off until you have presented the framing (the **what**) and the owner has explicitly approved it.",
+    "do NOT author the spec, write any code, create a work-item folder or any other artifact beyond Canon's own entries, or hand off until you have presented the framing (the **what**) and the owner has explicitly approved it.",
     "never approve on your own behalf",
     "hands back with no approved spec",
     "the draft stays on disk at the spec path `resolve-write --doc spec` reports, with `status: draft`",
