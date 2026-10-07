@@ -16,8 +16,8 @@
   .sheet-page .sheet-list { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
   .sheet-page .sheet-row, .sheet-page .sheet-fold { align-items: center; display: flex; gap: 8px; max-width: 100%; text-align: left; }
   .sheet-page .sheet-row { justify-content: space-between; }
-  .sheet-page .sheet-fold { flex-wrap: wrap; justify-content: flex-start; }
-  .sheet-page .sheet-fold-chips { display: flex; flex: 1 0 100%; flex-wrap: wrap; gap: 8px; }
+  .sheet-page .sheet-fold { display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr); padding-block: 8px; }
+  .sheet-page .sheet-fold-chips { display: flex; flex-wrap: wrap; gap: 8px; grid-column: 2; }
   .sheet-page .sheet-cue { display: inline-block; margin-inline-end: 4px; text-align: center; width: 1em; }
   .sheet-page .sheet-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }

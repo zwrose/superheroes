@@ -3704,8 +3704,8 @@ def test_the_fold_cue_follows_the_toggle():
     assert result["closedAgain"] == result["closed"]
 
 
-# Bites on: the folded row's count chips not sitting in one block that starts its own line after the label (chips beside the label, or loose in the button), that block not taking the full line width or not wrapping with even gaps, or the row's content not being left-aligned.
-def test_the_fold_puts_its_chips_on_their_own_left_aligned_line():
+# Bites on: the folded row having no block padding or no even gap between its lines, the chips line not sitting in the label's column, the row rule losing to the shared flex rule or beating the rules that hide it, or the chips not being one block after the cue and the label.
+def test_the_fold_row_is_padded_and_its_chips_line_up_with_the_label():
     ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
     docs = [
         {"id": "plan-day", "data": _doc("aligned")},
@@ -3722,10 +3722,27 @@ def test_the_fold_puts_its_chips_on_their_own_left_aligned_line():
     ]
 
     rules = _style_rules(_template_text())
-    chips = dict(pair for selector, pairs in rules if selector == ".sheet-page .sheet-fold-chips" for pair in pairs)
-    assert (chips.get("display"), chips.get("flex"), chips.get("flex-wrap"), chips.get("gap")) == ("flex", "1 0 100%", "wrap", "8px")
-    row = [dict(pairs) for selector, pairs in rules if selector == ".sheet-page .sheet-fold" and any(name == "flex-wrap" for name, _ in pairs)]
-    assert len(row) == 1 and row[0].get("justify-content") == "flex-start", "the folded row is not left-aligned"
+    grid_rules = [i for i, (selector, pairs) in enumerate(rules) if selector == ".sheet-page .sheet-fold" and ("display", "grid") in pairs]
+    assert len(grid_rules) == 1, "the folded row is not one grid rule"
+    index = grid_rules[0]
+    row = dict(rules[index][1])
+    assert row.get("gap") == "8px", "the folded row has no even gap between its lines"
+    assert row.get("grid-template-columns") == "auto minmax(0, 1fr)", "the folded row is not a cue column and a label column"
+    assert row.get("padding-block") == "8px", "the folded row has no block padding"
+    assert "flex-wrap" not in row and "justify-content" not in row, "the folded row still carries flex alignment"
+
+    shared = [i for i, (selector, _) in enumerate(rules) if selector == ".sheet-page .sheet-row, .sheet-page .sheet-fold"]
+    assert len(shared) == 1 and index > shared[0], "the folded row's rule does not come after the shared flex rule"
+    hidden = [i for i, (selector, pairs) in enumerate(rules) if selector == ".sheet-page .sheet-fold" and ("display", "none") in pairs]
+    assert len(hidden) == 1 and index < hidden[0], "the folded row's rule comes after the rule that hides it on wide screens"
+    hidden_attribute = [i for i, (selector, _) in enumerate(rules) if selector == ".sh-theme [hidden]"]
+    assert len(hidden_attribute) == 1 and index < hidden_attribute[0], "the folded row's rule comes after the hidden-attribute rule"
+
+    chips = [dict(pairs) for selector, pairs in rules if selector == ".sheet-page .sheet-fold-chips"]
+    assert len(chips) == 1, "the chips line is not one rule"
+    assert (chips[0].get("display"), chips[0].get("flex-wrap"), chips[0].get("gap")) == ("flex", "wrap", "8px"), "the chips line is not a wrapping row with even gaps"
+    assert chips[0].get("grid-column") == "2", "the chips line does not sit in the label's column"
+    assert "flex" not in chips[0], "the chips line still claims a full flex line"
 
 
 # Bites on: the declines toggle's cue not following the list (never redrawn on a click, stuck on ▶), disagreeing with aria-expanded or the list's hidden, not being the button's first child, or having no aria-hidden.
