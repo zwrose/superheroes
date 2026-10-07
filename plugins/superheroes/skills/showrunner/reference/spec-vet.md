@@ -120,8 +120,9 @@ command run on that file as vetted. The artifacts are the coverage map, the cont
 package-read audit trail and every body the filing creates, which is the inventory of
 [the filing dry-run](decomposition.md#the-verification-pass): each child body, the epic body and
 every planned layer body, each as a file. A single-issue spec has no
-register and no package read, so its one pin is the child's proposed body, which you save beside the
-spec as a file before you vet it. A record is clean for filing only when every pinned file's hash
+register and no package read, so its pins are the bodies its filing creates: the child's proposed
+body and, when the child plans a stack, every planned layer body, each saved beside the spec as a
+file before you vet it. A record is clean for filing only when every pinned file's hash
 equals its content now. A file that changed, or one the record does not pin, means the record is
 stale and the breakdown needs a new vet. This holds in the stored-spec mode too.
 
