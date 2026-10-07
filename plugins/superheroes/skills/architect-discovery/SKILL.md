@@ -594,7 +594,10 @@ offer them a spec that had none.
    `skills/showrunner/reference/spec-vet.md` § How discovery learns the vet is done — read it there,
    and act on a record only as it says. Ask the owner only after a current record reads `clean`.
    Fix every craft finding the vet raises, run the checks again on the changed parts, and hand the
-   spec back for the next vet. Owner calls in a record go to the final sheet. When discovery runs
+   spec back for the next vet. When those checks put anything new in the owner's queue, send a
+   remainder sheet for it and settle it as in Building a remainder sheet before handing the spec
+   back; a clean vet does not clear the checks' queue. Owner calls in a record go to the final
+   sheet. When discovery runs
    with no advisor reachable, the draft waits for the vet; if that cannot be resolved, the discovery
    parks (Exit C) with the draft marked unapproved.
 5. **The final sheet.** After a current clean record, send the final sheet as `sheets.md` says: the
