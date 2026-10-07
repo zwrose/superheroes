@@ -78,7 +78,8 @@ Ask about these in the chat:
 The template doc holds how each answer is stored. This doc names no stored value.
 
 Then record each ruling in Canon as `rubric/canon-contract.md` says in its section Writing a ruling.
-Mark the sheet `done` in the `sheets.md` log, apply the answers, and continue step 8.
+Apply the answers to the spec first. Keep the sheet `open` in the `sheets.md` log until they are
+applied and the checks on the changed parts have run. Then mark it `done` and continue step 8.
 
 ## Handing over for the vet
 
@@ -123,8 +124,10 @@ An answer that changes the spec holds approval. Do these in order:
 1. Record `changes-requested`, as step 8 shows.
 2. Apply the change.
 3. Run the checks on the changed parts.
-4. Hand the spec back for the vet.
-5. Republish the final sheet with a new last card.
+4. When the checks put anything new in the owner's queue, send a remainder sheet for it and settle
+   it as in Building a remainder sheet. Repeat steps 2 to 4 until the queue holds nothing unsettled.
+5. Hand the spec back for the vet.
+6. Republish the final sheet with a new last card, and add a card for every item the checks queued.
 
 The republished sheet starts unsigned, because its data file changed. When a changed answer redraws
 the board, put the redraw on that republished sheet.
@@ -136,8 +139,11 @@ rendered, from the same data file.
 
 In that mode the sheet has no store. So write each answer into an `answers.md` file in that sheet's
 folder, as the owner gives it: the card id, the answer in the owner's words, the note and the date.
-Write a final sheet's verdict there the same way. A session that takes the sheet over reads
-`answers.md` with the data file.
+Write a final sheet's verdict there the same way. Put the data file's digest on every line, as
+`theme/review-template.md` names the digest for the saved verdict. A republish changes the digest,
+so an earlier line, an old Approve included, no longer matches and counts as unanswered. A session
+that takes the sheet over reads `answers.md` with the data file and accepts only lines carrying the
+current digest.
 
 The same three conditions for approval hold. The owner's chat words stand in for the saved verdict.
 
@@ -146,7 +152,9 @@ The same three conditions for approval hold. The owner's chat words stand in for
 Another session given only the work item does this:
 
 1. Read the `sheets.md` log, in the work item's `sheets` folder.
-2. Open the data file of the newest `open` sheet.
+2. Open the data file of the newest `open` sheet. First check the newest `done` sheet: when its
+   rulings are in Canon but not yet in the spec, apply them, run the checks on the changed parts,
+   and only then carry on.
 3. Read its store through the kept link, as `theme/review-template.md` says in its section How
    answers come back. On a final sheet, read the verdict for the published revision too. In the
    prose mode, read the sheet's `answers.md` instead.
