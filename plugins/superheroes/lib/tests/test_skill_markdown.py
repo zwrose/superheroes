@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
 PATH_LITERALS = (".claude/review-profile.md", ".claude/review-decisions.json")
-REVIEW_SKILLS = ("review-code", "review-spec", "audit-debt")
+REVIEW_SKILLS = ("review-code", "audit-debt")
 ALL_SKILLS = REVIEW_SKILLS + ("review-init",)
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
 
@@ -104,13 +104,6 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
             "never one whole-file",
             "until the diff is covered",
         )),
-        "review-spec/SKILL.md": ("## Your assignment", "## Context files", (
-            "$SESSION_DIR/spec.md",
-            "bounded chunks",
-            "<=800",
-            "bounded shell",
-            "never one whole-file",
-        )),
         "audit-debt/SKILL.md": ("## Context files", "## Calibration precedence", (
             "$SESSION_DIR/sweep-prep/files.txt",
             "bounded chunks",
@@ -143,17 +136,14 @@ def test_review_loop_has_doc_mode_carveout():
     norm = " ".join(text.split())
     assert "any open blocking finding" in norm.lower()
     # #518 drift guard — the two caps are stated separately and bound to their CODE homes:
-    # (a) overall round cap in the prose == the deciders' --max-rounds default == the skill's
-    #     operative --max-rounds CLI arg (binds the reconciled 7 to code, not prose-to-prose).
-    spec_plan = _read_repo("plugins/superheroes/lib/spec_loop_plan.py")
-    m_call = _re.search(r'add_argument\(\s*"--max-rounds"[^)]*\)', spec_plan)
-    assert m_call, "spec_loop_plan.py must declare a --max-rounds argument"
+    # (a) overall round cap in the prose == the decider's --max-rounds default (binds the
+    #     reconciled 7 to code, not prose-to-prose).
+    loop_state_src = _read_repo("plugins/superheroes/lib/loop_state.py")
+    m_call = _re.search(r'add_argument\(\s*"--max-rounds"[^)]*\)', loop_state_src)
+    assert m_call, "loop_state.py must declare a --max-rounds argument"
     m_def = _re.search(r"default=(\d+)", m_call.group(0))
-    assert m_def, "spec_loop_plan.py --max-rounds must have a numeric default"
+    assert m_def, "loop_state.py --max-rounds must have a numeric default"
     cap = m_def.group(1)
-    spec_skill = _read_repo("plugins/superheroes/skills/review-spec/SKILL.md")
-    m_skill = _re.search(r"--max-rounds\s+(\d+)", spec_skill)
-    assert m_skill and m_skill.group(1) == cap, "skill --max-rounds must match the code default"
     assert _re.search(rf"overall round cap is \*\*{cap}\*\*", text), \
         f"review-loop.md must state the overall round cap as {cap} in its cap sentence"
     # (b) confirmation-panel budget in the prose == review_round_policy.MAX_CONFIRMATIONS
@@ -161,9 +151,7 @@ def test_review_loop_has_doc_mode_carveout():
     assert _re.search(rf"MAX_CONFIRMATIONS = {n_conf}\b", text), \
         f"review-loop.md must state the confirmation budget as MAX_CONFIRMATIONS = {n_conf}"
     # #518: the post-halt-edit named violation is stated in the shared contract...
-    assert "post-halt" in text.lower()
-    # ...and carried by review-spec's receipt (the "receipt says so" requirement).
-    assert "post-halt" in spec_skill.lower() and "terminal claim" in spec_skill.lower()
+    assert "post-halt" in text.lower() and "terminal claim" in text.lower()
 
 
 def test_host_maps_claude_dispatch_recovery_guidance():

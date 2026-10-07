@@ -20,5 +20,5 @@ def test_required_phrases_keys_match_skills_exactly_and_are_present():
 def test_body_ceilings_cover_the_survivors():
     reg = skills.load_registry(REGISTRY)
     assert set(reg["bodyCeilings"]) == {
-        "superheroes/review-code", "superheroes/review-spec", "superheroes/audit-debt",
+        "superheroes/review-code", "superheroes/audit-debt",
     }

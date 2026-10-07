@@ -1,6 +1,8 @@
 # review-loop.md — Relocation Map (UFR-2)
 
-> **Status (v2): historical.** Maps the retired v1 skill surface (review-plan/review-tasks, retired in #478/#479) alongside the still-current review-spec. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
+> **Status (v2): historical.** Maps the retired v1 skill surface (review-plan/review-tasks, retired in #478/#479) alongside review-spec. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
+
+> **Note (2026-10).** review-spec has since retired (its skill no longer exists); its mentions below are historical.
 
 > **Note (plugin-root form).** Paths quoted below are shown in the current `${CLAUDE_PLUGIN_ROOT}` form; when this record was written they carried a fallback form of the root variable, since retired.
 

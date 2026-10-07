@@ -144,14 +144,13 @@ reads the channel, never your reasoning.
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
 `Test`, `Failure-Mode`, `Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
-`Grounding`. The crew carries **two label sets drawn from the same reviewer
-agents**: a **code-leg** set (`Architecture`, `Code`, `Security`, `Test`,
-`Failure-Mode`) that `/superheroes:review-code` and `/superheroes:audit-debt`
-dispatch, and a **doc-native spec-leg** set (`Clarity`, `Verifiability`,
-`Coherence`, `Safety-access`, `Failure-Mode`, `Grounding`) that
-`/superheroes:review-spec` dispatches — the five shared reviewers reframed to
-requirements quality, plus `Grounding`, a spec-only seat with no review-code agent.
-Each dispatching skill names the subset it runs and assigns each agent its dimension
+`Grounding`. The crew carries **two label sets**: a **code-leg** set
+(`Architecture`, `Code`, `Security`, `Test`, `Failure-Mode`) that
+`/superheroes:review-code` and `/superheroes:audit-debt` dispatch as agents, and a
+**doc-native** set (`Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
+`Failure-Mode`, `Grounding`) that the spec checks' reviewer uses to label its findings
+(`skills/architect-discovery/reference/spec-checks.md`) — it is no longer a dispatched agent
+leg. Each dispatching skill names the subset it runs and assigns each agent its dimension
 and its `id` prefix; a leg runs one agent per dimension (e.g. the Security reviewer
 emits `security-001`, …; the Failure-Mode reviewer emits `premortem-001`, …).
 
@@ -161,9 +160,7 @@ the five code-leg risk lenses above and must not be counted as one: it adds no r
 lens, it checks the PR's self-claims against the repo. It runs at the `reviewer` model
 tier and **never** `mechanical` — a false "the claims check out" is a silence nothing
 downstream re-checks, so it must not go to the tier whose failure mode is confident wrong
-fills. On the **spec leg** this seat is already live — it is the `Grounding` label in the
-Dimensions enumeration line above, dispatched by `/superheroes:review-spec` (as of
-#515/#517). On the **code leg** it is **live-dispatched** under #609 and emits
+fills. On the **code leg** it is **live-dispatched** under #609 and emits
 **verdicts** (the orchestrator mints findings from `REFUTED` rows); the retained
 orchestrator-inline PR-body honesty check remains a second leg. As a code-leg lens it is
 not part of review-code's five risk dimensions, and no code-leg drift test should read it
@@ -206,7 +203,7 @@ This section **overrides the severity tiers above for document reviews only**. I
 apply to code review (`docType` absent). A document is not code: judge every finding against
 the reviewed document's **own job**, not against code-review severity.
 
-**Blocking bar (FR-1).** A finding is **blocking** only if *following the document as written
+**Blocking bar.** A finding is **blocking** only if *following the document as written
 would mislead the build or cause it to build something unsafe or incorrect*, judged against
 the document's own job. Everything else is **non-blocking** and routes forward — it never
 blocks the gate and never re-arms the loop.
@@ -308,16 +305,13 @@ finding with its taxonomy term.
 ## Verdict labels & mapping
 
 - `/superheroes:review-code`: `READY FOR PR` / `FIX BEFORE PR` / `MAJOR FIXES NEEDED`
-- `/superheroes:review-spec`: `SPEC READY` / `REVISE BEFORE OWNER REVIEW` / `MAJOR GAPS — RETURN TO DISCOVERY` *(advisory — the owner is the spec's gate authority; review-spec records no `passed`)*
 - `/superheroes:audit-debt`: no single verdict — a prioritized backlog
 
 Mapping (post-dedupe, post-filter counts) — the same shape for every skill (the first / second / third label):
-- 0 Critical, 0 Important → the **READY** label (`READY FOR PR` / `SPEC READY`)
-- 0 Critical, ≥1 Important → the **REVISE** label (`FIX BEFORE PR` / `REVISE BEFORE OWNER REVIEW`)
+- 0 Critical, 0 Important → the **READY** label (`READY FOR PR`)
+- 0 Critical, ≥1 Important → the **REVISE** label (`FIX BEFORE PR`)
 - ≥1 Critical → the **MAJOR** label
 - Only Minor/Nit → the READY label (informational)
-
-`review-spec` is **advisory** — it never records `passed` (the owner approves the spec in Discovery); its only gate write is resetting a *stale* approval to `pending`.
 
 ## Where calibration comes from (read these, in order)
 
