@@ -2173,8 +2173,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   the one home of the three spec checks discovery runs on every spec (gap review, the source check
   both ways, grounding), and the two read-only helper verbs it calls: `core_md.py
   spec-reviewer-seat` (resolves the reviewer seat) and `definition_doc.py grounding-base` (builds
-  the grounding base from the default branch). It costs loaded prose mass in discovery and one
-  reviewer dispatch per round.
+  the grounding base from the default branch). It costs loaded prose mass in discovery and three
+  reviewer dispatches per round (one per check, run concurrently), plus the citation check run locally.
 - **Start date.** 2026-10-07.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts that cite a spec
   check finding (or its absence) as the reason a spec's claim was caught or missed. Zero citations

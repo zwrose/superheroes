@@ -152,9 +152,20 @@ def _skill_files():
 
 
 def test_only_the_discovery_owner_approval_block_writes_passed():
-    writers = sorted(rel for rel, text in _skill_files() if "--review passed" in text)
-    # axis: the owner's approval is the one place a skill records passed
-    assert writers == [os.path.join("architect-discovery", "SKILL.md")], writers
+    counts = {
+        rel: text.count("--review passed")
+        for rel, text in _skill_files()
+        if "--review passed" in text
+    }
+    # axis: the owner's approval is the one place, and the one command, a skill records passed
+    assert counts == {os.path.join("architect-discovery", "SKILL.md"): 1}, counts
+    with open(_DISCOVERY, encoding="utf-8") as fh:
+        discovery = fh.read()
+    step8 = discovery[discovery.index("### 8."):]
+    step8 = step8[:step8.index("\n## ")]
+    # axis: that one command sits in step 8, after the owner's explicit approval
+    assert "--review passed" in step8
+    assert step8.index("Only once the owner explicitly approves") < step8.index("--review passed")
     with open(_SPEC_CHECKS, encoding="utf-8") as fh:
         checks = fh.read()
     # axis: the checks never write passed
