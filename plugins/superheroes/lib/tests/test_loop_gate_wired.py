@@ -15,8 +15,7 @@ SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 # per-round choreography into the ONE entrypoint `round_driver.py`; its SKILL.md invocation is
 # rewritten in a later order (phase 3), so this test pins the DRIVER'S OWN CONTRACT here (see
 # test_round_driver_is_the_one_entrypoint) rather than the phase-3 SKILL prose. (The plan/tasks
-# legs that called `loop_state.py" --round` directly retired in S1 train 2 (#469); audit-debt's
-# loop is loop-until-dry discovery, intentionally not gate-wrapped; spec review runs no loop —
+# legs that called `loop_state.py" --round` directly retired in S1 train 2 (#469); spec review runs no loop —
 # it follows the spec checks.)
 
 

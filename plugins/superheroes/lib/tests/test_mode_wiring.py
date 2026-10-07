@@ -9,9 +9,9 @@ _SKILLS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills")
 
 BOOTSTRAP_NO_RECONCILE_SKILLS = [
-    "review-init", "review-code", "audit-debt", "test-pilot-init",
+    "review-init", "review-code", "test-pilot-init",
 ]
-NUDGE_SKILLS = ["review-init", "review-code", "audit-debt",
+NUDGE_SKILLS = ["review-init", "review-code",
                 "test-pilot-init", "test-pilot-plan", "test-pilot-execute"]
 # Snippet N uses $ROOT_DIR; these run skills must define it (the review-crew skills + test-pilot-init already do).
 ROOTDIR_SKILLS = ["test-pilot-plan", "test-pilot-execute"]

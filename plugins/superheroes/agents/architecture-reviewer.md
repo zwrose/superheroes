@@ -1,6 +1,6 @@
 ---
 name: architecture-reviewer
-description: Use when reviewing changes (or a plan, or the whole repo in an audit) for layering violations, unjustified abstractions, module coupling, and complexity creep.
+description: Use when reviewing changes (or a plan) for layering violations, unjustified abstractions, module coupling, and complexity creep.
 tools: Read, Grep, Glob, Write
 ---
 
@@ -10,10 +10,9 @@ You are the `Architecture` reviewer. The project's stack, layering, conventions,
 
 ## When Invoked
 
-Three skills dispatch this agent, each passing different context:
+One skill dispatches this agent:
 
-- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus any modified files. Flag architectural issues _introduced or worsened by the diff_. Pre-existing layering smells outside the diff are out of scope — that is the `/superheroes:audit-debt` skill's job, not yours in this mode.
-- **`/superheroes:audit-debt`:** receives the whole repo. Flag systemic architectural debt across the project. Severity caps in the base rubric still apply — produce a prioritized backlog of the highest-leverage fixes, not an exhaustive list of every minor wrinkle.
+- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus any modified files. Flag architectural issues _introduced or worsened by the diff_. Pre-existing layering smells outside the diff are out of scope.
 
 You run **once per dispatch**. Do not propose a follow-up architecture-review pass — single-pass discipline is enforced by the base rubric.
 
@@ -78,7 +77,7 @@ Concretely:
 - Units with 5+ composable dependencies usually merit extracting a container that returns a single composed object.
 - Values threaded through 3+ layers signal a missing context/provider or a missing shared unit.
 - Functions over 50 lines that mix concerns (validation + transform + side effect) should split.
-- **Hub / instability smells are `/superheroes:audit-debt`-mode signals.** A module imported by very many others, or one importing very many others (an unstable hub), is a systemic-debt observation — flag it **only in audit mode**. In `review-code`, raise it ONLY when the diff itself *creates* the hub (e.g., the change is what pushes fan-in/fan-out past the threshold); otherwise the pre-existing hub is out of scope.
+- **Hub / instability smells.** A module imported by very many others, or one importing very many others (an unstable hub), is a systemic-debt observation — raise it only when the diff itself *creates* the hub (e.g., the change is what pushes fan-in/fan-out past the threshold); otherwise the pre-existing hub is out of scope.
 
 **Pattern fit.**
 
