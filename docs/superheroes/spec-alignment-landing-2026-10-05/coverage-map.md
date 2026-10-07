@@ -131,7 +131,7 @@ and C8).
 | B | FR-3 | bullet 1 | the plugin names no expected use beyond discovery's sheets. | **C8** |
 | B | FR-4 | bullet 1 (GWT) | Given an owner who answers two cards and closes the sheet, when they reopen it, then both answers are still there. | **C8** |
 | B | FR-4a | bullet 1 | no extra submission machinery is built for this; a saved draft plus the owner's word is enough. | **C8** |
-| B | FR-4a | bullet 2 | on a final sheet, the owner's "Send verdict" (FR-18) is that word. | **C8** |
+| B | FR-4a | bullet 2 | on a final sheet too, the owner's word in the chat is that word; no button on the sheet stands in for it (FR-18). (Amendment 2, 2026-10-07) | **C8** |
 | B | FR-5 | statement | Every card except a final sheet's last card (FR-17) shall have the same parts, in this order… | **C8** |
 | B | FR-6 | bullet 1 | Aligned agrees with the card's recommendation… a pick chooses that option; Discuss leaves the call open for chat. | **C8** |
 | B | FR-6 | bullet 2 | when the owner's note disagrees with their answer, the session treats the card as Discuss and asks. | **C8** |
@@ -146,9 +146,9 @@ and C8).
 | B | FR-13 | statement | On a phone, a remainder sheet shall fold answered items into one row… | **C8** |
 | B | FR-14 | statement | On a desktop, a sheet shall list every item with its state beside the open card, with Previous and Next controls. | **C8** |
 | B | FR-15 | statement | A remainder sheet shall say why it holds only these items… | **C8** |
-| B | FR-16 | statement | The owner shall be able to leave a sheet unfinished with "Done for now" and come back to it. | **C8** |
+| B | FR-16 | statement | The owner shall be able to leave a sheet unfinished and come back to it; every answer is already saved, so leaving needs no button. (Amendment 1, 2026-10-07) | **C8** |
 | B | FR-17 | bullet 1 | below the last card, the sheet says what happens next: the advisor adds the breakdown to the same PR… | **C8** |
-| B | FR-18 | statement | The owner shall send a final sheet's verdict, and with it the sheet's answers, with one "Send verdict" action… | **C8** |
+| B | FR-18 | statement | A final sheet's verdict (Approve or Not yet) and its note shall save as the owner taps and types, like any answer… the sheet has no "Send verdict" button. (Amendment 2, 2026-10-07) | **C8** |
 | B | FR-19 | statement | The plugin shall ship one visual theme, Comic panel, for its own pages… | **C7** |
 | B | FR-20 | statement | Each theme colour shall have one job… | **C7** |
 | B | FR-21 | statement | The theme shall set headings in Bricolage Grotesque 800, body text in Atkinson Hyperlegible 400 and 700… | **C7** |
