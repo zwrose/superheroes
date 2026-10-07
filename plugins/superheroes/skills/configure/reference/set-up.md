@@ -1,33 +1,34 @@
 ## Contents
 
-- §1 — Decide the storage mode (FR-2), with disclosure
-- §2 — Seed the core + the light hero layers (FR-16)
-- §3 — Verify command first (UFR-5)
-- §4 — Optional heavier heroes — provisional defaults disclose (FR-3)
+- §1 — Decide the storage mode, with disclosure
+- §2 — Seed the core + the light hero layers
+- §3 — Verify command first
+- §3.5 — Who it's for and what it's for — asked as its own step
+- §4 — Optional heavier heroes — provisional defaults disclose
 - §4.4 — Show-it surface — provisional default
-- §4.5 — Engine preferences — per-role defaults (FR-11/12/13/14)
+- §4.5 — Engine preferences — per-role defaults
 - §4.6 — Project-configuration dependencies and kind labels
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §4.8 — Sandbox access for the claude implementer — all off by default
 - §4.9 — Size count exclusions — none by default
 - §5 — Secrets stay out of shared calibration (NFR)
-- Recovering an interrupted set-up (UFR-7)
+- Recovering an interrupted set-up
 
 # configure — set-up path
 
-Reached from `configure` when a project has nothing configured yet (FR-1). Sets the project up
+Reached from `configure` when a project has nothing configured yet. Sets the project up
 end to end: storage mode, the shared core, the light hero layers, and named provisional defaults
 for optional heroes. Set-up takes declared defaults and discloses them in the layer carriers — it
 does not interview.
 
 `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
-## 1 — Decide the storage mode (FR-2), with disclosure
+## 1 — Decide the storage mode, with disclosure
 
 A project keeps its calibration either **repo-shared** (committed with the repo, **visible to
 collaborators**) or **out-of-repo** (kept on the local machine, the repo stays pristine). Present
 both with that consequence **before** recording the mode — repo-shared publishes the calibration to
-anyone with the repo. Resolve the band-wide decision (it is decided once and is sticky, FR-11):
+anyone with the repo. Resolve the band-wide decision (it is decided once and is sticky):
 
 <!-- decision-point: id=configure-setup-storage-location mode=notify kind=storage-location default="recorded mode when one exists, else provisional global (out-of-repo)" carrier=review-crew-layer -->
 
@@ -53,14 +54,14 @@ note, disclose in set-up output when provisional, and the run continues. Follow-
 
 <!-- /decision-point: id=configure-setup-storage-location -->
 
-## 2 — Seed the core + the light hero layers (FR-16)
+## 2 — Seed the core + the light hero layers
 
 Once the mode is set, seed the shared **core** (the project's stack, verify command, threat model)
 and the two light layers — the-architect's doc-policy and review-crew's threat model — in the same
 pass. Drive each hero's calibration logic through its now-internal `*-init` skill (reached from
 here, not advertised separately). Detect facts from the repo; do not ask. Write the core
 **provisional**, stating which fields were defaulted rather than answered; the owner confirms via
-the FR-18 confirm step.
+the owner-confirm step on the fix path.
 
 Set-up's decisions are disclosed in the **set-up output** — this path's own report to the owner.
 Each hero's `## Setup disclosures` section is **assembled and written by that hero's `*-init`
@@ -68,7 +69,7 @@ skill**, which this path drives; set-up hands its defaults to those skills, it d
 layers itself. Review-crew disclosures are written in `review-init` Step 4b; test-pilot disclosures
 in `test-pilot-init` Step 6.
 
-## 3 — Verify command first (UFR-5)
+## 3 — Verify command first
 
 The verify command is the project's **fast iteration check**: for example lint, types, and the tests
 the change touched. It is not the project's full gate. A build re-runs it after every review fix
@@ -86,7 +87,46 @@ verify command via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-verify-command -->
 
-## 4 — Optional heavier heroes — provisional defaults disclose (FR-3)
+## 3.5 — Who it's for and what it's for — asked as its own step
+
+This step is asked, not detected. Ask the owner, in these words: **"Who is this project for, and
+what is it for? A few plain sentences: the people it serves, and what it lets them do."**
+
+Record the answer as configuration item 14 through `project_config`:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd . <<'SUPERHEROES_ANSWER'
+<the answer as a one-line JSON string>
+SUPERHEROES_ANSWER
+```
+
+The answer is the owner's own free text, so it goes in through a quoted here-document, never inside
+shell single quotes: an apostrophe in the answer would break a single-quoted argument, and a
+`$(...)` in it would run. Write it as one line of JSON, with its quotes and backslashes escaped.
+
+Read the result as the other `set` calls are read: only `written` or `noop` means the answer was
+saved. If the owner would rather not answer now, leave item 14 unset, say so in the set-up output,
+and go on. The configure view shows item 14 as unset until it is set.
+
+Keep this one sitting. Ask any other question about who the project serves or what it is for here,
+together with this one, and not in a later step.
+
+Then record that item 13 lives in Canon:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" migrate-material-line --cwd .
+```
+
+Read the result's `action`. On a project with no item-13 value, the command moves nothing and only
+marks item 13 as pointing to the project's Canon standing rulings
+([Canon's contract](../../../rubric/canon-contract.md)). A project that already has a value has it
+moved into Canon as standing rulings (view-and-tune § 2, "Move item 13 into Canon"). Report a
+`refused` result to the owner with its `reason`, and never work around it. Only `migrated` and
+`already-adopted` mean item 13 is in Canon.
+
+## 4 — Optional heavier heroes — provisional defaults disclose
 
 <!-- decision-point: id=configure-setup-optional-heroes mode=notify kind=ask-user-question default="do not set up optional heroes" carrier=review-crew-layer -->
 
@@ -103,7 +143,7 @@ Set-up still **completes** and the project is usable without them.
 
 When test-pilot would apply but no browser tool is connected, NOTIFY: record the browser-tool gap
 in the set-up output and the run continues — do not guide the owner
-to connect one and do not block set-up (UFR-4). Follow-up: `/superheroes:configure`.
+to connect one and do not block set-up. Follow-up: `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-browser-tool-gap -->
 
@@ -125,7 +165,7 @@ Absent explicit decline language in the owner's **current-turn words**, the defa
 heroes are simply **not set up** — that is **not** the same as declined; do **not** call
 `hero_setup.py decline`. PROCEED: record the not-set-up posture in `## Setup disclosures` and
 continue. Only when the owner explicitly declines an optional hero in this turn, record it so the
-view tune-menu does not re-offer it on every run (FR-6 / #121):
+view tune-menu does not re-offer it on every run:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -223,7 +263,7 @@ An empty stdin body clears the section and returns the project to `none`.
 
 <!-- /decision-point: id=configure-setup-show-it -->
 
-## 4.5 — Engine preferences — per-role defaults (FR-11/12/13/14)
+## 4.5 — Engine preferences — per-role defaults
 
 <!-- decision-point: id=configure-setup-engine-preferences mode=notify kind=interview-step default="reviewer/implementer/pilot claude; briefCheck codex" carrier=review-crew-layer -->
 
@@ -237,7 +277,7 @@ this turn) into `enginePreferences` and disclose the picks in the set-up output 
 into the hero's `## Setup disclosures` section per the §2 carrier note, and the run continues.
 Follow-up: `/superheroes:configure`.
 
-1. **Availability (FR-11).** Probe both engines and show a readiness matrix — installed + signed in, or
+1. **Availability.** Probe both engines and show a readiness matrix — installed + signed in, or
    what to fix:
 
    ```bash
@@ -246,7 +286,7 @@ Follow-up: `/superheroes:configure`.
    ```
    A not-ready engine is shown with its next-command remediation; it is never offered as ready.
 
-2. **Per-role preference (FR-12).** Record the provisional defaults (or owner picks from this turn)
+2. **Per-role preference.** Record the provisional defaults (or owner picks from this turn)
    into `core.md`'s machine block
    `enginePreferences: {reviewer, implementation, briefCheck, pilot}` via `core_md` (schemaVersion 2).
    Optionally, `enginePreferences.seatPins` holds a per-review-panel-seat pin map (vendor required; model and effort optional per seat).
@@ -257,7 +297,7 @@ Follow-up: `/superheroes:configure`.
    A Codex pin may name `gpt-6.1-sol` (the default), the pin-only `gpt-5.6-sol` or `gpt-6-sol` (any role with a codex cell, at that role's own effort), or `gpt-6-astra` on `reviewer-deep` only at effort `high`; a pin to the retired `gpt-5.6-terra` is refused (`model-retired`; `model_registry.retired_model_reason` names the text).
    `max` effort is owner opt-in only (never a default).
 
-3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine
+3. **Show the build authorization — never apply it.** If an external **implementation** engine
    is chosen, an external autonomous write needs a one-time owner grant. Show the exact snippet and where
    it goes; do **not** write it:
 
@@ -266,7 +306,7 @@ Follow-up: `/superheroes:configure`.
    # prints the autoMode.allow block + its location (.claude/settings.local.json). SHOW it; never write it.
    ```
 
-4. **Test dispatch (FR-14), bounded by the stall limit (UFR-5).** Run the test dispatch **only** when
+4. **Test dispatch, bounded by the stall limit.** Run the test dispatch **only** when
    the owner grants authorization in this turn; when no authorization is present, leave the external
    implementation engine **not-ready**, disclose that in `## Setup disclosures`, and continue — do not
    block set-up:
@@ -274,7 +314,7 @@ Follow-up: `/superheroes:configure`.
    ```bash
    python3 -B "$ROOT_DIR/lib/engine_authz.py" test-dispatch --engine <codex|cursor> --cwd .
    # -> {"engine":E,"ok":true}  (ready)
-   # -> {"engine":E,"ok":false} (denied or no-response bounded by the UFR-5 limit -> falls open to
+   # -> {"engine":E,"ok":false} (denied or no-response bounded by the stall limit -> falls open to
    #    the host model; tell the owner how to enable, leave the engine not-ready with a retry instruction)
    ```
    For Codex, this probes the codex default model (the registry's opus peer) explicitly as well as
@@ -359,7 +399,7 @@ Any hero credential (such as test-pilot's sign-in) records **only non-secret ref
 of environment variables, never their values** — into committed or collaborator-visible
 calibration. This is test-pilot's existing rule; preserve it.
 
-## Recovering an interrupted set-up (UFR-7)
+## Recovering an interrupted set-up
 
 <!-- decision-point: id=configure-setup-recovery mode=notify kind=ask-user-question default="report what is missing; do not offer to finish" carrier=review-crew-layer -->
 

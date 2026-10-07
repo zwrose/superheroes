@@ -93,7 +93,7 @@ def test_all_thirteen_items_in_registry_order_unstamped(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 13
+    assert len(rows) == 14
     for item, row in zip(PC.ITEMS, rows):
         assert row.startswith("%d. %s —" % (item["number"], item["name"]))
 
@@ -101,7 +101,7 @@ def test_all_thirteen_items_in_registry_order_unstamped(tmp_path):
 def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     repo, store = _setup_repo(tmp_path)
     extra = {
-        "number": 14,
+        "number": 15,
         "slug": "testOnlyItem",
         "name": "Test-only item",
         "home": PC.HOME_PROJECT_CONFIGURATION,
@@ -111,7 +111,7 @@ def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(CV.project_config, "ITEMS", tuple(list(PC.ITEMS) + [extra]))
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert any("Test-only item" in row for row in rows)
 
 
@@ -133,7 +133,7 @@ def test_no_profile_renders_without_raising(tmp_path):
     block = _project_config_section(screen)
     assert "profile: no core calibration yet" in block
     rows = _numbered_rows(block)
-    assert len(rows) == 13
+    assert len(rows) == 14
     assert all("unset" in row or "plugin default" in row or "derived from dial" in row for row in rows)
 
 
@@ -196,7 +196,7 @@ def test_dependencies_raises_shows_not_available(tmp_path, monkeypatch):
     screen = CV.render(repo, root=store)
     block = _project_config_section(screen)
     assert "dependencies: (not available)" in block
-    assert len(_numbered_rows(block)) == 13
+    assert len(_numbered_rows(block)) == 14
 
 
 def test_dependencies_absent_show_fallback(tmp_path, monkeypatch):
@@ -208,3 +208,55 @@ def test_dependencies_absent_show_fallback(tmp_path, monkeypatch):
     assert "launchLedger: absent — fallback:" in joined
     assert "collector: absent — fallback:" in joined
     assert "detectorTestBoundary: absent — fallback:" in joined
+
+
+def test_item_14_row_follows_item_10_and_reads_unset(tmp_path):
+    repo, store = _setup_repo(tmp_path, unstamped=True)
+    rows = _numbered_rows(_project_config_section(CV.render(repo, root=store)))
+    numbers = [row.split(".", 1)[0] for row in rows]
+    assert numbers[numbers.index("10") + 1] == "14"
+    assert rows[numbers.index("14")] == (
+        "14. Who it's for and what it's for — unset (absence disables the rules that read it)"
+    )
+
+
+def test_item_14_stamped_shows_as_one_line_of_prose(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    PC.set_item(repo, "whoItsFor", "Home cooks\nwho want a weeknight recipe.", root=store)
+    block = _project_config_section(CV.render(repo, root=store))
+    row = next(r for r in block if r.startswith("14. "))
+    assert row == "14. Who it's for and what it's for — Home cooks who want a weeknight recipe."
+
+
+def test_adopted_item_13_row_points_to_canon(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    subprocess.run(["git", "-C", repo, "remote", "remove", "origin"], check=True)
+    CM.write_project_config_item(
+        repo, "materialConsequenceLine",
+        {"canon": "standing-rulings", "migratedOn": "2026-10-05"}, root=store)
+    block = _project_config_section(CV.render(repo, root=store))
+    row = next(r for r in block if r.startswith("13. "))
+    import definition_doc
+
+    canon_path = definition_doc.resolve_canon(root=repo, cwd=repo, store_root=store)["path"]
+    assert row == (
+        "13. Material consequence line — points to the project's Canon standing rulings (%s)"
+        " — no value of its own" % canon_path)
+
+
+def test_adopted_item_13_row_survives_a_failed_canon_lookup(tmp_path, monkeypatch):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config_item(
+        repo, "materialConsequenceLine",
+        {"canon": "standing-rulings", "migratedOn": "2026-10-05"}, root=store)
+    import definition_doc
+
+    def _boom(**kwargs):
+        raise definition_doc.CanonLookupError("no default ref")
+
+    monkeypatch.setattr(definition_doc, "resolve_canon", _boom)
+    block = _project_config_section(CV.render(repo, root=store))
+    row = next(r for r in block if r.startswith("13. "))
+    assert row == (
+        "13. Material consequence line — points to the project's Canon standing rulings"
+        " (Canon lookup failed: CanonLookupError) — no value of its own")
