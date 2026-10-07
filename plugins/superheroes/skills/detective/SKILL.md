@@ -20,6 +20,8 @@ diagnosis and does not repeat them.** Where a duty below touches a hard line, th
 
 **Owner rulings you receive are recorded in the project's Canon** as `${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md` says.
 
+**Every call you meet is sorted by the owner-vs-craft line** in `${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md`.
+
 ## When this role fires
 
 **Take work only when the diagnosis is separately valuable**, which means at least one of these

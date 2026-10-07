@@ -373,7 +373,7 @@ tripwire fired** and name the seam problem, so the advisor is grading a declared
 inferring it from provenance. Where the builder cannot say with confidence that the lane has
 converged, the park branch binds — the permissive branch is available only on a lane the builder can
 affirmatively call converged. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — stop with receipts; lifting the park is owner- or advisor-ruled
-rather than the builder's own call. When the advisor lifts a tripwire or a park and sets a bound, a hit on that bound parks back to the advisor, who applies the owner-decisions filter; the owner gets the question only when a real taste, trade or commitment, or a material consequence, arises. Two field specimens deviated from the letter while honouring
+rather than the builder's own call. When the advisor lifts a tripwire or a park and sets a bound, a hit on that bound parks back to the advisor, who applies the owner-decisions filter; the owner gets the question only when the owner-vs-craft line (`rubric/owner-vs-craft-line.md`) sorts it as the owner's. Two field specimens deviated from the letter while honouring
 the substance, which is what prompted the ruling.
 
 ### Continuation and the advisor-resolution valve
@@ -403,9 +403,7 @@ remaining the gate. A residual larger than that bound routes to one bounded buil
 the lane's existing route, and the standalone micro lane's per-change owner word is explicitly unchanged.
 The preservation is checkable in place at `### Micro — owner authorization` above.
 
-Within the micro-sized bound above, who types the fold splits by surface (owner ruling 2026-08-24,
-recorded on the collector —
-[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
+Within the micro-sized bound above, who types the fold splits by surface:
 a fold touching **only docs or tests** the advisor types in-session under the full micro floor
 above; a fold that touches **non-test code**, or mixes the two sides, routes to one bounded builder
 re-dispatch — the same shape as the over-size route — so quiet-failure surfaces keep a maker
@@ -437,7 +435,7 @@ What *can* be pinned — within the byte-literal floor above — is the prose fi
 register-quote checks, and cardinality floors over those censuses, plus the in-class extractor
 that bounds a pin to its home block). "Pinned structurally" means exactly that application to a
 shipped prose file — not structural parsers, table checks, or message/meaning guards, which
-stay out of class, permanently, per the owner ruling 2026-08-17 recorded on issue #695. This
+stay out of class, permanently. This
 does **not** reopen those out-of-class guards. This is **not**
 bite-proof vacuity mode 4 (*"delivered through a path the guarded input can never take"*) — for a
 structural pin the path is real and complete: mutate the shipped prose file, the detector reads
@@ -445,9 +443,7 @@ that file, the detector goes red. A structural pin must still satisfy bite-proof
 detector guarding N elements owes N separate neutralizations and N reds, not one representative
 (`rubric/bite-proof.md`).
 
-That line is where the ruling lands: out-of-class guards burned review rounds the real findings needed
-(owner ruling 2026-08-17, recorded on issue #695 — [comment
-5322427680](https://github.com/zwrose/superheroes/issues/695#issuecomment-5322427680)).
+That line is drawn there because out-of-class guards burned review rounds the real findings needed.
 
 **The bar cap** is a bar being set, so you know the disposition is legitimate when you use it. A
 review finding that demands a guard outside the kept classes, or an adversarial-evasion finding

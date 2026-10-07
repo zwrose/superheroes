@@ -376,15 +376,17 @@ above).
    - **Disposition the PR's follow-ups before the vet receipt posts.** Every PR ends with a *Follow-ups
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context. Each `FU` id gets its own keyed
-     disposition in the receipt's field 7. At a
+     disposition in the receipt's field 7. Which kind a follow-up is gets sorted by the
+     [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md). At a
      [craft call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#craft-call) you execute it now and record
      the determination, dated and reasoned, for cheap owner veto; at an
      [owner call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#owner-call) it is the owner's word, via the
      collector; **doubt resolves upward**. **Craft calls** — venue-1 continuations, craft declines
      with a revisit trigger, an owner-owed or relay memory entry — happen **immediately**, under the
      standing order in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`.
-     **Owner calls** — new issues, product folds, scope changes, product declines — are the owner's
-     word. Venue-3 filings are always owner calls: a new issue spends board attention, a commitment
+     **Owner calls** are the owner's word, and each is a case of the line: a new issue is
+     [category 6](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#the-ten-owner-categories),
+     and a scope change, a product decline, or a product fold is category 4. Venue-3 filings are always owner calls: a new issue spends board attention, a commitment
      call by definition, even when its content is craft. The project's **standing proposals
      collector** is one open issue per project, never one issue per proposal. **Every owner call is
      appended to the collector at vet time, unconditionally**, so the collector is the complete
@@ -471,13 +473,15 @@ above).
    ordinal. Your verdict sits in the owner half pointing at the receipt.
 5. **Decide what reaches the owner before the merge click.** Two tests:
    - **Test 1:** would a user notice this without reading the diff?
-   - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
-     already owns?
+   - **Test 2:** is the call, or a consequence it carries, the owner's under the
+     [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md)?
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/perceivability.md` when you apply Test 1** —
    it holds the enumerable net. That net is deliberately wide and, **alone, too wide**; Test 2
-   discriminates.
-   **Fail-direction is explicitly not an owner call** — the premortem and security lenses own it;
-   routing it up is a craft call dressed as a consequence.
+   decides whose call it is.
+   **Fail-direction is explicitly not an owner call** — inside a policy already chosen it applies a
+   set rule to a new case, which is always craft
+   ([always craft](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#always-craft)); the premortem
+   and security lenses own it, and routing it up is a craft call dressed as a consequence.
    **Three presentation levels** — **show it** / **say it** / **nothing to see** (the mapping from
    the retired tier numbering lives in `review-discipline.md`); only **show it** spends owner
    attention before the click:
@@ -487,9 +491,11 @@ above).
       spot-check — fail-direction flips, receipt-shape changes, storage moves; the panel is the check.
    3. **nothing to see** — neither test → nothing perceivable to judge — internal correctness, tech
       debt, bug fixes with no perceivable surface.
-   **Overlap (owner trade vs craft call):** fail-direction inside an already-chosen policy is the
-   lenses' craft call; changing what the product does **by default for an unconfigured user** is the
-   owner's trade. When a change is both, **show it** wins.
+   **Overlap (owner call vs craft call):** fail-direction inside an already-chosen policy is the
+   lenses' craft call; changing what the product does **by default for an unconfigured user** touches
+   categories 4 and 5 of the line
+   ([the ten owner categories](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#the-ten-owner-categories))
+   and is the owner's. When a change is both, **show it** wins.
    **The call is made at routing, not at handback.** When the issue is routed, **read the
    project's `## Show-it surface` declaration in `core.md`** so a **show it** call matches what level
    the project can actually offer, then record the call **in the issue with one line of reasoning**
@@ -516,14 +522,18 @@ above).
    merge click, presented with the final child's handback — or with the no-PR close — in **one
    sitting**, never a separate process. The verdict is **advisory** and the acceptance is the **owner's**.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when a spec's last child closes or its validation run fails.**
-   **Calibration home:** these tests are the **default**; per-owner taste domains belong in the
-   **configure profile**.
+   **Calibration home:** a project's own answers are its Canon's standing rulings and ceded calls
+   (`${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md`), never a configuration value; the line itself is
+   the same in every project. One transition applies, defined in
+   `${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md` (§ The same line in every project): while a
+   project's "material consequence line" configuration item still holds its own prose, read that
+   prose alongside Canon.
    **About to deliver open decisions to the owner → read
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` first** —
    the full contract lives there. Without it, delivery drifts both ways — short of full rigor, or
-   over-filtered — and the owner becomes the backstop for delivery quality. Apply this duty's two
-   tests per item as the filter's *why it is yours* ground, **written down**, not re-derived
-   silently. Three further shapes are that file's, not this one's: **how you derive
+   over-filtered — and the owner becomes the backstop for delivery quality. Name each item's
+   *why it is yours* ground from the owner-vs-craft line, as the filter says, **written down**,
+   not re-derived silently. Three further shapes are that file's, not this one's: **how you derive
    an item's tier and its craft-or-owner classification** rather than inheriting it, **the batches
    the walk runs and what the last of them carries**, and **the recap each sitting carries for the
    owner**.
@@ -556,8 +566,9 @@ above).
    layer, a fold) asks again. The one exception is the disclosed follow-up PR on a red train once
    the last lane has merged, which rides the scope only while the fix is craft with no material
    consequence. A PR whose behavior, scope, or disclosed tradeoffs changed materially after the
-   word asks again, judged against the project's
-   [material-consequence line](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#material-consequence). A routine base update
+   word asks again, judged against the
+   [owner-vs-craft line](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md) (a
+   [material consequence](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#material-consequence) asks again). A routine base update
    or a craft fix with no material consequence keeps the word. That is your judgment, and you say
    it on the owner half. When you cannot place a post-word change on that line with confidence,
    treat it as an [owner call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#owner-call) and ask.
