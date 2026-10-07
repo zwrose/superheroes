@@ -309,12 +309,11 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   with an earlier Canon ruling, pick neither and do not fold it in. Put the conflict to the owner
   as its own question, with both rulings side by side: the earlier entry's id, date, and words,
   and the new answer. Say what each would mean for this piece, and give your recommendation. The
-  owner's answer is a new ruling. When it replaces the earlier one, it names that entry's id, as
+  owner's answer is recorded as
   [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#append-only-and-supersession)
   says.
-- **Record every ruling in Canon at once.** Every ruling you receive is appended to Canon and
-  committed before your next step, per
-  [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling).
+- **Record every ruling in Canon.** Every ruling you receive is recorded in Canon as
+  [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling) says.
 - **Capture who the piece is for as user stories.** Write one or more in the form "As a …, I
   want …, so I can …" that evoke the core need without listing every detail. Edge cases are
   requirements (the unhappy paths), never user stories.
