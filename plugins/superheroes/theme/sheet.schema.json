@@ -110,14 +110,20 @@
               "description": "True when the approved board is saved with the spec.",
               "type": "boolean"
             }
-          }
+          },
+          "allOf": [
+            {
+              "description": "The board can be saved with the spec only when there is an approved board.",
+              "if": {"properties": {"approvedBoard": {"const": false}}, "required": ["approvedBoard"]},
+              "then": {"properties": {"boardSavedWithSpec": {"const": false}}}
+            }
+          ]
         }
       }
     },
     "cards": {
-      "description": "The calls the owner has to make, one card each.",
+      "description": "The calls the owner has to make, one card each. A remainder sheet or a plain sheet has at least one; a final sheet may have none when the review left no calls.",
       "type": "array",
-      "minItems": 1,
       "items": {"$ref": "#/$defs/card"}
     }
   },
@@ -136,6 +142,11 @@
       "description": "A plain sheet must carry neither the remainder block nor the final block.",
       "if": {"properties": {"kind": {"const": "plain"}}, "required": ["kind"]},
       "then": {"not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}]}}
+    },
+    {
+      "description": "A remainder sheet or a plain sheet must have at least one card.",
+      "if": {"properties": {"kind": {"enum": ["remainder", "plain"]}}, "required": ["kind"]},
+      "then": {"properties": {"cards": {"minItems": 1}}}
     }
   ],
   "$defs": {
@@ -143,6 +154,69 @@
       "description": "A short lowercase identifier made of letters, digits and hyphens that starts with a letter or digit.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "answer": {
+      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answer", "optionId", "note"],
+      "properties": {
+        "answer": {
+          "description": "What the owner tapped: aligned, discuss, option for a pick of one of the card's options, or null when nothing is picked (none yet, or a pick cleared by tapping it again).",
+          "enum": ["aligned", "discuss", "option", null]
+        },
+        "optionId": {
+          "description": "The id of the picked option, or null. It is a string exactly when the answer is option.",
+          "anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]
+        },
+        "note": {
+          "description": "The owner's note on the card, an empty string when there is none.",
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "description": "An answer of option must name the picked option.",
+          "if": {
+            "properties": {"answer": {"const": "option"}},
+            "required": ["answer"]
+          },
+          "then": {
+            "properties": {"optionId": {"type": "string"}}
+          }
+        },
+        {
+          "description": "An answer other than option must not name an option.",
+          "if": {
+            "properties": {"answer": {"enum": ["aligned", "discuss", null]}},
+            "required": ["answer"]
+          },
+          "then": {
+            "properties": {"optionId": {"type": "null"}}
+          }
+        }
+      ]
+    },
+    "verdict": {
+      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a republished sheet starts unsigned and a page showing an older revision never touches a newer one. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "note", "sheet"],
+      "properties": {
+        "verdict": {
+          "description": "What the owner has tapped so far: approve the spec, not yet, or null when nothing is picked (only a note was saved, or the pick was cleared by tapping it again).",
+          "enum": ["approve", "not-yet", null]
+        },
+        "note": {
+          "description": "The owner's note with the verdict, an empty string when there is none.",
+          "type": "string"
+        },
+        "sheet": {
+          "description": "The sheet revision this verdict belongs to: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. It equals <digest> in the document's path. A document whose digest differs from the current file's is not a verdict on this sheet.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
     },
     "card": {
       "description": "One call the owner has to make, with the question, what is true now, and the options and recommendation if there are any.",
