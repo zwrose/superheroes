@@ -31,10 +31,11 @@ An annex may only spell out what the core already decides. When an annex sentenc
 
 The source check runs both ways.
 
-- Forward. Every statement in the spec has a source and matches it, and the approved board is the
-  first source to look in. Nothing in the spec belongs to another piece of work.
+- Forward. Every statement in the spec has a source and matches it. When the piece has an approved
+  board, the board is the first source to look in. Nothing in the spec belongs to another piece of
+  work.
 - Backward. Every ruling for this piece is in the spec and written down right. So is every element
-  of the approved board that belongs to this piece, and so is the framing.
+  of the approved board that belongs to this piece, when the piece has one, and so is the framing.
 
 The source check is an agent reading plain files. No script reads a source tag.
 
@@ -170,14 +171,21 @@ repository for gap review and the source check. For grounding it is the groundin
 ### The source check's inputs
 
 Stage each of these into the source check's prompt, with a label on each: the spec, Canon, the
-approved board's files, the framing brief, and the rulings for this piece.
+approved board's files when the piece has an approved board, the framing brief, and the rulings for
+this piece.
+
+When the piece has no approved board, the source check still runs, on the other sources: Canon,
+the framing brief and the rulings. Record the backward direction's board element as "no approved
+board for this piece", and say so in that round's record. A missing board is never by itself a
+reason the check did not run.
 
 Read Canon as `rubric/canon-contract.md` § "Reading Canon" says. Stage the default-branch copy and
 this branch's copy, and label each copy with the sessions it binds. That section holds the
 procedure, so follow it there.
 
 When a required input cannot be read, the source check is not run that round. Put the reason in the
-record.
+record. An approved board that exists but cannot be read is such an input; a piece with no approved
+board is not.
 
 ### A result counts only when it is real
 
@@ -323,6 +331,7 @@ block for each of the three checks.
 - Run directory: <path>
 - Result: <real, or not run and why>
 - Grounding base, for grounding: <ref>, <sha>
+- Approved board, for the source check: <its path, or "no approved board for this piece">
 - Confirmations: <previous finding id> -> <fixed, not-fixed, fix-introduced-problem,
   decline-accepted, or decline-contested>
 
@@ -377,10 +386,11 @@ does not, report it as a finding with dimension Coherence and severity Important
 builder reading only the core build something different?
 
 Source check. Read the spec against its sources, which follow, each labelled. Forward: every
-statement in the spec must have a source and match it, the approved board first, and nothing in the
-spec may belong to another piece of work. Backward: every ruling for this piece, every element of
-the approved board that belongs to this piece, and the framing must be in the spec and written down
-right. Sources: <the labelled inputs>
+statement in the spec must have a source and match it, the approved board first when the sources
+include one, and nothing in the spec may belong to another piece of work. Backward: every ruling for
+this piece, every element of the approved board that belongs to this piece (when the sources include
+no approved board, write "no approved board for this piece" for that element), and the framing must
+be in the spec and written down right. Sources: <the labelled inputs>
 
 Grounding. Check every claim the spec makes about the product or the repository against the
 repository in your working directory. That repository is the project's default branch. Report each

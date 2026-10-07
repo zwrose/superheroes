@@ -911,3 +911,18 @@ def test_light_spec_fixture_schema_approved_required():
     fm_without_approved = {key: value for key, value in fm.items() if key != "approved"}
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(fm_without_approved, schema)
+
+
+def test_source_check_runs_without_an_approved_board():
+    section = _file_section(_SPEC_CHECKS_REF, "### The source check's inputs")
+    # axis: a piece with no approved board still gets the source check, on the other sources
+    assert (
+        "When the piece has no approved board, the source check still runs, on the other "
+        "sources: Canon, the framing brief and the rulings."
+    ) in section
+    # axis: the backward direction's board element is recorded, not skipped
+    assert "no approved board for this piece" in section
+    # axis: a missing board is never by itself a reason the check did not run
+    assert "A missing board is never by itself a reason the check did not run." in section
+    # axis: only an approved board that exists but cannot be read stops the check
+    assert "a piece with no approved board is not." in section

@@ -7,6 +7,7 @@ in a throwaway definition-doc fixture, and census the docs so no other surface w
 """
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 
@@ -19,6 +20,16 @@ _SKILLS = os.path.join(_PLUGIN, "skills")
 _DISCOVERY = os.path.join(_SKILLS, "architect-discovery", "SKILL.md")
 _SPEC_CHECKS = os.path.join(_SKILLS, "architect-discovery", "reference", "spec-checks.md")
 WI = "add-thing-50c082"
+
+
+def _step8(text):
+    """Discovery's step 8: from its `### 8.` heading to the next level-2 or level-3 heading."""
+    body = text[text.index("### 8."):]
+    first_line_end = body.find("\n")
+    if first_line_end == -1:
+        return body
+    match = re.search(r"\n#{2,3} ", body[first_line_end:])
+    return body if match is None else body[:first_line_end + match.start()]
 
 
 def _load(path, name):
@@ -161,8 +172,7 @@ def test_only_the_discovery_owner_approval_block_writes_passed():
     assert counts == {os.path.join("architect-discovery", "SKILL.md"): 1}, counts
     with open(_DISCOVERY, encoding="utf-8") as fh:
         discovery = fh.read()
-    step8 = discovery[discovery.index("### 8."):]
-    step8 = step8[:step8.index("\n## ")]
+    step8 = _step8(discovery)
     # axis: that one command sits in step 8, after the owner's explicit approval
     assert "--review passed" in step8
     assert step8.index("Only once the owner explicitly approves") < step8.index("--review passed")
@@ -170,6 +180,21 @@ def test_only_the_discovery_owner_approval_block_writes_passed():
         checks = fh.read()
     # axis: the checks never write passed
     assert "--review passed" not in checks
+
+
+def test_step8_slice_stops_at_the_next_sub_step():
+    text = (
+        "### 8. Owner\nOnly once the owner explicitly approves\n#### 8a. inner\nkept\n"
+        "### 9. Later\n--review passed\n## Next\n"
+    )
+    # axis: a later sub-step never falls inside step 8's slice
+    assert "--review passed" not in _step8(text)
+    assert "### 9." not in _step8(text)
+    # axis: a level-4 heading inside step 8 stays inside the slice
+    assert "#### 8a. inner" in _step8(text)
+    # axis: with no following heading the slice runs to the end of the text
+    tail = "intro\n### 8. Owner\nbody\n#### 8a. inner\nlast\n"
+    assert _step8(tail) == tail[tail.index("### 8."):]
 
 
 def test_docs_name_the_reset_and_the_changes_requested_record():
