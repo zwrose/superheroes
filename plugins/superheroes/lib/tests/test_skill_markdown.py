@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
 PATH_LITERALS = (".claude/review-profile.md", ".claude/review-decisions.json")
-REVIEW_SKILLS = ("review-code", "audit-debt")
+REVIEW_SKILLS = ("review-code",)
 ALL_SKILLS = REVIEW_SKILLS + ("review-init",)
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
 
@@ -103,13 +103,6 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
             "<=800",
             "never one whole-file",
             "until the diff is covered",
-        )),
-        "audit-debt/SKILL.md": ("## Context files", "## Calibration precedence", (
-            "$SESSION_DIR/sweep-prep/files.txt",
-            "bounded chunks",
-            "<=800",
-            "bounded shell",
-            "never one whole-file",
         )),
     }
     missing = []

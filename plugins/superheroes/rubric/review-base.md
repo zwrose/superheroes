@@ -146,7 +146,7 @@ adding one later is a single-place change): `Architecture`, `Code`, `Security`,
 `Test`, `Failure-Mode`, `Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
 `Grounding`. The crew carries **two label sets**: a **code-leg** set
 (`Architecture`, `Code`, `Security`, `Test`, `Failure-Mode`) that
-`/superheroes:review-code` and `/superheroes:audit-debt` dispatch as agents, and a
+`/superheroes:review-code` dispatches as agents, and a
 **doc-native** set (`Clarity`, `Verifiability`, `Coherence`, `Safety-access`,
 `Failure-Mode`, `Grounding`) that the spec checks' reviewer uses to label its findings
 (`skills/architect-discovery/reference/spec-checks.md`) — it is no longer a dispatched agent
@@ -305,7 +305,6 @@ finding with its taxonomy term.
 ## Verdict labels & mapping
 
 - `/superheroes:review-code`: `READY FOR PR` / `FIX BEFORE PR` / `MAJOR FIXES NEEDED`
-- `/superheroes:audit-debt`: no single verdict — a prioritized backlog
 
 Mapping (post-dedupe, post-filter counts) — the same shape for every skill (the first / second / third label):
 - 0 Critical, 0 Important → the **READY** label (`READY FOR PR`)

@@ -1495,11 +1495,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — the A1–D11 contract is load-bearing orchestration machinery; churn
   evidence observed on engine-7-class dispatches at weekly-eats (the assessment record, C1/H2).
 
-#### H3 — Other heroes (architect, discovery, detective, audit-debt, checkpoint…)
+#### H3 — Other heroes (architect, discovery, detective, checkpoint…)
 
 - **Component.** The other-heroes embedded machinery (not their skill front doors): architect,
-  discovery, detective, audit-debt, and checkpoint skills plus supporting lib hooks. It
-  costs loaded prose mass across the skill tree.
+  discovery, detective, and checkpoint skills plus supporting lib hooks (audit-debt retired
+  2026-10-07, #1664 — covered by the guardian). It costs loaded prose mass across the skill tree.
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
   specific other-hero skill dispatch failure (routing, charter drift, missing reference). On firing,

@@ -47,7 +47,7 @@
     {
       "file": "src/handlers/documents.ts",
       "lineHint": "const removed = await db.documents.delete({ id: target });",
-      "whyNotFlagged": "context-line — a reviewer may read deleteDocument's id-alone lookup as a cross-workspace (BOLA) hole. It genuinely is one, but every line of that function is a context line this diff does not change. The base rubric's diff-scope rule (verification rule #2) and the Pre-existing severity tier require SKIPPING it rather than reporting it at any severity; audit-debt owns it, not this review."
+      "whyNotFlagged": "context-line — a reviewer may read deleteDocument's id-alone lookup as a cross-workspace (BOLA) hole. It genuinely is one, but every line of that function is a context line this diff does not change. The base rubric's diff-scope rule (verification rule #2) and the Pre-existing severity tier require SKIPPING it rather than reporting it at any severity; it is out of this diff's scope, not this review's."
     },
     {
       "file": "src/handlers/documents.ts",

@@ -13,6 +13,7 @@ belongs to and lists every change with its replacement.
 
 - A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
 - A caller that invokes `/superheroes:review-spec` or the deleted `spec_loop_plan` module must switch to discovery's spec checks.
+- A caller that invokes `/superheroes:audit-debt` must switch to `/superheroes:guardian`, which replaced it; the reviewer agents no longer take a whole-repo audit mode.
 - **Move configure item 13 into Canon** when you adopt this release: run `python3 -B <plugin root>/lib/project_config.py migrate-material-line --cwd .` from the repository, on the branch the change should ride if Canon lives in the repository. Until you run it, item 13 behaves as before.
 
 ### Canon: the record of the owner's decisions
@@ -44,6 +45,12 @@ belongs to and lists every change with its replacement.
 - The spec review weight call is gone: no light-or-full call decides how a spec is reviewed. Package reads keep their weight call. Code review's light, full and micro lanes are unchanged.
 - The spec's review gate keeps `pending`, `changes-requested` and `passed`. Discovery now records `changes-requested` when the owner asks for changes, and the stale-approval reset (`gate_write.py --mode reset`) is called from spec-checks.md § The review gate. Only the owner's approval writes `passed`.
 - Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
+
+### audit-debt retires
+
+- The `audit-debt` skill is removed, along with its entry in the Codex manifest's skills list. `/superheroes:guardian` is the repo-health sweep that replaced it.
+- The reviewer agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `test-reviewer`) no longer carry an `audit-debt` mode bullet, and `premortem-reviewer` no longer notes that `audit-debt` does not dispatch it. The full dependency CVE and advisory sweep that `security-reviewer` deferred now points to `/superheroes:guardian`.
+- The `audit-report` decision-point carrier is removed from the carrier registry.
 
 ### Guardian dead-code ids are repo-relative
 

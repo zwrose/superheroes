@@ -1,7 +1,7 @@
 """Band-wide model-tier policy: role -> dispatch model name (the cost/perf knob).
 
-Pure + deterministic. review-code and audit-debt are the wired
-consumers (guarded by test_model_tier_wiring.py).
+Pure + deterministic. review-code is the wired
+consumer (guarded by test_model_tier_wiring.py).
 Returns the short names the Agent/Skill dispatch layer
 accepts ("sonnet"/"opus"/"haiku"), or None to inherit the session model.
 

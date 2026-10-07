@@ -152,11 +152,3 @@ and the run false-parked on no-net-progress).
 **Named exceptions (no silent divergence):**
 - **Single-reviewer legs** (per-task review, final-review deep leg) run no synthesis fold at all —
   one reviewer, nothing to reconcile (stated in `loop_synthesis.py`).
-- **Interactive doc reviews** (`audit-debt`) run
-  **no general keep/drop synthesis judge**: the orchestrator dedupes/compiles/verifies findings
-  **in-context**, with the owner present, so there is no judge→consumer split whose verdict-fold
-  could silently no-op. The one deterministic fold they do run — acceptance suppression
-  (`acceptance_rereview.py --acceptance-only`, deliberately drop/downgrade-stripped) —
-  already keys on an identity **copied verbatim** from `acceptance-candidates.json`, i.e. the same
-  staged-id/echo discipline, not a model-recomputed normalization. So the interactive surface is a
-  **documented exception**, not a silent divergence.

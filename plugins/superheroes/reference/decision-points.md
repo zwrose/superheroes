@@ -119,7 +119,6 @@ a silently-taken provisional default actually costs the owner something reopens 
 | --- | --- | --- | --- |
 | `review-crew-layer` | `## Setup disclosures` in the review-crew layer | `core_md.py write-layer --hero review-crew` | registry key only; no delivery assertion |
 | `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | registry key only; no delivery assertion |
-| `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | registry key only; no delivery assertion |
 | `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | registry key only; no delivery assertion |
 | `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | registry key only; no delivery assertion |
 | `run-output` | the run's own report to the owner | the run itself | registry key only; no file writer — use where a decision is reported to the owner in the session, in particular where a **gate hands back before any writer executes** |

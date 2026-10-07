@@ -71,7 +71,6 @@ _WAITING_TOKENS = (
 _CARRIER_REGISTRY = frozenset({
     "review-crew-layer",
     "test-pilot-layer",
-    "audit-report",
     "review-code-meta",
     "doc-policy-disclosures",
     "run-output",
@@ -601,7 +600,7 @@ def test_fixture_duplicate_decision_block_id_fails(tmp_path, monkeypatch):
     content = (
         _VALID_BLOCK
         + '<!-- decision-point: id=fixture-storage mode=gate kind=owner-gate '
-        'default="hold" carrier=audit-report -->\n'
+        'default="hold" carrier=review-code-meta -->\n'
         "GATE: write down and hand back. `/superheroes:configure`.\n"
         "<!-- /decision-point: id=fixture-storage -->\n"
     )
@@ -637,7 +636,7 @@ def test_fixture_waiting_token_in_block_fails(tmp_path, monkeypatch):
     skills.mkdir(parents=True)
     content = (
         '<!-- decision-point: id=wait-test mode=gate kind=owner-gate default="hold" '
-        'carrier=audit-report -->\n'
+        'carrier=review-code-meta -->\n'
         "GATE: write down, hand back, and wait for the owner. `/superheroes:configure`.\n"
         "<!-- /decision-point: id=wait-test -->\n"
     )
