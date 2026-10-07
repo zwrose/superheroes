@@ -71,7 +71,6 @@ _WAITING_TOKENS = (
 _CARRIER_REGISTRY = frozenset({
     "review-crew-layer",
     "test-pilot-layer",
-    "review-spec-receipt",
     "audit-report",
     "review-code-meta",
     "doc-policy-disclosures",

@@ -57,3 +57,4 @@ demonstrate cause, diagnosis receipt, never fix). Load the one that matches your
 all three stand on this covenant.
 
 The owner's decisions live in the project's Canon; read and write it as `rubric/canon-contract.md` says.
+Whether a call is the owner's or craft is sorted by the owner-vs-craft line; read it in `rubric/owner-vs-craft-line.md`.

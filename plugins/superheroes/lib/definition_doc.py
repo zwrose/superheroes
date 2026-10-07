@@ -124,10 +124,18 @@ class CanonLookupError(RuntimeError):
 _CANON_REMEDY = "run `git remote set-head origin --auto` (or fetch origin) and retry"
 
 
+def _scrubbed_git_env():
+    """The ambient environment minus every git routing variable (git_routing.GIT_ROUTING_VARS, the
+    one home of the list), so a git child acts on the repository it was given, never on an inherited
+    GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE."""
+    from git_routing import GIT_ROUTING_VARS
+    return {k: v for k, v in os.environ.items() if k not in GIT_ROUTING_VARS}
+
+
 def _git(root, *args):
     try:
         return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                              timeout=10)
+                              timeout=10, env=_scrubbed_git_env())
     except (OSError, subprocess.SubprocessError) as exc:
         raise CanonLookupError("git could not be run (%s: %s)" % (type(exc).__name__, exc))
 
@@ -207,6 +215,74 @@ def resolve_canon(*, root, cwd=None, store_root=None):
         path, git_root, default_ref = store, store_dir, None
     return {"path": os.path.abspath(path), "home": home, "gitRoot": git_root,
            "exists": os.path.isfile(path), "defaultRef": default_ref}
+
+
+class GroundingBaseError(RuntimeError):
+    """The grounding base (a detached worktree at the default branch's tip) could not be made.
+    `reason` is the refusal token; the single arg is the detail."""
+
+    def __init__(self, reason, detail):
+        super().__init__(detail)
+        self.reason = reason
+
+
+def _git_step(top, *args):
+    """Run git for the grounding base: (CompletedProcess, None), or (None, the failure text) when
+    git could not be run or timed out. Its own 60 s timeout, apart from the Canon lookup's `_git`."""
+    try:
+        # The checkout hooks are switched off (the pair engine_dispatch._git_scrubbed uses): a
+        # project's post-checkout hook must neither fail nor dirty the grounding worktree.
+        return subprocess.run(["git", "-C", top, "-c", "core.hooksPath=/dev/null",
+                               "-c", "core.fsmonitor=", *args], capture_output=True, text=True,
+                              timeout=60, env=_scrubbed_git_env()), None
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, "%s: %s" % (type(exc).__name__, exc)
+
+
+def grounding_base(*, root, dest):
+    """Fetch the project's default branch and materialize a detached worktree at its tip in the
+    new directory `dest`. Returns {ok, ref, sha, path}; raises GroundingBaseError (with a refusal
+    token) and creates nothing on any refusal. The dest checks run before the fetch."""
+    import store_core
+    try:
+        top = store_core.repo_root(os.path.abspath(root), env=_scrubbed_git_env())
+    except store_core.RepoRootUnavailable as exc:
+        raise GroundingBaseError("grounding-base-not-a-repo",
+                                 "could not resolve the repository root: %s" % exc)
+    try:
+        ref = _default_branch_ref(top)
+    except CanonLookupError as exc:
+        remedy = "; %s" % exc.remedy if exc.remedy else ""
+        raise GroundingBaseError("grounding-base-default-unknown", "%s%s" % (exc, remedy))
+    if ref is None:
+        raise GroundingBaseError("grounding-base-no-origin",
+                                 "the repository has no origin remote, so there is no default "
+                                 "branch to ground against")
+    dest_abs = os.path.abspath(dest)
+    if os.path.lexists(dest_abs):
+        raise GroundingBaseError("grounding-base-dest-exists", "%s already exists" % dest_abs)
+    dest_real = os.path.join(os.path.realpath(os.path.dirname(dest_abs)),
+                             os.path.basename(dest_abs))
+    top_real = os.path.realpath(top)
+    if dest_real == top_real or dest_real.startswith(top_real + os.sep):
+        raise GroundingBaseError("grounding-base-dest-inside-repo",
+                                 "%s is inside the repository at %s" % (dest_abs, top_real))
+    branch = ref.split("/", 1)[1]
+    fetched, failure = _git_step(top, "fetch", "--quiet", "origin",
+                                 "+refs/heads/%s:refs/remotes/%s" % (branch, ref))
+    if failure is not None or fetched.returncode != 0:
+        raise GroundingBaseError("grounding-base-fetch-failed",
+                                 failure or fetched.stderr.strip() or "git exit %d" % fetched.returncode)
+    parsed, failure = _git_step(top, "rev-parse", "--verify", "%s^{commit}" % ref)
+    if failure is not None or parsed.returncode != 0:
+        raise GroundingBaseError("grounding-base-fetch-failed",
+                                 failure or parsed.stderr.strip() or "git exit %d" % parsed.returncode)
+    sha = parsed.stdout.strip()
+    added, failure = _git_step(top, "worktree", "add", "--detach", dest_abs, sha)
+    if failure is not None or added.returncode != 0:
+        raise GroundingBaseError("grounding-base-worktree-failed",
+                                 failure or added.stderr.strip() or "git exit %d" % added.returncode)
+    return {"ok": True, "ref": ref, "sha": sha, "path": os.path.realpath(dest_abs)}
 
 
 class IgnoreCoverageError(RuntimeError):
@@ -619,6 +695,11 @@ def _build_parser():
 
     cn = sub.add_parser("canon", help="locate the project's Canon file (read-only)")
     cn.add_argument("--root", default=".")
+
+    gb = sub.add_parser("grounding-base",
+                        help="fetch the default branch and add a detached worktree at its tip")
+    gb.add_argument("--root", default=".")
+    gb.add_argument("--dest", required=True)
     return p
 
 
@@ -660,6 +741,15 @@ def main(argv):
             args.doc, args.work_item, size=args.size,
             issue=args.issue, created=args.created, updated=args.updated)
         sys.stdout.write(render_frontmatter(fm))
+        return 0
+    if args.cmd == "grounding-base":
+        try:
+            result = grounding_base(root=args.root, dest=args.dest)
+        except GroundingBaseError as exc:
+            sys.stdout.write(json.dumps({"ok": False, "reason": exc.reason,
+                                         "detail": str(exc)}) + "\n")
+            return 1
+        sys.stdout.write(json.dumps(result) + "\n")
         return 0
     try:
         if args.cmd == "canon":
