@@ -113,6 +113,16 @@ The record's header line reads `**Breakdown vet, round <n>**` in place of `**Spe
 and its owner-call list reads `None`. The breakdown carries no owner calls; a breakdown finding that
 needs the owner goes to the owner through the merge-word conversation, not the final sheet.
 
+**The breakdown pin.** The spec hash does not cover the breakdown, so the record also pins what you
+vetted. Just above the `Vet done:` line, add a line `Breakdown pins:` followed by one
+`<path> <content hash>` pair for each breakdown artifact, each hash from the same `content-hash`
+command run on that file as vetted. The artifacts are the coverage map, the contract register, the
+package-read audit trail and every child body that exists as a file. A single-issue spec has no
+register and no package read, so its one pin is the child's proposed body, which you save beside the
+spec as a file before you vet it. A record is clean for filing only when every pinned file's hash
+equals its content now. A file that changed, or one the record does not pin, means the record is
+stale and the breakdown needs a new vet. This holds in the stored-spec mode too.
+
 Where the package read applies, it runs as
 [decomposition.md](decomposition.md#the-adversarial-package-read) says. This vet does not replace
 it.

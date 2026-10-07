@@ -172,7 +172,9 @@ merge word: that is duty 1 and duty 6 of `skills/showrunner/SKILL.md`.
 Before you execute, confirm four things:
 
 1. The approval is recorded with its date.
-2. The breakdown's vet record is clean.
+2. The breakdown's vet record is clean, and every file it pins still hashes to the pinned value
+   ([spec-vet.md](spec-vet.md#vetting-the-breakdown)). This check also runs where the stored spec
+   stands in for the PR.
 3. Where the package read applies, its verification pass and filing dry-run are recorded against this
    head.
 4. Duty 6's three preconditions hold.

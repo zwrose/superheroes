@@ -700,10 +700,10 @@ above).
    [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md). Read it before you write an
    entry; what counts as a ruling, the entry shape, and the write steps are the contract's.
 
-   **Which branch.** The ruling rides a pull request you already have open: commit it to that branch
-   at once. With none open, it rides the next pull request you open. Canon never gets a pull request
-   of its own. Where Canon lives in the project store, nothing waits: the contract commits it there
-   at once.
+   **Which branch, and when to commit.** The contract's
+   [Writing a ruling](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling) says which
+   branch the ruling rides, that Canon never gets a pull request of its own, and when the commit
+   happens. This charter adds only how you hold a ruling when no pull request of yours is open.
 
    **Holding a ruling until that pull request exists.** At receipt, write the ruling's complete
    Canon entry line, id included, into one comment on the project's standing proposals
