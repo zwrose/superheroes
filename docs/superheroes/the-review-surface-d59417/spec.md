@@ -10,7 +10,7 @@ approved: "2026-10-04"
 gates: {review: passed}
 producedBy: "the-architect@0.33.0"
 created: "2026-10-03"
-updated: "2026-10-04"
+updated: "2026-10-07"
 ---
 # The review surface
 
@@ -70,19 +70,26 @@ template)
 ### The card
 
 **FR-5.** Every card except a final sheet's last card (FR-17) shall have the same parts, in this order: the kind of call; the question in
-one line, in the owner's words where possible; the context: what's true now, why it needs the
-owner, and the exact text the call is about; images, when the call has
+one line, in the owner's words where possible; the context, in sections the sending session titles
+and writes in its own words, as paragraphs and bulleted lists (what is true now, what accepting
+it means, why it needs the owner: whatever this call needs), quoting the exact text the call is
+about where there is one; images, when the call has
 relevant ones; options, when there are real ones, each with its plain consequence; a one-line
 recommendation with its reason; the owner's answer; a note. (source: ruling 34; board · One
-review template)
+review template; the owner's comment on the merge review sheet, 2026-10-07, Amendment 3)
+  - *Acceptance (rule):* the template fixes no context headings and requires no section; a card
+    whose call has no exact text shows no empty quote. (source: as its requirement)
 
-**FR-6.** Every card except a final sheet's last card (FR-17) shall offer Aligned and Discuss; where the card has options, the owner shall
-also be able to pick an option directly. (source: ruling 34)
-  - *Acceptance (rule):* Aligned agrees with the card's recommendation, or with the statement when
-    there is no recommendation; a pick chooses that option; Discuss leaves the call open for chat.
-    (source: ruling 48)
+**FR-6.** Every card except a final sheet's last card (FR-17) shall offer answers that match the
+call: a card with options offers one button per option and Something else, and nothing more; a card
+with no options offers Aligned and Discuss. (source: ruling 34; the owner's comment on the merge
+review sheet, 2026-10-07, Amendment 3)
+  - *Acceptance (rule):* a pick chooses that option; Something else leaves the call open for chat,
+    with the note as the place to say what instead; Aligned agrees with the card's recommendation,
+    or with the statement when there is no recommendation; Discuss leaves the call open for chat.
+    (source: ruling 48; Amendment 3)
   - *Acceptance (rule):* when the owner's note disagrees with their answer, the session treats the
-    card as Discuss and asks. (source: ruling 48)
+    card as open for chat and asks. (source: ruling 48)
   - *Acceptance (rule):* no review adds its own answer buttons. (source: ruling 34)
   - *Acceptance (rule):* a final sheet's last card offers Approve and Not yet instead. (source:
     board · One review template)
@@ -109,11 +116,13 @@ its own. (source: ruling 38)
 ### Sheets
 
 **FR-12.** A sheet shall show the review's name in a yellow app bar, and how many items are
-answered out of the total. (source: board · Spec review · phone; board · Final sheet · phone; board
-· The superheroes theme)
+answered out of the total; the bar scrolls away with the page rather than staying pinned in view.
+(source: board · Spec review · phone; board · Final sheet · phone; board · The superheroes theme;
+the owner's comment on the merge review sheet, 2026-10-07, Amendment 3)
 
 **FR-13.** On a phone, a remainder sheet shall fold answered items into one row showing how many
-are Aligned and how many are Discuss, show the open item in full, and list each other open item
+are settled (Aligned or an option picked) and how many are left open for chat (Discuss or Something
+else), show the open item in full, and list each other open item
 as a short row with its state. (source: board · Spec review · phone)
 
 **FR-14.** On a desktop, a sheet shall list every item with its state beside the open card, with
@@ -223,7 +232,7 @@ template produces a sheet with the same card and theme. (source: rulings 31, 34)
 
 ## Delivery
 
-**Delivered, accepted in full by the owner on 2026-10-07** (collector #695 item 46 = a, in chat: "46 a, you can merge the stack"; option a read "keep everything and accept Spec B as delivered"). The acceptance rests on the closure receipt carried at PR #1659's vet 404 and amended at vets 409 and 410. C7 shipped as stack #1642, and C8 as stack #1650, with this spec's Amendments 1 and 2 below. Every one of the spec's criteria is delivered, as amended; none is deferred or declined.
+**Delivered, accepted in full by the owner on 2026-10-07** (collector #695 item 46 = a, in chat: "46 a, you can merge the stack"; option a read "keep everything and accept Spec B as delivered"). The acceptance rests on the closure receipt carried at PR #1659's vet 404 and amended at vets 409 and 410. C7 shipped as stack #1642, and C8 as stack #1650, with this spec's Amendments 1 and 2 below. Every one of the spec's criteria as it stood after Amendments 1 and 2 is delivered; none is deferred or declined. Amendment 3 (2026-10-07) changes FR-5, FR-6, FR-12 and FR-13 after that acceptance; those changes are delivered by C10 (issue #1673) and reach the owner for delivery acceptance with its handback.
 
 ## Amendments
 
@@ -236,6 +245,14 @@ template produces a sheet with the same card and theme. (source: rulings 31, 34)
   not. A final sheet's verdict and note now save like any answer, the sheet says plainly to go back
   to the chat and say you're done, and the owner's word in the chat is what the session reads
   (collector #695 item 48, ruled "a" in chat). Sections touched: FR-4a, FR-18.
+- **2026-10-07 (owner-stamped, substantive):** the cards fit how the owner reads them. A card with
+  options offers one button per option and Something else, and Aligned and Discuss only appear on
+  cards with no options; the app bar scrolls away instead of staying pinned; and a card's context
+  is written by the sending session in its own sections rather than forced into fixed ones. The
+  owner, after completing the merge review sheet, found the extra buttons confusing, the pinned
+  bar in the way, and the context "forced into the template" when the owner wanted the "what you're
+  accepting" explanations he gets in chat (collector #695 item 54, ruled "a" in chat; built by
+  issue #1673). Sections touched: FR-5, FR-6, FR-12, FR-13, Coverage (Wording & tone).
 
 ## Coverage
 
@@ -254,7 +271,7 @@ where it gives a reason instead, the reason is the author's, recorded for the ow
 | Conflicting / simultaneous use | N-A | — | One owner answers each sheet (source: craft) |
 | Misuse & abuse | N-A | — | Malicious input is outside the plugin's threat model (source: craft) |
 | Reach (i18n / a11y) | Specify | Yes | Readability, touch and colour requirements above (source: craft) |
-| Wording & tone | Specify | Yes | Button words Aligned, Discuss, Approve, Not yet (source: craft; Done for now and Send verdict retired, Amendments 1 and 2) |
+| Wording & tone | Specify | Yes | Button words Aligned, Discuss, Something else, Approve, Not yet (source: craft; Done for now and Send verdict retired, Amendments 1 and 2; Something else added, Amendment 3) |
 | Workflow shape | Specify | Yes | FR-12 to FR-18 (source: as the requirement named) |
 | Placement & prominence | Specify | Yes | FR-5 card order; FR-12 app bar (source: as the requirement named) |
 | Limits & defaults | N-A | — | No limits the owner sets (source: craft) |
