@@ -37,8 +37,8 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
    ```
 
-   Reuse an existing slug if this spec already exists (a revision); never re-mint
-   for the same work-item.
+   Reuse the slug discovery hands you, or the existing slug if this spec already exists (a
+   revision); never re-mint for the same work-item.
 
 2. **Resolve the path at the repo root** (Phase 1 is in-repo). Pin `--root` to the
    repo top level so the spec can't land in a subdirectory regardless of the current

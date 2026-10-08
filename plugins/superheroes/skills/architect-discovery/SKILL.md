@@ -22,9 +22,14 @@ language. Translate every non-functional concern into a plain-language outcome.
 When a genuine choice needs the owner, present it with approachable pros/cons —
 never with jargon.
 
+**Owner rulings you receive are recorded in the project's Canon** as `${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md` says.
+
+**Every call you meet is sorted by the owner-vs-craft line** in `${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md`.
+
 <HARD-GATE>
-**On the spec path (Exit A):** do NOT author the spec, write any code, mint a
-work-item, or hand off until you have presented the framing (the **what**) and the
+**On the spec path (Exit A):** do NOT author the spec, write any code, create a
+work-item folder or any other artifact beyond Canon's own entries, or hand off until you
+have presented the framing (the **what**) and the
 owner has explicitly approved it. And do NOT consider that path finished until the
 owner gives their final approval of the written spec (step 8) — review-crew advises,
 the owner decides. A spec can be short; on this path it cannot be skipped, and its
@@ -100,6 +105,9 @@ with what is there."
    ratified record outside any work-item folder instead of stopping. Guard the mint, check it is
    non-empty, and only then resolve.
 
+   A discovery that reached step 1's mint already holds its slug. It sets `WORK_ITEM` to that
+   slug instead of running the mint, and everything after the mint runs as written.
+
    `resolve-write` is used **only to learn where the work-item folder is** — it is the one
    resolver that is correct in both storage modes. **Take its directory; never write to the
    `spec.md` path it names** — on this exit no spec is written at all. The findings record is
@@ -135,6 +143,8 @@ on.
   notes. Nothing downstream may anchor to them, and nothing in them is approved content.
 - **Nothing elicited is lost.** Every answer the owner gave goes into the note, so the work
   survives the gap.
+- **A park before the framing leaves the committed Canon entries as they are.** The park note
+  names the slug minted in step 1, when one was minted.
 - **Report the park to the advisor** with everything else.
 
 ## Checklist
@@ -143,18 +153,18 @@ Create a TodoWrite item for each step and complete them in order. **These steps 
 path (Exit A).** When a discovery ends on **Exit B** or **Exit C** instead, the remaining steps
 are not run — that exit's own artifact closes the work.
 
-1. **Initial context gathering**
+1. **Ground yourself before the first question**
 2. **The consent gate** → investigation spend starts only on the owner's consent
-3. **Requirements dialogue** (one question at a time; EARS phrasing; run the coverage checklist)
-4. **UI/UX** when relevant (hand the owner a Claude Design prompt)
-5. **Confirm the framing → owner approves the *what*** ← HARD GATE
+3. **Requirements dialogue** (owner calls only, one at a time; EARS phrasing; run the coverage checklist)
+4. **Confirm the framing → owner approves the *what*** ← HARD GATE
+5. **UI/UX** when relevant (hand the owner a Claude Design prompt)
 6. **Author the spec** via the `writing-specs` skill
 7. **Run the three spec checks** (fix craft findings before the owner spends time)
 8. **Advisor vet, then owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
 
 ## The steps
 
-### 1. Initial context gathering
+### 1. Ground yourself before the first question
 
 - **`CLAUDE.md` is mandatory context, not optional reading.** If it is **not
   already in your context, read it now** (plus any nested `CLAUDE.md` governing
@@ -166,11 +176,50 @@ are not run — that exit's own artifact closes the work.
   Borrow the *technique* (one question at a time, explore before deciding,
   present-and-approve), but the artifact you produce is the superheroes `spec` — or one of
   the two other exits' artifacts — and the phase ends at an exit, never with a plan document.
-- **Scope check.** If the idea is really several independent pieces (e.g. "a
+- **Ground yourself in four sources, all before the first question.**
+  1. **Who the product is for.** Read configuration item 14 with
+     `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/project_config.py" get --item whoItsFor --cwd .`.
+     The answer is the `effective` field of its JSON output.
+  2. **Canon.** Read it as
+     [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#reading-canon) says. Its
+     standing rulings and ceded calls bind this discovery. When the lookup refuses or the default
+     branch cannot be read, the contract's own stop rule applies. When there is no Canon file yet,
+     the contract covers that case.
+  3. **Sibling specs and their boards.** Read the other work-item folders where the project keeps
+     its definition-docs: their specs, and any board kept with them.
+  4. **The product as built.** Read the `README`, the recent commits, and the code or screens the
+     idea touches.
+- **When item 14 is empty, recommend its setup before anything else.** Treat item 14 as empty when
+  `effective` is null, empty, or only whitespace, when `malformed` is true, and when the command
+  fails or refuses. Then, before the first question, make this the first thing you say to the
+  owner: you strongly recommend that they set up who the product is for and what it's for with the
+  advisor before going on. Give the reason in one sentence. Discovery grounds every question in it,
+  and without it, discovery guesses who the product serves. Ask whether to stop for that or go on.
+  For example: "Before I ask anything, I strongly recommend settling who this product is for and
+  what it's for with the advisor. I ground every question in that, and without it I'd be guessing
+  who it serves. Want to stop and do that first, or should I go on?" When the owner chooses to go
+  on, go on. Their choice is never blocked, and you do not repeat the recommendation.
+- **Light scope check.** If the idea is plainly several independent pieces (e.g. "a
   platform with chat, billing, and analytics"), say so before refining details.
-  Help the owner pick the **first** piece; each piece gets its own
-  spec. Recursion is one level — don't decompose a
-  decomposition.
+  This check splits off only the obvious bundles. Help the owner pick the **first** piece.
+  Each piece gets its own spec. The full split check runs later, when the spec is written.
+  Recursion is one level. Don't decompose a decomposition.
+- **Pick the title and mint the slug before the first requirements question.** Choose a concise, accurate
+  title for the piece. It is the sole input to the *frozen* work-item slug, so choose it
+  deliberately: it cannot change later. Never ask the owner to pick or confirm it. Mint with the
+  guarded form, and stop on a non-zero exit or an empty result:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>") \
+    || { echo "the-architect: cannot mint the work-item (see message above) — not starting the dialogue." >&2; exit 1; }
+  [ -n "$WORK_ITEM" ] \
+    || { echo "the-architect: mint returned an empty work-item — not starting the dialogue." >&2; exit 1; }
+  ```
+
+  Minting writes nothing. The slug is frozen from here on, and the Canon entry of every ruling
+  for this piece names it. When the scope check had the owner pick which piece comes first, record
+  that pick in Canon right after the mint, naming the slug.
 
 ### 2. The consent gate — investigation spend is the owner's to authorize
 
@@ -191,10 +240,12 @@ feasibility read of an unfamiliar domain. It has one rule, and this is it:
   here and nowhere else. Every other owner interaction in this skill is elicitation or a gate,
   never a spend request.
 
-**Investigation likely helps when** the work is novel, in an unfamiliar domain, medium-or-large,
-the requirements are vague, or it is a user-facing "what do other products do here?" call. **A
-confident owner is not an automatic skip** — confidence isn't correctness, so offer the check on
-a consequential call and let them choose. **Skip for** small or mechanical, well-understood work.
+**Offer investigation only when an unknown blocks the requirements.** You cannot write a
+requirement without settling it. Spend on it only after the owner consents to a named cost. These
+are signs that an unknown may be blocking: the work is novel, it is in an unfamiliar domain, the
+requirements are vague, or it is a user-facing "what do other products do here?" call. **A
+confident owner is not an automatic skip when an unknown blocks** — confidence isn't correctness,
+so offer the check and let them choose. **Skip it when nothing blocks the requirements.**
 
 Once consent is granted, use `deep-research` if available, else `WebSearch`/`WebFetch`; if
 neither is available, say so and proceed. Report findings in **plain language** ("most apps in
@@ -210,11 +261,17 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   owner (and never decide in advance) how heavy this discovery will be, and you never select a
   lighter process before knowing what the work needs. The dialogue's shape comes from what the
   answers reveal, not from a mode picked at the start.
-- **Probe every opinion-bearing dimension, and ask whether they care.** A dimension is
-  opinion-bearing when a reasonable owner could hold a view on it that changes what gets built.
-  Put each one in front of them and **ask whether they care** — "do you have a view on X, or
-  should I choose?" A dimension they explicitly hand back to you is a **recorded disposition**,
-  not a skipped question.
+- **Ask only owner calls.** Before you ask anything, sort the call as
+  [How a call is sorted](${CLAUDE_PLUGIN_ROOT}/rubric/owner-vs-craft-line.md#how-a-call-is-sorted)
+  says. Only a call sorted as the owner's becomes a question.
+- **Decide craft calls yourself, and record each one for the owner's veto.** Do not ask. Keep a
+  running list. Each entry holds the call, what you chose, and one line of why. Show the list at
+  the framing (step 4) and carry it into the spec.
+- **Probe every opinion-bearing dimension in an owner category, and ask whether they care.** A
+  dimension is opinion-bearing when a reasonable owner could hold a view on it that changes what
+  gets built. Put each owner-category one in front of them and **ask whether they care** — "do
+  you have a view on X, or should I choose?" A dimension they explicitly hand back to you is a
+  **recorded disposition**, not a skipped question.
 - **The spec's dispositions table is the stopping rule, not a question quota.** That table is
   the spec's `## Coverage` section: one row per probed area, each carrying its disposition.
   Discovery closes when **every dimension the table covers carries a disposition** — Specify,
@@ -223,15 +280,21 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   that is the expected outcome for small work, never a shortcut you have to justify.
 - **Frame every consequential choice as prose — never a pick-one widget.** A choice is
   *consequential* when getting it wrong would change the spec's scope, an owner-visible
-  behavior, the `size`, or cost/risk the owner carries. **Present the options as prose in the
+  behavior, the `size`, or cost/risk the owner carries. A question is one of two kinds.
+
+  **A real choice** carries what is being decided and why it matters, the options each with its
+  plain consequences, and your recommendation. **Present the options as prose in the
   conversation**, in this order:
   1. **The decision & why it matters** — one or two plain sentences: what is being decided, what
      it changes for the owner, and what is at stake if it goes the wrong way. No internal
      jargon; if a term is unavoidable, define it in the same breath.
-  2. **The options** — 2–3 named options, each with a one-line plain-language *pro* and *con*
-     (the real trade-off, not a restatement of the label).
+  2. **The options** — 2–3 named options, each with its plain consequences: a one-line *pro*
+     and *con* (the real trade-off, not a restatement of the label).
   3. **Your recommendation** — name the option you would pick and why, in one line. No confident
      pick? Say so ("close call — your call") rather than feigning neutrality.
+
+  **An open question** (for example "who is this for?") is asked as it is, with no options
+  invented.
 
   **Never route a consequential choice through a pick-one widget** — not a single-selection
   control of any kind. A widget forces the owner into your labels, and the whole point is that
@@ -242,6 +305,18 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   **Re-forcing the choice after a clarifying answer is the failure this rule names.** A
   *trivial* confirmation (naming, a yes/no with one obvious default, a detail with no downside)
   needs none of this; ask it in a line.
+- **A conflict with an earlier Canon ruling is its own decision.** When an answer would conflict
+  with an earlier Canon ruling, pick neither and do not fold it in. Put the conflict to the owner
+  as its own question, with both rulings side by side: the earlier entry's id, date, and words,
+  and the new answer. Say what each would mean for this piece, and give your recommendation. The
+  owner's answer is recorded as
+  [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#append-only-and-supersession)
+  says.
+- **Record every ruling in Canon.** Every ruling you receive is recorded in Canon as
+  [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling) says.
+- **Capture who the piece is for as user stories.** Write one or more in the form "As a …, I
+  want …, so I can …" that evoke the core need without listing every detail. Edge cases are
+  requirements (the unhappy paths), never user stories.
 - **Phrase each requirement as EARS** (the owner answers in plain language; you
   reflect it back as a constrained sentence and confirm):
   - Ubiquitous: *The system shall &lt;response&gt;.*
@@ -266,7 +341,8 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   (**Yes / No**) alongside it — whether the owner should be **shown** this at
   handback rather than told. Risk-gate: go deeper only where a failure costs
   money, data, safety, trust, or legal standing. One representative case per area,
-  not a matrix.
+  not a matrix. A row whose call sorts as craft gets its disposition from you, recorded for the
+  owner's veto, with no question.
 
   | Coverage area | Ask the owner |
   | --- | --- |
@@ -301,6 +377,9 @@ line does **not** earn its place because it seemed important, because it is true
 because a template has a slot for it, or because leaving it out felt incomplete —
 **there is no author-side filter that admits a line the owner was never asked
 about.**
+
+A craft call recorded for the owner's veto and shown at the framing passes the test, because the
+owner saw it and could veto it.
 
 **These six classes do not land in specs** — each fails the elicitation test:
 
@@ -337,14 +416,42 @@ different failures are **not** graded the same way:
 - **"Asked and deferred"** — the owner was asked, and handed the choice back. If they
   later want it different, that is a **cheap amendment**. No finding; nobody missed
   anything.
-- **"Never asked"** — the dimension was never put in front of the owner at all. That is
+- **"Never asked"** — the dimension was never put in front of the owner at all (a craft call
+  shown for the owner's veto was put in front of them, so it is not "never asked"). That is
   a **finding against discovery**, and it carries a **duty**: **add that dimension to
   the coverage checklist in this charter and to the template's Dispositions table**, so
   the next discovery asks it. That growth is why the six happy-path dimensions are
   described as the **initial** seed list everywhere they appear — the list is designed
   to get longer, and a surface that presents it as closed is wrong.
 
-### 4. UI/UX when relevant (hand the owner a Claude Design prompt)
+### 4. Confirm the framing → owner approves the *what* (HARD GATE)
+
+Nothing is drawn before this gate: no design prompt, sketch, or board comes before the owner
+approves the framing.
+
+Present a compact **decision brief** the owner can digest in under a minute — not a replay
+of every requirement (that is the spec, which they review at step 8):
+- **One line each:** what this is and the `size` you're assigning.
+- **Who it's for** — the user stories you captured in step 3.
+- **Load-bearing decisions** — the handful of calls that shape the work: the
+  resolutions you reached on the consequential questions. One line each.
+- **Craft calls made for your veto** — each call you decided yourself, from the running list in
+  step 3. One line each: the call, what you chose, and why.
+- **Still open** — anything unresolved or assumed that the owner should rule on now.
+
+Ask: *"Does this framing look right? Anything to change before I write it up?"* **Do not
+proceed past this gate until the owner approves the framing.** Revise and re-present as
+needed. The full, requirement-by-requirement review happens **once**, on the authored spec
+(step 8) — not twice. Then continue to step 5 when the work is user-facing, else to step 6
+(author the spec).
+
+Decide one thing here **yourself** — never make the owner pick it:
+- **`size`** (`small | medium | large`) — infer it from the scope of the approved
+  requirements. The skill decides; the owner never picks. It's frozen into the spec (§6.4).
+
+### 5. UI/UX when relevant (hand the owner a Claude Design prompt)
+
+This step runs only after the owner approves the framing in step 4.
 
 If the work is user-facing, the design is created in **Claude Design** — a separate
 surface — and its output is referenced by the spec. The flow is **text-first** so it
@@ -368,40 +475,18 @@ the spec instead.
 comparison **on graphical clients only** — it does **not** render in a terminal, so
 always have a plain-text description as the fallback; never rely on it.
 
-### 5. Confirm the framing → owner approves the *what* (HARD GATE)
-
-Present a compact **decision brief** the owner can digest in under a minute — not a replay
-of every requirement (that is the spec, which they review at step 8):
-- **One line each:** what this is, who it's for, and the `size` you're assigning.
-- **Load-bearing decisions** — the handful of calls that shape the work: the
-  resolutions you reached on the consequential questions, plus any default you chose
-  on the owner's behalf. One line each.
-- **Still open** — anything unresolved or assumed that the owner should rule on now.
-
-Ask: *"Does this framing look right? Anything to change before I write it up?"* **Do not
-proceed past this gate until the owner approves the framing.** Revise and re-present as
-needed. The full, requirement-by-requirement review happens **once**, on the authored spec
-(step 8) — not twice. Then continue to step 6 (author the spec).
-
-Decide two things here **yourself** — never make the owner pick them:
-- **Title / slug** — choose a concise, accurate work-item title from the approved
-  requirements; it's the sole input to the *frozen* work-item slug (§6.1), so pick it
-  deliberately (it can't change later). Don't ask the owner to choose or confirm it —
-  they'll see it in the spec they review.
-- **`size`** (`small | medium | large`) — infer it from the scope of the approved
-  requirements. The skill decides; the owner never picks. It's frozen into the spec (§6.4).
-
 ### 6. Author the spec via `writing-specs`
 
 Once the owner has approved the requirements, invoke the **`writing-specs`** skill
-to mint the work-item, emit the §3.1 frontmatter, fill the body template, and write
+to emit the §3.1 frontmatter, fill the body template, and write
 the spec to the path `resolve-write --doc spec` reports for the work-item — the same
 resolver Exit B's block calls, correct in both storage modes; never a hardcoded repo
-path. Hand it the approved set:
+path. Hand it the slug minted in step 1, which it reuses and never mints again, along with
+the approved set:
 **title, purpose, who-it's-for, the functional requirements (EARS + acceptance
 criteria), the significant-unhappy-path requirements, non-functional requirements,
 UI/UX outcome, definition of done, assumptions & dependencies, constraints,
-out-of-scope, and `size`.** That skill owns the on-disk artifact; you own the
+out-of-scope, the craft calls made for the owner's veto, and `size`.** That skill owns the on-disk artifact; you own the
 dialogue that feeds it. What it writes is a **draft** — `status: draft` until the owner approves it at step 8, and if
 the discovery parks before then, the draft stays exactly where this step put it (Exit C).
 
@@ -512,11 +597,11 @@ and do not press for a verdict in the moment.
 | "Let me note the tech approach" | The *how* is the build's. Keep the spec to the *what*. |
 | "Happy path is enough" | The significant unhappy paths are the anti-slop core. Run the coverage checklist. |
 | "I'll research to be thorough" | Research is consented — offer it, name the time/usage cost, let the owner choose. |
-| "The owner's sure, skip research" | Confidence isn't correctness. Offer a quick prior-art check on consequential calls. |
+| "The owner's sure, skip research" | Confidence isn't correctness. Offer a quick prior-art check on an unknown that blocks the requirements. |
 | "The checks came back clean, that's done" | The checks advise; the **owner** has the final say (step 8). |
 | "Owner approved the idea, start building" | The HARD GATE needs explicit approval of the *what*, then the written spec, before the build. |
-| "Restate every requirement so they can approve" | Step 5 is a compact decision brief, not a spec replay. The requirement-by-requirement review is the spec (step 8) — don't double-review. |
-| "They can infer the trade-offs from the options" | A consequential question carries its own why-it-matters, per-option pro/con, and a recommendation (step 3) — in plain language, before the ask. |
+| "Restate every requirement so they can approve" | Step 4 is a compact decision brief, not a spec replay. The requirement-by-requirement review is the spec (step 8) — don't double-review. |
+| "They can infer the trade-offs from the options" | A real choice carries its own why-it-matters, per-option consequences, and a recommendation (step 3) — in plain language, before the ask. |
 | "It's just a spike — I'll investigate and skip the gate" | There is no spike surface. "Spike" is the informal name of discovery's investigation phase; when it ends, an exit is still ahead. |
 | "The owner ruled on this already, so I'll run discovery anyway to be safe" | A recorded dated ruling is already the *what* — it needs no discovery. Decline the work; what it routes to is the advisor's call, not yours. |
 | "They haven't answered — I'll start the research and tell them after" | Spend never starts on silence. Wait, or park (Exit C). |
