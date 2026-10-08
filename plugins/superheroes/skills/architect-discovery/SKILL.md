@@ -40,7 +40,7 @@ gates cannot be self-approved — you may *record the owner's* explicit approval
 discovery legitimately ends** (see **The three exits**). Each closes by writing its own
 durable artifact, which is why **Exit B mints the work-item and places its record** and
 why **Exit C hands back with no approved spec**. Where a draft was already written before
-the park — step 7's unweighable draft is the usual case — **the draft stays on disk at the spec
+the park — a draft whose checks could not run in step 7 is the usual case — **the draft stays on disk at the spec
 path `resolve-write --doc spec` reports, with `status: draft`, and the park note carries that
 path, never a second copy**. The draft is neither discarded nor treated as an artifact anything may anchor to. What is never permitted on any exit is fabricating a spec, or approving one on
 the owner's behalf.
@@ -158,8 +158,8 @@ are not run — that exit's own artifact closes the work.
 3. **Requirements dialogue** (owner calls only, one at a time; EARS phrasing; run the coverage checklist)
 4. **Confirm the framing → owner approves the *what*** ← HARD GATE
 5. **Draw it before writing it** → journeys, then choices, then the build board for the owner's approval (or skip: small with nothing to draw)
-6. **Author the spec** via the `writing-specs` skill
-7. **Run the three spec checks** (fix craft findings before the owner spends time)
+6. **Author the spec** via the `writing-specs` skill, once the build board is approved, every statement tagged with its source
+7. **Run the three spec checks** (fix craft findings before the owner spends time), then the writing pass and its meaning check
 8. **Advisor vet, then owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
 
 ## The steps
@@ -387,8 +387,8 @@ owner saw it and could veto it.
 2. **Limits the owner would not enforce** — a number nobody would defend if it were hit.
 3. **Vacuous quality lines** — "it should be reliable", "the UI should be intuitive":
    nothing a build could be graded against.
-4. **Design-handoff transcription** — re-describing the design output in prose instead
-   of referencing it.
+4. **Board transcription** — re-describing the approved board in prose instead of
+   pointing at it.
 5. **Test obligations** — that something will be tested. Tests are the build's contract.
 6. **Non-load-bearing mirror-facts** — repo facts the build does not rely on being true.
 
@@ -484,7 +484,10 @@ shows every entry still marked `sent: no`.
 
 ### 6. Author the spec via `writing-specs`
 
-Once the owner has approved the requirements, invoke the **`writing-specs`** skill
+Write the spec only once the owner has approved the build board, or once the skip is recorded at
+the framing. Write it from the approved board and the owner's rulings.
+
+Invoke the **`writing-specs`** skill
 to emit the §3.1 frontmatter, fill the body template, and write
 the spec to the path `resolve-write --doc spec` reports for the work-item — the same
 resolver Exit B's block calls, correct in both storage modes; never a hardcoded repo
@@ -492,10 +495,19 @@ path. Hand it the slug minted in step 1, which it reuses and never mints again, 
 the approved set:
 **title, purpose, who-it's-for, the functional requirements (EARS + acceptance
 criteria), the significant-unhappy-path requirements, non-functional requirements,
-the approved build board's saved path (or the recorded skip), definition of done, assumptions & dependencies, constraints,
+the approved build board's saved path (or the recorded skip), the owner's rulings for this piece, definition of done, assumptions & dependencies, constraints,
 out-of-scope, the craft calls made for the owner's veto, and `size`.** That skill owns the on-disk artifact; you own the
 dialogue that feeds it. What it writes is a **draft** — `status: draft` until the owner approves it at step 8, and if
 the discovery parks before then, the draft stays exactly where this step put it (Exit C).
+
+**Every statement ends with its source tag**, plain text at the end of the statement, as
+`writing-specs` says. A tag never cites transcript line numbers.
+
+**One spec covers one piece the owner could approve and ship on its own.** When writing turns up a
+second such piece, stop and propose a split to the owner: what each piece holds, and which one to
+write first. The owner rules, and each piece gets its own spec. When the spec passes about 300 to
+400 lines, raise splitting with the owner. Length alone never stops the work: when the owner keeps
+one spec, write on.
 
 ### 7. Run the three spec checks
 
@@ -513,6 +525,40 @@ Fix the craft pile before the owner sees the spec. The owner's queue goes to the
 spec path `resolve-write --doc spec` reports, `status: draft`, and the park note marks it
 unapproved. The owner is told, in plain language, that no review ran. **Self-review is never the
 substitute** — step 6's self-review is the author's own pass and was never independent.
+
+**Then run the writing pass.** When the checks come back clean, or after round 4, and before the
+owner is asked, run one writing pass over the spec to `${CLAUDE_PLUGIN_ROOT}/rubric/prose-standard.md`.
+The pass changes wording only. It never adds, drops or moves a requirement, and every statement
+keeps its source tag. Keep a copy of the spec as it stood before the pass.
+
+**Then check that no meaning shifted.** When the pass changed nothing, no check runs, and the record
+says so. Otherwise dispatch the meaning check to the spec-reviewer seat the three checks use, in its
+own run directory, the way `spec-checks.md` dispatches a check. Count its result only when it is
+real, by that doc's rule. Its prompt carries the spec before the pass and the spec after it, each
+labelled, the diff between them, and this lens, copied verbatim:
+
+```text
+You are checking that a wording pass changed no meaning in a requirements spec. Two versions of the
+spec follow, labelled before and after, with the diff between them. For each statement the diff
+changes, report one finding. Use taxonomy meaning:kept, severity Nit, when the statement still says
+the same thing, with the same scope and the same source tag. Use taxonomy meaning:shifted, severity
+Important, saying what moved, when its meaning, its scope or its source tag changed. Report nothing
+about wording quality. file is the spec path and line is the line in the after version. Return
+{"findings": [...], "investigated": [...]}, never a bare list.
+```
+
+When the meaning check reports any shift, you may redo the pass once, leaving each shifted statement
+as it stood before the pass, and run the meaning check again on the whole result. A second shift,
+or a meaning check with no real result after one re-dispatch, discards the whole pass: the spec as
+it stood before the pass stands. A real result still has to cover every changed statement: before
+keeping the pass, reconcile the findings against the statements the diff changes. A changed
+statement with no finding, a statement with two findings, or a finding that matches no changed
+statement counts as no real result and takes the same path: one re-dispatch, then discard. No text
+reaches the owner that the meaning check did not clear.
+
+Record the pass in `checks-record.md`, under a "Writing pass" section: what the pass changed, in a
+sentence; each meaning check's run directory, result and findings; and whether the pass was kept or
+discarded.
 
 ### 8. Owner review & final approval (terminal gate)
 
@@ -594,6 +640,8 @@ and do not press for a verdict in the moment.
   work-item, the spec's path, and the path of its `checks-record.md` — exactly as Exits B and C
   report theirs. Do **not** start a build yourself — hand back to the owner, who routes the
   approved work-item to a build session. The spec's approval gate is the authoritative signal.
+  **Breaking the spec into issues, filing those issues and wiring the project board are the
+  advisor's, after approval.** Discovery does none of them.
 
 ## Rationalization table
 
@@ -625,3 +673,6 @@ and do not press for a verdict in the moment.
 | "This looks small, I'll run the light version of discovery" | There is no up-front ceremony choice. Probe each opinion-bearing dimension and stop when the spec's dispositions table (`## Coverage`) is satisfied — a small surface closes early on its own. |
 | "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Record `changes-requested`, run the checks again on the changed parts, then go back to the owner. There is no path from `changes-requested` to `set-gate … passed` without that (step 8). |
 | "We're parking — I'll paste the draft into the park note so nothing is lost" | The draft is already durable at the spec path `resolve-write --doc spec` reports. The note carries the **path** and the unapproved mark, never a second copy — one artifact per home (Exit C). |
+| "The spec is long — I'll stop writing until it's split" | Length alone never stops the work. Past about 300 to 400 lines, raise splitting with the owner; when they keep one spec, write on (step 6). |
+| "The writing pass only touched wording, so the meaning can't have moved" | Every pass that changed text gets the meaning check before the owner sees it. A shift the check does not clear discards the pass (step 7). |
+| "The spec is approved — I'll break it into issues and file them" | Breaking a spec into issues, filing them and wiring the board are the advisor's, after approval (step 8). |

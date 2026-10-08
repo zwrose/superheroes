@@ -322,7 +322,7 @@ _CLAUSE_ENTRIES = [
     (
         "architect-spec-amendments-exception",
         _ARCHITECT_SPEC_CHARTER,
-        "## Weight never changes the artifact class",
+        "## Size never changes the artifact class",
         "Exception — `## Amendments`",
         "literal",
     ),
@@ -382,13 +382,6 @@ _CLAUSE_ENTRIES = [
         _DISCOVERY_CHARTER,
         "#### The elicitation test",
         "**Vacuous quality lines**",
-        "literal",
-    ),
-    (
-        "discovery-fr19-exclude-design-handoff",
-        _DISCOVERY_CHARTER,
-        "#### The elicitation test",
-        "**Design-handoff transcription**",
         "literal",
     ),
     (
@@ -477,6 +470,28 @@ _CLAUSE_ENTRIES = [
         _OLD_COVERAGE_TABLE_HEADER,
         "banned_file",
     ),
+    # F. spec-writing doctrine: source tags, the board, splits, the writing pass
+    (
+        "template-how-to-read-section",
+        "templates/spec.md",
+        "## How to read this spec",
+        "",
+        "section_exists",
+    ),
+    (
+        "template-how-to-read-before-purpose",
+        "templates/spec.md",
+        "## How to read this spec||## Purpose",
+        "",
+        "section_order",
+    ),
+    (
+        "discovery-advisor-breakdown",
+        _DISCOVERY_CHARTER,
+        "### 8. Owner review & final approval (terminal gate)",
+        "Breaking the spec into issues, filing those issues and wiring the project board are the advisor's, after approval.",
+        "literal",
+    ),
 ]
 
 
@@ -486,9 +501,9 @@ _CLAUSE_IDS = frozenset({
     "architect-spec-spec-content-pointer",
     "banned-old-coverage-header",
     "banned-shared-contract",
+    "discovery-advisor-breakdown",
     "discovery-coverage-tables-match",
     "discovery-fr19-admission-rule",
-    "discovery-fr19-exclude-design-handoff",
     "discovery-fr19-exclude-limits",
     "discovery-fr19-exclude-mechanisms",
     "discovery-fr19-exclude-mirror-facts",
@@ -535,6 +550,8 @@ _CLAUSE_IDS = frozenset({
     "template-coverage-header",
     "template-coverage-initial-seed",
     "template-coverage-show-it-handback",
+    "template-how-to-read-before-purpose",
+    "template-how-to-read-section",
 })
 
 
@@ -989,6 +1006,59 @@ def test_clause_entries_are_well_formed():
             assert literal, f"{clause_id}: register_r4 entry needs a pinned literal"
         if kind == "banned_surfaces":
             assert literal, f"{clause_id}: banned_surfaces entry needs a banned string"
+
+
+# The three files the spec-writing doctrine lives in state their rules without a spec-review
+# weight call, without a pointer to the retired spec-review skill, and without project provenance
+# (ruling, requirement, register or issue numbers, or design-handoff and discovery-note references).
+_WRITING_DOCTRINE_SURFACES = (
+    _DISCOVERY_CHARTER,
+    _ARCHITECT_SPEC_CHARTER,
+    "templates/spec.md",
+)
+_WRITING_DOCTRINE_BANNED = (
+    ("retired-review-skill-pointer", r"review[-_]spec"),
+    ("review-weight-call", r"[Ww]eigh|\blight spec\b|\bfull spec\b|light-or-full"),
+    ("ruling-number", r"\brulings? [0-9]"),
+    ("requirement-or-register-number", r"\bU?FR-[0-9]{2,}|\bR[0-9]{1,2}\b"),
+    (
+        "handoff-reference",
+        r"Claude Design handoff|[Dd]esign-handoff|handoff (output|list)|HANDOFF|discovery-notes",
+    ),
+    ("issue-or-pr-number", r"#[0-9]{2,}"),
+)
+
+
+def _banned_pattern_hits(pattern, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    hits = []
+    for rel in _WRITING_DOCTRINE_SURFACES:
+        for line_no, line in enumerate(read_text(rel).splitlines(), start=1):
+            match = re.search(pattern, line)
+            if match:
+                hits.append(f"{rel}:{line_no}: {match.group(0)!r}")
+    return hits
+
+
+@pytest.mark.parametrize(
+    "name,pattern",
+    _WRITING_DOCTRINE_BANNED,
+    ids=[name for name, _ in _WRITING_DOCTRINE_BANNED],
+)
+def test_writing_doctrine_surfaces_carry_no_banned_reference(name, pattern):
+    # axis: a banned weight-call, retired-pointer or provenance pattern on any line of the three
+    # spec-writing surfaces
+    hits = _banned_pattern_hits(pattern)
+    assert not hits, f"{name} found: {hits}"
+
+
+def test_negative_writing_doctrine_banned_reference_detected():
+    def read_text(rel):
+        return "clean line\nsee review-spec for more\n" if rel == _DISCOVERY_CHARTER else ""
+
+    hits = _banned_pattern_hits(r"review[-_]spec", read_text)
+    assert hits == [f"{_DISCOVERY_CHARTER}:2: 'review-spec'"]
 
 
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------

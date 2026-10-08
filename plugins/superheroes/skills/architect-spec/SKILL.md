@@ -24,9 +24,10 @@ Spec content rules (consolidation, annexes, rulings, Amendments shape):
 The approved: **title**, **purpose**, **who it's for**, **functional requirements**
 (EARS sentences, each with ≥1 acceptance criterion), **significant unhappy-path
 behaviors** (If/Then EARS, from the coverage checklist), **non-functional
-requirements** (outcomes + fit-criteria), **UI/UX outcome** (the Claude Design
-handoff, if user-facing), **definition of done / success**, **assumptions &
-dependencies**, **constraints**, **out-of-scope**, and **`size`**.
+requirements** (outcomes + fit-criteria), **the approved build board's saved path** (the
+work-item's `board/` folder) **or the recorded skip**, **the owner's rulings for this piece**,
+**definition of done / success**, **assumptions & dependencies**, **constraints**,
+**out-of-scope**, **the craft calls made for the owner's veto**, and **`size`**.
 
 ## Flow
 
@@ -67,6 +68,13 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`: replace the
    `{{frontmatter}}` line with the emitted block, set the `# {{Title}}`, and fill
    every section from the approved inputs. Honor the template's contract:
+   - **Every statement ends with its source tag**, plain text at the end of the statement. The
+     template's "How to read this spec" section is the one home for the kinds of source and how a
+     statement with two sources reads; fill it with only the sources this spec uses. A tag never
+     cites transcript line numbers. Tags are for the owner and for the source check, an agent
+     reading plain files; no script or validator reads them.
+   - **Write from the approved board and the rulings.** Where the spec and the approved board
+     disagree, follow discovery's step 5.
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1
      acceptance criterion (Given-When-Then for flows, rule bullets for constraints).
    - **Significant unhappy paths as If/Then EARS**, driven by the coverage checklist;
@@ -90,7 +98,9 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      Honor the **noise budget**: only load-bearing mirror-facts (ones the build relies on
      being true) get citations; incidental mentions don't. Citations stay rare — a
      citation-dense spec is usually leaking the build's *how* (CONVENTIONS §3.2).
-   - **UI/UX references the actual Claude Design handoff output** (not a rewrite).
+   - **UI/UX points at the approved build board's saved path**, the `board/` folder beside the
+     spec, with its link, and never re-describes a screen in prose. When the board was skipped,
+     the section says so in one sentence, with its source tag.
    - Plain language throughout, **no technical *how***. Delete sections that
      genuinely don't apply (UI/UX for non-user-facing work; Glossary when there are
      no terms). **Open questions** is resolved or deferred before approval, then left empty
@@ -114,6 +124,9 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - **Provenance:** does every load-bearing mirror-fact carry a `[cite: …]` citation whose
      path (and anchor, if any) resolves to a real repo source? Incidental facts and new
      definitions do NOT carry one — a citation-dense spec is leaking the build's *how*.
+   - **Source tags:** does every statement end with a plain-text source tag that names a source
+     listed in "How to read this spec", and does no tag cite a transcript line number? Does the
+     spec agree with the approved board? Where it does not, follow discovery's step 5.
    - **No tech leaked:** any implementation detail (libraries, schemas, APIs) that
      belongs to the build's *how*? Move it out — the spec is the *what*. (A `[cite: …]`
      provenance marker is a sanctioned spec construct (CONVENTIONS §3.2), not leaked
@@ -134,29 +147,29 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    and the owner's final approval; this skill stops at "spec written and
    self-reviewed."
 
-## Weight never changes the artifact class
+## Size never changes the artifact class
 
-A light spec and a full spec are **the same artifact class**. Four equivalences hold, always:
+A small spec and a large spec are **the same artifact class**. Four equivalences hold, always:
 
 1. **Same template.** Both are filled from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`.
-   **There is no light template.**
+   **There is no short-form template.**
 2. **Same home.** Both land at the `spec` definition-doc path for their work-item, resolved the
-   same way (`definition_doc.py resolve-write --doc spec`). **There is no light home.**
+   same way (`definition_doc.py resolve-write --doc spec`). **There is no separate home for small
+   specs.**
 3. **Same anchor power.** An issue's Anchor slot may cite a section of either, and the citation
-   resolves by the same test. **A light spec is not a weaker citation.** Both halves of that test
+   resolves by the same test. **A small spec is not a weaker citation.** Both halves of that test
    are mechanical: the **dated approval** an anchor resolves against is written by the approval
-   path itself ([#1062](https://github.com/zwrose/superheroes/issues/1062), shipped in PR #1069 —
-   `set-gate` records the date), so the equivalence holds mechanically end to end.
+   path itself (`set-gate` records the date), so the equivalence holds mechanically end to end.
 4. **Same owner approval authority.** Both are approved by the owner, recorded through the same
-   `set-gate` call. **There is no lighter approval.**
+   `set-gate` call. **There is no lesser approval.**
 
 Every spec gets the same three spec checks whatever its size, and a spec's size changes only which
 sections it carries. The advisor may size its own vet of it. None of this changes the artifact.
 
-**Empty sections are omitted, never filled.** A light spec is shorter because it **deletes** the
+**Empty sections are omitted, never filled.** A small spec is shorter because it **deletes** the
 sections that genuinely do not apply — not because it keeps a heading and writes "N/A", "None",
 "TBD", "—", or a one-line restatement of the heading underneath it. **A heading with nothing
-real under it is a defect at either weight**, and deleting it is the fix.
+real under it is a defect at any size**, and deleting it is the fix.
 
 **Exception — `## Amendments`:** This section is always kept. Its zero state — the explicit
 no-amendments line — *is* something real, not a placeholder. Do not delete it under the
@@ -172,8 +185,10 @@ empty-sections rule above.
 | "Plain prose is fine for requirements" | Functional requirements are EARS + acceptance criteria. That's the verifiable contract. |
 | "A little tech detail clarifies it" | Tech is the build's *how*. Keep the spec to the *what*. |
 | "Owner approved the idea, I'll author straight off" | Author only from the *approved requirements*. If they weren't approved, back to `discovery`. |
-| "I'll just assert the repo does X, everyone knows it" | A load-bearing mirror-fact needs a resolving `[cite: …]` to its repo source. A fabricated repo fact is the #205 class — cite it or don't assert it. |
-| "It's a light spec, I'll use a lighter format" | A spec's size changes only which sections it carries, never the artifact class: same template, same home, same anchor power, same owner approval authority. |
-| "I'll keep the heading and write N/A under it" | Empty sections are omitted, never filled. A heading with nothing real under it is a defect at either weight — delete it. |
+| "I'll just assert the repo does X, everyone knows it" | A load-bearing mirror-fact needs a resolving `[cite: …]` to its repo source. A fabricated repo fact is a known failure class — cite it or don't assert it. |
+| "It's a small spec, I'll use a shorter format" | A spec's size changes only which sections it carries, never the artifact class: same template, same home, same anchor power, same owner approval authority. |
+| "I'll keep the heading and write N/A under it" | Empty sections are omitted, never filled. A heading with nothing real under it is a defect at any size — delete it. |
 | "The Amendments section is empty, I'll delete it like any empty section" | `## Amendments` is always rendered; its zero state is the explicit no-amendments line — that is real content, not an empty section. |
 | "This annex just spells out what the spec meant" | An annex elaborates decisions the core already makes; a new opinion amends the core. Annex smuggling is a named spec-check finding class. |
+| "The chat said it more clearly than the board, so I'll write it the chat's way" | Write from the approved board and the rulings. Where the spec and the board disagree, follow discovery's step 5. |
+| "I'll cite the transcript line so the source is exact" | A tag never cites transcript line numbers. Name the board, the Canon entry, the framing, or craft. |
