@@ -74,7 +74,8 @@ A changed picture is published under a new path (a new name), so changing a pict
 sheet, never by URL, because a URL picture can change without the sheet changing.
 
 `sheet-words.json` holds the owner-facing words a final sheet shares with the chat prose
-(`lib/sheet_prose.py`): the page fetches it before drawing a final sheet, and the prose renderer reads
+(`lib/sheet_prose.py`), and the answers each card offers (their words, and which a card with options and
+which a card without options gets): the page fetches it before drawing a sheet, and the prose renderer reads
 it from the same folder, so the two cannot drift apart. Change those words there and nowhere else.
 
 A published sheet is private to the owner. The owner may share it from the page's Share menu.

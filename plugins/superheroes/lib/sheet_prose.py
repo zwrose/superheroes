@@ -31,6 +31,7 @@ TRACES_NO_BOARD = WORDS["tracesNoBoard"]
 BOARD_SAVED = WORDS["boardSaved"]
 BOARD_NOT_SAVED = WORDS["boardNotSaved"]
 NEXT = WORDS["next"]
+ANSWERS = WORDS["answers"]
 
 TYPE_NAMES = ("object", "array", "string", "boolean", "null", "integer", "number")
 
@@ -340,12 +341,11 @@ def _render_card(number, card):
             ids = [option["id"] for option in options]
             line += " (option %s)" % _letter(ids.index(recommendation["optionId"]))
         lines.append(line)
-    if not options:
-        answers = "Aligned or Discuss"
-    elif len(options) == 1:
-        answers = "a or Something else"
+    if options:
+        offered = [_letter(position) for position in range(len(options))] + [ANSWERS["labels"][value] for value in ANSWERS["withOptions"]]
     else:
-        answers = ", ".join(_letter(position) for position in range(len(options))) + ", or Something else"
+        offered = [ANSWERS["labels"][value] for value in ANSWERS["withoutOptions"]]
+    answers = " or ".join(offered) if len(offered) <= 2 else ", ".join(offered[:-1]) + ", or " + offered[-1]
     lines.append("   - Answer: %s" % answers)
     return lines
 

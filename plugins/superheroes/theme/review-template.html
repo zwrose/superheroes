@@ -475,20 +475,30 @@
     const historyBox = document.getElementById("sheet-history");
     const finalHost = document.getElementById("sheet-final");
 
-    // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
-    // has no words here leaves the answer controls off. The option value takes its words from the card.
-    const ANSWER_LABELS = { aligned: "Aligned", discuss: "Discuss", "something-else": "Something else" };
-    // The answers a card with options offers after its option buttons, and the answers a card without options
-    // offers. offeredChoices() is the one place that decides which a card gets.
-    const WITH_OPTIONS = ["something-else"];
-    const WITHOUT_OPTIONS = ["aligned", "discuss"];
+    // The answers a card offers live in sheet-words.json, which the chat prose (lib/sheet_prose.py) reads too:
+    // { labels, withOptions, withoutOptions }. labels gives the words on the answer buttons by the value a stored
+    // answer takes (the option value takes its words from the card); withOptions is what a card with options
+    // offers after its option buttons, withoutOptions what a card without options offers. A value the schema lists
+    // that has no words there leaves the answer controls off. Null until that file was read.
+    let answerWords = null;
 
     // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
     // kinds lists the values in the order the schema gives them, and carriesOption marks the one the schema
     // ties to a string optionId. Null until the schema was read, and left null when it is not in that shape.
     let answerShape = null;
 
+    // True when the words file gives the answers the way offeredChoices() reads them: labels by value, and two
+    // lists of values that each have words.
+    function fitsAnswerWords(words) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      if (!isObject(words) || !isObject(words.labels)) return false;
+      return ["withOptions", "withoutOptions"].every(function (name) {
+        return Array.isArray(words[name]) && words[name].every(function (value) { return typeof words.labels[value] === "string"; });
+      });
+    }
+
     function readAnswerShape(schema) {
+      if (!fitsAnswerWords(answerWords)) return null;
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
       const rule = isObject(schema.$defs) ? schema.$defs.answer : undefined;
       if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.answer)) return null;
@@ -507,8 +517,8 @@
       });
       if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
-      if (kinds.some(function (kind) { return !kind.carriesOption && typeof ANSWER_LABELS[kind.value] !== "string"; })) return null;
-      if (WITH_OPTIONS.concat(WITHOUT_OPTIONS).some(function (value) { return !values.includes(value); })) return null;
+      if (kinds.some(function (kind) { return !kind.carriesOption && typeof answerWords.labels[kind.value] !== "string"; })) return null;
+      if (answerWords.withOptions.concat(answerWords.withoutOptions).some(function (value) { return !values.includes(value); })) return null;
       return { root: schema, rule: rule, kinds: kinds };
     }
 
@@ -1198,21 +1208,21 @@
       article.appendChild(saveLine);
     }
 
-    // The answers a card offers, in button order: with options, one per option and then the WITH_OPTIONS
-    // answers; without, the WITHOUT_OPTIONS answers. Empty while the schema's answer shape is unread. Every
+    // The answers a card offers, in button order: with options, one per option and then the withOptions
+    // answers; without, the withoutOptions answers. Empty while the schema's answer shape is unread. Every
     // answer button and every restore is decided from this and from nothing else.
     function offeredChoices(card) {
       if (answerShape === null) return [];
       const choices = [];
-      const plain = function (value) { return { label: ANSWER_LABELS[value], answer: value, optionId: null }; };
+      const plain = function (value) { return { label: answerWords.labels[value], answer: value, optionId: null }; };
       if (card.options.length > 0) {
         const carrying = answerShape.kinds.find(function (kind) { return kind.carriesOption; });
         card.options.forEach(function (option) {
           choices.push({ label: option.label, answer: carrying.value, optionId: option.id });
         });
-        WITH_OPTIONS.forEach(function (value) { choices.push(plain(value)); });
+        answerWords.withOptions.forEach(function (value) { choices.push(plain(value)); });
       } else {
-        WITHOUT_OPTIONS.forEach(function (value) { choices.push(plain(value)); });
+        answerWords.withoutOptions.forEach(function (value) { choices.push(plain(value)); });
       }
       return choices;
     }
@@ -1482,7 +1492,8 @@
     }
 
     // The words a final sheet shares with the chat prose (lib/sheet_prose.py) live in one file, sheet-words.json,
-    // which both read; the page fetches it before drawing a final sheet. Nothing here retypes them.
+    // which both read; the page fetches it before drawing any sheet (the answers every card offers are in it
+    // too). Nothing here retypes them.
     let finalWords = null;
     function plural(count, noun) {
       return count + " " + noun + (count === 1 ? "" : "s");
@@ -1767,14 +1778,18 @@
         showErrors(problems);
         return;
       }
-      if (sheet.kind === "final") {
-        try {
-          finalWords = await fetchJson("sheet-words.json", "The sheet's wording file");
-        } catch (problems) {
+      let words = null;
+      try {
+        words = await fetchJson("sheet-words.json", "The sheet's wording file");
+      } catch (problems) {
+        // A final sheet can't be drawn without its words; any other sheet is drawn with its answer controls off.
+        if (sheet.kind === "final") {
           showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
           return;
         }
       }
+      if (sheet.kind === "final") finalWords = words;
+      answerWords = words !== null && typeof words === "object" ? words.answers : null;
       sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
