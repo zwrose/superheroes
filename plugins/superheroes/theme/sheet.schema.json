@@ -156,14 +156,14 @@
       "pattern": "^[a-z0-9][a-z0-9-]*$"
     },
     "answer": {
-      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it.",
+      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it. An answer the card does not offer now (aligned or discuss on a card with options, or option or something-else on a card without) counts as unanswered.",
       "type": "object",
       "additionalProperties": false,
       "required": ["answer", "optionId", "note"],
       "properties": {
         "answer": {
-          "description": "What the owner tapped: aligned, discuss, option for a pick of one of the card's options, or null when nothing is picked (none yet, or a pick cleared by tapping it again).",
-          "enum": ["aligned", "discuss", "option", null]
+          "description": "What the owner tapped. On a card with options: option for a pick of one of the card's options, or something-else for Something else, which leaves the call open for chat. On a card without options: aligned or discuss. Null when nothing is picked (none yet, or a pick cleared by tapping it again).",
+          "enum": ["aligned", "discuss", "option", "something-else", null]
         },
         "optionId": {
           "description": "The id of the picked option, or null. It is a string exactly when the answer is option.",
@@ -188,7 +188,7 @@
         {
           "description": "An answer other than option must not name an option.",
           "if": {
-            "properties": {"answer": {"enum": ["aligned", "discuss", null]}},
+            "properties": {"answer": {"enum": ["aligned", "discuss", "something-else", null]}},
             "required": ["answer"]
           },
           "then": {
@@ -219,7 +219,7 @@
       }
     },
     "card": {
-      "description": "One call the owner has to make, with the question, what is true now, and the options and recommendation if there are any.",
+      "description": "One call the owner has to make, with the question, the context the sending session writes, and the options and recommendation if there are any.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "callKind", "warning", "question", "context", "images", "options"],
@@ -243,27 +243,9 @@
           "minLength": 1
         },
         "context": {
-          "description": "What the owner needs to know to answer: what is true now, why it needs them, and the exact underlying text if there is any.",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["now", "whyOwner", "exactText"],
-          "properties": {
-            "now": {
-              "description": "What is true now.",
-              "type": "string",
-              "minLength": 1
-            },
-            "whyOwner": {
-              "description": "Why this call needs the owner.",
-              "type": "string",
-              "minLength": 1
-            },
-            "exactText": {
-              "description": "The exact text the call is about, or null when the call has no underlying text; the key itself is always present.",
-              "type": ["string", "null"],
-              "minLength": 1
-            }
-          }
+          "description": "What the owner needs to know to answer, in sections the sending session titles and writes in its own words: paragraphs, bulleted lists, and a quote of the exact text the call is about where there is one. No heading is fixed and no section is required.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/section"}
         },
         "images": {
           "description": "Pictures that help the owner answer, which may be empty.",
@@ -277,6 +259,59 @@
         },
         "recommendation": {"$ref": "#/$defs/recommendation"}
       }
+    },
+    "section": {
+      "description": "One part of a card's context: a heading in the sending session's words, then its paragraphs, bulleted lists and quotes, in reading order.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "blocks"],
+      "properties": {
+        "title": {
+          "description": "The section's heading, in the sending session's words.",
+          "type": "string",
+          "minLength": 1
+        },
+        "blocks": {
+          "description": "The section's content, in reading order.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/block"}
+        }
+      }
+    },
+    "block": {
+      "description": "One piece of a section: a paragraph, a bulleted list, or a quote of exact text. Each block holds exactly one of the three.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["paragraph"],
+          "properties": {
+            "paragraph": {"description": "A paragraph of plain text.", "type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bullets"],
+          "properties": {
+            "bullets": {
+              "description": "A bulleted list, one string per item.",
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["quote"],
+          "properties": {
+            "quote": {"description": "The exact text the call is about, quoted as written.", "type": "string", "minLength": 1}
+          }
+        }
+      ]
     },
     "image": {
       "description": "One picture shown on a card.",
