@@ -53,7 +53,7 @@ def test_usage_doc_states_each_answer_rule_once():
     doc = " ".join(_doc().split())
     sentinels = {
         "read together": "never acts on a single tap",
-        "disagreeing note": "is read as Discuss",
+        "disagreeing note": "A note that disagrees with its answer leaves the call open, and the session asks the owner about it.",
         "chat-prose fallback": "numbered chat prose",
     }
     for rule, phrase in sentinels.items():
@@ -155,11 +155,23 @@ def test_usage_doc_states_the_reading_rule_for_a_final_sheet():
         "the session asks rather than assuming",
         "A saved Approve never counts as approval on its own; the owner's word in the chat does.",
         "never acts on a single tap",
-        "is read as Discuss",
+        "A note that disagrees with its answer leaves the call open, and the session asks the owner about it.",
     ):
         assert phrase in section, "the reading rule doesn't say %r" % phrase
     for retired in ("Send verdict", "/sends", "draft"):
         assert retired not in section, "the reading rule still names %r" % retired
+
+
+# Bites on: the reading rule losing the disagreeing-note sentence, Something else as open for chat, an answer the card no longer offers reading as unanswered with the session asking, or the sending session owning the context's shape.
+def test_usage_doc_reading_rule():
+    doc = _squeezed(_doc())
+    assert "A note that disagrees with its answer leaves the call open, and the session asks the owner about it." in doc
+    answers = _squeezed(_section(_doc(), "How answers come back"))
+    assert "Discuss and Something else leave the call open for chat, and the session asks." in answers
+    assert "An answer the card does not offer now" in answers and "is unanswered, and the session asks." in answers
+    assert "The page shows a no-longer-offered answer as unanswered and keeps its note." in answers
+    data = _squeezed(_section(_doc(), "The data file"))
+    assert "The sending session owns the shape of a card's context." in data
 
 
 # Bites on: the doc no longer saying that tapping the picked answer or the chosen verdict again clears it (saved as null, note kept), or no longer reading a cleared answer or a cleared verdict as unanswered.

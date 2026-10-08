@@ -27,6 +27,12 @@ doc. There are three kinds of sheet:
 Each card's `id` must stay the same call across republishes, because answers are keyed by it.
 Change the wording of a card freely; never reuse an id for a different call.
 
+The sending session owns the shape of a card's context. It writes sections, titles each in its own
+words, and fills them with paragraphs and bulleted lists, the way it would explain a call in chat:
+"what you're accepting", what is true now, why it needs the owner, whatever the call needs. Where the
+call is about exact text, it quotes it as a `quote` block. The template fixes no heading and requires
+no section, so a card never shows an empty heading or an empty quote.
+
 The data file is the sheet's saved source. Keep it with the work it belongs to. The page checks
 the data file against `sheet.schema.json` when it loads, so a file the schema refuses is never drawn. The page also refuses a schema that uses a kind of rule its reader doesn't check, so a change to the sheet's shape that needs a new kind of rule must also teach the page's reader, or the page refuses every sheet.
 
@@ -78,10 +84,11 @@ Keep the returned link with the data file.
 
 ## The answers
 
-Each card offers Aligned, Discuss and, when it has options, one button per option, labelled with
-the option's own label. Aligned agrees with the card's recommendation, or with the statement when
-there is no recommendation. A pick chooses that option. Discuss leaves the call open for chat. No
-review adds its own answer buttons.
+A card with options offers one button per option, labelled with the option's own label, and
+**Something else**, and nothing more. A card without options offers **Aligned** and **Discuss**. A
+pick chooses that option. Something else leaves the call open for chat, and the note is the place to
+say what instead. Aligned agrees with the card's recommendation, or with the statement when there is
+no recommendation. Discuss leaves the call open for chat. No review adds its own answer buttons.
 
 A card's `warning` follows the rule in `sheet.schema.json` (`$defs/card/properties/warning`). It
 draws the red badge. Every other card draws a plain badge naming its kind
@@ -89,17 +96,19 @@ of call.
 
 ## How a sheet is laid out
 
-A yellow app bar sits at the top with the review's name. Once the saved answers are read, it also
-says "A of N answered", and how many of those are marked to discuss. Until they are read, it says
+A yellow app bar sits at the top with the review's name, and scrolls away with the page. Once the
+saved answers are read, it also says "A of N answered", and how many of those are open for chat
+(Discuss or Something else). Until they are read, it says
 "N items · answers not loaded" instead, so a sheet never claims a count it hasn't checked.
 
 One item is open at a time, with Previous and Next to move between them. The same Previous and Next
 also sit below the open card, so the owner doesn't have to scroll back up after reading it. Below it,
-the list of items shows each one's state: Aligned, Discuss, Picked or Open. An item whose save didn't
+the list of items shows each one's state: Aligned, Discuss, Picked, Something else or Open. An item whose save didn't
 land carries a red Not saved badge.
 
-On a phone, a remainder sheet folds the items that are answered into one row, with their Aligned,
-Discuss and Picked counts. An answer whose save failed or stalled never folds, so it stays in the list where it
+On a phone, a remainder sheet folds the items that are answered into one row, with how many of them
+are settled (Aligned, or an option picked) and how many are open for chat (Discuss or Something
+else). An answer whose save failed or stalled never folds, so it stays in the list where it
 can be seen and retried. On a desktop, every item is listed beside the open card. The folded
 "Answered" row, and a final sheet's "Declined findings", show ▶ when closed and ▼ when open.
 
@@ -174,7 +183,17 @@ cleared pick), a final sheet with no verdict document, or a verdict of null (a c
 unanswered: the session asks rather than assuming. A saved Approve never counts as approval on its
 own; the owner's word in the chat does.
 
-A card whose note disagrees with its answer is read as Discuss: ask the owner about it.
+The stored `answer` is `option` or `something-else` on a card with options, and `aligned` or
+`discuss` on a card without.
+
+The session reads each stored answer against the card as it is published now:
+
+- An answer the card does not offer now (an Aligned or Discuss saved before the card gained options,
+  or an option the card no longer has) is unanswered, and the session asks.
+- Discuss and Something else leave the call open for chat, and the session asks.
+- The page shows a no-longer-offered answer as unanswered and keeps its note.
+
+A note that disagrees with its answer leaves the call open, and the session asks the owner about it.
 
 Another session can take a sheet over by reading its data file and its store.
 
@@ -182,7 +201,8 @@ Another session can take a sheet over by reading its data file and its store.
 
 Republish to the same link with the changed `sheet.json`, and with the same template and
 stylesheet. Never fork a second copy of the page: the owner's link must keep pointing at the
-current sheet.
+current sheet. Answers are keyed by card id, so a republished sheet keeps the answers to its
+unchanged cards.
 
 ## When the page shows an error
 

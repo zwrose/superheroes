@@ -6,7 +6,6 @@
   body { background: var(--sh-paper); margin: 0; }
   .sh-theme { padding-block: 16px 40px; padding-inline: 16px; }
   .sheet-page { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 720px; overflow-wrap: anywhere; }
-  .sheet-page .sh-appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; }
   .sheet-page .sh-appbar { flex-wrap: wrap; }
   .sheet-page main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
   .sheet-layout { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
@@ -24,7 +23,7 @@
   .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
   .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
   .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
-  .sheet-page :is(h2, p, ul, blockquote) { margin: 0; }
+  .sheet-page :is(h2, h3, p, ul, blockquote) { margin: 0; }
   .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
   .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
   .sheet-page .sh-card > .sh-label { margin-top: 16px; }
@@ -478,7 +477,11 @@
 
     // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
     // has no words here leaves the answer controls off. The option value takes its words from the card.
-    const ANSWER_LABELS = { aligned: "Aligned", discuss: "Discuss" };
+    const ANSWER_LABELS = { aligned: "Aligned", discuss: "Discuss", "something-else": "Something else" };
+    // The answers a card with options offers after its option buttons, and the answers a card without options
+    // offers. offeredChoices() is the one place that decides which a card gets.
+    const WITH_OPTIONS = ["something-else"];
+    const WITHOUT_OPTIONS = ["aligned", "discuss"];
 
     // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
     // kinds lists the values in the order the schema gives them, and carriesOption marks the one the schema
@@ -505,6 +508,7 @@
       if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
       if (kinds.some(function (kind) { return !kind.carriesOption && typeof ANSWER_LABELS[kind.value] !== "string"; })) return null;
+      if (WITH_OPTIONS.concat(WITHOUT_OPTIONS).some(function (value) { return !values.includes(value); })) return null;
       return { root: schema, rule: rule, kinds: kinds };
     }
 
@@ -1194,20 +1198,28 @@
       article.appendChild(saveLine);
     }
 
-    // A card's answers: the schema's answer kinds, one button per option for the kind tied to an option, and a
-    // document written whole at answers/<card id>.
-    function addAnswerParts(card, article) {
+    // The answers a card offers, in button order: with options, one per option and then the WITH_OPTIONS
+    // answers; without, the WITHOUT_OPTIONS answers. Empty while the schema's answer shape is unread. Every
+    // answer button and every restore is decided from this and from nothing else.
+    function offeredChoices(card) {
+      if (answerShape === null) return [];
       const choices = [];
-      (answerShape === null ? [] : answerShape.kinds).forEach(function (kind) {
-        if (kind.carriesOption) {
-          card.options.forEach(function (option) {
-            choices.push({ label: option.label, answer: kind.value, optionId: option.id });
-          });
-        } else {
-          choices.push({ label: ANSWER_LABELS[kind.value], answer: kind.value, optionId: null });
-        }
-      });
-      const optionIds = new Set(card.options.map(function (option) { return option.id; }));
+      const plain = function (value) { return { label: ANSWER_LABELS[value], answer: value, optionId: null }; };
+      if (card.options.length > 0) {
+        const carrying = answerShape.kinds.find(function (kind) { return kind.carriesOption; });
+        card.options.forEach(function (option) {
+          choices.push({ label: option.label, answer: carrying.value, optionId: option.id });
+        });
+        WITH_OPTIONS.forEach(function (value) { choices.push(plain(value)); });
+      } else {
+        WITHOUT_OPTIONS.forEach(function (value) { choices.push(plain(value)); });
+      }
+      return choices;
+    }
+
+    // A card's answers: the choices it offers, and a document written whole at answers/<card id>.
+    function addAnswerParts(card, article) {
+      const choices = offeredChoices(card);
       addSaver({
         choices: choices,
         rowLabel: "Your answer",
@@ -1215,18 +1227,15 @@
         path: "answers/" + card.id,
         live: canEdit,
         document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
-        // A stored document restores a pick only when it fits the schema's answer rule and, for an option
-        // pick, names an option the card offers. A document that does not fit restores only its note, and
-        // only when that is text.
+        // A stored document restores a pick only when it fits the schema's answer rule and the card offers
+        // that answer now. A document that does not fit, or names an answer the card no longer offers,
+        // restores only its note, and only when that is text.
         state: function (data) {
           const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
-          const kind = answerShape !== null && fitsAnswerRule(data)
-            ? answerShape.kinds.find(function (entry) { return entry.value === data.answer; })
-            : undefined;
-          if (kind && !kind.carriesOption) {
-            state.answer = kind.value;
-          } else if (kind && optionIds.has(data.optionId)) {
-            state.answer = kind.value;
+          if (answerShape !== null && fitsAnswerRule(data) && offeredChoices(card).some(function (choice) {
+            return choice.answer === data.answer && choice.optionId === data.optionId;
+          })) {
+            state.answer = data.answer;
             state.optionId = data.optionId;
           }
           return state;
@@ -1267,14 +1276,20 @@
       article.id = "card-" + card.id;
       article.appendChild(textElement("span", card.warning ? "sh-badge sh-badge--warning" : "sh-badge", card.callKind));
       article.appendChild(textElement("h2", "", card.question));
-      article.appendChild(textElement("p", "sh-label", "What's true now"));
-      article.appendChild(textElement("p", "", card.context.now));
-      article.appendChild(textElement("p", "sh-label", "Why it needs you"));
-      article.appendChild(textElement("p", "", card.context.whyOwner));
-      if (card.context.exactText !== null) {
-        article.appendChild(textElement("p", "sh-label", "The exact text"));
-        article.appendChild(textElement("blockquote", "", card.context.exactText));
-      }
+      card.context.forEach(function (section) {
+        article.appendChild(textElement("h3", "sh-label", section.title));
+        section.blocks.forEach(function (block) {
+          if (typeof block.paragraph === "string") {
+            article.appendChild(textElement("p", "", block.paragraph));
+          } else if (Array.isArray(block.bullets)) {
+            const list = document.createElement("ul");
+            block.bullets.forEach(function (item) { list.appendChild(textElement("li", "", item)); });
+            article.appendChild(list);
+          } else if (typeof block.quote === "string") {
+            article.appendChild(textElement("blockquote", "", block.quote));
+          }
+        });
+      });
       if (card.images.length > 0) {
         article.appendChild(buildImages(card.images));
       }
@@ -1297,6 +1312,7 @@
       aligned: ["sh-pill sh-pill--aligned", "Aligned"],
       discuss: ["sh-pill sh-pill--discuss", "Discuss"],
       picked: ["sh-pill sh-pill--aligned", "Picked"],
+      "something-else": ["sh-pill sh-pill--discuss", "Something else"],
       open: ["sh-pill sh-pill--open", "Open"],
     };
     // One entry per card, in card order: { id, question, article, row }.
@@ -1384,7 +1400,12 @@
     function pillOf(state) {
       if (state.answer === null) return PICK_PILLS.open;
       if (state.optionId !== null) return PICK_PILLS.picked;
-      return PICK_PILLS[state.answer] || PICK_PILLS.aligned;
+      return PICK_PILLS[state.answer] || PICK_PILLS.open;
+    }
+
+    // Discuss and Something else leave the call open for chat; Aligned and a picked option settle it.
+    function openForChat(state) {
+      return state.answer === "discuss" || state.answer === "something-else";
     }
 
     function pillElement(pill) {
@@ -1396,13 +1417,13 @@
       const states = items.map(function (item) { return controllers.get(item.id).state(); });
       const notSavedKind = function (state) { return state.save === "failed" || state.save === "stalled"; };
       const answered = states.filter(function (state) { return state.answer !== null; });
-      const discussing = answered.filter(function (state) { return state.answer === "discuss"; });
+      const chatting = answered.filter(openForChat);
 
       // A final sheet may have no cards: there is then nothing to count, step through or list.
       countHost.textContent = total === 0
         ? "Nothing left to answer"
         : ready
-          ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
+          ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
           : total + (total === 1 ? " item" : " items") + " · answers not loaded";
       countHost.hidden = false;
 
@@ -1424,16 +1445,13 @@
       });
 
       const foldedStates = states.filter(function (state, index) { return folded[index]; });
-      const foldedWith = function (answer) {
-        return foldedStates.filter(function (state) { return state.answer === answer && state.optionId === null; }).length;
-      };
-      const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
+      const foldedChatting = foldedStates.filter(openForChat).length;
+      const foldedSettled = foldedStates.filter(function (state) { return state.answer !== null && !openForChat(state); }).length;
       const notSaved = states.filter(function (state, index) { return state.answer !== null && index !== openIndex && notSavedKind(state); }).length;
       const foldChips = [
-        textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
-        textElement("span", PICK_PILLS.discuss[0], foldedWith("discuss") + " Discuss"),
+        textElement("span", PICK_PILLS.aligned[0], foldedSettled + " settled"),
+        textElement("span", PICK_PILLS.discuss[0], foldedChatting + " open for chat"),
       ];
-      if (foldedPicks > 0) foldChips.push(textElement("span", PICK_PILLS.picked[0], foldedPicks + " Picked"));
       if (notSaved > 0) foldChips.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
       // The chips are one block that always starts its own line under the label.
       const foldChipsLine = document.createElement("span");

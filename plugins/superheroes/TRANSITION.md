@@ -56,6 +56,14 @@ belongs to and lists every change with its replacement.
 - An owner ruling the advisor receives goes to Canon on a pull request it has open; with none open, it is held in a comment marked `<!-- superheroes:canon-held -->` on the project's standing proposals collector until the next pull request the advisor opens.
 - Owner stamp for this change: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
 
+### Review sheets: answers match the card, the context is the sender's, and discovery sends sheets
+
+- A sheet data file's card `context` is now a list of sections, each `{"title": ..., "blocks": [...]}`, where a block is exactly one of `{"paragraph": ...}`, `{"bullets": [...]}` or `{"quote": ...}` (`theme/sheet.schema.json`, `$defs/section` and `$defs/block`). The fixed `now`, `whyOwner` and `exactText` fields are gone, and a data file that still carries them is refused with its card named. The schema id stays `superheroes-sheet/1`.
+- A card with options offers one button per option and **Something else**, and nothing more; a card without options offers **Aligned** and **Discuss**. A stored answer (`answers/<card id>`) may now be `"something-else"`, with `optionId` null. A stored Aligned or Discuss on a card that now has options shows as unanswered, with its note kept; a session reading answers treats it as unanswered and asks, and treats Discuss and Something else as open for chat (`theme/review-template.md` § How answers come back).
+- The sheet's yellow app bar scrolls away with the page. Its count and the phone's folded row count Aligned and picked options as settled, and Discuss and Something else as open for chat.
+- `lib/sheet_prose.py` prints each card's context sections and offers the same answers as the sheet.
+- Discovery now reaches the owner through sheets. It sends remainder sheets for the calls its spec checks leave, keeps them in a `sheets/` folder in the work item, asks whether the spec is ready for vet as its own word, and then opens the spec PR (or hands over the stored spec). After a clean vet it sends a final sheet. Approval needs the owner's saved Approve on the published revision, the owner saying in the chat that the sheet is done, and no answer on the sheet that changes the spec. Discovery's step 8 and `skills/architect-discovery/reference/sheets.md` carry the rest.
+
 ### audit-debt retires
 
 - The `audit-debt` skill is removed, along with its entry in the Codex manifest's skills list. `/superheroes:guardian` is the repo-health sweep that replaced it.
