@@ -75,7 +75,8 @@ Status vocabulary: *cut* (the *first-run-clean* stamp on the older rows is histo
 | **0.37.0** | A new codex default, and engine-dispatch and review field fixes | — | GPT-6.1 Sol becomes the codex default at each seat's existing effort, GPT-6 Sol stays as a pin, and Codex CLI 0.159.0 or later is required, refused at preflight otherwise (#1542). Cursor's finished work is no longer thrown away when cursor rewrites its result file before the deadline, and a dirty-tree forfeit names the paths it dirtied (#1537). Every engine attempt records host load and command time, the data for a later time-limit decision (#1538); #1537 and #1538 merged whole as stack #1539. The planted-bug control probe credits a correct Critical on the planted code, not only a finding that names the function (#1546). The size counter treats common test-support directories as test code (#1545). | (cut on receipts — every PR advisor-vetted, vets 358–362) | **cuts at the merge of release PR #1541** (superheroes-v0.37.0) — **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 | **0.38.0** | The Claude implementer gets a sandboxed shell, and the verification strategy's first shared format | — | The Claude write channel runs implementer orders in a sandboxed shell (no network, writes limited to the build worktree and its git dirs, `ps` refused up front), and the registry's sonnet row becomes `sonnet-5.5` (#1557). Choosing the implementer is one calibration setting, and `claude`, the default when unset, now means that sandboxed channel; the seat map keeps both maker families off the review panel on a non-Claude host, with two known limits owner-accepted (#1558); #1557 and #1558 merged whole as stack #1559. The `gate-receipt/1` format for a project's verify-command receipt ships as a plugin reference (#1551). The wave watcher refuses instead of reporting a clean wave when its launch ledger file is missing (#1552). | (cut on receipts — every PR advisor-vetted, vets 364–367) | **cuts at the merge of release PR #1553** (superheroes-v0.38.0) — **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 | **0.39.0** | Claude implementers run their own tests, and the sandbox opens on request | — | The sandboxed Claude write channel lets implementers run the Python test commands their orders name and sweeps its `.claude/.cc-writes` residue at run close (#1573, #1574, merged whole as stack #1581). Four opt-in `sandboxAccess` options (allowed domains, local ports, local sockets, extra write paths) are set and viewed through configure, offline by default (#1562). Review panels consider every installed cross-vendor engine (#1576, #1577). A wrong-typed `verifyCommand` refuses at parse instead of silently disabling the verify gate (#1572). | (cut on receipts — every PR advisor-vetted, vets 368–373) | **cut 2026-10-02** (superheroes-v0.39.0). This row and its TRANSITION heading landed late, in 0.40.0's pre-release doc pass (owner "1 b", 2026-10-02): 0.39.0 shipped without its own doc pass. |
-| **0.40.0** | The size tripwire reports itself, lockfiles stop counting, and the Claude sandbox stops tripping on everyday commands | — | `size_count` counts the uncommitted working tree read-only, and `dispatch-write` reports the size tripwire at every implementer fold (#1584, #1585, merged whole as stack #1594). The size count leaves package-manager lockfiles out for every project and honours a per-project `sizeExclude` list set through configure (#1589, #1590, merged whole as stack #1597). A stack-layer PR closes its own layer sub-issue, and the advisor's post-merge close becomes a read-back (#1592). Configure advises that the verify command be the fast iteration check, with the full gate once at the final head (#1602). The sandboxed Claude implementer runs the node toolchains and `ps` without a prompt, and writes under `/tmp` and binds localhost by default, with the runner's own state still denied (#1600). | (cut on receipts — every PR advisor-vetted, vets 374–387) | **cuts at the merge of release PR #1601** (superheroes-v0.40.0) — **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
+| **0.40.0** | The size tripwire reports itself, lockfiles stop counting, and the Claude sandbox stops tripping on everyday commands | — | `size_count` counts the uncommitted working tree read-only, and `dispatch-write` reports the size tripwire at every implementer fold (#1584, #1585, merged whole as stack #1594). The size count leaves package-manager lockfiles out for every project and honours a per-project `sizeExclude` list set through configure (#1589, #1590, merged whole as stack #1597). A stack-layer PR closes its own layer sub-issue, and the advisor's post-merge close becomes a read-back (#1592). Configure advises that the verify command be the fast iteration check, with the full gate once at the final head (#1602). The sandboxed Claude implementer runs the node toolchains and `ps` without a prompt, and writes under `/tmp` and binds localhost by default, with the runner's own state still denied (#1600). | (cut on receipts — every PR advisor-vetted, vets 374–387) | **cut 2026-10-03** (superheroes-v0.40.0) — **The reset lands** stays open. |
+| **0.41.0** | The alignment specs land: Canon, the three spec checks, discovery through review sheets, and two skills retired | #1615 | Canon, the record of the owner's decisions, ships with its contract, lookup and this repo's seed (#1643); configure item 13 moves into Canon by a one-time migration (#1653), and configure gains item 14, who it's for, and the spec-reviewer seat (#1647). The owner-vs-craft line has one rubric home (#1660). Every spec gets the three spec checks — gap review, source check, grounding (#1661) — and `review-spec` retires (#1662, breaking). `audit-debt` retires in favour of the guardian sweep (#1666, breaking). The advisor's spec vet hands its findings back to discovery, and one merge word covers spec and breakdown (#1668). Discovery grounds itself, draws journeys, choices and a build board before it writes, writes the spec from the approved board, and reaches the owner through review sheets (#1667, #1669, #1671, #1675, merged whole with #1676 as stack #1670). The review sheet: the Comic panel theme and template shell, answers saved to the sheet's own store, counted and folded, the final sheet, a chat-prose fallback, large phone-zoomable pictures, and answers that match the card (#1639, #1641, #1648, #1649, #1652, #1655, #1656, #1659, #1676). Guardian dead-code ids are repo-relative (#1640). | (cut on receipts — every PR advisor-vetted, vets 388–419) | **cuts at the merge of release PR #1644** (superheroes-v0.41.0) — **The alignment specs land** closes with this cut; **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 
 
 
@@ -103,7 +104,10 @@ dial, owner-ruled "10 a" at the 2026-10-02 walk.) (**Review-spec keeps pace** �
 2026-08-28 order — retired 2026-10-05 without a release: the approved alignment spec replaces
 review-spec with three checks that re-run on changed parts, which answers the divergence census
 and both delta-round items, closed as superseded; its slot went to The alignment specs land,
-owner-ruled at the 2026-10-05 walk.)
+owner-ruled at the 2026-10-05 walk.) (**The alignment specs land** — priority 2 of the
+2026-10-05 order — closed 2026-10-08 with the 0.41.0 cut: exit met, both alignment specs landed
+across the epic's children (#1615) and the owner accepted delivery in full on 2026-10-08, with
+the disclosed paths recorded on the epic's closure receipt.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
@@ -120,37 +124,30 @@ the owner is the direct consumer of.
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
    logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)*
-2. **The alignment specs land** — the landing epic of the two owner-approved alignment specs
-   (aligning on what to build; the review surface): Canon as the record of the owner's
-   decisions, one owner-vs-craft line, the board-first discovery flow, the three checks that
-   replace review-spec, and the Comic panel review surface; the closure receipt posts with the
-   owner's delivery decision. The next release holds until the discovery-flow child lands, so a
-   consuming project adopts the whole flow at once. *(Opened 2026-10-05, owner-ruled at the walk:
-   replaces Review-spec keeps pace and ranked 2nd.)*
-3. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+3. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
    what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
    under Review-spec keeps pace by the same word.)*
-5. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
-6. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
    hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
    garbage collection, the owner-authority gate's remaining side doors.
-7. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
    two largest charters finally under one; the activation record bound to what it certifies;
    the harness tripwire leaving a durable result.
-8. **Cross-session messaging** — a discovery starter: where the host's cross-session
+7. **Cross-session messaging** — a discovery starter: where the host's cross-session
    messaging primitive replaces the deaf-session workarounds, per surface.
-9. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
    actually is, for the owner first. Low priority.
-10. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-11. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
