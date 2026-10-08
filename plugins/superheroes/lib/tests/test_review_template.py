@@ -4128,7 +4128,7 @@ def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):
       await t.advance(9999);
       const early = elements["sheet-cards"].children.length;
       await t.advance(1);
-      return { early: early, cards: elements["sheet-cards"].children.length };
+      return { early: early, cards: elements["sheet-cards"].children.length, gate: t.gate().message, gateHidden: t.gate().hidden };
     """)
     assert page["result"]["early"] == 0
     if sheet == "final":
@@ -4138,6 +4138,8 @@ def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):
     else:
         assert page["result"]["cards"] > 0, "the sheet was never drawn"
         assert page["statusHidden"] is True
+        assert page["result"]["gateHidden"] is False
+        assert "wording file did not answer in time" in page["result"]["gate"], page["result"]
 
 
 # Bites on: an answer or note failing to come back onto its own card when the sheet is republished with new question wording and a new card order, or the reload writing.

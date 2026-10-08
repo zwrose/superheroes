@@ -1783,12 +1783,14 @@
         return;
       }
       let words = null;
+      let wordsProblem = null;
       try {
         words = await withDeadline(function () { return fetchJson("sheet-words.json", "The sheet's wording file"); });
       } catch (problems) {
+        wordsProblem = Array.isArray(problems) ? problems.join(" ") : problems === DEADLINE ? "The sheet's wording file did not answer in time." : "The sheet's wording file could not be loaded.";
         // A final sheet can't be drawn without its words; any other sheet is drawn with its answer controls off.
         if (sheet.kind === "final") {
-          showErrors(Array.isArray(problems) ? problems : problems === DEADLINE ? ["The sheet's wording file did not answer in time."] : ["The sheet could not be drawn."]);
+          showErrors([wordsProblem]);
           return;
         }
       }
@@ -1798,6 +1800,15 @@
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
       render(sheet);
+      if (wordsProblem !== null) {
+        // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.
+        say(wordsProblem + " " + SAY.noStore, function () {
+          load().catch(function () {
+            showErrors(["The sheet could not be drawn."]);
+          });
+        });
+        return;
+      }
       if (answerShape === null) {
         // The schema does not say what an answer is, so nothing could be saved or read back.
         say(SAY.noStore, false);
