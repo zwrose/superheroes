@@ -33,6 +33,7 @@
   .sheet-page .sh-card > label.sh-label { display: block; }
   .sheet-page .sh-card ul { padding-left: 20px; }
   .sheet-page .sheet-consequence { display: block; }
+  .sheet-page :is(.sh-card, .sh-box) a { overflow-wrap: anywhere; }
   .sheet-page .sheet-recommendation > * + * { margin-top: 4px; }
   .sheet-page .sheet-images { display: grid; gap: 12px; }
   .sheet-page .sheet-figure { margin: 0; }
@@ -628,6 +629,42 @@
       return element;
     }
 
+    // The same element for text from the data file, with each http:// or https:// address in it made a link that opens in a
+    // new tab. Links and the text around them are built as nodes, never as markup; text with no address is drawn as it is.
+    // A closing mark that ends the sentence (. , ; :) is not part of the address, nor is a ) with no ( before it to close.
+    function linkedElement(tag, className, text) {
+      const element = textElement(tag, className, text);
+      if (typeof text !== "string") return element;
+      const found = /https?:\/\/[^\s<>"]+/gi;
+      const pieces = [];
+      let from = 0;
+      let match;
+      while ((match = found.exec(text)) !== null) {
+        let address = match[0];
+        for (;;) {
+          const last = address.charAt(address.length - 1);
+          const closes = address.split(")").length - 1;
+          const opens = address.split("(").length - 1;
+          if (".,;:".includes(last) || (last === ")" && closes > opens)) address = address.slice(0, -1);
+          else break;
+        }
+        if (address.slice(address.indexOf("://") + 3) === "") continue;
+        if (match.index > from) pieces.push(document.createTextNode(text.slice(from, match.index)));
+        const link = document.createElement("a");
+        link.setAttribute("href", address);
+        link.setAttribute("target", "_blank");
+        link.setAttribute("rel", "noopener noreferrer");
+        link.textContent = address;
+        pieces.push(link);
+        from = match.index + address.length;
+        found.lastIndex = from;
+      }
+      if (pieces.length === 0) return element;
+      if (from < text.length) pieces.push(document.createTextNode(text.slice(from)));
+      element.replaceChildren(...pieces);
+      return element;
+    }
+
     // The image view: one picture, large, on its own. Nothing in it moves to another picture. The size, the zoom
     // and the look-around all live here: the picture is sized only through its width and height attributes, and
     // it is moved only through the frame's scroll position.
@@ -955,7 +992,7 @@
         picture.setAttribute("aria-label", "Open picture: " + image.alt);
         figure.appendChild(picture);
         if (typeof image.caption === "string" && image.caption !== "") {
-          figure.appendChild(textElement("figcaption", "sh-caption", image.caption));
+          figure.appendChild(linkedElement("figcaption", "sh-caption", image.caption));
         }
         wrap.appendChild(figure);
       });
@@ -967,7 +1004,7 @@
       options.forEach(function (option) {
         const item = document.createElement("li");
         item.appendChild(textElement("strong", "", option.label));
-        item.appendChild(textElement("span", "sheet-consequence", option.consequence));
+        item.appendChild(linkedElement("span", "sheet-consequence", option.consequence));
         list.appendChild(item);
       });
       return list;
@@ -976,8 +1013,8 @@
     function buildRecommendation(recommendation) {
       const wrap = document.createElement("div");
       wrap.className = "sheet-recommendation";
-      wrap.appendChild(textElement("p", "", recommendation.text));
-      wrap.appendChild(textElement("p", "", recommendation.reason));
+      wrap.appendChild(linkedElement("p", "", recommendation.text));
+      wrap.appendChild(linkedElement("p", "", recommendation.reason));
       return wrap;
     }
 
@@ -988,6 +1025,52 @@
     // Nothing on the sheet may be edited before the saved answers are read.
     function canEdit() {
       return ready;
+    }
+
+    // Keeps a note box on screen while a person types in it. The on-screen keyboard shrinks the visual viewport,
+    // not the page, so a box that was in view at focus can end up under the keyboard: the box is checked at focus
+    // and again each time the viewport resizes while it holds focus. A box already in view is never scrolled.
+    const REVEAL_MARGIN_PX = 16;
+
+    function keepInView(field) {
+      let watched = null;
+
+      function viewportNow() {
+        const viewport = typeof window !== "undefined" ? window.visualViewport : null;
+        return viewport && typeof viewport.height === "number" ? viewport : null;
+      }
+
+      function reveal() {
+        const viewport = viewportNow();
+        if (viewport === null) {
+          if (typeof field.scrollIntoView === "function") field.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (typeof field.getBoundingClientRect !== "function" || typeof window.scrollBy !== "function") return;
+        const rect = field.getBoundingClientRect();
+        const top = typeof viewport.offsetTop === "number" ? viewport.offsetTop : 0;
+        const bottom = top + viewport.height;
+        if (rect.top >= top && rect.bottom <= bottom) return;
+        // A box taller than the viewport lines its top up with the viewport's top.
+        const below = rect.bottom > bottom && rect.bottom - rect.top <= viewport.height;
+        window.scrollBy(0, below ? rect.bottom - bottom + REVEAL_MARGIN_PX : rect.top - top - REVEAL_MARGIN_PX);
+      }
+
+      function stopWatching() {
+        if (watched !== null && typeof watched.removeEventListener === "function") watched.removeEventListener("resize", reveal);
+        watched = null;
+      }
+
+      field.addEventListener("focus", function () {
+        reveal();
+        stopWatching();
+        const viewport = viewportNow();
+        if (viewport !== null && typeof viewport.addEventListener === "function") {
+          viewport.addEventListener("resize", reveal);
+          watched = viewport;
+        }
+      });
+      field.addEventListener("blur", stopWatching);
     }
 
     // The answer row, the note and the save line of one saver: a card's answers, or the final sheet's verdict.
@@ -1044,6 +1127,7 @@
       note.className = "sh-field";
       note.setAttribute("rows", "3");
       note.disabled = true;
+      keepInView(note);
       note.addEventListener("input", function () {
         if (!spec.live()) return;
         setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
@@ -1286,18 +1370,18 @@
       article.className = "sh-card";
       article.id = "card-" + card.id;
       article.appendChild(textElement("span", card.warning ? "sh-badge sh-badge--warning" : "sh-badge", card.callKind));
-      article.appendChild(textElement("h2", "", card.question));
+      article.appendChild(linkedElement("h2", "", card.question));
       card.context.forEach(function (section) {
-        article.appendChild(textElement("h3", "sh-label", section.title));
+        article.appendChild(linkedElement("h3", "sh-label", section.title));
         section.blocks.forEach(function (block) {
           if (typeof block.paragraph === "string") {
-            article.appendChild(textElement("p", "", block.paragraph));
+            article.appendChild(linkedElement("p", "", block.paragraph));
           } else if (Array.isArray(block.bullets)) {
             const list = document.createElement("ul");
-            block.bullets.forEach(function (item) { list.appendChild(textElement("li", "", item)); });
+            block.bullets.forEach(function (item) { list.appendChild(linkedElement("li", "", item)); });
             article.appendChild(list);
           } else if (typeof block.quote === "string") {
-            article.appendChild(textElement("blockquote", "", block.quote));
+            article.appendChild(linkedElement("blockquote", "", block.quote));
           }
         });
       });
@@ -1340,10 +1424,14 @@
       return button;
     }
 
+    // Moving to a different card puts the page back at its top; opening the card already open only refreshes.
+    // The first landing after the saved answers load does not come through here.
     function openAt(index) {
       if (index < 0 || index >= items.length) return;
+      const moved = index !== openIndex;
       openIndex = index;
       refreshSheet();
+      if (moved && typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     }
 
     // One Previous and Next pair; the sheet has one above the open card and one below it.
@@ -1529,13 +1617,13 @@
       const declined = final.declinedFindings;
       const parts = [
         textElement("h2", "", finalWords.historyHeading),
-        textElement("p", "", historySentence(history.reviewRounds, history.fixesMade, history.vet)),
+        linkedElement("p", "", historySentence(history.reviewRounds, history.fixesMade, history.vet)),
       ];
       if (declined.length > 0) {
         const list = document.createElement("ul");
         list.hidden = true;
         declined.forEach(function (finding) {
-          list.appendChild(textElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
+          list.appendChild(linkedElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
         });
         const declinedCue = cueElement();
         const toggle = actionButton("", function () {

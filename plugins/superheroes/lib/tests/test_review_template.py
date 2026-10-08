@@ -180,6 +180,9 @@ class Node {
     this.focusCount += 1;
     document.activeElement = this;
   }
+  scrollIntoView(options) {
+    scrollIntoViews.push([this, options]);
+  }
   setPointerCapture(id) {
     this.captured.push(id);
   }
@@ -273,6 +276,9 @@ viewerNodes["sheet-viewer-picture"].parent = viewerNodes["sheet-viewer-frame"];
   });
 });
 const documentListeners = {};
+// What the page asked the window to scroll, as ["to" | "by", x, y], and every scrollIntoView call, as [node, options].
+const scrolls = [];
+const scrollIntoViews = [];
 const document = {
   title: "Review sheet",
   activeElement: null,
@@ -283,6 +289,11 @@ const document = {
   querySelector: (selector) => (selector === ".sheet-page" ? sheetPageNode : null),
   createElement: (tag) => new Node(tag),
   createDocumentFragment: () => new Node("#fragment"),
+  createTextNode: (text) => {
+    const node = new Node("#text");
+    node.textContent = text;
+    return node;
+  },
 };
 
 // The fake host runtime. Each test says how `use("db")` and `use("user")` behave through `host`, and
@@ -376,7 +387,28 @@ const window = {
     if (type === "beforeunload") unloadListeners.push(listener);
     (windowListeners[type] = windowListeners[type] || []).push(listener);
   },
+  scrollTo: (x, y) => { scrolls.push(["to", x, y]); },
+  scrollBy: (x, y) => { scrolls.push(["by", x, y]); },
 };
+// The visual viewport (what the on-screen keyboard shrinks) exists only when a scenario asks: host.visualViewport = {height, offsetTop}.
+const viewportListeners = [];
+if (host.visualViewport) {
+  window.visualViewport = {
+    height: host.visualViewport.height,
+    offsetTop: host.visualViewport.offsetTop,
+    addEventListener: (type, listener) => { if (type === "resize") viewportListeners.push(listener); },
+    removeEventListener: (type, listener) => {
+      const at = viewportListeners.indexOf(listener);
+      if (type === "resize" && at >= 0) viewportListeners.splice(at, 1);
+    },
+  };
+}
+// A host without these is a page that must still run: noScrollIntoView takes the method away, noScroll the window's two.
+if (host.noScrollIntoView) delete Node.prototype.scrollIntoView;
+if (host.noScroll) {
+  delete window.scrollTo;
+  delete window.scrollBy;
+}
 const observers = [];
 if (host.resizeObserver) {
   globalThis.ResizeObserver = class {
@@ -726,6 +758,24 @@ const tools = {
     top: viewerNodes["sheet-viewer-frame"].scrollTop,
   }),
   resizeWindow: () => (windowListeners.resize || []).forEach((listener) => listener({ type: "resize" })),
+  scrolls: scrolls,
+  scrollIntoViews: scrollIntoViews,
+  // A node's place on screen, as getBoundingClientRect gives it.
+  place: (node, top, bottom) => { node.rect = { top: top, bottom: bottom, left: 0 }; },
+  // The fake visual viewport: how many resize listeners it holds now, and the keyboard changing its height.
+  viewport: {
+    listeners: () => viewportListeners.length,
+    resize: (height) => {
+      window.visualViewport.height = height;
+      viewportListeners.slice().forEach((listener) => listener({ type: "resize" }));
+    },
+  },
+  // Every link anywhere on the page, as [text, href, target, rel], and every button holding a child.
+  links: (root) => [...walk(root)].filter((node) => node.tagName === "a").map((node) => [node.textContent, node.getAttribute("href"), node.getAttribute("target"), node.getAttribute("rel")]),
+  everyLink: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "a"))].map((node) => node.textContent),
+  linkInsideButton: () => Object.values(elements).flatMap((root) => [...walk(root)]).some((node) => node.tagName === "button" && [...walk(node)].some((inner) => inner.tagName === "a")),
+  // A node's children as ["a" | "text", words], the shape a person reads left to right.
+  pieces: (node) => node.children.map((child) => [child.tagName === "a" ? "a" : "text", child.textContent]),
   observers: observers,
   // Every button node anywhere on the page, for the checks on what a control wears.
   allButtons: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "button"))].map((node) => ({
@@ -4298,3 +4348,316 @@ def test_context_draws_sender_sections():
     for old in ("What's true now", "Why it needs you", "The exact text"):
         assert old not in result["text"], "the old fixed heading %r is still drawn" % old
     assert result["nothing"] == ["span.sh-badge", "h2", "div.answer-row", "label:Note", "textarea.sh-field", "div.save-line"]
+
+
+# --- Moving between cards, the note box and the links ---
+
+
+def _three_cards():
+    return _named_cards("plan-day", "fridge-check", "third-card", plain=True)
+
+
+# Bites on: a move to another card (top or bottom Next or Previous, an item row) that leaves the page where it was, or one that scrolls more than once.
+@pytest.mark.parametrize("name, setup, action, opens", [
+    ("top-next", "", 't.click(t.control("next"));', "fridge-check"),
+    ("top-previous", 't.open("fridge-check");', 't.click(t.control("previous"));', "plan-day"),
+    ("bottom-next", "", 't.click(t.control("bottomNext"));', "fridge-check"),
+    ("bottom-previous", 't.open("fridge-check");', 't.click(t.control("bottomPrevious"));', "plan-day"),
+    ("item-row", "", 't.open("third-card");', "third-card"),
+])
+def test_moving_to_another_card_scrolls_to_the_top(name, setup, action, opens):
+    result = _answer_page(_three_cards(), """
+      %s
+      t.scrolls.length = 0;
+      %s
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """ % (setup, action))
+    assert result == {"scrolls": [["to", 0, 0]], "open": opens}, name
+
+
+# Bites on: a row inside the expanded Answered fold (a remainder sheet, answered cards folded away) opening its card without scrolling to the top.
+def test_a_row_in_the_expanded_fold_scrolls_to_the_top():
+    ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+    ]
+    result = _sheet_page(_remainder_of(_named_cards(*ids, plain={"plan-day", "fridge-check", "fourth-card"}), unsettled=["fourth-card"]), """
+      const out = { start: t.openCard(), landed: t.scrolls.slice() };
+      t.click(t.control("fold"));
+      t.scrolls.length = 0;
+      t.open("plan-day");
+      out.scrolls = t.scrolls.slice();
+      out.open = t.openCard();
+      return out;
+    """, host={"docs": docs})
+    assert result == {"start": "fourth-card", "landed": [], "scrolls": [["to", 0, 0]], "open": "plan-day"}
+
+
+# Bites on: tapping the row of the card that is already open scrolling the page.
+def test_tapping_the_open_cards_row_does_not_scroll():
+    result = _answer_page(_three_cards(), """
+      t.open("plan-day");
+      t.open("plan-day");
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """)
+    assert result == {"scrolls": [], "open": "plan-day"}
+
+
+# Bites on: the landing after the saved answers load (the first card already answered, so the sheet lands on the second) scrolling the page.
+def test_the_first_landing_never_scrolls():
+    result = _answer_page(_three_cards(), """
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """, host={"docs": [{"id": "plan-day", "data": _doc("aligned")}]})
+    assert result == {"scrolls": [], "open": "fridge-check"}
+
+
+# Bites on: a host with no scrollTo throwing when a person moves to another card.
+def test_moving_without_scroll_to_is_a_no_op():
+    result = _answer_page(_three_cards(), """
+      t.click(t.control("next"));
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """, host={"noScroll": True})
+    assert result == {"scrolls": [], "open": "fridge-check"}
+
+
+VIEWPORT = {"height": 600, "offsetTop": 0}
+
+
+# Bites on: the reveal rule: a note box in view being scrolled, one below the viewport not scrolling by the gap plus the margin, one above not scrolling up by the gap plus the margin, one taller than the viewport not aligning its top, and the viewport's own offset being ignored.
+@pytest.mark.parametrize("name, viewport, top, bottom, scrolls", [
+    ("in view", VIEWPORT, 100, 200, []),
+    ("flush with the top edge", VIEWPORT, 0, 100, []),
+    ("flush with the bottom edge", VIEWPORT, 500, 600, []),
+    ("below", VIEWPORT, 550, 650, [["by", 0, 66]]),
+    ("above", VIEWPORT, -50, 50, [["by", 0, -66]]),
+    ("taller than the viewport", VIEWPORT, 100, 900, [["by", 0, 84]]),
+    ("offset viewport, in view", {"height": 300, "offsetTop": 200}, 250, 350, []),
+    ("offset viewport, below", {"height": 300, "offsetTop": 200}, 450, 520, [["by", 0, 36]]),
+    ("offset viewport, above", {"height": 300, "offsetTop": 200}, 150, 190, [["by", 0, -66]]),
+])
+def test_a_focused_note_is_revealed_by_the_visual_viewport(name, viewport, top, bottom, scrolls):
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, %d, %d);
+      t.fire(note, "focus");
+      return { scrolls: t.scrolls.slice(), intoView: t.scrollIntoViews.length };
+    """ % (top, bottom), host={"visualViewport": viewport})
+    assert result == {"scrolls": scrolls, "intoView": 0}, name
+
+
+# Bites on: the keyboard opening after the focus (the visual viewport shrinking) not bringing the note back into view, a resize scrolling a note that is still in view, and a second scroll for one resize.
+def test_the_note_stays_visible_when_the_keyboard_opens():
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, 150, 250);
+      t.fire(note, "focus");
+      const out = { atFocus: t.scrolls.slice(), listeners: t.viewport.listeners() };
+      t.viewport.resize(400);
+      out.stillInView = t.scrolls.slice();
+      t.viewport.resize(200);
+      out.covered = t.scrolls.slice();
+      return out;
+    """, host={"visualViewport": VIEWPORT})
+    assert result == {"atFocus": [], "listeners": 1, "stillInView": [], "covered": [["by", 0, 66]]}
+
+
+# Bites on: the resize listener staying on the visual viewport after the note loses focus, a later resize scrolling the page, or a second listener piling up across focus and blur cycles.
+def test_the_note_stops_watching_the_viewport_when_it_loses_focus():
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, 150, 250);
+      const counts = [];
+      t.fire(note, "focus"); counts.push(t.viewport.listeners());
+      t.fire(note, "focus"); counts.push(t.viewport.listeners());
+      t.fire(note, "blur"); counts.push(t.viewport.listeners());
+      t.fire(note, "focus"); counts.push(t.viewport.listeners());
+      t.fire(note, "blur"); counts.push(t.viewport.listeners());
+      t.scrolls.length = 0;
+      t.viewport.resize(200);
+      return { counts: counts, scrolls: t.scrolls.slice() };
+    """, host={"visualViewport": VIEWPORT})
+    assert result == {"counts": [1, 1, 0, 1, 0], "scrolls": []}
+
+
+# Bites on: the final sheet's verdict note not being brought into view and not letting go of the viewport on blur, as a card's note does.
+def test_the_verdict_note_stays_visible_when_the_keyboard_opens():
+    result = _sheet_page(_final_sheet(), """
+      const note = t.lastNote();
+      t.place(note, 150, 250);
+      t.fire(note, "focus");
+      const out = { atFocus: t.scrolls.slice(), listeners: t.viewport.listeners() };
+      t.viewport.resize(200);
+      out.covered = t.scrolls.slice();
+      t.fire(note, "blur");
+      t.viewport.resize(100);
+      out.after = t.scrolls.slice();
+      out.listenersAfter = t.viewport.listeners();
+      return out;
+    """, host={"visualViewport": VIEWPORT})
+    assert result == {"atFocus": [], "listeners": 1, "covered": [["by", 0, 66]], "after": [["by", 0, 66]], "listenersAfter": 0}
+
+
+# Bites on: a browser with no visual viewport getting no help from the note box (it must ask the box to scroll into view, leaving a box in view alone), or the page scrolling the window itself there.
+def test_without_a_visual_viewport_the_note_scrolls_itself_into_view():
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.fire(note, "focus");
+      return { into: t.scrollIntoViews.map((call) => [call[0].id, call[1]]), scrolls: t.scrolls.slice(), id: note.id };
+    """)
+    assert result["into"] == [[result["id"], {"block": "nearest"}]]
+    assert result["scrolls"] == []
+
+
+# Bites on: a host missing scrollIntoView or scrollBy making the note's focus or blur throw.
+def test_a_note_without_the_scroll_apis_is_a_no_op():
+    bare = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.fire(note, "focus");
+      t.fire(note, "blur");
+      return { into: t.scrollIntoViews.length, scrolls: t.scrolls.slice() };
+    """, host={"noScrollIntoView": True})
+    assert bare == {"into": 0, "scrolls": []}
+    no_by = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, 550, 650);
+      t.fire(note, "focus");
+      t.fire(note, "blur");
+      return { scrolls: t.scrolls.slice() };
+    """, host={"noScroll": True, "visualViewport": VIEWPORT})
+    assert no_by == {"scrolls": []}
+
+
+ADDRESS = "https://example.com/a"
+
+
+def _paragraph_pieces(text):
+    """What a card's first context paragraph is drawn from, as [kind, words], with the paragraph's own text and links."""
+    card = _plain_card("link-card", context=[{"title": "T", "blocks": [{"paragraph": text}]}])
+    return _answer_page([card], """
+      const paragraph = t.card("link-card").children.find((child) => child.tagName === "p");
+      return { pieces: t.pieces(paragraph), text: paragraph.textContent, links: t.links(paragraph) };
+    """)
+
+
+# Bites on: an address in a paragraph, a bullet or a quote drawn as plain text, or as a link missing its address, its new-tab target or its rel.
+def test_an_address_in_context_text_is_a_link():
+    card = _plain_card("link-card", context=[{"title": "T", "blocks": [
+        {"paragraph": "Read https://example.com/p now"},
+        {"bullets": ["First http://example.com/b"]},
+        {"quote": "Quoted https://example.com/q"},
+    ]}])
+    result = _answer_page([card], """
+      const kids = t.card("link-card").children;
+      const of = (tag) => kids.find((child) => child.tagName === tag);
+      return { p: t.links(of("p")), li: t.links(of("ul")), q: t.links(of("blockquote")), pieces: t.pieces(of("p")) };
+    """)
+    rel = "noopener noreferrer"
+    assert result["p"] == [["https://example.com/p", "https://example.com/p", "_blank", rel]]
+    assert result["li"] == [["http://example.com/b", "http://example.com/b", "_blank", rel]]
+    assert result["q"] == [["https://example.com/q", "https://example.com/q", "_blank", rel]]
+    assert result["pieces"] == [["text", "Read "], ["a", "https://example.com/p"], ["text", " now"]]
+
+
+# Bites on: trailing punctuation swallowed into the link, a bracket that closes the address being cut off it, a bracket that closes the sentence being kept, or an address with nothing after the scheme becoming a link.
+@pytest.mark.parametrize("text, pieces", [
+    ("see https://example.com/a.", [["text", "see "], ["a", ADDRESS], ["text", "."]]),
+    ("see https://example.com/a,", [["text", "see "], ["a", ADDRESS], ["text", ","]]),
+    ("see https://example.com/a;", [["text", "see "], ["a", ADDRESS], ["text", ";"]]),
+    ("see https://example.com/a:", [["text", "see "], ["a", ADDRESS], ["text", ":"]]),
+    ("see https://example.com/a)", [["text", "see "], ["a", ADDRESS], ["text", ")"]]),
+    ("(see https://example.test/a)", [["text", "(see "], ["a", "https://example.test/a"], ["text", ")"]]),
+    ("(see https://example.test/a).", [["text", "(see "], ["a", "https://example.test/a"], ["text", ")."]]),
+    ("https://example.test/report_(draft)", [["a", "https://example.test/report_(draft)"]]),
+    ("https://example.test/report_(draft).", [["a", "https://example.test/report_(draft)"], ["text", "."]]),
+    ("https://example.com/a.,;:", [["a", ADDRESS], ["text", ".,;:"]]),
+    ("HTTPS://Example.com/A", [["a", "HTTPS://Example.com/A"]]),
+    ("one https://example.com/a and two http://example.com/b!", [["text", "one "], ["a", ADDRESS], ["text", " and two "], ["a", "http://example.com/b!"]]),
+    ("odd https://. then https://example.com/a", [["text", "odd https://. then "], ["a", ADDRESS]]),
+])
+def test_where_an_address_ends(text, pieces):
+    assert _paragraph_pieces(text)["pieces"] == pieces
+
+
+# Bites on: text with no address, or only an address with nothing after the scheme, gaining children, or a scheme other than http and https becoming a link.
+@pytest.mark.parametrize("text", [
+    "Nothing to link here.",
+    "javascript:alert(1)",
+    "ftp://example.com/file",
+    "mailto:someone@example.com",
+    "data:text/html,hello",
+    "https://",
+    "https://.",
+    "www.example.com",
+])
+def test_text_without_an_http_address_stays_plain(text):
+    assert _paragraph_pieces(text) == {"pieces": [], "text": text, "links": []}
+
+
+# Bites on: an answer button built from an option's label turning an address in that label into a link, or the option label in the list being linked.
+def test_an_address_in_an_option_label_is_never_a_link():
+    label = "Open https://example.com/label"
+    card = _card("link-card", options=[
+        {"id": "yes", "label": label, "consequence": "We go."},
+        {"id": "no", "label": "No", "consequence": "We stop."},
+    ])
+    result = _answer_page([card], """
+      const button = t.button("link-card", %s);
+      return { button: button ? [button.textContent, button.children.length] : null, links: t.links(t.card("link-card")), inButton: t.linkInsideButton() };
+    """ % json.dumps(label))
+    assert result == {"button": [label, 0], "links": [], "inButton": False}
+
+
+# Bites on: an address left plain at any site the sender or the final sheet's data writes (the card's section title, question, context, caption, consequence, recommendation, and the final sheet's declined findings and vet), an address linked where it must not be (an option label, the call kind, the sheet title, a picture's description), or a link inside a button.
+def test_every_data_drawn_text_links_and_the_exempt_ones_do_not():
+    def at(name):
+        return "https://example.com/" + name
+
+    card = _card(
+        "census-card",
+        callKind="Kind " + at("kind"),
+        question="Question " + at("question"),
+        context=[{"title": "Title " + at("title"), "blocks": [
+            {"paragraph": "Para " + at("paragraph")},
+            {"bullets": ["Bullet " + at("bullet")]},
+            {"quote": "Quote " + at("quote")},
+        ]}],
+        images=[{"src": "pic.png", "alt": "Alt " + at("alt"), "caption": "Caption " + at("caption")}],
+        options=[
+            {"id": "yes", "label": "Label " + at("label"), "consequence": "Consequence " + at("consequence")},
+            {"id": "no", "label": "No", "consequence": "We stop."},
+        ],
+        recommendation={"text": "Rec " + at("rec-text"), "reason": "Why " + at("rec-reason"), "optionId": "yes"},
+    )
+    sheet = _sheet("final", cards=[card], title="Sheet " + at("sheet-title"), final={
+        "history": {"reviewRounds": 2, "fixesMade": 3, "vet": "Vet " + at("vet")},
+        "declinedFindings": [{"summary": "Summary " + at("summary"), "reason": "Reason " + at("reason")}],
+        "approval": {"approvedBoard": True, "boardSavedWithSpec": True},
+    })
+    page = _run_page(_sample_files(sheet), scenario="""
+      return {
+        links: t.everyLink(),
+        inButton: t.linkInsideButton(),
+        alts: t.pictures("census-card").map((picture) => [picture.getAttribute("alt"), picture.getAttribute("aria-label")]),
+        label: t.button("census-card", %s).children.length,
+      };
+    """ % json.dumps("Label " + at("label")))
+    assert page["settled"], page
+    result = page["result"]
+    linked = ["question", "title", "paragraph", "bullet", "quote", "caption", "consequence", "rec-text", "rec-reason", "vet", "summary", "reason"]
+    assert sorted(result["links"]) == sorted(at(name) for name in linked)
+    assert result["inButton"] is False
+    assert result["alts"] == [["Alt " + at("alt"), "Open picture: Alt " + at("alt")]]
+    assert result["label"] == 0
+    assert page["appBar"] == "Sheet " + at("sheet-title")
+    assert page["title"] == "Sheet " + at("sheet-title")
+    assert page["cards"][0]["badgeClass"] == "sh-badge"
+
+
+# Bites on: a link drawn from anything but DOM nodes (a string of markup assigned to a node), which would let a sender's text carry markup.
+def test_links_are_built_without_markup_strings():
+    page = re.search(r"<script>(.*?)</script>", _template_text(), re.S).group(1)
+    assert "innerHTML" not in page and "insertAdjacentHTML" not in page and "outerHTML" not in page
+    assert page.count("function linkedElement(") == 1
+    assert 'setAttribute("target", "_blank")' in page and 'setAttribute("rel", "noopener noreferrer")' in page

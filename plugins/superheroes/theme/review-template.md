@@ -105,7 +105,13 @@ saved answers are read, it also says "A of N answered", and how many of those ar
 One item is open at a time, with Previous and Next to move between them. The same Previous and Next
 also sit below the open card, so the owner doesn't have to scroll back up after reading it. Below it,
 the list of items shows each one's state: Aligned, Discuss, Picked, Something else or Open. An item whose save didn't
-land carries a red Not saved badge.
+land carries a red Not saved badge. Moving to another item, from Previous, Next or the list, scrolls
+the page back to its top.
+
+A note box scrolls into view when it is opened, and again if the on-screen keyboard comes up and
+covers it. A box that is already in view stays where it is. Web addresses (`http://` or `https://`)
+in a card's text, and in a final sheet's declined findings and history, are links that open in a new
+tab. The answer buttons stay plain text, even when an option's label holds an address.
 
 On a phone, a remainder sheet folds the items that are answered into one row, with how many of them
 are settled (Aligned, or an option picked) and how many are open for chat (Discuss or Something
