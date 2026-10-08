@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.41.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.40.0...superheroes-v0.41.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** retire audit-debt, and the escalation rubric defers to the owner-vs-craft line (C9) ([#1666](https://github.com/zwrose/superheroes/issues/1666))
+* **superheroes:** retire review-spec — every spec gets the three spec checks (C5 layer 2) ([#1662](https://github.com/zwrose/superheroes/issues/1662))
+
+### Features
+
+* **superheroes:** a review card's pictures open large, zoom on a phone, and say so when missing ([#1656](https://github.com/zwrose/superheroes/issues/1656)) ([1629abe](https://github.com/zwrose/superheroes/commit/1629abe0c67f89ff262777afcfed628f93839973))
+* **superheroes:** Canon, the record of the owner's decisions — contract, lookup, anchor amendment, pointers, this repo's seed ([#1643](https://github.com/zwrose/superheroes/issues/1643)) ([b99bea7](https://github.com/zwrose/superheroes/commit/b99bea787f6ce009ae38d9aab28fa5063f706092))
+* **superheroes:** configure item 13 points to Canon, and the migration that moves it there ([#1653](https://github.com/zwrose/superheroes/issues/1653)) ([37d7352](https://github.com/zwrose/superheroes/commit/37d735284aebda924b81f78c25a501e45807815f))
+* **superheroes:** configure item 14 (who it's for) and the spec-reviewer seat ([#1647](https://github.com/zwrose/superheroes/issues/1647)) ([ad0ee22](https://github.com/zwrose/superheroes/commit/ad0ee22e5d368dc0b329eb87f051d1b79bb8a0f9))
+* **superheroes:** discovery draws before it writes — journeys, choices, then the build board (C4 layer 2) ([#1669](https://github.com/zwrose/superheroes/issues/1669)) ([8c07ce8](https://github.com/zwrose/superheroes/commit/8c07ce86024426b184188bdf0d8dc4f7fba02f66))
+* **superheroes:** discovery grounds itself and asks only owner calls (C4 layer 1) ([#1667](https://github.com/zwrose/superheroes/issues/1667)) ([c41b7e6](https://github.com/zwrose/superheroes/commit/c41b7e64b528d33ed77339dd504cc369c43f9249))
+* **superheroes:** discovery writes the spec from the approved board, every statement tagged with its source (C4 layer 3) ([#1671](https://github.com/zwrose/superheroes/issues/1671)) ([a101bfa](https://github.com/zwrose/superheroes/commit/a101bfaeb1b14fb8d8cecd94ac7c3483c1bb35dc))
+* **superheroes:** discovery's sheets, ready for vet, and the final sheet (C4 layer 4) ([#1675](https://github.com/zwrose/superheroes/issues/1675)) ([423c0ae](https://github.com/zwrose/superheroes/commit/423c0ae930469235ff18a1953e5f109f3cb61132))
+* **superheroes:** retire audit-debt, and the escalation rubric defers to the owner-vs-craft line (C9) ([#1666](https://github.com/zwrose/superheroes/issues/1666)) ([945ed23](https://github.com/zwrose/superheroes/commit/945ed2303082d61d5a688834144f24a5c5726907))
+* **superheroes:** retire review-spec — every spec gets the three spec checks (C5 layer 2) ([#1662](https://github.com/zwrose/superheroes/issues/1662)) ([9b910e0](https://github.com/zwrose/superheroes/commit/9b910e05d293d39502a4b633a7a78fee9da17a52))
+* **superheroes:** review sheet answers match the card, the bar scrolls away, and the sender writes the context ([#1676](https://github.com/zwrose/superheroes/issues/1676)) ([4330d19](https://github.com/zwrose/superheroes/commit/4330d19aff638b6c46089038ff21968b331d74b5))
+* **superheroes:** review sheets count your answers, fold what's done, say why only these, and fall back to chat prose ([#1649](https://github.com/zwrose/superheroes/issues/1649)) ([f11b613](https://github.com/zwrose/superheroes/commit/f11b613ca5922b357ac4ae9065009613b481a026))
+* **superheroes:** the advisor's spec vet hands findings back, and one merge word covers spec and breakdown ([#1668](https://github.com/zwrose/superheroes/issues/1668)) ([19fb9ef](https://github.com/zwrose/superheroes/commit/19fb9ef40451ef90e4d9d9e170733f03b96f5eff))
+* **superheroes:** the Comic panel theme stylesheet and its specimen page ([#1639](https://github.com/zwrose/superheroes/issues/1639)) ([ad3a45d](https://github.com/zwrose/superheroes/commit/ad3a45d7296a76ee46e4d2484f80dd18ee99bc2e))
+* **superheroes:** the final review sheet, where a verdict counts only once it is sent ([#1655](https://github.com/zwrose/superheroes/issues/1655)) ([8e1cd49](https://github.com/zwrose/superheroes/commit/8e1cd499f259bba4a68fb455a26c106bf0835775))
+* **superheroes:** the owner-vs-craft line in one rubric home, every older statement repointed ([#1660](https://github.com/zwrose/superheroes/issues/1660)) ([7a2ef8f](https://github.com/zwrose/superheroes/commit/7a2ef8f7c4438606c8f3c18ab0a0e935067f3b36))
+* **superheroes:** the owner's live-check changes to review sheets — no Done for now, no Send verdict, clear fold cues, Previous/Next below the card, trackpad pinch ([#1659](https://github.com/zwrose/superheroes/issues/1659)) ([3d1a628](https://github.com/zwrose/superheroes/commit/3d1a628aa46e2978400b4e7f73d11468109b92f6))
+* **superheroes:** the review sheet's cards take answers and save them to the sheet's own store ([#1648](https://github.com/zwrose/superheroes/issues/1648)) ([712e9a8](https://github.com/zwrose/superheroes/commit/712e9a80563ff4e8cc1ef862af35cf30ab7b51a8))
+* **superheroes:** the review template shell and the sheet data schema ([#1641](https://github.com/zwrose/superheroes/issues/1641)) ([0634345](https://github.com/zwrose/superheroes/commit/06343453b786dac852de25ff0abed69766b08313))
+* **superheroes:** the sheet's final-sheet rules, and a chat-prose fallback that refuses what the page refuses ([#1652](https://github.com/zwrose/superheroes/issues/1652)) ([23e99b0](https://github.com/zwrose/superheroes/commit/23e99b029e416d264df84ef3605f08de6c776fd6))
+* **superheroes:** the three spec checks — gap review, source check, grounding (C5 layer 1) ([#1661](https://github.com/zwrose/superheroes/issues/1661)) ([814ae23](https://github.com/zwrose/superheroes/commit/814ae2384369ae46cb0f70749b38f31ba051bec8))
+
+
+### Bug Fixes
+
+* **superheroes:** guardian dead-code ids are repo-relative, so a sweep from a new checkout no longer resurfaces the baseline ([#1640](https://github.com/zwrose/superheroes/issues/1640)) ([cd32a9b](https://github.com/zwrose/superheroes/commit/cd32a9b91d55d8f57dee7c53c041c3d0249f0b9f))
+
 ## [0.40.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.39.0...superheroes-v0.40.0) (2026-10-03)
 
 
