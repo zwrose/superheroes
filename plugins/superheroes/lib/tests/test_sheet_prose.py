@@ -34,7 +34,7 @@ def _card(card_id, **overrides):
         "callKind": "Wording to confirm",
         "warning": False,
         "question": "Is this what you meant?",
-        "context": {"now": "It reads one way.", "whyOwner": "Only you know.", "exactText": None},
+        "context": [{"title": "Where it stands", "blocks": [{"paragraph": "It reads one way."}]}],
         "images": [],
         "options": [],
     }
@@ -72,9 +72,14 @@ def test_prose_carries_every_cards_context_options_and_recommendation():
     items = re.split(r"^\d+\. \*\*", result.stdout, flags=re.M)[1:]
     assert len(items) == len(sample["cards"])
     for card, item in zip(sample["cards"], items):
-        wanted = [card["question"], card["callKind"], card["context"]["now"], card["context"]["whyOwner"]]
-        if card["context"]["exactText"] is not None:
-            wanted.append(card["context"]["exactText"])
+        wanted = [card["question"], card["callKind"]]
+        for section in card["context"]:
+            wanted.append(section["title"])
+            for block in section["blocks"]:
+                for kind in ("paragraph", "quote"):
+                    if kind in block:
+                        wanted.append(block[kind])
+                wanted += block.get("bullets", [])
         for option in card["options"]:
             wanted += [option["label"], option["consequence"]]
         if "recommendation" in card:
@@ -89,7 +94,9 @@ def test_prose_matches_the_documented_shape(tmp_path):
     sheet["cards"] = [
         _card(
             "plan-day", callKind="Open finding", warning=True, question="Plan the day?",
-            context={"now": "It is open.", "whyOwner": "Only you know.", "exactText": "Plan: day"},
+            context=[{"title": "What you're accepting",
+                      "blocks": [{"paragraph": "It is open."}, {"paragraph": "Only you know."}, {"bullets": ["One", "Two"]}]},
+                     {"title": "The line", "blocks": [{"quote": "Plan: day"}]}],
             images=[{"src": "img/a.png", "alt": "A chart"}, {"src": "https://x.test/b.png", "alt": "A map"}],
             options=[{"id": "x", "label": "Yes", "consequence": "We plan."},
                      {"id": "y", "label": "No", "consequence": "We skip."}],
@@ -107,21 +114,26 @@ def test_prose_matches_the_documented_shape(tmp_path):
         "",
         "1. **Plan the day?**",
         "   - Kind of call: Open finding (warning)",
-        "   - What's true now: It is open.",
-        "   - Why it needs you: Only you know.",
-        '   - The exact text: "Plan: day"',
+        "   - What you're accepting:",
+        "     It is open.",
+        "",
+        "     Only you know.",
+        "     - One",
+        "     - Two",
+        "   - The line:",
+        '     > "Plan: day"',
         "   - Images: A chart (img/a.png); A map (https://x.test/b.png)",
         "   - Options:",
         "     - a. Yes: We plan.",
         "     - b. No: We skip.",
         "   - Recommendation: Skip it. It costs a day. (option b)",
-        "   - Answer: Aligned, Discuss, or a, b",
+        "   - Answer: a, b, or Something else",
         "",
         "2. **Another call?**",
         "   - Kind of call: Wording to confirm",
-        "   - What's true now: It reads one way.",
-        "   - Why it needs you: Only you know.",
-        "   - Answer: Aligned, Discuss",
+        "   - Where it stands:",
+        "     It reads one way.",
+        "   - Answer: Aligned or Discuss",
         "",
     ])
     result = _render(tmp_path, sheet)
@@ -129,6 +141,61 @@ def test_prose_matches_the_documented_shape(tmp_path):
     assert result.stdout == expected
     assert result.stderr == ""
     assert not [line for line in result.stdout.split("\n") if line != line.rstrip()]
+
+
+# Bites on: the answer line offering Aligned or Discuss on a card with options, or leaving out Something else.
+@pytest.mark.parametrize("count, expected", [
+    (0, "Aligned or Discuss"),
+    (1, "a or Something else"),
+    (3, "a, b, c, or Something else"),
+])
+def test_prose_offers_the_same_answers_as_the_sheet(tmp_path, count, expected):
+    sheet = _remainder_sheet(1, 1, 0, card_count=1)
+    sheet["cards"][0]["options"] = [{"id": "opt-%d" % n, "label": "Option %d" % n, "consequence": "Happens."} for n in range(count)]
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    answers = [line for line in result.stdout.split("\n") if line.startswith("   - Answer:")]
+    assert answers == ["   - Answer: " + expected]
+    if count:
+        assert "Aligned" not in answers[0] and "Discuss" not in answers[0]
+
+
+# Bites on: the prose keeping a fixed context heading, dropping a bulleted list, or printing a quote line for a card with no quote.
+def test_prose_prints_sender_sections_without_fixed_headings():
+    result = _run(SAMPLE)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.split("\n")
+    assert "   - What you're accepting:" in lines
+    under = lines[lines.index("   - What you're accepting:") + 1:]
+    following = under[:next((n for n, line in enumerate(under) if line.startswith("   - ") or not line), len(under))]
+    assert any(line.startswith("     - ") for line in following), following
+    for fixed in ("What's true now", "Why it needs you", "The exact text"):
+        assert fixed not in result.stdout
+    items = re.split(r"^\d+\. \*\*", result.stdout, flags=re.M)[1:]
+    sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
+    quoteless = [card for card in sample["cards"] if card["id"] == "saved-plan-history"]
+    assert len(quoteless) == 1 and not any("quote" in b for s in quoteless[0]["context"] for b in s["blocks"])
+    position = [card["id"] for card in sample["cards"]].index("saved-plan-history")
+    assert not [line for line in items[position].split("\n") if line.lstrip().startswith(">")]
+
+
+# Bites on: a card with no context sections printing a stray section line or breaking the card's layout.
+def test_prose_prints_no_section_lines_for_an_empty_context(tmp_path):
+    sheet = _remainder_sheet(1, 1, 0, card_count=1)
+    sheet["cards"][0]["context"] = []
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    assert "\n".join(result.stdout.split("\n")[4:]) == "1. **Is this what you meant?**\n   - Kind of call: Wording to confirm\n   - Answer: Aligned or Discuss\n"
+
+
+# Bites on: the renderer printing a card whose context is still the old now / whyOwner / exactText object.
+def test_prose_refuses_an_old_shape_context(tmp_path):
+    sheet = _valid_sheet()
+    sheet["cards"][1]["context"] = {"now": "x", "whyOwner": "y", "exactText": None}
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1, result.stdout
+    assert result.stdout == ""
+    assert result.stderr
 
 
 # Bites on: the why line's wording drifting from the page's box, in its counts, plurals or unsettled sentence.
@@ -246,14 +313,16 @@ REFUSALS = {
     "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain."),
     "empty title": (_mutated(lambda s: _set(s, "", "title")), "Title must not be empty."),
     "empty cards": (_mutated(lambda s: _set(s, [], "cards")), "Cards must not be empty."),
-    "missing context.now": (_mutated(lambda s: _drop(s, "cards", 1, "context", "now")), "Cards[1].context has no now."),
+    "missing section title": (_mutated(lambda s: _drop(s, "cards", 1, "context", 0, "title")), "Cards[1].context[0] has no title."),
     "missing question": (_mutated(lambda s: _drop(s, "cards", 0, "question")), "Cards[0] has no question."),
     "missing warning": (_mutated(lambda s: _drop(s, "cards", 1, "warning")), "Cards[1] has no warning."),
     "wrong-typed warning": (_mutated(lambda s: _set(s, "yes", "cards", 1, "warning")), "Cards[1].warning must be boolean."),
     "wrong-typed option label": (_mutated(lambda s: _set(s, 7, "cards", 0, "options", 0, "label")),
                                  "Cards[0].options[0].label must be string."),
-    "wrong-typed exactText": (_mutated(lambda s: _set(s, 3, "cards", 1, "context", "exactText")),
-                              "Cards[1].context.exactText must be string or null."),
+    "wrong-typed paragraph": (_mutated(lambda s: _set(s, 3, "cards", 1, "context", 0, "blocks", 0, "paragraph")),
+                              "Cards[1].context[0].blocks[0] fits none of its allowed shapes."),
+    "block holding two kinds": (_mutated(lambda s: _set(s, {"paragraph": "a", "quote": "b"}, "cards", 1, "context", 0, "blocks", 0)),
+                                "Cards[1].context[0].blocks[0] fits none of its allowed shapes."),
     "image with no alt": (_mutated(lambda s: _set(s, [{"src": "a.png"}], "cards", 1, "images")), "Cards[1].images[0] has no alt."),
     "recommendation with no reason": (_mutated(lambda s: _drop(s, "cards", 0, "recommendation", "reason")),
                                       "Cards[0].recommendation has no reason."),
@@ -300,10 +369,10 @@ def test_prose_refuses_a_data_file_it_cannot_trust(tmp_path, name):
 def test_prose_refusal_lists_one_problem_per_line(tmp_path):
     sheet = _valid_sheet()
     _drop(sheet, "cards", 0, "question")
-    _drop(sheet, "cards", 1, "context", "now")
+    _drop(sheet, "cards", 1, "context", 0, "title")
     result = _render(tmp_path, sheet)
     assert result.returncode == 1
-    assert result.stderr.splitlines() == ["Cards[0] has no question.", "Cards[1].context has no now."]
+    assert result.stderr.splitlines() == ["Cards[0] has no question.", "Cards[1].context[0] has no title."]
 
 
 # Bites on: the renderer needing a third-party package, which a plain python3 on the owner's host may not have.
@@ -573,7 +642,7 @@ def test_prose_escapes_markdown_in_sheet_text(tmp_path):
     now = "`code` [link](u) <b> a|b ~c~ & d\\e"
     sheet = _valid_sheet()
     sheet["cards"][0]["question"] = question
-    sheet["cards"][0]["context"]["now"] = now
+    sheet["cards"][0]["context"][0]["blocks"][0]["paragraph"] = now
     sheet["cards"][0]["options"][0]["label"] = "_x_"
     result = _render(tmp_path, sheet)
     assert result.returncode == 0, result.stderr
@@ -596,8 +665,8 @@ def test_prose_letters_options_past_z(tmp_path):
     lines = result.stdout.split("\n")
     assert [line for line in lines if line.startswith("     - ")] == ["     - %s. Option %d: Happens." % (letter, n) for n, letter in enumerate(letters)]
     assert "   - Recommendation: Take the last. It is last. (option ab)" in lines
-    assert "   - Answer: Aligned, Discuss, or " + ", ".join(letters) in lines
-    assert [line for line in lines if line.startswith("   - Answer: Aligned, Discuss, or ")][0].endswith(", z, aa, ab")
+    assert "   - Answer: " + ", ".join(letters) + ", or Something else" in lines
+    assert [line for line in lines if line.startswith("   - Answer: a, b, ")][0].endswith(", z, aa, ab, or Something else")
 
 
 HISTORY_LINE = "**How the spec got here.** The review ran 3 rounds and fixed 1 thing itself. The vet: The vet found nothing."
@@ -618,8 +687,8 @@ NO_DECLINES_LINES = ["**Declined findings.** No findings were declined.", ""]
 
 
 def _plain_card_lines(number, question):
-    return ["%d. **%s**" % (number, question), "   - Kind of call: Wording to confirm", "   - What's true now: It reads one way.",
-            "   - Why it needs you: Only you know.", "   - Answer: Aligned, Discuss", ""]
+    return ["%d. **%s**" % (number, question), "   - Kind of call: Wording to confirm", "   - Where it stands:",
+            "     It reads one way.", "   - Answer: Aligned or Discuss", ""]
 
 
 TWO_CARD_LINES = _plain_card_lines(1, "Is this what you meant?") + _plain_card_lines(2, "Another call?")
