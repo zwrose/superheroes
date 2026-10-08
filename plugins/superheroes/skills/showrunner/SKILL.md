@@ -121,11 +121,9 @@ above).
    approved spec** except the downstream nets, the amendment path, and the consolidation re-read.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md` when you touch an approved spec body** — amendments, consolidation scheduling, or absorbing rulings into the spec.
 
-   **After approval.** Your after-approval work starts only when the owner, having chosen Approve on
-   discovery's final sheet, says in the chat that the sheet is done, and no other answer on that
-   sheet changes the spec. A saved Approve alone starts nothing. An answer that changes the spec
-   comes first: the spec goes back through its checks and your vet, and a new final sheet asks for
-   approval again. Then you add the breakdown to the same spec PR (or beside the stored spec) and
+   **After approval.** Your after-approval work starts only once the owner's approval stands under
+   the conditions held in discovery's step 8 (the one home for them; follow it, do not restate it). A saved Approve alone starts
+   nothing. Then you add the breakdown to the same spec PR (or beside the stored spec) and
    vet it. The independent package read still runs where it applies, before an epic's children
    file, and single-issue work keeps its fast path
    (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` § The breakdown rides the
