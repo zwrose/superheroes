@@ -6,7 +6,6 @@
   body { background: var(--sh-paper); margin: 0; }
   .sh-theme { padding-block: 16px 40px; padding-inline: 16px; }
   .sheet-page { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 720px; overflow-wrap: anywhere; }
-  .sheet-page .sh-appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; }
   .sheet-page .sh-appbar { flex-wrap: wrap; }
   .sheet-page main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
   .sheet-layout { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
@@ -24,7 +23,7 @@
   .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
   .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
   .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
-  .sheet-page :is(h2, p, ul, blockquote) { margin: 0; }
+  .sheet-page :is(h2, h3, p, ul, blockquote) { margin: 0; }
   .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
   .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
   .sheet-page .sh-card > .sh-label { margin-top: 16px; }
@@ -34,6 +33,7 @@
   .sheet-page .sh-card > label.sh-label { display: block; }
   .sheet-page .sh-card ul { padding-left: 20px; }
   .sheet-page .sheet-consequence { display: block; }
+  .sheet-page :is(.sh-card, .sh-box) a { overflow-wrap: anywhere; }
   .sheet-page .sheet-recommendation > * + * { margin-top: 4px; }
   .sheet-page .sheet-images { display: grid; gap: 12px; }
   .sheet-page .sheet-figure { margin: 0; }
@@ -476,16 +476,31 @@
     const historyBox = document.getElementById("sheet-history");
     const finalHost = document.getElementById("sheet-final");
 
-    // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
-    // has no words here leaves the answer controls off. The option value takes its words from the card.
-    const ANSWER_LABELS = { aligned: "Aligned", discuss: "Discuss" };
+    // The answers a card offers live in sheet-words.json, which the chat prose (lib/sheet_prose.py) reads too:
+    // { labels, withOptions, withoutOptions }. labels gives the words on the answer buttons by the value a stored
+    // answer takes (the option value takes its words from the card); withOptions is what a card with options
+    // offers after its option buttons, withoutOptions what a card without options offers. A value the schema lists
+    // that has no words there leaves the answer controls off. Null until that file was read.
+    let answerWords = null;
+    let reloading = false;
 
     // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
     // kinds lists the values in the order the schema gives them, and carriesOption marks the one the schema
     // ties to a string optionId. Null until the schema was read, and left null when it is not in that shape.
     let answerShape = null;
 
+    // True when the words file gives the answers the way offeredChoices() reads them: labels by value, and two
+    // lists of values that each have words.
+    function fitsAnswerWords(words) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      if (!isObject(words) || !isObject(words.labels)) return false;
+      return ["withOptions", "withoutOptions"].every(function (name) {
+        return Array.isArray(words[name]) && words[name].every(function (value) { return typeof words.labels[value] === "string"; });
+      });
+    }
+
     function readAnswerShape(schema) {
+      if (!fitsAnswerWords(answerWords)) return null;
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
       const rule = isObject(schema.$defs) ? schema.$defs.answer : undefined;
       if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.answer)) return null;
@@ -504,7 +519,8 @@
       });
       if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
-      if (kinds.some(function (kind) { return !kind.carriesOption && typeof ANSWER_LABELS[kind.value] !== "string"; })) return null;
+      if (kinds.some(function (kind) { return !kind.carriesOption && typeof answerWords.labels[kind.value] !== "string"; })) return null;
+      if (answerWords.withOptions.concat(answerWords.withoutOptions).some(function (value) { return !values.includes(value); })) return null;
       return { root: schema, rule: rule, kinds: kinds };
     }
 
@@ -610,6 +626,42 @@
       const element = document.createElement(tag);
       if (className) element.className = className;
       element.textContent = text;
+      return element;
+    }
+
+    // The same element for text from the data file, with each http:// or https:// address in it made a link that opens in a
+    // new tab. Links and the text around them are built as nodes, never as markup; text with no address is drawn as it is.
+    // A closing mark that ends the sentence (. , ; :) is not part of the address, nor is a ) with no ( before it to close.
+    function linkedElement(tag, className, text) {
+      const element = textElement(tag, className, text);
+      if (typeof text !== "string") return element;
+      const found = /https?:\/\/[^\s<>"]+/gi;
+      const pieces = [];
+      let from = 0;
+      let match;
+      while ((match = found.exec(text)) !== null) {
+        let address = match[0];
+        for (;;) {
+          const last = address.charAt(address.length - 1);
+          const closes = address.split(")").length - 1;
+          const opens = address.split("(").length - 1;
+          if (".,;:".includes(last) || (last === ")" && closes > opens)) address = address.slice(0, -1);
+          else break;
+        }
+        if (address.slice(address.indexOf("://") + 3) === "") continue;
+        if (match.index > from) pieces.push(document.createTextNode(text.slice(from, match.index)));
+        const link = document.createElement("a");
+        link.setAttribute("href", address);
+        link.setAttribute("target", "_blank");
+        link.setAttribute("rel", "noopener noreferrer");
+        link.textContent = address;
+        pieces.push(link);
+        from = match.index + address.length;
+        found.lastIndex = from;
+      }
+      if (pieces.length === 0) return element;
+      if (from < text.length) pieces.push(document.createTextNode(text.slice(from)));
+      element.replaceChildren(...pieces);
       return element;
     }
 
@@ -940,7 +992,7 @@
         picture.setAttribute("aria-label", "Open picture: " + image.alt);
         figure.appendChild(picture);
         if (typeof image.caption === "string" && image.caption !== "") {
-          figure.appendChild(textElement("figcaption", "sh-caption", image.caption));
+          figure.appendChild(linkedElement("figcaption", "sh-caption", image.caption));
         }
         wrap.appendChild(figure);
       });
@@ -952,7 +1004,7 @@
       options.forEach(function (option) {
         const item = document.createElement("li");
         item.appendChild(textElement("strong", "", option.label));
-        item.appendChild(textElement("span", "sheet-consequence", option.consequence));
+        item.appendChild(linkedElement("span", "sheet-consequence", option.consequence));
         list.appendChild(item);
       });
       return list;
@@ -961,8 +1013,8 @@
     function buildRecommendation(recommendation) {
       const wrap = document.createElement("div");
       wrap.className = "sheet-recommendation";
-      wrap.appendChild(textElement("p", "", recommendation.text));
-      wrap.appendChild(textElement("p", "", recommendation.reason));
+      wrap.appendChild(linkedElement("p", "", recommendation.text));
+      wrap.appendChild(linkedElement("p", "", recommendation.reason));
       return wrap;
     }
 
@@ -973,6 +1025,52 @@
     // Nothing on the sheet may be edited before the saved answers are read.
     function canEdit() {
       return ready;
+    }
+
+    // Keeps a note box on screen while a person types in it. The on-screen keyboard shrinks the visual viewport,
+    // not the page, so a box that was in view at focus can end up under the keyboard: the box is checked at focus
+    // and again each time the viewport resizes while it holds focus. A box already in view is never scrolled.
+    const REVEAL_MARGIN_PX = 16;
+
+    function keepInView(field) {
+      let watched = null;
+
+      function viewportNow() {
+        const viewport = typeof window !== "undefined" ? window.visualViewport : null;
+        return viewport && typeof viewport.height === "number" ? viewport : null;
+      }
+
+      function reveal() {
+        const viewport = viewportNow();
+        if (viewport === null) {
+          if (typeof field.scrollIntoView === "function") field.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (typeof field.getBoundingClientRect !== "function" || typeof window.scrollBy !== "function") return;
+        const rect = field.getBoundingClientRect();
+        const top = typeof viewport.offsetTop === "number" ? viewport.offsetTop : 0;
+        const bottom = top + viewport.height;
+        if (rect.top >= top && rect.bottom <= bottom) return;
+        // A box taller than the viewport lines its top up with the viewport's top.
+        const below = rect.bottom > bottom && rect.bottom - rect.top <= viewport.height;
+        window.scrollBy(0, below ? rect.bottom - bottom + REVEAL_MARGIN_PX : rect.top - top - REVEAL_MARGIN_PX);
+      }
+
+      function stopWatching() {
+        if (watched !== null && typeof watched.removeEventListener === "function") watched.removeEventListener("resize", reveal);
+        watched = null;
+      }
+
+      field.addEventListener("focus", function () {
+        reveal();
+        stopWatching();
+        const viewport = viewportNow();
+        if (viewport !== null && typeof viewport.addEventListener === "function") {
+          viewport.addEventListener("resize", reveal);
+          watched = viewport;
+        }
+      });
+      field.addEventListener("blur", stopWatching);
     }
 
     // The answer row, the note and the save line of one saver: a card's answers, or the final sheet's verdict.
@@ -1029,6 +1127,7 @@
       note.className = "sh-field";
       note.setAttribute("rows", "3");
       note.disabled = true;
+      keepInView(note);
       note.addEventListener("input", function () {
         if (!spec.live()) return;
         setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
@@ -1194,20 +1293,28 @@
       article.appendChild(saveLine);
     }
 
-    // A card's answers: the schema's answer kinds, one button per option for the kind tied to an option, and a
-    // document written whole at answers/<card id>.
-    function addAnswerParts(card, article) {
+    // The answers a card offers, in button order: with options, one per option and then the withOptions
+    // answers; without, the withoutOptions answers. Empty while the schema's answer shape is unread. Every
+    // answer button and every restore is decided from this and from nothing else.
+    function offeredChoices(card) {
+      if (answerShape === null) return [];
       const choices = [];
-      (answerShape === null ? [] : answerShape.kinds).forEach(function (kind) {
-        if (kind.carriesOption) {
-          card.options.forEach(function (option) {
-            choices.push({ label: option.label, answer: kind.value, optionId: option.id });
-          });
-        } else {
-          choices.push({ label: ANSWER_LABELS[kind.value], answer: kind.value, optionId: null });
-        }
-      });
-      const optionIds = new Set(card.options.map(function (option) { return option.id; }));
+      const plain = function (value) { return { label: answerWords.labels[value], answer: value, optionId: null }; };
+      if (card.options.length > 0) {
+        const carrying = answerShape.kinds.find(function (kind) { return kind.carriesOption; });
+        card.options.forEach(function (option) {
+          choices.push({ label: option.label, answer: carrying.value, optionId: option.id });
+        });
+        answerWords.withOptions.forEach(function (value) { choices.push(plain(value)); });
+      } else {
+        answerWords.withoutOptions.forEach(function (value) { choices.push(plain(value)); });
+      }
+      return choices;
+    }
+
+    // A card's answers: the choices it offers, and a document written whole at answers/<card id>.
+    function addAnswerParts(card, article) {
+      const choices = offeredChoices(card);
       addSaver({
         choices: choices,
         rowLabel: "Your answer",
@@ -1215,18 +1322,15 @@
         path: "answers/" + card.id,
         live: canEdit,
         document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
-        // A stored document restores a pick only when it fits the schema's answer rule and, for an option
-        // pick, names an option the card offers. A document that does not fit restores only its note, and
-        // only when that is text.
+        // A stored document restores a pick only when it fits the schema's answer rule and the card offers
+        // that answer now. A document that does not fit, or names an answer the card no longer offers,
+        // restores only its note, and only when that is text.
         state: function (data) {
           const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
-          const kind = answerShape !== null && fitsAnswerRule(data)
-            ? answerShape.kinds.find(function (entry) { return entry.value === data.answer; })
-            : undefined;
-          if (kind && !kind.carriesOption) {
-            state.answer = kind.value;
-          } else if (kind && optionIds.has(data.optionId)) {
-            state.answer = kind.value;
+          if (answerShape !== null && fitsAnswerRule(data) && offeredChoices(card).some(function (choice) {
+            return choice.answer === data.answer && choice.optionId === data.optionId;
+          })) {
+            state.answer = data.answer;
             state.optionId = data.optionId;
           }
           return state;
@@ -1266,15 +1370,21 @@
       article.className = "sh-card";
       article.id = "card-" + card.id;
       article.appendChild(textElement("span", card.warning ? "sh-badge sh-badge--warning" : "sh-badge", card.callKind));
-      article.appendChild(textElement("h2", "", card.question));
-      article.appendChild(textElement("p", "sh-label", "What's true now"));
-      article.appendChild(textElement("p", "", card.context.now));
-      article.appendChild(textElement("p", "sh-label", "Why it needs you"));
-      article.appendChild(textElement("p", "", card.context.whyOwner));
-      if (card.context.exactText !== null) {
-        article.appendChild(textElement("p", "sh-label", "The exact text"));
-        article.appendChild(textElement("blockquote", "", card.context.exactText));
-      }
+      article.appendChild(linkedElement("h2", "", card.question));
+      card.context.forEach(function (section) {
+        article.appendChild(linkedElement("h3", "sh-label", section.title));
+        section.blocks.forEach(function (block) {
+          if (typeof block.paragraph === "string") {
+            article.appendChild(linkedElement("p", "", block.paragraph));
+          } else if (Array.isArray(block.bullets)) {
+            const list = document.createElement("ul");
+            block.bullets.forEach(function (item) { list.appendChild(linkedElement("li", "", item)); });
+            article.appendChild(list);
+          } else if (typeof block.quote === "string") {
+            article.appendChild(linkedElement("blockquote", "", block.quote));
+          }
+        });
+      });
       if (card.images.length > 0) {
         article.appendChild(buildImages(card.images));
       }
@@ -1293,9 +1403,11 @@
     // The sheet around the cards. Everything it shows (the count, the item rows and their pills, the fold,
     // the stepper and the why box) is worked out again from the cards' current states by
     // refreshSheet() and from nothing else, so no display can drift from what the cards hold.
+    // The plain answers carry only their presentation class here; their words come from sheet-words.json.
     const PICK_PILLS = {
-      aligned: ["sh-pill sh-pill--aligned", "Aligned"],
-      discuss: ["sh-pill sh-pill--discuss", "Discuss"],
+      aligned: ["sh-pill sh-pill--aligned"],
+      discuss: ["sh-pill sh-pill--discuss"],
+      "something-else": ["sh-pill sh-pill--discuss"],
       picked: ["sh-pill sh-pill--aligned", "Picked"],
       open: ["sh-pill sh-pill--open", "Open"],
     };
@@ -1312,10 +1424,14 @@
       return button;
     }
 
+    // Moving to a different card puts the page back at its top; opening the card already open only refreshes.
+    // The first landing after the saved answers load does not come through here.
     function openAt(index) {
       if (index < 0 || index >= items.length) return;
+      const moved = index !== openIndex;
       openIndex = index;
       refreshSheet();
+      if (moved && typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     }
 
     // One Previous and Next pair; the sheet has one above the open card and one below it.
@@ -1384,7 +1500,15 @@
     function pillOf(state) {
       if (state.answer === null) return PICK_PILLS.open;
       if (state.optionId !== null) return PICK_PILLS.picked;
-      return PICK_PILLS[state.answer] || PICK_PILLS.aligned;
+      // Aligned, Discuss and Something else take their words from sheet-words.json, the one home the buttons and the chat prose read too.
+      const pill = PICK_PILLS[state.answer];
+      const label = answerWords !== null && answerWords.labels ? answerWords.labels[state.answer] : null;
+      return pill !== undefined && typeof label === "string" ? [pill[0], label] : PICK_PILLS.open;
+    }
+
+    // Discuss and Something else leave the call open for chat; Aligned and a picked option settle it.
+    function openForChat(state) {
+      return state.answer === "discuss" || state.answer === "something-else";
     }
 
     function pillElement(pill) {
@@ -1396,13 +1520,13 @@
       const states = items.map(function (item) { return controllers.get(item.id).state(); });
       const notSavedKind = function (state) { return state.save === "failed" || state.save === "stalled"; };
       const answered = states.filter(function (state) { return state.answer !== null; });
-      const discussing = answered.filter(function (state) { return state.answer === "discuss"; });
+      const chatting = answered.filter(openForChat);
 
       // A final sheet may have no cards: there is then nothing to count, step through or list.
       countHost.textContent = total === 0
         ? "Nothing left to answer"
         : ready
-          ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
+          ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
           : total + (total === 1 ? " item" : " items") + " · answers not loaded";
       countHost.hidden = false;
 
@@ -1424,16 +1548,13 @@
       });
 
       const foldedStates = states.filter(function (state, index) { return folded[index]; });
-      const foldedWith = function (answer) {
-        return foldedStates.filter(function (state) { return state.answer === answer && state.optionId === null; }).length;
-      };
-      const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
+      const foldedChatting = foldedStates.filter(openForChat).length;
+      const foldedSettled = foldedStates.filter(function (state) { return state.answer !== null && !openForChat(state); }).length;
       const notSaved = states.filter(function (state, index) { return state.answer !== null && index !== openIndex && notSavedKind(state); }).length;
       const foldChips = [
-        textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
-        textElement("span", PICK_PILLS.discuss[0], foldedWith("discuss") + " Discuss"),
+        textElement("span", PICK_PILLS.aligned[0], foldedSettled + " settled"),
+        textElement("span", PICK_PILLS.discuss[0], foldedChatting + " open for chat"),
       ];
-      if (foldedPicks > 0) foldChips.push(textElement("span", PICK_PILLS.picked[0], foldedPicks + " Picked"));
       if (notSaved > 0) foldChips.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
       // The chips are one block that always starts its own line under the label.
       const foldChipsLine = document.createElement("span");
@@ -1464,7 +1585,8 @@
     }
 
     // The words a final sheet shares with the chat prose (lib/sheet_prose.py) live in one file, sheet-words.json,
-    // which both read; the page fetches it before drawing a final sheet. Nothing here retypes them.
+    // which both read; the page fetches it before drawing any sheet (the answers every card offers are in it
+    // too). Nothing here retypes them.
     let finalWords = null;
     function plural(count, noun) {
       return count + " " + noun + (count === 1 ? "" : "s");
@@ -1495,13 +1617,13 @@
       const declined = final.declinedFindings;
       const parts = [
         textElement("h2", "", finalWords.historyHeading),
-        textElement("p", "", historySentence(history.reviewRounds, history.fixesMade, history.vet)),
+        linkedElement("p", "", historySentence(history.reviewRounds, history.fixesMade, history.vet)),
       ];
       if (declined.length > 0) {
         const list = document.createElement("ul");
         list.hidden = true;
         declined.forEach(function (finding) {
-          list.appendChild(textElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
+          list.appendChild(linkedElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
         });
         const declinedCue = cueElement();
         const toggle = actionButton("", function () {
@@ -1749,18 +1871,37 @@
         showErrors(problems);
         return;
       }
-      if (sheet.kind === "final") {
-        try {
-          finalWords = await fetchJson("sheet-words.json", "The sheet's wording file");
-        } catch (problems) {
-          showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
+      let words = null;
+      let wordsProblem = null;
+      try {
+        words = await withDeadline(function () { return fetchJson("sheet-words.json", "The sheet's wording file"); });
+      } catch (problems) {
+        wordsProblem = Array.isArray(problems) ? problems.join(" ") : problems === DEADLINE ? "The sheet's wording file did not answer in time." : "The sheet's wording file could not be loaded.";
+        // A final sheet can't be drawn without its words; any other sheet is drawn with its answer controls off.
+        if (sheet.kind === "final") {
+          showErrors([wordsProblem]);
           return;
         }
       }
+      if (sheet.kind === "final") finalWords = words;
+      answerWords = words !== null && typeof words === "object" ? words.answers : null;
       sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
       render(sheet);
+      if (wordsProblem !== null) {
+        // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.
+        say(wordsProblem + " " + SAY.noStore, function () {
+          // One reload at a time: a second tap while one runs (even on a held Try again) would draw the sheet over the first.
+          if (reloading) return;
+          reloading = true;
+          say(SAY.loading, false);
+          load().catch(function () {
+            showErrors(["The sheet could not be drawn."]);
+          }).finally(function () { reloading = false; });
+        });
+        return;
+      }
       if (answerShape === null) {
         // The schema does not say what an answer is, so nothing could be saved or read back.
         say(SAY.noStore, false);

@@ -13,11 +13,25 @@
       "callKind": "Open finding",
       "warning": true,
       "question": "Should leftovers from one dinner count as lunch the next day?",
-      "context": {
-        "now": "The spec says the planner fills seven dinners and seven lunches, but it does not say whether a leftover dinner can fill a lunch slot.",
-        "whyOwner": "Only the owner knows whether households want to plan around leftovers or cook fresh for every meal.",
-        "exactText": "Each day has one breakfast, one lunch and one dinner slot, and every slot is filled with a different recipe."
-      },
+      "context": [
+        {
+          "title": "What you're accepting",
+          "blocks": [
+            {"paragraph": "The spec fills seven dinners and seven lunches, but it never says whether last night's dinner can be tomorrow's lunch. This one is yours to call, because it depends on whether households want to plan around leftovers or cook fresh every time."},
+            {"bullets": [
+              "If leftovers count, plans need fewer recipes and shopping lists get shorter.",
+              "If they do not, every meal is a new recipe, so plans stay varied but take more cooking.",
+              "Either way the spec needs one clear sentence about it before the build starts."
+            ]}
+          ]
+        },
+        {
+          "title": "The line that leaves it open",
+          "blocks": [
+            {"quote": "Each day has one breakfast, one lunch and one dinner slot, and every slot is filled with a different recipe."}
+          ]
+        }
+      ],
       "images": [],
       "options": [
         {
@@ -42,11 +56,20 @@
       "callKind": "Wording to confirm",
       "warning": false,
       "question": "Is the shopping list rounding rule what you meant?",
-      "context": {
-        "now": "The spec rounds ingredient amounts up to the next whole package size when it builds the shopping list.",
-        "whyOwner": "The rule decides whether the list errs toward buying too much or too little, which is a product choice.",
-        "exactText": "Quantities on the shopping list are rounded up to the nearest purchasable package."
-      },
+      "context": [
+        {
+          "title": "How the list is built",
+          "blocks": [
+            {"paragraph": "When the planner builds the shopping list, it rounds each ingredient up to the next whole package. The rule decides whether the list leans toward buying too much or too little, and that is a product choice."}
+          ]
+        },
+        {
+          "title": "The rule as written",
+          "blocks": [
+            {"quote": "Quantities on the shopping list are rounded up to the nearest purchasable package."}
+          ]
+        }
+      ],
       "images": [],
       "options": [],
       "recommendation": {
@@ -59,11 +82,19 @@
       "callKind": "Scope note",
       "warning": false,
       "question": "Do you want past weekly plans kept after the week ends?",
-      "context": {
-        "now": "The spec describes creating and editing the current week's plan but does not mention what happens to it afterward.",
-        "whyOwner": "Keeping history adds storage and a screen to browse it, so it is a scope decision.",
-        "exactText": null
-      },
+      "context": [
+        {
+          "title": "What happens after the week",
+          "blocks": [
+            {"paragraph": "The spec covers making and editing the current week's plan. It says nothing about what happens to that plan once the week is over."},
+            {"bullets": [
+              "Keeping old plans means more storage.",
+              "It also means a new screen to browse them.",
+              "That makes it a call about scope, so it is yours."
+            ]}
+          ]
+        }
+      ],
       "images": [],
       "options": []
     },
@@ -72,11 +103,15 @@
       "callKind": "Wording to confirm",
       "warning": false,
       "question": "Which day should a weekly plan start on?",
-      "context": {
-        "now": "The spec says a plan covers seven days in a row but does not say which day the week begins on.",
-        "whyOwner": "The first day decides where a plan ends and the next one begins, and households disagree about it.",
-        "exactText": "A weekly plan covers seven consecutive days."
-      },
+      "context": [
+        {
+          "title": "Where a week begins",
+          "blocks": [
+            {"paragraph": "A plan covers seven days in a row, but the spec does not name the first day. That day decides where one plan ends and the next begins, and households disagree about it."},
+            {"quote": "A weekly plan covers seven consecutive days."}
+          ]
+        }
+      ],
       "images": [],
       "options": [
         {
@@ -101,11 +136,14 @@
       "callKind": "Scope note",
       "warning": false,
       "question": "Should a plan remember a household's dietary needs?",
-      "context": {
-        "now": "The spec lets a person pick any recipe for any slot and says nothing about allergies or diets.",
-        "whyOwner": "Remembering dietary needs adds a settings screen and a filter on every recipe list, so it is a scope decision.",
-        "exactText": null
-      },
+      "context": [
+        {
+          "title": "Allergies and diets",
+          "blocks": [
+            {"paragraph": "Today a person can pick any recipe for any slot. The spec says nothing about allergies or diets. Remembering them would add a settings screen and a filter on every recipe list, so this is a scope call."}
+          ]
+        }
+      ],
       "images": [],
       "options": []
     }

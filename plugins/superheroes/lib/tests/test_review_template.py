@@ -72,7 +72,11 @@ def _card(card_id, **overrides):
         "callKind": "Plan check",
         "warning": False,
         "question": "Is this the right plan?",
-        "context": {"now": "The plan is drafted.", "whyOwner": "Only you can pick.", "exactText": "Do the thing."},
+        "context": [
+            {"title": "What's true now", "blocks": [{"paragraph": "The plan is drafted."}]},
+            {"title": "Why it needs you", "blocks": [{"paragraph": "Only you can pick."}]},
+            {"title": "The exact text", "blocks": [{"quote": "Do the thing."}]},
+        ],
         "images": [],
         "options": [
             {"id": "yes", "label": "Yes", "consequence": "We go ahead."},
@@ -176,6 +180,9 @@ class Node {
     this.focusCount += 1;
     document.activeElement = this;
   }
+  scrollIntoView(options) {
+    scrollIntoViews.push([this, options]);
+  }
   setPointerCapture(id) {
     this.captured.push(id);
   }
@@ -269,6 +276,9 @@ viewerNodes["sheet-viewer-picture"].parent = viewerNodes["sheet-viewer-frame"];
   });
 });
 const documentListeners = {};
+// What the page asked the window to scroll, as ["to" | "by", x, y], and every scrollIntoView call, as [node, options].
+const scrolls = [];
+const scrollIntoViews = [];
 const document = {
   title: "Review sheet",
   activeElement: null,
@@ -279,6 +289,11 @@ const document = {
   querySelector: (selector) => (selector === ".sheet-page" ? sheetPageNode : null),
   createElement: (tag) => new Node(tag),
   createDocumentFragment: () => new Node("#fragment"),
+  createTextNode: (text) => {
+    const node = new Node("#text");
+    node.textContent = text;
+    return node;
+  },
 };
 
 // The fake host runtime. Each test says how `use("db")` and `use("user")` behave through `host`, and
@@ -372,7 +387,28 @@ const window = {
     if (type === "beforeunload") unloadListeners.push(listener);
     (windowListeners[type] = windowListeners[type] || []).push(listener);
   },
+  scrollTo: (x, y) => { scrolls.push(["to", x, y]); },
+  scrollBy: (x, y) => { scrolls.push(["by", x, y]); },
 };
+// The visual viewport (what the on-screen keyboard shrinks) exists only when a scenario asks: host.visualViewport = {height, offsetTop}.
+const viewportListeners = [];
+if (host.visualViewport) {
+  window.visualViewport = {
+    height: host.visualViewport.height,
+    offsetTop: host.visualViewport.offsetTop,
+    addEventListener: (type, listener) => { if (type === "resize") viewportListeners.push(listener); },
+    removeEventListener: (type, listener) => {
+      const at = viewportListeners.indexOf(listener);
+      if (type === "resize" && at >= 0) viewportListeners.splice(at, 1);
+    },
+  };
+}
+// A host without these is a page that must still run: noScrollIntoView takes the method away, noScroll the window's two.
+if (host.noScrollIntoView) delete Node.prototype.scrollIntoView;
+if (host.noScroll) {
+  delete window.scrollTo;
+  delete window.scrollBy;
+}
 const observers = [];
 if (host.resizeObserver) {
   globalThis.ResizeObserver = class {
@@ -722,6 +758,24 @@ const tools = {
     top: viewerNodes["sheet-viewer-frame"].scrollTop,
   }),
   resizeWindow: () => (windowListeners.resize || []).forEach((listener) => listener({ type: "resize" })),
+  scrolls: scrolls,
+  scrollIntoViews: scrollIntoViews,
+  // A node's place on screen, as getBoundingClientRect gives it.
+  place: (node, top, bottom) => { node.rect = { top: top, bottom: bottom, left: 0 }; },
+  // The fake visual viewport: how many resize listeners it holds now, and the keyboard changing its height.
+  viewport: {
+    listeners: () => viewportListeners.length,
+    resize: (height) => {
+      window.visualViewport.height = height;
+      viewportListeners.slice().forEach((listener) => listener({ type: "resize" }));
+    },
+  },
+  // Every link anywhere on the page, as [text, href, target, rel], and every button holding a child.
+  links: (root) => [...walk(root)].filter((node) => node.tagName === "a").map((node) => [node.textContent, node.getAttribute("href"), node.getAttribute("target"), node.getAttribute("rel")]),
+  everyLink: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "a"))].map((node) => node.textContent),
+  linkInsideButton: () => Object.values(elements).flatMap((root) => [...walk(root)]).some((node) => node.tagName === "button" && [...walk(node)].some((inner) => inner.tagName === "a")),
+  // A node's children as ["a" | "text", words], the shape a person reads left to right.
+  pieces: (node) => node.children.map((child) => [child.tagName === "a" ? "a" : "text", child.textContent]),
   observers: observers,
   // Every button node anywhere on the page, for the checks on what a control wears.
   allButtons: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "button"))].map((node) => ({
@@ -893,7 +947,8 @@ def test_template_restates_no_theme_value():
 # Bites on: checkSheet trusting a data file it should reject, or rejecting a sheet that is valid.
 def test_check_sheet():
     valid = [_remainder_sheet(), _final_sheet(), _sheet("plain")]
-    valid.append(_with(_sheet(), _set(0, "context", "exactText", None)))
+    valid.append(_with(_sheet(), _set(0, "context", [])))
+    valid.append(_with(_sheet(), _set(0, "context", [{"title": "Both", "blocks": [{"bullets": ["One."]}, {"quote": "Q."}]}])))
     valid.append(_with(_sheet(), _set(0, "recommendation", {"text": "Say yes.", "reason": "It is cheap.", "optionId": "yes"})))
     for index, problems in enumerate(_run_check_sheet(valid)):
         assert problems == [], "valid fixture %d was refused: %s" % (index, problems)
@@ -903,8 +958,9 @@ def test_check_sheet():
         ("empty cards", _sheet(cards=[]), None),
         ("missing question", _with(_sheet(), _drop(1, "question")), "fridge-check"),
         ("warning not boolean", _with(_sheet(), _set(1, "warning", "yes")), "fridge-check"),
-        ("missing exactText key", _with(_sheet(), _drop(1, "context", "exactText")), "fridge-check"),
-        ("exactText empty string", _with(_sheet(), _set(1, "context", "exactText", "")), "fridge-check"),
+        ("context in the old fixed shape", _with(_sheet(), _set(1, "context", {"now": "A.", "whyOwner": "B.", "exactText": None})), "fridge-check"),
+        ("section with no blocks", _with(_sheet(), _set(1, "context", [{"title": "Empty", "blocks": []}])), "fridge-check"),
+        ("quote empty string", _with(_sheet(), _set(1, "context", [{"title": "Q", "blocks": [{"quote": ""}]}])), "fridge-check"),
         ("duplicate card id", _sheet(cards=[_card("plan-day"), _card("plan-day")]), "plan-day"),
         ("duplicate option id", _with(_sheet(), _set(1, "options", [
             {"id": "yes", "label": "Yes", "consequence": "Go."},
@@ -1277,8 +1333,15 @@ def _write(card_id, answer, option_id, note):
     return {"path": "answers/" + card_id, "body": _body(answer, option_id, note)}
 
 
+def _plain_card(card_id="plan-day", **overrides):
+    return _card(card_id, options=[], **overrides)
+
+
 def _bare_card(card_id="bare-card"):
-    return _card(card_id, options=[], context={"now": "Nothing is fixed yet.", "whyOwner": "It is your call.", "exactText": None})
+    return _card(card_id, options=[], context=[
+        {"title": "What's true now", "blocks": [{"paragraph": "Nothing is fixed yet."}]},
+        {"title": "Why it needs you", "blocks": [{"paragraph": "It is your call."}]},
+    ])
 
 
 # Bites on: the order and presence of a card's parts (badge, question, context, images, options, recommendation, answers, note, save line).
@@ -1469,7 +1532,7 @@ def test_the_sheet_behind_the_view_cannot_be_answered_while_it_is_open():
     result = _answer_page([_picture_card()], """
       const view = t.view;
       t.click(t.pictures("pic-card")[0]);
-      const answer = t.button("pic-card", "Aligned");
+      const answer = t.button("pic-card", "Yes");
       const out = {
         controls: t.all(view.root).filter((node) => node.tagName === "button" || node.tagName === "textarea").map((node) => t.text(node) || node.tagName),
         answerRows: t.all(view.root).filter((node) => t.hasClass(node, "answer-row")).length,
@@ -1491,7 +1554,7 @@ def test_the_sheet_behind_the_view_cannot_be_answered_while_it_is_open():
     assert result["inert"] == ""
     assert result["pressed"] is False and result["noteTyped"] is False and result["writesWhileOpen"] == 0
     assert result["pressedAfter"] is True, "the answer button was never usable, so the inert check proves nothing"
-    assert result["writesAfter"] == [_write("pic-card", "aligned", None, "")]
+    assert result["writesAfter"] == [_write("pic-card", "option", "yes", "")]
     assert result["inertAfter"] is None
 
 
@@ -1736,7 +1799,7 @@ def test_a_missing_picture_leaves_the_card_in_place_and_says_so():
       t.click(first);
       t.fire(first, "keydown", { key: "Enter" });
       out.openedFromMissing = !view.root.hidden;
-      t.click(t.button("full-card", "Aligned"));
+      t.click(t.button("full-card", "Yes"));
       await t.tick();
       out.writes = t.setLog();
       out.opens = t.all(t.figures("full-card")[0]).filter((node) => node.getAttribute("role") === "button").length;
@@ -1763,7 +1826,7 @@ def test_a_missing_picture_leaves_the_card_in_place_and_says_so():
     ]
     assert result["pictures"] == 1 and result["cardHidden"] is False
     assert result["openedFromMissing"] is False and result["opens"] == 0
-    assert result["writes"] == [_write("full-card", "aligned", None, "")]
+    assert result["writes"] == [_write("full-card", "option", "yes", "")]
     assert result["second"] == [False, "https://example.test/fridge.png"]
 
 
@@ -1805,7 +1868,7 @@ def test_answer_row_has_only_the_fixed_buttons():
       });
       return { options: row("plan-day"), bare: row("bare-card") };
     """)
-    assert result["options"]["labels"] == ["Aligned", "Discuss", "Yes", "No"]
+    assert result["options"]["labels"] == ["Yes", "No", "Something else"]
     assert result["bare"]["labels"] == ["Aligned", "Discuss"]
     for row in result.values():
         assert set(row["tags"]) == {"button"}
@@ -1818,7 +1881,7 @@ def test_owner_tap_writes_one_whole_document_per_card():
     result = _answer_page([_card("plan-day"), _card("fridge-check")], """
       t.click(t.button("plan-day", "Yes"));
       await t.tick();
-      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("plan-day", "Something else"));
       await t.tick();
       const note = t.note("plan-day");
       t.type(note, "Use the blue one", "input");
@@ -1840,14 +1903,14 @@ def test_owner_tap_writes_one_whole_document_per_card():
     assert result["afterInput"] == 2, "typing wrote before its pause or its change"
     assert result["sets"] == [
         _write("plan-day", "option", "yes", ""),
-        _write("plan-day", "aligned", None, ""),
-        _write("plan-day", "aligned", None, "Use the blue one"),
+        _write("plan-day", "something-else", None, ""),
+        _write("plan-day", "something-else", None, "Use the blue one"),
         _write("fridge-check", "option", "no", ""),
     ]
-    assert result["plan"]["pressed"] == ["true", "false", "false", "false"]
-    assert result["plan"]["classes"][0] == "sh-button sh-button--main"
+    assert result["plan"]["pressed"] == ["false", "false", "true"]
+    assert result["plan"]["classes"][2] == "sh-button sh-button--main"
     assert result["plan"]["note"] == "Use the blue one"
-    assert result["fridge"]["pressed"] == ["false", "false", "false", "true"]
+    assert result["fridge"]["pressed"] == ["false", "true", "false"]
     assert result["save"] == "Saved"
 
 
@@ -1903,7 +1966,7 @@ def test_typing_saves_once_after_a_pause():
 
 # Bites on: "Saved" showing for a state that is not the latest, a second write in flight, or the older state being sent last.
 def test_saved_shows_only_for_the_latest_state():
-    result = _answer_page([_card("plan-day")], """
+    result = _answer_page([_plain_card("plan-day")], """
       t.click(t.button("plan-day", "Aligned"));
       const first = { sets: t.sets.length, save: t.saveText("plan-day") };
       t.click(t.button("plan-day", "Discuss"));
@@ -1926,7 +1989,7 @@ def test_saved_shows_only_for_the_latest_state():
 
 # Bites on: leaving or reloading the sheet while an answer or note is not yet confirmed by the store going unguarded, or the guard staying on once everything is saved.
 def test_leaving_the_sheet_is_guarded_only_while_an_answer_is_unconfirmed():
-    result = _answer_page([_card("plan-day")], """
+    result = _answer_page([_plain_card("plan-day")], """
       const out = {};
       out.idle = t.unload();
       t.click(t.button("plan-day", "Aligned"));
@@ -1948,35 +2011,38 @@ def test_leaving_the_sheet_is_guarded_only_while_an_answer_is_unconfirmed():
 
 # Bites on: tapping the picked answer (a plain answer, an option or Discuss) leaving it pressed or writing it again instead of clearing it, the cleared document losing the note or not fitting the answer schema, a pressed button left after the clear, a save line that does not end on Saved, or the leave-guard staying on once the cleared write resolves.
 def test_tapping_the_picked_answer_again_clears_it_and_keeps_the_note():
-    result = _answer_page([_card("plan-day")], """
+    result = _answer_page([_plain_card("plain-day"), _card("plan-day")], """
       const out = { cleared: [] };
       const settle = async () => {
         t.sets[t.sets.length - 1].resolve();
         await t.tick();
       };
-      t.type(t.note("plan-day"), "keep me", "input");
-      await t.advance(1000);
-      await settle();
-      for (const label of ["Aligned", "Yes", "Discuss"]) {
-        t.click(t.button("plan-day", label));
+      for (const id of ["plain-day", "plan-day"]) {
+        t.type(t.note(id), "keep me", "input");
+        await t.advance(1000);
         await settle();
-        const picked = t.state("plan-day").pressed;
-        t.click(t.button("plan-day", label));
+      }
+      for (const [id, label] of [["plain-day", "Aligned"], ["plan-day", "Yes"], ["plain-day", "Discuss"], ["plan-day", "Something else"]]) {
+        t.open(id);
+        t.click(t.button(id, label));
+        await settle();
+        const picked = t.state(id).pressed;
+        t.click(t.button(id, label));
         await settle();
         const log = t.setLog();
-        out.cleared.push({ label: label, picked: picked, state: t.state("plan-day"), save: t.saveText("plan-day"), guarded: t.unload(), last: log[log.length - 1] });
+        out.cleared.push({ id: id, label: label, picked: picked, state: t.state(id), save: t.saveText(id), guarded: t.unload(), last: log[log.length - 1] });
       }
       out.writes = t.setLog().length;
       return out;
     """, host={"set": "pending", "fakeTimers": True})
-    assert result["writes"] == 7, "each pick and each clear is one write after the note's"
-    assert [entry["label"] for entry in result["cleared"]] == ["Aligned", "Yes", "Discuss"]
+    assert result["writes"] == 10, "each pick and each clear is one write after the notes'"
+    assert [entry["label"] for entry in result["cleared"]] == ["Aligned", "Yes", "Discuss", "Something else"]
     for entry in result["cleared"]:
         label = entry["label"]
         assert entry["picked"].count("true") == 1, label
-        assert entry["last"] == {"path": "answers/plan-day", "body": {"answer": None, "optionId": None, "note": "keep me"}}, label
+        assert entry["last"] == {"path": "answers/" + entry["id"], "body": {"answer": None, "optionId": None, "note": "keep me"}}, label
         ANSWER_VALIDATOR.validate(entry["last"]["body"])
-        assert entry["state"]["pressed"] == ["false"] * 4, label
+        assert entry["state"]["pressed"] == ["false"] * len(entry["state"]["labels"]), label
         assert entry["state"]["note"] == "keep me", label
         assert entry["save"] == "Saved", label
         assert entry["guarded"] is False, label
@@ -1984,7 +2050,7 @@ def test_tapping_the_picked_answer_again_clears_it_and_keeps_the_note():
 
 # Bites on: a cleared answer still counting as answered, still showing an Aligned or Discuss pill on its row, still folded, or still counted in the fold's label.
 def test_a_cleared_answer_drops_out_of_the_count_the_pill_and_the_fold():
-    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card", plain=True), unsettled=["third-card"]), """
       const settle = async (index) => {
         t.sets[index].resolve();
         await t.tick();
@@ -2006,8 +2072,8 @@ def test_a_cleared_answer_drops_out_of_the_count_the_pill_and_the_fold():
       out.after = shape();
       return out;
     """, host={"set": "pending"})
-    assert result["before"] == {"count": "2 of 3 answered · 1 to discuss", "pills": ["Aligned", "Discuss", "Open"], "folded": [True, True, False], "label": "Answered · 2"}
-    assert result["after"]["count"] == "1 of 3 answered · 1 to discuss"
+    assert result["before"] == {"count": "2 of 3 answered · 1 open for chat", "pills": ["Aligned", "Discuss", "Open"], "folded": [True, True, False], "label": "Answered · 2"}
+    assert result["after"]["count"] == "1 of 3 answered · 1 open for chat"
     assert result["after"]["pills"] == ["Open", "Discuss", "Open"]
     assert result["after"]["folded"] == [False, True, False]
     assert result["after"]["label"] == "Answered · 1"
@@ -2015,7 +2081,7 @@ def test_a_cleared_answer_drops_out_of_the_count_the_pill_and_the_fold():
 
 # Bites on: a clear tapped while the pick's write is still in flight being dropped (the store keeping the pick), a second write starting before the first resolved, or the save line not ending on Saved.
 def test_a_clear_tapped_while_the_pick_is_saving_ends_cleared():
-    result = _answer_page([_card("plan-day")], """
+    result = _answer_page([_plain_card("plan-day")], """
       t.click(t.button("plan-day", "Aligned"));
       t.click(t.button("plan-day", "Aligned"));
       const early = { sets: t.sets.length, save: t.saveText("plan-day"), pressed: t.state("plan-day").pressed };
@@ -2026,7 +2092,7 @@ def test_a_clear_tapped_while_the_pick_is_saving_ends_cleared():
       await t.tick();
       return { early: early, queued: queued, sets: t.setLog(), save: t.saveText("plan-day"), guarded: t.unload() };
     """, host={"set": "pending"})
-    assert result["early"] == {"sets": 1, "save": "Saving…", "pressed": ["false"] * 4}
+    assert result["early"] == {"sets": 1, "save": "Saving…", "pressed": ["false"] * 2}
     assert result["queued"] == {"sets": 2, "save": "Saving…"}
     assert result["sets"] == [_write("plan-day", "aligned", None, ""), _write("plan-day", None, None, "")]
     assert result["save"] == "Saved"
@@ -2063,7 +2129,7 @@ def test_tapping_the_chosen_verdict_again_clears_it_and_keeps_the_note():
 
 # Bites on: a cleared answer or verdict that comes back pressed after a reopen (as when the second tap writes the pick again), a reopen that loses the note or writes anything, or a restored cleared answer counting as answered.
 def test_a_reopen_restores_a_cleared_answer_and_verdict():
-    first = _answer_page([_card("plan-day")], """
+    first = _answer_page([_plain_card("plan-day")], """
       const settle = async () => {
         t.sets[t.sets.length - 1].resolve();
         await t.tick();
@@ -2080,11 +2146,11 @@ def test_a_reopen_restores_a_cleared_answer_and_verdict():
     answer = [call for call in first if call["path"] == "answers/plan-day"][-1]["body"]
     assert answer == {"answer": None, "optionId": None, "note": "keep me"}
 
-    reopened = _answer_page([_card("plan-day")], """
+    reopened = _answer_page([_plain_card("plan-day")], """
       await t.advance(200);
       return { state: t.state("plan-day"), sets: t.setLog(), count: t.count(), save: t.saveText("plan-day") };
     """, host={"fakeTimers": True, "docs": [{"id": "plan-day", "data": answer}]})
-    assert reopened["state"]["pressed"] == ["false"] * 4
+    assert reopened["state"]["pressed"] == ["false"] * 2
     assert reopened["state"]["note"] == "keep me"
     assert reopened["sets"] == [], "reopening wrote something"
     assert reopened["count"] == "0 of 1 answered"
@@ -2120,7 +2186,7 @@ def test_a_reopen_restores_a_cleared_answer_and_verdict():
 
 # Bites on: a rejected write being hidden, a retry that does not send the latest state, or an older write's failure speaking for a newer one.
 def test_failed_save_offers_retry_of_the_latest():
-    result = _answer_page([_card("plan-day"), _card("fridge-check"), _card("third-card")], """
+    result = _answer_page([_plain_card("plan-day"), _plain_card("fridge-check"), _plain_card("third-card")], """
       const out = {};
       const failure = { code: "unavailable", message: "try later" };
       const badgeOf = (id) => t.saveLine(id).children.find((child) => t.hasClass(child, "sh-badge"));
@@ -2182,37 +2248,37 @@ def test_controls_stay_disabled_until_answers_are_restored():
     result = _answer_page([_card("plan-day"), _card("fridge-check")], """
       const states = () => t.state("plan-day").disabled.concat(t.state("fridge-check").disabled);
       const before = { gate: t.gate().message, disabled: states(), reads: t.reads.length, names: t.reads.map((read) => read.name) };
-      t.fire(t.button("plan-day", "Aligned"), "click");
+      t.fire(t.button("plan-day", "Yes"), "click");
       t.note("plan-day").value = "sneaky";
       t.fire(t.note("plan-day"), "input");
       t.fire(t.note("plan-day"), "change");
       const forced = t.sets.length;
-      const clicked = t.click(t.button("plan-day", "Aligned"));
+      const clicked = t.click(t.button("plan-day", "Yes"));
       t.reads[0].resolve(t.snapshotOf([{ id: "plan-day", data: { answer: "option", optionId: "no", note: "Saved earlier" } }]));
       await t.tick();
       const after = { gate: t.gate().hidden, disabled: states(), plan: t.state("plan-day"), fridge: t.state("fridge-check") };
-      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("plan-day", "Yes"));
       await t.tick();
       return { before: before, forced: forced, clicked: clicked, after: after, sets: t.setLog() };
     """, host={"read": "pending"})
     assert result["before"]["gate"] == "Loading your saved answers…"
-    assert result["before"]["disabled"] == [True] * 10
+    assert result["before"]["disabled"] == [True] * 8
     assert result["before"]["reads"] == 1
     assert result["before"]["names"] == ["answers"], "the saved answers were read from another collection"
     assert result["forced"] == 0, "a control wrote while the saved answers were still loading"
     assert result["clicked"] is False
     assert result["after"]["gate"] is True
-    assert result["after"]["disabled"] == [False] * 10
-    assert result["after"]["plan"]["pressed"] == ["false", "false", "false", "true"]
+    assert result["after"]["disabled"] == [False] * 8
+    assert result["after"]["plan"]["pressed"] == ["false", "true", "false"]
     assert result["after"]["plan"]["note"] == "Saved earlier"
-    assert result["after"]["fridge"]["pressed"] == ["false"] * 4
-    assert result["sets"] == [_write("plan-day", "aligned", None, "Saved earlier")]
+    assert result["after"]["fridge"]["pressed"] == ["false"] * 3
+    assert result["sets"] == [_write("plan-day", "option", "yes", "Saved earlier")]
 
 
 # Bites on: a failed read of the saved answers being treated as an empty collection, or its retry not re-reading.
 def test_failed_restore_is_not_an_empty_sheet():
     docs = [{"id": "plan-day", "data": {"answer": "discuss", "optionId": None, "note": "n"}}]
-    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+    result = _answer_page([_plain_card("plan-day"), _plain_card("fridge-check")], """
       const states = () => t.state("plan-day").disabled.concat(t.state("fridge-check").disabled);
       const gate = t.gate();
       const failed = { message: gate.message, hidden: gate.hidden, retry: gate.retry !== undefined, disabled: states(), reads: t.reads.length };
@@ -2224,19 +2290,19 @@ def test_failed_restore_is_not_an_empty_sheet():
       return { failed: failed, forced: forced, recovered: recovered };
     """, host={"read": ["reject", "docs"], "docs": docs})
     assert result["failed"] == {
-        "message": "Your saved answers couldn't be loaded.", "hidden": False, "retry": True, "disabled": [True] * 10, "reads": 1,
+        "message": "Your saved answers couldn't be loaded.", "hidden": False, "retry": True, "disabled": [True] * 6, "reads": 1,
     }
     assert result["forced"] == 0
     assert result["recovered"]["hidden"] is True
     assert result["recovered"]["reads"] == 2
     assert result["recovered"]["names"] == ["answers", "answers"], "a read, or its retry, used another collection"
-    assert result["recovered"]["disabled"] == [False] * 10
-    assert result["recovered"]["plan"]["pressed"] == ["false", "true", "false", "false"]
+    assert result["recovered"]["disabled"] == [False] * 6
+    assert result["recovered"]["plan"]["pressed"] == ["false", "true"]
 
 
 # Bites on: a write that never answers blocking the card for good, a stalled write offering a Try again that would overlap it, a second write in flight, an older write landing after a newer one, or Saved showing before the newest answer was sent and acknowledged.
 def test_stalled_save_is_single_flight_and_the_latest_state_lands_last():
-    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+    result = _answer_page([_plain_card("plan-day"), _plain_card("fridge-check")], """
       const out = {};
       t.click(t.button("plan-day", "Aligned"));
       await t.advance(9999);
@@ -2296,7 +2362,7 @@ def test_stalled_host_initialization_offers_retry(hang):
       return out;
     """, host={"hang": hang, "fakeTimers": True})
     assert result["early"] == {"message": "Loading your saved answers…", "retry": False}
-    assert result["stalled"] == {"message": "The sheet's store isn't answering.", "retry": True, "disabled": [True] * 5}
+    assert result["stalled"] == {"message": "The sheet's store isn't answering.", "retry": True, "disabled": [True] * 4}
     assert result["retried"]["message"] == "Loading your saved answers…"
     if hang == "isOwner":
         assert result["retried"]["newOwner"] > 0, "the retry did not ask isOwner() again"
@@ -2308,7 +2374,7 @@ def test_stalled_host_initialization_offers_retry(hang):
 def test_stalled_restore_offers_retry_and_applies_the_first_read_once():
     first = [{"id": "plan-day", "data": {"answer": "discuss", "optionId": None, "note": "from the retry"}}]
     late = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": "too late"}}]
-    result = _answer_page([_card("plan-day")], """
+    result = _answer_page([_plain_card("plan-day")], """
       const out = {};
       await t.advance(9999);
       out.early = { message: t.gate().message, disabled: t.state("plan-day").disabled };
@@ -2327,13 +2393,13 @@ def test_stalled_restore_offers_retry_and_applies_the_first_read_once():
       out.afterTimer = { hidden: t.gate().hidden, reads: t.reads.length };
       return out;
     """.replace("__FIRST__", json.dumps(first)).replace("__LATE__", json.dumps(late)), host={"read": "pending", "fakeTimers": True})
-    assert result["early"] == {"message": "Loading your saved answers…", "disabled": [True] * 5}
+    assert result["early"] == {"message": "Loading your saved answers…", "disabled": [True] * 3}
     assert result["stalled"] == {
-        "message": "Your saved answers couldn't be loaded.", "hidden": False, "retry": True, "disabled": [True] * 5, "reads": 1,
+        "message": "Your saved answers couldn't be loaded.", "hidden": False, "retry": True, "disabled": [True] * 3, "reads": 1,
     }
     assert result["retried"] == {"message": "Loading your saved answers…", "reads": 2, "names": ["answers", "answers"]}
     assert result["applied"]["hidden"] is True
-    assert result["applied"]["state"]["disabled"] == [False] * 5
+    assert result["applied"]["state"]["disabled"] == [False] * 3
     assert result["applied"]["state"]["note"] == "from the retry"
     assert result["afterLate"] == result["applied"]["state"], "a late read replaced the applied answers"
     assert result["afterTimer"] == {"hidden": True, "reads": 2}
@@ -2401,10 +2467,10 @@ def test_restore_ignores_answers_it_cannot_place():
     """, host={"docs": docs})
     plan, fridge, third = result["restored"]
     assert result["gateHidden"] is True
-    assert plan["pressed"] == ["false"] * 4 and plan["note"] == "keep my note"
-    assert fridge["pressed"] == ["false"] * 4 and fridge["note"] == "n2"
+    assert plan["pressed"] == ["false"] * 3 and plan["note"] == "keep my note"
+    assert fridge["pressed"] == ["false"] * 3 and fridge["note"] == "n2"
     # A document that does not fit the schema's answer rule (here a note that is not text) restores no pick.
-    assert third["pressed"] == ["false"] * 4 and third["note"] == ""
+    assert third["pressed"] == ["false"] * 3 and third["note"] == ""
     assert all(not any(state["disabled"]) for state in result["restored"])
     assert result["sets"] == [
         _write("plan-day", None, None, "edited plan-day"),
@@ -2416,18 +2482,18 @@ def test_restore_ignores_answers_it_cannot_place():
 # Bites on: a saved Aligned pick (or its note) not being restored onto the card it was saved for.
 def test_a_saved_aligned_pick_is_restored():
     docs = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": "agreed"}}]
-    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+    result = _answer_page([_plain_card("plan-day"), _plain_card("fridge-check")], """
       return { plan: t.state("plan-day"), other: t.state("fridge-check") };
     """, host={"docs": docs})
-    assert result["plan"]["pressed"] == ["true", "false", "false", "false"]
+    assert result["plan"]["pressed"] == ["true", "false"]
     assert result["plan"]["note"] == "agreed"
-    assert result["other"]["pressed"] == ["false"] * 4
+    assert result["other"]["pressed"] == ["false"] * 2
 
 
 # Bites on: a failed write of a different answer leaving a revert to the acknowledged answer reported Saved without sending it.
 def test_a_revert_after_a_failed_write_is_sent_again():
     docs = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": ""}}]
-    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+    result = _answer_page([_plain_card("plan-day"), _plain_card("fridge-check")], """
       t.click(t.button("plan-day", "Discuss"));
       t.click(t.button("plan-day", "Aligned"));
       t.sets[0].reject({ code: "unavailable", message: "lost ack" });
@@ -2449,7 +2515,7 @@ def test_a_revert_after_a_failed_write_is_sent_again():
 # Bites on: a rejected write leaving the acknowledged answer trusted, so a later revert to it was skipped and the failure cleared.
 def test_a_revert_after_a_settled_rejection_is_sent_and_saved_only_after_it_resolves():
     docs = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": ""}}]
-    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+    result = _answer_page([_plain_card("plan-day"), _plain_card("fridge-check")], """
       t.click(t.button("plan-day", "Discuss"));
       t.sets[0].reject({ code: "unavailable", message: "lost ack" });
       await t.tick();
@@ -2559,8 +2625,12 @@ def _doc(answer, option_id=None, note=""):
     return {"answer": answer, "optionId": option_id, "note": note}
 
 
-def _named_cards(*ids):
-    return [_card(card_id, question="Question %d" % (index + 1)) for index, card_id in enumerate(ids)]
+def _named_cards(*ids, plain=()):
+    """One card per id; the ids in `plain` (or every id, when `plain` is True) have no options, so they offer Aligned and Discuss."""
+    return [
+        _card(card_id, question="Question %d" % (index + 1), **({"options": []} if plain is True or card_id in plain else {}))
+        for index, card_id in enumerate(ids)
+    ]
 
 
 def _remainder_of(cards, rounds=2, fixes=3, unsettled=()):
@@ -2576,7 +2646,7 @@ def _sheet_page(sheet, scenario, host=None):
 
 # Bites on: the answered count reading anything but each card's latest answer (an unconfirmed pick left out, a note counted as an answer, a discuss pick not counted separately, a restored answer missed, or a restored document that does not fit counted).
 def test_sheet_count_follows_the_latest_answers():
-    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card"), """
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card", plain={"plan-day", "third-card", "fourth-card"}), """
       const out = {};
       const failure = { code: "unavailable", message: "try later" };
       out.start = t.count();
@@ -2601,20 +2671,20 @@ def test_sheet_count_follows_the_latest_answers():
     assert result["start"] == "0 of 4 answered"
     assert result["noteOnly"] == "0 of 4 answered", "a note alone was counted as an answer"
     assert result["aligned"] == "1 of 4 answered", "an unconfirmed pick was left out of the count"
-    assert result["changed"] == "1 of 4 answered · 1 to discuss"
-    assert result["picked"] == "2 of 4 answered · 1 to discuss"
+    assert result["changed"] == "1 of 4 answered · 1 open for chat"
+    assert result["picked"] == "2 of 4 answered · 1 open for chat"
     assert result["changedBack"] == "2 of 4 answered"
     assert result["failed"] == "2 of 4 answered"
-    assert result["stalled"] == "3 of 4 answered · 1 to discuss"
+    assert result["stalled"] == "3 of 4 answered · 1 open for chat"
 
     docs = [
         {"id": "plan-day", "data": _doc("aligned")},
-        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "fridge-check", "data": _doc("something-else")},
         {"id": "third-card", "data": _doc("option", "yes")},
         {"id": "fourth-card", "data": _doc("maybe", None, "kept")},
     ]
-    restored = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card"), "return t.count();", host={"docs": docs})
-    assert restored == "3 of 4 answered · 1 to discuss"
+    restored = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card", plain={"plan-day", "fourth-card"}), "return t.count();", host={"docs": docs})
+    assert restored == "3 of 4 answered · 1 open for chat"
 
 
 # Bites on: the sheet claiming "0 of N answered" or "Open" while the saved answers are not known (loading, a failed or stalled read, no store, a non-owner, no answer shape), or a retried read that succeeds not turning the count and pills on.
@@ -2629,7 +2699,7 @@ def test_sheet_count_follows_the_latest_answers():
     pytest.param({"read": "pending"}, 0, False, False, ["plan-day"], id="one-card"),
 ])
 def test_sheet_makes_no_answer_claim_until_answers_are_read(host, advance, drop_shape, retry, card_ids):
-    files = _sample_files(_remainder_of(_named_cards(*card_ids), unsettled=card_ids[-1:]))
+    files = _sample_files(_remainder_of(_named_cards(*card_ids, plain=True), unsettled=card_ids[-1:]))
     if drop_shape:
         files["sheet.schema.json"]["body"] = json.dumps(_schema_without_answers(_drop_answer_definition))
     page = _run_page(files, host=host, scenario="""
@@ -2664,7 +2734,7 @@ def test_rows_show_each_cards_state():
         {"id": "third-card", "data": _doc("option", "yes")},
         {"id": "fourth-card", "data": _doc("maybe", None, "only a note")},
     ]
-    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card"), """
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", "fourth-card", plain={"plan-day", "fridge-check", "fourth-card"}), """
       const out = { nodes: t.rowNodes().map((row) => [row.tagName, row.getAttribute("type")]), rows: t.rows(), open: t.openCard() };
       t.click(t.control("next"));
       out.stepped = t.openCard();
@@ -2692,7 +2762,7 @@ def test_rows_show_each_cards_state():
 
 # Bites on: a card whose save failed or stalled not showing "Not saved" on its row, a saved or untouched card showing it, or the mark staying after a retry lands.
 def test_row_shows_not_saved_for_a_failed_or_stalled_save():
-    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card"), """
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "third-card", plain={"plan-day", "third-card"}), """
       const out = {};
       const failure = { code: "unavailable", message: "try later" };
       const badges = () => t.rows().map((row) => row.badge);
@@ -2759,10 +2829,10 @@ def test_one_card_is_open_and_previous_next_step_through():
     # A restore lands on the first card still waiting for an answer, or on the first when every card is answered.
     ids = ("plan-day", "fridge-check", "third-card")
     partly = [{"id": "plan-day", "data": _doc("aligned")}, {"id": "fridge-check", "data": _doc("discuss")}]
-    landed = _answer_page(_named_cards(*ids), "return { open: t.openCard(), label: t.stepper().label };", host={"docs": partly})
+    landed = _answer_page(_named_cards(*ids, plain={"plan-day", "fridge-check"}), "return { open: t.openCard(), label: t.stepper().label };", host={"docs": partly})
     assert landed == {"open": "third-card", "label": "Item 3 of 3"}
     everything = partly + [{"id": "third-card", "data": _doc("option", "no")}]
-    landed = _answer_page(_named_cards(*ids), "return { open: t.openCard(), label: t.stepper().label };", host={"docs": everything})
+    landed = _answer_page(_named_cards(*ids, plain={"plan-day", "fridge-check"}), "return { open: t.openCard(), label: t.stepper().label };", host={"docs": everything})
     assert landed == {"open": "plan-day", "label": "Item 1 of 3"}
 
     # A sheet with one card has nowhere to step.
@@ -2770,7 +2840,7 @@ def test_one_card_is_open_and_previous_next_step_through():
     assert single == {"open": "plan-day", "stepper": {"hidden": False, "label": "Item 1 of 1", "prevDisabled": True, "nextDisabled": True}, "fold": True}
 
 
-# Bites on: the fold missing an answered item, miscounting its pills, showing a Picked pill when none was picked, folding the open card, folding on a plain or final sheet, or its toggle not flipping aria-expanded and the list's expanded class.
+# Bites on: the fold missing an answered item, miscounting its pills, counting a pick as open for chat, folding the open card, folding on a plain or final sheet, or its toggle not flipping aria-expanded and the list's expanded class.
 def test_remainder_fold_counts_answered_items():
     ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
     docs = [
@@ -2786,7 +2856,7 @@ def test_remainder_fold_counts_answered_items():
       out.collapsed = { aria: t.fold().aria, list: t.fold().listExpanded };
       return out;
     """
-    result = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), scenario, host={"docs": docs})
+    result = _sheet_page(_remainder_of(_named_cards(*ids, plain={"plan-day", "fridge-check", "fourth-card"}), unsettled=["fourth-card"]), scenario, host={"docs": docs})
     assert result["open"] == "fourth-card"
     assert result["rows"] == [True, True, True, False]
     fold = result["fold"]
@@ -2794,20 +2864,19 @@ def test_remainder_fold_counts_answered_items():
     assert fold["className"] == "sh-button sheet-fold"
     assert fold["parts"] == [
         ["", "Answered · 3"],
-        ["sh-pill sh-pill--aligned", "1 Aligned"],
-        ["sh-pill sh-pill--discuss", "1 Discuss"],
-        ["sh-pill sh-pill--aligned", "1 Picked"],
+        ["sh-pill sh-pill--aligned", "2 settled"],
+        ["sh-pill sh-pill--discuss", "1 open for chat"],
     ]
     assert result["expanded"] == {"aria": "true", "list": True}
     assert result["collapsed"] == {"aria": "false", "list": False}
 
-    # No pick, no Picked pill.
-    two = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), scenario, host={"docs": docs[:1]})
-    assert [part[1] for part in two["fold"]["parts"]] == ["Answered · 1", "1 Aligned", "0 Discuss"]
+    # Both chips always show, and a pick is counted with the settled ones.
+    two = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", plain=True), unsettled=["fridge-check"]), scenario, host={"docs": docs[:1]})
+    assert [part[1] for part in two["fold"]["parts"]] == ["Answered · 1", "1 settled", "0 open for chat"]
 
     # The open card is never folded or counted, even when every card is answered.
     everything = docs + [{"id": "fourth-card", "data": _doc("aligned")}]
-    full = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), scenario, host={"docs": everything})
+    full = _sheet_page(_remainder_of(_named_cards(*ids, plain={"plan-day", "fridge-check", "fourth-card"}), unsettled=["fourth-card"]), scenario, host={"docs": everything})
     assert full["open"] == "plan-day"
     assert full["rows"] == [False, True, True, True]
     assert full["fold"]["parts"][0] == ["", "Answered · 3"]
@@ -2821,7 +2890,7 @@ def test_remainder_fold_counts_answered_items():
 
 # Bites on: an answer whose save failed or stalled folding away with the rest, losing its Not saved mark, going missing from the fold's "not saved" count, or the open card (already in full view) being counted in that number.
 def test_an_unsaved_answer_never_folds():
-    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card", plain=True), unsettled=["third-card"]), """
       const out = {};
       const failure = { code: "unavailable", message: "try later" };
       const shape = () => ({ folded: t.rows().map((row) => row.folded), badges: t.rows().map((row) => row.badge), fold: t.fold() });
@@ -2847,26 +2916,26 @@ def test_an_unsaved_answer_never_folds():
     warning = ["sh-badge sh-badge--warning", "Not saved"]
     # An answer still being written folds; one whose write failed does not, though the owner has moved on.
     assert result["saving"]["folded"] == [True, True, False]
-    assert [part[1] for part in result["saving"]["fold"]["parts"]] == ["Answered · 2", "1 Aligned", "1 Discuss"]
+    assert [part[1] for part in result["saving"]["fold"]["parts"]] == ["Answered · 2", "1 settled", "1 open for chat"]
     assert result["failed"]["folded"] == [False, True, False]
     assert result["failed"]["badges"] == [warning, None, None]
     assert result["failed"]["fold"]["hidden"] is False
     assert result["failed"]["fold"]["parts"] == [
         ["", "Answered · 1"],
-        ["sh-pill sh-pill--aligned", "0 Aligned"],
-        ["sh-pill sh-pill--discuss", "1 Discuss"],
+        ["sh-pill sh-pill--aligned", "0 settled"],
+        ["sh-pill sh-pill--discuss", "1 open for chat"],
         ["sh-badge sh-badge--warning", "1 not saved"],
     ]
     # The open card is in full view with its own save line, so the fold does not count it.
     assert result["openFailed"]["folded"] == [False, True, False]
-    assert [part[1] for part in result["openFailed"]["fold"]["parts"]] == ["Answered · 1", "0 Aligned", "1 Discuss"]
+    assert [part[1] for part in result["openFailed"]["fold"]["parts"]] == ["Answered · 1", "0 settled", "1 open for chat"]
     assert result["recovered"]["folded"] == [True, True, False]
     assert result["recovered"]["badges"] == [None, None, None]
 
 
 # Bites on: an answer whose write stalled folding away with the rest, losing its Not saved mark, or going missing from the fold's "not saved" count.
 def test_a_stalled_answer_never_folds():
-    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card", plain=True), unsettled=["third-card"]), """
       t.click(t.button("plan-day", "Aligned"));
       t.open("fridge-check");
       t.click(t.button("fridge-check", "Discuss"));
@@ -2878,7 +2947,7 @@ def test_a_stalled_answer_never_folds():
     """, host={"set": "pending", "fakeTimers": True})
     assert result["folded"] == [False, True, False]
     assert result["badges"] == [["sh-badge sh-badge--warning", "Not saved"], None, None]
-    assert [part[1] for part in result["fold"]["parts"]] == ["Answered · 1", "0 Aligned", "1 Discuss", "1 not saved"]
+    assert [part[1] for part in result["fold"]["parts"]] == ["Answered · 1", "0 settled", "1 open for chat", "1 not saved"]
 
 
 # Bites on: the "why only these" line built from anything but the review's own rounds, fixes and unsettled count, the card count, or shown on a plain or final sheet.
@@ -2900,7 +2969,7 @@ def test_why_only_these_is_built_from_the_remainder_facts():
 
 # Bites on: an earlier write settling cutting a note's one-second pause short, so a half-typed note is written early.
 def test_an_earlier_save_settling_keeps_the_note_pause():
-    result = _answer_page([_card("plan-day")], """
+    result = _answer_page([_plain_card("plan-day")], """
       const out = {};
       t.click(t.button("plan-day", "Aligned"));
       t.type(t.note("plan-day"), "the note", "input");
@@ -3132,7 +3201,7 @@ def test_final_parts_absent_off_a_final_sheet(sheet):
     """)
     assert result["parts"] == {"historyHidden": True, "historyChildren": 0, "finalHidden": True, "finalChildren": 0}
     assert result["reads"] == ["answers"]
-    assert result["controls"] == 2 * (4 + 1)
+    assert result["controls"] == 2 * (3 + 1)
 
 
 # Bites on: any sheet kind drawing a Done for now control or heading, a Back to the sheet control, or the old done box, before or after the answers load or an answer is tapped.
@@ -3406,7 +3475,7 @@ def test_without_a_digest_the_last_card_stays_off_and_says_why():
     assert all(result["last"]["disabled"]) and result["last"]["pressed"] == ["false", "false"]
     assert result["sets"] == [], "the last card wrote without a digest"
     assert result["reads"] == ["answers"], "the page read the verdict collection without a digest"
-    assert result["cards"] == [False] * 5, "the cards stopped working too"
+    assert result["cards"] == [False] * 4, "the cards stopped working too"
 
     for name, host in (
         ("loading", {"read": "pending", "noCrypto": True}),
@@ -3605,7 +3674,7 @@ def test_a_schema_without_a_verdict_shape_keeps_the_last_card_off(mutate):
     result = page["result"]
     assert result["last"]["disabled"][-1] is True and all(result["last"]["disabled"])
     assert result["sets"] == []
-    assert result["cardControls"] == [False] * 5, "the cards stopped working too"
+    assert result["cardControls"] == [False] * 4, "the cards stopped working too"
     assert result["gate"] is True and result["caption"] is True
 
 
@@ -3688,7 +3757,7 @@ CUE_SCENARIO = """
 # Bites on: the folded row's cue not following the toggle (stuck on ▶, or not redrawn on the second click), a closed cue missing its text-presentation selector (U+FE0E), a cue that is not the button's first child, one a screen reader would read (no aria-hidden), one that disagrees with aria-expanded, or the row losing its theme button class.
 def test_the_fold_cue_follows_the_toggle():
     docs = [{"id": "plan-day", "data": _doc("aligned")}, {"id": "fridge-check", "data": _doc("discuss")}]
-    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), CUE_SCENARIO + """
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card", plain={"plan-day", "fridge-check"}), unsettled=["third-card"]), CUE_SCENARIO + """
       const fold = t.control("fold");
       const out = { closed: cueOf(fold), hiddenRow: t.fold().hidden };
       t.click(fold);
@@ -3712,13 +3781,12 @@ def test_the_fold_row_is_padded_and_its_chips_line_up_with_the_label():
         {"id": "fridge-check", "data": _doc("discuss")},
         {"id": "third-card", "data": _doc("option", "yes")},
     ]
-    fold = _sheet_page(_remainder_of(_named_cards(*ids), unsettled=["fourth-card"]), "return t.fold();", host={"docs": docs})
+    fold = _sheet_page(_remainder_of(_named_cards(*ids, plain={"plan-day", "fridge-check", "fourth-card"}), unsettled=["fourth-card"]), "return t.fold();", host={"docs": docs})
     assert fold["chips"] == {"className": "sheet-fold-chips", "index": 2}, "the chips are not one block after the cue and the label"
     assert fold["parts"] == [
         ["", "Answered · 3"],
-        ["sh-pill sh-pill--aligned", "1 Aligned"],
-        ["sh-pill sh-pill--discuss", "1 Discuss"],
-        ["sh-pill sh-pill--aligned", "1 Picked"],
+        ["sh-pill sh-pill--aligned", "2 settled"],
+        ["sh-pill sh-pill--discuss", "1 open for chat"],
     ]
 
     rules = _style_rules(_template_text())
@@ -4039,3 +4107,557 @@ def test_a_gesture_begun_before_the_fingers_never_zooms_with_the_pinch():
     """)
     assert result["pinch"]["width"] == 800, "a gesture begun before the fingers zoomed the pinch as well"
     assert len(result["prevented"]) == 2 and all(result["prevented"]), result["prevented"]
+
+
+# The sample sheet's own cards: leftovers-handling has two options; shopping-list-rounding and saved-plan-history have none.
+LEFTOVERS_LABELS = ["Let leftovers fill a lunch slot", "Require a different recipe for every slot"]
+OPEN_PILL = ["sh-pill sh-pill--open", "Open"]
+SOMETHING_ELSE_PILL = ["sh-pill sh-pill--discuss", "Something else"]
+
+
+def _page_of_the_sample(scenario, host=None, sheet=None):
+    page = _run_page(_sample_files(sheet), host=host, scenario=scenario)
+    assert page["settled"] and page["errors"] == [], page
+    return page["result"]
+
+
+# Bites on: a card with options offering Aligned or Discuss beside its options, a card without options offering anything but Aligned and Discuss, or the options losing their order or labels.
+def test_options_card_offers_its_options_and_something_else_only():
+    result = _page_of_the_sample("""
+      return { options: t.state("leftovers-handling").labels, plain: t.state("shopping-list-rounding").labels };
+    """)
+    assert result["options"] == LEFTOVERS_LABELS + ["Something else"]
+    assert result["plain"] == ["Aligned", "Discuss"]
+
+
+# Bites on: Something else saving as anything but its own whole document, its row not showing the Something else pill (live, after a restore, or on an expanded remainder row), or a restore writing.
+def test_something_else_saves_as_its_own_answer():
+    written = _page_of_the_sample("""
+      t.click(t.button("leftovers-handling", "Something else"));
+      await t.tick();
+      return { sets: t.setLog(), pressed: t.state("leftovers-handling").pressed, pill: t.rows()[0].pill };
+    """)
+    assert written["sets"] == [_write("leftovers-handling", "something-else", None, "")]
+    assert written["sets"][0]["body"] == {"answer": "something-else", "optionId": None, "note": ""}
+    assert written["pressed"] == ["false", "false", "true"]
+    assert written["pill"] == SOMETHING_ELSE_PILL
+
+    restored = _page_of_the_sample("""
+      const before = { pressed: t.state("leftovers-handling").pressed, pill: t.rows()[0].pill, folded: t.rows()[0].folded };
+      t.click(t.control("fold"));
+      return { before: before, expanded: t.fold().listExpanded, pill: t.rows()[0].pill, folded: t.rows()[0].folded, sets: t.setLog(), count: t.count() };
+    """, host={"docs": [{"id": "leftovers-handling", "data": written["sets"][0]["body"]}]})
+    assert restored["before"] == {"pressed": ["false", "false", "true"], "pill": SOMETHING_ELSE_PILL, "folded": True}
+    assert restored["expanded"] is True and restored["folded"] is True and restored["pill"] == SOMETHING_ELSE_PILL
+    assert restored["sets"] == [], "reopening wrote something"
+    assert restored["count"] == "1 of 5 answered · 1 open for chat"
+
+
+# Bites on: the Something else pill retyping its words in the page instead of reading them from sheet-words.json, so editing that file changes the button but not the item's pill.
+def test_something_else_pill_reads_its_words_from_the_wording_file():
+    words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
+    words["answers"]["labels"]["something-else"] = "Another way"
+    files = _sample_files()
+    files["sheet-words.json"] = {"status": 200, "body": json.dumps(words)}
+    page = _run_page(files, scenario="""
+      t.click(t.button("leftovers-handling", "Another way"));
+      await t.tick();
+      return { labels: t.state("leftovers-handling").labels, pill: t.rows()[0].pill };
+    """)
+    assert page["settled"] and page["errors"] == [], page
+    assert page["result"]["labels"][-1] == "Another way"
+    assert page["result"]["pill"] == ["sh-pill sh-pill--discuss", "Another way"]
+
+
+# Bites on: the Aligned or Discuss row pill retyping its words in the page instead of reading them from sheet-words.json, so editing that file changes the button but not the item's pill.
+@pytest.mark.parametrize("answer,label,card_id,index", [
+    pytest.param("aligned", "Agree", "shopping-list-rounding", 1, id="aligned"),
+    pytest.param("discuss", "Talk it over", "saved-plan-history", 2, id="discuss"),
+])
+def test_plain_answer_pills_read_their_words_from_the_wording_file(answer, label, card_id, index):
+    words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
+    words["answers"]["labels"][answer] = label
+    files = _sample_files()
+    files["sheet-words.json"] = {"status": 200, "body": json.dumps(words)}
+    page = _run_page(files, scenario="""
+      t.click(t.button(__CARD__, __LABEL__));
+      await t.tick();
+      return { labels: t.state(__CARD__).labels, pill: t.rows()[__INDEX__].pill };
+    """.replace("__CARD__", json.dumps(card_id)).replace("__LABEL__", json.dumps(label)).replace("__INDEX__", str(index)))
+    assert page["settled"] and page["errors"] == [], page
+    assert label in page["result"]["labels"]
+    assert page["result"]["pill"][1] == label
+
+
+# Bites on: Try again after a wording-file failure staying live while the reload runs, so two taps draw the sheet twice and the second drawing clears the restored answers.
+def test_overlapping_wording_file_retries_load_the_sheet_once():
+    files = _sample_files()
+    good = files["sheet-words.json"]
+    files["sheet-words.json"] = {"status": 503, "body": ""}
+    page = _run_page(files, scenario="""
+      const retry = t.gate().retry;
+      let loads = 0;
+      const sheetFile = files["sheet.json"];
+      Object.defineProperty(files, "sheet.json", { get() { loads += 1; return sheetFile; } });
+      files["sheet-words.json"] = __GOOD__;
+      t.click(retry);
+      t.click(retry);
+      await t.tick();
+      await t.tick();
+      return { loads: loads, cards: elements["sheet-cards"].children.length };
+    """.replace("__GOOD__", json.dumps(good)))
+    assert page["settled"] and page["errors"] == [], page
+    assert page["result"]["loads"] == 1, "two taps started two reloads"
+    assert page["result"]["cards"] > 0
+
+
+# Bites on: a wording file that never answers leaving a sheet on Loading with no cards or error, instead of the final sheet naming that file and any other sheet drawing with its answer controls off.
+@pytest.mark.parametrize("sheet", [None, "final"], ids=["plain", "final"])
+def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):
+    files = _sample_files(_sample_final() if sheet == "final" else None)
+    files["sheet-words.json"] = {"hang": True}
+    page = _run_page(files, host={"fakeTimers": True}, scenario="""
+      await t.advance(9999);
+      const early = elements["sheet-cards"].children.length;
+      await t.advance(1);
+      return { early: early, cards: elements["sheet-cards"].children.length, gate: t.gate().message, gateHidden: t.gate().hidden };
+    """)
+    assert page["result"]["early"] == 0
+    if sheet == "final":
+        assert page["result"]["cards"] == 0
+        assert page["errorHidden"] is False
+        assert any("wording file" in error and "in time" in error for error in page["errors"]), page["errors"]
+    else:
+        assert page["result"]["cards"] > 0, "the sheet was never drawn"
+        assert page["statusHidden"] is True
+        assert page["result"]["gateHidden"] is False
+        assert "wording file did not answer in time" in page["result"]["gate"], page["result"]
+
+
+# Bites on: an answer or note failing to come back onto its own card when the sheet is republished with new question wording and a new card order, or the reload writing.
+def test_answers_restore_across_a_republish():
+    first = _page_of_the_sample("""
+      t.click(t.button("leftovers-handling", "Let leftovers fill a lunch slot"));
+      await t.tick();
+      t.type(t.note("leftovers-handling"), "fits our week", "change");
+      await t.tick();
+      t.click(t.button("shopping-list-rounding", "Aligned"));
+      await t.tick();
+      t.type(t.note("shopping-list-rounding"), "round up", "change");
+      await t.tick();
+      t.click(t.button("saved-plan-history", "Discuss"));
+      await t.tick();
+      t.type(t.note("saved-plan-history"), "how long?", "change");
+      await t.tick();
+      return t.setLog();
+    """)
+    last = {}
+    for call in first:
+        last[call["path"].split("/")[1]] = call["body"]
+    assert last == {
+        "leftovers-handling": _body("option", "allow-leftovers", "fits our week"),
+        "shopping-list-rounding": _body("aligned", None, "round up"),
+        "saved-plan-history": _body("discuss", None, "how long?"),
+    }
+    revised = json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8"))
+    revised["cards"].reverse()
+    for index, card in enumerate(revised["cards"]):
+        card["question"] = "Revised wording %d" % (index + 1)
+    docs = [{"id": card_id, "data": body} for card_id, body in last.items()]
+    second = _page_of_the_sample("""
+      const ids = ["leftovers-handling", "shopping-list-rounding", "saved-plan-history"];
+      return { states: ids.map((id) => t.state(id)), sets: t.setLog() };
+    """, host={"docs": docs}, sheet=revised)
+    leftovers, rounding, history = second["states"]
+    assert leftovers["pressed"] == ["true", "false", "false"] and leftovers["note"] == "fits our week"
+    assert rounding["pressed"] == ["true", "false"] and rounding["note"] == "round up"
+    assert history["pressed"] == ["false", "true"] and history["note"] == "how long?"
+    assert second["sets"] == [], "the reload wrote something"
+
+
+# Bites on: a stored answer the card does not offer now (Aligned or Discuss on a card with options, an option or Something else on a card without) restoring as a pick, losing its note, or the reload writing.
+@pytest.mark.parametrize("card_id,index,answer,option_id", [
+    pytest.param("leftovers-handling", 0, "aligned", None, id="aligned"),
+    pytest.param("leftovers-handling", 0, "discuss", None, id="discuss"),
+    pytest.param("shopping-list-rounding", 1, "option", "allow-leftovers", id="option"),
+    pytest.param("shopping-list-rounding", 1, "something-else", None, id="something-else"),
+])
+def test_an_answer_the_card_no_longer_offers_restores_unanswered(card_id, index, answer, option_id):
+    scenario = "return { state: t.state(__CARD__), pill: t.rows()[__INDEX__].pill, sets: t.setLog() };"
+    result = _page_of_the_sample(
+        scenario.replace("__CARD__", json.dumps(card_id)).replace("__INDEX__", str(index)),
+        host={"docs": [{"id": card_id, "data": _body(answer, option_id, "keep this")}]},
+    )
+    assert set(result["state"]["pressed"]) == {"false"}, "an answer the card does not offer was restored as a pick"
+    assert result["state"]["note"] == "keep this"
+    assert result["pill"] == OPEN_PILL
+    assert result["sets"] == [], "the reload wrote something"
+
+
+# Bites on: the fold row counting by the old Aligned, Discuss and Picked split instead of settled and open for chat, Something else counting as settled, or the app bar not using the same split.
+def test_fold_counts_settled_and_open_for_chat():
+    ids = ("aligned-card", "picked-card", "discuss-card", "else-card", "waiting-card")
+    docs = [
+        {"id": "aligned-card", "data": _doc("aligned")},
+        {"id": "picked-card", "data": _doc("option", "yes")},
+        {"id": "discuss-card", "data": _doc("discuss")},
+        {"id": "else-card", "data": _doc("something-else")},
+    ]
+    cards = _named_cards(*ids, plain={"aligned-card", "discuss-card", "waiting-card"})
+    scenario = "return { fold: t.fold(), count: t.count(), rows: t.rows().map((row) => row.pill[1]) };"
+    result = _sheet_page(_remainder_of(cards, unsettled=["waiting-card"]), scenario, host={"docs": docs})
+    assert result["fold"]["parts"] == [
+        ["", "Answered · 4"],
+        ["sh-pill sh-pill--aligned", "2 settled"],
+        ["sh-pill sh-pill--discuss", "2 open for chat"],
+    ]
+    assert result["count"] == "4 of 5 answered · 2 open for chat"
+    assert result["rows"] == ["Aligned", "Picked", "Discuss", "Something else", "Open"]
+
+
+# Bites on: a rule pinning the yellow app bar (sticky or fixed), so it stays on screen while the page scrolls; the image view's own fixed rule is a different selector.
+def test_app_bar_is_not_pinned():
+    pinned = [
+        selector for selector, pairs in _style_rules(_template_text())
+        if "sh-appbar" in selector and any(prop == "position" and value in ("sticky", "fixed") for prop, value in pairs)
+    ]
+    assert pinned == [], "the app bar is pinned by %s" % pinned
+
+
+# Bites on: a card's context not being drawn from its sections in order (title as a heading, then each block as a paragraph, bulleted list or quote), a fixed heading still drawn, or an empty context drawing a heading.
+def test_context_draws_sender_sections():
+    accepting = _plain_card("accepting-card", context=[
+        {"title": "What you're accepting", "blocks": [{"paragraph": "P."}, {"bullets": ["One.", "Two."]}]},
+    ])
+    quoting = _plain_card("quoting-card", context=[
+        {"title": "The wording", "blocks": [{"quote": "Say it exactly."}]},
+    ])
+    nothing = _plain_card("nothing-card", context=[])
+    result = _answer_page([accepting, quoting, nothing], """
+      const drawn = (id) => t.card(id).children.map((child) => [child.tagName, child.className, child.tagName === "ul" ? child.children.map((item) => [item.tagName, item.textContent]) : child.textContent]);
+      return { accepting: drawn("accepting-card"), quoting: drawn("quoting-card"), nothing: t.parts("nothing-card"), text: t.text(t.card("accepting-card")) };
+    """)
+    assert result["accepting"][2:5] == [
+        ["h3", "sh-label", "What you're accepting"],
+        ["p", "", "P."],
+        ["ul", "", [["li", "One."], ["li", "Two."]]],
+    ]
+    assert not any(child[0] == "blockquote" for child in result["accepting"]), "a quote was drawn that no block carries"
+    assert result["quoting"][2:4] == [["h3", "sh-label", "The wording"], ["blockquote", "", "Say it exactly."]]
+    assert sum(child[0] == "blockquote" for child in result["quoting"]) == 1
+    for old in ("What's true now", "Why it needs you", "The exact text"):
+        assert old not in result["text"], "the old fixed heading %r is still drawn" % old
+    assert result["nothing"] == ["span.sh-badge", "h2", "div.answer-row", "label:Note", "textarea.sh-field", "div.save-line"]
+
+
+# --- Moving between cards, the note box and the links ---
+
+
+def _three_cards():
+    return _named_cards("plan-day", "fridge-check", "third-card", plain=True)
+
+
+# Bites on: a move to another card (top or bottom Next or Previous, an item row) that leaves the page where it was, or one that scrolls more than once.
+@pytest.mark.parametrize("name, setup, action, opens", [
+    ("top-next", "", 't.click(t.control("next"));', "fridge-check"),
+    ("top-previous", 't.open("fridge-check");', 't.click(t.control("previous"));', "plan-day"),
+    ("bottom-next", "", 't.click(t.control("bottomNext"));', "fridge-check"),
+    ("bottom-previous", 't.open("fridge-check");', 't.click(t.control("bottomPrevious"));', "plan-day"),
+    ("item-row", "", 't.open("third-card");', "third-card"),
+])
+def test_moving_to_another_card_scrolls_to_the_top(name, setup, action, opens):
+    result = _answer_page(_three_cards(), """
+      %s
+      t.scrolls.length = 0;
+      %s
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """ % (setup, action))
+    assert result == {"scrolls": [["to", 0, 0]], "open": opens}, name
+
+
+# Bites on: a row inside the expanded Answered fold (a remainder sheet, answered cards folded away) opening its card without scrolling to the top.
+def test_a_row_in_the_expanded_fold_scrolls_to_the_top():
+    ids = ("plan-day", "fridge-check", "third-card", "fourth-card")
+    docs = [
+        {"id": "plan-day", "data": _doc("aligned")},
+        {"id": "fridge-check", "data": _doc("discuss")},
+        {"id": "third-card", "data": _doc("option", "yes")},
+    ]
+    result = _sheet_page(_remainder_of(_named_cards(*ids, plain={"plan-day", "fridge-check", "fourth-card"}), unsettled=["fourth-card"]), """
+      const out = { start: t.openCard(), landed: t.scrolls.slice() };
+      t.click(t.control("fold"));
+      t.scrolls.length = 0;
+      t.open("plan-day");
+      out.scrolls = t.scrolls.slice();
+      out.open = t.openCard();
+      return out;
+    """, host={"docs": docs})
+    assert result == {"start": "fourth-card", "landed": [], "scrolls": [["to", 0, 0]], "open": "plan-day"}
+
+
+# Bites on: tapping the row of the card that is already open scrolling the page.
+def test_tapping_the_open_cards_row_does_not_scroll():
+    result = _answer_page(_three_cards(), """
+      t.open("plan-day");
+      t.open("plan-day");
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """)
+    assert result == {"scrolls": [], "open": "plan-day"}
+
+
+# Bites on: the landing after the saved answers load (the first card already answered, so the sheet lands on the second) scrolling the page.
+def test_the_first_landing_never_scrolls():
+    result = _answer_page(_three_cards(), """
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """, host={"docs": [{"id": "plan-day", "data": _doc("aligned")}]})
+    assert result == {"scrolls": [], "open": "fridge-check"}
+
+
+# Bites on: a host with no scrollTo throwing when a person moves to another card.
+def test_moving_without_scroll_to_is_a_no_op():
+    result = _answer_page(_three_cards(), """
+      t.click(t.control("next"));
+      return { scrolls: t.scrolls.slice(), open: t.openCard() };
+    """, host={"noScroll": True})
+    assert result == {"scrolls": [], "open": "fridge-check"}
+
+
+VIEWPORT = {"height": 600, "offsetTop": 0}
+
+
+# Bites on: the reveal rule: a note box in view being scrolled, one below the viewport not scrolling by the gap plus the margin, one above not scrolling up by the gap plus the margin, one taller than the viewport not aligning its top, and the viewport's own offset being ignored.
+@pytest.mark.parametrize("name, viewport, top, bottom, scrolls", [
+    ("in view", VIEWPORT, 100, 200, []),
+    ("flush with the top edge", VIEWPORT, 0, 100, []),
+    ("flush with the bottom edge", VIEWPORT, 500, 600, []),
+    ("below", VIEWPORT, 550, 650, [["by", 0, 66]]),
+    ("above", VIEWPORT, -50, 50, [["by", 0, -66]]),
+    ("taller than the viewport", VIEWPORT, 100, 900, [["by", 0, 84]]),
+    ("offset viewport, in view", {"height": 300, "offsetTop": 200}, 250, 350, []),
+    ("offset viewport, below", {"height": 300, "offsetTop": 200}, 450, 520, [["by", 0, 36]]),
+    ("offset viewport, above", {"height": 300, "offsetTop": 200}, 150, 190, [["by", 0, -66]]),
+])
+def test_a_focused_note_is_revealed_by_the_visual_viewport(name, viewport, top, bottom, scrolls):
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, %d, %d);
+      t.fire(note, "focus");
+      return { scrolls: t.scrolls.slice(), intoView: t.scrollIntoViews.length };
+    """ % (top, bottom), host={"visualViewport": viewport})
+    assert result == {"scrolls": scrolls, "intoView": 0}, name
+
+
+# Bites on: the keyboard opening after the focus (the visual viewport shrinking) not bringing the note back into view, a resize scrolling a note that is still in view, and a second scroll for one resize.
+def test_the_note_stays_visible_when_the_keyboard_opens():
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, 150, 250);
+      t.fire(note, "focus");
+      const out = { atFocus: t.scrolls.slice(), listeners: t.viewport.listeners() };
+      t.viewport.resize(400);
+      out.stillInView = t.scrolls.slice();
+      t.viewport.resize(200);
+      out.covered = t.scrolls.slice();
+      return out;
+    """, host={"visualViewport": VIEWPORT})
+    assert result == {"atFocus": [], "listeners": 1, "stillInView": [], "covered": [["by", 0, 66]]}
+
+
+# Bites on: the resize listener staying on the visual viewport after the note loses focus, a later resize scrolling the page, or a second listener piling up across focus and blur cycles.
+def test_the_note_stops_watching_the_viewport_when_it_loses_focus():
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, 150, 250);
+      const counts = [];
+      t.fire(note, "focus"); counts.push(t.viewport.listeners());
+      t.fire(note, "focus"); counts.push(t.viewport.listeners());
+      t.fire(note, "blur"); counts.push(t.viewport.listeners());
+      t.fire(note, "focus"); counts.push(t.viewport.listeners());
+      t.fire(note, "blur"); counts.push(t.viewport.listeners());
+      t.scrolls.length = 0;
+      t.viewport.resize(200);
+      return { counts: counts, scrolls: t.scrolls.slice() };
+    """, host={"visualViewport": VIEWPORT})
+    assert result == {"counts": [1, 1, 0, 1, 0], "scrolls": []}
+
+
+# Bites on: the final sheet's verdict note not being brought into view and not letting go of the viewport on blur, as a card's note does.
+def test_the_verdict_note_stays_visible_when_the_keyboard_opens():
+    result = _sheet_page(_final_sheet(), """
+      const note = t.lastNote();
+      t.place(note, 150, 250);
+      t.fire(note, "focus");
+      const out = { atFocus: t.scrolls.slice(), listeners: t.viewport.listeners() };
+      t.viewport.resize(200);
+      out.covered = t.scrolls.slice();
+      t.fire(note, "blur");
+      t.viewport.resize(100);
+      out.after = t.scrolls.slice();
+      out.listenersAfter = t.viewport.listeners();
+      return out;
+    """, host={"visualViewport": VIEWPORT})
+    assert result == {"atFocus": [], "listeners": 1, "covered": [["by", 0, 66]], "after": [["by", 0, 66]], "listenersAfter": 0}
+
+
+# Bites on: a browser with no visual viewport getting no help from the note box (it must ask the box to scroll into view, leaving a box in view alone), or the page scrolling the window itself there.
+def test_without_a_visual_viewport_the_note_scrolls_itself_into_view():
+    result = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.fire(note, "focus");
+      return { into: t.scrollIntoViews.map((call) => [call[0].id, call[1]]), scrolls: t.scrolls.slice(), id: note.id };
+    """)
+    assert result["into"] == [[result["id"], {"block": "nearest"}]]
+    assert result["scrolls"] == []
+
+
+# Bites on: a host missing scrollIntoView or scrollBy making the note's focus or blur throw.
+def test_a_note_without_the_scroll_apis_is_a_no_op():
+    bare = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.fire(note, "focus");
+      t.fire(note, "blur");
+      return { into: t.scrollIntoViews.length, scrolls: t.scrolls.slice() };
+    """, host={"noScrollIntoView": True})
+    assert bare == {"into": 0, "scrolls": []}
+    no_by = _answer_page(_three_cards(), """
+      const note = t.note("plan-day");
+      t.place(note, 550, 650);
+      t.fire(note, "focus");
+      t.fire(note, "blur");
+      return { scrolls: t.scrolls.slice() };
+    """, host={"noScroll": True, "visualViewport": VIEWPORT})
+    assert no_by == {"scrolls": []}
+
+
+ADDRESS = "https://example.com/a"
+
+
+def _paragraph_pieces(text):
+    """What a card's first context paragraph is drawn from, as [kind, words], with the paragraph's own text and links."""
+    card = _plain_card("link-card", context=[{"title": "T", "blocks": [{"paragraph": text}]}])
+    return _answer_page([card], """
+      const paragraph = t.card("link-card").children.find((child) => child.tagName === "p");
+      return { pieces: t.pieces(paragraph), text: paragraph.textContent, links: t.links(paragraph) };
+    """)
+
+
+# Bites on: an address in a paragraph, a bullet or a quote drawn as plain text, or as a link missing its address, its new-tab target or its rel.
+def test_an_address_in_context_text_is_a_link():
+    card = _plain_card("link-card", context=[{"title": "T", "blocks": [
+        {"paragraph": "Read https://example.com/p now"},
+        {"bullets": ["First http://example.com/b"]},
+        {"quote": "Quoted https://example.com/q"},
+    ]}])
+    result = _answer_page([card], """
+      const kids = t.card("link-card").children;
+      const of = (tag) => kids.find((child) => child.tagName === tag);
+      return { p: t.links(of("p")), li: t.links(of("ul")), q: t.links(of("blockquote")), pieces: t.pieces(of("p")) };
+    """)
+    rel = "noopener noreferrer"
+    assert result["p"] == [["https://example.com/p", "https://example.com/p", "_blank", rel]]
+    assert result["li"] == [["http://example.com/b", "http://example.com/b", "_blank", rel]]
+    assert result["q"] == [["https://example.com/q", "https://example.com/q", "_blank", rel]]
+    assert result["pieces"] == [["text", "Read "], ["a", "https://example.com/p"], ["text", " now"]]
+
+
+# Bites on: trailing punctuation swallowed into the link, a bracket that closes the address being cut off it, a bracket that closes the sentence being kept, or an address with nothing after the scheme becoming a link.
+@pytest.mark.parametrize("text, pieces", [
+    ("see https://example.com/a.", [["text", "see "], ["a", ADDRESS], ["text", "."]]),
+    ("see https://example.com/a,", [["text", "see "], ["a", ADDRESS], ["text", ","]]),
+    ("see https://example.com/a;", [["text", "see "], ["a", ADDRESS], ["text", ";"]]),
+    ("see https://example.com/a:", [["text", "see "], ["a", ADDRESS], ["text", ":"]]),
+    ("see https://example.com/a)", [["text", "see "], ["a", ADDRESS], ["text", ")"]]),
+    ("(see https://example.test/a)", [["text", "(see "], ["a", "https://example.test/a"], ["text", ")"]]),
+    ("(see https://example.test/a).", [["text", "(see "], ["a", "https://example.test/a"], ["text", ")."]]),
+    ("https://example.test/report_(draft)", [["a", "https://example.test/report_(draft)"]]),
+    ("https://example.test/report_(draft).", [["a", "https://example.test/report_(draft)"], ["text", "."]]),
+    ("https://example.com/a.,;:", [["a", ADDRESS], ["text", ".,;:"]]),
+    ("HTTPS://Example.com/A", [["a", "HTTPS://Example.com/A"]]),
+    ("one https://example.com/a and two http://example.com/b!", [["text", "one "], ["a", ADDRESS], ["text", " and two "], ["a", "http://example.com/b!"]]),
+    ("odd https://. then https://example.com/a", [["text", "odd https://. then "], ["a", ADDRESS]]),
+])
+def test_where_an_address_ends(text, pieces):
+    assert _paragraph_pieces(text)["pieces"] == pieces
+
+
+# Bites on: text with no address, or only an address with nothing after the scheme, gaining children, or a scheme other than http and https becoming a link.
+@pytest.mark.parametrize("text", [
+    "Nothing to link here.",
+    "javascript:alert(1)",
+    "ftp://example.com/file",
+    "mailto:someone@example.com",
+    "data:text/html,hello",
+    "https://",
+    "https://.",
+    "www.example.com",
+])
+def test_text_without_an_http_address_stays_plain(text):
+    assert _paragraph_pieces(text) == {"pieces": [], "text": text, "links": []}
+
+
+# Bites on: an answer button built from an option's label turning an address in that label into a link, or the option label in the list being linked.
+def test_an_address_in_an_option_label_is_never_a_link():
+    label = "Open https://example.com/label"
+    card = _card("link-card", options=[
+        {"id": "yes", "label": label, "consequence": "We go."},
+        {"id": "no", "label": "No", "consequence": "We stop."},
+    ])
+    result = _answer_page([card], """
+      const button = t.button("link-card", %s);
+      return { button: button ? [button.textContent, button.children.length] : null, links: t.links(t.card("link-card")), inButton: t.linkInsideButton() };
+    """ % json.dumps(label))
+    assert result == {"button": [label, 0], "links": [], "inButton": False}
+
+
+# Bites on: an address left plain at any site the sender or the final sheet's data writes (the card's section title, question, context, caption, consequence, recommendation, and the final sheet's declined findings and vet), an address linked where it must not be (an option label, the call kind, the sheet title, a picture's description), or a link inside a button.
+def test_every_data_drawn_text_links_and_the_exempt_ones_do_not():
+    def at(name):
+        return "https://example.com/" + name
+
+    card = _card(
+        "census-card",
+        callKind="Kind " + at("kind"),
+        question="Question " + at("question"),
+        context=[{"title": "Title " + at("title"), "blocks": [
+            {"paragraph": "Para " + at("paragraph")},
+            {"bullets": ["Bullet " + at("bullet")]},
+            {"quote": "Quote " + at("quote")},
+        ]}],
+        images=[{"src": "pic.png", "alt": "Alt " + at("alt"), "caption": "Caption " + at("caption")}],
+        options=[
+            {"id": "yes", "label": "Label " + at("label"), "consequence": "Consequence " + at("consequence")},
+            {"id": "no", "label": "No", "consequence": "We stop."},
+        ],
+        recommendation={"text": "Rec " + at("rec-text"), "reason": "Why " + at("rec-reason"), "optionId": "yes"},
+    )
+    sheet = _sheet("final", cards=[card], title="Sheet " + at("sheet-title"), final={
+        "history": {"reviewRounds": 2, "fixesMade": 3, "vet": "Vet " + at("vet")},
+        "declinedFindings": [{"summary": "Summary " + at("summary"), "reason": "Reason " + at("reason")}],
+        "approval": {"approvedBoard": True, "boardSavedWithSpec": True},
+    })
+    page = _run_page(_sample_files(sheet), scenario="""
+      return {
+        links: t.everyLink(),
+        inButton: t.linkInsideButton(),
+        alts: t.pictures("census-card").map((picture) => [picture.getAttribute("alt"), picture.getAttribute("aria-label")]),
+        label: t.button("census-card", %s).children.length,
+      };
+    """ % json.dumps("Label " + at("label")))
+    assert page["settled"], page
+    result = page["result"]
+    linked = ["question", "title", "paragraph", "bullet", "quote", "caption", "consequence", "rec-text", "rec-reason", "vet", "summary", "reason"]
+    assert sorted(result["links"]) == sorted(at(name) for name in linked)
+    assert result["inButton"] is False
+    assert result["alts"] == [["Alt " + at("alt"), "Open picture: Alt " + at("alt")]]
+    assert result["label"] == 0
+    assert page["appBar"] == "Sheet " + at("sheet-title")
+    assert page["title"] == "Sheet " + at("sheet-title")
+    assert page["cards"][0]["badgeClass"] == "sh-badge"
+
+
+# Bites on: a link drawn from anything but DOM nodes (a string of markup assigned to a node), which would let a sender's text carry markup.
+def test_links_are_built_without_markup_strings():
+    page = re.search(r"<script>(.*?)</script>", _template_text(), re.S).group(1)
+    assert "innerHTML" not in page and "insertAdjacentHTML" not in page and "outerHTML" not in page
+    assert page.count("function linkedElement(") == 1
+    assert 'setAttribute("target", "_blank")' in page and 'setAttribute("rel", "noopener noreferrer")' in page

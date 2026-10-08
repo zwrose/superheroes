@@ -1,6 +1,11 @@
 {
   "historyHeading": "How the spec got here",
   "history": "The review ran {rounds} and fixed {fixes} itself. The vet: {vet}",
+  "answers": {
+    "labels": {"aligned": "Aligned", "discuss": "Discuss", "something-else": "Something else"},
+    "withOptions": ["something-else"],
+    "withoutOptions": ["aligned", "discuss"]
+  },
   "roundNoun": "round",
   "thingNoun": "thing",
   "declinedHeading": "Declined findings",
