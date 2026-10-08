@@ -508,6 +508,10 @@ summarizes)
 - **Ready for vet:** the owner's word that the spec may go to the advisor's vet; not approval.
   (source: ruling 4)
 
+## Delivery
+
+**Delivered, accepted in full by the owner on 2026-10-08** (collector #695 item 56 = a, in chat: "56 a plus you have my merge word"; option a read "merge the stack and #1677, accept Spec A in full (four paths unexercised, disclosed) and Spec B amendment 3 in full"). The acceptance rests on the closure receipt carried at PR #1676's vet 418 (moved there from vet 417 when C10 joined the stack) and re-pinned at vet 419. The children shipped as: C1 #1643; C2 #1660; C3 stack #1654; C4 stack #1670 (#1667, #1669, #1671, #1675, merged 2026-10-08 with C10 #1676 on top); C5 stack #1663; C6 #1668; C9 #1666. Every criterion is delivered; none is deferred or declined. Four paths were exercised only in a rehearsal, not in a live run, and were disclosed at acceptance: opening a real spec PR, a real advisor's vet of it, answers typed in chat where a sheet can't be shown, and the same-family note. The first real discovery after the release is their first live run.
+
 ## Amendments
 
 _No amendments since the last full approval._
