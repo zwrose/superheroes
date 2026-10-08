@@ -549,3 +549,271 @@ Run by the advisor on 2026-10-05, against branch head `advisor/breakdown-1614` (
   - The front-half-sdlc-core FR-16/FR-17 amendment: that spec's Amendments log, entry dated 2026-10-04.
   - None of these is called open anywhere in the files.
 - **Result:** verified. No missing body, every build-ready result `ok`, every register check `pass`, every ruling found.
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "Spec B amendment 3 (owner-stamped, substantive, 2026-10-07; collector #695 item 54 = a): FR-5, FR-6, FR-12, FR-13, register R17/R18, and new child C10 (#1673)",
+ "ceiling": 3,
+ "invocation": "inv2",
+ "kind": "invocation",
+ "measurables": {
+  "children": 1,
+  "registerEntries": 4
+ },
+ "override": null,
+ "seats": [
+  "codex gpt-6.1-sol high: all five lenses"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "not-applicable",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "a3-1",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "a3-3",
+   "lens": "coverage-exactly-once"
+  },
+  {
+   "finding": "a3-4",
+   "lens": "coverage-exactly-once"
+  },
+  {
+   "finding": "a3-5",
+   "lens": "collisions"
+  },
+  {
+   "finding": "a3-6",
+   "lens": "collisions"
+  },
+  {
+   "finding": "a3-7",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "a3-8",
+   "lens": "dod-adequacy"
+  },
+  {
+   "finding": "a3-9",
+   "lens": "dod-adequacy"
+  }
+ ],
+ "invocation": "inv2",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "R17",
+   "status": "unreviewed"
+  },
+  {
+   "part": "R18",
+   "status": "unreviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C10-body",
+   "status": "unreviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "not-applicable",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "a3-10",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "a3-11",
+   "lens": "register-drift"
+  },
+  {
+   "finding": "a3-12",
+   "lens": "coverage-exactly-once"
+  }
+ ],
+ "invocation": "inv2",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "R17",
+   "status": "reviewed"
+  },
+  {
+   "part": "R18",
+   "status": "reviewed"
+  },
+  {
+   "part": "R20",
+   "status": "unreviewed"
+  },
+  {
+   "part": "R25",
+   "status": "unreviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "C10-body",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv2",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "R20",
+   "status": "reviewed"
+  },
+  {
+   "part": "R25",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "C10-body",
+   "status": "reviewed"
+  }
+ ],
+ "round": 3
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "C10 body item 3 now quotes exact text where the call is about it, matching FR-5/R17; closed at round 2",
+   "finding": "a3-1",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "FR-5 statement row removed, bullet row carries it; counts 117 total, Spec B 35, C10 5; closed at round 2",
+   "finding": "a3-3",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "finding": "a3-4",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "lib/sheet_prose.py in C10 scope, size and DoD; closed at round 2",
+   "finding": "a3-5",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "finding": "a3-6",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R18 rule: an answer under a control the card no longer offers counts as unanswered; C10 item 4 and DoD; closed at round 2",
+   "finding": "a3-7",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "finding": "a3-8",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "finding": "a3-9",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "Delivery section limits accepted delivery to amendments 1-2; closed at round 3",
+   "finding": "a3-10",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C10 added to R20 and R25 consumers and quoted; register_check C10 pass; closed at round 3",
+   "finding": "a3-11",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "finding": "a3-12",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv2",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C10",
+   "result": "pass"
+  }
+ ]
+}
+```
+
+## Re-read after Spec B amendment 3 (inv2)
+
+Run by the advisor on 2026-10-07. Light weight (one new child, C10; four register entries touched: R17, R18, R20, R25), ceiling 3, one codex seat across all five lenses (the advisor is the maker, so no Anthropic-family seat). Round 1 raised eight findings (seven Important, one Mechanical), round 2 three, and round 3 none: every finding was a package fix, verified at the next round. **Control probe, disclosed:** rounds 1 and 2 carried no planted defect, so they are recorded `not-applicable`. After round 3, the same seat read the final package with one planted defect (FR-12's row moved back to C8) and caught it at once, naming the row, the broken counts and the C8 layer breakdown; round 3 is recorded `engaged` on that probe. Prompts and outputs: the advisor's scratchpad (`amend3-read1..3`, `amend3-probe`). The verification pass's sync check: `register_check.py` on C10's body with `--register-copy worktree`, `pass` (R17, R18, R20, R25). C4's bodies are re-injected with the amended R17 and R18 after this read, as amendments.md orders.

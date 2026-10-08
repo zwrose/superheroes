@@ -8,7 +8,7 @@ exactly one child.
 spec's own bullet granularity. An FR or UFR with no acceptance bullet is one criterion (its
 statement). Each non-functional requirement is one criterion. Each item of Spec A's "What this spec
 amends" is one criterion. Where an FR carries acceptance bullets, its statement is owned by the child
-that owns its bullets; the one FR whose bullets are split names the statement's owner below. One
+that owns its bullets; the FRs whose bullets are split name the statement's owner below. One
 further rule, following the precedent package's treatment of numbered lists: Spec A FR-41's three
 named checks are list items of its statement that each define a separate check, so each counts as a
 criterion beside the FR's own acceptance bullet; FR-3's ten categories are one list graded by its
@@ -18,7 +18,7 @@ single acceptance bullet and are not counted separately.
 C1's (Canon's write procedure, when a ruling binds, the out-of-repo store); bullet 2 (Canon never
 gets a PR of its own; the advisor's rulings ride its PRs, a ruling received outside any open PR riding
 the next one) is C6's, because it is the advisor's own write path and C6 owns the advisor's doctrine.
-Register entry R5 binds both. No other criterion is split.
+Register entry R5 binds both. Spec B FR-6 is split at its bullets by Spec B amendment 3 (2026-10-07): the statement (answers that match the call) and bullets 1 and 2 (what each answer means; a disagreeing note leaves the call open) are C10's, because C10 builds the new controls; bullets 3 and 4 (no review adds its own buttons; the final sheet's last card) stay C8's, which delivered them unchanged. Register entry R18 binds both. Spec A FR-1 is split at its bullets since 2026-10-07 (collector #695 item 49 = a): the statement and bullets 2 and 3 are C2's, which built the one line and repointed the sites it named; bullet 1 (no second, different line anywhere in the plugin) is C9's, which retired the escalation rubric's own line. Register entry R8 binds both. No other criterion is split.
 
 **Moves from the starting sketch** (reasons in the README): FR-12 is C4's (it is a step of
 discovery's grounding, and discovery's skill has one owner); FR-18 and the item-13 migration are
@@ -132,9 +132,9 @@ and C8).
 | B | FR-4 | bullet 1 (GWT) | Given an owner who answers two cards and closes the sheet, when they reopen it, then both answers are still there. | **C8** |
 | B | FR-4a | bullet 1 | no extra submission machinery is built for this; a saved draft plus the owner's word is enough. | **C8** |
 | B | FR-4a | bullet 2 | on a final sheet too, the owner's word in the chat is that word; no button on the sheet stands in for it (FR-18). (Amendment 2, 2026-10-07) | **C8** |
-| B | FR-5 | statement | Every card except a final sheet's last card (FR-17) shall have the same parts, in this order… | **C8** |
-| B | FR-6 | bullet 1 | Aligned agrees with the card's recommendation… a pick chooses that option; Discuss leaves the call open for chat. | **C8** |
-| B | FR-6 | bullet 2 | when the owner's note disagrees with their answer, the session treats the card as Discuss and asks. | **C8** |
+| B | FR-5 | bullet 1 | the template fixes no context headings and requires no section; a card whose call has no exact text shows no empty quote. | **C10** (added by Spec B amendment 3, 2026-10-07; FR-5 now carries a bullet, so its statement, the card's parts with the sender-written context, is owned with it and no longer counted on its own; C8 delivered the earlier statement) |
+| B | FR-6 | bullet 1 | a pick chooses that option; Something else leaves the call open for chat… Aligned agrees with the card's recommendation…; Discuss leaves the call open for chat. | **C10** (amended 2026-10-07, Spec B amendment 3, collector #695 item 54 = a; C8 delivered the earlier text) |
+| B | FR-6 | bullet 2 | when the owner's note disagrees with their answer, the session treats the card as open for chat and asks. | **C10** (amended 2026-10-07, Spec B amendment 3, collector #695 item 54 = a; C8 delivered the earlier text) |
 | B | FR-6 | bullet 3 | no review adds its own answer buttons. | **C8** |
 | B | FR-6 | bullet 4 | a final sheet's last card offers Approve and Not yet instead. | **C8** |
 | B | FR-7 | statement | A card for a gap the reviewer found, a statement with no source, or a finding the review didn't settle shall carry a red warning badge… | **C8** |
@@ -142,8 +142,8 @@ and C8).
 | B | FR-9 | statement | When the owner taps an image on a card, the sheet shall open it on its own, large, with a Close control… | **C8** |
 | B | FR-10 | statement | While an image is open, the owner shall be able to pinch or double-tap to zoom and drag to look around. | **C8** |
 | B | FR-11 | statement | The image view shall not move between images by swiping sideways… | **C8** |
-| B | FR-12 | statement | A sheet shall show the review's name in a yellow app bar, and how many items are answered out of the total. | **C8** |
-| B | FR-13 | statement | On a phone, a remainder sheet shall fold answered items into one row… | **C8** |
+| B | FR-12 | statement | A sheet shall show the review's name in a yellow app bar, and how many items are answered out of the total; the bar scrolls away with the page… | **C10** (amended 2026-10-07, Spec B amendment 3, collector #695 item 54 = a; C8 delivered the earlier text) |
+| B | FR-13 | statement | On a phone, a remainder sheet shall fold answered items into one row showing how many are settled and how many are left open for chat… | **C10** (amended 2026-10-07, Spec B amendment 3, collector #695 item 54 = a; C8 delivered the earlier text) |
 | B | FR-14 | statement | On a desktop, a sheet shall list every item with its state beside the open card, with Previous and Next controls. | **C8** |
 | B | FR-15 | statement | A remainder sheet shall say why it holds only these items… | **C8** |
 | B | FR-16 | statement | The owner shall be able to leave a sheet unfinished and come back to it; every answer is already saved, so leaving needs no button. (Amendment 1, 2026-10-07) | **C8** |
@@ -162,7 +162,7 @@ and C8).
 | B | NFR | Touch | every control is at least 44px tall. | **C7** |
 | B | NFR | Telling things apart | colours that must be told apart also differ in lightness. | **C7** |
 
-**Counts.** Spec A: C1: 13, C2: 11, C3: 3, C4: 31, C5: 18, C6: 6; total 82 (4 amends items, 69 FR criteria, 7 UFR criteria, 2 NFRs). Spec B: C7: 8, C8: 27; total 35 (27 FR criteria, 4 UFR criteria, 4 NFRs). Per child, both specs: C1: 13, C2: 11, C3: 3, C4: 31, C5: 18, C6: 6, C7: 8, C8: 27; children 117. **Total criteria: 117. Unallocated: 0. Owned twice: 0.**
+**Counts** (re-checked 2026-10-07 after Spec B amendment 3; the same re-check also carries C9's row from 2026-10-07, which moved one Spec A criterion from C2 and had not been counted). Spec A: C1: 13, C2: 10, C3: 3, C4: 31, C5: 18, C6: 6, C9: 1; total 82 (4 amends items, 69 FR criteria, 7 UFR criteria, 2 NFRs). Spec B: C7: 8, C8: 22, C10: 5; total 35 (27 FR criteria, 4 UFR criteria, 4 NFRs; amendment 3's new FR-5 bullet replaces FR-5's statement as the counted criterion). Per child, both specs: C1: 13, C2: 10, C3: 3, C4: 31, C5: 18, C6: 6, C7: 8, C8: 22, C9: 1, C10: 5; children 117. **Total criteria: 117. Unallocated: 0. Owned twice: 0.**
 
 **Within stacked children** (for the layer sub-issues; each layer's DoD grades only its rows):
 
@@ -174,8 +174,8 @@ and C8).
   the retirements: amends items 1 and 3, FR-49, FR-49a, FR-49b (5).
 - C7 (8): layer 1, the theme: Spec B FR-19 to FR-22 and the readability, touch and telling-apart
   NFRs (7); layer 2, the template shell: Spec B FR-1 (1).
-- C8 (27): layer 1, cards and answers: Spec B FR-3, FR-4, FR-4a (2), FR-5, FR-6 bullets 1 to 3,
-  FR-7, UFR-2, UFR-4, the privacy NFR (12); layer 2, sheets: FR-2, FR-12 to FR-16, UFR-1 (7); layer 3,
+- C8 (22): layer 1, cards and answers: Spec B FR-3, FR-4, FR-4a (2), FR-6 bullet 3,
+  FR-7, UFR-2, UFR-4, the privacy NFR (9); layer 2, sheets: FR-2, FR-14 to FR-16, UFR-1 (5); layer 3,
   the final sheet: FR-6 bullet 4, FR-17, FR-18 (3); layer 4, images: FR-8 to FR-11, UFR-3 (5).
 
 **Spec sections that are not criteria but have a builder home.** These carry no acceptance
