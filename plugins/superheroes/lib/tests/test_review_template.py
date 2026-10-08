@@ -4119,6 +4119,48 @@ def test_something_else_pill_reads_its_words_from_the_wording_file():
     assert page["result"]["pill"] == ["sh-pill sh-pill--discuss", "Another way"]
 
 
+# Bites on: the Aligned or Discuss row pill retyping its words in the page instead of reading them from sheet-words.json, so editing that file changes the button but not the item's pill.
+@pytest.mark.parametrize("answer,label,card_id,index", [
+    pytest.param("aligned", "Agree", "shopping-list-rounding", 1, id="aligned"),
+    pytest.param("discuss", "Talk it over", "saved-plan-history", 2, id="discuss"),
+])
+def test_plain_answer_pills_read_their_words_from_the_wording_file(answer, label, card_id, index):
+    words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
+    words["answers"]["labels"][answer] = label
+    files = _sample_files()
+    files["sheet-words.json"] = {"status": 200, "body": json.dumps(words)}
+    page = _run_page(files, scenario="""
+      t.click(t.button(__CARD__, __LABEL__));
+      await t.tick();
+      return { labels: t.state(__CARD__).labels, pill: t.rows()[__INDEX__].pill };
+    """.replace("__CARD__", json.dumps(card_id)).replace("__LABEL__", json.dumps(label)).replace("__INDEX__", str(index)))
+    assert page["settled"] and page["errors"] == [], page
+    assert label in page["result"]["labels"]
+    assert page["result"]["pill"][1] == label
+
+
+# Bites on: Try again after a wording-file failure staying live while the reload runs, so two taps draw the sheet twice and the second drawing clears the restored answers.
+def test_overlapping_wording_file_retries_load_the_sheet_once():
+    files = _sample_files()
+    good = files["sheet-words.json"]
+    files["sheet-words.json"] = {"status": 503, "body": ""}
+    page = _run_page(files, scenario="""
+      const retry = t.gate().retry;
+      let loads = 0;
+      const sheetFile = files["sheet.json"];
+      Object.defineProperty(files, "sheet.json", { get() { loads += 1; return sheetFile; } });
+      files["sheet-words.json"] = __GOOD__;
+      t.click(retry);
+      t.click(retry);
+      await t.tick();
+      await t.tick();
+      return { loads: loads, cards: elements["sheet-cards"].children.length };
+    """.replace("__GOOD__", json.dumps(good)))
+    assert page["settled"] and page["errors"] == [], page
+    assert page["result"]["loads"] == 1, "two taps started two reloads"
+    assert page["result"]["cards"] > 0
+
+
 # Bites on: a wording file that never answers leaving a sheet on Loading with no cards or error, instead of the final sheet naming that file and any other sheet drawing with its answer controls off.
 @pytest.mark.parametrize("sheet", [None, "final"], ids=["plain", "final"])
 def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):

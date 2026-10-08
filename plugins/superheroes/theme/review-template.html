@@ -481,6 +481,7 @@
     // offers after its option buttons, withoutOptions what a card without options offers. A value the schema lists
     // that has no words there leaves the answer controls off. Null until that file was read.
     let answerWords = null;
+    let reloading = false;
 
     // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
     // kinds lists the values in the order the schema gives them, and carriesOption marks the one the schema
@@ -1318,9 +1319,11 @@
     // The sheet around the cards. Everything it shows (the count, the item rows and their pills, the fold,
     // the stepper and the why box) is worked out again from the cards' current states by
     // refreshSheet() and from nothing else, so no display can drift from what the cards hold.
+    // The plain answers carry only their presentation class here; their words come from sheet-words.json.
     const PICK_PILLS = {
-      aligned: ["sh-pill sh-pill--aligned", "Aligned"],
-      discuss: ["sh-pill sh-pill--discuss", "Discuss"],
+      aligned: ["sh-pill sh-pill--aligned"],
+      discuss: ["sh-pill sh-pill--discuss"],
+      "something-else": ["sh-pill sh-pill--discuss"],
       picked: ["sh-pill sh-pill--aligned", "Picked"],
       open: ["sh-pill sh-pill--open", "Open"],
     };
@@ -1409,12 +1412,10 @@
     function pillOf(state) {
       if (state.answer === null) return PICK_PILLS.open;
       if (state.optionId !== null) return PICK_PILLS.picked;
-      // Something else takes its words from sheet-words.json, the one home the buttons and the chat prose read too.
-      if (state.answer === "something-else") {
-        const label = answerWords !== null && answerWords.labels ? answerWords.labels[state.answer] : null;
-        return typeof label === "string" ? ["sh-pill sh-pill--discuss", label] : PICK_PILLS.open;
-      }
-      return PICK_PILLS[state.answer] || PICK_PILLS.open;
+      // Aligned, Discuss and Something else take their words from sheet-words.json, the one home the buttons and the chat prose read too.
+      const pill = PICK_PILLS[state.answer];
+      const label = answerWords !== null && answerWords.labels ? answerWords.labels[state.answer] : null;
+      return pill !== undefined && typeof label === "string" ? [pill[0], label] : PICK_PILLS.open;
     }
 
     // Discuss and Something else leave the call open for chat; Aligned and a picked option settle it.
@@ -1803,9 +1804,13 @@
       if (wordsProblem !== null) {
         // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.
         say(wordsProblem + " " + SAY.noStore, function () {
+          // One reload at a time: a second tap while one runs (even on a held Try again) would draw the sheet over the first.
+          if (reloading) return;
+          reloading = true;
+          say(SAY.loading, false);
           load().catch(function () {
             showErrors(["The sheet could not be drawn."]);
-          });
+          }).finally(function () { reloading = false; });
         });
         return;
       }
