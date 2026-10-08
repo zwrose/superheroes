@@ -4103,6 +4103,43 @@ def test_something_else_saves_as_its_own_answer():
     assert restored["count"] == "1 of 5 answered · 1 open for chat"
 
 
+# Bites on: the Something else pill retyping its words in the page instead of reading them from sheet-words.json, so editing that file changes the button but not the item's pill.
+def test_something_else_pill_reads_its_words_from_the_wording_file():
+    words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
+    words["answers"]["labels"]["something-else"] = "Another way"
+    files = _sample_files()
+    files["sheet-words.json"] = {"status": 200, "body": json.dumps(words)}
+    page = _run_page(files, scenario="""
+      t.click(t.button("leftovers-handling", "Another way"));
+      await t.tick();
+      return { labels: t.state("leftovers-handling").labels, pill: t.rows()[0].pill };
+    """)
+    assert page["settled"] and page["errors"] == [], page
+    assert page["result"]["labels"][-1] == "Another way"
+    assert page["result"]["pill"] == ["sh-pill sh-pill--discuss", "Another way"]
+
+
+# Bites on: a wording file that never answers leaving a sheet on Loading with no cards or error, instead of the final sheet naming that file and any other sheet drawing with its answer controls off.
+@pytest.mark.parametrize("sheet", [None, "final"], ids=["plain", "final"])
+def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):
+    files = _sample_files(_sample_final() if sheet == "final" else None)
+    files["sheet-words.json"] = {"hang": True}
+    page = _run_page(files, host={"fakeTimers": True}, scenario="""
+      await t.advance(9999);
+      const early = elements["sheet-cards"].children.length;
+      await t.advance(1);
+      return { early: early, cards: elements["sheet-cards"].children.length };
+    """)
+    assert page["result"]["early"] == 0
+    if sheet == "final":
+        assert page["result"]["cards"] == 0
+        assert page["errorHidden"] is False
+        assert any("wording file" in error and "in time" in error for error in page["errors"]), page["errors"]
+    else:
+        assert page["result"]["cards"] > 0, "the sheet was never drawn"
+        assert page["statusHidden"] is True
+
+
 # Bites on: an answer or note failing to come back onto its own card when the sheet is republished with new question wording and a new card order, or the reload writing.
 def test_answers_restore_across_a_republish():
     first = _page_of_the_sample("""

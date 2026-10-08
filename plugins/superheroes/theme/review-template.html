@@ -1322,7 +1322,6 @@
       aligned: ["sh-pill sh-pill--aligned", "Aligned"],
       discuss: ["sh-pill sh-pill--discuss", "Discuss"],
       picked: ["sh-pill sh-pill--aligned", "Picked"],
-      "something-else": ["sh-pill sh-pill--discuss", "Something else"],
       open: ["sh-pill sh-pill--open", "Open"],
     };
     // One entry per card, in card order: { id, question, article, row }.
@@ -1410,6 +1409,11 @@
     function pillOf(state) {
       if (state.answer === null) return PICK_PILLS.open;
       if (state.optionId !== null) return PICK_PILLS.picked;
+      // Something else takes its words from sheet-words.json, the one home the buttons and the chat prose read too.
+      if (state.answer === "something-else") {
+        const label = answerWords !== null && answerWords.labels ? answerWords.labels[state.answer] : null;
+        return typeof label === "string" ? ["sh-pill sh-pill--discuss", label] : PICK_PILLS.open;
+      }
       return PICK_PILLS[state.answer] || PICK_PILLS.open;
     }
 
@@ -1780,11 +1784,11 @@
       }
       let words = null;
       try {
-        words = await fetchJson("sheet-words.json", "The sheet's wording file");
+        words = await withDeadline(function () { return fetchJson("sheet-words.json", "The sheet's wording file"); });
       } catch (problems) {
         // A final sheet can't be drawn without its words; any other sheet is drawn with its answer controls off.
         if (sheet.kind === "final") {
-          showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
+          showErrors(Array.isArray(problems) ? problems : problems === DEADLINE ? ["The sheet's wording file did not answer in time."] : ["The sheet could not be drawn."]);
           return;
         }
       }
