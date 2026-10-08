@@ -304,16 +304,26 @@ def _letter(position):
 
 
 def _render_card(number, card):
-    context = card["context"]
     kind = _text(card["callKind"]) + (" (warning)" if card["warning"] else "")
     lines = [
         "%d. **%s**" % (number, _text(card["question"])),
         "   - Kind of call: %s" % kind,
-        "   - What's true now: %s" % _text(context["now"]),
-        "   - Why it needs you: %s" % _text(context["whyOwner"]),
     ]
-    if context["exactText"] is not None:
-        lines.append('   - The exact text: "%s"' % _text(context["exactText"]))
+    for section in card["context"]:
+        lines.append("   - %s:" % _text(section["title"]))
+        previous = None
+        for block in section["blocks"]:
+            if "paragraph" in block:
+                if previous == "paragraph":
+                    lines.append("")
+                lines.append("     %s" % _text(block["paragraph"]))
+                previous = "paragraph"
+            elif "bullets" in block:
+                lines += ["     - %s" % _text(item) for item in block["bullets"]]
+                previous = "bullets"
+            else:
+                lines.append('     > "%s"' % _text(block["quote"]))
+                previous = "quote"
     if card["images"]:
         pictures = "; ".join("%s%s (%s)" % (_text(i["alt"]), ": " + _text(i["caption"]) if i.get("caption") else "", _text(i["src"])) for i in card["images"])
         lines.append("   - Images: %s" % pictures)
@@ -330,9 +340,12 @@ def _render_card(number, card):
             ids = [option["id"] for option in options]
             line += " (option %s)" % _letter(ids.index(recommendation["optionId"]))
         lines.append(line)
-    answers = "Aligned, Discuss"
-    if options:
-        answers += ", or " + ", ".join(_letter(position) for position in range(len(options)))
+    if not options:
+        answers = "Aligned or Discuss"
+    elif len(options) == 1:
+        answers = "a or Something else"
+    else:
+        answers = ", ".join(_letter(position) for position in range(len(options))) + ", or Something else"
     lines.append("   - Answer: %s" % answers)
     return lines
 
