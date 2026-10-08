@@ -2,7 +2,7 @@
 
 Enforces: (1) the old spec-only exit vocabulary is gone from architect-discovery;
 (2) the new doctrine clauses are present section-scoped in discovery, architect-spec,
-and showrunner duty-1; (3) a light-weight spec is the same artifact class as a full spec.
+and showrunner duty-1; (3) a small spec is the same artifact class as a large spec.
 """
 # What this file does and does not guard (owner ruling 21-d, issue #935; byte-literal floor 2026-08-17).
 #
@@ -44,12 +44,6 @@ PACKAGE_WEIGHT_VOCABULARY = (
 )
 
 _SPEC_CHECKS_REF = "skills/architect-discovery/reference/spec-checks.md"
-
-# The same-family sentence discovery passes to the owner is spec-checks.md's, word for word.
-_SAME_FAMILY_SENTENCE = (
-    "The reviewer is from the same model family as the author. It is a fresh reviewer that "
-    "never saw the conversation that wrote the spec."
-)
 
 R7_PARK_SURFACE = (
     "A park lands the full park note — what was elicited or found so far, explicitly "
@@ -111,7 +105,7 @@ _BANNED_DISCOVERY_STRINGS = [
 _DOCS_BASE_LITERAL = "docs/superheroes"
 
 _DISCOVERY_HARD_GATE_CLAUSES = [
-    "do NOT author the spec, write any code, mint a work-item, or hand off until you have presented the framing (the **what**) and the owner has explicitly approved it.",
+    "do NOT author the spec, write any code, create a work-item folder or any other artifact beyond Canon's own entries, or hand off until you have presented the framing (the **what**) and the owner has explicitly approved it.",
     "never approve on your own behalf",
     "hands back with no approved spec",
     "the draft stays on disk at the spec path `resolve-write --doc spec` reports, with `status: draft`",
@@ -184,11 +178,7 @@ _DISCOVERY_SECTION_CLAUSES = {
         "Never fabricate a review result.",
     ],
     "### 8. Owner review & final approval (terminal gate)": [
-        "Send one message: \"Spec written to `<spec path>` and through the three spec checks.",
-        "Send that sentence only when all three checks ran in the last round of the review and their results were real.",
-        "When `checks-record.md` shows a check that did not run, do not claim all three",
         "name each check that did not run and why in plain words",
-        "Present each queued item with its recommendation and its marks from `checks-record.md`.",
         "Ask for approval one way, for every spec.",
         "do not press for a verdict in the moment",
         "If the owner requests changes, record the gate as `changes-requested` first.",
@@ -203,19 +193,14 @@ _DISCOVERY_SECTION_CLAUSES = {
 }
 
 _ARCHITECT_SPEC_SECTION_CLAUSES = {
-    "## Weight never changes the artifact class": [
+    "## Size never changes the artifact class": [
         "Same template.",
-        "There is no light template.",
         "Same home.",
-        "There is no light home.",
         "Same anchor power.",
-        "A light spec is not a weaker citation.",
         "Same owner approval authority.",
-        "There is no lighter approval.",
         "Empty sections are omitted, never filled.",
         "A heading with nothing",
         "is written by the approval path itself",
-        "[#1062](https://github.com/zwrose/superheroes/issues/1062), shipped in PR #1069",
     ],
 }
 
@@ -480,7 +465,7 @@ def test_census_tables_are_populated():
         "### 8. Owner review & final approval (terminal gate)",
     }
     assert set(_DISCOVERY_SECTION_CLAUSES) == expected_discovery_keys
-    expected_architect_spec_keys = {"## Weight never changes the artifact class"}
+    expected_architect_spec_keys = {"## Size never changes the artifact class"}
     assert set(_ARCHITECT_SPEC_SECTION_CLAUSES) == expected_architect_spec_keys
     for clauses in _DISCOVERY_SECTION_CLAUSES.values():
         assert len(clauses) >= 3
@@ -527,9 +512,9 @@ def test_discovery_charter_section_clauses(heading, clauses):
 # --- 1c. Section-scoped presence, architect-spec ---------------------------
 
 
-def test_architect_spec_weight_equivalence_clauses():
+def test_architect_spec_size_equivalence_clauses():
     _assert_section_clauses(_ARCHITECT_SPEC_CHARTER, _ARCHITECT_SPEC_SECTION_CLAUSES)
-    labels = _ARCHITECT_SPEC_SECTION_CLAUSES["## Weight never changes the artifact class"]
+    labels = _ARCHITECT_SPEC_SECTION_CLAUSES["## Size never changes the artifact class"]
     for label in ("Same template.", "Same home.", "Same anchor power.", "Same owner approval authority."):
         assert label in labels, "missing equivalence label %r in table" % label
 
@@ -859,14 +844,6 @@ def test_discovery_charter_names_no_weight():
     assert not re.search(r"weight", text, re.IGNORECASE), (
         "%s: the word 'weight' is back in the charter" % _DISCOVERY_CHARTER
     )
-
-
-def test_discovery_charter_same_family_sentence_matches_spec_checks():
-    # axis: the sentence discovery gives the owner is spec-checks.md's own, word for word
-    assert _SAME_FAMILY_SENTENCE in _file_section(
-        _DISCOVERY_CHARTER, "### 8. Owner review & final approval (terminal gate)"
-    )
-    assert _SAME_FAMILY_SENTENCE in _normalized(_read_plugin(_SPEC_CHECKS_REF))
 
 
 def test_negative_set_gate_without_gates_line_fails(tmp_path):

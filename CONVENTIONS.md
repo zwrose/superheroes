@@ -318,9 +318,9 @@ updated: <date>
 ### 3.2 Body
 
 **`spec`** — plain-language requirements, owner co-authors, **no tech**. Sections:
-purpose; who it's for; functional requirements; significant unhappy paths;
-non-functional requirements; UI/UX; definition of done; assumptions & dependencies;
-constraints; out-of-scope; open questions; glossary. **Functional requirements are
+how to read this spec (its source legend); purpose; who it's for; functional requirements;
+significant unhappy paths; non-functional requirements; UI/UX; definition of done;
+assumptions & dependencies; constraints; out-of-scope; open questions; glossary. **Functional requirements are
 written in EARS** (Easy Approach to Requirements Syntax — `When`/`While`/`Where`/`If-Then`
 + "the system shall …"), one behavior each, every requirement carrying **≥1 acceptance
 criterion** (Given-When-Then for flows, a rule for simple constraints). **Depth = the
@@ -329,8 +329,9 @@ elicited via a coverage checklist (empty/first-run, invalid input, boundaries, e
 access, duplicates, concurrency, abuse, reach) and tagged Specify/Defer/N-A —
 **not** an exhaustive enumeration, and **not** the technical *how* (that is the build
 brief, owned by the builder, §1). Non-functional requirements are stated as **outcomes
-with a fit-criterion**. UI/UX **references the Claude Design handoff output**, not a
-reinterpretation. This is the anti-slop core.
+with a fit-criterion**. UI/UX **points at the approved build board** saved beside the spec, not a
+reinterpretation. Every statement ends with its **source tag**, plain text naming the board, an
+owner ruling, the framing or a craft call; nothing machine-reads a tag. This is the anti-slop core.
 
 **Provenance / citations (#517, owner-ratified #514 D3).** A load-bearing **mirror-fact** — a
 spec sentence asserting something about the *existing repo* that the repo could contradict
@@ -366,10 +367,11 @@ judgment, not the deterministic check's.
   documented field-mapping). An actual converter is built only if something needs it.
 
 > **Naming note.** We do **not** name the `spec` "design": **"design" means UI/UX**
-> here, never a technical-approach doc. **Claude Design** (Anthropic's UI/UX design
-> tool) is a first-class Discovery activity: Discovery hands the owner a design prompt
-> built from the requirements, the owner creates the design there, and its **handoff
-> output** (not a reinterpretation) is referenced in the `spec`.
+> here, never a technical-approach doc. Discovery draws the design as boards the owner
+> approves, and the approved build board, saved beside the `spec`, is the design the `spec`
+> points at. Where a project uses **Claude Design** (Anthropic's UI/UX design tool), its
+> boards take their design system from it, and syncing an approved board there is the
+> project's choice.
 
 **Discovery's non-definition-doc artifacts.** A discovery that ends without a spec still lands a
 durable artifact. A **findings record** is `findings.md` in the

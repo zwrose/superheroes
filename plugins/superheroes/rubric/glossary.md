@@ -347,3 +347,14 @@ images and options, a recommendation, and the owner's answer and note.
 ### Sheet
 
 A set of [cards](#card) sent to the owner at one time, drawn by the plugin's review template.
+
+### Remainder sheet
+
+A [sheet](#sheet) that holds only what nothing already rules on: no board, ruling or earlier answer
+covers it. It also holds the findings the review didn't settle and the declines the reviewer still
+contests.
+
+### Ready for vet
+
+The owner's word that the spec may go to the advisor's vet. It is not approval, and a
+[sheet](#sheet)'s answers or silence never stand in for it.

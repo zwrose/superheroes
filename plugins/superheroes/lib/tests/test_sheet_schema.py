@@ -81,9 +81,9 @@ CENSUS = {
     "kind of call": "properties/cards/items/properties/callKind",
     "warning badge": "properties/cards/items/properties/warning",
     "question": "properties/cards/items/properties/question",
-    "context now": "properties/cards/items/properties/context/properties/now",
-    "context why owner": "properties/cards/items/properties/context/properties/whyOwner",
-    "context exact text": "properties/cards/items/properties/context/properties/exactText",
+    "context sections": "properties/cards/items/properties/context",
+    "context section title": "properties/cards/items/properties/context/items/properties/title",
+    "context section blocks": "properties/cards/items/properties/context/items/properties/blocks",
     "images": "properties/cards/items/properties/images",
     "options": "properties/cards/items/properties/options",
     "option consequence":
@@ -145,7 +145,7 @@ RED_FIXTURES = [
     ("remainder-missing-block", drop("remainder")),
     ("final-without-final", final_without_final),
     ("plain-carrying-remainder", set_top("kind", "plain")),
-    ("card-missing-exact-text", lambda s: s["cards"][2]["context"].pop("exactText")),
+    ("card-section-missing-title", lambda s: s["cards"][2]["context"][0].pop("title")),
     ("card-id-bad", lambda s: s["cards"][0].__setitem__("id", "Bad Id")),
     ("unknown-top-level-field", set_top("extra", 1)),
     ("option-missing-consequence", lambda s: s["cards"][0]["options"][0].pop("consequence")),
@@ -313,6 +313,58 @@ def test_verdict_document_refuses_what_is_not_a_verdict_on_one_revision():
            dict(full, verdict="maybe"), dict(full, verdict="Approve"), dict(full, note=None), dict(full, note=3)]
     for document in bad:
         assert document_errors("verdict", document) != [], document
+
+
+def with_context(context):
+    sheet = copy.deepcopy(load_sample())
+    sheet["cards"][2]["context"] = context
+    return sheet
+
+
+def test_card_context_needs_no_fixed_fields():
+    # Axis: a card's context is any list of titled sections, with no fixed heading and no required section, so an empty list is accepted by both readers.
+    sections = [{"title": "What you're accepting", "blocks": [
+        {"paragraph": "You are choosing how leftovers count."},
+        {"bullets": ["Fewer recipes", "More repeats"]}]}]
+    for context in (sections, []):
+        sheet = with_context(context)
+        assert errors_for(sheet) == [], context
+        assert check_sheet_problems(sheet) == [], context
+
+
+def test_old_fixed_context_is_refused():
+    # Axis: the old context object with now, whyOwner and exactText is no longer a context, in both readers.
+    sheet = with_context({"now": "Something.", "whyOwner": "Because.", "exactText": None})
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+BAD_CONTEXT_PIECES = [
+    {"blocks": [{"paragraph": "x", "bullets": ["y"]}], "title": "T"},
+    {"blocks": [{"heading": "x"}], "title": "T"},
+    {"blocks": [{"bullets": []}], "title": "T"},
+    {"blocks": [{"paragraph": ""}], "title": "T"},
+    {"blocks": [{"quote": ""}], "title": "T"},
+    {"blocks": [], "title": "T"},
+    {"blocks": [{"paragraph": "x"}]},
+    {"blocks": [{"paragraph": "x"}], "title": ""},
+]
+BAD_CONTEXT_IDS = ["two-kinds", "unknown-key", "empty-bullets", "empty-paragraph", "empty-quote",
+                   "no-blocks", "no-title", "empty-title"]
+
+
+@pytest.mark.parametrize("section", BAD_CONTEXT_PIECES, ids=BAD_CONTEXT_IDS)
+def test_block_holds_exactly_one_kind(section):
+    # Axis: a block with two kinds or an unknown key, an empty list or string, and a section with no blocks or no title are each refused by both readers.
+    sheet = with_context([section])
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+def test_something_else_answer_document():
+    # Axis: the stored answer may be something-else, and then it names no option.
+    assert document_errors("answer", {"answer": "something-else", "optionId": None, "note": ""}) == []
+    assert document_errors("answer", {"answer": "something-else", "optionId": "x", "note": ""}) != []
 
 
 def test_the_retired_verdict_definitions_are_gone():
