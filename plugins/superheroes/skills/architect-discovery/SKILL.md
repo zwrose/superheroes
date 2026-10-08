@@ -157,7 +157,7 @@ are not run — that exit's own artifact closes the work.
 2. **The consent gate** → investigation spend starts only on the owner's consent
 3. **Requirements dialogue** (owner calls only, one at a time; EARS phrasing; run the coverage checklist)
 4. **Confirm the framing → owner approves the *what*** ← HARD GATE
-5. **UI/UX** when relevant (hand the owner a Claude Design prompt)
+5. **Draw it before writing it** → journeys, then choices, then the build board for the owner's approval (or skip: small with nothing to draw)
 6. **Author the spec** via the `writing-specs` skill
 7. **Run the three spec checks** (fix craft findings before the owner spends time)
 8. **Advisor vet, then owner review & final approval** ← terminal gate for Exit A; the approved spec is the ready artifact
@@ -442,38 +442,45 @@ of every requirement (that is the spec, which they review at step 8):
 Ask: *"Does this framing look right? Anything to change before I write it up?"* **Do not
 proceed past this gate until the owner approves the framing.** Revise and re-present as
 needed. The full, requirement-by-requirement review happens **once**, on the authored spec
-(step 8) — not twice. Then continue to step 5 when the work is user-facing, else to step 6
-(author the spec).
+(step 8) — not twice. Then continue to step 5, which either draws the boards or records the skip.
 
 Decide one thing here **yourself** — never make the owner pick it:
 - **`size`** (`small | medium | large`) — infer it from the scope of the approved
   requirements. The skill decides; the owner never picks. It's frozen into the spec (§6.4).
 
-### 5. UI/UX when relevant (hand the owner a Claude Design prompt)
+### 5. Draw it before writing it
 
-This step runs only after the owner approves the framing in step 4.
+This step runs only after the owner approves the framing in step 4. The theme for every board's
+frame is `${CLAUDE_PLUGIN_ROOT}/theme/comic-panel.css`.
 
-If the work is user-facing, the design is created in **Claude Design** — a separate
-surface — and its output is referenced by the spec. The flow is **text-first** so it
-works for owners on any client (including a terminal):
+Read `${CLAUDE_PLUGIN_ROOT}/skills/architect-discovery/reference/boards.md` when you draw, publish, save or redraw a board.
 
-1. From the requirements so far, compose a **Claude Design prompt** (the feature,
-   who it's for, key screens/states, tone, and any design-system reference) and hand
-   it to the owner.
-2. The owner creates and iterates the design in Claude Design, then brings back its
-   **handoff output**.
-3. The spec's UI/UX section **references that actual handoff output**, not a
-   reinterpretation.
+Draw three boards in order. The owner comments and rules on each before the next.
 
-If the owner doesn't have or doesn't want to use Claude Design, **don't block** —
-capture the UI/UX as a plain-language description of the key screens and states in
-the spec instead.
+1. **Journeys or flows.** How a person moves through the work.
+2. **The open choices, side by side.** Each option is drawn, so the owner compares by looking.
+3. **The build board.** The settled design, for the owner's approval.
 
-**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
+Any visual that communicates counts: screens, storyboards, flow charts, diagrams.
 
-`mcp__visualize__show_widget` (inline SVG/HTML) may help for a quick option
-comparison **on graphical clients only** — it does **not** render in a terminal, so
-always have a plain-text description as the fallback; never rely on it.
+The build board holds three things. It holds only the settled design, with no open alternative. It
+uses the product's real wording, never placeholder copy. Everything that can reasonably be drawn is
+drawn, not described in prose.
+
+A board is never less detailed than the chat. Anything the chat settled appears on the board.
+
+**The owner approves the build board.** Then save it with the spec, in the work-item's `board/`
+folder, as the reference says. Do not author the spec before that approval.
+
+**Skip the board only when the work is small and has nothing to draw.** Say so at the framing, and
+write the spec from the framing and the rulings. A small screen or a small flow still gets a board.
+
+**Where the spec and the approved board disagree, the board wins.** Correct the spec in the same
+pass, and run the checks again on the changed parts.
+
+When a later ruling changes something the approved board shows, redraw that part, republish it to
+the same link, and record the redraw in `board/redraws.md` marked `sent: no`. The owner's next sheet
+shows every entry still marked `sent: no`.
 
 ### 6. Author the spec via `writing-specs`
 
@@ -485,7 +492,7 @@ path. Hand it the slug minted in step 1, which it reuses and never mints again, 
 the approved set:
 **title, purpose, who-it's-for, the functional requirements (EARS + acceptance
 criteria), the significant-unhappy-path requirements, non-functional requirements,
-UI/UX outcome, definition of done, assumptions & dependencies, constraints,
+the approved build board's saved path (or the recorded skip), definition of done, assumptions & dependencies, constraints,
 out-of-scope, the craft calls made for the owner's veto, and `size`.** That skill owns the on-disk artifact; you own the
 dialogue that feeds it. What it writes is a **draft** — `status: draft` until the owner approves it at step 8, and if
 the discovery parks before then, the draft stays exactly where this step put it (Exit C).
@@ -612,6 +619,9 @@ and do not press for a verdict in the moment.
 | "The owner went quiet — I'll leave it and come back" | An abandoned discovery gets a park note (**Exit C**). Silence is not an exit, and the note is what keeps their answers from being lost or mistaken for approved content. |
 | "A pick-one widget is faster than writing the options out" | Options are prose in the conversation. A widget forces the owner into your labels — and they may not be in your labels. |
 | "They answered with a question instead of picking one — I'll re-ask the list" | That is re-forcing the choice. Answer the question and carry the dialogue forward. |
+| "It's small, I'll skip the board" | Only work that is small **and** has nothing to draw skips the board. A small screen or a small flow still gets one (step 5). |
+| "The spec says it differently from the board — I'll keep the spec" | The board wins. Correct the spec and run the checks again on the changed parts (step 5). |
+| "I'll describe the screen in chat; the board can be lighter" | A board is never less detailed than the chat. Anything the chat settled appears on the board (step 5). |
 | "This looks small, I'll run the light version of discovery" | There is no up-front ceremony choice. Probe each opinion-bearing dimension and stop when the spec's dispositions table (`## Coverage`) is satisfied — a small surface closes early on its own. |
 | "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Record `changes-requested`, run the checks again on the changed parts, then go back to the owner. There is no path from `changes-requested` to `set-gate … passed` without that (step 8). |
 | "We're parking — I'll paste the draft into the park note so nothing is lost" | The draft is already durable at the spec path `resolve-write --doc spec` reports. The note carries the **path** and the unapproved mark, never a second copy — one artifact per home (Exit C). |
