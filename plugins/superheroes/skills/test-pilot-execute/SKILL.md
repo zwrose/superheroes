@@ -1,6 +1,6 @@
 ---
 name: test-pilot-execute
-description: Use when a test-pilot plan should be exercised before human spot-check — "run the test plan", "pilot this PR", "verify the branch in the browser". Drives the app via a browser MCP and posts a results comment. Observe-and-report only — a bug it finds is a finding, never an edit.
+description: Use when a test-pilot plan should be exercised before human spot-check — "run the test plan", "pilot this PR", "verify the branch in the browser". Drives the app via a browser MCP, or the lane's simulated iPhone, and posts a results comment. Observe-and-report only — a bug it finds is a finding, never an edit.
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
@@ -25,6 +25,7 @@ orchestrator or a human) routes each finding to a fix as it sees fit.
    `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" scrub` (stdin→stdout).
    Never quote raw request headers.
 4. The plan comment's checkboxes belong to the human — never check them.
+5. **The iPhone check's hard lines** (Device Hub, phones) live in the execution steps' § The iPhone check — follow them.
 
 ## Flow
 
@@ -36,7 +37,8 @@ path instead of keeping a copy that drifts (CONVENTIONS §11.4).
 
 Steps 1–4 provision the run; steps 5–8 execute and observe. **If you cannot
 read that file, stop and report it** — never drive the app from memory of
-these steps.
+these steps. A lane that holds a phone, or whose issue names an iPhone check, also follows the
+execution steps' `§ The iPhone check`.
 
 ## Rationalization table
 
