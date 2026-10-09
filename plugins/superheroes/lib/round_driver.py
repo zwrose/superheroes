@@ -174,6 +174,7 @@ GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 200
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
+GATE_GUIDANCE_OVERSIZE = "gate-guidance-oversize"
 RULING_GUIDANCE_OMITTED = "ruling-guidance-omitted"
 
 # --- version spelling: pinned declaration block (BEGIN) ---
@@ -3329,6 +3330,13 @@ def _escape_guidance_placeholder_syntax(text):
     return text
 
 
+def _guidance_oversize(text):
+    """The one measure for owner guidance (#1691): True when the stripped text's UTF-8 length is over
+    ``GATE_GUIDANCE_ROW_BYTE_CAP``. Gate submit, the fold, the ruling path and the order renderer all
+    ask this."""
+    return isinstance(text, str) and len(text.strip().encode("utf-8")) > GATE_GUIDANCE_ROW_BYTE_CAP
+
+
 def _truncate_utf8_bytes(text, max_bytes):
     """Return ``(prefix, withheld_byte_count)`` truncating on a UTF-8 boundary."""
     raw = text.encode("utf-8")
@@ -3630,18 +3638,12 @@ def _gate_guidance_block(entries):
                 "read all guidance blocks before applying any fix."
                 % identity_counts[identity_line])
         header_lines.append(_gate_guidance_record_id_line(fid))
-        if from_ruling:
-            text = guidance
-            withheld = 0
-        else:
-            text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
-        escaped = _escape_guidance_placeholder_syntax(text)
+        if _guidance_oversize(guidance):
+            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_OVERSIZE)
+        escaped = _escape_guidance_placeholder_syntax(guidance)
         body_lines = ["BEGIN owner-gate guidance"]
         for line in escaped.splitlines() or [""]:
             body_lines.append("> " + line)
-        if withheld:
-            body_lines.append(
-                "> (%d bytes withheld; the remainder is not carried in this order)" % withheld)
         body_lines.append("END owner-gate guidance")
         entry_text = "\n".join(header_lines + body_lines)
         entry_bytes = len(entry_text.encode("utf-8"))
@@ -3725,6 +3727,12 @@ def _fold_judgment(state, config, artifact):
     (every judgment finding skipped and no mechanical blocker) the loop settles into a converged
     terminal with the skips disclosed."""
     raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    oversize = judgment_guidance_oversize_fault(artifact)
+    if oversize:
+        _park_cannot_certify(state, oversize)
+        state.pop("_judgmentFindings", None)
+        state.pop("_judgmentMechanical", None)
+        return
     by_id = {}
     for d in raw:
         if not isinstance(d, dict) or d.get("id") is None:
@@ -7591,7 +7599,7 @@ def _validate_ruling_entries(doc):
             guidance = spec.get("guidance")
             if not isinstance(guidance, str) or not guidance.strip():
                 return None, None, RULING_FILE_SHAPE
-            if len(guidance.encode("utf-8")) > GATE_GUIDANCE_ROW_BYTE_CAP:
+            if _guidance_oversize(guidance):
                 return None, None, RULING_GUIDANCE_OVERSIZE
             entry["guidance"] = guidance.strip()
         parsed.append(entry)
@@ -8160,6 +8168,23 @@ def judgment_follow_up_fault(artifact):
     return None
 
 
+def judgment_guidance_oversize_fault(artifact):
+    """Refuse fix-with-guidance guidance over the per-row cap before fold (#1691) — a fixer order
+    never carries guidance shorter than what the owner wrote."""
+    if not isinstance(artifact, dict):
+        return None
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
+        if not isinstance(disp, dict) or disp.get("disposition") != "fix-with-guidance":
+            continue
+        guidance = disp.get("guidance")
+        if _guidance_oversize(guidance):
+            return "%s: %s (%d bytes; cap %d)" % (
+                GATE_GUIDANCE_OVERSIZE, disp.get("id") or "?",
+                len(guidance.strip().encode("utf-8")), GATE_GUIDANCE_ROW_BYTE_CAP)
+    return None
+
+
 def stall_follow_up_fault(artifact):
     """Refuse malformed followUp on accept-the-disclosed-risk before fold."""
     if not isinstance(artifact, dict):
@@ -8410,6 +8435,12 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
+        fault = judgment_guidance_oversize_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": GATE_GUIDANCE_OVERSIZE})
             return {"ok": False, "reason": fault}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.

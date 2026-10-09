@@ -523,15 +523,15 @@ def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
 
 
 def test_gate_guidance_per_row_cap_renders_full_at_boundary():
-    """E7: guidance at the 2000-byte row cap renders in full; one byte over withholds exactly one."""
+    """E7: guidance at the 2000-byte row cap renders in full; one byte over refuses the render (#1691)."""
     entry = {"id": "d.py::big@L1", "title": "big", "file": "d.py", "line": 1, "guidance": "x"}
     at_cap = dict(entry, guidance="x" * 2000)
     block_full = RD._gate_guidance_block([at_cap])
     assert "bytes withheld" not in block_full
     assert "> %s" % ("x" * 2000) in block_full
     over_cap = dict(entry, guidance="x" * 2001)
-    block_over = RD._gate_guidance_block([over_cap])
-    assert "(1 bytes withheld; the remainder is not carried in this order)" in block_over
+    with pytest.raises(ValueError, match="order-render-refused:gate-guidance-oversize"):
+        RD._gate_guidance_block([over_cap])
 
 
 def test_gate_guidance_aggregate_cap_admits_and_omits_at_boundary():

@@ -12,6 +12,7 @@ belongs to and lists every change with its replacement.
 ### Before you upgrade
 
 - Nothing to do. Launches without `iphoneCheck` behave exactly as before.
+- Finish or discard any in-flight review session that holds owner guidance over 2000 bytes.
 
 ### Canon: what stays out
 
@@ -30,6 +31,14 @@ belongs to and lists every change with its replacement.
 - Phone creation and the Device Hub check together run under their own 90-second ceiling, and the launch's own deadline is extended by exactly the time they took. Turning the check on never makes a launch time out that would have started without it.
 - The launch fold gains two keys on every lane: `iphoneCheck` (a bool, false when the premise does not ask) and `iphoneId` (the UDID, or `None`). A `reserved` record whose `iphoneId` is malformed, or is present without `iphoneCheck: true` in its premise, makes the fold refuse with `fold-bad-field:reserved:iphoneId`. An older fold ignores the new field.
 - The launch result gains an `iphone` key when the check is on. On success it is `{"id": <udid or None>, "deviceHub": <value>}`. When the reservation is refused before the record is written, it is `{"id": <udid>, "recorded": false, "deleted": <bool>}`. When the reservation's append fails, it is `{"id": <udid>, "recorded": "uncertain"}`, and the phone is kept.
+
+### Review driver: oversized owner-gate guidance refuses
+
+- A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at `present-judgment` submit with the new token `gate-guidance-oversize`; nothing folds and the owner resubmits shorter guidance. On the library `run_loop` path, which has no submit, the fold parks `cannot-certify` with the same token.
+- The fixer order no longer truncates guidance and no longer carries the `bytes withheld` line. A render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`.
+- The ruling path (`rule --file`) now measures stripped text, as the gate does, so guidance that is over 2000 bytes only through surrounding whitespace no longer refuses with `ruling-guidance-oversize`.
+- The 8000-byte aggregate cap on guidance in one order is unchanged.
+- A session that already folded guidance over 2000 bytes now refuses its next fixer order render with `order-render-refused:gate-guidance-oversize`. A session whose fixer order was already emitted under the old driver, with the `bytes withheld` line, should be discarded, not replayed.
 
 ### Showrunner: iPhone lanes
 
