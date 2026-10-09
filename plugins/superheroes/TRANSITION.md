@@ -11,13 +11,11 @@ belongs to and lists every change with its replacement.
 
 ### Canon: what stays out
 
-- Canon's contract now holds a test for what goes in: would a session sorting a future call, after the work is done, need this to answer it? Instructions for one act (go-words, which instance runs, who updates a branch, whether to wait for a check, a one-change waiver), records that already have a home (spec approval, delivery acceptance, walk records, the declined registry, lane and presentation calls, the threat model) and bookkeeping that rides on a ruling stay out. A ruling that arrives with bookkeeping goes in without it.
-- One ruling per entry. A mixed entry is trimmed to the ruling.
-- Scope is honest: `standing` only for a ruling that applies to all later work, and `piece <work-item slug>` only for a minted work-item slug, never an issue, a pull request, a stack layer or a phase.
-- Dates and times are UTC. An entry's `<time>` is marked `UTC` or reads `time not recorded`, and `migrate-material-line`'s default `--date` is now the UTC date, not the local date.
-- A ruling that approves wording kept in another artifact points to the artifact and does not copy the wording.
-- A misfiled entry is retired by a new entry that supersedes it, never edited or deleted. Entries already merged owe no clean-up.
-- Showrunner duty 2's supersession notice also covers a retirement: affected Anchors are re-pointed to the replacement entry where one carries the ruling.
+- Canon's contract has a new section, What stays out, and where it goes, and a test in What Canon holds. Read both before writing an entry.
+- An entry has new rules in An entry (one ruling per entry, scope honesty, UTC dates and times, narrowing an earlier decision) and a new subsection, Rulings that approve wording kept elsewhere.
+- Append only, and supersession has a new subsection, Retiring a misfiled entry. Entries a project already merged owe no clean-up.
+- `migrate-material-line`'s default `--date` is now the UTC date, not the local date.
+- Showrunner duty 2's supersession notice also covers a retirement.
 
 ## 0.41.0
 

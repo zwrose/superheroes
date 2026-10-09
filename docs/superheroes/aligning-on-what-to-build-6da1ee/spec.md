@@ -52,7 +52,7 @@ owner-stamped amendment where it lives, at this spec's approval. (source: adviso
 
 What an owner agrees with an agent and what gets written down drift apart, and owners get asked
 about the wrong things: consulted on craft, skipped on real product calls. This work gives every project that uses superheroes one clear line between the owner's
-decisions and craft, a durable record of every ruling, and a discovery flow in which the owner
+decisions and craft, a durable record of the owner's decisions, and a discovery flow in which the owner
 decides by looking at drawn boards, reviews only what nobody has ruled on yet, and never has to
 read a spec end to end to trust it. (source: ruling 8; framing)
 
@@ -450,7 +450,7 @@ owner-vs-craft line, in full". The tap sheets, the review template and the theme
 On a project that uses superheroes, a new discovery runs from intake to handoff as drawn on the
 board: the owner rules one question at a time, approves a board where the work has one, sees on
 their sheets only unruled items plus findings the review didn't settle, agrees "ready for vet", approves on a final sheet after a clean vet, and gives one merge
-word, while every decision lands in Canon and no session asks a question Canon already answers
+word, while every decision that belongs in Canon lands there and no session asks a question Canon already answers
 once that ruling has reached its branch. (source: ruling 8, 16, 55, 61; board · The flow)
 
 ## Assumptions & dependencies
@@ -521,7 +521,7 @@ summarizes)
   bookkeeping and records kept elsewhere into the first real Canon a consuming project wrote.
   Instructions for one act and records with another home now stay where they are, and a ruling with
   bookkeeping goes in without it; the detail lives in Canon's contract (issue #1680, owner ruling
-  2026-10-08). Sections touched: FR-14, Glossary (Canon).
+  2026-10-08). Sections touched: Purpose, FR-14, Definition of done / success, Glossary (Canon).
 
 ## Coverage
 
