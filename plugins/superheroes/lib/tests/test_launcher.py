@@ -8331,7 +8331,7 @@ def test_iphone_f9_open_ok_but_never_running_is_unavailable(tmp_path, monkeypatc
     captured = []
     _repo, result = _iphone_launch(
         tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
-        device_hub_poll_seconds=0.2,
+        device_hub_poll_seconds=1.0,
     )
     assert result["ok"] is True
     assert len(runner.commands("open")) == 1
