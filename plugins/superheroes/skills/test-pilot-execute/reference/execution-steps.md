@@ -174,7 +174,12 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
 - **Boot and open.** Boot the phone, then open the page in Mobile Safari and
   keep the `token` it returns. Before any tap, take a first reading
   (`read --run-dir <dir> --token <token> --where browser`). It proves the
-  page's reporting script. If it never arrives, the whole check stops with
+  page's reporting script. If it never arrives, take a screenshot before
+  calling it a miss. If Safari is not showing the page (a fresh phone's Safari
+  can drop its first URL and show its Start Page), `open` once more, keep the
+  new `token`, and take the first reading again. Re-opening is preparation, not
+  a step of the plan. Only a page that is showing and sends no reading, or a
+  second miss, stops the whole check with
   `iPhone check did not run — whole check: the app lacks its reporting script`.
   A later reading that never returns ends only its part (see Stops).
 - **Driving.** Step 5's calibration (accessible names, no coordinates) is for
@@ -184,7 +189,10 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   at once (`AXE_HID_STABILIZATION_MS=2000`, and `--post-delay 1` on a tap), so
   never call `axe` yourself to tap or type. Find a control with
   `axe describe-ui --udid <phone>`, then tap by `--label` or by coordinates.
-  Take a screenshot with `shot --phone <id> --out <png> --page <page-url>
+  `describe-ui` can time out right after boot; retry it once. The page's own
+  contents and Safari's sheets may be missing from it; then tap by coordinates
+  read off a screenshot, in points (screenshot pixels divided by the phone's
+  scale; 3 on current iPhones). Take a screenshot with `shot --phone <id> --out <png> --page <page-url>
   --where <part>`. Look at every screenshot yourself: you judge `keyboardSeen`
   and `expectedSeen` from the image.
 - **Readings.** After each step the plan checks, take a reading with
@@ -202,7 +210,9 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
 - **The installed app.** When the check includes it, add the page to the Home
   Screen from Safari: Share → Add to Home Screen, keep "Open as Web App" on,
   Add. Find each control with `axe describe-ui --udid <phone>`. Dismiss a
-  one-time keyboard tip if one covers the screen. Open the app from its Home
+  one-time keyboard tip if one covers the screen. After returning to the Home
+  Screen, take a screenshot before tapping an icon; it may be on another Home
+  Screen page (swipe to it). Open the app from its Home
   Screen icon and read with `--where installed`. Judge these preparation taps
   by whether the install succeeded; a failed install is
   `iPhone check did not run — installed-app check: the Home Screen install failed`.
