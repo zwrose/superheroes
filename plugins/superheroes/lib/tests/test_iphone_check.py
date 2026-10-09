@@ -154,6 +154,30 @@ def test_ufr4_typing_with_value_unchanged_is_not_completed():
     assert done is False
 
 
+def focused_as(r, fid, name):
+    r["focused"] = {"tag": "input", "type": "text", "id": fid, "name": name}
+    return r
+
+
+def test_ufr4_typing_that_moves_focus_to_another_prefilled_field_is_not_completed():
+    done, reason = ic.judge_step(step(kind="type", before=focused_as(rd(value="Alice"), "name", "name"),
+                                      after=focused_as(rd(value="existing@example.test"), "email", "email")))
+    assert done is False and "another field" in reason
+
+
+def test_ufr4_tap_on_a_field_with_no_id_is_matched_by_name_form_target():
+    after = focused_as(rd(), None, "email")
+    assert ic.judge_step(step(kind="tap-field", target="name:email", after=after, keyboardSeen=True))[0] is True
+    done, reason = ic.judge_step(step(kind="tap-field", target="email", after=after, keyboardSeen=True))
+    assert done is False and "intended field" in reason
+
+
+def test_ufr4_typing_on_an_unkeyed_field_is_not_completed():
+    done, reason = ic.judge_step(step(kind="type", before=focused_as(rd(value="a"), None, None),
+                                      after=focused_as(rd(value="ab"), None, None)))
+    assert done is False and "could not be identified" in reason
+
+
 def test_ufr4_password_typing_with_screen_unchanged_is_not_completed():
     done, _ = ic.judge_step(step(kind="type", password=True, before=rd(ftype="password"),
                                  after=rd(ftype="password"), screenChanged=False))

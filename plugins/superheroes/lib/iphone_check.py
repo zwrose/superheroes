@@ -257,6 +257,11 @@ def read(run_dir, token, where, timeout):
     return {"ok": True, "returned": True, "reading": accepted[0], "labels": labels}
 
 
+def _field_key(focused):
+    f = focused if isinstance(focused, dict) else {}
+    return next((f"{k}:{f[k]}" for k in ("id", "name") if isinstance(f.get(k), str) and f[k]), None)
+
+
 def judge_step(step):
     """-> (completed, reason). Anything needed and null or missing is not completed."""
     kind, before, after = step.get("kind"), step.get("before"), step.get("after")
@@ -268,9 +273,9 @@ def judge_step(step):
         # Axis: a tap with no keyboard seen
         if step.get("keyboardSeen") is not True:
             return False, "no keyboard seen after the tap"
-        # Axis: a tap whose after-reading does not focus the intended field (a missed tap leaves another field focused)
+        # Axis: a tap whose after-reading does not focus the intended field (a missed tap leaves another field focused); the target is the field's id, or name:<name> when it has no id
         target = step.get("target")
-        if not (isinstance(target, str) and target and isinstance(after_focus, dict) and after_focus.get("id") == target):
+        if not (isinstance(target, str) and target and (key := _field_key(after_focus)) and target == (after_focus["id"] if key[:3] == "id:" else key)):
             return False, "the intended field did not receive focus"
         return True, "field focused and keyboard seen"
     if kind == "type":
@@ -280,6 +285,10 @@ def judge_step(step):
                 return False, "password typing: the screen did not change"
             return True, "password typing: the screen changed"
         old, new = (before or {}).get("value"), (after or {}).get("value")
+        key, akey = _field_key((before or {}).get("focused")), _field_key(after_focus)
+        # Axis: typed text whose before and after readings do not name the same field (a value change elsewhere is not the typed field's)
+        if key is None or key != akey:
+            return False, "the field could not be identified" if None in (key, akey) else "the focus moved to another field"
         # Axis: typed text whose value is unchanged (or unreadable in either reading)
         if not (isinstance(old, str) and isinstance(new, str) and new != old):
             return False, "the field's value did not change"

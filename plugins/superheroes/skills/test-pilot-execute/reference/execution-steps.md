@@ -226,9 +226,10 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   before and after readings and what the screenshot showed. Its fields are
   `kind` (`tap-field`, `type` or `other`), `step`, `before`, `after`,
   `keyboardSeen`, `screenChanged`, `expected`, `expectedSeen` and `password`;
-  a `tap-field` step also carries `target`, the intended field's `id` as a
-  reading reports it in `focused.id`, and is completed only when the after
-  reading's `focused.id` is that `target` and a keyboard was seen.
+  a `tap-field` step also carries `target`, the intended field's `id` (or
+  `name:<name>` for a field with no id) as a reading reports it in `focused`, and
+  is completed only when the after reading's field is that `target` and a keyboard
+  was seen; a typing step completes only when its before and after readings name the same field.
   A driver that reports success proves nothing; only `judge` decides. A step
   `judge` calls not completed ends that part with `no response to input (<step>)`.
 - **Stops.** Every call has a time limit. A call that never returns ends its
