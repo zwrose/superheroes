@@ -286,7 +286,9 @@ def test_date_default_is_the_utc_date(tmp_path, monkeypatch):
     class _DateTime(real.datetime):
         @classmethod
         def now(cls, tz=None):
-            return cls(2026, 10, 9, 2, 0, tzinfo=tz)  # the UTC instant
+            if tz is real.timezone.utc:
+                return cls(2026, 10, 9, 2, 0, tzinfo=tz)  # the UTC instant
+            return cls(2026, 10, 8, 22, 0)  # a zone-less clock reads local time
 
     class _Clock:
         date = _Date
