@@ -6,6 +6,7 @@
 - [Amending a lane's record](#amending-a-lanes-record)
 - [The ledger is version-coupled](#the-ledger-is-version-coupled)
 - [The launcher provisions each build's worktree](#the-launcher-provisions-each-builds-worktree)
+- [iPhone lanes: launching and reaping their phones](#iphone-lanes-launching-and-reaping-their-phones)
 - [Liveness sweep and wave watch](#liveness-sweep-and-wave-watch)
 - [Adoption mechanics](#adoption-mechanics)
 
@@ -68,6 +69,41 @@ A record kind an older plugin build does not understand bricks every ledger door
 commit. It records the path on the `reserved` record and starts the session inside it. A path that
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
+
+## iPhone lanes: launching and reaping their phones
+
+**Launching.** Put `"iphoneCheck": true` in the premise when the issue's done-definition names an
+iPhone check (a check on a simulated iPhone, a phone the Mac imitates in software). Absent or false
+means no phone. The launcher records `iphoneCheck` on the launch record and, when it made a phone,
+the phone's ID as `iphoneId`. The premise names no place to check.
+
+**Reaping.** When the lane is finished (every launch for the issue has a terminal outcome
+recorded), run
+`python3 -B ${CLAUDE_PLUGIN_ROOT}/lib/iphone_reap.py reap --repo-root <repo> --issue <n>`.
+Record the outcome first: the reap refuses, deleting nothing, while any launch for the issue is
+still live (`reap-lane-not-terminal:<launchId>`). It deletes every phone the lane's launch records
+name, relaunched and failed launches included. A phone already gone reads `already-gone` and counts
+as gone. The `phones` verb, with the same flags, lists them first (`phones[].launchId`,
+`phones[].iphoneId`, `liveLaunches`).
+
+**What it never touches.** It deletes only the phones the lane's records name. `xcrun simctl delete`
+removes a booted phone without shutting it down. The reap never quits Device Hub, never shuts down
+or erases a phone, and leaves every other phone running. A phone a launcher crash left unrecorded
+(named `superheroes-<launchId>`) is on no record, so the reap cannot find it. A person removes it by
+hand.
+
+**The reap record.** The reap writes one `evidence` amendment with value `reap` on each launch that
+names a phone: `reap: phone <udid> deleted | already gone | left running: <detail>`. That is where
+the lane's outcome already lives. Its output lists `leftRunning`. It exits 0 only when every phone
+is gone and recorded.
+
+**When it is not clean.**
+
+- For `leftRunning`, the phone stays recorded as left running. Name it in the lane's vet or
+  close-out note.
+- For `recordFailures` (the ledger refused an amendment), re-run the reap. It is safe, because
+  deleted phones then read as already gone. If the ledger stays unwritable, post each phone ID and
+  result on the lane's issue, and park.
 
 ## Liveness sweep and wave watch
 
