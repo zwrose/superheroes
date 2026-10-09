@@ -16,6 +16,7 @@ import urllib.request
 import pytest
 
 import iphone_check as ic
+import launcher
 
 U = "0A1B2C3D-4E5F-6789-ABCD-0123456789AB"
 V = "11111111-2222-3333-4444-555555555555"
@@ -23,6 +24,7 @@ DT17 = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 RT27 = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "iphone", "reading-page.html")
 DASH = "—"
+SHA = "ab" * 32
 UFR5_LITERAL = "iPhone check did not run — whole check: no phone for this lane"
 
 
@@ -84,6 +86,12 @@ def test_literal_pins():
     assert ic.classify_env(env) == ("did-not-run", "iPhone check did not run — whole check: Device Hub unavailable")
     env = {"SUPERHEROES_IPHONE_ID": U, "SUPERHEROES_DEVICE_HUB": "available"}
     assert ic.classify_env(env) == ("pending", None)
+
+
+def test_launch_contract_names_are_the_launchers_own():
+    for name in ("IPHONE_ID_ENV", "DEVICE_HUB_ENV", "IPHONE_NONE", "DEVICE_HUB_AVAILABLE",
+                 "DEVICE_HUB_UNAVAILABLE", "DEVICE_HUB_PROCESS"):
+        assert getattr(ic, name) is getattr(launcher, name), name
 
 
 def test_where_line_for_both_parts_chosen_by_the_issue():
@@ -185,7 +193,8 @@ def labels(**kw):
 
 
 def ev_shot(part="browser", **lb):
-    return {"kind": "screenshot", "part": part, "caption": "Home", "labels": labels(where=part, **lb), "path": "/r/a.png"}
+    return {"kind": "screenshot", "part": part, "caption": "Home", "labels": labels(where=part, **lb), "path": "/r/a.png",
+            "sha256": SHA}
 
 
 def part(included=True, completed=False, reason=""):
@@ -646,6 +655,26 @@ def test_render_refuses_a_reading_without_a_reading_and_a_screenshot_without_a_l
         ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "path": None}]))
 
 
+def test_render_a_screenshot_with_only_a_path_is_a_plain_line_never_an_image():
+    _, section = ic.render(chk(where=["browser"], evidence=[ev_shot("browser")]))
+    assert f"screenshot file (on the capturing Mac, not posted): /r/a.png · sha256 {SHA}" in section
+    assert "![" not in section
+
+
+def test_render_a_screenshot_with_a_url_is_an_image():
+    ev = {**ev_shot("browser"), "url": "https://files.example/a.png"}
+    _, section = ic.render(chk(where=["browser"], evidence=[ev]))
+    assert "![Home](https://files.example/a.png)" in section
+    assert "screenshot file" not in section
+
+
+@pytest.mark.parametrize("drop", [("url", "sha256", "path"), ("url", "sha256"), ("url", "path")])
+def test_render_refuses_a_screenshot_with_neither_url_nor_path_and_sha256(drop):
+    ev = {k: v for k, v in ev_shot("browser").items() if k not in drop}
+    with pytest.raises(ValueError):
+        ic.render(chk(where=["browser"], evidence=[ev]))
+
+
 def test_render_never_shows_a_password_value_even_if_the_evidence_carries_one():
     r = rd(value="s3cret-hello", ftype="password", where="installed")
     ev = {**ev_reading(), "reading": r}
@@ -655,7 +684,7 @@ def test_render_never_shows_a_password_value_even_if_the_evidence_carries_one():
 
 def test_render_lays_out_one_screenshot_and_one_reading_exactly():
     check = chk(where=["browser"], parts={"browser": part(completed=True), "installed": part(included=False)},
-                evidence=[ev_shot("browser"),
+                evidence=[{**ev_shot("browser"), "url": "https://files.example/a.png"},
                           {**ev_reading("browser", "browser"), "caption": "After typing"}])
     opening, section = ic.render(check)
     assert opening == ""
@@ -668,7 +697,7 @@ def test_render_lays_out_one_screenshot_and_one_reading_exactly():
         "multi-finger gestures) and real-device speed.",
         "#### iPhone evidence 1 — screenshot (browser): Home",
         label_line,
-        "![Home](/r/a.png)",
+        "![Home](https://files.example/a.png)",
         "#### iPhone evidence 2 — reading (browser): After typing",
         label_line,
         'visible height 700 · focused input#name (text) · value "v"',
@@ -713,7 +742,8 @@ def test_judge_and_render_cli(tmp_path, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["ok"] is False
     path.write_text(json.dumps(chk(where=["browser"], evidence=[ev_shot("browser")])), encoding="utf-8")
     assert ic.main(["render", "--in", str(path)]) == 0
-    assert "![Home](/r/a.png)" in json.loads(capsys.readouterr().out)["section"]
+    section = json.loads(capsys.readouterr().out)["section"]
+    assert f"screenshot file (on the capturing Mac, not posted): /r/a.png · sha256 {SHA}" in section
 
 
 # ---------------------------------------------------------------- the fixture page

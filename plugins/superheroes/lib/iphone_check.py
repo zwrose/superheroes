@@ -20,8 +20,9 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-IPHONE_ID_ENV = "SUPERHEROES_IPHONE_ID"
-DEVICE_HUB_ENV = "SUPERHEROES_DEVICE_HUB"
+from launcher import (DEVICE_HUB_AVAILABLE, DEVICE_HUB_ENV, DEVICE_HUB_PROCESS, DEVICE_HUB_UNAVAILABLE,
+                      IPHONE_ID_ENV, IPHONE_NONE)
+
 READING_PARAM = "superheroes-reading"
 UDID_RE = re.compile(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
 SIX = ("phone", "model", "iOS", "page", "where", "source")
@@ -95,19 +96,19 @@ def classify_env(environ, issue_names_check=False):
         # Axis: both unset — the lane asked for no phone; only an issue naming the check makes it a line
         return ("did-not-run", UFR5) if issue_names_check else ("off", None)
     # Axis: one value missing, a hub value outside available|unavailable, or an ID neither none nor a UDID
-    if (phone is None or hub is None or hub not in ("available", "unavailable")
-            or not (phone == "none" or UDID_RE.fullmatch(phone))):
+    if (phone is None or hub is None or hub not in (DEVICE_HUB_AVAILABLE, DEVICE_HUB_UNAVAILABLE)
+            or not (phone == IPHONE_NONE or UDID_RE.fullmatch(phone))):
         return "did-not-run", _line("whole check", "launch values unreadable")
     # Axis: `none` dominates — no other whole cause is reported next to it
-    if phone == "none":
+    if phone == IPHONE_NONE:
         return "did-not-run", UFR5
-    if hub == "unavailable":
+    if hub == DEVICE_HUB_UNAVAILABLE:
         return "did-not-run", _line("whole check", "Device Hub unavailable")
     return "pending", None
 
 
 def _live_reason(udid):
-    returned, code, _ = _run(["pgrep", "-x", "DeviceHub"], 10)
+    returned, code, _ = _run(["pgrep", "-x", DEVICE_HUB_PROCESS], 10)
     # Axis: Device Hub not provably running (pgrep failed, errored or never returned)
     if not (returned and code == 0):
         return "Device Hub unavailable"
@@ -291,6 +292,11 @@ def judge_step(step):
     return False, "unknown step kind"
 
 
+def _screenshot_located(ev):
+    """A screenshot is rendered only when readers can open it (url) or the file is named and hashed (path + sha256)."""
+    return bool(ev.get("url")) or (bool(ev.get("path")) and isinstance(ev.get("sha256"), str) and bool(ev["sha256"]))
+
+
 def _has_installed_reading(check):
     return any(isinstance(e, dict) and e.get("kind") == "reading" and (e.get("labels") or {}).get("where") == "installed"
                and (e.get("reading") or {}).get("where") == "installed" for e in check.get("evidence") or [])
@@ -333,7 +339,7 @@ def render(check):
             # Axis: a reading whose where label disagrees with the reading's own where
             if not isinstance(ev.get("reading"), dict) or labels["where"] != ev["reading"].get("where"):
                 raise ValueError(f"evidence {n}: where label disagrees with the reading")
-        elif ev.get("kind") != "screenshot" or not (ev.get("url") or ev.get("path")):
+        elif ev.get("kind") != "screenshot" or not _screenshot_located(ev):
             raise ValueError(f"evidence {n} is neither a located screenshot nor a reading")
     opening = "\n\n".join(did_not_run_lines(check))
     if not evidence and (check.get("noPhone") or check.get("whole")):
@@ -347,7 +353,11 @@ def render(check):
         out.append(f"#### iPhone evidence {n} — {ev['kind']} ({ev.get('part')}): {ev.get('caption', '')}")
         out.append(" · ".join(f"`{k}` {lb[k]}" for k in SIX))
         if ev["kind"] == "screenshot":
-            out.append(f"![{ev.get('caption', '')}]({ev.get('url') or ev.get('path')})")
+            # Axis: a PR comment shows an image only by a URL its readers can open; a local path is named, not embedded
+            if ev.get("url"):
+                out.append(f"![{ev.get('caption', '')}]({ev['url']})")
+            else:
+                out.append(f"screenshot file (on the capturing Mac, not posted): {ev['path']} · sha256 {ev['sha256']}")
             continue
         rd = ev["reading"]
         f = rd.get("focused")

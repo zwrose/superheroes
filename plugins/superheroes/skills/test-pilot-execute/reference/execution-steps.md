@@ -174,13 +174,16 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
 - **Boot and open.** Boot the phone, then open the page in Mobile Safari and
   keep the `token` it returns. Before any tap, take a first reading
   (`read --run-dir <dir> --token <token> --where browser`). It proves the
-  page's reporting script. If it never arrives, take a screenshot before
-  calling it a miss. If Safari is not showing the page (a fresh phone's Safari
+  page's reporting script. If `read` returns an `error` (a session or
+  listener failure), stop the whole check with that error as the reason. If it
+  never arrives, take a screenshot before calling it a miss. If Safari is not showing the page (a fresh phone's Safari
   can drop its first URL and show its Start Page), `open` once more, keep the
   new `token`, and take the first reading again. Re-opening is preparation, not
-  a step of the plan. Only a page that is showing and sends no reading, or a
-  second miss, stops the whole check with
-  `iPhone check did not run — whole check: the app lacks its reporting script`.
+  a step of the plan. A second miss, or a page that is showing and sends no
+  reading, stops the whole check. Fetch the page source served at the page URL
+  once and search it for `superheroes-reading`. With no match the reason is
+  `the app lacks its reporting script`; otherwise it is
+  `a page reading never returned`.
   A later reading that never returns ends only its part (see Stops).
 - **Driving.** Step 5's calibration (accessible names, no coordinates) is for
   browser tools; on the phone, use these rules. Send every tap and keystroke
@@ -235,7 +238,11 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   environment. Write the check JSON (`noPhone`, `whole`, `where`, `chosenBy`,
   `parts` with `included`, `completed` and `reason` for `browser` and
   `installed`, and `evidence`), then run `render --in <file>`; it refuses
-  unlabelled evidence. Put its `opening` first in the results, before any
+  unlabelled evidence. A PR comment shows a screenshot only by a URL its
+  readers can open: publish each screenshot where the PR readers can reach it
+  and pass its `url` in the evidence; else the results name the local file and
+  its `sha256` (pass `path` and `sha256` from `shot`). The plugin makes no
+  hosting choice. Put its `opening` first in the results, before any
   evidence, and its `section` after the steps table (the iPhone slots in
   `templates/results-comment.md`).
 - **Hard lines.** Never quit Device Hub. Never shut down, erase or delete any
