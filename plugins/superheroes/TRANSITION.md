@@ -11,7 +11,7 @@ belongs to and lists every change with its replacement.
 
 ### Before you upgrade
 
-- Finish or discard any in-flight review session that holds owner guidance over 2000 bytes, or a fix batch whose guidance adds up past 8000 bytes. Under 0.42.0 its next fixer order refuses instead of carrying cut or missing guidance.
+- Finish or discard any in-flight review session that holds owner guidance over 2000 bytes, or a fix batch whose guidance, as rendered in the fixer order (each finding's header and quoting included), comes to more than 8000 bytes. Four guidances of about 1,900 bytes each are already enough. Under 0.42.0 its next fixer order refuses instead of carrying cut or missing guidance.
 - After upgrading, run configure once. `rubric-version` moves from 10 to 11, so each project's review profile reads as behind until configure refreshes it.
 - Launches without `iphoneCheck` behave exactly as before. Nothing else needs doing before you upgrade.
 
