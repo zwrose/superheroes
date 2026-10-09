@@ -153,8 +153,10 @@ above).
    that may already have moved.
 
    **Notify in-flight builds when a ruling is superseded.** When you record an owner decision that
-   **supersedes an earlier ruling**, notify every in-flight build whose Anchor slot cites the
-   superseded ruling — at the moment you record the new decision, not afterwards. **The Anchor
+   **supersedes an earlier ruling**, or a Canon entry that retires a misfiled entry (the contract's
+   [Retiring a misfiled entry](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#retiring-a-misfiled-entry)),
+   notify every in-flight build whose Anchor slot cites the
+   superseded ruling — at the moment you record the new decision, not afterwards. For a retirement, re-point each affected Anchor to the replacement entry where one carries the ruling. **The Anchor
    citation is the reverse index:** affected work is located by its Anchor slot; the rulings themselves are recorded in the project's Canon
    (`${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md`). Absorbing accumulated rulings into a spec, and the consolidation re-read and re-stamp an amended spec owes, follow the spec-content doctrine; you schedule the re-stamp because only the owner can give it.
    Doctrine:
@@ -363,6 +365,10 @@ above).
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
      while an **undisclosed** one holds the handback.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` when you grade the register row.**
+   - **The iPhone-evidence row** — fires when the PR carries iPhone evidence (a screenshot or page
+     reading from a simulated iPhone) **or** the issue names an iPhone check. Grade each piece valid
+     or invalid. When the issue names the check, grade whether it is complete.
+     **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` § iPhone evidence when the row fires.**
    - **The closure row** — fires when **this vet is the final one**; which vet that is, including concurrent final vets, a no-PR close, and the stacked-feature case, is [When closure fires](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md#when-closure-fires). When the row fires, the vet **assembles and carries the closure receipt**.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when the closure row fires.**
    - **Trust CI green on the recorded head** — including the suite's receipt per
@@ -694,9 +700,10 @@ above).
    carries its five graded checks and exactly one terminal branch in plain language on the incident
    issue; no fix issue cites an unvetted diagnosis.
 8. **Keep durable memory, and put the owner's rulings in Canon.** A ruling the owner gives you that
-   decides something goes to the project's Canon by
+   belongs in Canon by the contract's test goes to the project's Canon by
    [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md). Read it before you write an
-   entry; what counts as a ruling, the entry shape, and the write steps are the contract's.
+   entry; what counts as a ruling, what stays out, the entry shape, and the write steps are the
+   contract's.
 
    **Which branch, and when to commit.** The contract's
    [Writing a ruling](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling) says which
@@ -724,7 +731,7 @@ above).
    The routing test for what belongs in memory versus a plugin surface lives in the **workhorse**
    charter's `## Memory` section — read it there; this charter does not restate it.
 
-   **Done when:** every ruling this session received that decides something is committed to Canon on
+   **Done when:** every ruling this session received that belongs in Canon is committed to Canon on
    a branch, or held on the collector with its id; every decision and gotcha is recorded with its
    provenance line, or placed on the plugin surface the routing test names.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
@@ -769,8 +776,11 @@ above).
    configuration resolves to **`opus`**, never to an inherited session tier. The failure is quiet — a
    wrong tier does not error, it just burns a shared account's limit at multiplied cost.
    **The launcher provisions each build's worktree**, so **you never hand a builder a worktree and
-   never launch one into the primary checkout**. Reaping a finished lane's worktree is yours, not
-   the builder's.
+   never launch one into the primary checkout**. Reaping a finished lane's worktree, and its
+   simulated phones, is yours, not the builder's. When the issue's done-definition names an iPhone
+   check (a check on a simulated iPhone), the premise carries `"iphoneCheck": true`. The premise
+   names no place to check.
+   **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**
 
    **Declare a batch before its launches, and record every terminal outcome** — handback, park,
    refusal, or died; an unrecorded outcome makes the batch unreadable rather than clean. **Read

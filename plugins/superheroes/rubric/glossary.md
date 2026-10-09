@@ -13,8 +13,8 @@ Any decision the owner gives, in any session.
 ### Canon
 
 The project's record of the owner's decisions: answers to owner calls, principles, and ceded calls,
-each standing or for one piece. Go-words stay where the owner gives them.
-See [Canon's contract](canon-contract.md).
+each standing or for one piece. The contract holds what goes in, what stays out and where it goes
+instead. See [Canon's contract](canon-contract.md).
 
 ### Ceded call
 

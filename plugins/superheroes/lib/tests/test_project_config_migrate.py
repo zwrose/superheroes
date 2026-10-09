@@ -275,6 +275,32 @@ def test_session_and_date_default_when_omitted(tmp_path):
     assert w.item13()["raw"]["migratedOn"] == got["entries"][0][:10]
 
 
+def test_date_default_is_the_utc_date(tmp_path, monkeypatch):
+    import datetime as real
+
+    class _Date(real.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 8)  # the local date, a day behind UTC
+
+    class _DateTime(real.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is real.timezone.utc:
+                return cls(2026, 10, 9, 2, 0, tzinfo=tz)  # the UTC instant
+            return cls(2026, 10, 8, 22, 0)  # a zone-less clock reads local time
+
+    class _Clock:
+        date = _Date
+        datetime = _DateTime
+        timezone = real.timezone
+
+    monkeypatch.setattr(PC, "datetime", _Clock)
+    w = _world(tmp_path)
+    got = PC.migrate_material_line(w.repo, root=w.store)
+    assert got["entries"][0].startswith("2026-10-09-")
+
+
 # --- E9-E12: the Canon lookup ---
 
 def test_e9_no_origin_remote_reports_no_origin_and_stays_pending(tmp_path):
