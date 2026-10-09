@@ -176,6 +176,10 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.
 
+**iPhone check.** When the project's lanes will run the iPhone check, its app needs a
+development-only reporting script. Read `${CLAUDE_PLUGIN_ROOT}/skills/test-pilot-init/reference/reporting-script.md`
+and tell the user the project adds the script itself.
+
 ### Conformance run (when `pilot` block is declared)
 
 After calibration is written, and **only when** the profile declares a `pilot`

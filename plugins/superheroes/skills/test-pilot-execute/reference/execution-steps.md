@@ -3,6 +3,7 @@
 - Framing — provisioning vs. execution
 - Steps 1–4 — provision the run
 - Steps 5–8 — execute, observe, report
+- The iPhone check
 
 # test-pilot-execute — the execution steps
 
@@ -62,7 +63,9 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 4. **Browser tool.** Profile `browserTools` order ∩ currently connected
    (ToolSearch). Empty intersection → ABORT with remediation: "run
    test-pilot-init to install/record a browser tool". Never continue
-   without one.
+   without one. A missing browser tool stops only the browser-MCP plan; the
+   iPhone check, when it applies, runs and posts on its own (it needs no
+   browser MCP).
 
 ## Steps 5–8 — execute, observe, report
 
@@ -135,3 +138,122 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    The verdict is the run's observed outcome; the human's spot-check is the
    certifier. Fixes route to the invoking session — the PR is ready for
    spot-checking.
+
+## The iPhone check
+
+You drive the lane's simulated iPhone through `lib/iphone_check.py`, with no
+browser MCP. Every verb prints one JSON object and exits 0 when its `ok` is
+true. Every verb that touches the phone takes `--timeout <seconds>`.
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/iphone_check.py" preflight [--issue-names-check]
+python3 -B "$ROOT_DIR/lib/iphone_check.py" boot --phone <id>
+python3 -B "$ROOT_DIR/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
+python3 -B "$ROOT_DIR/lib/iphone_check.py" drive --phone <id> -- type hello
+python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --page <page-url> --where browser
+python3 -B "$ROOT_DIR/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
+python3 -B "$ROOT_DIR/lib/iphone_check.py" judge < step.json
+python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
+```
+
+- **When it applies.** The check applies when `SUPERHEROES_IPHONE_ID` or
+  `SUPERHEROES_DEVICE_HUB` is in your environment (the launcher sets both for
+  an iPhone launch), or when the issue's done-definition names an iPhone check.
+  Run `preflight` (`--issue-names-check` when the issue names one). Its `state`
+  decides:
+  - `off`: leave the iPhone section out of the results.
+  - `did-not-run`: post its `line` as the opening of the results, and stop the
+    iPhone check.
+  - `ready`: go on. The handed ID is the lane's only phone. Never create or
+    boot another, pick a phone by name, or use `booted` as a target.
+- **Where to check.** The issue's statement governs: the browser, the installed
+  web app, or both. A check limited to the browser does not meet an issue that
+  asks for the installed app. When the issue says nothing, the lane chooses and
+  the results say so (`chosenBy: "lane"`). The plugin makes no choice.
+- **Boot and open.** Boot the phone, then open the page in Mobile Safari and
+  keep the `token` it returns. Before any tap, take a first reading
+  (`read --run-dir <dir> --token <token> --where browser`). It proves the
+  page's reporting script. If `read` returns an `error` (a session or
+  listener failure), stop the whole check with that error as the reason. If it
+  never arrives, take a screenshot before calling it a miss. If Safari is not showing the page (a fresh phone's Safari
+  can drop its first URL and show its Start Page), `open` once more, keep the
+  new `token`, and take the first reading again. Re-opening is preparation, not
+  a step of the plan. A second miss, or a page that is showing and sends no
+  reading, stops the whole check. Fetch the page source served at the page URL
+  once and search it for `superheroes-reading`. With no match the reason is
+  `the app lacks its reporting script`; otherwise it is
+  `a page reading never returned`. A project adds the script by following
+  `skills/test-pilot-init/reference/reporting-script.md`.
+  A later reading that never returns ends only its part (see Stops).
+- **Driving.** Step 5's calibration (accessible names, no coordinates) is for
+  browser tools; on the phone, use these rules. Send every tap and keystroke
+  through `drive --phone <id> -- <axe args>` (`drive --phone <id> -- type hello`
+  types). It carries the workaround for AXe dropping a tap whose process exits
+  at once (`AXE_HID_STABILIZATION_MS=2000`, and `--post-delay 1` on a tap), so
+  never call `axe` yourself to tap or type. Find a control with
+  `axe describe-ui --udid <phone>`, then tap by `--label` or by coordinates.
+  `describe-ui` can time out right after boot; retry it once. The page's own
+  contents and Safari's sheets may be missing from it; then tap by coordinates
+  read off a screenshot, in points (screenshot pixels divided by the phone's
+  scale; 3 on current iPhones). Take a screenshot with `shot --phone <id> --out <png> --page <page-url>
+  --where <part>`. Look at every screenshot yourself: you judge `keyboardSeen`
+  and `expectedSeen` from the image.
+- **Readings.** After each step the plan checks, take a reading with
+  `read --run-dir <dir> --token <token> --where <part>`, where `<part>` is
+  `browser` or `installed`. A reading gives the visible height, the focused
+  element, its value (withheld for a password field), and whether the page ran
+  in the browser or installed. The page's development-only reporting script
+  posts each reading as JSON to the address carried in its URL's
+  `superheroes-reading` query parameter (the name is `READING_PARAM` in
+  `lib/iphone_check.py`). `read` listens on that loopback
+  address for one call. Nothing outside the page is needed
+  (`lib/tests/fixtures/iphone/reading-page.html` reports this way; its test
+  harness fills the name in). An
+  installed app keeps the address only when it opens the page URL it was added
+  from. A project whose manifest `start_url` drops the query gets
+  `no page reading from the installed app` until its development build keeps it.
+- **The installed app.** When the check includes it, add the page to the Home
+  Screen from Safari: Share → Add to Home Screen, keep "Open as Web App" on,
+  Add. Find each control with `axe describe-ui --udid <phone>`. Dismiss a
+  one-time keyboard tip if one covers the screen. After returning to the Home
+  Screen, take a screenshot before tapping an icon; it may be on another Home
+  Screen page (swipe to it). Open the app from its Home
+  Screen icon and read with `--where installed`. Judge these preparation taps
+  by whether the install succeeded; a failed install is
+  `iPhone check did not run — installed-app check: the Home Screen install failed`.
+  An installed part needs a reading that reports installed; `render` enforces it.
+- **No response is never a pass.** Pass each plan step to `judge` with the
+  before and after readings and what the screenshot showed. Its fields are
+  `kind` (`tap-field`, `type` or `other`), `step`, `before`, `after`,
+  `keyboardSeen`, `screenChanged`, `expected`, `expectedSeen` and `password`;
+  a `tap-field` step also carries `target`, the intended field's `id` (or
+  `name:<name>` for a field with no id) as a reading reports it in `focused`, and
+  is completed only when the after reading's field is that `target` and a keyboard
+  was seen; a typing step completes only when its before and after readings name the same field.
+  A driver that reports success proves nothing; only `judge` decides. A step
+  `judge` calls not completed ends that part with `no response to input (<step>)`.
+- **Stops.** Every call has a time limit. A call that never returns ends its
+  part: `a driver step never returned (<step>)`, `a screenshot never returned`
+  or `a page reading never returned`. A boot that never returns ends the whole
+  check. A cause that stops everything gets one whole-check line; each part that
+  fails for its own cause gets its own; an included part never attempted gets
+  `not attempted`. Evidence gathered before a stop stays in the results.
+- **Labels and posting.** Every screenshot and reading carries the six labels
+  that `shot` and `read` return: `phone`, `model`, `iOS`, `page`, `where`,
+  `source`. Never type a label by hand, and never copy the phone ID from the
+  environment. Write the check JSON (`noPhone`, `whole`, `where`, `chosenBy`,
+  `parts` with `included`, `completed` and `reason` for `browser` and
+  `installed`, and `evidence`), then run `render --in <file>`; it refuses
+  unlabelled evidence. A PR comment shows a screenshot only by a URL its
+  readers can open: publish each screenshot where the PR readers can reach it
+  and pass its `url` in the evidence; else the results name the local file and
+  its `sha256` (pass `path` and `sha256` from `shot`). The plugin makes no
+  hosting choice. Put its `opening` first in the results, before any
+  evidence, and its `section` after the steps table (the iPhone slots in
+  `templates/results-comment.md`).
+- **Hard lines.** Never quit Device Hub. Never shut down, erase or delete any
+  phone; the advisor deletes the lane's phone when it reaps the lane. Never
+  drive a phone other than the handed one. The check needs no owner approval
+  and no sandbox change. An iPhone check that did not complete never holds the
+  PR: the results say so, and the build hands back.

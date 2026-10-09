@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iPhone check reading page</title>
+</head>
+<body>
+<h1>Reading page</h1>
+<p><label for="name">Name</label><br>
+<input type="text" id="name" name="name" style="font-size:14px"></p>
+<p><label for="secret">Secret</label><br>
+<input type="password" id="secret" name="secret" style="font-size:14px"></p>
+<script>
+function buildReading() {
+  var e = document.activeElement;
+  var focused = null;
+  if (e && e !== document.body && e.tagName) {
+    focused = {tag: String(e.tagName).toLowerCase(), type: e.type || null, id: e.id || null, name: e.name || null};
+  }
+  var standalone = navigator.standalone === true ||
+    (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches);
+  var r = {
+    visibleHeight: Math.round(window.visualViewport ? visualViewport.height : innerHeight),
+    focused: focused,
+    valueWithheld: false,
+    where: standalone ? 'installed' : 'browser',
+    visibility: document.visibilityState === 'visible' ? 'visible' : 'hidden',
+    page: location.href,
+    takenAt: Date.now()
+  };
+  if (focused && String(focused.type).toLowerCase() === 'password') {
+    r.valueWithheld = true;
+  } else if (focused && typeof e.value === 'string') {
+    r.value = e.value;
+  }
+  return r;
+}
+var addr = new URLSearchParams(location.search).get('__READING_PARAM__');
+function send() {
+  fetch(addr, {method: 'POST', mode: 'no-cors', keepalive: true, headers: {'Content-Type': 'text/plain'},
+    body: JSON.stringify(buildReading())}).catch(function () {});
+}
+if (addr) {
+  send();
+  document.addEventListener('focusin', send);
+  document.addEventListener('focusout', send);
+  document.addEventListener('input', send);
+  document.addEventListener('visibilitychange', send);
+  if (window.visualViewport) { visualViewport.addEventListener('resize', send); }
+  setInterval(send, 500);
+}
+</script>
+</body>
+</html>
