@@ -52,7 +52,7 @@ owner-stamped amendment where it lives, at this spec's approval. (source: adviso
 
 What an owner agrees with an agent and what gets written down drift apart, and owners get asked
 about the wrong things: consulted on craft, skipped on real product calls. This work gives every project that uses superheroes one clear line between the owner's
-decisions and craft, a durable record of the owner's decisions, and a discovery flow in which the owner
+decisions and craft, a durable record of those decisions, and a discovery flow in which the owner
 decides by looking at drawn boards, reviews only what nobody has ruled on yet, and never has to
 read a spec end to end to trust it. (source: ruling 8; framing)
 

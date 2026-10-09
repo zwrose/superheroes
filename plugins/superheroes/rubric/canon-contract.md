@@ -72,8 +72,18 @@ Canon holds three kinds of record:
 Everything else the owner says stays out, even when it sounds like a decision. [What stays out, and
 where it goes](#what-stays-out-and-where-it-goes) says what that is and where each kind belongs.
 
-**The test.** Would a session sorting a future call, after the work this is about is done, need
-this to answer it? If not, it is not Canon.
+**The test.** Would a later session need this to answer a call, on the same piece or on later work?
+A ruling it would need passes, whether its scope is one piece or standing. Only two kinds of thing
+fail, both described in [What stays out, and where it goes](#what-stays-out-and-where-it-goes): an
+instruction for one act, spent once the act happens, and a record that already has another home. A
+ruling about one issue or pull request with no work-item slug, and that holds for no later work, is
+such a record: its home is that issue or pull request (see **scope honesty** in
+[An entry](#an-entry)).
+
+**A piece ruling passes.** On one piece, the owner rules that a failed import keeps the previous
+data instead of clearing it. Every later session that builds, fixes or reviews that piece needs the
+ruling, even while the piece is still being built, so it is an entry with scope
+`piece <that piece's slug>`.
 
 **An instruction that does two things.** When an owner instruction both directs one act and states
 a rule for later work, it holds a ruling. Record the rule only, and leave the act where it was
