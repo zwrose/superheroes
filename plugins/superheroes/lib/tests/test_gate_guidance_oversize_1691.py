@@ -39,6 +39,7 @@ def _rendered_guidance(session_dir):
 
 
 def test_t1_submit_refuses_over_cap_guidance(tmp_path):
+    """axis: submit refusal — oversized guidance refuses before fold, state unchanged"""
     session_dir = _parked_judgment_session(tmp_path)
     before = _state_bytes(session_dir)
     out = _pending_submit(session_dir, _guided("x" * 2001))
@@ -50,6 +51,7 @@ def test_t1_submit_refuses_over_cap_guidance(tmp_path):
 
 
 def test_t2_at_cap_guidance_folds_and_renders_whole(tmp_path):
+    """axis: boundary acceptance at exactly the cap"""
     session_dir = _parked_judgment_session(tmp_path)
     out = _pending_submit(session_dir, _guided("x" * 2000))
     assert out["ok"] is True, out
@@ -61,6 +63,7 @@ def test_t2_at_cap_guidance_folds_and_renders_whole(tmp_path):
 
 
 def test_t3_multibyte_guidance_is_measured_in_bytes(tmp_path):
+    """axis: the measure is UTF-8 bytes, not characters"""
     guidance = "é" * 1000 + "x"
     assert len(guidance) == 1001 and len(guidance.encode("utf-8")) == 2001
     session_dir = _parked_judgment_session(tmp_path)
@@ -72,6 +75,7 @@ def test_t3_multibyte_guidance_is_measured_in_bytes(tmp_path):
 
 
 def test_t4_whitespace_padding_is_not_counted_on_submit_and_ruling_paths(tmp_path):
+    """axis: one stripped measure on both the gate and ruling paths"""
     padded = "  \n" + "x" * 2000 + "\n\t  "
     assert len(padded.encode("utf-8")) > 2000
     session_dir = _parked_judgment_session(tmp_path)
@@ -94,6 +98,7 @@ def test_t4_whitespace_padding_is_not_counted_on_submit_and_ruling_paths(tmp_pat
 
 
 def test_t5_library_run_loop_parks_cannot_certify_without_fixing():
+    """axis: the library run_loop door parks before any fixer runs"""
     fixes = []
 
     def fix_step(batch, rnd, payload):
@@ -116,6 +121,7 @@ def test_t5_library_run_loop_parks_cannot_certify_without_fixing():
 
 @pytest.mark.parametrize("ruling_channel", [False, True])
 def test_t6_render_backstop_refuses_over_cap_entry(ruling_channel):
+    """axis: render backstop on both channels"""
     entry = {"id": "d.py::big@L1", "title": "big", "file": "d.py", "line": 1,
              "guidance": "x" * 2001}
     if ruling_channel:
@@ -126,5 +132,17 @@ def test_t6_render_backstop_refuses_over_cap_entry(ruling_channel):
 
 
 def test_t7_literals_pinned():
+    """axis: external-contract literals pinned"""
     assert RD.GATE_GUIDANCE_OVERSIZE == "gate-guidance-oversize"
     assert RD.GATE_GUIDANCE_ROW_BYTE_CAP == 2000
+
+
+def test_t8_render_backstop_checks_entries_past_the_aggregate_cap():
+    """axis: render backstop checks every entry, including those past the aggregate cap"""
+    sizes = [2000, 2000, 2000, 2000, 2001]
+    entries = [{"id": "e%d.py::t%d@L%d" % (i, i, i), "title": "t%d" % i, "file": "e%d.py" % i,
+                "line": i, "guidance": "x" * size}
+               for i, size in enumerate(sizes, start=1)]
+    with pytest.raises(ValueError) as excinfo:
+        RD._gate_guidance_block(entries)
+    assert str(excinfo.value) == "order-render-refused:gate-guidance-oversize"

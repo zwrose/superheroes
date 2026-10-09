@@ -3610,6 +3610,9 @@ def _gate_guidance_block(entries):
         guided.append((entry, guidance.strip(), fid_stripped))
     if not guided:
         return _GATE_GUIDANCE_NO_GUIDANCE
+    for _entry, guidance, _fid in guided:
+        if _guidance_oversize(guidance):
+            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_OVERSIZE)
     identity_counts = {}
     identity_lines = []
     for entry, _guidance, _fid in guided:
@@ -3638,8 +3641,6 @@ def _gate_guidance_block(entries):
                 "read all guidance blocks before applying any fix."
                 % identity_counts[identity_line])
         header_lines.append(_gate_guidance_record_id_line(fid))
-        if _guidance_oversize(guidance):
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_OVERSIZE)
         escaped = _escape_guidance_placeholder_syntax(guidance)
         body_lines = ["BEGIN owner-gate guidance"]
         for line in escaped.splitlines() or [""]:
