@@ -579,6 +579,12 @@ In the light lane the bug first triggers escalation to the full lane.
 evidence that stands in for it: the receipts you re-ran and the review. Never fabricate a browser
 run.
 
+**The iPhone check.** At intake, read `SUPERHEROES_IPHONE_ID` and `SUPERHEROES_DEVICE_HUB` from
+your environment. The handed ID is the lane's only phone. Pass the pilot that phone ID, where to
+check per the issue (or your own choice, stated as yours), and the execution steps' iPhone
+section.
+**Read `skills/test-pilot-execute/reference/execution-steps.md` § The iPhone check when the launch hands you a phone or the issue names an iPhone check.**
+
 **Done when:** the pilot's results are posted and every reported bug has an implementer order, or the
 PR records test-pilot N/A with its stand-in evidence.
 
