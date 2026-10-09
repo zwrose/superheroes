@@ -950,6 +950,19 @@ def _validate_reserved_optional_fields(rec):
         if rec["foreignInstanceAllowed"] is not True:
             return "fold-bad-field:reserved:foreignInstanceAllowed"
 
+    if "iphoneId" in rec:
+        # The simulator device the launcher provisioned for a launch that asked for the
+        # iPhone check. A phone on a launch that never asked for one, or a value that is
+        # not a canonical simctl UUID, is not a record this ledger produced.
+        # axis: iphoneId shape and premise provenance — bites on a malformed id, or an id on a premise without iphoneCheck true.
+        premise = rec.get("premise")
+        if (
+            not is_iphone_id(rec["iphoneId"])
+            or not isinstance(premise, dict)
+            or premise.get("iphoneCheck") is not True
+        ):
+            return "fold-bad-field:reserved:iphoneId"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1079,6 +1092,16 @@ def is_positive_premise_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
+def is_iphone_id(value):
+    """True iff ``value`` is a canonical upper-case hyphenated UUID string (a simctl device id)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(uuid.UUID(value)).upper() == value
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 def _fold_premise_positive_int(premise, key):
     if not isinstance(premise, dict):
         return None
@@ -1203,6 +1226,15 @@ def fold(records):
                 "layersPlanned": _fold_premise_positive_int(
                     rec.get("premise"), "layersPlanned",
                 ),
+                # Whether the launch asked for the iPhone check; False on pre-iPhone records
+                # and on a premise that omits or malforms it.
+                "iphoneCheck": (
+                    isinstance(rec.get("premise"), dict)
+                    and rec["premise"].get("iphoneCheck") is True
+                ),
+                # The simulator device provisioned at reserve time; None on every record that
+                # carries none. It survives terminalization, so a reader can still reap it.
+                "iphoneId": rec.get("iphoneId"),
             }
             continue
 
@@ -1403,8 +1435,19 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
         _release_lock(lock_path)
 
 
-def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Reserve a launch under lock with overlap detection."""
+# The only keys a ``provision`` callable may add to the reserved record; anything else it
+# returns is dropped, never written.
+_PROVISION_FIELDS = ("iphoneId",)
+
+
+def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT, *, provision=None):
+    """Reserve a launch under lock with overlap detection.
+
+    ``provision``, when given, is called with no arguments after every admission check has
+    passed and before the append, still under the ledger lock, so a slow callable delays
+    other reservers (the launcher bounds its own callable). Its fields land on the same
+    record and the result reports them under ``provisioned``.
+    """
     if not isinstance(record, dict):
         return {"ok": False, "reason": "fold-not-an-object", "path": None}
     if record.get("event") == "batch-declared":
@@ -1497,14 +1540,38 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                 "reason": folded_with_new["reason"],
                 "path": None,
             }
+        provisioned = None
+        if provision is not None:
+            try:
+                made = provision()
+            except Exception:
+                made = None
+            if not isinstance(made, dict):
+                made = {}
+            provisioned = {k: made[k] for k in _PROVISION_FIELDS if k in made}
+            to_write.update(provisioned)
+            refolded = fold(read_result["records"] + [to_write])
+            if not refolded["ok"]:
+                return {
+                    "ok": False,
+                    "reason": refolded["reason"],
+                    "path": None,
+                    "provisioned": provisioned,
+                }
         if not append(repo_root, to_write, env=env):
-            return {"ok": False, "reason": "ledger-append-failed", "path": None}
-        return {
+            failed = {"ok": False, "reason": "ledger-append-failed", "path": None}
+            if provisioned is not None:
+                failed["provisioned"] = provisioned
+            return failed
+        result = {
             "ok": True,
             "reason": None,
             "path": lp["path"],
             "warnings": ["surface-overlap:%s" % lid for lid in overlapped],
         }
+        if provisioned is not None:
+            result["provisioned"] = provisioned
+        return result
     finally:
         _release_lock(lock_path)
 
