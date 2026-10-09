@@ -39,9 +39,11 @@ import stack_check  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 # The iPhone check is R1-R4 of the iPhone-check register: a launch that asks for it gets one
-# fresh simulator phone made inside its reservation, and its builder is told that phone's ID
-# and whether Device Hub is up. No launcher path quits Device Hub — quitting it shuts down
-# every simulator on the Mac — and no launcher path kills an app or removes a simulator.
+# fresh simulator phone, made just before the reservation and outside the ledger lock, and its
+# builder is told that phone's ID and whether Device Hub is up. No launcher path quits Device
+# Hub — quitting it shuts down every simulator on the Mac — or kills an app. The only simulator
+# a launcher path removes is the phone its own launch just made, when the reservation refuses
+# before writing the record.
 IPHONE_ID_ENV = "SUPERHEROES_IPHONE_ID"
 DEVICE_HUB_ENV = "SUPERHEROES_DEVICE_HUB"
 IPHONE_NONE = "none"

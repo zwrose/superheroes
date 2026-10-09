@@ -8562,8 +8562,8 @@ class _FakeClock:
 
 
 def test_iphone_device_hub_poll_never_outruns_its_budget(monkeypatch):
-  # axis: the post-open poll spends at most poll_seconds, each lookup is capped by what is left,
-  # and a lookup that succeeds only after the deadline is not running
+    # axis: each post-open lookup is capped by the budget left, and a lookup that succeeds
+    # only after the deadline is not running
     clock = _FakeClock()
     monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(L.time, "sleep", clock.sleep)
@@ -8577,12 +8577,14 @@ def test_iphone_device_hub_poll_never_outruns_its_budget(monkeypatch):
             if seen["pgrep"] == 1:
                 return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
             issued.append((timeout, 10 - (clock.now - start)))
-            clock.now += timeout
+            # this lookup always finishes one second after the deadline it was issued under
+            clock.now += timeout + 1
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     assert L._ensure_device_hub(slow_run, 10) == L.DEVICE_HUB_UNAVAILABLE
-    assert clock.now <= start + 10
+    # the budget plus the final lookup's one-second overrun
+    assert clock.now <= start + 10 + 1
     assert issued
     assert all(timeout <= remaining for timeout, remaining in issued)
 
@@ -8596,6 +8598,30 @@ def test_iphone_device_hub_poll_never_outruns_its_budget(monkeypatch):
 
     assert L._ensure_device_hub(zero_run, 0) == L.DEVICE_HUB_UNAVAILABLE
     assert [c[0] for c in zero_calls] == ["pgrep", "open"]
+
+
+def test_iphone_device_hub_success_exactly_at_deadline_counts(monkeypatch):
+    # axis: a lookup that returns 0 at exactly the deadline is running (the comparison is <=)
+    clock = _FakeClock()
+    monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(L.time, "sleep", clock.sleep)
+    start = clock.now
+    issued = []
+    seen = {"pgrep": 0}
+
+    def exact_run(argv, timeout):
+        if argv[0] == "pgrep":
+            seen["pgrep"] += 1
+            if seen["pgrep"] == 1:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+            issued.append(timeout)
+            clock.now += timeout
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    assert L._ensure_device_hub(exact_run, 10) == L.DEVICE_HUB_RUNNING
+    assert issued
+    assert clock.now == start + 10
 
 
 def test_iphone_external_contract_values_are_pinned():
