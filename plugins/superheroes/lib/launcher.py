@@ -38,6 +38,22 @@ import pilot_slot  # noqa: E402
 import stack_check  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
+# The iPhone check is R1-R4 of the iPhone-check register: a launch that asks for it gets one
+# fresh simulator phone made inside its reservation, and its builder is told that phone's ID
+# and whether Device Hub is up. No launcher path quits Device Hub — quitting it shuts down
+# every simulator on the Mac — and no launcher path kills an app or removes a simulator.
+IPHONE_ID_ENV = "SUPERHEROES_IPHONE_ID"
+DEVICE_HUB_ENV = "SUPERHEROES_DEVICE_HUB"
+IPHONE_NONE = "none"
+DEVICE_HUB_RUNNING = "running"
+DEVICE_HUB_UNAVAILABLE = "unavailable"
+IPHONE_DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
+DEVICE_HUB_BUNDLE_ID = "com.apple.dt.Devices"
+DEVICE_HUB_PROCESS = "DeviceHub"
+# Phone creation runs under the ledger lock, whose waiters time out at 30 seconds.
+_IPHONE_CREATE_TIMEOUT = 20
+_DEVICE_HUB_CMD_TIMEOUT = 30
+_DEVICE_HUB_POLL_SECONDS = 10
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
 WORKTREES_DIR_NAME = ".superheroes-worktrees"
 CONFIG_DIR_ENV = config_dir.CONFIG_DIR_ENV
@@ -1108,6 +1124,12 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not ll.is_positive_premise_int(dependency_val):
             return _fail("premise-dependency-invalid")
 
+    if "iphoneCheck" in premise:
+        # axis: iphoneCheck must be a real bool (1 and "yes" are not); False and absent both
+        # mean the check is off
+        if not isinstance(premise["iphoneCheck"], bool):
+            return _fail("premise-iphone-check-invalid")
+
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
@@ -1250,6 +1272,63 @@ def _overlap_evidence(warnings):
     return "overlaps %s; %s" % (", ".join(ids), _OVERLAP_EVIDENCE_SUFFIX)
 
 
+def _default_iphone_run(argv, timeout):
+    """The one runner every simulator and Device Hub command goes through."""
+    return subprocess.run(
+        argv,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _create_iphone(launch_id, run):
+    """Create this launch's phone; return {"iphoneId": udid}, or {} on any failure.
+
+    Runs inside the ledger lock via `ll.reserve`'s provision hook, so it never raises: a
+    phone that could not be made is a launch without a phone, not a failed launch.
+    """
+    try:
+        proc = run(
+            ["xcrun", "simctl", "create", "superheroes-%s" % launch_id, IPHONE_DEVICE_TYPE],
+            _IPHONE_CREATE_TIMEOUT,
+        )
+        if proc.returncode != 0:
+            return {}
+        udid = (proc.stdout or "").strip()
+        if not ll.is_iphone_id(udid):
+            return {}
+        return {"iphoneId": udid}
+    except Exception:
+        return {}
+
+
+def _ensure_device_hub(run, poll_seconds):
+    """Return DEVICE_HUB_RUNNING or DEVICE_HUB_UNAVAILABLE; never raises.
+
+    A Device Hub that is not up is opened, never restarted: the only commands issued are a
+    process lookup and an open request.
+    """
+    pgrep_argv = ["pgrep", "-x", DEVICE_HUB_PROCESS]
+    try:
+        if run(pgrep_argv, _DEVICE_HUB_CMD_TIMEOUT).returncode == 0:
+            return DEVICE_HUB_RUNNING
+        # `-g` opens it without bringing it to the foreground, so the owner's front window
+        # does not change (UFR-9).
+        opened = run(["open", "-g", "-b", DEVICE_HUB_BUNDLE_ID], _DEVICE_HUB_CMD_TIMEOUT)
+        if opened.returncode != 0:
+            return DEVICE_HUB_UNAVAILABLE
+        poll_deadline = time.monotonic() + poll_seconds
+        while time.monotonic() < poll_deadline:
+            time.sleep(0.5)
+            if run(pgrep_argv, _DEVICE_HUB_CMD_TIMEOUT).returncode == 0:
+                return DEVICE_HUB_RUNNING
+        return DEVICE_HUB_UNAVAILABLE
+    except Exception:
+        return DEVICE_HUB_UNAVAILABLE
+
+
 # WORKAROUND: launcher refuses spawn when cwd is the primary checkout (own-worktree)
 # delete-when: a re-run of the background-session trial observes its
 # "launcher-enforced own-worktree half" condition met; the condition is restated in the
@@ -1269,6 +1348,7 @@ def _spawn_attempt(
     cwd=None,
     evidence=None,
     effort=None,
+    iphone_env=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
@@ -1288,6 +1368,12 @@ def _spawn_attempt(
         child_env[SLOT_REF_ENV] = pilot_slot.format_slot_ref(slot, generation)
     else:
         child_env.pop(SLOT_REF_ENV, None)
+    # The scrub is unconditional, so a launch issued from inside an iPhone lane can never hand
+    # its own phone to a lane that has none; only the launcher's own iphone_env sets them.
+    child_env.pop(IPHONE_ID_ENV, None)
+    child_env.pop(DEVICE_HUB_ENV, None)
+    if isinstance(iphone_env, dict):
+        child_env.update(iphone_env)
     resolved = ll.resolve_root(repo_root, env=env)
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
@@ -1698,6 +1784,8 @@ def launch_build(
     membership_reader=None,
     pr_lookup=None,
     pr_vet_reader=None,
+    iphone_run=None,
+    device_hub_poll_seconds=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
     if membership_reader is None:
@@ -1711,6 +1799,11 @@ def launch_build(
     backoff_seconds = _BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
     total_deadline_seconds = (
         _TOTAL_DEADLINE_SECONDS if total_deadline_seconds is None else total_deadline_seconds
+    )
+
+    run = iphone_run or _default_iphone_run
+    poll_seconds = (
+        _DEVICE_HUB_POLL_SECONDS if device_hub_poll_seconds is None else device_hub_poll_seconds
     )
 
     launch_id = "launch-%s" % secrets.token_hex(8)
@@ -1913,6 +2006,8 @@ def launch_build(
         return _accounted_fail(reserve_result, reason, launch_id)
 
     stamped = stamped_premise
+    iphone_check = stamped.get("iphoneCheck") is True
+    iphone_info = {"id": None, "deviceHub": None} if iphone_check else None
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
@@ -2008,9 +2103,18 @@ def launch_build(
         reserved["generation"] = generation
     if boundary is not None:
         reserved["boundary"] = boundary
-    reserve_result = ll.reserve(repo_root, reserved, env=env)
+    reserve_result = ll.reserve(
+        repo_root,
+        reserved,
+        env=env,
+        provision=(lambda: _create_iphone(launch_id, run)) if iphone_check else None,
+    )
     if not reserve_result["ok"]:
         extra = {}
+        # A phone made before the reservation failed stays; it is reported, never removed.
+        stranded = (reserve_result.get("provisioned") or {}).get("iphoneId")
+        if iphone_check and stranded:
+            extra["iphone"] = {"id": stranded, "recorded": "uncertain"}
         proc = _git_scrubbed(
             repo_root, "worktree", "remove", worktree_path,
             env=env, timeout=_WORKTREE_GIT_TIMEOUT,
@@ -2024,6 +2128,8 @@ def launch_build(
     # accepted overlap and where the cost lands, without the advisor's context.
     warnings = list(reserve_result.get("warnings") or [])
     overlap_evidence = _overlap_evidence(warnings)
+    if iphone_info is not None:
+        iphone_info["id"] = (reserve_result.get("provisioned") or {}).get("iphoneId")
 
     def _post_reserve_fail(reason, **extra):
         """Every return past the reservation carries the overlap disclosure.
@@ -2034,6 +2140,8 @@ def launch_build(
         post-reserve failures through one helper is what keeps a future failure path
         from silently omitting it.
         """
+        if iphone_info is not None:
+            extra["iphone"] = dict(iphone_info)
         return _fail(reason, launchId=launch_id, warnings=warnings, **extra)
 
     ledger_recheck = _ledger_live_state(repo_root, env=env)
@@ -2079,6 +2187,17 @@ def launch_build(
     log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 
+    # A phone or Device Hub that is not there never fails the launch: the builder is told what
+    # is true and the lane spawns regardless.
+    if iphone_check:
+        iphone_info["deviceHub"] = _ensure_device_hub(run, poll_seconds)
+        iphone_env = {
+            IPHONE_ID_ENV: iphone_info["id"] or IPHONE_NONE,
+            DEVICE_HUB_ENV: iphone_info["deviceHub"],
+        }
+    else:
+        iphone_env = None
+
     attempt = 1
     child_ever_spawned = False
     while attempt <= max_attempts:
@@ -2110,6 +2229,7 @@ def launch_build(
             cwd=worktree_path,
             evidence=overlap_evidence,
             effort=compose_result["effort"],
+            iphone_env=iphone_env,
         )
         if spawn_result.get("refused"):
             return _post_reserve_fail(spawn_result["reason"])
@@ -2222,6 +2342,8 @@ def launch_build(
                 success["stackGate"] = stack_gate
             if dependency_gate is not None:
                 success["dependencyGate"] = dependency_gate
+            if iphone_check:
+                success["iphone"] = dict(iphone_info)
             return success
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc

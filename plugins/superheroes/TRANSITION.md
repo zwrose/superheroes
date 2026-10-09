@@ -7,6 +7,22 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Before you upgrade
+
+- Nothing to do. Launches without `iphoneCheck` behave exactly as before.
+
+### Launcher: the iPhone check
+
+- New optional premise key `iphoneCheck`, a bool. A launch whose premise carries a non-bool value (`"yes"`, `1`) refuses with `premise-iphone-check-invalid` before anything is created. `false` and absent both mean the check is off.
+- With `iphoneCheck: true`, the launcher creates exactly one new phone for the launch, named `superheroes-<launchId>`: an iPhone 17 on the newest installed iOS runtime. The phone is created inside the reservation and recorded as `iphoneId` on the `reserved` record. A phone that cannot be created, or output that is not a simulator ID, never fails the launch; the lane spawns without a phone.
+- The builder's environment gains two variables. `SUPERHEROES_IPHONE_ID` is the phone's UDID, or `none` when no phone was made. `SUPERHEROES_DEVICE_HUB` is `running` or `unavailable`. Both are always scrubbed from the environment the launch inherits, so a launch without the check never passes them on, and a launch issued from inside an iPhone lane never hands its phone to a lane that has none.
+- When Device Hub is not running, the launcher opens it with `open -g -b com.apple.dt.Devices`, which does not bring it to the foreground, and waits up to ten seconds for it to appear. If it does not, the variable reads `unavailable` and the lane still spawns. The launcher never quits Device Hub and never shuts down, erases or deletes a simulator.
+- The launch fold gains two keys on every lane: `iphoneCheck` (a bool, false when the premise does not ask) and `iphoneId` (the UDID, or `None`). A `reserved` record whose `iphoneId` is malformed, or is present without `iphoneCheck: true` in its premise, makes the fold refuse with `fold-bad-field:reserved:iphoneId`. An older fold ignores the new field.
+- `ll.reserve` gains a keyword-only `provision` callable. It runs after every admission check and before the append, under the ledger lock, and may add only `iphoneId` to the record. The result gains a `provisioned` key (a dict, possibly empty) whenever `provision` was given, including on a refusal after provisioning and on `ledger-append-failed`.
+- The launch result gains an `iphone` key when the check is on: `id` (the UDID or `None`) and `deviceHub`. When the reservation's append fails after the phone was made, the failure carries `iphone` as `{"id": <udid>, "recorded": "uncertain"}`, and the phone is left in place.
+
 ## 0.41.0
 
 ### Before you upgrade

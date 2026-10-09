@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8057,3 +8058,404 @@ def test_premise_adopts_shape_refuses(tmp_path, overrides, reason):
     result = L.validate_premise(premise, repo)
     assert result["ok"] is False
     assert result["reason"] == reason
+
+
+# --- the launcher's phone: the iPhone check (R1-R4 of the iPhone-check register) ---------------
+
+
+def test_iphone_launcher_never_quits_device_hub_or_shuts_down_phones():
+  # axis: no launcher code path quits Device Hub, kills an app, or shuts down, erases or deletes
+  # simulators — no string constant in launcher.py can name such a command
+    import ast
+
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    banned = ("killall", "pkill", "osascript", "shutdown", "erase", "quit")
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            low = node.value.lower()
+            if any(token in low for token in banned) or low == "delete":
+                offenders.append((node.lineno, node.value))
+    assert offenders == []
+
+
+class _FakeIphoneRun:
+    """The injected `iphone_run`: records every argv and answers from a script.
+
+    `create` is "ok" (a fresh UDID each call), an int (that exit status, empty stdout), a str
+    (exit 0 with that stdout), or an exception instance (raised). `pgrep` is the exit statuses
+    handed out in order, the last repeating. `open_rc` is what `open` exits with.
+    """
+
+    def __init__(self, create="ok", pgrep=(0,), open_rc=0):
+        self.create = create
+        self.pgrep = list(pgrep)
+        self.open_rc = open_rc
+        self.calls = []
+        self.udids = []
+        self._pgrep_n = 0
+
+    def __call__(self, argv, timeout):
+        self.calls.append(list(argv))
+        out = ""
+        rc = 0
+        if argv[0] == "xcrun":
+            if isinstance(self.create, BaseException):
+                raise self.create
+            if self.create == "ok":
+                out = "%s\n" % str(uuid.uuid4()).upper()
+                self.udids.append(out.strip())
+            elif isinstance(self.create, int):
+                rc = self.create
+            else:
+                out = self.create
+        elif argv[0] == "pgrep":
+            rc = self.pgrep[min(self._pgrep_n, len(self.pgrep) - 1)]
+            self._pgrep_n += 1
+        elif argv[0] == "open":
+            rc = self.open_rc
+        return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="")
+
+    def commands(self, name):
+        return [c for c in self.calls if c[0] == name]
+
+
+def _assert_iphone_argv_shapes(calls):
+    # axis: the runner only ever receives the three argv shapes — create, pgrep, open
+    for argv in calls:
+        if argv[:3] == ["xcrun", "simctl", "create"]:
+            assert len(argv) == 5
+            assert argv[3].startswith("superheroes-launch-")
+            assert argv[4] == L.IPHONE_DEVICE_TYPE
+        else:
+            assert argv in (
+                ["pgrep", "-x", "DeviceHub"],
+                ["open", "-g", "-b", "com.apple.dt.Devices"],
+            )
+
+
+def _iphone_launch(tmp_path, monkeypatch, runner, captured, issue=656, premise_extra=None,
+                   log_dir=None, **kwargs):
+    repo = str(tmp_path / "repo")
+    if not os.path.isdir(repo):
+        _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo, issue=issue, **(premise_extra or {}))
+    kwargs.setdefault("settle_seconds", 0.3)
+    result = L.launch_build(
+        repo,
+        issue,
+        premise,
+        _all_checks(),
+        log_dir or str(tmp_path / "logs"),
+        spawn_fn=_capturing_spawn(captured),
+        iphone_run=runner,
+        **kwargs
+    )
+    return repo, result
+
+
+def _folded_launch(repo, result):
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["ok"] is True
+    return folded["launches"][result["launchId"]]
+
+
+def _reserved_record(repo, result):
+    return [
+        r for r in ll.read(repo)["records"]
+        if r["event"] == "reserved" and r["launchId"] == result["launchId"]
+    ][0]
+
+
+@pytest.mark.parametrize("premise_extra", [{}, {"iphoneCheck": False}], ids=["absent", "false"])
+def test_iphone_f1_off_creates_nothing_and_scrubs_inherited_env(
+    tmp_path, monkeypatch, premise_extra
+):
+  # axis: a launch that does not ask makes no phone, runs no command, and its builder's env
+  # carries neither variable even when the launching env does
+    monkeypatch.setenv(L.IPHONE_ID_ENV, "STALE-PHONE")
+    monkeypatch.setenv(L.DEVICE_HUB_ENV, "running")
+    runner = _FakeIphoneRun()
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra=premise_extra,
+    )
+    assert result["ok"] is True
+    assert runner.calls == []
+    assert len(captured) == 1
+    assert L.IPHONE_ID_ENV not in captured[0]
+    assert L.DEVICE_HUB_ENV not in captured[0]
+    assert "iphoneId" not in _reserved_record(repo, result)
+    launch = _folded_launch(repo, result)
+    assert launch["iphoneCheck"] is False
+    assert launch["iphoneId"] is None
+    assert "iphone" not in result
+    _reap(result)
+
+
+@pytest.mark.parametrize("bad", ["yes", 1, 0, None], ids=["yes", "one", "zero", "none"])
+def test_iphone_f2_non_bool_check_refuses_without_commands(tmp_path, monkeypatch, bad):
+  # axis: a non-bool iphoneCheck refuses at the premise, before any phone or command
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": bad},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "premise-iphone-check-invalid"
+    assert runner.calls == []
+    assert captured == []
+
+
+def test_iphone_on_creates_one_phone_and_hands_it_to_the_builder(tmp_path, monkeypatch):
+  # axis: the happy path — one phone, recorded, in the builder's env, in the result
+    runner = _FakeIphoneRun()
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert len(runner.commands("xcrun")) == 1
+    assert runner.calls[0][3] == "superheroes-%s" % result["launchId"]
+    udid = runner.udids[0]
+    assert captured[0][L.IPHONE_ID_ENV] == udid
+    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    assert _reserved_record(repo, result)["iphoneId"] == udid
+    launch = _folded_launch(repo, result)
+    assert launch["iphoneCheck"] is True
+    assert launch["iphoneId"] == udid
+    assert result["iphone"] == {"id": udid, "deviceHub": "running"}
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
+
+
+def _assert_phoneless_spawn(repo, result, runner, captured, hub):
+    assert result["ok"] is True
+    assert captured[0][L.IPHONE_ID_ENV] == "none"
+    assert captured[0][L.DEVICE_HUB_ENV] == hub
+    assert "iphoneId" not in _reserved_record(repo, result)
+    assert _folded_launch(repo, result)["iphoneId"] is None
+    assert result["iphone"] == {"id": None, "deviceHub": hub}
+    _assert_iphone_argv_shapes(runner.calls)
+
+
+def test_iphone_f3_create_nonzero_spawns_with_none(tmp_path, monkeypatch):
+  # axis: a failed phone creation never fails the launch
+    runner = _FakeIphoneRun(create=1)
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    _assert_phoneless_spawn(repo, result, runner, captured, "running")
+    _reap(result)
+
+
+def test_iphone_f4_create_timeout_spawns_with_none(tmp_path, monkeypatch):
+  # axis: a creation timeout inside the ledger lock is swallowed, not raised
+    runner = _FakeIphoneRun(create=subprocess.TimeoutExpired(["xcrun"], 20))
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    _assert_phoneless_spawn(repo, result, runner, captured, "running")
+    _reap(result)
+
+
+def test_iphone_f5_create_garbage_stdout_spawns_with_none(tmp_path, monkeypatch):
+  # axis: stdout that is not a UUID is not a phone ID
+    runner = _FakeIphoneRun(create="garbage\n")
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    _assert_phoneless_spawn(repo, result, runner, captured, "running")
+    _reap(result)
+
+
+def test_iphone_f6_device_hub_running_is_not_opened(tmp_path, monkeypatch):
+  # axis: a running Device Hub is left alone — no open call
+    runner = _FakeIphoneRun(pgrep=(0,))
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert runner.commands("open") == []
+    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
+
+
+def test_iphone_f7_device_hub_opened_in_background_then_running(tmp_path, monkeypatch):
+  # axis: a stopped Device Hub is opened with -g so the front window does not change
+    runner = _FakeIphoneRun(pgrep=(1, 0), open_rc=0)
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert runner.commands("open") == [["open", "-g", "-b", "com.apple.dt.Devices"]]
+    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    assert result["iphone"]["deviceHub"] == "running"
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
+
+
+def test_iphone_f8_open_nonzero_is_unavailable_and_still_spawns(tmp_path, monkeypatch):
+  # axis: an open request that fails marks Device Hub unavailable and never fails the launch
+    runner = _FakeIphoneRun(pgrep=(1,), open_rc=1)
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert len(runner.commands("open")) == 1
+    assert captured[0][L.DEVICE_HUB_ENV] == "unavailable"
+    assert result["iphone"]["deviceHub"] == "unavailable"
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
+
+
+def test_iphone_f9_open_ok_but_never_running_is_unavailable(tmp_path, monkeypatch):
+  # axis: an open that is accepted but never produces a process is unavailable after the poll
+    runner = _FakeIphoneRun(pgrep=(1,), open_rc=0)
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+        device_hub_poll_seconds=0.2,
+    )
+    assert result["ok"] is True
+    assert len(runner.commands("open")) == 1
+    assert len(runner.commands("pgrep")) >= 2
+    assert captured[0][L.DEVICE_HUB_ENV] == "unavailable"
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
+
+
+def test_iphone_f10_no_phone_and_no_device_hub_still_spawns(tmp_path, monkeypatch):
+  # axis: both failures together still spawn the lane, told the truth about each
+    runner = _FakeIphoneRun(create=1, pgrep=(1,), open_rc=1)
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    _assert_phoneless_spawn(repo, result, runner, captured, "unavailable")
+    _reap(result)
+
+
+def test_iphone_f11_failure_after_creation_carries_the_phone(tmp_path, monkeypatch):
+  # axis: a later failure still reports the phone, and the terminal record keeps its iphoneId
+    blocker = tmp_path / "a-regular-file"
+    blocker.write_text("x\n")
+    runner = _FakeIphoneRun()
+    captured = []
+    repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+        log_dir=str(blocker / "logs"),
+    )
+    assert result["ok"] is False
+    assert captured == []
+    udid = runner.udids[0]
+    assert result["iphone"]["id"] == udid
+    launch = _folded_launch(repo, result)
+    assert launch["iphoneId"] == udid
+    assert launch["terminal"] is True
+    _assert_iphone_argv_shapes(runner.calls)
+
+
+def test_iphone_f12_append_failure_reports_uncertain_and_never_deletes(tmp_path, monkeypatch):
+  # axis: a phone made before a failed append is reported uncertain and never removed
+    real_append = ll.append
+
+    def failing_reserved_append(repo_root, record, env=None):
+        if record.get("event") == "reserved":
+            return False
+        return real_append(repo_root, record, env=env)
+
+    monkeypatch.setattr(ll, "append", failing_reserved_append)
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+    assert result["iphone"] == {"id": runner.udids[0], "recorded": "uncertain"}
+    assert captured == []
+    assert not any("delete" in argv for argv in runner.calls)
+    _assert_iphone_argv_shapes(runner.calls)
+
+
+def test_iphone_f13_stale_inherited_phone_never_reaches_the_child(tmp_path, monkeypatch):
+  # axis: with the check on and creation failing, the child gets none — never the stale value
+    monkeypatch.setenv(L.IPHONE_ID_ENV, "STALE-PHONE")
+    monkeypatch.setenv(L.DEVICE_HUB_ENV, "stale-hub")
+    runner = _FakeIphoneRun(create=1)
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is True
+    assert captured[0][L.IPHONE_ID_ENV] == "none"
+    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
+
+
+def test_iphone_f14_two_launches_get_two_phones(tmp_path, monkeypatch):
+  # axis: one phone per launch — each on its own record and in its own child env
+    runner = _FakeIphoneRun()
+    captured = []
+    repo, first = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, issue=656,
+        premise_extra={"iphoneCheck": True},
+    )
+    _repo, second = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, issue=657,
+        premise_extra={"iphoneCheck": True},
+    )
+    assert first["ok"] is True
+    assert second["ok"] is True
+    creates = runner.commands("xcrun")
+    assert len(creates) == 2
+    assert len(set(runner.udids)) == 2
+    assert [env[L.IPHONE_ID_ENV] for env in captured] == runner.udids
+    assert _folded_launch(repo, first)["iphoneId"] == runner.udids[0]
+    assert _folded_launch(repo, second)["iphoneId"] == runner.udids[1]
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(first)
+    _reap(second)
+
+
+def test_iphone_f15_spawn_retry_reuses_the_one_phone(tmp_path, monkeypatch):
+  # axis: a retried spawn does not make a second phone and carries the same ID
+    runner = _FakeIphoneRun()
+    captured = []
+    calls = {"n": 0}
+
+    def oserror_then_capture(argv, cwd, out_fh, err_fh, child_env):
+        calls["n"] += 1
+        captured.append(dict(child_env))
+        if calls["n"] == 1:
+            raise OSError("spawn failed")
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
+
+    repo = _init_repo(tmp_path / "repo")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, iphoneCheck=True),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=oserror_then_capture,
+        settle_seconds=0.3,
+        backoff_seconds=(0,),
+        iphone_run=runner,
+    )
+    assert result["ok"] is True
+    assert calls["n"] == 2
+    assert len(runner.commands("xcrun")) == 1
+    assert [env[L.IPHONE_ID_ENV] for env in captured] == [runner.udids[0]] * 2
+    _assert_iphone_argv_shapes(runner.calls)
+    _reap(result)
