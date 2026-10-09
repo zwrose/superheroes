@@ -79,7 +79,7 @@ the phone's ID as `iphoneId`. The premise names no place to check.
 
 **Reaping.** When the lane is finished (every launch for the issue has a terminal outcome
 recorded), run
-`python3 -B ${CLAUDE_PLUGIN_ROOT}/lib/iphone_reap.py reap --repo-root <repo> --issue <n>`.
+`python3 -B <plugin root>/lib/iphone_reap.py reap --repo-root <repo> --issue <n>`.
 Record the outcome first: the reap refuses, deleting nothing, while any launch for the issue is
 still live (`reap-lane-not-terminal:<launchId>`). It deletes every phone the lane's launch records
 name, relaunched and failed launches included. A phone already gone reads `already-gone` and counts
