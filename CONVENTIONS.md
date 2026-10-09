@@ -1166,7 +1166,7 @@ every consumer with no test failing. That one literal is not the second hand-mai
 the contract it checks. A fact shared only among this repository's own modules, languages, skill
 docs, or fixtures is not an external identifier, even when a separate process reads it, and every
 other test of an external identifier still reads the home. This paragraph is the one statement of
-the exception; `rubric/bite-proof.md`, review-base rule 6, and the test-reviewer's
+the exception; the bite-proof rubric, review-base rule 6, and the test-reviewer's
 **literal-pin** check point here.
 
 ### 11.4 Pointable step-body (the dispatched consumer cites, never copies)
