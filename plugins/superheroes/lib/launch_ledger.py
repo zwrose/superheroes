@@ -950,6 +950,19 @@ def _validate_reserved_optional_fields(rec):
         if rec["foreignInstanceAllowed"] is not True:
             return "fold-bad-field:reserved:foreignInstanceAllowed"
 
+    if "iphoneId" in rec:
+        # The simulator device the launcher provisioned for a launch that asked for the
+        # iPhone check. A phone on a launch that never asked for one, or a value that is
+        # not a canonical simctl UUID, is not a record this ledger produced.
+        # axis: iphoneId shape and premise provenance — bites on a malformed id, or an id on a premise without iphoneCheck true.
+        premise = rec.get("premise")
+        if (
+            not is_iphone_id(rec["iphoneId"])
+            or not isinstance(premise, dict)
+            or premise.get("iphoneCheck") is not True
+        ):
+            return "fold-bad-field:reserved:iphoneId"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1079,6 +1092,16 @@ def is_positive_premise_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
+def is_iphone_id(value):
+    """True iff ``value`` is a canonical upper-case hyphenated UUID string (a simctl device id)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(uuid.UUID(value)).upper() == value
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 def _fold_premise_positive_int(premise, key):
     if not isinstance(premise, dict):
         return None
@@ -1203,6 +1226,15 @@ def fold(records):
                 "layersPlanned": _fold_premise_positive_int(
                     rec.get("premise"), "layersPlanned",
                 ),
+                # Whether the launch asked for the iPhone check; False on pre-iPhone records
+                # and on a premise that omits or malforms it.
+                "iphoneCheck": (
+                    isinstance(rec.get("premise"), dict)
+                    and rec["premise"].get("iphoneCheck") is True
+                ),
+                # The simulator device provisioned at reserve time; None on every record that
+                # carries none. It survives terminalization, so a reader can still reap it.
+                "iphoneId": rec.get("iphoneId"),
             }
             continue
 

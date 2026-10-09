@@ -9,6 +9,10 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Before you upgrade
+
+- Nothing to do. Launches without `iphoneCheck` behave exactly as before.
+
 ### Canon: what stays out
 
 - Canon's contract has a new section, What stays out, and where it goes, and a test in What Canon holds. Read both before writing an entry.
@@ -16,6 +20,16 @@ belongs to and lists every change with its replacement.
 - Append only, and supersession has a new subsection, Retiring a misfiled entry. Entries a project already merged owe no clean-up.
 - `migrate-material-line`'s default `--date` is now the UTC date, not the local date.
 - Showrunner duty 2's supersession notice also covers a retirement.
+
+### Launcher: the iPhone check
+
+- New optional premise key `iphoneCheck`, a bool. A launch whose premise carries a non-bool value (`"yes"`, `1`) refuses with `premise-iphone-check-invalid` before anything is created. `false` and absent both mean the check is off.
+- With `iphoneCheck: true`, the launcher creates exactly one new phone for the launch, named `superheroes-<launchId>`: an iPhone 17 on the newest installed iOS runtime. The phone is created just before the reservation, outside the ledger lock, and its ID is recorded as `iphoneId` on the `reserved` record. A phone that cannot be created, or output that is not a simulator ID, never fails the launch; the lane spawns without a phone.
+- The builder's environment gains two variables. `SUPERHEROES_IPHONE_ID` is the phone's UDID, or `none` when no phone was made. `SUPERHEROES_DEVICE_HUB` is `available` or `unavailable`. Both are always scrubbed from the environment the launch inherits, so a launch without the check never passes them on, and a launch issued from inside an iPhone lane never hands its phone to a lane that has none.
+- When Device Hub is not running, the launcher opens it with `open -g -b com.apple.dt.Devices`, which does not bring it to the foreground, and waits up to ten seconds for it to appear. If it does not, the variable reads `unavailable` and the lane still spawns. The launcher never quits Device Hub and never shuts down or erases a simulator. The only simulator it ever deletes is the phone its own launch just made, when the reservation refuses before writing the record.
+- Phone creation and the Device Hub check together run under their own 90-second ceiling, and the launch's own deadline is extended by exactly the time they took. Turning the check on never makes a launch time out that would have started without it.
+- The launch fold gains two keys on every lane: `iphoneCheck` (a bool, false when the premise does not ask) and `iphoneId` (the UDID, or `None`). A `reserved` record whose `iphoneId` is malformed, or is present without `iphoneCheck: true` in its premise, makes the fold refuse with `fold-bad-field:reserved:iphoneId`. An older fold ignores the new field.
+- The launch result gains an `iphone` key when the check is on. On success it is `{"id": <udid or None>, "deviceHub": <value>}`. When the reservation is refused before the record is written, it is `{"id": <udid>, "recorded": false, "deleted": <bool>}`. When the reservation's append fails, it is `{"id": <udid>, "recorded": "uncertain"}`, and the phone is kept.
 
 ## 0.41.0
 

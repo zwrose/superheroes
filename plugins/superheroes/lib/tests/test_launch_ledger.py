@@ -5877,3 +5877,94 @@ def test_read_process_facts_live_pid_smoke():
     assert facts is not None
     assert facts["command"]
     assert facts["startTs"] <= time.time()
+
+
+_IPHONE_UUID = "E1F5C684-4D8F-4030-A7CE-1BFEFA9F153A"
+_IPHONE_PREMISE = {"iphoneCheck": True}
+
+
+def _iphone_repo(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    return repo
+
+
+def _iphone_ledger_records(repo):
+    return ll.read(repo)["records"]
+
+
+def test_iphone_is_iphone_id_truth_table():
+    # axis: canonical upper-case hyphenated UUID shape, measured from `xcrun simctl create`
+    assert ll.is_iphone_id(_IPHONE_UUID) is True
+    assert ll.is_iphone_id(_IPHONE_UUID.lower()) is False
+    assert ll.is_iphone_id(_IPHONE_UUID.replace("-", "")) is False
+    assert ll.is_iphone_id("{%s}" % _IPHONE_UUID) is False
+    assert ll.is_iphone_id("urn:uuid:" + _IPHONE_UUID) is False
+    assert ll.is_iphone_id(" %s " % _IPHONE_UUID) is False
+    assert ll.is_iphone_id("") is False
+    assert ll.is_iphone_id(None) is False
+    assert ll.is_iphone_id(123) is False
+
+
+def test_iphone_fold_malformed_id_refuses():
+    # axis: a reserved iphoneId that is not a canonical UUID refuses the fold
+    for bad in (_IPHONE_UUID.lower(), "not-a-uuid", "", None, 123):
+        rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(_IPHONE_PREMISE), iphoneId=bad)
+        result = ll.fold([rec])
+        assert result["ok"] is False, bad
+        assert result["reason"] == "fold-bad-field:reserved:iphoneId", bad
+
+
+def test_iphone_e8_id_without_iphone_check_premise_refuses():
+    # axis: an iphoneId only belongs to a launch whose premise asked for the iPhone check
+    for premise in ({}, {"iphoneCheck": False}, {"iphoneCheck": "true"}, "x", None, []):
+        rec = _reserved("l1", "b1", ["a"], "/r", premise=premise, iphoneId=_IPHONE_UUID)
+        result = ll.fold([rec])
+        assert result["ok"] is False, premise
+        assert result["reason"] == "fold-bad-field:reserved:iphoneId", premise
+
+
+def test_iphone_fold_pre_c1_record_has_no_phone():
+    # axis: a record written before the phone existed folds as no-check, no-id
+    result = ll.fold([_reserved("l1", "b1", ["a"], "/r")])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["iphoneCheck"] is False
+    assert lane["iphoneId"] is None
+
+
+def test_iphone_fold_exposes_check_without_id():
+    # axis: iphoneCheck is read off the premise independent of any provisioned id
+    rec = _reserved("l1", "b1", ["a"], "/r", premise=dict(_IPHONE_PREMISE))
+    lane = ll.fold([rec])["launches"]["l1"]
+    assert lane["iphoneCheck"] is True
+    assert lane["iphoneId"] is None
+
+
+def test_iphone_reserve_writes_id_carried_on_record(tmp_path, monkeypatch):
+    # axis: an iphoneId on the reserved record is appended as given and the fold returns it
+    repo = _iphone_repo(tmp_path, monkeypatch)
+    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE),
+                    iphoneId=_IPHONE_UUID)
+    result = ll.reserve(repo, rec)
+    assert result["ok"] is True
+    assert "provisioned" not in result
+    records = _iphone_ledger_records(repo)
+    assert [r["event"] for r in records] == ["reserved"]
+    assert records[0]["iphoneId"] == _IPHONE_UUID
+    lane = ll.fold(records)["launches"]["l1"]
+    assert lane["iphoneId"] == _IPHONE_UUID
+    assert lane["iphoneCheck"] is True
+
+
+def test_iphone_e9_refused_lane_still_folds_its_id():
+    # axis: a pre-spawn refusal leaves the lane's phone readable so a reader can reap it
+    rec = _reserved("l1", "b1", ["a"], "/r",
+                    premise=dict(_IPHONE_PREMISE), iphoneId=_IPHONE_UUID)
+    result = ll.fold([rec, _refused("l1")])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["terminal"] is True
+    assert lane["terminalKind"] == "refused"
+    assert lane["iphoneId"] == _IPHONE_UUID
+    assert lane["iphoneCheck"] is True
