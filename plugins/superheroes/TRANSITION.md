@@ -14,6 +14,11 @@ belongs to and lists every change with its replacement.
 - Nothing to do. Launches without `iphoneCheck` behave exactly as before.
 - Finish or discard any in-flight review session that holds owner guidance over 2000 bytes.
 
+### Review: pinning an external identifier
+
+- Review-base rule 6 now excepts a name whose spelling is fixed outside the repository (a config key, an env-var name, a query parameter, a marker another tool reads): one test pins its literal, and a review seat no longer flags that pin as a copy or as restating the constant. CONVENTIONS §11.3 is the one home of the exception and its reason; the bite-proof rubric and the test-reviewer's literal-pin check point there.
+- `rubric-version` in `rubric/review-base.md` moves from 10 to 11, so a project's review profile reads as behind until configure refreshes it.
+
 ### Canon: what stays out
 
 - Canon's contract has a new section, What stays out, and where it goes, and a test in What Canon holds. Read both before writing an entry.

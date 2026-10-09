@@ -15,11 +15,8 @@ test, an assertion, a guard clause, a validator, a CI check, a lint rule, a revi
 
 The proof runs with the **detector unedited**. A detector edited to make itself go red proves nothing.
 
-**An external-contract constant is proven by pinning its literal.** Where the guarded thing is a
-value some other system reads — a config key, an env-var name, a marker or token another tool
-matches on — **one test asserts the literal, spelled out**. A proof that reaches the constant
-through the symbol that defines it stays green under *any* value, so it proves the plumbing and
-nothing about the contract (PR #1159, vet 181; same shape at PR #1156, vet 178).
+**An external-contract constant is proven by pinning its literal**, in one test. CONVENTIONS §11.3
+is the one home of that exception to reading the home, with its reason.
 
 A green run is equally consistent with *the code is right* and *this detector cannot fail*. Only
 the red run tells them apart. This is the covenant's fourth promise — **claim nothing you did not
