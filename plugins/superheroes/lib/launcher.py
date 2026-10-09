@@ -50,9 +50,8 @@ DEVICE_HUB_UNAVAILABLE = "unavailable"
 IPHONE_DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 DEVICE_HUB_BUNDLE_ID = "com.apple.dt.Devices"
 DEVICE_HUB_PROCESS = "DeviceHub"
-# Phone creation runs under the ledger lock, whose waiters time out at 30 seconds; two queued
-# creations at 10 seconds each still fit one wait (simctl create measures about 1-2 s).
-_IPHONE_CREATE_TIMEOUT = 10
+# Creation runs before the reservation, outside the ledger lock, so this bounds only the launch itself.
+_IPHONE_CREATE_TIMEOUT = 20
 _DEVICE_HUB_CMD_TIMEOUT = 30
 _DEVICE_HUB_POLL_SECONDS = 10
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
@@ -1329,11 +1328,17 @@ def _ensure_device_hub(run, poll_seconds):
         if opened.returncode != 0:
             return DEVICE_HUB_UNAVAILABLE
         poll_deadline = time.monotonic() + poll_seconds
-        while time.monotonic() < poll_deadline:
-            time.sleep(0.5)
-            if run(pgrep_argv, _DEVICE_HUB_CMD_TIMEOUT).returncode == 0:
+        while True:
+            remaining = poll_deadline - time.monotonic()
+            if remaining <= 0:
+                return DEVICE_HUB_UNAVAILABLE
+            time.sleep(min(0.5, remaining))
+            remaining = poll_deadline - time.monotonic()
+            if remaining <= 0:
+                return DEVICE_HUB_UNAVAILABLE
+            looked = run(pgrep_argv, min(_DEVICE_HUB_CMD_TIMEOUT, remaining))
+            if looked.returncode == 0 and time.monotonic() <= poll_deadline:
                 return DEVICE_HUB_RUNNING
-        return DEVICE_HUB_UNAVAILABLE
     except Exception:
         return DEVICE_HUB_UNAVAILABLE
 
@@ -2132,6 +2137,7 @@ def launch_build(
                 # so it is this launch's own and nothing else can reap it.
                 extra["iphone"] = {
                     "id": made_iphone_id,
+                    "recorded": False,
                     "deleted": _delete_own_iphone(made_iphone_id, run),
                 }
         proc = _git_scrubbed(
