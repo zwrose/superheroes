@@ -25,6 +25,7 @@ orchestrator or a human) routes each finding to a fix as it sees fit.
    `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" scrub` (stdin→stdout).
    Never quote raw request headers.
 4. The plan comment's checkboxes belong to the human — never check them.
+5. **The iPhone check's hard lines** (Device Hub, phones) live in the execution steps' § The iPhone check — follow them.
 
 ## Flow
 
@@ -36,7 +37,8 @@ path instead of keeping a copy that drifts (CONVENTIONS §11.4).
 
 Steps 1–4 provision the run; steps 5–8 execute and observe. **If you cannot
 read that file, stop and report it** — never drive the app from memory of
-these steps.
+these steps. A lane that holds a phone, or whose issue names an iPhone check, also follows the
+execution steps' `§ The iPhone check`.
 
 ## Rationalization table
 
