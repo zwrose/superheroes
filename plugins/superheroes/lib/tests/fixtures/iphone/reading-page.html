@@ -36,7 +36,7 @@ function buildReading() {
   }
   return r;
 }
-var addr = new URLSearchParams(location.search).get('superheroes-reading');
+var addr = new URLSearchParams(location.search).get('__READING_PARAM__');
 function send() {
   fetch(addr, {method: 'POST', mode: 'no-cors', keepalive: true, headers: {'Content-Type': 'text/plain'},
     body: JSON.stringify(buildReading())}).catch(function () {});

@@ -204,9 +204,11 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   element, its value (withheld for a password field), and whether the page ran
   in the browser or installed. The page's development-only reporting script
   posts each reading as JSON to the address carried in its URL's
-  `superheroes-reading` query parameter. `read` listens on that loopback
+  `superheroes-reading` query parameter (the name is `READING_PARAM` in
+  `lib/iphone_check.py`). `read` listens on that loopback
   address for one call. Nothing outside the page is needed
-  (`lib/tests/fixtures/iphone/reading-page.html` reports this way). An
+  (`lib/tests/fixtures/iphone/reading-page.html` reports this way; its test
+  harness fills the name in). An
   installed app keeps the address only when it opens the page URL it was added
   from. A project whose manifest `start_url` drops the query gets
   `no page reading from the installed app` until its development build keeps it.

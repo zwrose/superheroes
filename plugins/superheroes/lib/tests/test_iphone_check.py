@@ -74,6 +74,7 @@ def sim(inv, pgrep=(True, 0, "42"), screenshot=(True, 0, "")):
 def test_literal_pins():
     assert ic.IPHONE_ID_ENV == "SUPERHEROES_IPHONE_ID"
     assert ic.DEVICE_HUB_ENV == "SUPERHEROES_DEVICE_HUB"
+    assert ic.READING_PARAM == "superheroes-reading"
     assert ic.UFR5 == UFR5_LITERAL
     assert ic.UFR5 == "iPhone check did not run — whole check: no phone for this lane"
     assert ic._line("whole check", "Device Hub unavailable") == \
@@ -500,7 +501,7 @@ def test_open_appends_the_reading_param_and_writes_the_session(fake, tmp_path):
     f = fake()
     r = ic.open_url(U, "http://x.test/p?a=1#frag", str(tmp_path), 30)
     assert r["ok"] is True and re.fullmatch(r"[0-9a-f]{16}", r["token"])
-    want = f"http://x.test/p?a=1&superheroes-reading=http://127.0.0.1:{r['port']}/{r['token']}#frag"
+    want = f"http://x.test/p?a=1&{ic.READING_PARAM}=http://127.0.0.1:{r['port']}/{r['token']}#frag"
     assert r["url"] == want and f.calls[0][0] == ["xcrun", "simctl", "openurl", U, want]
     sess = json.loads((tmp_path / "sessions" / (r["token"] + ".json")).read_text())
     assert sess == {"token": r["token"], "port": r["port"], "phone": U, "url": want}
@@ -607,9 +608,9 @@ def test_read_strips_the_value_of_a_password_focused_reading(tmp_path, monkeypat
 
 def test_read_strips_the_reading_param_from_the_page_label(tmp_path, monkeypatch, fake):
     s = Session(tmp_path, monkeypatch, fake)
-    s.post(reading(page="http://x.test/p?a=1&superheroes-reading=http://127.0.0.1:9/abc123&b=2#top"))
+    s.post(reading(page=f"http://x.test/p?a=1&{ic.READING_PARAM}=http://127.0.0.1:9/abc123&b=2#top"))
     assert s.finish()["labels"]["page"] == "http://x.test/p?a=1&b=2#top"
-    assert ic._page_label("http://x.test/p?superheroes-reading=http://127.0.0.1:9/t") == "http://x.test/p"
+    assert ic._page_label(f"http://x.test/p?{ic.READING_PARAM}=http://127.0.0.1:9/t") == "http://x.test/p"
     assert ic._page_label("http://x.test/p") == "http://x.test/p"
 
 
@@ -833,22 +834,20 @@ console.log(JSON.stringify({bodies, afterLoad, accesses, intervals, events: Obje
 """
 
 
+_PARAM_PLACEHOLDER = "__READING_PARAM__"
+
+
 def _run_fixture_script(tmp_path, kind):
     _need_node()
     script = re.search(r"<script>(.*?)</script>", open(FIXTURE, encoding="utf-8").read(), re.S).group(1)
+    assert script.count(_PARAM_PLACEHOLDER) == 1, f"the page script must carry {_PARAM_PLACEHOLDER} exactly once"
+    script = script.replace(_PARAM_PLACEHOLDER, ic.READING_PARAM)
     (tmp_path / "page.js").write_text(script, encoding="utf-8")
     (tmp_path / "runner.js").write_text(_RUNNER, encoding="utf-8")
     proc = subprocess.run(["node", str(tmp_path / "runner.js"), str(tmp_path / "page.js"), kind, ic.READING_PARAM],
                           capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
-
-
-def test_fixture_page_reads_the_reading_param_the_driver_appends():
-    html = open(FIXTURE, encoding="utf-8").read()
-    got = re.findall(r"URLSearchParams\([^)]*\)\s*\.get\(\s*'([^']*)'\s*\)", html)
-    assert got == [ic.READING_PARAM]
-    assert set(re.findall(r"superheroes-[A-Za-z0-9_-]+", html)) == {ic.READING_PARAM}
 
 
 def test_fixture_script_withholds_password_value(tmp_path):
