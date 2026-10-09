@@ -14,7 +14,7 @@ The pilot then runs `read --run-dir <dir> --token <token> --where browser|instal
 - It sends each reading as a JSON body with `fetch`, using `method: "POST"`, `mode: "no-cors"`, and `Content-Type: text/plain`. That header keeps the browser from sending a preflight request. The target is that exact address.
 - It needs no bridge or helper from outside the page.
 - It sends on page load, on focus in and out, on input, on visual-viewport resize, on visibility change, and every 500 ms. `read` accepts only a reading taken after its call began, so a script that posts once on load is never read.
-- It keeps each body under 1 MiB.
+- `read` reads at most 1 MiB of a body. A `fetch` sent with `keepalive: true`, as the working example does, fails above 64 KiB. So keep each body under 64 KiB when using `keepalive`, for example by shortening a very long field value.
 
 ## The reading
 
@@ -66,7 +66,7 @@ A reading never carries any part of a password field's value. When the focused f
 
 ## Limits
 
-- The page source served at the page URL must contain the text `superheroes-reading`, for example with the script inline in the page. The pilot searches that source to tell a missing script from a reading that never came. A script loaded only from a separate bundle file reads as "the app lacks its reporting script".
+- A script in a separate bundle file works. But when a first reading does not arrive, the pilot searches the page source served at the page URL for the text `superheroes-reading`. Without a match, it reports the app as lacking its reporting script, even when the real cause is elsewhere. So keep that text in the served page, for example with the script inline, to have a missed reading named correctly.
 - In the installed web app, the address survives only when the app opens a URL that keeps the query. A manifest `start_url` that drops it gives `no page reading from the installed app`. Keep the query in the development build's start URL.
 - The address is plain `http` on the loopback. A development Content-Security-Policy must let `connect-src` reach `http://127.0.0.1:*`. A page served over `https` that sends to it has not been exercised. If such a page sends no readings, check that first.
 - An HTTP reading cannot name the phone it came from. Its `phone` label is the phone the page was opened on.

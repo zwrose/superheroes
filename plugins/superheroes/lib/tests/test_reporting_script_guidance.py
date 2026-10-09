@@ -82,13 +82,15 @@ def test_guidance_names_the_parameter_and_its_home():
         assert token in text, "guidance missing %s" % token
 
 
-# Axis: the text example's keys drift from the fixture's buildReading() shape, lacks a key read needs, or read would refuse it
+# Axis: the text example's keys drift from the fixture's buildReading() shape, lacks a key read needs, read would refuse it, or it shows a password field's value
 def test_guidance_text_field_example_is_a_reading_read_accepts():
     ex = _examples()[0]
     assert ic._complete_reading(ex)
     sent, focused_keys = _reading_shape()
     assert set(ex["focused"]) == focused_keys
     assert set(ex) <= sent
+    assert ex["focused"]["type"].lower() != "password"
+    assert ex["valueWithheld"] is False
     assert "value" in ex
     assert _accepted(ex)
 
