@@ -13,6 +13,14 @@ belongs to and lists every change with its replacement.
 
 - Nothing to do. Launches without `iphoneCheck` behave exactly as before.
 
+### Canon: what stays out
+
+- Canon's contract has a new section, What stays out, and where it goes, and a test in What Canon holds. Read both before writing an entry.
+- An entry has new rules in An entry (one ruling per entry, scope honesty, UTC dates and times, narrowing an earlier decision) and a new subsection, Rulings that approve wording kept elsewhere.
+- Append only, and supersession has a new subsection, Retiring a misfiled entry. Entries a project already merged owe no clean-up.
+- `migrate-material-line`'s default `--date` is now the UTC date, not the local date.
+- Showrunner duty 2's supersession notice also covers a retirement.
+
 ### Launcher: the iPhone check
 
 - New optional premise key `iphoneCheck`, a bool. A launch whose premise carries a non-bool value (`"yes"`, `1`) refuses with `premise-iphone-check-invalid` before anything is created. `false` and absent both mean the check is off.
