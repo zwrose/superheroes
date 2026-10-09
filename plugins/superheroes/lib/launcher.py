@@ -1287,8 +1287,8 @@ def _default_iphone_run(argv, timeout):
 def _create_iphone(launch_id, run):
     """Create this launch's phone; return {"iphoneId": udid}, or {} on any failure.
 
-    Runs inside the ledger lock via `ll.reserve`'s provision hook, so it never raises: a
-    phone that could not be made is a launch without a phone, not a failed launch.
+    Called just before the reservation, outside the ledger lock, and never raises: a phone
+    that could not be made is a launch without a phone, not a failed launch.
     """
     try:
         proc = run(
@@ -1303,6 +1303,14 @@ def _create_iphone(launch_id, run):
         return {"iphoneId": udid}
     except Exception:
         return {}
+
+
+def _delete_own_iphone(udid, run):
+    """Delete the phone this launch made; True on exit 0, False otherwise. Never raises."""
+    try:
+        return run(["xcrun", "simctl", "delete", udid], _IPHONE_CREATE_TIMEOUT).returncode == 0
+    except Exception:
+        return False
 
 
 def _ensure_device_hub(run, poll_seconds):
@@ -2104,22 +2112,28 @@ def launch_build(
         reserved["generation"] = generation
     if boundary is not None:
         reserved["boundary"] = boundary
-    # The provision keyword is omitted when the check is off, so a launch without it keeps the pre-iPhone call shape.
+    # The phone is made here, outside the ledger lock: a slow simulator creation must never hold
+    # other launches' reservations. Its id rides on the reserved record.
+    made_iphone_id = None
     if iphone_check:
-        reserve_result = ll.reserve(
-            repo_root,
-            reserved,
-            env=env,
-            provision=lambda: _create_iphone(launch_id, run),
-        )
-    else:
-        reserve_result = ll.reserve(repo_root, reserved, env=env)
+        made_iphone_id = _create_iphone(launch_id, run).get("iphoneId")
+        if made_iphone_id:
+            reserved["iphoneId"] = made_iphone_id
+    reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         extra = {}
-        # A phone made before the reservation failed stays; it is reported, never removed.
-        stranded = (reserve_result.get("provisioned") or {}).get("iphoneId")
-        if iphone_check and stranded:
-            extra["iphone"] = {"id": stranded, "recorded": "uncertain"}
+        if made_iphone_id:
+            if reserve_result.get("reason") == "ledger-append-failed":
+                # The append may or may not have landed, so the record may name this phone:
+                # it is reported, never removed.
+                extra["iphone"] = {"id": made_iphone_id, "recorded": "uncertain"}
+            else:
+                # Every other refusal returns before the append: no record names this phone,
+                # so it is this launch's own and nothing else can reap it.
+                extra["iphone"] = {
+                    "id": made_iphone_id,
+                    "deleted": _delete_own_iphone(made_iphone_id, run),
+                }
         proc = _git_scrubbed(
             repo_root, "worktree", "remove", worktree_path,
             env=env, timeout=_WORKTREE_GIT_TIMEOUT,
@@ -2134,7 +2148,7 @@ def launch_build(
     warnings = list(reserve_result.get("warnings") or [])
     overlap_evidence = _overlap_evidence(warnings)
     if iphone_info is not None:
-        iphone_info["id"] = (reserve_result.get("provisioned") or {}).get("iphoneId")
+        iphone_info["id"] = made_iphone_id
 
     def _post_reserve_fail(reason, **extra):
         """Every return past the reservation carries the overlap disclosure.

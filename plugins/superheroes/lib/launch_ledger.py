@@ -1435,19 +1435,8 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
         _release_lock(lock_path)
 
 
-# The only keys a ``provision`` callable may add to the reserved record; anything else it
-# returns is dropped, never written.
-_PROVISION_FIELDS = ("iphoneId",)
-
-
-def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT, *, provision=None):
-    """Reserve a launch under lock with overlap detection.
-
-    ``provision``, when given, is called with no arguments after every admission check has
-    passed and before the append, still under the ledger lock, so a slow callable delays
-    other reservers (the launcher bounds its own callable). Its fields land on the same
-    record and the result reports them under ``provisioned``.
-    """
+def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """Reserve a launch under lock with overlap detection."""
     if not isinstance(record, dict):
         return {"ok": False, "reason": "fold-not-an-object", "path": None}
     if record.get("event") == "batch-declared":
@@ -1540,38 +1529,14 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT, *, 
                 "reason": folded_with_new["reason"],
                 "path": None,
             }
-        provisioned = None
-        if provision is not None:
-            try:
-                made = provision()
-            except Exception:
-                made = None
-            if not isinstance(made, dict):
-                made = {}
-            provisioned = {k: made[k] for k in _PROVISION_FIELDS if k in made}
-            to_write.update(provisioned)
-            refolded = fold(read_result["records"] + [to_write])
-            if not refolded["ok"]:
-                return {
-                    "ok": False,
-                    "reason": refolded["reason"],
-                    "path": None,
-                    "provisioned": provisioned,
-                }
         if not append(repo_root, to_write, env=env):
-            failed = {"ok": False, "reason": "ledger-append-failed", "path": None}
-            if provisioned is not None:
-                failed["provisioned"] = provisioned
-            return failed
-        result = {
+            return {"ok": False, "reason": "ledger-append-failed", "path": None}
+        return {
             "ok": True,
             "reason": None,
             "path": lp["path"],
             "warnings": ["surface-overlap:%s" % lid for lid in overlapped],
         }
-        if provisioned is not None:
-            result["provisioned"] = provisioned
-        return result
     finally:
         _release_lock(lock_path)
 

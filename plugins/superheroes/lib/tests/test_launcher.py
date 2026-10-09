@@ -8065,17 +8065,25 @@ def test_premise_adopts_shape_refuses(tmp_path, overrides, reason):
 
 def test_iphone_launcher_never_quits_device_hub_or_shuts_down_phones():
   # axis: no launcher code path quits Device Hub, kills an app, or shuts down, erases or deletes
-  # simulators — no string constant in launcher.py can name such a command
+  # simulators — no string constant in launcher.py can name such a command; the one exception is
+  # `_delete_own_iphone`, which removes only the phone this launch itself just made
     import ast
 
     with open(_MOD, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
+    own = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_delete_own_iphone"
+    )
+    own_lines = range(own.lineno, own.end_lineno + 1)
     banned = ("killall", "pkill", "osascript", "shutdown", "erase", "quit")
     offenders = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             low = node.value.lower()
-            if any(token in low for token in banned) or low == "delete":
+            if any(token in low for token in banned) or (
+                low == "delete" and node.lineno not in own_lines
+            ):
                 offenders.append((node.lineno, node.value))
     assert offenders == []
 
@@ -8385,6 +8393,25 @@ def test_iphone_f12_append_failure_reports_uncertain_and_never_deletes(tmp_path,
     assert captured == []
     assert not any("delete" in argv for argv in runner.calls)
     _assert_iphone_argv_shapes(runner.calls)
+
+
+def test_iphone_f12b_admission_refusal_deletes_only_its_own_phone(tmp_path, monkeypatch):
+  # axis: a refusal before the append leaves no record naming the phone, so the launch deletes it
+    monkeypatch.setattr(
+        ll, "reserve", lambda *a, **k: {"ok": False, "reason": "lock-unavailable", "path": None},
+    )
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "lock-unavailable"
+    udid = runner.udids[0]
+    assert result["iphone"] == {"id": udid, "deleted": True}
+    assert runner.commands("xcrun")[-1] == ["xcrun", "simctl", "delete", udid]
+    assert len(runner.commands("xcrun")) == 2
+    assert captured == []
 
 
 def test_iphone_f13_stale_inherited_phone_never_reaches_the_child(tmp_path, monkeypatch):

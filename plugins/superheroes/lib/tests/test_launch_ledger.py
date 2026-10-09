@@ -5941,147 +5941,20 @@ def test_iphone_fold_exposes_check_without_id():
     assert lane["iphoneId"] is None
 
 
-def test_iphone_reserve_with_provision_writes_id_on_record(tmp_path, monkeypatch):
-    # axis: provisioned fields land on the reserved record and the fold exposes them
+def test_iphone_reserve_writes_id_carried_on_record(tmp_path, monkeypatch):
+    # axis: an iphoneId on the reserved record is appended as given and the fold returns it
     repo = _iphone_repo(tmp_path, monkeypatch)
-    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE))
-    result = ll.reserve(repo, rec, provision=lambda: {"iphoneId": _IPHONE_UUID})
+    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE),
+                    iphoneId=_IPHONE_UUID)
+    result = ll.reserve(repo, rec)
     assert result["ok"] is True
-    assert result["provisioned"] == {"iphoneId": _IPHONE_UUID}
+    assert "provisioned" not in result
     records = _iphone_ledger_records(repo)
     assert [r["event"] for r in records] == ["reserved"]
     assert records[0]["iphoneId"] == _IPHONE_UUID
     lane = ll.fold(records)["launches"]["l1"]
     assert lane["iphoneId"] == _IPHONE_UUID
     assert lane["iphoneCheck"] is True
-
-
-def test_iphone_e1_provision_raises_appends_without_fields(tmp_path, monkeypatch):
-    # axis: a raising provision fails closed to a plain reservation
-    repo = _iphone_repo(tmp_path, monkeypatch)
-
-    def boom():
-        raise RuntimeError("simctl down")
-
-    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE))
-    result = ll.reserve(repo, rec, provision=boom)
-    assert result["ok"] is True
-    assert result["provisioned"] == {}
-    records = _iphone_ledger_records(repo)
-    assert len(records) == 1
-    assert "iphoneId" not in records[0]
-
-
-@pytest.mark.parametrize("returned", [None, [("iphoneId", _IPHONE_UUID)], "iphoneId"])
-def test_iphone_e2_provision_returns_non_dict(tmp_path, monkeypatch, returned):
-    # axis: a non-dict provision return fails closed to a plain reservation
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE))
-    result = ll.reserve(repo, rec, provision=lambda: returned)
-    assert result["ok"] is True
-    assert result["provisioned"] == {}
-    records = _iphone_ledger_records(repo)
-    assert len(records) == 1
-    assert "iphoneId" not in records[0]
-
-
-def test_iphone_e3_provision_extra_keys_dropped(tmp_path, monkeypatch):
-    # axis: only _PROVISION_FIELDS keys are copied onto the record
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE))
-    result = ll.reserve(
-        repo, rec,
-        provision=lambda: {"iphoneId": _IPHONE_UUID, "event": "outcome", "extra": 1},
-    )
-    assert result["ok"] is True
-    assert result["provisioned"] == {"iphoneId": _IPHONE_UUID}
-    records = _iphone_ledger_records(repo)
-    assert len(records) == 1
-    assert records[0]["event"] == "reserved"
-    assert records[0]["iphoneId"] == _IPHONE_UUID
-    assert "extra" not in records[0]
-
-
-def test_iphone_e4_provision_malformed_id_refuses_without_append(tmp_path, monkeypatch):
-    # axis: a malformed provisioned id is refused by the re-fold and never appended
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE))
-    result = ll.reserve(repo, rec, provision=lambda: {"iphoneId": "not-a-uuid"})
-    assert result["ok"] is False
-    assert result["reason"] == "fold-bad-field:reserved:iphoneId"
-    assert result["path"] is None
-    assert result["provisioned"] == {"iphoneId": "not-a-uuid"}
-    assert _iphone_ledger_records(repo) == []
-
-
-def test_iphone_e4_provision_id_without_check_premise_refuses(tmp_path, monkeypatch):
-    # axis: the re-fold also refuses a valid id on a launch that never asked for the phone
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    rec = _reserved("l1", "b1", ["a"], repo)
-    result = ll.reserve(repo, rec, provision=lambda: {"iphoneId": _IPHONE_UUID})
-    assert result["ok"] is False
-    assert result["reason"] == "fold-bad-field:reserved:iphoneId"
-    assert result["provisioned"] == {"iphoneId": _IPHONE_UUID}
-    assert _iphone_ledger_records(repo) == []
-
-
-def test_iphone_e5_append_failure_after_provision_reports_provisioned(tmp_path, monkeypatch):
-    # axis: an append failure after provisioning still reports what was provisioned
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    monkeypatch.setattr(ll, "append", lambda *a, **k: False)
-    rec = _reserved("l1", "b1", ["a"], repo, premise=dict(_IPHONE_PREMISE))
-    result = ll.reserve(repo, rec, provision=lambda: {"iphoneId": _IPHONE_UUID})
-    assert result == {
-        "ok": False,
-        "reason": "ledger-append-failed",
-        "path": None,
-        "provisioned": {"iphoneId": _IPHONE_UUID},
-    }
-
-
-def test_iphone_e6_admission_refusals_never_call_provision(tmp_path, monkeypatch):
-    # axis: provision runs only after reservation admission has fully passed
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    calls = []
-
-    def counted():
-        calls.append(1)
-        return {"iphoneId": _IPHONE_UUID}
-
-    assert ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))["ok"] is True
-
-    duplicate = ll.reserve(
-        repo,
-        _reserved("l1", "b1", ["z"], repo, issue=999, premise=dict(_IPHONE_PREMISE)),
-        provision=counted,
-    )
-    assert duplicate["ok"] is False
-    assert duplicate["reason"].startswith("reserve-duplicate-launch-id:")
-    assert calls == []
-
-    same_issue = ll.reserve(
-        repo, _reserved("l2", "b1", ["b"], repo, premise=dict(_IPHONE_PREMISE)),
-        provision=counted,
-    )
-    assert same_issue["ok"] is False
-    assert same_issue["reason"] == "surface-overlap:l1"
-    assert calls == []
-    assert "provisioned" not in duplicate
-    assert "provisioned" not in same_issue
-
-
-def test_iphone_e7_no_provision_means_no_provisioned_key(tmp_path, monkeypatch):
-    # axis: provision=None leaves every return shape unchanged
-    repo = _iphone_repo(tmp_path, monkeypatch)
-    ok = ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
-    assert ok["ok"] is True
-    assert "provisioned" not in ok
-    refused = ll.reserve(repo, _reserved("l1", "b1", ["c"], repo, issue=658))
-    assert refused["ok"] is False
-    assert "provisioned" not in refused
-    monkeypatch.setattr(ll, "append", lambda *a, **k: False)
-    failed = ll.reserve(repo, _reserved("l2", "b1", ["b"], repo, issue=657))
-    assert failed == {"ok": False, "reason": "ledger-append-failed", "path": None}
 
 
 def test_iphone_e9_refused_lane_still_folds_its_id():
