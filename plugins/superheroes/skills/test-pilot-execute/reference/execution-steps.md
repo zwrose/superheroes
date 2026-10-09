@@ -183,7 +183,8 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   reading, stops the whole check. Fetch the page source served at the page URL
   once and search it for `superheroes-reading`. With no match the reason is
   `the app lacks its reporting script`; otherwise it is
-  `a page reading never returned`.
+  `a page reading never returned`. A project adds the script by following
+  `skills/test-pilot-init/reference/reporting-script.md`.
   A later reading that never returns ends only its part (see Stops).
 - **Driving.** Step 5's calibration (accessible names, no coordinates) is for
   browser tools; on the phone, use these rules. Send every tap and keystroke

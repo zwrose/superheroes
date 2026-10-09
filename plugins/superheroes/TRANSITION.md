@@ -38,6 +38,7 @@ belongs to and lists every change with its replacement.
 - Readings come from the page. A development-only reporting script on the page posts each reading as JSON to the loopback address in the page URL's `superheroes-reading` query parameter, and `read` listens there for one call. A password field's value is never sent.
 - A check that cannot run says so in the results with `iPhone check did not run — <part>: <reason>`, where `<part>` is `browser check`, `installed-app check` or `whole check`. A lane with no phone reads `iPhone check did not run — whole check: no phone for this lane`. Every screenshot and reading carries six labels: `phone`, `model`, `iOS`, `page`, `where`, `source`. A check that did not run never holds the PR.
 - A project whose page has no reporting script gets `iPhone check did not run — whole check: the app lacks its reporting script`.
+- New guidance for a project adding its reporting script: `skills/test-pilot-init/reference/reporting-script.md`, reached from the test-pilot set-up.
 - Nothing changes for lanes launched without the check.
 
 ### Showrunner: iPhone lanes
