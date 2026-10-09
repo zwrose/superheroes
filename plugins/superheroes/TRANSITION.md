@@ -31,6 +31,13 @@ belongs to and lists every change with its replacement.
 - The launch fold gains two keys on every lane: `iphoneCheck` (a bool, false when the premise does not ask) and `iphoneId` (the UDID, or `None`). A `reserved` record whose `iphoneId` is malformed, or is present without `iphoneCheck: true` in its premise, makes the fold refuse with `fold-bad-field:reserved:iphoneId`. An older fold ignores the new field.
 - The launch result gains an `iphone` key when the check is on. On success it is `{"id": <udid or None>, "deviceHub": <value>}`. When the reservation is refused before the record is written, it is `{"id": <udid>, "recorded": false, "deleted": <bool>}`. When the reservation's append fails, it is `{"id": <udid>, "recorded": "uncertain"}`, and the phone is kept.
 
+### Showrunner: iPhone lanes
+
+- The advisor's launch rule: when the issue's done-definition names an iPhone check, the launch premise carries `"iphoneCheck": true`. The premise names no place to check.
+- A new vet row, the iPhone-evidence row, grades each piece of iPhone evidence valid or invalid, and whether the check is complete when the issue names it. The vet receipt gains a triggered-fields row for it.
+- New helper `lib/iphone_reap.py` with verbs `phones` and `reap`, both taking `--repo-root` and `--issue`. `reap` deletes a finished lane's phones and writes one `evidence` amendment with value `reap` per phone-carrying launch. There is no new record or amendment kind, so older builds read the ledger unchanged.
+- Nothing to do before upgrading.
+
 ## 0.41.0
 
 ### Before you upgrade

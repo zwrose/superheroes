@@ -365,6 +365,10 @@ above).
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
      while an **undisclosed** one holds the handback.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` when you grade the register row.**
+   - **The iPhone-evidence row** — fires when the PR carries iPhone evidence (a screenshot or page
+     reading from a simulated iPhone) **or** the issue names an iPhone check. Grade each piece valid
+     or invalid. When the issue names the check, grade whether it is complete.
+     **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` § iPhone evidence when the row fires.**
    - **The closure row** — fires when **this vet is the final one**; which vet that is, including concurrent final vets, a no-PR close, and the stacked-feature case, is [When closure fires](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md#when-closure-fires). When the row fires, the vet **assembles and carries the closure receipt**.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when the closure row fires.**
    - **Trust CI green on the recorded head** — including the suite's receipt per
@@ -772,8 +776,11 @@ above).
    configuration resolves to **`opus`**, never to an inherited session tier. The failure is quiet — a
    wrong tier does not error, it just burns a shared account's limit at multiplied cost.
    **The launcher provisions each build's worktree**, so **you never hand a builder a worktree and
-   never launch one into the primary checkout**. Reaping a finished lane's worktree is yours, not
-   the builder's.
+   never launch one into the primary checkout**. Reaping a finished lane's worktree, and its
+   simulated phones, is yours, not the builder's. When the issue's done-definition names an iPhone
+   check (a check on a simulated iPhone), the premise carries `"iphoneCheck": true`. The premise
+   names no place to check.
+   **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**
 
    **Declare a batch before its launches, and record every terminal outcome** — handback, park,
    refusal, or died; an unrecorded outcome makes the batch unreadable rather than clean. **Read
