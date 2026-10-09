@@ -54,12 +54,7 @@ The check is about four values:
 - `value` is that element's value.
 - `where` is `installed` when `navigator.standalone` is true or `(display-mode: standalone)` matches. Otherwise it is `browser`.
 
-`read` accepts a reading only when all of these hold:
-
-- The script posted it to the path of its own token.
-- `where` matches the part being checked.
-- `visibility` is `"visible"`.
-- `takenAt`, in epoch milliseconds, is not before the moment the call began.
+`read` decides whether to accept each reading. The rules live in `accept_reading` in `lib/iphone_check.py`, the one home for them. Send the shape above to the address exactly as the page URL gave it, and keep sending fresh readings, so that function takes them. If `read` refuses your readings, read that function.
 
 ## Two rules
 

@@ -80,4 +80,5 @@ def test_lacks_script_stop_points_at_the_guidance():
 
 # Axis: the guidance stops stating the literal line the pilot reports for a missing script
 def test_guidance_states_the_did_not_run_line():
-    assert "iPhone check did not run — whole check: the app lacks its reporting script" in _read_plugin(_GUIDANCE)
+    line = ic.did_not_run_lines({"whole": "the app lacks its reporting script"})[0]
+    assert line in _read_plugin(_GUIDANCE)
