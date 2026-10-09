@@ -7,12 +7,13 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.42.0
 
 ### Before you upgrade
 
-- Nothing to do. Launches without `iphoneCheck` behave exactly as before.
-- Finish or discard any in-flight review session that holds owner guidance over 2000 bytes.
+- Finish or discard any in-flight review session that holds owner guidance over 2000 bytes, or a fix batch whose guidance adds up past 8000 bytes. Under 0.42.0 its next fixer order refuses instead of carrying cut or missing guidance.
+- After upgrading, run configure once. `rubric-version` moves from 10 to 11, so each project's review profile reads as behind until configure refreshes it.
+- Launches without `iphoneCheck` behave exactly as before. Nothing else needs doing before you upgrade.
 
 ### Review: pinning an external identifier
 
