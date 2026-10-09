@@ -8130,8 +8130,8 @@ def _assert_iphone_argv_shapes(calls):
             assert argv[4] == L.IPHONE_DEVICE_TYPE
         else:
             assert argv in (
-                ["pgrep", "-x", "DeviceHub"],
-                ["open", "-g", "-b", "com.apple.dt.Devices"],
+                ["pgrep", "-x", L.DEVICE_HUB_PROCESS],
+                ["open", "-g", "-b", L.DEVICE_HUB_BUNDLE_ID],
             )
 
 
@@ -8295,7 +8295,7 @@ def test_iphone_f7_device_hub_opened_in_background_then_running(tmp_path, monkey
         tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
     )
     assert result["ok"] is True
-    assert runner.commands("open") == [["open", "-g", "-b", "com.apple.dt.Devices"]]
+    assert runner.commands("open") == [["open", "-g", "-b", L.DEVICE_HUB_BUNDLE_ID]]
     assert captured[0][L.DEVICE_HUB_ENV] == "running"
     assert result["iphone"]["deviceHub"] == "running"
     _assert_iphone_argv_shapes(runner.calls)
@@ -8459,3 +8459,8 @@ def test_iphone_f15_spawn_retry_reuses_the_one_phone(tmp_path, monkeypatch):
     assert [env[L.IPHONE_ID_ENV] for env in captured] == [runner.udids[0]] * 2
     _assert_iphone_argv_shapes(runner.calls)
     _reap(result)
+
+
+def test_iphone_create_timeouts_of_two_queued_launches_fit_one_ledger_lock_wait():
+    # axis: two stalled phone creations queued on the ledger lock must not exhaust a third lane's wait
+    assert 2 * L._IPHONE_CREATE_TIMEOUT < ll._DEFAULT_LOCK_TIMEOUT

@@ -50,8 +50,9 @@ DEVICE_HUB_UNAVAILABLE = "unavailable"
 IPHONE_DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 DEVICE_HUB_BUNDLE_ID = "com.apple.dt.Devices"
 DEVICE_HUB_PROCESS = "DeviceHub"
-# Phone creation runs under the ledger lock, whose waiters time out at 30 seconds.
-_IPHONE_CREATE_TIMEOUT = 20
+# Phone creation runs under the ledger lock, whose waiters time out at 30 seconds; two queued
+# creations at 10 seconds each still fit one wait (simctl create measures about 1-2 s).
+_IPHONE_CREATE_TIMEOUT = 10
 _DEVICE_HUB_CMD_TIMEOUT = 30
 _DEVICE_HUB_POLL_SECONDS = 10
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
