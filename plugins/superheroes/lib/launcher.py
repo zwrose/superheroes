@@ -2103,12 +2103,16 @@ def launch_build(
         reserved["generation"] = generation
     if boundary is not None:
         reserved["boundary"] = boundary
-    reserve_result = ll.reserve(
-        repo_root,
-        reserved,
-        env=env,
-        provision=(lambda: _create_iphone(launch_id, run)) if iphone_check else None,
-    )
+    # The provision keyword is omitted when the check is off, so a launch without it keeps the pre-iPhone call shape.
+    if iphone_check:
+        reserve_result = ll.reserve(
+            repo_root,
+            reserved,
+            env=env,
+            provision=lambda: _create_iphone(launch_id, run),
+        )
+    else:
+        reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         extra = {}
         # A phone made before the reservation failed stays; it is reported, never removed.
