@@ -9,6 +9,7 @@
 - [The owner-half slot — states you will meet](#the-owner-half-slot--states-you-will-meet)
 - [A gate needs its unlock citation](#a-gate-needs-its-unlock-citation)
 - [Sequential orders need a commit between them](#sequential-orders-need-a-commit-between-them)
+- [iPhone evidence](#iphone-evidence)
 - [Vet-time escalation](#vet-time-escalation)
 - [Timing follows the show-it level](#timing-follows-the-show-it-level)
 
@@ -151,6 +152,62 @@ itself, cite the unlock condition in the anti-opportunities ledger (`LEDGERS.md`
 
 A build that ran sequential orders against one worktree should show a commit between them in its
 artifacts. Uncommitted work a later order could have wiped is a finding.
+
+## iPhone evidence
+
+**It applies** when the PR carries iPhone evidence (a screenshot or page reading from a simulated
+iPhone, a phone the Mac imitates in software), or the issue's done-definition names an iPhone check.
+
+**Read each piece's labels by name:** `phone`, `model`, `iOS`, `page`, `where` (`browser` or
+`installed`), and `source` (always `Simulator`). The layout belongs to the pilot
+(`test-pilot-execute`), not to this page. Never grade a piece on its layout.
+
+**Rule a piece invalid, with its reason, when:**
+
+- (a) it has no `phone` value;
+- (b) its `phone` differs from the `iphoneId` on the record of the launch the builder runs under.
+  That is the launch that delivered the PR, normally the lane's latest started launch; the
+  builder's heartbeat is filed under that launch id. List each launch's `launchId` and `iphoneId`
+  with `python3 -B <plugin root>/lib/iphone_reap.py phones --repo-root <repo> --issue <n>`.
+  A phone from an earlier launch of the same lane is still another phone;
+- (c) it has no `where` label;
+- (d) its `where` disagrees with its reading (for example `installed` on a piece whose reading says
+  the page runs in the browser).
+
+The ruling lists every invalid piece and its reason.
+
+**A complete check** matters only when the issue names an iPhone check. The results show one unless
+**any** of these holds:
+
+1. a "did not run" line;
+2. no pilot's results;
+3. no iPhone evidence in the results;
+4. no evidence for a part the lane's check includes;
+5. any piece ruled invalid;
+6. any piece missing its `model`, `iOS`, or `page`;
+7. any piece missing its `where` label;
+8. any piece missing its `source: Simulator` label;
+9. results missing the statement of what a simulator cannot show (a real finger's touch and
+   real-device speed);
+10. results missing the statement of where the check ran and who chose it;
+11. an installed-app part with no reading that reports the app installed.
+
+**Your own check.** When the issue names an iPhone check and the check is not complete, check the
+change on a simulated iPhone by hand **before** you rule. The vet receipt records what you checked,
+on which phone (its ID, model and iOS version), where (browser or installed), and what you saw. Check
+where the issue says. When the issue says nothing, check where the lane's results say the lane
+checked. When neither names a place, the receipt records the place as undetermined and you check in
+the browser and in the installed web app alike, so that no place is preferred; never pick one of
+them. Use a phone of your own, never a lane's phone that is waiting to be reaped.
+
+```
+piece 1: no phone ID                        → invalid: no `phone` value (a)
+piece 2: phone from an earlier launch       → invalid: another phone (b)
+piece 3: where installed, reading: browser  → invalid: `where` disagrees with reading (d)
+piece 4: no `where` label                   → invalid: no `where` label (c)
+check not complete (condition 5) → advisor's own iPhone check recorded
+ruling: pieces 1–4 invalid, with the reasons above
+```
 
 ## Vet-time escalation
 

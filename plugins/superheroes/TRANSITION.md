@@ -40,6 +40,13 @@ belongs to and lists every change with its replacement.
 - A project whose page has no reporting script gets `iPhone check did not run — whole check: the app lacks its reporting script`.
 - Nothing changes for lanes launched without the check.
 
+### Showrunner: iPhone lanes
+
+- The advisor's launch rule: when the issue's done-definition names an iPhone check, the launch premise carries `"iphoneCheck": true`. The premise names no place to check.
+- A new vet row, the iPhone-evidence row, grades each piece of iPhone evidence valid or invalid, and whether the check is complete when the issue names it. The vet receipt gains a triggered-fields row for it.
+- New helper `lib/iphone_reap.py` with verbs `phones` and `reap`, both taking `--repo-root` and `--issue`. `reap` deletes a finished lane's phones and writes one `evidence` amendment with value `reap` per phone-carrying launch. There is no new record or amendment kind, so older builds read the ledger unchanged.
+- Nothing to do before upgrading.
+
 ## 0.41.0
 
 ### Before you upgrade
