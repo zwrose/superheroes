@@ -18,6 +18,8 @@ The pilot then runs `read --run-dir <dir> --token <token> --where browser|instal
 
 ## The reading
 
+The shape of a reading is defined by `buildReading()` in `lib/tests/fixtures/iphone/reading-page.html`, the reference implementation, and accepted by `accept_reading` in `lib/iphone_check.py`. The two examples show what that implementation sends. They are illustrations, not a second protocol.
+
 A text field focused after typing `hello`:
 
 ```json
@@ -54,7 +56,7 @@ The check is about four values:
 - `value` is that element's value.
 - `where` is `installed` when `navigator.standalone` is true or `(display-mode: standalone)` matches. Otherwise it is `browser`.
 
-`read` decides whether to accept each reading. The rules live in `accept_reading` in `lib/iphone_check.py`, the one home for them. Send the shape above to the address exactly as the page URL gave it, and keep sending fresh readings, so that function takes them. If `read` refuses your readings, read that function.
+`read` decides whether to accept each reading. The rules live in `accept_reading` in `lib/iphone_check.py`, the one home for them. Send what the reference implementation sends, to the address exactly as the page URL gave it, and keep sending fresh readings, so that function takes them. If `read` refuses your readings, read that function.
 
 ## Two rules
 
