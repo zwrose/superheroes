@@ -56,6 +56,10 @@ DEVICE_HUB_PROCESS = "DeviceHub"
 _IPHONE_CREATE_TIMEOUT = 20
 _DEVICE_HUB_CMD_TIMEOUT = 30
 _DEVICE_HUB_POLL_SECONDS = 10
+# Time kept back from the launch deadline, beyond the settle window, for the builder to spawn.
+_IPHONE_SPAWN_HEADROOM_SECONDS = 5
+# The shortest timeout the poll's last lookup gets once the poll deadline has passed.
+_DEVICE_HUB_FINAL_LOOKUP_SECONDS = 1
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
 WORKTREES_DIR_NAME = ".superheroes-worktrees"
 CONFIG_DIR_ENV = config_dir.CONFIG_DIR_ENV
@@ -1285,16 +1289,19 @@ def _default_iphone_run(argv, timeout):
     )
 
 
-def _create_iphone(launch_id, run):
+def _create_iphone(launch_id, run, budget_seconds):
     """Create this launch's phone; return {"iphoneId": udid}, or {} on any failure.
 
     Called just before the reservation, outside the ledger lock, and never raises: a phone
-    that could not be made is a launch without a phone, not a failed launch.
+    that could not be made is a launch without a phone, not a failed launch. The command
+    never runs longer than `budget_seconds`, and with none left it is not run at all.
     """
+    if budget_seconds <= 0:
+        return {}
     try:
         proc = run(
             ["xcrun", "simctl", "create", "superheroes-%s" % launch_id, IPHONE_DEVICE_TYPE],
-            _IPHONE_CREATE_TIMEOUT,
+            min(_IPHONE_CREATE_TIMEOUT, budget_seconds),
         )
         if proc.returncode != 0:
             return {}
@@ -1314,33 +1321,52 @@ def _delete_own_iphone(udid, run):
         return False
 
 
-def _ensure_device_hub(run, poll_seconds):
+def _ensure_device_hub(run, poll_seconds, budget_seconds):
     """Return DEVICE_HUB_RUNNING or DEVICE_HUB_UNAVAILABLE; never raises.
 
     A Device Hub that is not up is opened, never restarted: the only commands issued are a
-    process lookup and an open request.
+    process lookup and an open request. All of it is bounded by `budget_seconds`.
     """
     pgrep_argv = ["pgrep", "-x", DEVICE_HUB_PROCESS]
+    end = time.monotonic() + budget_seconds
+
+    def left():
+        return end - time.monotonic()
+
     try:
-        if run(pgrep_argv, _DEVICE_HUB_CMD_TIMEOUT).returncode == 0:
+        if left() <= 0:
+            return DEVICE_HUB_UNAVAILABLE
+        if run(pgrep_argv, min(_DEVICE_HUB_CMD_TIMEOUT, left())).returncode == 0:
             return DEVICE_HUB_RUNNING
+        if left() <= 0:
+            return DEVICE_HUB_UNAVAILABLE
         # `-g` opens it without bringing it to the foreground, so the owner's front window
         # does not change (UFR-9).
-        opened = run(["open", "-g", "-b", DEVICE_HUB_BUNDLE_ID], _DEVICE_HUB_CMD_TIMEOUT)
+        opened = run(
+            ["open", "-g", "-b", DEVICE_HUB_BUNDLE_ID],
+            min(_DEVICE_HUB_CMD_TIMEOUT, left()),
+        )
         if opened.returncode != 0:
             return DEVICE_HUB_UNAVAILABLE
-        poll_deadline = time.monotonic() + poll_seconds
+        poll_deadline = min(time.monotonic() + poll_seconds, end)
         while True:
-            remaining = poll_deadline - time.monotonic()
-            if remaining <= 0:
+            time.sleep(max(0.0, min(0.5, poll_deadline - time.monotonic())))
+            if left() <= 0:
                 return DEVICE_HUB_UNAVAILABLE
-            time.sleep(min(0.5, remaining))
-            remaining = poll_deadline - time.monotonic()
-            if remaining <= 0:
-                return DEVICE_HUB_UNAVAILABLE
-            looked = run(pgrep_argv, min(_DEVICE_HUB_CMD_TIMEOUT, remaining))
-            if looked.returncode == 0 and time.monotonic() <= poll_deadline:
+            # The last lookup is always made, at or after the poll deadline, so a late wake
+            # cannot end the poll without one.
+            looked = run(
+                pgrep_argv,
+                min(
+                    _DEVICE_HUB_CMD_TIMEOUT,
+                    max(poll_deadline - time.monotonic(), _DEVICE_HUB_FINAL_LOOKUP_SECONDS),
+                    left(),
+                ),
+            )
+            if looked.returncode == 0 and time.monotonic() <= end:
                 return DEVICE_HUB_RUNNING
+            if time.monotonic() >= poll_deadline:
+                return DEVICE_HUB_UNAVAILABLE
     except Exception:
         return DEVICE_HUB_UNAVAILABLE
 
@@ -1825,6 +1851,10 @@ def launch_build(
     launch_id = "launch-%s" % secrets.token_hex(8)
     deadline = time.monotonic() + total_deadline_seconds
 
+    # Optional iPhone work never spends the time the builder needs to spawn and settle.
+    def _iphone_budget():
+        return deadline - time.monotonic() - (settle_seconds + _IPHONE_SPAWN_HEADROOM_SECONDS)
+
     batch_id = premise.get("batchId") if isinstance(premise, dict) else None
     if not isinstance(batch_id, str) or not batch_id.strip():
         batch_id = None
@@ -2123,7 +2153,7 @@ def launch_build(
     # other launches' reservations. Its id rides on the reserved record.
     made_iphone_id = None
     if iphone_check:
-        made_iphone_id = _create_iphone(launch_id, run).get("iphoneId")
+        made_iphone_id = _create_iphone(launch_id, run, _iphone_budget()).get("iphoneId")
         if made_iphone_id:
             reserved["iphoneId"] = made_iphone_id
     reserve_result = ll.reserve(repo_root, reserved, env=env)
@@ -2217,7 +2247,7 @@ def launch_build(
     # A phone or Device Hub that is not there never fails the launch: the builder is told what
     # is true and the lane spawns regardless.
     if iphone_check:
-        iphone_info["deviceHub"] = _ensure_device_hub(run, poll_seconds)
+        iphone_info["deviceHub"] = _ensure_device_hub(run, poll_seconds, _iphone_budget())
         iphone_env = {
             IPHONE_ID_ENV: iphone_info["id"] or IPHONE_NONE,
             DEVICE_HUB_ENV: iphone_info["deviceHub"],

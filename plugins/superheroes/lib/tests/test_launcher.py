@@ -8101,11 +8101,13 @@ class _FakeIphoneRun:
         self.pgrep = list(pgrep)
         self.open_rc = open_rc
         self.calls = []
+        self.timeouts = []
         self.udids = []
         self._pgrep_n = 0
 
     def __call__(self, argv, timeout):
         self.calls.append(list(argv))
+        self.timeouts.append((list(argv), timeout))
         out = ""
         rc = 0
         if argv[0] == "xcrun":
@@ -8562,8 +8564,8 @@ class _FakeClock:
 
 
 def test_iphone_device_hub_poll_never_outruns_its_budget(monkeypatch):
-    # axis: each post-open lookup is capped by the budget left, and a lookup that succeeds
-    # only after the deadline is not running
+    # axis: each post-open lookup is capped by the poll time left (or the final-lookup floor),
+    # and the poll always ends with a lookup at the poll deadline
     clock = _FakeClock()
     monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(L.time, "sleep", clock.sleep)
@@ -8576,19 +8578,24 @@ def test_iphone_device_hub_poll_never_outruns_its_budget(monkeypatch):
             seen["pgrep"] += 1
             if seen["pgrep"] == 1:
                 return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
-            issued.append((timeout, 10 - (clock.now - start)))
-            # this lookup always finishes one second after the deadline it was issued under
-            clock.now += timeout + 1
-            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            issued.append((clock.now - start, timeout, 10 - (clock.now - start)))
+            clock.now += timeout
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    assert L._ensure_device_hub(slow_run, 10) == L.DEVICE_HUB_UNAVAILABLE
-    # the budget plus the final lookup's one-second overrun
-    assert clock.now <= start + 10 + 1
+    assert L._ensure_device_hub(slow_run, 10, 100) == L.DEVICE_HUB_UNAVAILABLE
+    # the poll deadline plus the final lookup's floor
+    assert clock.now <= start + 10 + L._DEVICE_HUB_FINAL_LOOKUP_SECONDS
     assert issued
-    assert all(timeout <= remaining for timeout, remaining in issued)
+    assert all(
+        timeout <= max(remaining, L._DEVICE_HUB_FINAL_LOOKUP_SECONDS)
+        for _at, timeout, remaining in issued
+    )
+    # the last lookup runs up to the poll deadline (it is not issued after it: this fake
+    # lookup spends its whole timeout, so one issued at 0.5 s ends at 10 s)
+    assert any(at + timeout >= 10 for at, timeout, _remaining in issued)
 
-    # a budget spent before the first post-open lookup issues no lookup at all
+    # a poll of zero seconds still makes exactly one lookup after the open
     zero_calls = []
 
     def zero_run(argv, timeout):
@@ -8596,12 +8603,12 @@ def test_iphone_device_hub_poll_never_outruns_its_budget(monkeypatch):
         rc = 1 if argv[0] == "pgrep" else 0
         return subprocess.CompletedProcess(argv, rc, stdout="", stderr="")
 
-    assert L._ensure_device_hub(zero_run, 0) == L.DEVICE_HUB_UNAVAILABLE
-    assert [c[0] for c in zero_calls] == ["pgrep", "open"]
+    assert L._ensure_device_hub(zero_run, 0, 100) == L.DEVICE_HUB_UNAVAILABLE
+    assert [c[0] for c in zero_calls] == ["pgrep", "open", "pgrep"]
 
 
 def test_iphone_device_hub_success_exactly_at_deadline_counts(monkeypatch):
-    # axis: a lookup that returns 0 at exactly the deadline is running (the comparison is <=)
+    # axis: a lookup that returns 0 at exactly the poll deadline is running
     clock = _FakeClock()
     monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(L.time, "sleep", clock.sleep)
@@ -8619,9 +8626,143 @@ def test_iphone_device_hub_success_exactly_at_deadline_counts(monkeypatch):
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    assert L._ensure_device_hub(exact_run, 10) == L.DEVICE_HUB_RUNNING
+    assert L._ensure_device_hub(exact_run, 10, 100) == L.DEVICE_HUB_RUNNING
     assert issued
     assert clock.now == start + 10
+
+
+def test_iphone_device_hub_success_after_poll_deadline_within_budget_counts(monkeypatch):
+    # axis: a lookup that succeeds after the poll deadline but inside the overall budget is running
+    clock = _FakeClock()
+    monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(L.time, "sleep", clock.sleep)
+    start = clock.now
+    seen = {"pgrep": 0}
+
+    def late_run(argv, timeout):
+        if argv[0] == "pgrep":
+            seen["pgrep"] += 1
+            if seen["pgrep"] == 1:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+            clock.now += 5  # past the 2-second poll deadline, inside the 100-second budget
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    assert L._ensure_device_hub(late_run, 2, 100) == L.DEVICE_HUB_RUNNING
+    assert clock.now > start + 2
+
+
+def _budget_clock_run(clock, rcs, spend):
+    """A fake run recording (argv[0], timeout, clock at issue) for every command.
+
+    `rcs` maps argv[0] to its exit status; `spend(argv[0], timeout)` is how far each command
+    advances the clock.
+    """
+    issued = []
+
+    def run(argv, timeout):
+        issued.append((argv[0], timeout, clock.now))
+        clock.now += spend(argv[0], timeout)
+        return subprocess.CompletedProcess(argv, rcs[argv[0]], stdout="", stderr="")
+
+    return run, issued
+
+
+def test_iphone_device_hub_commands_never_exceed_the_overall_budget(monkeypatch):
+    # axis: no Device Hub command is given more time than the overall budget has left
+    clock = _FakeClock()
+    monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(L.time, "sleep", clock.sleep)
+
+    # every command spends its whole timeout: the first lookup takes the whole budget of 5
+    start = clock.now
+    run, issued = _budget_clock_run(
+        clock, {"pgrep": 1, "open": 0}, lambda _name, timeout: timeout,
+    )
+    assert L._ensure_device_hub(run, 10, 5) == L.DEVICE_HUB_UNAVAILABLE
+    assert issued
+    assert all(timeout <= start + 5 - at for _name, timeout, at in issued)
+    assert clock.now <= start + 5
+
+    # a budget that outlasts the first two commands caps every later lookup too
+    start = clock.now
+    run, issued = _budget_clock_run(
+        clock,
+        {"pgrep": 1, "open": 0},
+        lambda name, timeout: 0 if len(issued) <= 2 else timeout,
+    )
+    assert L._ensure_device_hub(run, 100, 5) == L.DEVICE_HUB_UNAVAILABLE
+    assert [name for name, _timeout, _at in issued][:2] == ["pgrep", "open"]
+    assert len(issued) >= 3
+    assert all(timeout <= start + 5 - at for _name, timeout, at in issued)
+    assert clock.now <= start + 5
+
+    # no budget at all: no command is run
+    run, issued = _budget_clock_run(clock, {"pgrep": 1, "open": 0}, lambda _n, t: t)
+    assert L._ensure_device_hub(run, 10, 0) == L.DEVICE_HUB_UNAVAILABLE
+    assert issued == []
+
+
+def test_iphone_device_hub_budget_spent_by_the_open_makes_no_lookup(monkeypatch):
+    # axis: a budget used up between the open and the first lookup is unavailable, with no lookup
+    clock = _FakeClock()
+    monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(L.time, "sleep", clock.sleep)
+    run, issued = _budget_clock_run(
+        clock, {"pgrep": 1, "open": 0}, lambda name, timeout: timeout if name == "open" else 1,
+    )
+    assert L._ensure_device_hub(run, 10, 5) == L.DEVICE_HUB_UNAVAILABLE
+    assert [name for name, _timeout, _at in issued] == ["pgrep", "open"]
+
+
+def test_iphone_device_hub_late_wake_still_makes_a_final_lookup(monkeypatch):
+    # axis: a sleep that wakes after the poll deadline still gets one lookup before giving up
+    clock = _FakeClock()
+    monkeypatch.setattr(L.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(
+        L.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds + 0.6)
+    )
+    run, issued = _budget_clock_run(clock, {"pgrep": 1, "open": 0}, lambda _n, _t: 0)
+    assert L._ensure_device_hub(run, 0.2, 100) == L.DEVICE_HUB_UNAVAILABLE
+    assert [name for name, _timeout, _at in issued] == ["pgrep", "open", "pgrep"]
+
+
+def test_iphone_exhausted_launch_budget_skips_optional_work_and_still_spawns(
+    tmp_path, monkeypatch
+):
+    # axis: with no time to spare, no phone is made and Device Hub is not touched, yet the lane starts
+    # (the headroom is raised past the deadline, so the budget is spent however fast preflight is)
+    monkeypatch.setattr(L, "_IPHONE_SPAWN_HEADROOM_SECONDS", 1000)
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+        total_deadline_seconds=60,
+    )
+    assert result["ok"] is True, result
+    assert len(captured) == 1
+    assert runner.calls == []
+    assert captured[0][L.IPHONE_ID_ENV] == "none"
+    assert captured[0][L.DEVICE_HUB_ENV] == "unavailable"
+    _reap(result)
+
+
+def test_iphone_create_timeout_is_capped_by_the_launch_budget(tmp_path, monkeypatch):
+    # axis: the phone's create command is never given more time than the launch can spare
+    # (the fixed create timeout is raised past the deadline, so only the budget can cap it)
+    monkeypatch.setattr(L, "_IPHONE_CREATE_TIMEOUT", 10000)
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+        total_deadline_seconds=100,
+    )
+    assert result["ok"] is True, result
+    create_timeouts = [t for argv, t in runner.timeouts if argv[:3] == ["xcrun", "simctl", "create"]]
+    assert len(create_timeouts) == 1
+    assert 0 < create_timeouts[0] < L._IPHONE_CREATE_TIMEOUT
+    assert create_timeouts[0] <= 100
+    _reap(result)
 
 
 def test_iphone_external_contract_values_are_pinned():
