@@ -54,6 +54,10 @@ clone, `git` not on PATH, a non-zero exit, a path not tracked on main — the re
 check **never** falls back to the worktree file unless the caller passes
 `--register-copy worktree` explicitly.
 
+**A register kept in an out-of-repo project store** is read with `--register-copy worktree`,
+passed by the caller. The store is a git work tree with no `origin/main` and no `main`, so `auto`
+selects `main` and answers `undecided` / `register-unreadable`; the file on disk is the only copy.
+
 `--allow-no-required-entries` exists for the single legitimate case of a child that consumes
 **no** register entry — it makes the required set legitimately empty. **None of the three
 invocation points ever passes this flag.** At those points an unmatched `--child` is a
