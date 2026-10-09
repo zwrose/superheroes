@@ -181,6 +181,7 @@ def _phone_ids(listing):
 # ---- lane_phones: what the lane's records name ----
 
 def test_phones_relaunch_lists_both_phones(repo):
+    # axis: a relaunched lane lists every launch's phone, so a reaper that stops at the latest phone leaks the earlier one
     _two_phone_lane(repo)
     listing = ir.lane_phones(repo, 7)
     assert listing == {
@@ -194,6 +195,7 @@ def test_phones_relaunch_lists_both_phones(repo):
 
 
 def test_phones_failed_launch_after_reserve_is_listed(repo):
+    # axis: a launch refused after its phone was reserved still lists that phone, so a never-started lane's phone is not leaked
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     listing = ir.lane_phones(repo, 7)
     assert _phone_ids(listing) == [_PHONE_A]
@@ -201,6 +203,7 @@ def test_phones_failed_launch_after_reserve_is_listed(repo):
 
 
 def test_phones_other_issue_phone_is_excluded(repo):
+    # axis: another issue's phone never appears in this lane's listing, so a reap cannot delete a neighbouring lane's phone
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     _launch(repo, "l2", 8, _PHONE_OTHER, end="handback")
     assert _phone_ids(ir.lane_phones(repo, 7)) == [_PHONE_A]
@@ -208,6 +211,7 @@ def test_phones_other_issue_phone_is_excluded(repo):
 
 
 def test_phones_same_issue_launch_without_phone_is_excluded(repo):
+    # axis: a same-issue launch that recorded no phone adds no listing entry, so the reaper never invents a phone to delete
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, None, end="handback")
     listing = ir.lane_phones(repo, 7)
@@ -216,6 +220,7 @@ def test_phones_same_issue_launch_without_phone_is_excluded(repo):
 
 
 def test_phones_non_terminal_launch_is_in_live_launches(repo):
+    # axis: a non-terminal launch is named in liveLaunches, so a caller can see the lane is still running
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     _launch(repo, "l2", 7, None, end=None)
     listing = ir.lane_phones(repo, 7)
@@ -225,6 +230,7 @@ def test_phones_non_terminal_launch_is_in_live_launches(repo):
 
 
 def test_phones_live_launch_with_phone_is_listed_not_terminal(repo):
+    # axis: a live launch's phone is listed with terminal false, so a reader can tell it is not yet safe to delete
     _launch(repo, "l1", 7, _PHONE_A, end=None)
     listing = ir.lane_phones(repo, 7)
     assert listing["phones"] == [{"launchId": "l1", "iphoneId": _PHONE_A, "terminal": False}]
@@ -232,6 +238,7 @@ def test_phones_live_launch_with_phone_is_listed_not_terminal(repo):
 
 
 def test_phones_pre_iphone_record_has_no_phone(repo):
+    # axis: a record written before iPhone lanes existed lists no phone and no error, so old ledgers still read cleanly
     _launch(repo, "l1", 7, None, end="handback")
     listing = ir.lane_phones(repo, 7)
     assert listing["ok"] is True
@@ -240,6 +247,7 @@ def test_phones_pre_iphone_record_has_no_phone(repo):
 
 
 def test_phones_listed_set_is_exactly_the_issues_recorded_phones(repo):
+    # axis: the listed set equals the phones the raw reserved records name for the issue, no more and no fewer
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_B, end="handback")
     _launch(repo, "l3", 7, None, end="handback")
@@ -261,6 +269,7 @@ _BAD_ISSUES = [0, -1, True, False, "7", None, 7.0, [7]]
 
 @pytest.mark.parametrize("issue", _BAD_ISSUES, ids=repr)
 def test_phones_invalid_issue_refuses(repo, issue):
+    # axis: a non-positive-int issue (bool, string, float, list) refuses with reap-issue-invalid and lists nothing
     _launch(repo, "l1", 1, _PHONE_A, end="handback")
     listing = ir.lane_phones(repo, issue)
     assert listing["ok"] is False
@@ -269,6 +278,7 @@ def test_phones_invalid_issue_refuses(repo, issue):
 
 
 def test_phones_missing_ledger_is_unreadable(repo):
+    # axis: a missing ledger is reported unreadable, not an empty lane, so absence of evidence is not read as no phones
     listing = ir.lane_phones(repo, 7)
     assert ll.read(repo)["state"] == "missing"
     assert listing["ok"] is False
@@ -276,6 +286,7 @@ def test_phones_missing_ledger_is_unreadable(repo):
 
 
 def test_phones_corrupt_ledger_is_unreadable(repo):
+    # axis: a corrupt ledger refuses with the read state and lists no phones, so a half-readable ledger is never trusted
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     with open(ll.ledger_path(repo)["path"], "ab") as fh:
         fh.write(b"not json\n")
@@ -288,6 +299,7 @@ def test_phones_corrupt_ledger_is_unreadable(repo):
 
 
 def test_phones_fold_refusal_is_carried(repo):
+    # axis: a fold refusal (orphan event) is carried into the listing's reason and lists no phones, never swallowed
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     assert ll.append(repo, _started("ghost")) is True
     listing = ir.lane_phones(repo, 7)
@@ -299,6 +311,7 @@ def test_phones_fold_refusal_is_carried(repo):
 # ---- reap_lane: results ----
 
 def test_reap_all_deleted(repo):
+    # axis: a clean reap deletes each lane phone and reports ok with nothing left running or unrecorded
     _two_phone_lane(repo)
     run = _FakeRun()
     result = ir.reap_lane(repo, 7, run=run)
@@ -314,6 +327,7 @@ def test_reap_all_deleted(repo):
 
 
 def test_reap_already_gone(repo):
+    # axis: a failed delete whose phone is absent from a readable census is already-gone and ok, not a false failure
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: (148, "Invalid device: %s" % _PHONE_A)}, census={_PHONE_B})
     result = ir.reap_lane(repo, 7, run=run)
@@ -324,6 +338,7 @@ def test_reap_already_gone(repo):
 
 
 def test_reap_left_running(repo):
+    # axis: a failed delete whose phone the census still lists is left-running and reap-incomplete, so a live phone is never reported gone
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: (1, "NSCocoaErrorDomain code 513\nmore")}, census={_PHONE_A})
     result = ir.reap_lane(repo, 7, run=run)
@@ -338,6 +353,7 @@ def test_reap_left_running(repo):
 
 
 def test_reap_left_running_detail_is_first_line_cut_to_200(repo):
+    # axis: the left-running detail is the failure's first line cut to 200 characters, so a long stderr cannot bloat the record
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: (1, "x" * 500 + "\nsecond line")}, census={_PHONE_A})
     detail = ir.reap_lane(repo, 7, run=run)["phones"][0]["detail"]
@@ -349,6 +365,7 @@ def test_reap_left_running_detail_is_first_line_cut_to_200(repo):
     OSError("no xcrun"),
 ], ids=["timeout", "oserror"])
 def test_reap_delete_raises_and_phone_listed_is_left_running(repo, raised):
+    # axis: a delete that raises (timeout, OSError) with the phone still in the census is left-running, naming the exception type
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: raised}, census={_PHONE_A})
     result = ir.reap_lane(repo, 7, run=run)
@@ -363,6 +380,7 @@ def test_reap_delete_raises_and_phone_listed_is_left_running(repo, raised):
     OSError("no xcrun"),
 ], ids=["timeout", "oserror"])
 def test_reap_delete_raises_and_phone_absent_is_already_gone(repo, raised):
+    # axis: a delete that raises with the phone absent from the census is already-gone, so the census, not the exception, decides
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: raised}, census=set())
     result = ir.reap_lane(repo, 7, run=run)
@@ -389,6 +407,7 @@ _UNREADABLE_CENSUSES = {
 @pytest.mark.parametrize("census", list(_UNREADABLE_CENSUSES.values()),
                          ids=list(_UNREADABLE_CENSUSES))
 def test_reap_census_unreadable_is_left_running_never_gone(repo, census):
+    # axis: an unreadable census (any of twelve shapes) leaves the phone left-running, never already-gone, and records it
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: (1, "could not delete")}, census=census)
     result = ir.reap_lane(repo, 7, run=run)
@@ -405,6 +424,7 @@ def test_reap_census_unreadable_is_left_running_never_gone(repo, census):
 
 
 def test_reap_census_is_valid_with_empty_runtimes_and_other_phones(repo):
+    # axis: a census with an empty runtime and unrelated phones is valid, so strict census parsing does not reject a real reply
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: (148, "Invalid device")}, census={_PHONE_OTHER})
     assert ir.reap_lane(repo, 7, run=run)["phones"][0]["result"] == "already-gone"
@@ -412,6 +432,7 @@ def test_reap_census_is_valid_with_empty_runtimes_and_other_phones(repo):
 
 @pytest.mark.parametrize("live_has_phone", [True, False], ids=["phone", "no-phone"])
 def test_reap_live_launch_refuses_with_no_runner_call(repo, live_has_phone):
+    # axis: a lane with a live launch refuses before any runner call or amendment, so a running lane's phone is never deleted
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     _launch(repo, "l2", 7, _PHONE_B if live_has_phone else None, end=None)
     run = _FakeRun()
@@ -425,6 +446,7 @@ def test_reap_live_launch_refuses_with_no_runner_call(repo, live_has_phone):
 
 @pytest.mark.parametrize("issue", _BAD_ISSUES, ids=repr)
 def test_reap_invalid_issue_runs_nothing(repo, issue):
+    # axis: an invalid issue refuses with reap-issue-invalid before any runner call, so a bad argument deletes nothing
     _launch(repo, "l1", 1, _PHONE_A, end="handback")
     run = _FakeRun()
     result = ir.reap_lane(repo, issue, run=run)
@@ -434,6 +456,7 @@ def test_reap_invalid_issue_runs_nothing(repo, issue):
 
 
 def test_reap_unreadable_ledger_runs_nothing(repo):
+    # axis: an unreadable ledger refuses before any runner call, so a reap never guesses which phones belong to the lane
     run = _FakeRun()
     result = ir.reap_lane(repo, 7, run=run)
     assert result["ok"] is False
@@ -442,6 +465,7 @@ def test_reap_unreadable_ledger_runs_nothing(repo):
 
 
 def test_reap_fold_refusal_runs_nothing(repo):
+    # axis: a ledger fold refusal refuses before any runner call, so an inconsistent ledger deletes nothing
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     assert ll.append(repo, _started("ghost")) is True
     run = _FakeRun()
@@ -452,6 +476,7 @@ def test_reap_fold_refusal_runs_nothing(repo):
 
 
 def test_reap_no_launch_for_issue_is_ok_and_idle(repo):
+    # axis: an issue with no launches reaps ok and idle, with no runner call and no amendment on another issue's launch
     _launch(repo, "l1", 8, _PHONE_OTHER, end="handback")
     run = _FakeRun()
     result = ir.reap_lane(repo, 7, run=run)
@@ -464,6 +489,7 @@ def test_reap_no_launch_for_issue_is_ok_and_idle(repo):
 
 
 def test_reap_lane_without_any_phone_is_ok_and_idle(repo):
+    # axis: a lane whose launches recorded no phone reaps ok and idle, with no runner call and no amendment
     _launch(repo, "l1", 7, None, end="handback")
     run = _FakeRun()
     result = ir.reap_lane(repo, 7, run=run)
@@ -474,6 +500,7 @@ def test_reap_lane_without_any_phone_is_ok_and_idle(repo):
 
 
 def test_reap_duplicate_udid_is_deleted_once_and_amended_twice(repo):
+    # axis: a phone shared by two launches is deleted once but amended on both launches, so each record tells its own story
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_A, end="handback")
     run = _FakeRun()
@@ -491,6 +518,7 @@ def test_reap_duplicate_udid_is_deleted_once_and_amended_twice(repo):
 
 
 def test_reap_duplicate_udid_left_running_is_listed_once(repo):
+    # axis: a shared phone left running is listed once in leftRunning and costs one census, so duplicates do not inflate the report
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_A, end="handback")
     run = _FakeRun(deletes={_PHONE_A: (1, "busy")}, census={_PHONE_A})
@@ -501,6 +529,7 @@ def test_reap_duplicate_udid_left_running_is_listed_once(repo):
 
 
 def test_reap_one_failure_does_not_stop_the_others(repo):
+    # axis: one phone's delete failure does not stop the remaining deletes, so a single stuck phone cannot leak the rest
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_B, end="refused")
     _launch(repo, "l3", 7, _PHONE_C, end="handback")
@@ -512,6 +541,7 @@ def test_reap_one_failure_does_not_stop_the_others(repo):
 
 
 def test_reap_amendments_are_read_back_from_the_ledger(repo):
+    # axis: each phone's outcome (deleted, already gone, left running) is amended onto its launch and read back from the ledger, not from the result
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_B, end="handback")
     _launch(repo, "l3", 7, _PHONE_C, end="handback")
@@ -530,6 +560,7 @@ def test_reap_amendments_are_read_back_from_the_ledger(repo):
 
 
 def test_reap_amendment_failure_is_a_record_failure(repo, monkeypatch):
+    # axis: a failed amendment is a recordFailure that makes the reap not ok even when the delete succeeded, never silent
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_B, end="handback")
     real_amend = ll.amend
@@ -552,6 +583,7 @@ def test_reap_amendment_failure_is_a_record_failure(repo, monkeypatch):
 
 
 def test_reap_amendment_failure_and_delete_failure_land_in_both_lists(repo, monkeypatch):
+    # axis: a phone that fails both delete and amendment lands in leftRunning and recordFailures, so neither failure masks the other
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_B, end="handback")
     real_amend = ll.amend
@@ -578,6 +610,7 @@ def test_reap_amendment_failure_and_delete_failure_land_in_both_lists(repo, monk
 
 
 def test_reap_timeouts_are_pinned(repo):
+    # axis: delete runs under a 60s timeout and the census under 30s, so a hung simctl cannot stall the reap unbounded
     assert ir.DELETE_TIMEOUT == 60
     assert ir.CENSUS_TIMEOUT == 30
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
@@ -592,6 +625,7 @@ def test_reap_timeouts_are_pinned(repo):
 # ---- the argv census: the only commands the helper may send ----
 
 def test_reap_every_argv_is_a_lane_delete_or_the_census(repo):
+    # axis: every command sent is a four-token delete of a lane-recorded phone or the census, so no other phone is ever touched
     _launch(repo, "l1", 7, _PHONE_A, end="refused")
     _launch(repo, "l2", 7, _PHONE_B, end="refused")
     _launch(repo, "l3", 7, _PHONE_C, end="refused")
@@ -636,6 +670,7 @@ def _cli(argv, capsys):
 
 
 def test_cli_reap_exits_zero_when_ok(repo, monkeypatch, capsys):
+    # axis: the reap verb exits 0 and prints one JSON line when the reap is ok, so a caller can trust the exit code
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     run = _FakeRun()
     monkeypatch.setattr(ir, "_default_run", run)
@@ -647,6 +682,7 @@ def test_cli_reap_exits_zero_when_ok(repo, monkeypatch, capsys):
 
 
 def test_cli_reap_exits_one_when_not_ok(repo, monkeypatch, capsys):
+    # axis: the reap verb exits 1 when a phone is left running, so a failed reap cannot pass as success in a shell
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     monkeypatch.setattr(
         ir, "_default_run", _FakeRun(deletes={_PHONE_A: (1, "busy")}, census={_PHONE_A}),
@@ -659,6 +695,7 @@ def test_cli_reap_exits_one_when_not_ok(repo, monkeypatch, capsys):
 
 
 def test_cli_phones_lists_and_exits_zero(repo, capsys):
+    # axis: the phones verb prints the lane's phones as one JSON line and exits 0 without touching any phone
     _two_phone_lane(repo)
     code, printed = _cli(["phones", "--repo-root", repo, "--issue", "7"], capsys)
     assert code == 0
@@ -668,6 +705,7 @@ def test_cli_phones_lists_and_exits_zero(repo, capsys):
 @pytest.mark.parametrize("verb", ["phones", "reap"])
 @pytest.mark.parametrize("issue", ["0", "-3", "abc", "7.5", ""])
 def test_cli_invalid_issue_exits_one(repo, monkeypatch, capsys, verb, issue):
+    # axis: a non-numeric or non-positive --issue exits 1 with reap-issue-invalid on both verbs and runs nothing
     run = _FakeRun()
     monkeypatch.setattr(ir, "_default_run", run)
     code, printed = _cli([verb, "--repo-root", repo, "--issue", issue], capsys)
@@ -678,6 +716,7 @@ def test_cli_invalid_issue_exits_one(repo, monkeypatch, capsys, verb, issue):
 
 
 def test_cli_script_entry_point_prints_one_json_line(repo):
+    # axis: the script run as a subprocess prints one JSON line and exits 0 or 1, so the entry point works outside pytest imports
     _launch(repo, "l1", 7, _PHONE_A, end="handback")
     proc = subprocess.run(
         [sys.executable, "-B", _SCRIPT, "phones", "--repo-root", repo, "--issue", "7"],
