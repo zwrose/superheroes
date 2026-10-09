@@ -32,6 +32,16 @@ belongs to and lists every change with its replacement.
 - The launch fold gains two keys on every lane: `iphoneCheck` (a bool, false when the premise does not ask) and `iphoneId` (the UDID, or `None`). A `reserved` record whose `iphoneId` is malformed, or is present without `iphoneCheck: true` in its premise, makes the fold refuse with `fold-bad-field:reserved:iphoneId`. An older fold ignores the new field.
 - The launch result gains an `iphone` key when the check is on. On success it is `{"id": <udid or None>, "deviceHub": <value>}`. When the reservation is refused before the record is written, it is `{"id": <udid>, "recorded": false, "deleted": <bool>}`. When the reservation's append fails, it is `{"id": <udid>, "recorded": "uncertain"}`, and the phone is kept.
 
+### Pilot: the iPhone check
+
+- The pilot drives the lane's phone through `lib/iphone_check.py`, a stdlib-only CLI. Its verbs are `preflight`, `boot`, `open`, `drive`, `shot`, `read`, `judge` and `render`. Each prints one JSON object and exits 0 when its `ok` is true. The rules live in `skills/test-pilot-execute/reference/execution-steps.md` § The iPhone check.
+- The check runs when `SUPERHEROES_IPHONE_ID` or `SUPERHEROES_DEVICE_HUB` is in the lane's environment (the launcher sets both for an iPhone launch), or when the issue's done-definition names an iPhone check. It needs no browser MCP, so a lane without a browser tool still runs and posts it.
+- Readings come from the page. A development-only reporting script on the page posts each reading as JSON to the loopback address in the page URL's `superheroes-reading` query parameter, and `read` listens there for one call. A password field's value is never sent.
+- A check that cannot run says so in the results with `iPhone check did not run — <part>: <reason>`, where `<part>` is `browser check`, `installed-app check` or `whole check`. A lane with no phone reads `iPhone check did not run — whole check: no phone for this lane`. Every screenshot and reading carries six labels: `phone`, `model`, `iOS`, `page`, `where`, `source`. A check that did not run never holds the PR.
+- A project whose page has no reporting script gets `iPhone check did not run — whole check: the app lacks its reporting script`.
+- New guidance for a project adding its reporting script: `skills/test-pilot-init/reference/reporting-script.md`, reached from the test-pilot set-up.
+- Nothing changes for lanes launched without the check.
+
 ### Review driver: oversized owner-gate guidance refuses
 
 - A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at `present-judgment` submit with the new token `gate-guidance-oversize`; nothing folds and the owner resubmits shorter guidance. On the library `run_loop` path, which has no submit, the fold parks `cannot-certify` with the same token.

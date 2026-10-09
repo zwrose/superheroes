@@ -2,6 +2,10 @@
 
 ## Pilot Results{{slot-suffix-heading}} — {{verdict}}
 
+{{#if iphone}}
+{{iphone-opening}}
+{{/if}}
+
 **Branch:** `{{branch}}` | **Run:** {{run-id}} | **Browser:** {{browser-tool}}
 | **App commit:** {{app-commit}}
 
@@ -10,6 +14,10 @@
 {{#each steps}}
 | {{instruction}} | {{pass/fail/skipped}} | {{scrubbed-notes}} |
 {{/each}}
+
+{{#if iphone}}
+{{iphone-section}}
+{{/if}}
 
 {{#if findings}}
 ### Findings
