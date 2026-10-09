@@ -134,6 +134,20 @@ def test_ufr4_tap_with_no_keyboard_seen_is_not_completed():
     assert done is False and "no keyboard" in reason
 
 
+def test_ufr4_tap_that_leaves_another_field_focused_is_not_completed():
+    # Name stays focused (reading id "name") when Secret was the target
+    done, reason = ic.judge_step(step(kind="tap-field", target="secret", before=rd(), after=rd(), keyboardSeen=True))
+    assert done is False and "intended field" in reason
+
+
+def test_ufr4_tap_with_no_target_is_not_completed():
+    for target in (None, "", 7):
+        done, reason = ic.judge_step(step(kind="tap-field", target=target, after=rd(), keyboardSeen=True))
+        assert done is False and "intended field" in reason
+    bare = step(kind="tap-field", after=rd(), keyboardSeen=True)
+    assert "target" not in bare and ic.judge_step(bare)[0] is False
+
+
 def test_ufr4_typing_with_value_unchanged_is_not_completed():
     done, _ = ic.judge_step(step(kind="type", before=rd(value="a"), after=rd(value="a")))
     assert done is False
@@ -157,7 +171,7 @@ def test_ufr4_step_naming_no_expected_change_is_not_completed():
 
 
 def test_ufr4_positive_rows_are_completed():
-    assert ic.judge_step(step(kind="tap-field", after=rd(), keyboardSeen=True))[0] is True
+    assert ic.judge_step(step(kind="tap-field", target="name", after=rd(), keyboardSeen=True))[0] is True
     assert ic.judge_step(step(kind="type", before=rd(value=""), after=rd(value="hi")))[0] is True
     assert ic.judge_step(step(kind="type", password=True, screenChanged=True))[0] is True
     assert ic.judge_step(step(kind="other", expected="menu", expectedSeen=True))[0] is True
@@ -165,7 +179,7 @@ def test_ufr4_positive_rows_are_completed():
 
 @pytest.mark.parametrize("bad", [
     step(kind="tap-field", after=None, keyboardSeen=True),
-    step(kind="tap-field", after=rd(), keyboardSeen=None),
+    step(kind="tap-field", target="name", after=rd(), keyboardSeen=None),
     step(kind="type", before=None, after=rd(value="x")),
     step(kind="type", before=rd(value="a"), after=None),
     step(kind="type", before=rd(), after=rd()),
@@ -298,9 +312,10 @@ def test_preflight_none_dominates_hub_unavailable(fake):
 
 
 @pytest.mark.parametrize("e", [env(U, None), env(None, "available"), env(U, "maybe"), env("iPhone 17", "available"),
-                               env("", "available"), env(U, ""), env(U[:-1], "available"), env(U, "Available")],
+                               env("", "available"), env(U, ""), env(U[:-1], "available"), env(U, "Available"),
+                               env(U.lower(), "available")],
                          ids=["only-id", "only-hub", "hub-maybe", "id-name", "id-empty", "hub-empty", "id-short",
-                              "hub-case"])
+                              "hub-case", "id-lower-case"])
 def test_classify_env_invalid_values(fake, e):
     f = fake()
     assert ic.classify_env(e) == ("did-not-run", PRE + "launch values unreadable")
@@ -655,6 +670,33 @@ def test_render_refuses_a_reading_without_a_reading_and_a_screenshot_without_a_l
         ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "path": None}]))
 
 
+@pytest.mark.parametrize("bad", [{"where": "installed"}, {**rd(where="installed"), "visibleHeight": None},
+                                 {**rd(where="installed"), "visibleHeight": "700"},
+                                 {k: v for k, v in rd(where="installed").items() if k != "focused"}],
+                         ids=["truncated", "height-null", "height-string", "focused-missing"])
+def test_render_refuses_an_incomplete_reading_and_it_never_counts_as_installed_evidence(bad):
+    ev = {**ev_reading(), "reading": bad}
+    c = chk(where=["installed"], parts={"browser": part(included=False), "installed": part(completed=True)},
+            evidence=[ev])
+    with pytest.raises(ValueError):
+        ic.render(c)
+    assert ic.did_not_run_lines(c) == [
+        "iPhone check did not run — installed-app check: no page reading from the installed app"]
+
+
+def test_render_refuses_a_reading_whose_where_is_neither_browser_nor_installed():
+    ev = {**ev_reading(), "reading": rd(where="other"), "labels": labels(where="other")}
+    with pytest.raises(ValueError):
+        ic.render(chk(where=["installed"], evidence=[ev]))
+
+
+def test_render_accepts_a_reading_whose_focused_is_null():
+    ev = {**ev_reading(), "reading": rd(focus=None, where="installed")}
+    _, section = ic.render(chk(where=["installed"], parts={"browser": part(included=False),
+                                                           "installed": part(completed=True)}, evidence=[ev]))
+    assert "focused none" in section
+
+
 def test_render_a_screenshot_with_only_a_path_is_a_plain_line_never_an_image():
     _, section = ic.render(chk(where=["browser"], evidence=[ev_shot("browser")]))
     assert f"screenshot file (on the capturing Mac, not posted): /r/a.png · sha256 {SHA}" in section
@@ -767,7 +809,7 @@ def _need_node():
 
 _RUNNER = r"""
 const vm = require('vm'), fs = require('fs');
-const [, , scriptPath, kind] = process.argv;
+const [, , scriptPath, kind, param] = process.argv;
 let accesses = 0;
 const el = kind === 'password'
   ? Object.defineProperty({tagName: 'INPUT', type: 'password', id: 'secret', name: 'secret'}, 'value',
@@ -776,7 +818,7 @@ const el = kind === 'password'
 const listeners = {}, bodies = [], intervals = [];
 const doc = {activeElement: el, body: {tagName: 'BODY'}, visibilityState: 'visible',
   addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); }};
-const search = kind === 'absent' ? '' : '?superheroes-reading=http://127.0.0.1:9/tok';
+const search = kind === 'absent' ? '' : '?' + param + '=http://127.0.0.1:9/tok';
 const sb = {document: doc, location: {search, href: 'http://x.test/' + search},
   visualViewport: {height: 612.4, addEventListener(t, f) { (listeners['vv-' + t] = listeners['vv-' + t] || []).push(f); }},
   innerHeight: 800, navigator: {standalone: false}, matchMedia: () => ({matches: false}), URLSearchParams,
@@ -796,10 +838,17 @@ def _run_fixture_script(tmp_path, kind):
     script = re.search(r"<script>(.*?)</script>", open(FIXTURE, encoding="utf-8").read(), re.S).group(1)
     (tmp_path / "page.js").write_text(script, encoding="utf-8")
     (tmp_path / "runner.js").write_text(_RUNNER, encoding="utf-8")
-    proc = subprocess.run(["node", str(tmp_path / "runner.js"), str(tmp_path / "page.js"), kind],
+    proc = subprocess.run(["node", str(tmp_path / "runner.js"), str(tmp_path / "page.js"), kind, ic.READING_PARAM],
                           capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
+
+
+def test_fixture_page_reads_the_reading_param_the_driver_appends():
+    html = open(FIXTURE, encoding="utf-8").read()
+    got = re.findall(r"URLSearchParams\([^)]*\)\s*\.get\(\s*'([^']*)'\s*\)", html)
+    assert got == [ic.READING_PARAM]
+    assert set(re.findall(r"superheroes-[A-Za-z0-9_-]+", html)) == {ic.READING_PARAM}
 
 
 def test_fixture_script_withholds_password_value(tmp_path):

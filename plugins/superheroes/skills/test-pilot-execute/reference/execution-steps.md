@@ -223,7 +223,10 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
 - **No response is never a pass.** Pass each plan step to `judge` with the
   before and after readings and what the screenshot showed. Its fields are
   `kind` (`tap-field`, `type` or `other`), `step`, `before`, `after`,
-  `keyboardSeen`, `screenChanged`, `expected`, `expectedSeen` and `password`.
+  `keyboardSeen`, `screenChanged`, `expected`, `expectedSeen` and `password`;
+  a `tap-field` step also carries `target`, the intended field's `id` as a
+  reading reports it in `focused.id`, and is completed only when the after
+  reading's `focused.id` is that `target` and a keyboard was seen.
   A driver that reports success proves nothing; only `judge` decides. A step
   `judge` calls not completed ends that part with `no response to input (<step>)`.
 - **Stops.** Every call has a time limit. A call that never returns ends its

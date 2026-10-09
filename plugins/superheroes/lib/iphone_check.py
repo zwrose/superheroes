@@ -20,11 +20,11 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import launch_ledger
 from launcher import (DEVICE_HUB_AVAILABLE, DEVICE_HUB_ENV, DEVICE_HUB_PROCESS, DEVICE_HUB_UNAVAILABLE,
                       IPHONE_ID_ENV, IPHONE_NONE)
 
 READING_PARAM = "superheroes-reading"
-UDID_RE = re.compile(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
 SIX = ("phone", "model", "iOS", "page", "where", "source")
 GAPS = ("**What a simulator cannot show:** a real finger's touch (the timing and imprecision of a human "
         "tap, and multi-finger gestures) and real-device speed.")
@@ -95,9 +95,9 @@ def classify_env(environ, issue_names_check=False):
     if phone is None and hub is None:
         # Axis: both unset — the lane asked for no phone; only an issue naming the check makes it a line
         return ("did-not-run", UFR5) if issue_names_check else ("off", None)
-    # Axis: one value missing, a hub value outside available|unavailable, or an ID neither none nor a UDID
+    # Axis: one value missing, a hub value outside available|unavailable, or an ID neither none nor a canonical phone ID
     if (phone is None or hub is None or hub not in (DEVICE_HUB_AVAILABLE, DEVICE_HUB_UNAVAILABLE)
-            or not (phone == IPHONE_NONE or UDID_RE.fullmatch(phone))):
+            or not (phone == IPHONE_NONE or launch_ledger.is_iphone_id(phone))):
         return "did-not-run", _line("whole check", "launch values unreadable")
     # Axis: `none` dominates — no other whole cause is reported next to it
     if phone == IPHONE_NONE:
@@ -268,6 +268,10 @@ def judge_step(step):
         # Axis: a tap with no keyboard seen
         if step.get("keyboardSeen") is not True:
             return False, "no keyboard seen after the tap"
+        # Axis: a tap whose after-reading does not focus the intended field (a missed tap leaves another field focused)
+        target = step.get("target")
+        if not (isinstance(target, str) and target and isinstance(after_focus, dict) and after_focus.get("id") == target):
+            return False, "the intended field did not receive focus"
         return True, "field focused and keyboard seen"
     if kind == "type":
         if step.get("password") is True or (isinstance(after_focus, dict) and after_focus.get("type") == "password"):
@@ -297,9 +301,17 @@ def _screenshot_located(ev):
     return bool(ev.get("url")) or (bool(ev.get("path")) and isinstance(ev.get("sha256"), str) and bool(ev["sha256"]))
 
 
+def _complete_reading(rd):
+    """A reading carries a numeric visibleHeight, a where in browser|installed and a focused key (null allowed)."""
+    return (isinstance(rd, dict) and isinstance(rd.get("visibleHeight"), (int, float))
+            and not isinstance(rd.get("visibleHeight"), bool) and rd.get("where") in ("browser", "installed")
+            and "focused" in rd)
+
+
 def _has_installed_reading(check):
     return any(isinstance(e, dict) and e.get("kind") == "reading" and (e.get("labels") or {}).get("where") == "installed"
-               and (e.get("reading") or {}).get("where") == "installed" for e in check.get("evidence") or [])
+               and _complete_reading(e.get("reading")) and e["reading"]["where"] == "installed"
+               for e in check.get("evidence") or [])
 
 
 def did_not_run_lines(check):
@@ -339,6 +351,9 @@ def render(check):
             # Axis: a reading whose where label disagrees with the reading's own where
             if not isinstance(ev.get("reading"), dict) or labels["where"] != ev["reading"].get("where"):
                 raise ValueError(f"evidence {n}: where label disagrees with the reading")
+            # Axis: a reading missing a measurement the section prints (height, where, focused) is refused
+            if not _complete_reading(ev["reading"]):
+                raise ValueError(f"evidence {n}: the reading lacks visibleHeight, where or focused")
         elif ev.get("kind") != "screenshot" or not _screenshot_located(ev):
             raise ValueError(f"evidence {n} is neither a located screenshot nor a reading")
     opening = "\n\n".join(did_not_run_lines(check))
