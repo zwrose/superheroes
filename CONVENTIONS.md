@@ -1008,7 +1008,8 @@ statement of the band's review convention (no unreviewed PRs, §7.4).
 boundary** (event/verb names, schema field sets, verdict/reason tokens, path layouts,
 reviewer rosters) has **exactly one authoritative definition**. Every other consumer
 **reads that home** (§11.1) or **cites it** (§11.4). Those are the two patterns. There
-is no third. A **second hand-maintained copy** of a cross-boundary fact is a
+is no third; a test's literal pin of an external identifier is §11.3's one exception, not
+a copy. A **second hand-maintained copy** of a cross-boundary fact is a
 **review-blocking violation, whether or not a drift test guards it**. A drift test does
 not make a copy legitimate. It makes the cost of the copy recur. A reviewer seeing a
 constant re-typed from another language still has a rule to object with, citable by this
@@ -1153,6 +1154,20 @@ copy against a fixture that restated the *same* wrong copy, so the tautology pas
 the two real homes disagreed. A drift test that reads one copy and asserts against
 a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
 must trace back to the authoritative home (directly, or via the fixture the home also feeds).
+
+**The one exception: an external identifier is pinned by its literal.** An external identifier
+is a name whose spelling is fixed outside this repository, by a consuming project, another tool,
+or a protocol, so renaming it here breaks the far side and not only this repository's own code: a
+config key, an env-var name, a query parameter, a marker or token another tool matches on. For
+such a name, exactly one test compares the home's value with the literal, spelled out
+(`READING_PARAM == "superheroes-reading"`). A test that compares the value only with its own
+symbol asserts the constant against itself and stays green under any value, so a rename breaks
+every consumer with no test failing. That one literal is not the second hand-maintained copy §11 forbids: the far side's spelling is
+the contract it checks. A fact shared only among this repository's own modules, languages, skill
+docs, or fixtures is not an external identifier, even when a separate process reads it, and every
+other test of an external identifier still reads the home. This paragraph is the one statement of
+the exception; `rubric/bite-proof.md`, review-base rule 6, and the test-reviewer's
+**literal-pin** check point here.
 
 ### 11.4 Pointable step-body (the dispatched consumer cites, never copies)
 
