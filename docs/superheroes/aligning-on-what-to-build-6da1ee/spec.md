@@ -516,7 +516,7 @@ summarizes)
 
 ## Amendments
 
-- **2026-10-09 (owner stamp pending the owner's merge word, substantive):** FR-14 read as every
+- **2026-10-09 (owner-stamped 2026-10-09 by the owner's merge word on PR #1686, "merge it", substantive):** FR-14 read as every
   answer to an owner call going into Canon, which admitted one-time instructions, filing
   bookkeeping and records kept elsewhere into the first real Canon a consuming project wrote.
   Instructions for one act and records with another home now stay where they are, and a ruling with
