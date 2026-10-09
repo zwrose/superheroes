@@ -3,10 +3,13 @@
 - [Canon's contract](#canons-contract)
   - [What Canon is and where it lives](#what-canon-is-and-where-it-lives)
   - [What Canon holds](#what-canon-holds)
+  - [What stays out, and where it goes](#what-stays-out-and-where-it-goes)
   - [An entry](#an-entry)
+    - [Rulings that approve wording kept elsewhere](#rulings-that-approve-wording-kept-elsewhere)
   - [Standing rulings and principles](#standing-rulings-and-principles)
   - [Ceded calls](#ceded-calls)
   - [Append only, and supersession](#append-only-and-supersession)
+    - [Retiring a misfiled entry](#retiring-a-misfiled-entry)
   - [Writing a ruling](#writing-a-ruling)
   - [Merging](#merging)
   - [Reading Canon](#reading-canon)
@@ -66,11 +69,54 @@ Canon holds three kinds of record:
 - Principles, recorded as standing rulings.
 - Ceded calls, and their take-backs.
 
-Three things stay out:
+Everything else the owner says stays out, even when it sounds like a decision. [What stays out, and
+where it goes](#what-stays-out-and-where-it-goes) says what that is and where each kind belongs.
 
-- Go-words (merge, launch, release, tier) stay where the owner gives them.
-- Walk records and the declined registry carry on as they are.
-- The threat model stays in configure's threat model item.
+**The test.** Would a later session need this to answer a call, on the same piece or on later work?
+A ruling it would need passes, whether its scope is one piece or standing. Only two kinds of thing
+fail, both described in [What stays out, and where it goes](#what-stays-out-and-where-it-goes): an
+instruction for one act, spent once the act happens, and a record that already has another home. A
+ruling about one issue or pull request with no work-item slug, and that holds for no later work, is
+such a record: its home is that issue or pull request (see **scope honesty** in
+[An entry](#an-entry)).
+
+**A piece ruling passes.** On one piece, the owner rules that a failed import keeps the previous
+data instead of clearing it. Every later session that builds, fixes or reviews that piece needs the
+ruling, even while the piece is still being built, so it is an entry with scope
+`piece <that piece's slug>`.
+
+**An instruction that does two things.** When an owner instruction both directs one act and states
+a rule for later work, it holds a ruling. Record the rule only, and leave the act where it was
+given.
+
+## What stays out, and where it goes
+
+**Instructions for one act.** An owner instruction that directs one specific act, and is spent once
+the act happens, stays where it was given: the issue's STATE block or order, the pull request's
+owner half, or the thread. The class includes:
+
+- Go-words: launch, merge, release, tier, force-push and filing words.
+- Which instance or account a session runs on.
+- Who brings a branch up to date, and when.
+- Whether to wait for CI or another check before a step.
+- A waiver or authorization for one change, such as the micro lane's quiet-failure waiver or a lane
+  downgrade.
+
+**Records that already have a home.** Canon never duplicates them.
+
+| Record | Its home |
+|---|---|
+| Spec approval | The spec's review gate and its dated approval |
+| Delivery acceptance | The closure receipt |
+| [Decision-walk](glossary.md#decision-walk) dispositions, and proposals awaiting the owner's word | The [collector](glossary.md#collector) |
+| Declined items and their reopening [triggers](glossary.md#trigger) | The [declined registry](glossary.md#declined-registry) |
+| Lane and presentation calls | The issue |
+| Merge and release words | The thread and the pull request's owner half |
+| The threat model | Configure's threat model item |
+
+**Bookkeeping that rides on a ruling.** When a real ruling arrives with bookkeeping attached (where
+it was filed, which phase or milestone it is scheduled for, which issue tracks it), only the ruling
+goes in. The bookkeeping stays on the board.
 
 ## An entry
 
@@ -90,24 +136,66 @@ An entry is exactly one line. Fields are separated by the three characters space
 - **<id>** · <date> · <scope> · <ruling>[ · cedes: <kind of call>; example: <example>][ · supersedes: <id>] · owner's words: "<exact words>" · where: <session>, <time>
 ```
 
-- `<date>` is the ISO date (`YYYY-MM-DD`) the ruling was given.
-- `<scope>` is `standing` or `piece <work-item slug>`.
+- `<date>` is the ISO date (`YYYY-MM-DD`) the ruling was given, in UTC.
+- `<scope>` is `standing` or `piece <work-item slug>`. See **scope honesty** below.
 - `<ruling>` may be several sentences. It never contains a line break and never contains ` · `.
 - `cedes:` appears only on a ceded call. `supersedes:` appears only on an entry that replaces an
   earlier one.
 - Where no owner's words were recorded, the field reads `owner's words: none recorded`, with no
   quotes.
-- `<time>` may read `time not recorded` when the time is unknown.
+- `<time>` is written in UTC and marked `UTC` (for example `14:05 UTC`), or reads
+  `time not recorded` when the time is unknown.
 
 An entry is one line because a union merge keeps whole lines. Two branches' entries can never
 interleave.
 
-**The id rule.** An id is `<YYYY-MM-DD the entry was written>-<first 8 characters of the writing
-session's id, lowercase>-<n>`. `<n>` is a positive integer with no leading zeros. The sequence
-continues from the highest number that session prefix already used on that date in any copy the
-writer can read, meaning its working copy and the default-branch copy. A resumed session keeps
-counting. **A writer never mints an id already present.** Where a host exposes no session id, the
-session mints 8 random lowercase hex characters once and reuses them.
+**One ruling per entry.** An entry records exactly one ruling. Two rulings are two entries. A ruling
+mixed with an act or with bookkeeping is trimmed to the ruling.
+
+**Scope honesty.** The scope says how far the ruling reaches, and no further.
+
+- `standing` only when the ruling applies to all later work. A step that is spent within the pull
+  request it was given on is not standing: it is an instruction for one act and stays out.
+- `piece <work-item slug>` names a work item's minted slug. An issue, a pull request, a stack layer
+  or a phase is not a piece.
+- A ruling that concerns only an issue or pull request with no work-item slug stays on that issue
+  or pull request, where a ruling anchor can cite it, unless it holds for later work too. Then it
+  passes the test, gets an entry, and its scope is `standing`. One that does not hold for later
+  work gets no entry.
+
+**Dates and times are UTC.** The `<date>` is the UTC date the ruling was given. The id's date is the
+UTC date the entry was written. Take both from a UTC clock (`date -u`). When the source shows a
+time in another zone (a sheet, a chat stamp), convert it, so an entry's date never disagrees with
+the `where:` time it cites.
+
+**Narrowing or replacing an earlier decision.** When a ruling narrows or replaces an earlier owner
+decision, the entry says so. It carries `supersedes: <id>` when the earlier decision is a Canon
+entry. Otherwise the ruling text names where the earlier decision lives (a spec section, a
+configure item, an issue). Because a superseded entry no longer binds, the new entry restates
+whatever part of the earlier ruling still stands.
+
+**The id rule.** An id is `<YYYY-MM-DD the entry was written, in UTC>-<first 8 characters of the
+writing session's id, lowercase>-<n>`. `<n>` is a positive integer with no leading zeros. The
+sequence continues from the highest number that session prefix already used on that date in any
+copy the writer can read, meaning its working copy and the default-branch copy. A resumed session
+keeps counting. **A writer never mints an id already present.** Where a host exposes no session id,
+the session mints 8 random lowercase hex characters once and reuses them.
+
+### Rulings that approve wording kept elsewhere
+
+When a ruling approves wording whose home is another artifact (a product doc, a configure item, a
+spec), the entry records the decision and names the artifact. It never copies the wording. The
+artifact is authoritative for the wording. A later change to that wording, made through the
+artifact's own path (a spec amendment, a configure change), needs no new entry unless it changes
+what the ruling decided. That is a new ruling, recorded with `supersedes:`.
+
+Where Canon is itself the wording's home (configure item 13's examples once item 13 points to
+Canon, a ceded call's example), Canon is authoritative, and a change is a new entry that
+supersedes.
+
+Canon is append-only and cannot follow an edit, so a copy goes stale silently. The same wording in
+two homes can disagree, with no rule for which wins. The owner's-words field still quotes what the
+owner said.
 
 ## Standing rulings and principles
 
@@ -135,10 +223,32 @@ anchor that cites the earlier entry.
 **Two entries sharing one id resolve for no reader.** A ruling anchor citing that id does not
 resolve, and the duplicate goes to the owner.
 
+### Retiring a misfiled entry
+
+An entry that should never have been in Canon is retired, never edited or deleted. The retirement is
+a new entry with `supersedes: <id>` whose ruling says the earlier entry is not a ruling and names
+where it belongs.
+
+- **A mixed entry** (a real ruling plus an act or bookkeeping): the new entry restates the ruling
+  alone, with that ruling's own honest scope, and says what it trimmed. Supersession retires the
+  earlier entry for every reader, whatever the new entry's scope.
+- **An entry with nothing left to rule:** the new entry's scope is `standing`, because the
+  retirement holds for every reader and every later piece of work. Its owner's-words field reads
+  `owner's words: none recorded` unless the owner said something.
+- **Only a plain misfile.** A session retires only an entry the contract's tests plainly put outside
+  Canon. Whether a disputed entry is a ruling is the owner's call.
+- **Anchors.** A retirement is a supersession, so a ruling anchor citing the retired id stops
+  resolving. The session that writes a retirement tells the advisor. The advisor's supersession
+  notice ([the advisor charter's](../skills/showrunner/SKILL.md) duty 2) re-points affected
+  Anchors at the replacement entry where one carries the ruling.
+- **No sweep is owed.** No project owes a sweep of its Canon for misfiled entries. A session that
+  meets one may retire it.
+
 ## Writing a ruling
 
-A session that receives a ruling that decides something writes it. That means an answer to an owner
-call, a principle, or a ceded call or its take-back. Go-words are never written.
+A session writes a ruling that passes the test in [What Canon holds](#what-canon-holds): an answer
+to an owner call, a principle, or a ceded call or its take-back. It writes one ruling per entry.
+What stays out is never written.
 
 1. Refresh the default branch, then run the lookup. Before the lookup, when an origin remote exists and
    the network is available, run `git fetch origin`, so a stale `origin/HEAD` does not hide a Canon
@@ -227,3 +337,7 @@ These sessions read Canon:
 - Canon lives in the project store when a project's definition-docs are gitignored.
 - An in-repository project gains the one-line `.gitattributes` with its first entry.
 - Entries are one line each.
+- An entry that approves wording kept in another artifact points to it rather than copying it.
+- Canon's dates and times are UTC.
+- A misfiled entry is retired by a superseding entry, scoped `standing` when nothing in it is a
+  ruling.

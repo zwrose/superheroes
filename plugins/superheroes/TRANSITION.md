@@ -7,6 +7,16 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Canon: what stays out
+
+- Canon's contract has a new section, What stays out, and where it goes, and a test in What Canon holds. Read both before writing an entry.
+- An entry has new rules in An entry (one ruling per entry, scope honesty, UTC dates and times, narrowing an earlier decision) and a new subsection, Rulings that approve wording kept elsewhere.
+- Append only, and supersession has a new subsection, Retiring a misfiled entry. Entries a project already merged owe no clean-up.
+- `migrate-material-line`'s default `--date` is now the UTC date, not the local date.
+- Showrunner duty 2's supersession notice also covers a retirement.
+
 ## 0.41.0
 
 ### Before you upgrade
