@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.42.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.41.0...superheroes-v0.42.0) (2026-10-09)
+
+
+### Features
+
+* **superheroes:** Canon's contract says what stays out and how an entry stays honest ([#1686](https://github.com/zwrose/superheroes/issues/1686)) ([1c067fc](https://github.com/zwrose/superheroes/commit/1c067fcea3600c4b9e08e84640841f389946fbe9))
+* **superheroes:** guidance for a project's development-only iPhone reporting script ([#1696](https://github.com/zwrose/superheroes/issues/1696)) ([725cc01](https://github.com/zwrose/superheroes/commit/725cc01497b653541af1a2b97d95e262a8f44388))
+* **superheroes:** the advisor launches iPhone lanes, vets their iPhone evidence, and reaps their phones ([#1689](https://github.com/zwrose/superheroes/issues/1689)) ([2d75686](https://github.com/zwrose/superheroes/commit/2d756869847e97506fbbb664bd96d8520ae7e70a))
+* **superheroes:** the launcher gives an iPhone-check lane its own simulated phone and keeps Device Hub up ([#1688](https://github.com/zwrose/superheroes/issues/1688)) ([8c7fbcf](https://github.com/zwrose/superheroes/commit/8c7fbcffafe4a302fc7cf3738ad08b9a9ddf4f67))
+* **superheroes:** the pilot checks the change on the lane's iPhone and posts labelled evidence ([#1694](https://github.com/zwrose/superheroes/issues/1694)) ([627b8ec](https://github.com/zwrose/superheroes/commit/627b8ec75ed5153099f3400a8cea9004c4b857de))
+
+
+### Bug Fixes
+
+* **superheroes:** one home for the external-identifier literal-pin exception ([#1699](https://github.com/zwrose/superheroes/issues/1699)) ([431e6f4](https://github.com/zwrose/superheroes/commit/431e6f48d0fe3d7148be2ea352a3dd058ce73871))
+* **superheroes:** review-code refuses over-long owner guidance instead of cutting it off ([#1695](https://github.com/zwrose/superheroes/issues/1695)) ([6fce11a](https://github.com/zwrose/superheroes/commit/6fce11a6f5b66d56c019677dfcf5a2691508ec86))
+
 ## [0.41.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.40.0...superheroes-v0.41.0) (2026-10-08)
 
 
