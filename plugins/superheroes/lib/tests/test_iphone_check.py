@@ -229,7 +229,8 @@ def test_ufr4_step_naming_no_expected_change_is_not_completed():
 def test_ufr4_positive_rows_are_completed():
     assert ic.judge_step(step(kind="tap-field", target="name", after=rd(), keyboardSeen=True))[0] is True
     assert ic.judge_step(step(kind="type", before=rd(value=""), after=rd(value="hi")))[0] is True
-    assert ic.judge_step(step(kind="type", password=True, screenChanged=True))[0] is True
+    assert ic.judge_step(step(kind="type", password=True, before=rd(ftype="password"),
+                              after=rd(ftype="password"), screenChanged=True))[0] is True
     assert ic.judge_step(step(kind="other", expected="menu", expectedSeen=True))[0] is True
 
 
