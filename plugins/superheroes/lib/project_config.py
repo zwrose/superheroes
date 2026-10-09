@@ -1228,7 +1228,7 @@ def _migrate_material_line(cwd, root, session, date, result):
         if not _SESSION_PATTERN.match(session):
             raise _MigrationRefusal("session-id-malformed")
     if date is None:
-        date = datetime.date.today().isoformat()
+        date = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     else:
         try:
             if datetime.date.fromisoformat(date).isoformat() != date:

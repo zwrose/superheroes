@@ -7,6 +7,18 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Canon: what stays out
+
+- Canon's contract now holds a test for what goes in: would a session sorting a future call, after the work is done, need this to answer it? Instructions for one act (go-words, which instance runs, who updates a branch, whether to wait for a check, a one-change waiver), records that already have a home (spec approval, delivery acceptance, walk records, the declined registry, lane and presentation calls, the threat model) and bookkeeping that rides on a ruling stay out. A ruling that arrives with bookkeeping goes in without it.
+- One ruling per entry. A mixed entry is trimmed to the ruling.
+- Scope is honest: `standing` only for a ruling that applies to all later work, and `piece <work-item slug>` only for a minted work-item slug, never an issue, a pull request, a stack layer or a phase.
+- Dates and times are UTC. An entry's `<time>` is marked `UTC` or reads `time not recorded`, and `migrate-material-line`'s default `--date` is now the UTC date, not the local date.
+- A ruling that approves wording kept in another artifact points to the artifact and does not copy the wording.
+- A misfiled entry is retired by a new entry that supersedes it, never edited or deleted. Entries already merged owe no clean-up.
+- Showrunner duty 2's supersession notice also covers a retirement: affected Anchors are re-pointed to the replacement entry where one carries the ruling.
+
 ## 0.41.0
 
 ### Before you upgrade

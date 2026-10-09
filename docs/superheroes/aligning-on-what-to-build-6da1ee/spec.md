@@ -10,7 +10,7 @@ approved: "2026-10-04"
 gates: {review: passed}
 producedBy: "the-architect@0.33.0"
 created: "2026-10-03"
-updated: "2026-10-04"
+updated: "2026-10-09"
 ---
 # Aligning on what to build
 
@@ -170,11 +170,13 @@ ruling 30)
 ### Canon: the record of the owner's decisions
 
 **FR-14.** Each project shall keep Canon: one plain file, `canon.md`, where the project keeps its
-definition-docs, holding the owner's decisions: answers to owner calls, principles and ceded calls.
-(source: rulings 32, 35, 55, 61)
-  - *Acceptance (rule):* go-words (merge, launch, release, tier) stay where the owner gives them,
-    and walk records and the declined-items registry carry on as they are; an issue's ruling anchor
-    may point to a Canon entry. (source: ruling 55) [cite: plugins/superheroes/skills/showrunner/reference/issue-contract.md § Anchor resolution]
+definition-docs, holding the owner's decisions that later work turns on: answers to owner calls,
+principles and ceded calls, one ruling per entry. (source: rulings 32, 35, 55, 61; owner ruling 2026-10-08, issue #1680)
+  - *Acceptance (rule):* instructions that direct one act and are spent once it happens (go-words
+    such as merge, launch, release and tier among them) stay where the owner gives them; records that
+    already have a home (spec approval, delivery acceptance, walk records and the declined-items
+    registry, lane and presentation calls) stay there; a ruling that arrives with bookkeeping goes in
+    without it; an issue's ruling anchor may point to a Canon entry. (source: ruling 55; owner ruling 2026-10-08, issue #1680) [cite: plugins/superheroes/skills/showrunner/reference/issue-contract.md § Anchor resolution]
 
 **FR-15.** When the owner makes a ruling that decides something (FR-14) in any session, that
 session shall add the ruling to Canon and commit it at once to the branch it is working on; the ruling reaches the default branch
@@ -497,8 +499,8 @@ summarizes)
 ## Glossary
 
 - **Canon:** the project's record of the owner's decisions (answers to owner calls, principles and
-  ceded calls), standing or for one piece; go-words stay where they're given. (source: rulings 35,
-  55, 60)
+  ceded calls), standing or for one piece; instructions for one act and records with another home
+  stay where they are. (source: rulings 35, 55, 60; owner ruling 2026-10-08, issue #1680)
 - **Ceded call:** a kind of call the owner has told agents to decide from now on, kept in Canon as a
   standing ruling; not the same as a builder's handback. (source: ruling 60)
 - **Standing ruling:** a ruling that applies to all later work; the project's principles are its
@@ -514,7 +516,12 @@ summarizes)
 
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-09 (owner stamp pending the owner's merge word, substantive):** FR-14 read as every
+  answer to an owner call going into Canon, which admitted one-time instructions, filing
+  bookkeeping and records kept elsewhere into the first real Canon a consuming project wrote.
+  Instructions for one act and records with another home now stay where they are, and a ruling with
+  bookkeeping goes in without it; the detail lives in Canon's contract (issue #1680, owner ruling
+  2026-10-08). Sections touched: FR-14, Glossary (Canon).
 
 ## Coverage
 

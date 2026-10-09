@@ -312,7 +312,8 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   owner's answer is recorded as
   [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#append-only-and-supersession)
   says.
-- **Record every ruling in Canon.** Every ruling you receive is recorded in Canon as
+- **Record each ruling that belongs in Canon.** A ruling that passes the contract's test is
+  recorded in Canon as
   [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md#writing-a-ruling) says.
 - **Capture who the piece is for as user stories.** Write one or more in the form "As a …, I
   want …, so I can …" that evoke the core need without listing every detail. Edge cases are
@@ -575,7 +576,8 @@ offer them a spec that had none.
    `checks-record.md` as `sheets.md` says. They hold only what no board, ruling or earlier answer
    covers, plus findings the review didn't settle and declines the reviewer still contests. A
    statement with no source that decides product behaviour goes on the next remainder sheet with a
-   recommendation, never kept or cut by discovery. Record each ruling in Canon and apply the answers.
+   recommendation, never kept or cut by discovery. Record the sheet's rulings in Canon as
+   [Canon's contract](${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md) says, and apply the answers.
    Run the checks again on the changed parts as `spec-checks.md` says in its After rulings section,
    then send the next remainder sheet. Repeat until nothing is left. When nothing is left after step
    7, send no remainder sheet.
