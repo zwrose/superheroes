@@ -682,6 +682,8 @@ or `re-emit` before ruling. Refusal tokens (each leaves state bytes unchanged):
 `ruling-session-terminal`, `ruling-attempt-pending`,
 `disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
 
+Owner-gate guidance is held to the same measure. A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at submit with `gate-guidance-oversize`, nothing folds, and the owner resubmits shorter guidance; on the library `run_loop` path the fold parks `cannot-certify` with the same token. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a submit whose fix batch would carry more guidance than one order holds refuses with `gate-guidance-aggregate-oversize` (the library fold parks with it), and the render refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
+
 ## Batch concurrency — an independent batch goes out together
 
 Several `dispatch-` phases hand you a **batch**: `dispatch-panel`'s `payload.dimensions`,
