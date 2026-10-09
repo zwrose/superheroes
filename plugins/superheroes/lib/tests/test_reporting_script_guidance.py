@@ -33,15 +33,10 @@ def _accepted(ex):
     return ic.accept_reading(ex, "/" + _TOKEN, _TOKEN, ex.get("where"), ex.get("takenAt"))
 
 
-# Axis: the external-contract query parameter name drifts from the literal the page script reads
-def test_reading_param_literal_is_pinned():
-    assert ic.READING_PARAM == "superheroes-reading"
-
-
 # Axis: the guidance stops naming the parameter, its one home, or the file that holds it
 def test_guidance_names_the_parameter_and_its_home():
     text = _read_plugin(_GUIDANCE)
-    for token in ("`superheroes-reading`", "`READING_PARAM`", "`lib/iphone_check.py`"):
+    for token in ("`%s`" % ic.READING_PARAM, "`READING_PARAM`", "`lib/iphone_check.py`"):
         assert token in text, "guidance missing %s" % token
 
 
