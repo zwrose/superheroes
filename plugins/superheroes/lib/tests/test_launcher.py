@@ -8185,7 +8185,7 @@ def test_iphone_f1_off_creates_nothing_and_scrubs_inherited_env(
   # axis: a launch that does not ask makes no phone, runs no command, and its builder's env
   # carries neither variable even when the launching env does
     monkeypatch.setenv(L.IPHONE_ID_ENV, "STALE-PHONE")
-    monkeypatch.setenv(L.DEVICE_HUB_ENV, "running")
+    monkeypatch.setenv(L.DEVICE_HUB_ENV, "available")
     runner = _FakeIphoneRun()
     captured = []
     repo, result = _iphone_launch(
@@ -8230,12 +8230,12 @@ def test_iphone_on_creates_one_phone_and_hands_it_to_the_builder(tmp_path, monke
     assert runner.calls[0][3] == "superheroes-%s" % result["launchId"]
     udid = runner.udids[0]
     assert captured[0][L.IPHONE_ID_ENV] == udid
-    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    assert captured[0][L.DEVICE_HUB_ENV] == "available"
     assert _reserved_record(repo, result)["iphoneId"] == udid
     launch = _folded_launch(repo, result)
     assert launch["iphoneCheck"] is True
     assert launch["iphoneId"] == udid
-    assert result["iphone"] == {"id": udid, "deviceHub": "running"}
+    assert result["iphone"] == {"id": udid, "deviceHub": "available"}
     _assert_iphone_argv_shapes(runner.calls)
     _reap(result)
 
@@ -8257,7 +8257,7 @@ def test_iphone_f3_create_nonzero_spawns_with_none(tmp_path, monkeypatch):
     repo, result = _iphone_launch(
         tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
     )
-    _assert_phoneless_spawn(repo, result, runner, captured, "running")
+    _assert_phoneless_spawn(repo, result, runner, captured, "available")
     _reap(result)
 
 
@@ -8268,7 +8268,7 @@ def test_iphone_f4_create_timeout_spawns_with_none(tmp_path, monkeypatch):
     repo, result = _iphone_launch(
         tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
     )
-    _assert_phoneless_spawn(repo, result, runner, captured, "running")
+    _assert_phoneless_spawn(repo, result, runner, captured, "available")
     _reap(result)
 
 
@@ -8279,7 +8279,7 @@ def test_iphone_f5_create_garbage_stdout_spawns_with_none(tmp_path, monkeypatch)
     repo, result = _iphone_launch(
         tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
     )
-    _assert_phoneless_spawn(repo, result, runner, captured, "running")
+    _assert_phoneless_spawn(repo, result, runner, captured, "available")
     _reap(result)
 
 
@@ -8292,7 +8292,7 @@ def test_iphone_f6_device_hub_running_is_not_opened(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     assert runner.commands("open") == []
-    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    assert captured[0][L.DEVICE_HUB_ENV] == "available"
     _assert_iphone_argv_shapes(runner.calls)
     _reap(result)
 
@@ -8306,8 +8306,8 @@ def test_iphone_f7_device_hub_opened_in_background_then_running(tmp_path, monkey
     )
     assert result["ok"] is True
     assert runner.commands("open") == [["open", "-g", "-b", L.DEVICE_HUB_BUNDLE_ID]]
-    assert captured[0][L.DEVICE_HUB_ENV] == "running"
-    assert result["iphone"]["deviceHub"] == "running"
+    assert captured[0][L.DEVICE_HUB_ENV] == "available"
+    assert result["iphone"]["deviceHub"] == "available"
     _assert_iphone_argv_shapes(runner.calls)
     _reap(result)
 
@@ -8427,7 +8427,7 @@ def test_iphone_f13_stale_inherited_phone_never_reaches_the_child(tmp_path, monk
     )
     assert result["ok"] is True
     assert captured[0][L.IPHONE_ID_ENV] == "none"
-    assert captured[0][L.DEVICE_HUB_ENV] == "running"
+    assert captured[0][L.DEVICE_HUB_ENV] == "available"
     _assert_iphone_argv_shapes(runner.calls)
     _reap(result)
 
@@ -8626,7 +8626,7 @@ def test_iphone_device_hub_success_exactly_at_deadline_counts(monkeypatch):
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    assert L._ensure_device_hub(exact_run, 10, 100) == L.DEVICE_HUB_RUNNING
+    assert L._ensure_device_hub(exact_run, 10, 100) == L.DEVICE_HUB_AVAILABLE
     assert issued
     assert clock.now == start + 10
 
@@ -8648,7 +8648,7 @@ def test_iphone_device_hub_success_after_poll_deadline_within_budget_counts(monk
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    assert L._ensure_device_hub(late_run, 2, 100) == L.DEVICE_HUB_RUNNING
+    assert L._ensure_device_hub(late_run, 2, 100) == L.DEVICE_HUB_AVAILABLE
     assert clock.now > start + 2
 
 
@@ -8773,5 +8773,5 @@ def test_iphone_external_contract_values_are_pinned():
     assert L.IPHONE_ID_ENV == "SUPERHEROES_IPHONE_ID"
     assert L.DEVICE_HUB_ENV == "SUPERHEROES_DEVICE_HUB"
     assert L.IPHONE_NONE == "none"
-    assert L.DEVICE_HUB_RUNNING == "running"
+    assert L.DEVICE_HUB_AVAILABLE == "available"
     assert L.DEVICE_HUB_UNAVAILABLE == "unavailable"

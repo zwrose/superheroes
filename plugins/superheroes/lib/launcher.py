@@ -47,7 +47,7 @@ SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 IPHONE_ID_ENV = "SUPERHEROES_IPHONE_ID"
 DEVICE_HUB_ENV = "SUPERHEROES_DEVICE_HUB"
 IPHONE_NONE = "none"
-DEVICE_HUB_RUNNING = "running"
+DEVICE_HUB_AVAILABLE = "available"
 DEVICE_HUB_UNAVAILABLE = "unavailable"
 IPHONE_DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 DEVICE_HUB_BUNDLE_ID = "com.apple.dt.Devices"
@@ -1322,7 +1322,7 @@ def _delete_own_iphone(udid, run):
 
 
 def _ensure_device_hub(run, poll_seconds, budget_seconds):
-    """Return DEVICE_HUB_RUNNING or DEVICE_HUB_UNAVAILABLE; never raises.
+    """Return DEVICE_HUB_AVAILABLE or DEVICE_HUB_UNAVAILABLE; never raises.
 
     A Device Hub that is not up is opened, never restarted: the only commands issued are a
     process lookup and an open request. All of it is bounded by `budget_seconds`.
@@ -1337,7 +1337,7 @@ def _ensure_device_hub(run, poll_seconds, budget_seconds):
         if left() <= 0:
             return DEVICE_HUB_UNAVAILABLE
         if run(pgrep_argv, min(_DEVICE_HUB_CMD_TIMEOUT, left())).returncode == 0:
-            return DEVICE_HUB_RUNNING
+            return DEVICE_HUB_AVAILABLE
         if left() <= 0:
             return DEVICE_HUB_UNAVAILABLE
         # `-g` opens it without bringing it to the foreground, so the owner's front window
@@ -1364,7 +1364,7 @@ def _ensure_device_hub(run, poll_seconds, budget_seconds):
                 ),
             )
             if looked.returncode == 0 and time.monotonic() <= end:
-                return DEVICE_HUB_RUNNING
+                return DEVICE_HUB_AVAILABLE
             if time.monotonic() >= poll_deadline:
                 return DEVICE_HUB_UNAVAILABLE
     except Exception:
