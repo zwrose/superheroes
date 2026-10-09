@@ -184,6 +184,37 @@ def test_ufr4_password_typing_with_screen_unchanged_is_not_completed():
     assert done is False
 
 
+def test_ufr4_password_typing_that_moves_focus_between_two_password_fields_is_not_completed():
+    before, after = focused_as(rd(), "secret", "secret"), focused_as(rd(), "secret2", "secret2")
+    before["focused"]["type"] = after["focused"]["type"] = "password"
+    done, reason = ic.judge_step(step(kind="type", password=True, before=before, after=after, screenChanged=True))
+    assert done is False and "another field" in reason
+
+
+def test_ufr4_password_typing_on_an_unkeyed_field_is_not_completed():
+    unkeyed = focused_as(rd(), None, None)
+    unkeyed["focused"]["type"] = "password"
+    keyed = focused_as(rd(), "secret", "secret")
+    keyed["focused"]["type"] = "password"
+    for before, after in ((unkeyed, unkeyed), (keyed, unkeyed), (unkeyed, keyed)):
+        done, reason = ic.judge_step(step(kind="type", password=True, before=before, after=after, screenChanged=True))
+        assert done is False and "could not be identified" in reason
+
+
+def test_ufr4_password_typing_on_the_same_field_with_screen_changed_is_completed():
+    before, after = focused_as(rd(), "secret", "secret"), focused_as(rd(), "secret", "secret")
+    before["focused"]["type"] = after["focused"]["type"] = "password"
+    done, reason = ic.judge_step(step(kind="type", password=True, before=before, after=after, screenChanged=True))
+    assert done is True and "screen changed" in reason
+
+
+def test_ufr4_password_typing_with_no_before_reading_is_not_completed():
+    after = focused_as(rd(), "secret", "secret")
+    after["focused"]["type"] = "password"
+    done, reason = ic.judge_step(step(kind="type", password=True, before=None, after=after, screenChanged=True))
+    assert done is False and "could not be identified" in reason
+
+
 def test_ufr4_other_input_with_expected_change_not_seen_is_not_completed():
     done, reason = ic.judge_step(step(kind="other", expected="the menu opens", expectedSeen=False))
     assert done is False and "not seen" in reason
@@ -374,6 +405,14 @@ def test_preflight_udid_absent_from_the_inventory_is_the_not_on_this_mac_line(fa
     fake(sim(inventory((V, "Booted"))))
     monkeypatch.setattr(shutil, "which", lambda name: "/opt/axe")
     assert ic.preflight(env())["line"] == PRE + "the phone is not on this Mac"
+
+
+@pytest.mark.parametrize("bad", [(False, None, ""), (True, 1, ""), (True, 0, "not json")],
+                         ids=["timeout", "exit1", "not-json"])
+def test_preflight_failed_inventory_call_is_the_inventory_line(fake, monkeypatch, bad):
+    fake(sim(bad))
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/axe")
+    assert ic.preflight(env())["line"] == PRE + "the simulator inventory could not be read"
 
 
 def test_preflight_unreadable_inventory_is_never_ready(fake, monkeypatch):

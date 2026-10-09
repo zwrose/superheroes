@@ -116,8 +116,11 @@ def _live_reason(udid):
     if shutil.which("axe") is None:
         return "the driver tool (AXe) is missing"
     returned, inv = _inventory(30)
-    # Axis: the UDID is not in the live inventory (an unreadable inventory counts as absent)
-    if not (returned and device_labels(inv, udid)):
+    # Axis: the inventory call timed out, exited non-zero or returned unparseable output
+    if not returned or inv is None:
+        return "the simulator inventory could not be read"
+    # Axis: the inventory was read and the UDID is not in it
+    if not device_labels(inv, udid):
         return "the phone is not on this Mac"
     return None
 
@@ -279,16 +282,16 @@ def judge_step(step):
             return False, "the intended field did not receive focus"
         return True, "field focused and keyboard seen"
     if kind == "type":
+        key, akey = _field_key((before or {}).get("focused")), _field_key(after_focus)
+        # Axis: typed text (password or not) whose before and after readings do not name the same field (a value change or screen change elsewhere is not the typed field's)
+        if key is None or key != akey:
+            return False, "the field could not be identified" if None in (key, akey) else "the focus moved to another field"
         if step.get("password") is True or (isinstance(after_focus, dict) and after_focus.get("type") == "password"):
             # Axis: password typing leaves no value to compare, so only a changed screen counts
             if step.get("screenChanged") is not True:
                 return False, "password typing: the screen did not change"
             return True, "password typing: the screen changed"
         old, new = (before or {}).get("value"), (after or {}).get("value")
-        key, akey = _field_key((before or {}).get("focused")), _field_key(after_focus)
-        # Axis: typed text whose before and after readings do not name the same field (a value change elsewhere is not the typed field's)
-        if key is None or key != akey:
-            return False, "the field could not be identified" if None in (key, akey) else "the focus moved to another field"
         # Axis: typed text whose value is unchanged (or unreadable in either reading)
         if not (isinstance(old, str) and isinstance(new, str) and new != old):
             return False, "the field's value did not change"
