@@ -8727,12 +8727,10 @@ def test_iphone_device_hub_late_wake_still_makes_a_final_lookup(monkeypatch):
     assert [name for name, _timeout, _at in issued] == ["pgrep", "open", "pgrep"]
 
 
-def test_iphone_exhausted_launch_budget_skips_optional_work_and_still_spawns(
-    tmp_path, monkeypatch
-):
-    # axis: with no time to spare, no phone is made and Device Hub is not touched, yet the lane starts
-    # (the headroom is raised past the deadline, so the budget is spent however fast preflight is)
-    monkeypatch.setattr(L, "_IPHONE_SPAWN_HEADROOM_SECONDS", 1000)
+def test_iphone_create_timeout_is_capped_by_the_iphone_ceiling(tmp_path, monkeypatch):
+    # axis: the phone's create command is never given more time than the iPhone ceiling, and the launch budget does not cap it
+    # (the fixed create timeout is raised past the ceiling, so only the ceiling can cap it)
+    monkeypatch.setattr(L, "_IPHONE_CREATE_TIMEOUT", 10000)
     runner = _FakeIphoneRun()
     captured = []
     _repo, result = _iphone_launch(
@@ -8740,28 +8738,110 @@ def test_iphone_exhausted_launch_budget_skips_optional_work_and_still_spawns(
         total_deadline_seconds=60,
     )
     assert result["ok"] is True, result
-    assert len(captured) == 1
-    assert runner.calls == []
-    assert captured[0][L.IPHONE_ID_ENV] == "none"
-    assert captured[0][L.DEVICE_HUB_ENV] == "unavailable"
+    create_timeouts = [t for argv, t in runner.timeouts if argv[:3] == ["xcrun", "simctl", "create"]]
+    assert len(create_timeouts) == 1
+    assert 60 < create_timeouts[0] <= L._IPHONE_CEILING_SECONDS
     _reap(result)
 
 
-def test_iphone_create_timeout_is_capped_by_the_launch_budget(tmp_path, monkeypatch):
-    # axis: the phone's create command is never given more time than the launch can spare
-    # (the fixed create timeout is raised past the deadline, so only the budget can cap it)
-    monkeypatch.setattr(L, "_IPHONE_CREATE_TIMEOUT", 10000)
-    runner = _FakeIphoneRun()
+class _OffsetClockRun(_FakeIphoneRun):
+    """A `_FakeIphoneRun` whose every command advances the offset clock by `spend(argv, timeout)`."""
+
+    def __init__(self, offset, spend, **kwargs):
+        super().__init__(**kwargs)
+        self.offset = offset
+        self.spend = spend
+        self.events = []
+        self.iphone_spent = 0.0
+        self.granted = []
+
+    def __call__(self, argv, timeout):
+        self.events.append(argv[0])
+        self.granted.append((timeout, self.iphone_spent))
+        spend = self.spend(argv, timeout)
+        self.offset[0] += spend
+        self.iphone_spent += spend
+        return super().__call__(argv, timeout)
+
+
+def _offset_clock_and_settle_log(monkeypatch):
+    """Patch the clock to real time plus a test-driven offset; log what `_observe_settle` is given."""
+    real_monotonic = time.monotonic
+    offset = [0.0]
+    monkeypatch.setattr(L.time, "monotonic", lambda: real_monotonic() + offset[0])
+    settles = []
+    real_settle = L._observe_settle
+
+    def logging_settle(proc, settle_seconds, deadline=None):
+        settles.append((deadline, L.time.monotonic()))
+        return real_settle(proc, settle_seconds, deadline=deadline)
+
+    monkeypatch.setattr(L, "_observe_settle", logging_settle)
+    return offset, settles
+
+
+def test_iphone_near_exhausted_base_budget_still_starts_with_the_check_on(tmp_path, monkeypatch):
+    # axis: a launch whose base budget is nearly spent before the phone is made still gets the phone and
+    # Device Hub, and its deadline is extended by exactly the simulated iPhone time
+    offset, settles = _offset_clock_and_settle_log(monkeypatch)
+    runner = _OffsetClockRun(offset, lambda argv, _t: 15 if argv[0] == "xcrun" else 1)
+    real_worktree = L.create_build_worktree
+
+    def slow_preparation(*args, **kwargs):
+        result = real_worktree(*args, **kwargs)
+        runner.events.append("prepared")
+        # (20 of the 30 s: the launch's own real work before the spawn already takes seconds)
+        offset[0] += 20
+        return result
+
+    monkeypatch.setattr(L, "create_build_worktree", slow_preparation)
     captured = []
+    t_before = L.time.monotonic()
     _repo, result = _iphone_launch(
         tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
-        total_deadline_seconds=100,
+        total_deadline_seconds=30,
     )
     assert result["ok"] is True, result
-    create_timeouts = [t for argv, t in runner.timeouts if argv[:3] == ["xcrun", "simctl", "create"]]
-    assert len(create_timeouts) == 1
-    assert 0 < create_timeouts[0] < L._IPHONE_CREATE_TIMEOUT
-    assert create_timeouts[0] <= 100
+    assert runner.events[:2] == ["prepared", "xcrun"]
+    assert len(captured) == 1
+    assert captured[0][L.IPHONE_ID_ENV] == runner.udids[0]
+    assert captured[0][L.DEVICE_HUB_ENV] == "available"
+    assert len(settles) == 1
+    recorded_deadline, clock_at_settle = settles[0]
+    assert t_before + 30 + 16 <= recorded_deadline <= t_before + 30 + 16 + 5
+    assert recorded_deadline - clock_at_settle > 0
+    _reap(result)
+
+
+def test_iphone_slow_steps_hit_their_own_ceiling_and_leave_the_base_deadline_alone(
+    tmp_path, monkeypatch
+):
+    # axis: iPhone steps that spend every second they are handed stop at the ceiling, the lane still starts
+    # without them, and the launch deadline grows by exactly what they took
+    offset, settles = _offset_clock_and_settle_log(monkeypatch)
+    runner = _OffsetClockRun(
+        offset, lambda _argv, timeout: timeout,
+        create=subprocess.TimeoutExpired("xcrun", 1), pgrep=(1,), open_rc=0,
+    )
+    captured = []
+    t_before = L.time.monotonic()
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+        total_deadline_seconds=30,
+    )
+    assert result["ok"] is True, result
+    assert len(captured) == 1
+    assert captured[0][L.IPHONE_ID_ENV] == "none"
+    assert captured[0][L.DEVICE_HUB_ENV] == "unavailable"
+    simulated = runner.iphone_spent
+    assert simulated <= L._IPHONE_CEILING_SECONDS + 1
+    assert all(
+        timeout <= L._IPHONE_CEILING_SECONDS - spent_before + 1
+        for timeout, spent_before in runner.granted
+    )
+    assert len(settles) == 1
+    recorded_deadline, _clock_at_settle = settles[0]
+    assert t_before + 30 + simulated <= recorded_deadline <= t_before + 30 + simulated + 5
     _reap(result)
 
 
@@ -8775,3 +8855,5 @@ def test_iphone_external_contract_values_are_pinned():
     assert L.IPHONE_NONE == "none"
     assert L.DEVICE_HUB_AVAILABLE == "available"
     assert L.DEVICE_HUB_UNAVAILABLE == "unavailable"
+    assert 0 < L._IPHONE_CEILING_SECONDS <= 90
+    assert not hasattr(L, "_IPHONE_SPAWN_HEADROOM_SECONDS")

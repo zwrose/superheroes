@@ -56,8 +56,8 @@ DEVICE_HUB_PROCESS = "DeviceHub"
 _IPHONE_CREATE_TIMEOUT = 20
 _DEVICE_HUB_CMD_TIMEOUT = 30
 _DEVICE_HUB_POLL_SECONDS = 10
-# Time kept back from the launch deadline, beyond the settle window, for the builder to spawn.
-_IPHONE_SPAWN_HEADROOM_SECONDS = 5
+# The iPhone steps together never run longer than this; the launch deadline is extended by exactly the time they took.
+_IPHONE_CEILING_SECONDS = 90
 # The shortest timeout the poll's last lookup gets once the poll deadline has passed.
 _DEVICE_HUB_FINAL_LOOKUP_SECONDS = 1
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
@@ -1851,10 +1851,6 @@ def launch_build(
     launch_id = "launch-%s" % secrets.token_hex(8)
     deadline = time.monotonic() + total_deadline_seconds
 
-    # Optional iPhone work never spends the time the builder needs to spawn and settle.
-    def _iphone_budget():
-        return deadline - time.monotonic() - (settle_seconds + _IPHONE_SPAWN_HEADROOM_SECONDS)
-
     batch_id = premise.get("batchId") if isinstance(premise, dict) else None
     if not isinstance(batch_id, str) or not batch_id.strip():
         batch_id = None
@@ -2152,8 +2148,15 @@ def launch_build(
     # The phone is made here, outside the ledger lock: a slow simulator creation must never hold
     # other launches' reservations. Its id rides on the reserved record.
     made_iphone_id = None
+    iphone_spent = 0.0
     if iphone_check:
-        made_iphone_id = _create_iphone(launch_id, run, _iphone_budget()).get("iphoneId")
+        step_started = time.monotonic()
+        made_iphone_id = _create_iphone(
+            launch_id, run, _IPHONE_CEILING_SECONDS - iphone_spent
+        ).get("iphoneId")
+        took = time.monotonic() - step_started
+        iphone_spent += took
+        deadline += took
         if made_iphone_id:
             reserved["iphoneId"] = made_iphone_id
     reserve_result = ll.reserve(repo_root, reserved, env=env)
@@ -2247,7 +2250,13 @@ def launch_build(
     # A phone or Device Hub that is not there never fails the launch: the builder is told what
     # is true and the lane spawns regardless.
     if iphone_check:
-        iphone_info["deviceHub"] = _ensure_device_hub(run, poll_seconds, _iphone_budget())
+        step_started = time.monotonic()
+        iphone_info["deviceHub"] = _ensure_device_hub(
+            run, poll_seconds, _IPHONE_CEILING_SECONDS - iphone_spent
+        )
+        took = time.monotonic() - step_started
+        iphone_spent += took
+        deadline += took
         iphone_env = {
             IPHONE_ID_ENV: iphone_info["id"] or IPHONE_NONE,
             DEVICE_HUB_ENV: iphone_info["deviceHub"],
