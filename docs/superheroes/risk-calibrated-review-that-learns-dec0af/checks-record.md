@@ -87,3 +87,45 @@
 
 #### Citation check
 []
+
+### Round 3
+
+#### Gap review
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r3-gap-run
+- Result: real (terminal, ok, 1 attempt, engaged: 17 tool calls, 166.0 s)
+- Confirmations: gap-001 -> fixed; gap-003 -> fixed; gap-004 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Gap review | no new findings | | | |
+
+#### Source check
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r3-source-run
+- Result: real (terminal, ok, 1 attempt, engaged: 17 tool calls, 86.0 s)
+- Approved board, for the source check: docs/superheroes/risk-calibrated-review-that-learns-dec0af/board/build-board.html
+- Confirmations: SRC-10 -> fixed; SRC-11 -> fixed; SRC-12 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Source check | no new findings | | | |
+
+#### Grounding
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r3-grounding-run
+- Result: real (terminal, ok, 1 attempt, engaged: 19 tool calls, 130.3 s)
+- Grounding base, for grounding: origin/main, 48a7881e07318177c598deadef2d8bbf96d4894d
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Grounding | no new findings | | | |
+
+#### Citation check
+[]
+
+Round 3 closed the first review: all three checks returned real results, confirmed every earlier
+fix, and raised nothing new. Two items wait in the owner's queue.
+
+## The owner's queue
+
+- gap-002: FR-18 says every reviewer comes from a different model family than every maker, while FR-21 and FR-22 have the test role write break-it tests that stay in the change, which makes that reviewer a maker under the glossary. Recommendation: a reviewer's own break-it tests do not make it a maker of the change; independence is measured against the models that built and fixed the product code, and the generalist still reads the break-it tests for bloat and false passes. Marks: none
+- SRC-2: FR-38 lets the review record name an owner decision that is on record in the PR's saved sheet answers, where Canon 2026-10-09-d6064e1d-5 says the record names one only when Canon holds it. Recommendation: an acceptance that concerns one PR is on record in that PR's saved answers, which are written back to the PR; an answer that sets a rule for later work is on record in Canon. Marks: none
