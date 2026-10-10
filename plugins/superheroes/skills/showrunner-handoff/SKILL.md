@@ -16,7 +16,7 @@ Run this in the **showrunner advisor seat you are leaving**, while that seat is 
 
 | Form | Behavior |
 | --- | --- |
-| `/superheroes:showrunner-handoff` | Ask whether this instance's account is going dark, prepare durable state, stop this seat's watch loops, freshen the resume point if one exists, and close (Step 5). Refuse plainly when this is not a showrunner advisor session. |
+| `/superheroes:showrunner-handoff` | Ask whether this instance's account is going dark, prepare durable state, stop this seat's background tasks, freshen the resume point if one exists, and close (Step 5). Refuse plainly when this is not a showrunner advisor session. |
 
 ## Step 1 — the one question
 
@@ -38,11 +38,11 @@ The wait is a **bounded poll** over those artifacts. A lane that does not resolv
 
 **If no:** the builders keep running, untouched. Say so explicitly. Step 5 will state it, so the new seat is not left guessing whether lanes were stopped.
 
-## Step 3 — stop this seat's watch loops
+## Step 3 — stop this seat's background tasks
 
-Stop the watch loops **this session** armed. Use the host-neutral action to stop each background task you started for batch watching.
+Use the host-neutral action to stop every background task this session started — watch loops and any other wait or poll — and name each in step 5. The work a stopped task was waiting on passes to the incoming seat through the resume point. Never kill a builder's leftover child process: it can block `record-outcome` and is not this seat's.
 
-When a loop cannot be confirmed stopped, name it in step 5 as unresolved. Do not assume it stopped.
+When a task cannot be confirmed stopped, name it in step 5 as unresolved. Do not assume it stopped.
 
 ## Step 4 — freshen the resume point
 
