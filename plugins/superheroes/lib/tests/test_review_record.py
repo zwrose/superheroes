@@ -997,6 +997,16 @@ def test_cost_and_observation_token_counts_survive_the_credential_scrub():
     assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"token": "[REDACTED]"}
 
 
+@pytest.mark.parametrize("val", ["OPAQUE_CREDENTIAL", ["OPAQUE_CREDENTIAL"], {"service": "OPAQUE_CREDENTIAL"}])
+def test_tokens_key_holding_a_non_number_is_redacted(val):
+    # axis: the tokens exemption is numeric-only; any other value type is redacted like every secret-named key
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {"tokens": val}
+    posted = rr.render(build(account(findings=[f])))
+    assert "OPAQUE_CREDENTIAL" not in posted
+    assert rr._parse_body(posted)["findings"][0]["evidence"] == {"tokens": "[REDACTED]"}
+
+
 def test_one_run_record_claimed_by_two_reviewers_credits_neither(tmp_path):
     # axis: run binding; one engine run credited to several reviewers (the same directory, even spelled differently)
     real = tmp_path / "run"

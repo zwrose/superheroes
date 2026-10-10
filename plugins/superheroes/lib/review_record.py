@@ -464,8 +464,12 @@ _SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|p
 
 
 def _secret_key(k):
-    # "tokens" is the count field (cost.tokens, observation.tokens), not a credential name.
-    return isinstance(k, str) and k.lower() != "tokens" and bool(_SECRET_KEY.search(k))
+    return isinstance(k, str) and bool(_SECRET_KEY.search(k))
+
+
+def _is_token_count(k, v):
+    """A "tokens" key holding a plain number is the count field (cost.tokens, observation.tokens), not a credential."""
+    return isinstance(k, str) and k.lower() == "tokens" and isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 _KEY_SEP = re.compile(r"(?:" + _SECRET_KEY.pattern.replace("api[_-]?key", "api[ _-]?key").replace("private[_-]?key", "private[ _-]?key")
@@ -509,7 +513,8 @@ def _scrubbed(value):
                 k2 = nk
             else:
                 k2 = k
-            out[k2] = "[REDACTED]" if (hidden_key or _secret_key(k)) and v is not None else _scrubbed(v)
+            secret = hidden_key or (_secret_key(k) and not _is_token_count(k, v))
+            out[k2] = "[REDACTED]" if secret and v is not None else _scrubbed(v)
         return out
     return value
 
