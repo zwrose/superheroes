@@ -214,7 +214,7 @@ def shot(phone, out, run_dir, token, timeout):
     call_start_ms, end = time.time() * 1000, time.monotonic() + timeout
     res = {"ok": False, "returned": False, "path": out, "sha256": None, "labels": None, "labelNote": None}
     collected, cond, conns = [], threading.Condition(), set()
-    reading_posts = {"begun": 0, "done": 0}  # token-matched POSTs begun vs. ones whose reading was fully read and parsed
+    requests = []  # one state per connection: request bytes delivered, and whether a POST body was fully parsed
     visible = lambda rd: rd.get("visibility") == "visible"
 
     def left():
@@ -229,7 +229,40 @@ def shot(phone, out, run_dir, token, timeout):
                 cond.wait(rest)
             return True
 
+    class Counted:
+        """Unbuffered request reader that counts the bytes a connection actually delivered, even when it stalls mid-line."""
+        def __init__(self, raw, state):
+            self.raw, self.state = raw, state
+
+        def _byte(self):
+            b = self.raw.read(1)
+            self.state["bytes"] += len(b or b"")
+            return b
+
+        def readline(self, limit=-1):
+            out = b""
+            while limit < 0 or len(out) < limit:
+                if not (b := self._byte()):
+                    break
+                out += b
+                if b == b"\n":
+                    break
+            return out
+
+        def read(self, n=-1):
+            out = b""
+            while n < 0 or len(out) < n:
+                if not (b := self._byte()):
+                    break
+                out += b
+            return out
+
+        def __getattr__(self, name):
+            return getattr(self.raw, name)
+
     class Handler(BaseHTTPRequestHandler):
+        rbufsize = 0
+
         def handle(self):
             # Axis: a request still in flight when the call ends is tracked so it can be drained, then cut at the deadline
             with cond:
@@ -245,17 +278,15 @@ def shot(phone, out, run_dir, token, timeout):
             # Axis: a POST that stalls is dropped once the call's budget runs out, never outliving it
             self.timeout = max(min(2, end - time.monotonic()), 0.05)
             super().setup()
+            self.state = {"bytes": 0, "parsed": False}
+            self.rfile = Counted(self.rfile, self.state)
+            with cond:
+                requests.append(self.state)
 
         def do_POST(self):
-            # Axis: a POST to this session's token path that begins but whose reading never completes (timeout, cut at drain, bad body)
-            if self.path == "/" + token:
-                with cond:
-                    reading_posts["begun"] += 1
             try:
                 reading = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
-                if self.path == "/" + token:
-                    with cond:
-                        reading_posts["done"] += 1
+                self.state["parsed"] = True
             except (ValueError, OSError):
                 reading = None
             # Axis: hidden readings are kept too (a fresh, token-matched one is a visibility-loss observation); only visible ones label
@@ -336,15 +367,22 @@ def shot(phone, out, run_dir, token, timeout):
         window = [rd for _, rd in collected if visible(rd) and rd["takenAt"] <= after_ms]
     page, where, notes = _derive_labels(window) if window else (NOT_ESTABLISHED, NOT_ESTABLISHED, [])
     # Axis: the page left the foreground during the capture window — the screenshot may show something else
-    # The page's state when the capture began is the latest observation taken at or before it, whatever order the posts landed in
-    before = max((rd for _, rd in collected if rd["takenAt"] <= shot_start_ms), key=lambda rd: rd["takenAt"], default=None)
-    if window and ((before is not None and before.get("visibility") == "hidden")
-                   or any(rd.get("visibility") == "hidden" and shot_start_ms <= rd["takenAt"] <= after_ms for _, rd in collected)):
-        page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
-        notes.append("the page left the foreground during the capture")
-    # Axis: a token-matched reading was cut off or unreadable, so an observation that could contradict the labels is missing
+    # The capture context is the one the visible window agrees on; an observation concerns it when it is from that context
+    # (or from none of the two awaited contexts). Every such observation from the latest one before the capture (ties
+    # included, whatever order the posts landed in) through the first after it must be visible, or the labels are void.
+    if window:
+        wheres = {rd.get("where") for rd in window}
+        candidate = next(iter(wheres)) if len(wheres) == 1 else None
+        concerns = [rd for _, rd in collected
+                    if candidate is None or rd.get("where") == candidate or rd.get("where") not in ("browser", "installed")]
+        start = max((rd["takenAt"] for rd in concerns if rd["takenAt"] <= shot_start_ms), default=shot_start_ms)
+        if any(not visible(rd) and start <= rd["takenAt"] <= after_ms for rd in concerns):
+            page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
+            notes.append("the page left the foreground during the capture")
+    # Axis: a connection delivered request bytes but no fully parsed POST body (stall in the headers, timeout, cut at drain,
+    # bad body), so an observation that could contradict the labels is missing. A bare connect delivers no bytes and is not one.
     with cond:
-        cut_off = reading_posts["begun"] > reading_posts["done"]
+        cut_off = any(st["bytes"] > 0 and not st["parsed"] for st in requests)
     if cut_off:
         page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
         notes.append("a page reading was cut off")

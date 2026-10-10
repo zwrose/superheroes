@@ -1024,6 +1024,90 @@ def test_shot_when_the_page_was_already_hidden_as_the_capture_began_establishes_
     assert r["labelNote"] and "foreground" in r["labelNote"]
 
 
+def test_shot_establishes_nothing_when_a_connection_stalls_inside_the_request_headers(fake, tmp_path):
+    port, conns = make_session(tmp_path), []
+
+    def stall():  # request bytes arrive, but the headers never finish: no reading was ever delivered
+        conn = socket.create_connection(("127.0.0.1", port), 1)
+        conns.append(conn)
+        conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Len")
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(stall))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+        for conn in conns:
+            conn.close()
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "cut off" in r["labelNote"]
+
+
+def test_shot_establishes_nothing_when_a_token_matched_reading_during_the_capture_has_no_visibility(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def unknown():
+        r = reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000))
+        del r["visibility"]
+        _post(port, "abc123", r)
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(unknown))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_latest_pre_capture_time(fake, tmp_path):
+    port = make_session(tmp_path)
+    captured, stop = threading.Event(), threading.Event()
+
+    def post(**kw):
+        _post(port, "abc123", reading(page=PAGE_A, where="browser", **kw))
+
+    def phone_page():
+        for _ in range(100):  # wait for the listener
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                time.sleep(0.02)
+        tied = int(time.time() * 1000)
+        post(takenAt=tied, visibility="visible")  # visible delivered first ...
+        post(takenAt=tied, visibility="hidden")  # ... then the hidden reading taken at the very same moment
+        captured.wait(10)
+        while not stop.is_set():  # the page is visible again after the capture
+            post(takenAt=int(time.time() * 1000))
+            stop.wait(0.05)
+
+    def screenshot():
+        time.sleep(0.2)
+        captured.set()
+
+    thread = threading.Thread(target=phone_page)
+    thread.start()
+    fake(on_screenshot(screenshot))
+    try:
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    finally:
+        captured.set()
+        stop.set()
+        thread.join(5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_ignores_a_hidden_reading_from_the_other_context_during_the_capture(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def safari_hidden():
+        _post(port, "abc123", reading(page=PAGE_B, where="browser", visibility="hidden", takenAt=int(time.time() * 1000)))
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="installed"):
+        fake(on_screenshot(safari_hidden))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+    assert r["ok"] is True and r["labels"] == established(PAGE_A, "installed")
+    assert r["labelNote"] is None
+
+
 def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path):
     port, late = make_session(tmp_path), []
 
