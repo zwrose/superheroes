@@ -5,11 +5,11 @@ docType: spec
 workItem: risk-calibrated-review-that-learns-dec0af
 issue: null
 size: large
-status: draft
-gates: {review: pending}
+status: in-review
+gates: {review: changes-requested}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-09"
-updated: "2026-10-09"
+updated: "2026-10-10"
 ---
 # Risk-calibrated review that learns
 
@@ -170,6 +170,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **FR-31.** When a finding has no consequence beyond code quality, the loop shall decide it as craft and record the decision for the owner's veto. (source: Canon 2026-10-09-d6064e1d-4)
   - *Acceptance (Given-When-Then):* Given a finding about naming with no effect on what the product does, when the review ends, then the finding appears under "Decided as craft, for your veto" and not under "What you're accepting". (source: board · 3 Big PR sheet)
+  - *Acceptance (rule):* A finding with no consequence beyond code quality is craft inside a risk area too. (source: Canon 2026-10-10-d6064e1d-16)
 
 **FR-32.** When a finding with a real consequence is left unfixed, the plugin shall bring it to the owner as a leftover, unless a standing ruling of the project clearly decides it. (source: Canon 2026-10-09-d6064e1d-4; Canon 2026-10-08-d6064e1d-26)
   - *Acceptance (Given-When-Then):* Given a project with no standing ruling that covers a leftover, when the PR's sheet is built, then the leftover is on the sheet under "What you're accepting". (source: Canon 2026-10-08-d6064e1d-26)
@@ -204,8 +205,8 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* A decision about one PR is on record in that PR's saved sheet answers. (source: Canon 2026-10-10-d6064e1d-10)
   - *Acceptance (rule):* A decision that sets a rule for later work is on record in Canon. (source: Canon 2026-10-10-d6064e1d-10)
 
-**FR-41.** The plugin shall keep everything the review did not show the owner retrievable. (source: Canon 2026-10-08-d6064e1d-11)
-  - *Acceptance (Given-When-Then):* Given a bug found after merge, when the advisor looks up the PR's review, then every craft decision and every finding shown wrong is still readable. (source: Canon 2026-10-08-d6064e1d-11)
+**FR-41.** The plugin shall keep everything the review did not show the owner retrievable. (source: Canon 2026-10-10-d6064e1d-16)
+  - *Acceptance (Given-When-Then):* Given a bug found after merge, when the advisor looks up the PR's review, then every craft decision and every finding shown wrong is still readable. (source: Canon 2026-10-10-d6064e1d-16)
 
 ### Part D · The owner's decisions: the index, the PR sheets and the walk
 
@@ -257,7 +258,9 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (Given-When-Then):* Given a PR sheet with saved answers and no "done" yet, when the advisor looks at it, then nothing is merged, sent back, filed or recorded in Canon from it. (source: Canon 2026-10-05-3dbeb858-39)
   - *Acceptance (Given-When-Then):* Given "Keep it" on a leftover with a note that says to fix it first, when the advisor reads the sheet after "done", then the advisor treats that item as open, does not merge the PR, and asks the owner which one stands, as that spec's FR-6 says. (source: Canon 2026-10-05-3dbeb858-38)
   - *Acceptance (rule):* A save that fails, a picture that cannot load and a sheet the owner shared behave as that spec's UFR-2, UFR-3 and UFR-4 say. (source: Canon 2026-10-05-3dbeb858-40; vet round 1)
-  - *Acceptance (rule):* Four things differ on a PR sheet and the index: the answer buttons (FR-52, FR-53, FR-56, FR-57 and FR-59), the merge verdict (FR-62 to FR-66), the zoom buttons on an opened picture (FR-61), and a batch-1 question, whose first answer counts at once (FR-43). (source: board · 3 Big PR sheet; Canon 2026-10-09-d6064e1d-6)
+  - *Acceptance (rule):* Every question on a PR sheet and the index uses one of the four accepted answer patterns: pick, for a batch-1 question and for an item with a real choice (FR-43 and FR-52); agree, with "Accept" as its yes-word, for an item with no real choice (FR-53); check, for a walk stop (FR-56, FR-57 and FR-59); and sign-off, for the merge verdict (FR-62 to FR-66). (source: Canon 2026-10-10-d6064e1d-17)
+  - *Acceptance (rule):* No PR sheet and no index offers an answer button outside those four patterns. (source: Canon 2026-10-10-d6064e1d-17)
+  - *Acceptance (rule):* Four things differ on a PR sheet and the index from that spec as it stands today: the answer buttons (FR-52, FR-53, FR-56, FR-57 and FR-59), the merge verdict (FR-62 to FR-66), the zoom buttons on an opened picture (FR-61), and a batch-1 question, whose first answer counts at once (FR-43). (source: board · 3 Big PR sheet; Canon 2026-10-09-d6064e1d-6)
 
 **FR-56.** Where a PR has something the owner can try, its sheet shall carry a "Walk it" part. (source: Canon 2026-10-09-d6064e1d-19; board · 3 Big PR sheet)
   - *Acceptance (rule):* The part shows a way to open the product, how many stops are walked, and the stops in named groups. (source: board · 3 Big PR sheet)
@@ -429,9 +432,9 @@ The sheets and the index are built on the plugin's shared review template [cite:
 The approved requirements and shipped rules below change under this spec. (source: vet round 1)
 Scheduling the amendments to the approved specs is the advisor's. (source: Canon 2026-10-08-d6064e1d-8)
 
-- **The certification contract spec** (work item `part-b-spec-b-contract-re-derivation`): FR-D1 to FR-D9 and FR-M2. This spec retires the certificate those requirements define. FR-5 says which guard each of its four escape classes keeps. (source: vet round 1)
+- **The certification contract spec** (work item `part-b-spec-b-contract-re-derivation`): FR-D1 to FR-D9 and FR-M2. This spec retires the certificate those requirements define. FR-5 says which guard each of its four escape classes keeps. (source: vet round 1) The way back in its FR-D9, the prior plugin version kept runnable for one release, is not kept. (source: Canon 2026-10-10-d6064e1d-15)
 - **The forward doctrine spec** (work item `part-b-spec-a-forward-doctrine`): FR-A4 and FR-A10, because the misses log and the gardening pass gain review escapes; FR-B3, because reviewer seats join the keep-or-retire list; FR-B4, whose review half this spec designs; FR-E1 item 10, because the threat-model item becomes Risk and trust; FR-F1, because the merge word becomes the saved "Merge" verdict plus "done", and a head move starts the verdict over; and FR-F5 and FR-F8, which describe certification. (source: vet round 1)
-- **The review surface spec** (`the-review-surface-d59417`): FR-3 and FR-6, because PR sheets carry their own answers. (source: vet round 1)
+- **The review surface spec** (`the-review-surface-d59417`): FR-3 and FR-6, because PR sheets carry their own answers. (source: vet round 1) Its FR-6 becomes the list of the four accepted answer patterns. (source: Canon 2026-10-10-d6064e1d-17)
 - **The verification strategy spec** (`verification-strategy-for-the-superheroes-repo-c629cd`): FR-18 and its rule on which stage checks what, because the test lens becomes the test role. (source: vet round 1)
 - **The converge-faster spec** (`make-the-shared-review-and-fix-loop-converge-faste-4c45d8`): FR-8, FR-11 and its Out of scope. FR-34 and FR-35 replace its full confirmation round before certifying. (source: vet round 1)
 - **Shipped rules:** the three batches and batch 3's click list in the owner-decisions reference; the advisor's duty on the owner's merge word; the rows for merge words and the threat model in Canon's contract; the glossary's Misses log entry; the driver mandate, the lane rule and the single-reviewer fallbacks in the review discipline; and the keep-or-retire entries for the seat canary, the round driver core, the certification receipt writer and its four checks. (source: vet round 1)
@@ -442,6 +445,7 @@ Scheduling the amendments to the approved specs is the advisor's. (source: Canon
 - That choice is looked at again if vets start sending PRs back for missing review records. (source: Canon 2026-10-08-d6064e1d-18)
 - No new review gate runs in a watch-only mode first. (source: Canon 2026-10-08-d6064e1d-10)
 - No date is set for the release. (source: Canon 2026-10-10-d6064e1d-3)
+- No way back is kept when the parts in FR-5 retire: the prior plugin version is not held runnable for a release. (source: Canon 2026-10-10-d6064e1d-15)
 - The plugin's specs and long-lived records name nothing specific to one project that uses the plugin. (source: Canon 2026-10-09-d6064e1d-10)
 - The plugin's default sends every leftover with a real consequence to the owner. (source: Canon 2026-10-08-d6064e1d-26)
 - A project's own standing rulings, or a call its owner has ceded, change that default for that project only. (source: Canon 2026-10-09-d6064e1d-4; Canon 2026-10-08-d6064e1d-26)
@@ -464,6 +468,7 @@ Scheduling the amendments to the approved specs is the advisor's. (source: Canon
 - **Real consequence:** a material consequence, as the plugin's glossary defines it [cite: plugins/superheroes/rubric/glossary.md § Material consequence]. It touches one of the owner categories of the owner-vs-craft line. (source: vet round 1)
 - **Craft:** a finding whose only consequence is code quality. Deciding it is a craft call, as the plugin's glossary defines that [cite: plugins/superheroes/rubric/glossary.md § Craft call]. (source: Canon 2026-10-09-d6064e1d-4; vet round 1)
 - **Leftover:** a finding with a real consequence that the review left unfixed. It is an owner call [cite: plugins/superheroes/rubric/glossary.md § Owner call] unless a standing ruling already answers it. (source: Canon 2026-10-09-d6064e1d-4; vet round 1)
+- **Answer pattern:** one of the four accepted shapes for a question's buttons: agree, pick, check and sign-off. (source: Canon 2026-10-10-d6064e1d-17)
 - **Walk:** the part of a PR sheet where the owner tries the change, stop by stop. (source: Canon 2026-10-09-d6064e1d-19)
 - **Review escape:** a bug traced to a PR that was reviewed. (source: Canon 2026-10-10-d6064e1d-1)
 - **Calibration:** the project's Risk and trust item together with its standing rulings about leftovers. (source: craft, for your veto)
