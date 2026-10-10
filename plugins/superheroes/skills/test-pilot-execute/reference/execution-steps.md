@@ -191,7 +191,21 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   through `drive --phone <id> -- <axe args>` (`drive --phone <id> -- type hello`
   types). It carries the workaround for AXe dropping a tap whose process exits
   at once (`AXE_HID_STABILIZATION_MS=2000`, and `--post-delay 1` on a tap), so
-  never call `axe` yourself to tap or type. Find a control with
+  never call `axe` yourself to tap or type. Before every step except
+  `describe-ui`, `list-simulators` and `screenshot`, `drive` checks that the
+  phone's typing helper is running. That helper is Device Hub's `dtuhidd`,
+  inside the phone; while it is down, every keystroke is dropped and AXe still
+  reports success. When it is not running, `drive` restarts it inside the handed
+  phone and checks again. The result's `helper` reads `running`, `restarted` or
+  `not running`; a call that never returned has none, and ends its part as any
+  driver step that never returned. With `not running`, `drive` sends nothing and
+  returns a `reason`: end that part with `iPhone check did not run — <part>: the
+  phone's typing helper is not running`. Before the first type in each app
+  (Safari, and the installed app), tap the field and take a reading with the
+  keyboard up, and keep its height as that app's keyboard-up height. After a
+  restart, the soft keyboard can stay hidden in an app that already received a
+  dropped keystroke, so from a `restarted` result on, judge typing in that app by
+  the field's value, not by whether the keyboard shows. Find a control with
   `axe describe-ui --udid <phone>`, then tap by `--label` or by coordinates.
   `describe-ui` can time out right after boot; retry it once. The page's own
   contents and Safari's sheets may be missing from it; then tap by coordinates

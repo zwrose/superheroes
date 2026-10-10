@@ -9,6 +9,12 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Pilot: iPhone typing helper
+
+- `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `running`, `restarted` or `not running` (absent when a call never returned).
+- When the helper stays down, `drive` sends nothing and returns `ok: false` with `reason: "the phone's typing helper is not running"`; the pilot ends that part with `iPhone check did not run — <part>: the phone's typing helper is not running`. Before, such keystrokes were dropped while `drive` reported `ok: true`.
+- A checked step makes up to three extra simulator calls inside its `--timeout` (about 0.25 s when the helper is up).
+
 ### Pilot: iPhone screenshot labels
 
 - `shot` no longer takes `--page` or `--where`. It takes `--run-dir` and `--token` (the session `open` returned) and labels `page` and `where` from the page readings posted during the capture. Callers passing `--page` or `--where` now fail with an argument error.

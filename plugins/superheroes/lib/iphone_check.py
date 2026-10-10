@@ -28,6 +28,9 @@ from launcher import (DEVICE_HUB_AVAILABLE, DEVICE_HUB_ENV, DEVICE_HUB_PROCESS, 
 READING_PARAM = "superheroes-reading"
 NOT_ESTABLISHED = "could not be established"
 READING_WAIT = 3.0  # seconds: the cap on each of the two page-reading waits inside `shot`
+TYPING_HELPER = "com.apple.coredevice.dtuhidd"  # the phone's keystroke helper: while it is down, AXe drops input and exits 0
+HELPER_DOWN = "the phone's typing helper is not running"
+READ_ONLY_VERBS = frozenset({"describe-ui", "list-simulators", "screenshot"})
 SIX = ("phone", "model", "iOS", "page", "where", "source")
 GAPS = ("**What a simulator cannot show:** a real finger's touch (the timing and imprecision of a human "
         "tap, and multi-finger gestures) and real-device speed.")
@@ -165,12 +168,41 @@ def open_url(phone, url, run_dir, timeout):
     return {"ok": ok, "returned": returned, "token": token, "port": port, "url": full}
 
 
+def _typing_helper(phone, end):
+    """-> (returned, running). Running only when the call exited 0 and names a PID: a stopped helper still exits 0."""
+    returned, code, out = _run(["xcrun", "simctl", "spawn", phone, "launchctl", "list", TYPING_HELPER],
+                               max(end - time.monotonic(), 0.1))
+    return returned, returned and code == 0 and re.search(r'^\s*"PID" = \d+;\s*$', out, re.MULTILINE) is not None
+
+
 def drive(phone, args, timeout):
+    end = time.monotonic() + timeout
+    helper = None
+    # Axis: every verb outside the read-only set is checked, so a verb AXe adds later is never exempt
+    if args[0] not in READ_ONLY_VERBS:
+        returned, running = _typing_helper(phone, end)
+        if running:
+            helper = "running"
+        elif returned:
+            # Axis: a stopped helper drops every keystroke while AXe exits 0, so it is restarted and the re-check alone decides
+            returned, _, _ = _run(["xcrun", "simctl", "spawn", phone, "launchctl", "kickstart", "system/" + TYPING_HELPER],
+                                  max(end - time.monotonic(), 0.1))
+            if returned:
+                returned, running = _typing_helper(phone, end)
+            helper = "restarted" if running else "not running"
+        # Axis: a helper call that never returned leaves the phone unchecked, so AXe is not run
+        if not returned:
+            return {"ok": False, "returned": False, "exit": None, "stdout": ""}
+        # Axis: a helper that is still down after the restart gets no keystroke
+        if helper == "not running":
+            return {"ok": False, "returned": True, "exit": None, "stdout": "", "helper": helper, "reason": HELPER_DOWN}
     argv = ["axe", *args]
     if args[0] == "tap" and not any(a.startswith("--post-delay") for a in args):
         argv += ["--post-delay", "1"]  # AXe drops taps without it (cameroncooke/AXe#71)
-    returned, code, out = _run(argv + ["--udid", phone], timeout, {**os.environ, "AXE_HID_STABILIZATION_MS": "2000"})
-    return {"ok": returned and code == 0, "returned": returned, "exit": code, "stdout": out}
+    returned, code, out = _run(argv + ["--udid", phone], timeout if helper is None else max(end - time.monotonic(), 0.1),
+                               {**os.environ, "AXE_HID_STABILIZATION_MS": "2000"})
+    return {"ok": returned and code == 0, "returned": returned, "exit": code, "stdout": out,
+            **({} if helper is None else {"helper": helper})}
 
 
 class Listener(ThreadingHTTPServer):
