@@ -1,0 +1,137 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "remainder",
+  "title": "Cloud builders spec review",
+  "remainder": {
+    "roundsRun": 3,
+    "fixesMade": 17,
+    "unsettled": []
+  },
+  "cards": [
+    {
+      "id": "stopped-before-push",
+      "callKind": "Gap the review found",
+      "warning": true,
+      "question": "What should happen when a cloud builder stops with work it never pushed?",
+      "context": [
+        {
+          "title": "What the spec says now",
+          "blocks": [
+            {
+              "paragraph": "A stopped cloud builder is recovered at once from its pushed work, and you're told how much is being redone. The spec also asks builders to push often."
+            },
+            {
+              "paragraph": "It doesn't say what happens to work the builder had not pushed yet, or when the builder stops before its first push. The reviewer found the gap, and filling it adds behaviour, so it's yours."
+            }
+          ]
+        },
+        {
+          "title": "What's different in the cloud",
+          "blocks": [
+            {
+              "paragraph": "On your machine a dead build's unpushed work is still on disk and gets swept up. A cloud machine that has only stalled can still be asked to push. One that is gone has taken its unpushed work with it."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "save-then-redo",
+          "label": "Try to save it, then redo what's lost",
+          "consequence": "The advisor first asks the stopped builder to push what it has. Whatever can't be saved is redone, and you're told how much. A build that never pushed starts again from the beginning."
+        },
+        {
+          "id": "restart-from-last-push",
+          "label": "Go straight back to the last push",
+          "consequence": "Simpler and quicker to recover. Unpushed work is redone without trying to save it, which wastes time when the builder had only stalled."
+        }
+      ],
+      "recommendation": {
+        "text": "Try to save it, then redo what's lost.",
+        "reason": "It matches how a dead build is treated on your machine, and a stalled cloud builder often still has its work.",
+        "optionId": "save-then-redo"
+      }
+    },
+    {
+      "id": "plugin-version-pickup",
+      "callKind": "Scope call",
+      "warning": true,
+      "question": "After a plugin release, who brings the cloud up to the new version?",
+      "context": [
+        {
+          "title": "Why this is a call",
+          "blocks": [
+            {
+              "paragraph": "You ruled that a cloud builder runs only on the advisor's plugin version, and otherwise the build runs on your machine. The plugin releases often, so this comes up after most releases."
+            },
+            {
+              "paragraph": "The journeys board lists hands-off upkeep of the setup as the later piece. The spec, as I wrote it, asks this piece's build to make the cloud pick up the new version by itself, with pasting new setup text as the fallback. The reviewer flagged that those two don't agree."
+            }
+          ]
+        },
+        {
+          "title": "The sentence in question",
+          "blocks": [
+            {
+              "quote": "Making the cloud carry the advisor's plugin version without a hand step after each release is the build's to solve. Where it cannot be done, the owner pastes new setup text, as the board shows."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "aim-in-this-piece",
+          "label": "This piece tries to pick it up automatically",
+          "consequence": "If the build manages it, a release doesn't interrupt cloud builds. If it can't, you paste new setup text after a release, as the board shows. The journeys board's \"not in this piece\" line is redrawn to match."
+        },
+        {
+          "id": "by-hand-in-this-piece",
+          "label": "By hand in this piece",
+          "consequence": "Matches the boards as approved. After every release, builds run on your machine until you paste new setup text. Automatic pickup waits for the later piece."
+        }
+      ],
+      "recommendation": {
+        "text": "This piece tries to pick it up automatically.",
+        "reason": "With frequent releases, by hand would send builds back to your machine most weeks, which undoes the point of the piece.",
+        "optionId": "aim-in-this-piece"
+      }
+    },
+    {
+      "id": "added-craft-calls",
+      "callKind": "Calls made for your veto",
+      "warning": true,
+      "question": "Nine small calls I made while writing the spec: keep them?",
+      "context": [
+        {
+          "title": "What these are",
+          "blocks": [
+            {
+              "paragraph": "You saw ten craft calls at the framing. Writing the spec and fixing the review's findings needed nine more. Each fills a hole with the obvious answer, but they decide behaviour and you haven't seen them."
+            },
+            {
+              "bullets": [
+                "A cloud build needs no step from you between its launch and its ready PR.",
+                "A cloud builder reads its calibration copy and does not change calibration.",
+                "A build's pushed branch is kept until its PR is merged or closed, so a handback or a park is not cleaned up.",
+                "A PR closed without merging gets the same cleanup as a merged one.",
+                "A review that finished before the pass lapsed stays as it was recorded.",
+                "A recovery never leaves two builders working one issue.",
+                "A builder whose question gets no answer parks with its work pushed, and the advisor resumes it when it's back.",
+                "After you renew the pass, a parked PR that was closed in the meantime is not sent back for review.",
+                "A review that did not run for some other reason gets no advice to renew the pass."
+              ]
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [],
+      "recommendation": {
+        "text": "Keep all nine.",
+        "reason": "Each applies a rule you already set or closes a gap the reviewer found. Tap Discuss and name any you'd change."
+      }
+    }
+  ]
+}

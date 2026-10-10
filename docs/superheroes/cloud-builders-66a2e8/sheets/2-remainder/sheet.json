@@ -1,0 +1,128 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "remainder",
+  "title": "Cloud builders spec review, sheet 2",
+  "remainder": {
+    "roundsRun": 5,
+    "fixesMade": 25,
+    "unsettled": []
+  },
+  "cards": [
+    {
+      "id": "same-family-on-owners-word",
+      "callKind": "Two approved sources disagree",
+      "warning": true,
+      "question": "When a cloud PR parks because the pass lapsed, can your word let it through with a same-family reviewer?",
+      "context": [
+        {
+          "title": "The two sides",
+          "blocks": [
+            {
+              "paragraph": "The cloud boards you approved today say a parked cloud PR never gets a same-family stand-in."
+            },
+            {
+              "quote": "Never a same-family stand-in for the missing reviewer."
+            },
+            {
+              "paragraph": "The review spec you approved earlier says no session picks a same-family reviewer on its own. It also keeps two ways through that only you can open: you can say, for one change, to use a reviewer from the builder's own family, and the record then says the review was not independent. Or you can say in plain words to go ahead without the review."
+            }
+          ]
+        },
+        {
+          "title": "How this came up",
+          "blocks": [
+            {
+              "paragraph": "The advisor's vet asked the cloud spec to follow the review spec instead of being stricter. I made that change, and the independent reviewer then pointed out it contradicts the cloud boards. Only you can say which one holds."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "follow-review-spec",
+          "label": "Same rule as everywhere else",
+          "consequence": "A parked cloud PR stays parked by default. Your word, for that PR, can send it through with a same-family reviewer marked as not independent, or without the review. I redraw the two board lines to say so."
+        },
+        {
+          "id": "stricter-in-cloud",
+          "label": "Stricter in the cloud",
+          "consequence": "A parked cloud PR waits until the pass is renewed, with no way through on your word. The boards stay as they are. The cloud then has a different rule from a local build."
+        }
+      ],
+      "recommendation": {
+        "text": "Same rule as everywhere else.",
+        "reason": "One rule is easier to hold in your head, nothing happens without your word, and it keeps a way through when you can't renew the pass right away.",
+        "optionId": "follow-review-spec"
+      }
+    },
+    {
+      "id": "canon-or-specs-outside-repo",
+      "callKind": "Gap the advisor's vet found",
+      "warning": true,
+      "question": "When a project keeps its Canon or its specs outside the repo, where do its builds run?",
+      "context": [
+        {
+          "title": "The gap",
+          "blocks": [
+            {
+              "paragraph": "The cloud setup carries a copy of the project's calibration. It does not carry Canon or the specs. Every builder has to read Canon and find its issue's anchor when it starts, so a cloud builder in such a project would have nothing to read."
+            },
+            {
+              "paragraph": "This does not touch a project that keeps Canon and its specs in the repo, because the cloud builder gets the repo."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "run-locally",
+          "label": "They run on your machine",
+          "consequence": "In this piece such a project's builds are judged as needing your machine. They run locally and the launch report says why. The later hands-off piece can carry these files properly."
+        },
+        {
+          "id": "carry-in-setup",
+          "label": "The setup text carries them too",
+          "consequence": "Cloud builds become possible for such a project. Canon changes with almost every ruling, so the pasted copy would be out of date nearly all the time, and the readiness check would send the builds to your machine anyway."
+        }
+      ],
+      "recommendation": {
+        "text": "They run on your machine.",
+        "reason": "It says honestly what would happen in practice. This is the advisor's recommendation too.",
+        "optionId": "run-locally"
+      }
+    },
+    {
+      "id": "journeys-redraw-plugin-pickup",
+      "callKind": "Redrawn board",
+      "warning": false,
+      "question": "The journeys board was redrawn for your plugin-version answer. Does it read right?",
+      "context": [
+        {
+          "title": "What changed",
+          "blocks": [
+            {
+              "paragraph": "On sheet 1 you ruled that this piece tries to make the cloud pick up a new plugin version by itself, with pasting as the fallback. Two places on the journeys board changed to match. The build board did not change."
+            },
+            {
+              "bullets": [
+                "Journey 1 gained this line: \"After a plugin release, the cloud picks up the advisor's new version by itself where the platform allows it. Where it can't, you paste new setup text.\"",
+                "The \"Not in this piece\" box now reads: \"Hands-off upkeep of the reviewer pass and the calibration copy. That is the later piece.\" It no longer lists the setup."
+              ]
+            },
+            {
+              "paragraph": "The redrawn board is at https://claude.ai/artifact/DZ8VeQQdoFyLYVswRsg5MY"
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [],
+      "recommendation": {
+        "text": "Keep the redraw.",
+        "reason": "It only writes your sheet 1 answer onto the board."
+      }
+    }
+  ]
+}

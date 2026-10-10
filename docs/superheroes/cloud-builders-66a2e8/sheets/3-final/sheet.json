@@ -1,0 +1,116 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "final",
+  "title": "Cloud builders spec approval",
+  "final": {
+    "history": {
+      "reviewRounds": 6,
+      "fixesMade": 25,
+      "vet": "The advisor vetted the spec twice. Round 1 found eight things to fix, all fixed, and one call for you, which you answered on sheet 2. Round 2 came back clean with no calls. The wording was tidied after the checks, and an independent reviewer confirmed no meaning moved."
+    },
+    "declinedFindings": [
+      {
+        "summary": "The Canon entries the spec cites are not in the main branch's Canon.",
+        "reason": "They are in Canon on the spec's own branch and reach the main branch when this pull request merges, which is how rulings for a spec in review are meant to travel. The reviewer accepted this."
+      },
+      {
+        "summary": "The board files the spec names are not on the main branch.",
+        "reason": "They are saved beside the spec on its own branch and reach the main branch with the same pull request. The reviewer accepted this."
+      }
+    ],
+    "approval": {
+      "approvedBoard": true,
+      "boardSavedWithSpec": true
+    }
+  },
+  "cards": [
+    {
+      "id": "redraw-build-board-review-rule",
+      "callKind": "Redrawn board",
+      "warning": false,
+      "question": "The build board's line about a same-family reviewer was redrawn. Does it read right?",
+      "context": [
+        {
+          "title": "What changed",
+          "blocks": [
+            {
+              "paragraph": "On sheet 2 you ruled that a parked cloud PR follows the same rule as everywhere else. The caption under \"When something goes wrong mid-build\" used to say \"Never a same-family stand-in for the missing reviewer.\" It now reads:"
+            },
+            {
+              "quote": "No session picks a same-family reviewer on its own. Your word, for that PR, can send it through with one, marked as not independent, or without the review. The same rule as for a build on your machine."
+            },
+            {
+              "paragraph": "The redrawn board is at https://claude.ai/artifact/KB6uNAzk5Ujoa6WzCN8xBy"
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [],
+      "recommendation": {
+        "text": "Keep the redraw.",
+        "reason": "It only writes your sheet 2 answer onto the board."
+      }
+    },
+    {
+      "id": "redraw-journeys-review-rule",
+      "callKind": "Redrawn board",
+      "warning": false,
+      "question": "The journeys board's matching line was redrawn too. Does it read right?",
+      "context": [
+        {
+          "title": "What changed",
+          "blocks": [
+            {
+              "paragraph": "The same ruling, on the journeys board. In journey 3, the reviewer step used to end \"Never a same-family stand-in.\" It now reads:"
+            },
+            {
+              "quote": "If the pass has lapsed, the review counts as not run and the PR parks. No same-family stand-in unless you say so for that PR."
+            },
+            {
+              "paragraph": "The redrawn board is at https://claude.ai/artifact/DZ8VeQQdoFyLYVswRsg5MY"
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [],
+      "recommendation": {
+        "text": "Keep the redraw.",
+        "reason": "It is the same change as the build board's, in the one other place the old line appeared."
+      }
+    },
+    {
+      "id": "craft-calls-since-sheet-1",
+      "callKind": "Calls made for your veto",
+      "warning": true,
+      "question": "Six small things I added while fixing the advisor's findings: keep them?",
+      "context": [
+        {
+          "title": "What these are",
+          "blocks": [
+            {
+              "paragraph": "The advisor's first vet asked for these. Each states a fact or closes a small hole, and you haven't seen them yet."
+            },
+            {
+              "bullets": [
+                "The new gardening-pass check is added as duty 8, so the seven existing duties keep their numbers.",
+                "After you renew the pass, the advisor does not send back a parked PR that you already let through yourself.",
+                "The spec says it builds on the review redesign's release, which is not built yet.",
+                "The spec assumes the advisor can message a running cloud session, and that a cloud session cannot message the advisor. That is why a builder's question is a comment on its issue.",
+                "The spec says plainly that, until the later piece ships, a project that keeps its calibration outside the repo has a hand step after every calibration change. Until you paste new setup text, its builds run on your machine.",
+                "The list of six things the build tests where it can is marked as my list: several builders at once, a full-size build, a mid-build question, a stopped builder, calibration kept outside the repo, and a lapsed pass."
+              ]
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [],
+      "recommendation": {
+        "text": "Keep all six.",
+        "reason": "None changes what you ruled. Tap Discuss and name any you'd change."
+      }
+    }
+  ]
+}
