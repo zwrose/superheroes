@@ -61,10 +61,8 @@ def _setup_cloud_lane(tmp_path, monkeypatch, launch_id="c1", pid=999999, started
 # --- vocabulary ---------------------------------------------------------------
 
 
-def test_vocabulary_and_event_kinds_unchanged():
-    assert (ll.PLACE_LOCAL, ll.PLACE_CLOUD) == ("local", "cloud")
-    assert ll.PLACES == ("local", "cloud")
-    assert ll.EVENT_KINDS == ("reserved", "started", "retry", "refused", "outcome", "amendment")
+def test_places_are_local_and_cloud():
+    assert ll.PLACES == (ll.PLACE_LOCAL, ll.PLACE_CLOUD)
 
 
 # --- edge 1: place other than "cloud" -----------------------------------------

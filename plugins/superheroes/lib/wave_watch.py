@@ -1015,8 +1015,14 @@ def _lane_activity_epoch(repository, number):
 def _fetch_cloud_activity(
     repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
 ):
-    """One GraphQL read for every issue; {issue: epoch or None}. None = unreadable. Never raises."""
+    """One GraphQL read for every issue; {issue: epoch or None}. None = unreadable. Never raises.
+
+    Returns None (not a mapping) when no request could start for lack of time budget,
+    so the caller does not cache a read that was never made.
+    """
     unreadable = {number: None for number in issues}
+    if deadline - monotonic() < _MIN_PR_POLL_SECONDS:
+        return None
     slug = known_slug
     if slug is None:
         slug, _refusal_result = _resolve_repo_slug(
@@ -1026,10 +1032,10 @@ def _fetch_cloud_activity(
         return unreadable
     remaining = deadline - monotonic()
     if remaining <= 0:
-        return unreadable
+        return None
     timeout = min(30.0, remaining)
     if timeout < _MIN_PR_POLL_SECONDS:
-        return unreadable
+        return None
     owner, _sep, name = slug.partition("/")
     argv = [
         "gh", "api", "graphql",
@@ -1093,7 +1099,11 @@ def _evaluate_cloud_activity(
             activity = _fetch_cloud_activity(
                 repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
             )
-            cloud_state[0] = (read_at, activity)
+            if activity is None:
+                # Skipped for lack of budget: no request was made, so leave the cache alone.
+                activity = {number: None for number in issues}
+            else:
+                cloud_state[0] = (read_at, activity)
     now = time.time()
     stale = []
     for lid in sorted(started):

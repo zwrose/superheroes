@@ -586,6 +586,17 @@ def test_edge10_a_cached_failed_read_stays_disclosed_without_a_second_request(re
     assert len(gh.api_calls()) == 1
 
 
+def test_edge10_a_read_skipped_at_the_arm_deadline_is_not_cached(repo):
+    # The tick at each arm's deadline has no budget to request; it must not cache that skip.
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _fresh_gh(101)
+    ww.loop(
+        repo, _BATCH, max_seconds=60, interval_seconds=60, max_total_seconds=180,
+        gh_run=gh,
+    )
+    assert len(gh.api_calls()) >= 2
+
+
 def test_edge10_loop_threads_the_cache_across_arms(repo):
     _add_cloud_lane(repo, "cloud-a", 101)
     gh = _fresh_gh(101)
