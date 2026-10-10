@@ -368,13 +368,15 @@ def shot(phone, out, run_dir, token, timeout):
     page, where, notes = _derive_labels(window) if window else (NOT_ESTABLISHED, NOT_ESTABLISHED, [])
     # Axis: the page left the foreground during the capture window — the screenshot may show something else
     # The capture context is the one the visible window agrees on; an observation concerns it when it is from that context
-    # (or from none of the two awaited contexts). Every such observation from the latest one before the capture (ties
+    # (or from none of the two awaited contexts), and an observation whose visibility is neither "visible" nor "hidden"
+    # concerns it whatever its context; only an explicitly hidden reading from the other context is excluded. Every such observation from the latest one before the capture (ties
     # included, whatever order the posts landed in) through the first after it must be visible, or the labels are void.
     if window:
         wheres = {rd.get("where") for rd in window}
         candidate = next(iter(wheres)) if len(wheres) == 1 else None
         concerns = [rd for _, rd in collected
-                    if candidate is None or rd.get("where") == candidate or rd.get("where") not in ("browser", "installed")]
+                    if candidate is None or rd.get("where") == candidate or rd.get("where") not in ("browser", "installed")
+                    or rd.get("visibility") not in ("visible", "hidden")]
         start = max((rd["takenAt"] for rd in concerns if rd["takenAt"] <= shot_start_ms), default=shot_start_ms)
         if any(not visible(rd) and start <= rd["takenAt"] <= after_ms for rd in concerns):
             page, where = NOT_ESTABLISHED, NOT_ESTABLISHED

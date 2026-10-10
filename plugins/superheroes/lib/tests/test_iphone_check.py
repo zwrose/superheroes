@@ -1056,6 +1056,21 @@ def test_shot_establishes_nothing_when_a_token_matched_reading_during_the_captur
     assert r["labelNote"] and "foreground" in r["labelNote"]
 
 
+def test_shot_establishes_nothing_when_an_other_context_reading_during_the_capture_has_no_visibility(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def unknown_other_context():
+        r = reading(page=PAGE_B, where="installed", takenAt=int(time.time() * 1000))
+        del r["visibility"]
+        _post(port, "abc123", r)
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(unknown_other_context))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
 def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_latest_pre_capture_time(fake, tmp_path):
     port = make_session(tmp_path)
     captured, stop = threading.Event(), threading.Event()
