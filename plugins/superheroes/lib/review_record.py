@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """The review record: one marker-tagged PR comment per PR, decided in one place.
 
+Each write is a complete account. The previous version is kept verbatim in its own archive comment,
+which the record names under `archives`; archive comments are only ever created, never edited. The one
+check that crosses writes is a set difference of finding identity keys against the immediately
+previous record (_earlier_keys): a key it held that this account omits is owed, by key.
+
 build_record() is the only place a status, a reviewer's ran-state or a code fact is decided;
 write() and read() do I/O only. Facts that code holds (lane, final commit, CI, whether a
 reviewer with a run directory ran) come from code, never from the session's account.
@@ -33,11 +38,11 @@ import store_core  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
 ARCHIVE_MARKER = "<!-- superheroes:review-record-archive -->"
-ARCHIVE_SCHEMA = "review-record-archive/1"
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
 FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
 MAX_BODY_CHARS = 65000
+GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
@@ -312,13 +317,21 @@ def _reviewer(r, makers, rd, dis, head=None):
     return out
 
 
-_SETTLES_OWNER = tuple(o for o in rfs.OUTCOMES if o not in (_LEFT_FOR_OWNER, "craft"))
-
-
 def _raw_rows(members, source):
-    """The whole reviewer member (every canonical key it carries) plus where it came from."""
-    return [{**{k: m[k] for k in rfs.CANONICAL_MEMBER_KEYS if k in m}, "sourceFile": source}
-            for m in members if isinstance(m, dict)]
+    """The whole reviewer member (every canonical key it carries) plus where it came from.
+
+    Its line is normalized as the compiler does, so a raw " 291 " and an account 291 share one key.
+    """
+    rows = []
+    for m in members:
+        if isinstance(m, dict):
+            row = {k: m[k] for k in rfs.CANONICAL_MEMBER_KEYS if k in m}
+            if "line" in row:
+                ok, n = session_contract.coerce_line(row["line"])
+                if ok:
+                    row["line"] = n
+            rows.append({**row, "sourceFile": source})
+    return rows
 
 
 def _raw_findings(paths):
@@ -350,20 +363,45 @@ def _name(f):
     return f.get("id") or f"at {f.get('file')}:{f.get('line')}"
 
 
-def _ref(f):
-    """An owed entry for a finding the record already holds in full: its identity and what names it."""
-    keep = ("id", "title", "file", "line", "outcome", "reason", "sourceFile")
-    return {**{k: f[k] for k in keep if k in f}, session_contract.FINDING_KEY_FIELD: _key(f)}
+_ENTRY_KEYS = ("id", "title", "outcome")
+
+
+def _earlier_keys(prior):
+    """The identity keys the previous record held, each with a small entry; the only reader of `prior`.
+
+    `since` is the writtenAt of the archived record that holds the finding's full body.
+    """
+    out = {}
+    if not isinstance(prior, dict):
+        return out
+
+    def items(field):
+        v = prior.get(field)
+        return [p for p in v if isinstance(p, dict)] if isinstance(v, list) else []
+
+    def entry(p, since, keys=_ENTRY_KEYS):
+        e = {session_contract.FINDING_KEY_FIELD: _key(p), **{k: p[k] for k in keys if k in p}}
+        if since is not None:
+            e["since"] = since
+        return e
+
+    for p in items("findings"):
+        out.setdefault(_key(p), entry(p, prior.get("writtenAt")))
+    for p in items("rawFindings"):
+        out.setdefault(_key(p), entry(p, prior.get("writtenAt"), ("id", "title")))
+    for p in items("owed"):
+        out.setdefault(_key(p), entry(p, p.get("since")))
+    return out
 
 
 def _owed(findings, raw, prior):
     """One check, by finding identity (session_contract.finding_identity_key), never by id.
 
-    Every finding the prior record held (its findings and its owed list) must reappear in this
-    account with one of the outcomes and a reason; every reviewer finding must match an account
-    finding that has both. Anything else is owed. Nothing is cleared by omission.
+    Every finding in this account, and every reviewer finding, must have one of the outcomes and a
+    reason. A key the previous record held that this account omits is owed, by key only; its full
+    text is in the archived record. Nothing is cleared by omission.
     """
-    by_key, owed, lines = {}, {}, []
+    by_key, lines = {}, []
     for f in findings:
         by_key.setdefault(_key(f), []).append(f)
         if f.get("outcome") not in rfs.OUTCOMES:
@@ -372,43 +410,17 @@ def _owed(findings, raw, prior):
             lines.append(f"finding {_name(f)} has no reason")
         elif f["outcome"] == _LEFT_FOR_OWNER:
             lines.append(f"finding {_name(f)} waits for the owner's decision")
-    earlier = {}
-    for p in list((prior or {}).get("findings") or []) + list((prior or {}).get("owed") or []):
-        if isinstance(p, dict):
-            # The fullest copy (the findings list) is kept; any copy still left for the owner keeps it so.
-            kept = earlier.setdefault(_key(p), dict(p))
-            if p.get("outcome") == _LEFT_FOR_OWNER:
-                kept["outcome"] = _LEFT_FOR_OWNER
-                kept["reason"] = kept.get("reason") or p.get("reason")
-    for k, p in earlier.items():
-        mine = by_key.get(k, [])
-        settles = _SETTLES_OWNER if p.get("outcome") == _LEFT_FOR_OWNER else rfs.OUTCOMES
-        if any(_decided(f, settles) and f["outcome"] != _LEFT_FOR_OWNER for f in mine):
-            continue
-        if any(f.get("outcome") == _LEFT_FOR_OWNER and f.get("reason") for f in mine):
-            continue  # still left for the owner: owed below, from this account's copy
-        # Held in full only when this account no longer holds it; otherwise a reference.
-        owed.setdefault(k, dict(p) if not mine else _ref(p))
-        if not mine:
-            lines.append(f"finding {_name(p)} from the earlier record is not in this account, so it is still owed"
-                         + ("; it waits for the owner's decision" if p.get("outcome") == _LEFT_FOR_OWNER else ""))
-        elif any(_decided(f) and f["outcome"] != _LEFT_FOR_OWNER for f in mine):
-            lines.append(f"finding {_name(p)} was left for the owner; only "
-                         + ", ".join(_SETTLES_OWNER) + " settles it")
-    for f in findings:
-        if not _decided(f) or f["outcome"] == _LEFT_FOR_OWNER:
-            owed.setdefault(_key(f), _ref(f))
     for r in raw:
         if not any(_decided(f) for f in by_key.get(_key(r), [])):
-            # Whole: the raw file may be gone on a later write, and this is then the only copy of its text.
-            mine = by_key.get(_key(r), [{}])[0]
-            # A raw member always wins over an account reference; the account's outcome and reason ride on it.
-            base = owed.get(_key(r), {})
-            owed[_key(r)] = {**r, **{k: (mine if k in mine else base)[k] for k in ("outcome", "reason")
-                                     if k in mine or k in base},
-                             session_contract.FINDING_KEY_FIELD: _key(r)}
             lines.append(f"reviewer finding {_name(r)} in {r.get('sourceFile')} has no recorded outcome")
-    return list(owed.values()), lines
+    present = set(by_key) | {_key(r) for r in raw}
+    owed = []
+    for k, e in _earlier_keys(prior).items():
+        if k not in present:
+            owed.append(e)
+            lines.append(f"finding {e.get('id') or k} from the earlier record is not in this account, so it is "
+                         f"still owed; its full text is in the archived record written {e.get('since') or 'earlier'}")
+    return owed, lines
 
 
 def _status(rec, unread=(), finding_lines=()):
@@ -451,14 +463,7 @@ def build_record(account, readers, prior=None):
             if mine and not good:
                 notes.append(f"the go-ahead for {v['name']} is incomplete")
             missing.append({"name": v["name"], "goAhead": good})
-    raw, unread, read = _raw_findings(a["rawFindingsFiles"])
-    # Raw findings accumulate across every write, by identity key, and are never dropped; a fresh read wins.
-    fresh = {_key(m) for m in raw}
-    raw = [m for m in (prior or {}).get("rawFindings") or [] if isinstance(m, dict) and _key(m) not in fresh] + raw
-    # An unread file (tracked by the exact path given) stays owed until a later account reads that same path.
-    prior_unread = (prior or {}).get("unreadFiles")
-    unread = list(dict.fromkeys(unread + [n for n in (prior_unread if isinstance(prior_unread, list) else [])
-                                          if isinstance(n, str) and n not in read]))
+    raw, unread, _ = _raw_findings(a["rawFindingsFiles"])
     findings = [dict(f) for f in a["findings"]]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -466,16 +471,16 @@ def build_record(account, readers, prior=None):
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
-    hist = list((prior or {}).get("history") or [])
-    if prior and prior.get("sessionId") != a["sessionId"]:
-        hist.append({k: prior.get(k) for k in ("sessionId", "finalCommit", "findings", "rawFindings")})
     owed, finding_lines = _owed(findings, raw, prior)
+    archives = (prior or {}).get("archives")
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
         "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw, "unreadFiles": unread,
-        "owed": owed, "leftForOwner": [_name(f) for f in owed if f.get("outcome") == _LEFT_FOR_OWNER],
-        "historyArchives": list((prior or {}).get("historyArchives") or []),
-        "carriedArchives": [],
+        "owed": owed,
+        "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER]
+                        + [e.get("id") or e[session_contract.FINDING_KEY_FIELD] for e in owed
+                           if e.get("outcome") == _LEFT_FOR_OWNER],
+        "archives": [x for x in archives if isinstance(x, dict)] if isinstance(archives, list) else [],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
@@ -484,7 +489,6 @@ def build_record(account, readers, prior=None):
         "sessionDisagreements": dis,
         "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
                     "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
-        "history": [h for h in hist if h.get("sessionId") != a["sessionId"]],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     rec["status"], rec["parked"], lines = _status(
@@ -502,7 +506,7 @@ def _assert_no_bug_free_claim(text):
             raise Refusal("review-record-forbidden-claim", phrase)
 
 
-_SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|private[_-]?key", re.I)
+_SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase", re.I)
 
 
 def _secret_key(k):
@@ -549,91 +553,24 @@ def render(record):
     return body
 
 
-def render_archive(entries, carried=()):
-    """An archive comment: earlier sessions' complete entries and/or full carried finding bodies, verbatim.
-
-    Compact (no indent) so an archive is never larger than the record body it came out of.
-    """
-    payload = _scrubbed({"schema": ARCHIVE_SCHEMA, "history": entries, "carried": list(carried)})
-    intro = ("Earlier sessions of this PR's review record, kept in full. "
-             "The review record comment names this comment.")
-    # Only the sentence this writer authors is checked: the entries are reviewers' verbatim text.
+def render_archive(prior_body):
+    """An archive comment: the previous record comment, copied verbatim under a short writer-authored intro."""
+    intro = ("An earlier version of this PR's review record, kept verbatim. "
+             "The current review record comment names this comment.")
+    # Only the sentence this writer authors is checked: the kept body is the record as it was.
     _assert_no_bug_free_claim(intro)
-    body = (f"{ARCHIVE_MARKER}\n{intro}\n\n<details><summary>Earlier sessions</summary>\n\n```json\n"
-            f"{json.dumps(payload, separators=(',', ':'), sort_keys=True)}\n```\n</details>")
-    if len(body) > MAX_BODY_CHARS:
-        raise Refusal("review-record-too-large", f"an archived entry alone is {len(body)} characters")
+    body = ARCHIVE_MARKER + "\n" + intro + "\n\n" + prior_body
+    if len(body) > GITHUB_MAX_CHARS:
+        raise Refusal("review-record-too-large", f"an archive of the earlier record is {len(body)} characters")
     return body
 
 
-_STUB_KEYS = ("id", "title", "file", "line", "severity", "outcome", "reason", "sourceFile")
-_STUB_SET = frozenset(_STUB_KEYS) | {session_contract.FINDING_KEY_FIELD, "archived"}
-
-
-def _stub(f):
-    """What stays in the record for a finding whose full body moved to an archive comment."""
-    return {**{k: f[k] for k in _STUB_KEYS if k in f}, session_contract.FINDING_KEY_FIELD: _key(f), "archived": True}
-
-
-def _compact(record):
-    """Every full body outside the current account (owed and raw copies) as archive entries, leaving stubs."""
-    entries, out = [], {}
-    for field, kind in (("owed", "owed"), ("rawFindings", "raw")):
-        kept = []
-        for e in record[field]:
-            if isinstance(e, dict) and not e.get("archived") and (field == "rawFindings" or set(e) - _STUB_SET):
-                entries.append({"kind": kind, "entry": e})
-                kept.append(_stub(e))
-            else:
-                kept.append(e)
-        out[field] = kept
-    return entries, dict(record, **out)
-
-
-def _carried_bodies(entries):
-    """Pack carried entries greedily into archive comments that each fit; an entry alone too big refuses."""
-    bodies, chunk = [], []
-    for e in entries:
-        try:
-            render_archive([], chunk + [e])
-        except Refusal:
-            if not chunk:
-                raise
-            bodies.append(render_archive([], chunk))
-            chunk = []
-            render_archive([], [e])
-        chunk.append(e)
-    if chunk:
-        bodies.append(render_archive([], chunk))
-    return bodies
-
-
-def _rejoin(rec, carried):
-    """Put the full bodies back in place of their stubs; a stub with no archived body refuses."""
-    pool = {}
-    for c in carried:
-        if isinstance(c, dict) and isinstance(c.get("entry"), dict):
-            pool.setdefault((c.get("kind"), _key(c["entry"])), []).append(c["entry"])
-    out = dict(rec)
-    for field, kind in (("owed", "owed"), ("rawFindings", "raw")):
-        joined = []
-        for e in rec.get(field) or []:
-            if isinstance(e, dict) and e.get("archived") is True:
-                found = pool.get((kind, _key(e)))
-                if not found:
-                    raise Refusal("review-record-unreadable", "an archived finding body is missing")
-                e = found.pop(0)
-            joined.append(e)
-        out[field] = joined
-    return out
-
-
-def _parse_body(body, schema=RECORD_SCHEMA):
+def _parse_body(body):
     try:
         rec = json.loads(body[body.index("```json\n") + 8:body.rindex("\n```\n</details>")])
     except ValueError:
         return None
-    return rec if isinstance(rec, dict) and rec.get("schema") == schema else None
+    return rec if isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA else None
 
 
 def _marker_comments(rd, pr, repo):
@@ -655,35 +592,7 @@ def _guarded(fn):
         return _refuse("review-record-internal-error", f"{type(e).__name__}: {e}")
 
 
-def _load_archives(rd, pr, repo, rec):
-    """(earlier sessions, carried finding bodies) the record's archive comments hold; refuses if any is lost."""
-    archived, carried = [], []
-    refs = [x for x in list(rec.get("historyArchives") or []) + list(rec.get("carriedArchives") or [])
-            if isinstance(x, dict)]
-    if refs:
-        wanted = {x.get("id") for x in refs}
-        comments = rd["list_comments"](pr, repo)
-        if comments is None:
-            raise Refusal("review-record-unreadable", "the archive comments could not be fetched")
-        seen = set()
-        for c in comments:
-            if c.get("id") in wanted and str(c.get("body", "")).startswith(ARCHIVE_MARKER):
-                parsed = _parse_body(c["body"], ARCHIVE_SCHEMA)
-                if parsed is None:
-                    raise Refusal("review-record-unreadable", c.get("url") or "an archive comment")
-                seen.add(c.get("id"))
-                archived += parsed.get("history") or []
-                carried += parsed.get("carried") or []
-        if wanted - seen:
-            raise Refusal("review-record-unreadable", "a referenced archive comment is missing")
-    return archived, carried
-
-
-def _made(rd, account, text):
-    archive = rd["create_comment"](account["pr"], account.get("repo"), text)
-    if archive is None:
-        raise Refusal("review-record-gh-failed", "the archive comment could not be written")
-    return {"id": archive["id"], "url": archive.get("url")}
+_PLACEHOLDER_ARCHIVE = {"id": 10 ** 15, "url": "u" * 120, "writtenAt": "0000-00-00T00:00:00Z"}
 
 
 def write(account_path, repo_root, readers=None):
@@ -702,42 +611,16 @@ def write(account_path, repo_root, readers=None):
             prior = _parse_body(found[0]["body"])
             if prior is None:
                 raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-            # Refuse before editing if history is lost; carried bodies rejoin so they are never thinned.
-            prior = _rejoin(prior, _load_archives(rd, account["pr"], account.get("repo"), prior)[1])
         record = build_record(account, rd, prior)
-        try:
-            body = render(record)
-        except Refusal as e:
-            if e.reason != "review-record-too-large":
-                raise
-            # Nothing is trimmed. Each full earlier session moves to its own comment on the PR; if the
-            # record is still too large, every full body outside the current account (owed and raw
-            # copies) moves too, leaving stubs. The final record is rendered with placeholder pointers
-            # first, so a record that cannot fit refuses before any archive comment is written.
-            # (A carried archive from an earlier write is superseded by the new one, not edited.)
-            def pointers(made_h, made_c):
-                return dict(slim, historyArchives=record["historyArchives"] + made_h, carriedArchives=made_c)
-
-            ph = lambda sids: {"id": 10 ** 15, "url": "u" * 120, "sessionIds": sids}  # noqa: E731
-            slim, entries = dict(record, history=[]), []
-            holders = [ph([h.get("sessionId")]) for h in record["history"]]
-            try:
-                render(pointers(holders, []))
-            except Refusal as e2:
-                if e2.reason != "review-record-too-large":
-                    raise
-                entries, slim = _compact(record)
-                slim = dict(slim, history=[])
-                render(pointers(holders, [ph(None)] * max(1, len(_carried_bodies(entries)))))
-            bodies = [render_archive([h]) for h in record["history"]]
-            carried_bodies = _carried_bodies(entries) if entries else []
-            made_h, made_c = [], []
-            for h, text in zip(record["history"], bodies):
-                made_h.append({**_made(rd, account, text), "sessionIds": [h.get("sessionId")]})
-            for text in carried_bodies:
-                made_c.append(_made(rd, account, text))
-            record = pointers(made_h, made_c)
-            body = render(record)
+        # Refuse here, before any comment is created or edited, if the record cannot be posted.
+        render(dict(record, archives=record["archives"] + [_PLACEHOLDER_ARCHIVE]) if found else record)
+        if found:
+            archive = rd["create_comment"](account["pr"], account.get("repo"), render_archive(found[0]["body"]))
+            if archive is None:
+                raise Refusal("review-record-gh-failed", "the archive comment could not be written")
+            record["archives"].append({"id": archive["id"], "url": archive.get("url"),
+                                       "writtenAt": prior.get("writtenAt")})
+        body = render(record)
         sent = (rd["edit_comment"](found[0]["id"], account.get("repo"), body) if found
                 else rd["create_comment"](account["pr"], account.get("repo"), body))
         if sent is None:
@@ -756,8 +639,7 @@ def read(pr, repo=None, readers=None):
         rec = _parse_body(found[0]["body"])
         if rec is None:
             raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-        archived, carried = _load_archives(rd, pr, repo, rec)
-        return {"ok": True, "url": found[0].get("url"), **_rejoin(rec, carried), "archivedHistory": archived}
+        return {"ok": True, "url": found[0].get("url"), **rec}
     return _guarded(go)
 
 

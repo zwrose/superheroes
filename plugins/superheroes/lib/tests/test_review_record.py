@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -27,7 +28,7 @@ class Fake:
     """Injectable readers with an in-memory comment list; records create/edit calls."""
 
     def __init__(self, ci=GREEN, meta=None, marker=None, runs=None, issue_bodies=None):
-        self.comments, self.writes = [], []
+        self.comments, self.writes, self.edits = [], [], []
         self.ci = ci
         self.meta = {"head": HEAD, "body": "", "issues": []} if meta is None else meta
         self.marker, self.runs, self.issue_bodies = marker, runs or {}, issue_bodies or {}
@@ -54,6 +55,7 @@ class Fake:
         c = next(c for c in self.comments if c["id"] == cid)
         c["body"] = body
         self.writes.append("edit")
+        self.edits.append(cid)
         return {"id": cid, "url": c["url"]}
 
     def marked(self):
@@ -101,7 +103,7 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
     ]
     keys = {"schema", "pr", "sessionId", "lane", "finalCommit", "ci", "makers", "reviewers", "findings",
             "rawFindings", "leftForOwner", "missingReviews", "rounds", "cost", "status", "parked",
-            "whatIsMissing", "sessionDisagreements", "checked", "history", "writtenAt"}
+            "whatIsMissing", "sessionDisagreements", "checked", "archives", "owed", "writtenAt"}
     for fake, lane, source, reason in cases:
         out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
         assert out["ok"] and out["action"] == "created"
@@ -236,16 +238,16 @@ def test_forbidden_phrase_in_the_summary_refuses_the_write_and_posts_nothing(tmp
 
 
 def test_forbidden_phrase_in_a_reviewers_finding_text_does_not_refuse_the_archive():
-    # axis: the archive guard's scope; reviewers' quoted finding text refusing the archive write
-    entries = [{"sessionId": "A", "findings": [finding(body="the README claims no bugs")]}]
-    assert "the README claims no bugs" in rr.render_archive(entries)
+    # axis: the archive guard's scope; reviewers' quoted finding text in the kept body refusing the archive write
+    prior_body = rr.MARKER + "\nthe README claims no bugs"
+    assert rr.render_archive(prior_body).endswith(prior_body)
 
 
 def test_forbidden_phrase_in_the_archive_intro_still_refuses(monkeypatch):
     # axis: the archive guard; a forbidden phrase in the writer's own archive intro passing
-    monkeypatch.setattr(rr, "FORBIDDEN_CLAIMS", ("kept in full",))
+    monkeypatch.setattr(rr, "FORBIDDEN_CLAIMS", ("kept verbatim",))
     with pytest.raises(rr.Refusal) as e:
-        rr.render_archive([])
+        rr.render_archive(rr.MARKER + "\nbody")
     assert e.value.reason == "review-record-forbidden-claim"
 
 
@@ -281,66 +283,13 @@ def test_unreadable_raw_findings_file_is_named_not_fatal(tmp_path):
     assert rec["status"] == "not-reviewed" and f"the findings file {bad} could not be read" in rec["whatIsMissing"]
 
 
-def test_unread_raw_file_stays_owed_across_a_rewrite_that_omits_it(tmp_path):
-    # axis: unread evidence across rewrites; an omitted unreadable file flipping the record to reviewed
-    gone = str(tmp_path / "gone.json")
-    first = build(account(rawFindingsFiles=[gone]))
-    assert first["status"] == "not-reviewed" and first["unreadFiles"] == [gone]
-    again = build(account(rawFindingsFiles=[]), prior=first)
-    assert again["status"] == "not-reviewed" and f"the findings file {gone} could not be read" in again["whatIsMissing"]
-    good = tmp_path / "gone.json"
-    good.write_text("[]")
-    healed = build(account(rawFindingsFiles=[]), prior=again)
-    assert healed["status"] == "not-reviewed"
-    healed = build(account(rawFindingsFiles=[str(good)]), prior=again)
-    assert healed["unreadFiles"] == [] and healed["status"] == "reviewed"
-
-
-def test_a_same_named_file_in_another_round_does_not_clear_an_unread_one(tmp_path):
-    # axis: unread evidence identity; a basename match clearing another round's unread file
-    (tmp_path / "round-1").mkdir()
-    (tmp_path / "round-2").mkdir()
-    one, two = tmp_path / "round-1" / "findings-code.json", tmp_path / "round-2" / "findings-code.json"
-    first = build(account(rawFindingsFiles=[str(one)]))
-    two.write_text("[]")
-    second = build(account(rawFindingsFiles=[str(two)]), prior=first)
-    assert second["unreadFiles"] == [str(one)] and second["status"] == "not-reviewed"
-    one.write_text("[]")
-    third = build(account(rawFindingsFiles=[str(one), str(two)]), prior=second)
-    assert third["unreadFiles"] == [] and third["status"] == "reviewed"
-
-
-def test_a_secret_named_field_is_redacted_whole_in_the_record_and_the_archive():
+@pytest.mark.parametrize("secret", ["password", "pwd", "passphrase"])
+def test_a_secret_named_field_is_redacted_whole_in_the_record(secret):
     # axis: structured credentials; a value scrubbed without its field name keeping a password
     f = finding("a-1", outcome="fixed", reason="r")
-    f["evidence"] = {"password": "hunter2", "Nested": {"API_KEY": "abc", "note": "ok"}}
-    rec = build(account(findings=[f]))
-    body = rr.render(rec)
+    f["evidence"] = {secret: "hunter2", "Nested": {"API_KEY": "abc", "note": "ok"}}
+    body = rr.render(build(account(findings=[f])))
     assert "hunter2" not in body and "abc" not in body and '"note": "ok"' in body
-    assert "hunter2" not in rr.render_archive([{"findings": [f]}])
-
-
-def test_earlier_session_findings_survive_in_history(tmp_path):
-    # axis: history across sessions; an earlier session's findings or owner decision lost on a later write
-    fake = Fake()
-    a, b = tmp_path / "a", tmp_path / "b"
-    a.mkdir(), b.mkdir()
-    a_findings = [finding("a-1", outcome="left-for-owner", reason="owner call")]
-    assert rr.write(put(a, account(sessionId="A", findings=a_findings)), str(a), fake.readers())["action"] == "created"
-    assert rr.write(put(b, account(sessionId="B")), str(b), fake.readers())["action"] == "edited"
-    shutil.rmtree(a), shutil.rmtree(b)
-    rec = rr.read(7, readers=fake.readers())
-    assert rec["sessionId"] == "B" and rec["findings"] == [] and len(fake.marked()) == 1
-    assert [h["sessionId"] for h in rec["history"]] == ["A"]
-    assert rec["history"][0]["findings"][0]["reason"] == "owner call"
-    # A's unresolved owner decision is still waiting in B's record and its visible summary.
-    assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
-    assert any("a-1" in m and "waits for the owner" in m for m in rec["whatIsMissing"])
-    shown = rr.render(rec)
-    assert "Nothing waits for the owner" not in shown and "a-1" in shown.split("Waiting for the owner:")[1]
-    prior = rec
-    again = build(account(sessionId="B"), fake, prior)
-    assert [h["sessionId"] for h in again["history"]] == ["A"]
 
 
 def test_engine_record_without_result_kind_is_not_run():
@@ -522,106 +471,13 @@ def test_credentials_are_scrubbed_before_the_record_is_published(tmp_path):
     assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == "key [REDACTED]"
 
 
-def test_earlier_left_for_owner_clears_only_when_a_later_session_records_another_outcome(tmp_path):
-    # axis: carried owner decisions; one cleared by a later session that did not decide it, or kept after it did
-    fake = Fake()
-    old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
-    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
-    rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
-    rr.write(put(tmp_path, account(sessionId="C")), str(tmp_path), fake.readers())
-    assert rr.read(7, readers=fake.readers())["leftForOwner"] == ["a-1"]
-    decided = [finding("a-1", outcome="ruling", reason="owner ruled it out")]
-    rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
-    rec = rr.read(7, readers=fake.readers())
-    assert rec["leftForOwner"] == [] and rec["status"] == "reviewed"
-
-
-def test_relisting_an_owner_finding_without_an_outcome_keeps_it_pending(tmp_path):
-    # axis: carried owner decisions; a re-listing with a null outcome erasing the pending owner decision
-    fake = Fake()
-    old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
-    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
-    rr.write(put(tmp_path, account(sessionId="B", findings=[finding("a-1", outcome=None, reason="looked again")])),
-             str(tmp_path), fake.readers())
-    rec = rr.read(7, readers=fake.readers())
-    assert "a-1" in rec["leftForOwner"] and rec["status"] == "not-reviewed"
-    rr.write(put(tmp_path, account(sessionId="C")), str(tmp_path), fake.readers())
-    rec = rr.read(7, readers=fake.readers())
-    assert "a-1" in rec["leftForOwner"] and rec["status"] == "not-reviewed"
-
-
-def test_same_session_rewrite_keeps_an_owner_decision(tmp_path):
-    # axis: same-session rewrite; an owner decision erased because the session id did not change
-    fake = Fake()
-    old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
-    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
-    rr.write(put(tmp_path, account(sessionId="A")), str(tmp_path), fake.readers())
-    rec = rr.read(7, readers=fake.readers())
-    assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
-
-
-def test_reused_finding_id_for_another_finding_does_not_clear_an_owner_decision(tmp_path):
-    # axis: finding identity; a different finding reusing an id clearing the pending owner decision
-    fake = Fake()
-    old = [finding("code-001", title="Auth gap", file="auth.py", outcome="left-for-owner", reason="owner call")]
-    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
-    other = [finding("code-001", title="Doc typo", file="docs.py")]
-    rr.write(put(tmp_path, account(sessionId="B", findings=other)), str(tmp_path), fake.readers())
-    rec = rr.read(7, readers=fake.readers())
-    assert rec["leftForOwner"] == ["code-001"] and rec["status"] == "not-reviewed"
-    assert [f["file"] for f in rec["owed"]] == ["auth.py"]
-    # an explicit findingKey is the identity across titles and ids; it settles only its own finding
-    keyed = [finding("v0", title="Auth gap reworded", file="auth.py", findingKey="k1", outcome="left-for-owner",
-                     reason="r"), dict(old[0]), dict(other[0])]
-    rr.write(put(tmp_path, account(sessionId="C", findings=keyed)), str(tmp_path), fake.readers())
-    decided = [finding("v9", title="x", file="y.py", findingKey="k1", outcome="ruling", reason="owner ruled"),
-               dict(other[0])]
-    rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
-    rec = rr.read(7, readers=fake.readers())
-    assert [(f["file"], f["outcome"]) for f in rec["owed"]] == [("auth.py", "left-for-owner")]
-    assert rec["status"] == "not-reviewed"
-
-
 def test_same_title_at_another_line_is_another_finding():
     # axis: finding identity; two findings sharing file and title collapsing into one, so settling one settles both
     two = [finding("c1", title="Leak", line=10, outcome="left-for-owner", reason="r"),
            finding("c2", title="Leak", line=90, outcome="left-for-owner", reason="r")]
     old = build(account(sessionId="A", findings=two))
     rec = build(account(sessionId="B", findings=[finding("c2", title="Leak", line=90, reason="fixed it")]), prior=old)
-    assert [f["line"] for f in rec["owed"]] == [10] and rec["status"] == "not-reviewed"
-
-
-def test_an_unsettled_finding_omitted_later_stays_owed_in_the_same_session_and_the_next():
-    # axis: nothing cleared by omission; an approved-to-fix finding (null outcome) dropped by a rewrite
-    old = build(account(sessionId="A", findings=[finding("a-1", outcome=None)]))
-    same = build(account(sessionId="A"), prior=old)
-    assert [f["id"] for f in same["owed"]] == ["a-1"] and same["status"] == "not-reviewed"
-    assert same["owed"][0]["body"] == "b"  # held whole: this account no longer holds it
-    assert any("a-1" in m and "not in this account" in m for m in same["whatIsMissing"])
-    nxt = build(account(sessionId="B"), prior=same)
-    assert [f["id"] for f in nxt["owed"]] == ["a-1"] and nxt["status"] == "not-reviewed"
-    done = build(account(sessionId="B", findings=[finding("a-1")]), prior=nxt)
-    assert done["owed"] == [] and done["status"] == "reviewed"
-
-
-def test_a_settled_finding_must_still_reappear_in_the_next_account():
-    # axis: nothing cleared by omission; a prior finding missing from the new account silently dropped
-    old = build(account(sessionId="A", findings=[finding("a-1")]))
-    assert old["status"] == "reviewed"
-    rec = build(account(sessionId="B"), prior=old)
-    assert [f["id"] for f in rec["owed"]] == ["a-1"] and rec["status"] == "not-reviewed"
-
-
-def test_an_owner_decision_needs_a_settling_outcome_and_a_reason():
-    # axis: owner decisions; a reasonless ruling or a craft call erasing the pending owner decision
-    old = build(account(sessionId="A", findings=[finding("a-1", outcome="left-for-owner", reason="r")]))
-    for bad in (dict(outcome="ruling", reason=None), dict(outcome="craft", reason="style")):
-        rec = build(account(sessionId="B", findings=[finding("a-1", **bad)]), prior=old)
-        assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
-        later = build(account(sessionId="C"), prior=rec)
-        assert later["leftForOwner"] == ["a-1"] and later["status"] == "not-reviewed"
-    rec = build(account(sessionId="B", findings=[finding("a-1", outcome="craft", reason="style")]), prior=old)
-    assert any("only fixed, shown-wrong, ruling settles it" in m for m in rec["whatIsMissing"])
+    assert [e["id"] for e in rec["owed"]] == ["c1"] and rec["status"] == "not-reviewed"
 
 
 def test_raw_findings_match_by_identity_not_by_reused_id(tmp_path):
@@ -631,8 +487,10 @@ def test_raw_findings_match_by_identity_not_by_reused_id(tmp_path):
                                {"id": "code-001", "title": "Auth gap", "file": "auth.py", "line": 5,
                                 "severity": "Important"}]))
     rec = build(account(rawFindingsFiles=[str(raw)], findings=[finding("code-001")]))
-    assert rec["status"] == "not-reviewed" and [f["file"] for f in rec["owed"]] == ["auth.py"]
-    assert "reviewer finding code-001 in code.json has no recorded outcome" in rec["whatIsMissing"]
+    assert rec["status"] == "not-reviewed" and rec["owed"] == []
+    assert [m for m in rec["whatIsMissing"] if "has no recorded outcome" in m] == [
+        "reviewer finding code-001 in code.json has no recorded outcome"]
+    assert [r["file"] for r in rec["rawFindings"]] == ["a.py", "auth.py"]
 
 
 def test_every_reviewers_findings_coverage_is_marked_as_reported_by_the_session():
@@ -658,81 +516,6 @@ def test_check_runs_are_read_across_every_page_and_a_failed_page_is_unavailable(
     assert rr._check_data(HEAD, "o/r") is None
     monkeypatch.setattr(rr, "_run", reader(None))
     assert rr._check_data(HEAD, "o/r") is None
-
-
-def test_a_raw_finding_keeps_its_consequence_and_stays_whole_when_owed_and_the_file_is_gone(tmp_path):
-    # axis: raw text survival; an owed raw finding reduced to a reference once the raw file is not an input
-    raw = tmp_path / "code.json"
-    raw.write_text(json.dumps([{"id": "c-1", "title": "Auth gap", "file": "auth.py", "line": 5,
-                                "severity": "Important", "body": "the explanation", "consequence": "data leaks"}]))
-    first = build(account(sessionId="A", rawFindingsFiles=[str(raw)]))
-    assert first["rawFindings"][0]["consequence"] == "data leaks"
-    again = build(account(sessionId="A"), prior=first)
-    assert again["status"] == "not-reviewed" and again["rawFindings"] == first["rawFindings"]
-    (owed,) = again["owed"]
-    assert (owed["body"], owed["severity"], owed["consequence"], owed["file"], owed["line"], owed["title"]) == \
-        ("the explanation", "Important", "data leaks", "auth.py", 5, "Auth gap")
-
-
-def test_raw_findings_survive_a_relist_then_an_omission_in_the_same_session(tmp_path):
-    # axis: raw text survival; an account reference replacing the raw member, or a rewrite dropping it
-    raw = tmp_path / "code.json"
-    raw.write_text(json.dumps([{"id": "c-1", "title": "Auth gap", "file": "auth.py", "line": 5,
-                                "severity": "Important", "body": "the explanation", "consequence": "data leaks"}]))
-    first = build(account(sessionId="A", rawFindingsFiles=[str(raw)]))
-    relist = build(account(sessionId="A", findings=[finding("c-1", title="Auth gap", file="auth.py", line=5,
-                                                            outcome=None, reason=None)]), prior=first)
-    omit = build(account(sessionId="A"), prior=relist)
-    for rec in (relist, omit):
-        (owed,) = rec["owed"]
-        assert (owed["body"], owed["severity"], owed["consequence"]) == ("the explanation", "Important", "data leaks")
-        assert rec["rawFindings"][0]["body"] == "the explanation"
-
-
-def test_null_outcome_does_not_clear_an_owner_decision():
-    # axis: carry clearing; a finding listed without an outcome clearing the pending decision
-    old = build(account(sessionId="A", findings=[finding("a-1", outcome="left-for-owner", reason="r")]))
-    rec = build(account(sessionId="B", findings=[finding("a-1", outcome=None, reason=None)]), prior=old)
-    assert rec["leftForOwner"] == ["a-1"]
-
-
-def test_read_refuses_when_an_archive_is_missing_or_cannot_be_fetched(tmp_path):
-    # axis: archive read; lost history returned as a complete record
-    fake = Fake()
-    old = [finding("old-1", body="x" * 61000, outcome="left-for-owner", reason="owner call " + "r" * 400)]
-    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
-    rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
-    assert rr.read(7, readers=fake.readers())["ok"]
-    marked, calls = fake.marked(), []
-    rd = fake.readers()
-    rd["list_comments"] = lambda pr, repo: marked
-    out = rr.read(7, readers=rd)
-    assert not out["ok"] and out["reason"] == "review-record-unreadable"
-    def flaky(pr, repo):
-        calls.append(1)
-        return list(fake.comments) if len(calls) == 1 else None
-    rd["list_comments"] = flaky
-    out = rr.read(7, readers=rd)
-    assert not out["ok"] and out["reason"] == "review-record-unreadable"
-
-
-def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment(tmp_path):
-    # axis: archive overflow; earlier sessions trimmed or lost instead of moved whole to an archive comment
-    fake = Fake()
-    old = [finding("old-1", body="x" * 61000, consequence="it breaks", outcome="left-for-owner",
-                   reason="owner call " + "r" * 400)]
-    assert rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())["ok"]
-    out = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
-    assert out["ok"] and out["action"] == "edited"
-    assert len(fake.marked()) == 1 and len(fake.comments) == 2
-    rec = rr.read(7, readers=fake.readers())
-    assert rec["history"] == [] and [a["sessionIds"] for a in rec["historyArchives"]] == [["A"]]
-    kept = rec["archivedHistory"][0]["findings"][0]
-    assert kept["body"] == "x" * 61000 and kept["consequence"] == "it breaks" and len(kept["reason"]) > 300
-    assert rec["leftForOwner"] == ["old-1"]
-    again = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
-    assert again["ok"] and len(fake.comments) == 2
-    assert [a["sessionIds"] for a in rr.read(7, readers=fake.readers())["historyArchives"]] == [["A"]]
 
 
 def test_ungraded_or_forfeited_engine_receipt_is_not_a_completed_review():
@@ -772,47 +555,6 @@ def test_lane_marker_is_none_when_the_marker_path_cannot_be_resolved(tmp_path, m
     assert rr._lane_marker(str(tmp_path)) is None
 
 
-def test_write_refuses_when_the_prior_records_archive_is_missing(tmp_path):
-    # axis: archive validation on write; an update reporting success over history that cannot be recovered
-    fake = Fake()
-    old = [finding("old-1", body="x" * 61000, outcome="left-for-owner", reason="owner call")]
-    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
-    rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
-    fake.comments = fake.marked()
-    before = [c["body"] for c in fake.comments]
-    fake.writes.clear()
-    out = rr.write(put(tmp_path, account(sessionId="C")), str(tmp_path), fake.readers())
-    assert not out["ok"] and out["reason"] == "review-record-unreadable"
-    assert fake.writes == [] and [c["body"] for c in fake.comments] == before
-
-
-def test_each_earlier_session_gets_its_own_compact_archive(tmp_path):
-    # axis: archive size; many earlier sessions or a near-limit session making the next write refuse
-    fake = Fake()
-    big = lambda n: [finding(n, body="x" * 30000, outcome="left-for-owner", reason="owner call")]  # noqa: E731
-    for sid, n in (("A", "a-1"), ("B", "b-1"), ("C", "c-1")):
-        assert rr.write(put(tmp_path, account(sessionId=sid, findings=big(n))), str(tmp_path), fake.readers())["ok"]
-    assert rr.write(put(tmp_path, account(sessionId="D")), str(tmp_path), fake.readers())["ok"]
-    rec = rr.read(7, readers=fake.readers())
-    assert [a["sessionIds"] for a in rec["historyArchives"]] == [["A"], ["B"]]
-    assert [h["sessionId"] for h in rec["history"]] == ["C"]
-    assert all("\n  " not in c["body"].split("```json\n")[1] for c in fake.comments if c["body"].startswith(rr.ARCHIVE_MARKER))
-    assert [h["sessionId"] for h in rec["archivedHistory"]] == ["A", "B"]
-    # a session whose findings fit the record body (indented) always fits its compact archive
-    many = [finding(f"m-{i}", body="y" * 100) for i in range(120)]
-    fake2 = Fake()
-    assert rr.write(put(tmp_path, account(sessionId="A", findings=many)), str(tmp_path), fake2.readers())["ok"]
-    assert rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake2.readers())["ok"]
-
-
-def test_a_session_too_large_for_any_archive_refuses():
-    # axis: archive size; a single oversized session partially written or silently trimmed
-    huge = {"sessionId": "A", "finalCommit": {}, "findings": [{"body": "z" * (rr.MAX_BODY_CHARS + 1)}], "rawFindings": []}
-    with pytest.raises(rr.Refusal) as e:
-        rr.render_archive([huge])
-    assert e.value.reason == "review-record-too-large"
-
-
 def test_raw_finding_keeps_every_canonical_member_and_a_non_object_member_blocks_reviewed(tmp_path):
     # axis: raw evidence fidelity; evidence/suggestion/tradeoff dropped, or a malformed member read as an empty file
     raw = tmp_path / "code.json"
@@ -826,41 +568,10 @@ def test_raw_finding_keeps_every_canonical_member_and_a_non_object_member_blocks
     assert rec["status"] == "not-reviewed" and f"the findings file {bad} could not be read" in rec["whatIsMissing"]
 
 
-def test_a_same_session_relist_keeps_the_owner_wait_reason():
-    # axis: owed reason; a carried owner decision losing why it waits
-    old = build(account(sessionId="A", findings=[finding("a-1", outcome="left-for-owner", reason="needs budget decision")]))
-    mid = build(account(sessionId="A", findings=[finding("a-1", outcome=None, reason=None)]), prior=old)
-    last = build(account(sessionId="A"), prior=mid)
-    assert [o["reason"] for o in last["owed"]] == ["needs budget decision"]
-
-
 def test_a_roster_with_no_planned_reviewer_that_ran_is_not_reviewed():
     # axis: nothing ran; an unplanned, unrun roster counted as reviewed
     rec = build(account(reviewers=[reviewer(planned=False, ran=False, runDir=None)]))
     assert rec["status"] == "not-reviewed" and "no planned reviewer ran" in rec["whatIsMissing"]
-
-
-def test_three_sessions_of_30000_character_findings_archive_their_carried_bodies(tmp_path):
-    # axis: carried bodies; distinct outstanding findings piling up in the record until the third write refuses
-    fake = Fake()
-    big = lambda n: [finding(n, title=n, body=n[0] * 30000, outcome="left-for-owner", reason="owner call")]  # noqa: E731
-    for sid, n in (("A", "a-1"), ("B", "b-1"), ("C", "c-1")):
-        out = rr.write(put(tmp_path, account(sessionId=sid, findings=big(n))), str(tmp_path), fake.readers())
-        assert out["ok"], out
-    rec = rr.read(7, readers=fake.readers())
-    assert len(fake.marked()[0]["body"]) <= rr.MAX_BODY_CHARS and rec["carriedArchives"]
-    assert any(e.get("archived") for e in json.loads(fake.marked()[0]["body"].split("```json\n")[1].split("\n```")[0])["owed"])
-    bodies = {e["id"]: e["body"] for e in rec["owed"] if "body" in e}
-    assert bodies == {"a-1": "a" * 30000, "b-1": "b" * 30000}  # c-1 is in the current account, held as a reference
-    assert sorted(rec["leftForOwner"]) == ["a-1", "b-1", "c-1"]
-    # a later write rejoins the bodies before it rewrites them, and nothing is lost
-    assert rr.write(put(tmp_path, account(sessionId="D")), str(tmp_path), fake.readers())["ok"]
-    again = rr.read(7, readers=fake.readers())
-    assert {e["id"]: e["body"] for e in again["owed"] if "body" in e} == {
-        **bodies, "c-1": "c" * 30000}
-    # a missing carried archive refuses the read
-    fake.comments = [c for c in fake.comments if c["id"] not in {a["id"] for a in again["carriedArchives"]}]
-    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
 
 
 def test_a_single_account_too_large_refuses_before_any_archive_is_written(tmp_path):
@@ -869,3 +580,152 @@ def test_a_single_account_too_large_refuses_before_any_archive_is_written(tmp_pa
     huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
     out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-too-large") and fake.comments == []
+
+
+class Clock:
+    """A datetime whose now() moves one second per call, so two writes never share a writtenAt."""
+    n = 0
+
+    @classmethod
+    def now(cls, tz=None):
+        cls.n += 1
+        return datetime(2026, 1, 1, 0, 0, cls.n, tzinfo=timezone.utc)
+
+
+def send(tmp_path, fake, **over):
+    out = rr.write(put(tmp_path, account(**over)), str(tmp_path), fake.readers())
+    assert out["ok"], out
+    return out
+
+
+def test_every_earlier_record_is_kept_verbatim_in_its_own_append_only_archive(tmp_path):
+    # axis: append-only archive; an earlier record rewritten, merged, or an archive comment edited instead of created
+    fake = Fake()
+    send(tmp_path, fake, sessionId="A")
+    body1 = fake.marked()[0]["body"]
+    send(tmp_path, fake, sessionId="B")
+    body2 = fake.marked()[0]["body"]
+    send(tmp_path, fake, sessionId="A")
+    archives = [c for c in fake.comments if c["body"].startswith(rr.ARCHIVE_MARKER)]
+    assert len(fake.marked()) == 1 and len(archives) == 2 and len(fake.comments) == 3
+    assert archives[0]["body"].endswith(body1) and archives[1]["body"].endswith(body2)
+    assert [a["id"] for a in rr.read(7, readers=fake.readers())["archives"]] == [a["id"] for a in archives]
+    assert fake.edits == [fake.marked()[0]["id"]] * 2
+
+
+def test_a_key_the_new_account_omits_is_owed_by_key_alone(tmp_path, monkeypatch):
+    # axis: the set difference; an omitted earlier finding cleared by omission, or its body copied into the record
+    monkeypatch.setattr(rr, "datetime", Clock)
+    fake = Fake()
+    send(tmp_path, fake, findings=[finding("a-1", body="LONGBODY " * 200)])
+    since = rr.read(7, readers=fake.readers())["writtenAt"]
+    send(tmp_path, fake)
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["status"] == "not-reviewed" and len(rec["owed"]) == 1
+    (owed,) = rec["owed"]
+    assert owed["id"] == "a-1" and owed["since"] == since and owed["findingKey"] and "body" not in owed
+    assert any("a-1" in m and since in m for m in rec["whatIsMissing"])
+    assert "LONGBODY" not in fake.marked()[0]["body"]
+    assert "LONGBODY" in next(c for c in fake.comments if c["body"].startswith(rr.ARCHIVE_MARKER))["body"]
+
+
+def test_an_owed_key_carries_across_writes_until_it_is_relisted(tmp_path, monkeypatch):
+    # axis: owed carry; an owed key forgotten by the next write, its original since replaced, or never cleared by a relist
+    monkeypatch.setattr(rr, "datetime", Clock)
+    fake = Fake()
+    send(tmp_path, fake, findings=[finding("a-1")])
+    since = rr.read(7, readers=fake.readers())["writtenAt"]
+    send(tmp_path, fake)
+    send(tmp_path, fake)
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["status"] == "not-reviewed" and [(o["id"], o["since"]) for o in rec["owed"]] == [("a-1", since)]
+    send(tmp_path, fake, findings=[finding("a-1")])
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["owed"] == [] and rec["status"] == "reviewed"
+
+
+def test_an_earlier_raw_key_is_owed_too(tmp_path):
+    # axis: the set difference over raw rows; a reviewer finding the earlier record held dropped by a later account
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "r-1", "title": "t", "file": "a.py", "line": 3, "severity": "Minor"}]))
+    fake = Fake()
+    send(tmp_path, fake, findings=[finding("r-1")], rawFindingsFiles=[str(raw)])
+    assert rr.read(7, readers=fake.readers())["status"] == "reviewed"
+    send(tmp_path, fake)
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["status"] == "not-reviewed" and [o["id"] for o in rec["owed"]] == ["r-1"]
+    # a key only a raw file held (never in the account) is owed by id, without an outcome
+    only = Fake()
+    send(tmp_path, only, rawFindingsFiles=[str(raw)])
+    send(tmp_path, only)
+    (owed,) = rr.read(7, readers=only.readers())["owed"]
+    assert owed["id"] == "r-1" and "outcome" not in owed and "body" not in owed
+
+
+def test_a_raw_line_is_normalized_so_it_matches_the_account_finding(tmp_path):
+    # axis: raw line normalization; a raw " 291 " keyed apart from an account 291 and left with no recorded outcome
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "r-1", "title": "t", "file": "a.py", "line": " 291 ", "severity": "Minor"}]))
+    rec = build(account(findings=[finding("f-1", title="t", file="a.py", line=291)], rawFindingsFiles=[str(raw)]))
+    assert rec["rawFindings"][0]["line"] == 291
+    assert not any("has no recorded outcome" in m for m in rec["whatIsMissing"]) and rec["status"] == "reviewed"
+
+
+def test_only_the_current_accounts_raw_files_count(tmp_path):
+    # axis: completeness scope; an unreadable file named by an earlier write still blocking a later account that omits it
+    gone = str(tmp_path / "gone.json")
+    fake = Fake()
+    send(tmp_path, fake, rawFindingsFiles=[gone])
+    first = rr.read(7, readers=fake.readers())
+    assert first["status"] == "not-reviewed" and first["unreadFiles"] == [gone]
+    send(tmp_path, fake)
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["unreadFiles"] == [] and rec["status"] == "reviewed"
+
+
+def test_a_left_for_owner_finding_omitted_later_stays_visible(tmp_path):
+    # axis: owner decisions across writes; a left-for-owner finding dropped from the owner's wait list by an omission
+    fake = Fake()
+    send(tmp_path, fake, findings=[finding("a-1", outcome="left-for-owner", reason="owner call")])
+    send(tmp_path, fake)
+    rec = rr.read(7, readers=fake.readers())
+    assert [(o["id"], o["outcome"]) for o in rec["owed"]] == [("a-1", "left-for-owner")]
+    assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
+    assert "a-1" in rr.render(rec).split("Waiting for the owner:")[1]
+
+
+def test_a_record_too_large_to_post_refuses_before_any_comment_is_written(tmp_path):
+    # axis: pre-check ordering; the earlier record archived, or the record edited, before the new one is known to fit
+    fake = Fake()
+    send(tmp_path, fake)
+    before, writes = [dict(c) for c in fake.comments], list(fake.writes)
+    huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
+    out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"]) == (False, "review-record-too-large")
+    assert fake.writes == writes and fake.edits == [] and fake.comments == before
+
+
+def test_a_failed_archive_create_edits_nothing(tmp_path):
+    # axis: archive-first ordering; the record comment edited after its earlier version failed to be archived
+    fake = Fake()
+    send(tmp_path, fake)
+    before = fake.marked()[0]["body"]
+    readers = dict(fake.readers(), create_comment=lambda pr, repo, body: None)
+    out = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), readers)
+    assert (out["ok"], out["reason"]) == (False, "review-record-gh-failed")
+    assert fake.edits == [] and fake.marked()[0]["body"] == before and len(fake.comments) == 1
+
+
+def test_an_archive_over_the_github_limit_refuses():
+    # axis: archive size; an archive past GitHub's comment limit sent instead of refused
+    with pytest.raises(rr.Refusal) as e:
+        rr.render_archive("x" * rr.GITHUB_MAX_CHARS)
+    assert e.value.reason == "review-record-too-large"
+
+
+def test_a_malformed_prior_never_raises_in_the_key_reader():
+    # axis: malformed prior; non-list fields or non-dict items raising instead of being skipped
+    assert rr._earlier_keys(None) == {}
+    bad = {"findings": "x", "rawFindings": [None, 3, finding("r-1")], "owed": {"a": 1}, "archives": 5}
+    assert [e["id"] for e in rr._earlier_keys(bad).values()] == ["r-1"]
+    assert build(account(), prior=bad)["archives"] == []

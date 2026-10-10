@@ -2,10 +2,12 @@ The review record: the plain account of one PR's review. This file is the one ho
 
 ## What the record is
 
-One PR comment whose first line is `<!-- superheroes:review-record -->`. A PR has exactly one. A
-later review edits it in place; earlier sessions' findings stay in it (whole, in an archive comment
-the record names, if they would not fit). Nothing is cleared by omission: every finding the record
-holds or lists as `owed` must reappear in your account. Each review ends by writing it.
+One current PR comment whose first line is `<!-- superheroes:review-record -->`. A PR has exactly one.
+On each write the previous version is copied, verbatim, into its own archive comment
+(`<!-- superheroes:review-record-archive -->`) that the record lists under `archives`. Archive comments
+are never edited. The account is complete each time: any finding (identity key) the previous record
+held that the new account omits is listed in `owed` by key, and its full text stays in the archived
+record. Each review ends by writing it.
 
 The writer holds some facts in code: the lane, the final commit, CI on it, and whether an engine-run
 reviewer ran. Those win over your account. A run only you report is marked "reported by the session", and so is every reviewer's findings
@@ -54,11 +56,10 @@ record's URL in the PR body's build record.
 
 ## When it refuses
 
-- `review-record-duplicate` or `review-record-unreadable` (on `read` and `write`, for a missing
-  archive): park the PR and report it on the PR. Never delete or overwrite a record by hand.
+- `review-record-duplicate` or `review-record-unreadable` (an unparseable record): park the PR and
+  report it on the PR. Never delete or overwrite a record by hand.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
-- `review-record-too-large`: shorten the account's long text and write again. (Earlier sessions
-  move whole, one archive comment each; `read` returns it as `archivedHistory`.)
+- `review-record-too-large`: shorten the account's long text and write again.
 - `review-record-forbidden-claim`: rewrite the account text the writer quotes in its summary.
 - `review-record-gh-failed`: GitHub could not be read or written. Retry; else park and report.
 - `review-record-internal-error`: park the PR and report it.
@@ -67,10 +68,9 @@ record's URL in the PR body's build record.
 ## What "reviewed" means
 
 The record says reviewed only when all six hold: CI is green on the PR's final commit; every
-finding (in the account, held or owed by the existing record, or in a raw findings file), matched by identity, has one of the five outcomes and a reason in this
-account; no planned review is missing and a planned reviewer ran; no raw findings file is unread; the final commit
-was read from the PR; and the makers' families are recorded. Any finding short of that is listed in `owed` and in what is left. One left
-for the owner stays owed until `fixed`, `shown-wrong`, or `ruling` is recorded with its reason.
+finding in the account or a raw findings file, matched by identity, has an outcome and a reason, and no key from the previous record is owed;
+no planned review is missing and a planned reviewer ran; no raw findings file is unread; the final commit
+was read from the PR; and the makers' families are recorded. Any finding short of that is listed in what is left.
 A reviewer run counts only when the engine's record shows it graded a success; a forfeit is missing.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
