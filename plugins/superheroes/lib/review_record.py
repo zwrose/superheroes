@@ -320,8 +320,14 @@ def _raw_findings(paths):
     return raw, unread
 
 
-def _status(rec):
-    fc, ci, lines = rec["finalCommit"], rec["ci"], []
+def _finding_key(f):
+    if isinstance(f.get("key"), str) and f["key"]:
+        return f["key"]
+    return f"{f.get('file')}::{' '.join(str(f.get('title') or '').lower().split())}"
+
+
+def _status(rec, unread=()):
+    fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
     if fc["source"] != "GitHub PR":
         lines.append("the final commit could not be read from the PR")
@@ -384,15 +390,15 @@ def build_record(account, readers, prior=None):
     hist = list((prior or {}).get("history") or [])
     if prior and prior.get("sessionId") != a["sessionId"]:
         hist.append({k: prior.get(k) for k in ("sessionId", "finalCommit", "findings", "rawFindings")})
-    # An earlier session's finding left for the owner stays pending until a later session records a
-    # different outcome for the same finding id (a re-listed finding is judged from the new account).
-    listed = {f["id"] for f in findings}
-    earlier = list((prior or {}).get("carriedForOwner") or [])
-    if prior and prior.get("sessionId") != a["sessionId"]:
-        earlier += prior.get("findings") or []
-    carried = list({f["id"]: dict(f) for f in earlier
+    # An earlier finding left for the owner (from any session, this one included) stays pending until a
+    # later account lists the same finding, by key, with another recorded outcome. Ids are review-local
+    # and recur, so identity is the finding's own `key`, else its file plus normalized title.
+    cleared = {_finding_key(f) for f in findings if f.get("outcome") in rfs.OUTCOMES and f["outcome"] != _LEFT_FOR_OWNER}
+    listed = {_finding_key(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER}
+    earlier = list((prior or {}).get("carriedForOwner") or []) + list((prior or {}).get("findings") or [])
+    carried = list({_finding_key(f): dict(f) for f in earlier
                     if isinstance(f, dict) and f.get("outcome") == _LEFT_FOR_OWNER
-                    and f.get("id") not in listed}.values())
+                    and _finding_key(f) not in cleared | listed}.values())
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
         "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw,
@@ -411,8 +417,8 @@ def build_record(account, readers, prior=None):
         "history": [h for h in hist if h.get("sessionId") != a["sessionId"]],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    rec["status"], rec["parked"], lines = _status(rec)
-    rec["whatIsMissing"] = notes + unread + lines
+    rec["status"], rec["parked"], lines = _status(rec, unread)
+    rec["whatIsMissing"] = notes + lines
     return rec
 
 
@@ -557,12 +563,19 @@ def read(pr, repo=None, readers=None):
         archived = []
         if rec.get("historyArchives"):
             wanted = {x.get("id") for x in rec["historyArchives"] if isinstance(x, dict)}
-            for c in rd["list_comments"](pr, repo) or []:
+            comments = rd["list_comments"](pr, repo)
+            if comments is None:
+                raise Refusal("review-record-unreadable", "the archive comments could not be fetched")
+            seen = set()
+            for c in comments:
                 if c.get("id") in wanted and str(c.get("body", "")).startswith(ARCHIVE_MARKER):
                     parsed = _parse_body(c["body"], ARCHIVE_SCHEMA)
                     if parsed is None:
                         raise Refusal("review-record-unreadable", c.get("url") or "an archive comment")
+                    seen.add(c.get("id"))
                     archived += parsed.get("history") or []
+            if wanted - seen:
+                raise Refusal("review-record-unreadable", "a referenced archive comment is missing")
         return {"ok": True, "url": found[0].get("url"), **rec, "archivedHistory": archived}
     return _guarded(go)
 

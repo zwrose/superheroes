@@ -1,12 +1,11 @@
-The review record: the plain account of one PR's review. This file is the one home of the rule for
-how a review writes it. The light lane, the micro lane, and `--review-only` each point here.
+The review record: the plain account of one PR's review. This file is the one home of the rule for how a review writes it. The light lane, the micro lane, and `--review-only` each point here.
 
 ## What the record is
 
 One PR comment whose first line is `<!-- superheroes:review-record -->`. A PR has exactly one. A
 later review edits it in place; earlier sessions' findings stay in it (whole, in an archive comment
 the record names, if they would not fit). An owner decision an earlier session left stays pending
-until a later session records another outcome. Each review ends by writing it.
+until a later session, or a rewrite, lists that finding with another outcome. Each review ends by writing it.
 
 The writer holds some facts in code: the lane, the final commit, CI on it, and whether an
 engine-run reviewer ran. Those win over your account. A reviewer whose run only you report is
@@ -22,8 +21,9 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `reviewers`: each as `{name, vendor, model, planned, ran, runDir, ownerWord}`. List every
   planned reviewer, whether or not it ran. `runDir` is its run directory; with none, leave it empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
-  reviewer}`; `consequence` may be null.
-- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, and `checked`: what was checked.
+  reviewer, key}`; `consequence` and `key` may be null. `id` is the reviewer's own id, not a staged
+  `v0`. Across sessions a finding is its `key`, else its file plus title.
+- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked).
 - `goAheads`: the owner's word to go on without a planned review. Either
   `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`.
 
@@ -49,16 +49,16 @@ python3 -B "$ROOT_DIR/lib/review_record.py" write --account <account.json> --rep
 python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>
 ```
 
-Each prints one JSON object and exits 0 on ok, 1 on a refusal. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`.
-Put the record's URL in the PR body's build record.
+Each prints one JSON object (exit 0 ok, 1 refusal). `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Put the
+record's URL in the PR body's build record.
 
 ## When it refuses
 
-- `review-record-duplicate` or `review-record-unreadable`: park the PR and report it on the PR.
-  Never delete or overwrite a record by hand.
+- `review-record-duplicate` or `review-record-unreadable` (on `read` too, for a missing
+  archive): park the PR and report it on the PR. Never delete or overwrite a record by hand.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
 - `review-record-too-large`: shorten the account's long text and write again. (Earlier sessions
-  never cause it: they move whole to an archive comment, which `read` returns as `archivedHistory`.)
+  move whole to an archive comment; `read` returns it as `archivedHistory`.)
 - `review-record-forbidden-claim`: rewrite the account text the writer quotes in its summary.
 - `review-record-gh-failed`: GitHub could not be read or written. Retry; else park and report.
 - `review-record-internal-error`: park the PR and report it.

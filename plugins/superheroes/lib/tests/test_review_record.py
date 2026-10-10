@@ -274,6 +274,11 @@ def test_unreadable_raw_findings_file_is_named_not_fatal(tmp_path):
     # axis: unreadable raw findings; a missing file hidden, or one that aborts the write
     rec = build(account(rawFindingsFiles=[str(tmp_path / "gone.json")]))
     assert rec["whatIsMissing"] == ["the findings file gone.json could not be read"]
+    assert rec["status"] == "not-reviewed"
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    rec = build(account(rawFindingsFiles=[str(bad)]))
+    assert rec["status"] == "not-reviewed" and "the findings file bad.json could not be read" in rec["whatIsMissing"]
 
 
 def test_earlier_session_findings_survive_in_history(tmp_path):
@@ -489,6 +494,62 @@ def test_earlier_left_for_owner_clears_only_when_a_later_session_records_another
     rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
     rec = rr.read(7, readers=fake.readers())
     assert rec["leftForOwner"] == [] and rec["status"] == "reviewed"
+
+
+def test_same_session_rewrite_keeps_an_owner_decision(tmp_path):
+    # axis: same-session rewrite; an owner decision erased because the session id did not change
+    fake = Fake()
+    old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
+    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
+    rr.write(put(tmp_path, account(sessionId="A")), str(tmp_path), fake.readers())
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
+
+
+def test_reused_finding_id_for_another_finding_does_not_clear_an_owner_decision(tmp_path):
+    # axis: finding identity; a different finding reusing an id clearing the pending owner decision
+    fake = Fake()
+    old = [finding("code-001", title="Auth gap", file="auth.py", outcome="left-for-owner", reason="owner call")]
+    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
+    other = [finding("code-001", title="Doc typo", file="docs.py")]
+    rr.write(put(tmp_path, account(sessionId="B", findings=other)), str(tmp_path), fake.readers())
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["leftForOwner"] == ["code-001"] and rec["status"] == "not-reviewed"
+    assert rec["carriedForOwner"][0]["file"] == "auth.py"
+    # the same finding under a new id, decided, clears it; an explicit key matches across titles
+    keyed = [finding("v0", title="Auth gap reworded", file="auth.py", key="k1", outcome="left-for-owner", reason="r")]
+    rr.write(put(tmp_path, account(sessionId="C", findings=keyed)), str(tmp_path), fake.readers())
+    decided = [finding("v9", title="x", file="y.py", key="k1", outcome="ruling", reason="owner ruled")]
+    rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
+    rec = rr.read(7, readers=fake.readers())
+    assert [f["file"] for f in rec["carriedForOwner"]] == ["auth.py"]
+
+
+def test_null_outcome_does_not_clear_an_owner_decision():
+    # axis: carry clearing; a finding listed without an outcome clearing the pending decision
+    old = build(account(sessionId="A", findings=[finding("a-1", outcome="left-for-owner", reason="r")]))
+    rec = build(account(sessionId="B", findings=[finding("a-1", outcome=None, reason=None)]), prior=old)
+    assert rec["leftForOwner"] == ["a-1"]
+
+
+def test_read_refuses_when_an_archive_is_missing_or_cannot_be_fetched(tmp_path):
+    # axis: archive read; lost history returned as a complete record
+    fake = Fake()
+    old = [finding("old-1", body="x" * 62000, outcome="left-for-owner", reason="owner call " + "r" * 400)]
+    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
+    rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
+    assert rr.read(7, readers=fake.readers())["ok"]
+    marked, calls = fake.marked(), []
+    rd = fake.readers()
+    rd["list_comments"] = lambda pr, repo: marked
+    out = rr.read(7, readers=rd)
+    assert not out["ok"] and out["reason"] == "review-record-unreadable"
+    def flaky(pr, repo):
+        calls.append(1)
+        return list(fake.comments) if len(calls) == 1 else None
+    rd["list_comments"] = flaky
+    out = rr.read(7, readers=rd)
+    assert not out["ok"] and out["reason"] == "review-record-unreadable"
 
 
 def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment(tmp_path):
