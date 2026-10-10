@@ -262,7 +262,8 @@ def _ci(rd, repo, sha):
 def _lane(a, rd, meta):
     m = rd["lane_marker"](a.get("repoRoot"))
     if isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full" \
-            and m.get("branch") == m.get("currentBranch"):
+            and m.get("branch") == m.get("currentBranch") and meta \
+            and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
         return {"value": "full", "source": "build lane marker", "reason": None}
     if meta:
         texts = [(rd["issue_body"](n, a["repo"]), "issue lane call") for n in meta["issues"]]
@@ -546,7 +547,7 @@ def _scrub_text(text):
         out.append(_REDACTED_LINE)
         value = line[m.end():]
         depth, quote = _open_after(value, 0, None)
-        if not (depth or quote) and _BLOCK_INDICATOR.search(value):
+        if not (depth or quote) and (_BLOCK_INDICATOR.search(value) or not value.strip(" \t\r\"'")):
             block_indent = indent
     return pr_comment.scrub("\n".join(out))
 

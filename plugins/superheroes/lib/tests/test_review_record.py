@@ -92,14 +92,15 @@ def send(tmp_path, fake, **over):
 
 def test_each_lane_writes_one_record_with_every_key(tmp_path):
     # axis: lane resolution and the record's key set; a lane taking the wrong source or a record missing a key
-    marker = {"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b"}
+    marker = {"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": 9}
     cases = [
         (Fake(meta={"head": HEAD, "body": "x\n**Lane call:** light. small and safe\n", "issues": []}),
          "light", "PR lane call", "small and safe"),
         (Fake(meta={"head": HEAD, "body": "", "issues": [9]}, issue_bodies={9: "**Lane call:** micro: one line"}),
          "micro", "issue lane call", "one line"),
         (Fake(), "full", "reported by the session", "big"),
-        (Fake(marker=marker), "full", "build lane marker", None),
+        (Fake(marker=marker, meta={"head": HEAD, "body": "", "issues": [9]}, issue_bodies={9: "no call"}),
+         "full", "build lane marker", None),
     ]
     keys = {"schema", "pr", "sessionId", "lane", "finalCommit", "ci", "reviewers", "findings", "unreadFiles",
             "rawOutputs", "leftForOwner", "missingReviews", "rounds", "cost", "sessionDisagreements", "checked",
@@ -118,6 +119,15 @@ def test_branch_mismatched_marker_does_not_count():
     # axis: the build-lane marker's branch check; a marker from another branch deciding the lane
     marker = {"schema": "build-lane/1", "lane": "full", "branch": "other", "currentBranch": "b"}
     assert build(account(lane="micro"), Fake(marker=marker))["lane"]["source"] == "reported by the session"
+
+
+def test_marker_for_another_issue_does_not_count():
+    # axis: the build-lane marker's PR binding; a marker whose issue is not the PR's closing issue deciding the lane
+    marker = {"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": 5}
+    fake = Fake(marker=marker, meta={"head": HEAD, "body": "**Lane call:** light. small\n", "issues": [9]},
+                issue_bodies={9: "no call"})
+    lane = build(account(lane="micro"), fake)["lane"]
+    assert (lane["value"], lane["source"]) == ("light", "PR lane call")
 
 
 def test_planned_reviewer_that_did_not_run_is_missing():
@@ -139,7 +149,8 @@ def test_session_only_run_counts_and_is_labelled():
 
 def test_code_wins_over_the_session_account():
     # axis: code over account; lane, final commit and CI taking the session's claim over code's reading
-    fake = Fake(ci=PENDING, marker={"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b"})
+    fake = Fake(ci=PENDING, meta={"head": HEAD, "body": "", "issues": [9]},
+                marker={"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": "9"})
     rec = build(account(lane="light", finalCommit=EARLIER, ci="green"), fake)
     assert (rec["lane"]["value"], rec["finalCommit"]["sha"], rec["ci"]["state"]) == ("full", HEAD, "pending")
     assert {d["fact"] for d in rec["sessionDisagreements"]} == {"lane", "finalCommit", "ci"}
@@ -797,6 +808,7 @@ SAFE_TAIL = "SAFE_TAIL_TEXT"
     ("password: &db_password EXAMPLE_SECRET", "EXAMPLE_SECRET"),
     ('{\\"cookie\\": \\"sess-value-9\\"}', "sess-value-9"),
     ("api key = hunter2value", "hunter2value"),
+    ("credentials:\n  plainnested\n  EMPTYKEYLEAK\nafter: ok", "EMPTYKEYLEAK"),
 ])
 def test_every_secret_value_form_is_redacted_by_the_one_line_pass(text, leaked):
     # axis: redaction; a credential value form (quoted, escaped, array, block, PEM, spaced) surviving past its secret-named key
