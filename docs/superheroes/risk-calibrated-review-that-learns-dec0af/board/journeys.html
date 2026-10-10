@@ -1,0 +1,129 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review redesign journeys</title>
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .board { display: grid; gap: 24px; padding-inline: 16px; padding-block: 24px; max-width: 1280px; margin: 0 auto; }
+  .intro { display: grid; gap: 8px; max-width: 72ch; }
+  .key { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .journeys { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); align-items: start; }
+  .journey { display: grid; gap: 10px; }
+  .flow { display: grid; gap: 6px; }
+  .arrow { text-align: center; }
+  .step-note { display: block; font-weight: 400; font-size: 14px; margin-top: 4px; }
+  .branch { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+</style>
+<div class="sh-theme">
+  <div class="board">
+    <div class="intro">
+      <p class="sh-label">Discovery #1472 · Board 1 of 3 · journeys</p>
+      <h1 class="sh-heading">How review works after the redesign</h1>
+      <p class="sh-caption">Four journeys, drawn from the framing and your rulings through 2026-10-09. Comment on anything that's wrong or missing; the open choices board comes next, then the build board with the actual sheets.</p>
+      <div class="key">
+        <span class="sh-step sh-step--owner">You</span>
+        <span class="sh-step sh-step--agent">An agent (builder or advisor)</span>
+        <span class="sh-step sh-step--reviewer">An independent reviewer</span>
+      </div>
+    </div>
+
+    <div class="journeys">
+      <!-- J1 -->
+      <section class="sh-card journey" aria-labelledby="j1">
+        <p class="sh-label">Journey 1 · once per project</p>
+        <h2 class="sh-heading" id="j1">Setting up the risk profile</h2>
+        <div class="flow">
+          <div class="sh-step sh-step--agent">The advisor opens setup<span class="step-note">One sitting, together with "who it's for". If "who it's for" is already set, the sitting covers risk and trust and only offers a look at the existing answer.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--owner">You answer in product terms<span class="step-note">Where money, customer data, access and irreversible actions live; which outcomes are unacceptable; how fast a bad change can be undone; what can be run to test.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">Saved as one "Risk and trust" item<span class="step-note">Your threat model, plus the risk areas the loop reads mechanically.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">Until it's set: unclear changes go to the full lane<span class="step-note">and every leftover with a consequence comes to you.</span></div>
+        </div>
+      </section>
+
+      <!-- J2 -->
+      <section class="sh-card journey" aria-labelledby="j2">
+        <p class="sh-label">Journey 2 · every change</p>
+        <h2 class="sh-heading" id="j2">A change gets reviewed</h2>
+        <div class="flow">
+          <div class="sh-step sh-step--agent">Routing picks the lane<span class="step-note">Touches a risk area: full lane, whatever the size. A model may raise the lane, never lower it.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">The builder builds</div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--reviewer">The panel reviews<span class="step-note">Full lane: a generalist, the test role (break-it tests, false passes, flakiness, bloat), and the specialists your risk areas call for. Light lane: one reviewer. All from a different model family than every maker; all get the threat model.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">Each finding states its consequence<span class="step-note">No consequence beyond code quality: craft, decided and recorded. A real consequence: fixed, shown wrong, or left for you.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">Fix rounds until the obligations are met<span class="step-note">Re-review focuses on the fix. Rulings reach the next fix. Nothing found is lost. Capped rounds stop and disclose.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">The review record is written<span class="step-note">By code: lane and why, who reviewed, what was found and what happened to it, CI on the final commit, what's left, cost.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">The advisor vets from the record</div>
+        </div>
+      </section>
+
+      <!-- J3 -->
+      <section class="sh-card journey" aria-labelledby="j3">
+        <p class="sh-label">Journey 3 · when you sit down to decide</p>
+        <h2 class="sh-heading" id="j3">Your decision walk</h2>
+        <div class="flow">
+          <div class="sh-step sh-step--owner">Batch 1: what blocks work<span class="step-note">In the chat and on the index sheet (visuals live on the index). Answer either place. Each item leaves the index once answered.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">The advisor executes what batch 1 unblocked</div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--owner">Batch 2: other calls not tied to a PR<span class="step-note">In the chat.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">The advisor executes batch 2, then builds the PR sheets<span class="step-note">Built only now, because a ruling can send a PR back.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--owner">Batch 3: one sheet per PR, plus the index<span class="step-note">The index lists PRs in merge order: needs you, being fixed, ready. Each sheet: the owner half, every acceptance answered on its own, then the merge verdict, which unlocks only when every acceptance is accepted. The index and the sheets are drawn on the build board (board 3) before the spec is written.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--owner">You say "done" in the chat</div>
+          <p class="sh-label arrow">↓</p>
+          <div class="branch">
+            <div class="sh-step sh-step--agent">Merges in order<span class="step-note">Answers and verdict written back to each PR.</span></div>
+            <div class="sh-step sh-step--agent">Send-backs and follow-ups<span class="step-note">Fix-before-merge goes back to the builder; follow-ups are filed.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- J4 -->
+      <section class="sh-card journey" aria-labelledby="j4">
+        <p class="sh-label">Journey 4 · over weeks</p>
+        <h2 class="sh-heading" id="j4">The loop learns from escapes</h2>
+        <div class="flow">
+          <div class="sh-step sh-step--agent">A bug is traced to a reviewed PR<span class="step-note">Seen at a vet of a fix, a detective diagnosis, a field report, or your own report. Later: the project's error tracker, where it has one.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">It's logged as a review escape<span class="step-note">In the misses log, linked to the PR's record: was it missed, or seen and left?</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">The gardening pass reads the evidence<span class="step-note">Escapes, plus each reviewer seat on the keep-or-retire list.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--owner">You rule on a proposal<span class="step-note">"Two left-over billing issues became bugs: treat billing as a risk area?" Tightening and loosening both need your yes.</span></div>
+          <p class="sh-label arrow">↓</p>
+          <div class="sh-step sh-step--agent">Your ruling goes to Canon<span class="step-note">and the profile changes from the next review on.</span></div>
+        </div>
+      </section>
+    </div>
+
+
+    <section class="sh-box" aria-labelledby="upgrade">
+      <p class="sh-label">Once, when an existing project adopts the release</p>
+      <h2 class="sh-heading" id="upgrade">Upgrading a project that already uses superheroes</h2>
+      <div class="flow">
+        <div class="sh-step sh-step--agent">Its threat model becomes the prose half of "Risk and trust", unchanged<span class="step-note">The risk areas start empty, so until the sitting: unclear changes go to the full lane, and every leftover with a consequence comes to you.</span></div>
+        <p class="sh-label arrow">↓</p>
+        <div class="sh-step sh-step--owner">The release notes ask you to do the risk sitting with your advisor<span class="step-note">Not blocking: the project keeps working on the safe default above until you do.</span></div>
+        <p class="sh-label arrow">↓</p>
+        <div class="sh-step sh-step--agent">Reviews in flight at the upgrade finish on the old version or restart once<span class="step-note">Old certification files stay on disk, unread. Review seat pins carry over; the test seat's pin becomes the merged test role's.</span></div>
+        <p class="sh-label arrow">↓</p>
+        <div class="sh-step sh-step--agent">Learning starts counting at adoption<span class="step-note">The misses log gains review escapes from that day; each review seat joins the keep-or-retire list with its window starting then.</span></div>
+      </div>
+    </section>
+    <section class="sh-box" aria-labelledby="once">
+      <p class="sh-label">Once, at rollout</p>
+      <h2 class="sh-heading" id="once">What retires, in the same step as the review record lands</h2>
+      <p class="sh-caption">The certificate gate, the planted-bug review control, relocate and re-emit, resuming old saved sessions, and the exact-head evidence chain. Every rule that pointed at them points at the review record instead. Sessions in flight at the upgrade restart once.</p>
+    </section>
+  </div>
+</div>

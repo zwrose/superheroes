@@ -1,0 +1,431 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review redesign build board</title>
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .board { display: grid; gap: 28px; padding-inline: 16px; padding-block: 24px; max-width: 1320px; margin: 0 auto; }
+  .intro { display: grid; gap: 8px; max-width: 74ch; }
+  .frame { display: grid; gap: 14px; }
+  .screens { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+  .screen { display: grid; gap: 10px; min-width: 0; }
+  .phone { display: grid; gap: 10px; max-width: 390px; width: 100%; justify-self: center; min-width: 0; }
+  .stack { display: grid; gap: 8px; min-width: 0; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .rowtext { display: grid; gap: 2px; min-width: 0; }
+  .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .note { margin: 0; }
+  .list { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  .group { display: grid; gap: 6px; }
+  .start { justify-self: start; }
+  .nowrap { white-space: nowrap; }
+  .shot { display: block; width: 100%; max-width: 100%; height: auto; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .one { display: grid; grid-template-columns: minmax(0, 190px); }
+  .fig { margin: 0; display: grid; gap: 4px; min-width: 0; }
+  .expect { margin: 0; padding: 10px 12px; border: var(--sh-line-small); border-radius: var(--sh-radius-small); background: var(--sh-green-ground); }
+  .sh-button[aria-disabled="true"] { border-style: dashed; box-shadow: none; }
+</style>
+<div class="sh-theme">
+  <div class="board">
+    <div class="intro">
+      <p class="sh-label">Discovery #1472 · Board 3 of 3 · build board</p>
+      <h1 class="sh-heading">What you'll see, settled</h1>
+      <p class="sh-caption">Only the settled design, with real wording. The examples use a made-up shop app. A filled button is an answer already tapped. Every question has an optional note box. The plugin's own pages use the comic-panel theme as their design system; the app screens inside the sheets are drawn plainly because the example app has no design system.</p>
+    </div>
+
+    <!-- 1. The index -->
+    <section class="sh-card frame" aria-labelledby="s1">
+      <p class="sh-label">1 · The index</p>
+      <h2 class="sh-heading" id="s1">"Waiting on you"</h2>
+      <p class="sh-caption">Sent with batch 1 (and linked from the chat); refreshed for batch 3. Grouped by state. Batch-1 questions sit on top and leave as soon as they're answered.</p>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">During batch 1</p>
+          <div class="phone">
+            <div class="sh-appbar"><span class="sh-heading">Waiting on you</span><span class="sh-label nowrap">1 question</span></div>
+            <div class="sh-box stack">
+              <span class="sh-badge sh-badge--warning start">Blocks work</span>
+              <p class="sh-heading">Should a disabled account's old orders stay visible to support?</p>
+              <p class="note">The order-history build is paused on this. Support asked; the spec doesn't say.</p>
+              <ul class="list">
+                <li><b>Keep them visible:</b> support can still look up an old order for a refund.</li>
+                <li><b>Hide them:</b> a disabled account shows nothing, and a refund needs an engineer.</li>
+              </ul>
+              <p class="note"><b>Recommended:</b> Keep them visible. Support needs them for refunds.</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Keep them visible</span><span class="sh-button sh-button--second">Hide them</span><span class="sh-button sh-button--second">Something else</span></div>
+              <span class="sh-label">Note (optional)</span>
+              <span class="sh-field">&nbsp;</span>
+            </div>
+            <p class="sh-caption">Answer here or in the chat; whichever comes first counts. When the chat and the index disagree, the advisor asks.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">During batch 3</p>
+          <div class="phone">
+            <div class="sh-appbar"><span class="sh-heading">Waiting on you</span><span class="sh-label nowrap">2 need you</span></div>
+            <div class="sh-box stack"><p class="sh-label">Blocks work</p><p class="note">Nothing is blocking work right now.</p></div>
+            <div class="group"><p class="sh-label">Needs you</p>
+              <div class="sh-box row"><span class="rowtext"><b>#214 · Retry a failed payment</b><span class="sh-caption">0 of 2 accepted · 0 of 4 walked · merges second</span></span><span class="sh-label nowrap">Open ›</span></div>
+              <div class="sh-box row"><span class="rowtext"><b>#211 · Tidy the help page</b><span class="sh-caption">Nothing to accept · merges first</span></span><span class="sh-label nowrap">Open ›</span></div>
+            </div>
+            <div class="group"><p class="sh-label">Being fixed</p>
+              <div class="sh-box row"><span class="rowtext"><b>#219 · Order export</b><span class="sh-caption">Going back for a fix · a new sheet comes after it</span></span><span class="sh-label nowrap">Open ›</span></div>
+            </div>
+            <div class="group"><p class="sh-label">Ready</p>
+              <div class="sh-box row"><span class="rowtext"><b>#205 · Faster search</b><span class="sh-caption">Merge verdict given</span></span><span class="sh-label nowrap">Open ›</span></div>
+            </div>
+            <p class="sh-caption">When every sheet you meant to answer is saved, say "done" in the chat.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Small PR sheet -->
+    <section class="sh-card frame" aria-labelledby="s2">
+      <p class="sh-label">2 · A small PR sheet, and a stack's sheet</p>
+      <h2 class="sh-heading" id="s2">A sheet is only as long as it needs to be</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">A straightforward PR, nothing to accept</p>
+          <div class="phone">
+            <div class="sh-appbar"><span class="sh-heading">#211</span><span class="sh-label nowrap">Nothing to accept</span></div>
+            <span class="sh-button sh-button--second start">‹ Index</span>
+            <p class="sh-heading">Tidy the help page</p>
+            <div class="sh-box stack">
+              <p class="sh-label">What changed</p>
+              <ul class="list">
+                <li>Rewrites three help articles and fixes two broken links.</li>
+                <li>One independent reviewer; nothing left over. CI green on 4e1a9c2.</li>
+              </ul>
+              <p class="sh-caption">Light lane · describes commit 4e1a9c2</p>
+            </div>
+            <div class="sh-box stack">
+              <p class="sh-label">What you're accepting</p>
+              <p class="note">Nothing. The review left nothing for you.</p>
+            </div>
+            <div class="sh-box stack">
+              <p class="sh-label">Merge verdict</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Merge #211</span><span class="sh-button sh-button--second">Not yet</span></div>
+              <span class="sh-label">Note (optional)</span>
+              <span class="sh-field">&nbsp;</span>
+              <p class="sh-caption">Saved as you tap. Your merge word is this verdict plus "done" in the chat.</p>
+            </div>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">A stack is one sheet</p>
+          <div class="phone">
+            <div class="sh-appbar"><span class="sh-heading">Stack #230</span><span class="sh-label nowrap">0 of 4 accepted</span></div>
+            <p class="sh-heading">Gift cards · 3 PRs</p>
+            <div class="sh-box stack">
+              <p class="sh-label">What changed</p>
+              <ul class="list">
+                <li>Customers can buy, send and redeem a gift card.</li>
+                <li>Reviewed layer by layer. CI green on the top commit 7c03b1e.</li>
+              </ul>
+              <p class="sh-caption">Full lane · describes commit 7c03b1e</p>
+              <div class="row"><span class="sh-label">The PRs in this stack (3)</span><span class="sh-label nowrap">▶ Show</span></div>
+            </div>
+            <p class="sh-caption">One walk, one list of what you're accepting, and one verdict, "Merge stack #230", for the whole stack. Each walk stop names the PR it comes from.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <div class="sh-box stack">
+            <p class="sh-label">Rules every sheet follows</p>
+            <ul class="list">
+              <li>A part with nothing in it is left out. A PR with nothing to try has no walk.</li>
+              <li>The sheet names the commit it describes. If the PR changes, the sheet is replaced and starts unsigned.</li>
+              <li>Your answers and verdict are written back to the PR as its receipt.</li>
+              <li>Pictures show on the sheet itself, even when the builder made them somewhere you can't open.</li>
+              <li>Three folded parts sit above the verdict: decided as craft, already decided, and how the review went.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Big PR sheet -->
+    <section class="sh-card frame" aria-labelledby="s3">
+      <p class="sh-label">3 · A big PR sheet</p>
+      <h2 class="sh-heading" id="s3">A PR in a risk area, with a walk and pictures</h2>
+      <p class="sh-caption">One scrolling page, shown here in pieces from top to bottom, then a picture opened from it.</p>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">Top: what changed, then the walk</p>
+          <div class="phone">
+            <div class="sh-appbar"><span class="sh-heading">#214</span><span class="sh-label nowrap">1 of 2 accepted</span></div>
+            <span class="sh-button sh-button--second start">‹ Index</span>
+            <p class="sh-heading">Retry a failed payment</p>
+            <div class="sh-box stack">
+              <p class="sh-label">What changed</p>
+              <ul class="list">
+                <li>A failed card payment is retried once before the customer sees an error.</li>
+                <li>Reviewed by a generalist, the test role and a security specialist, all from a different model family than the builder.</li>
+                <li>A break-it test caught a double charge on retry. Fixed, and the test now guards it.</li>
+                <li>3 rounds. CI green on 9b27d4e.</li>
+              </ul>
+              <p class="sh-caption">Full lane: it touches payments, a risk area in your profile · describes commit 9b27d4e</p>
+            </div>
+            <div class="row"><span class="sh-label">Walk it</span><span class="sh-label nowrap">2 of 4 walked</span></div>
+            <p class="note">Walk on your phone. The last stop needs the bank to be down, so it's a picture to look at, not steps.</p>
+            <div class="sh-box stack">
+              <p class="note"><b><u>Open the test shop ↗</u></b></p>
+              <p class="sh-caption">Sign in with the test account. Test cards never charge real money.</p>
+            </div>
+            <p class="sh-caption">The advisor walked all of this first; the pictures below are from that run.</p>
+            <p class="sh-label">On your phone</p>
+            <div class="sh-box stack">
+              <div class="meta"><span class="sh-tag">P1</span></div>
+              <p class="sh-heading">A declined card is retried once</p>
+              <ol class="list">
+                <li>Add any item to the cart</li>
+                <li>Pay with the test card ending 0002 (it declines once, then succeeds)</li>
+              </ol>
+              <p class="expect"><b>Expect:</b> One spinner with "Still trying your card", then a normal receipt.</p>
+              <div class="pair">
+                <figure class="fig">
+                  <div class="sh-product">
+                    <svg class="shot" viewBox="0 0 150 200" role="img" aria-label="Checkout while it retries: a spinner and the line 'Still trying your card. This can take up to 30 seconds.'">
+                      <rect x="0.5" y="0.5" width="149" height="199" rx="8" fill="#ffffff" stroke="#9a9a9a"/>
+                      <rect x="0.5" y="0.5" width="149" height="26" rx="8" fill="#eeeeee"/>
+                      <text x="10" y="18" font-family="Arial, sans-serif" font-size="11" fill="#333333">Checkout</text>
+                      <circle cx="75" cy="88" r="15" fill="none" stroke="#777777" stroke-width="4" stroke-dasharray="56 38"/>
+                      <text x="75" y="130" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#333333">Still trying your card.</text>
+                      <text x="75" y="144" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#333333">This can take up to 30 seconds.</text>
+                    </svg>
+                  </div>
+                  <figcaption class="sh-caption">While it retries</figcaption>
+                </figure>
+                <figure class="fig">
+                  <div class="sh-product">
+                    <svg class="shot" viewBox="0 0 150 200" role="img" aria-label="The receipt: 'Order confirmed', receipt 1042, 18 dollars">
+                      <rect x="0.5" y="0.5" width="149" height="199" rx="8" fill="#ffffff" stroke="#9a9a9a"/>
+                      <rect x="0.5" y="0.5" width="149" height="26" rx="8" fill="#eeeeee"/>
+                      <text x="10" y="18" font-family="Arial, sans-serif" font-size="11" fill="#333333">Receipt</text>
+                      <circle cx="75" cy="80" r="16" fill="none" stroke="#3a7d44" stroke-width="3"/>
+                      <path d="M67 80 l6 6 l11 -12" fill="none" stroke="#3a7d44" stroke-width="3"/>
+                      <text x="75" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#333333">Order confirmed</text>
+                      <text x="75" y="140" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#555555">Receipt #1042 · $18.00</text>
+                    </svg>
+                  </div>
+                  <figcaption class="sh-caption">Then</figcaption>
+                </figure>
+              </div>
+              <p class="sh-caption">Tap a picture to see it full size.</p>
+              <div class="buttons"><span class="sh-button sh-button--main">Works</span><span class="sh-button sh-button--second">Problem</span><span class="sh-button sh-button--second">Skip</span></div>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="screen">
+          <p class="sh-label">The walk, continued</p>
+          <div class="phone">
+            <div class="sh-box stack">
+              <div class="meta"><span class="sh-tag">P2</span></div>
+              <p class="sh-heading">A card that keeps declining</p>
+              <ol class="list">
+                <li>Pay with the test card ending 0005 (it always declines)</li>
+              </ol>
+              <p class="expect"><b>Expect:</b> After one retry you see "Your card was declined", and your cart is still there.</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Works</span><span class="sh-button sh-button--main">Problem</span><span class="sh-button sh-button--second">Skip</span></div>
+              <p class="sh-label">What should happen with it?</p>
+              <ul class="list">
+                <li><b>Fix before merge:</b> This goes back with your note and returns with a new sheet.</li>
+                <li><b>Fix in a follow-up:</b> This can still merge; a follow-up is filed with your note.</li>
+              </ul>
+              <div class="buttons"><span class="sh-button sh-button--second">Fix before merge</span><span class="sh-button sh-button--second">Fix in a follow-up</span></div>
+              <span class="sh-button sh-button--second start">Add a screenshot</span>
+              <span class="sh-label">What did you see?</span><span class="sh-field">The cart was empty after the decline.</span>
+            </div>
+            <div class="sh-box stack">
+              <div class="meta"><span class="sh-tag">P3</span><span class="sh-badge">Optional</span></div>
+              <p class="sh-heading">Only one charge is made</p>
+              <ol class="list">
+                <li>After P1, open the test dashboard</li>
+              </ol>
+              <p class="expect"><b>Expect:</b> One charge of $18.00 for that order, not two.</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Works</span><span class="sh-button sh-button--second">Problem</span><span class="sh-button sh-button--second">Skip</span></div>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+            </div>
+            <p class="sh-label">Failure screens · look only</p>
+            <div class="sh-box stack">
+              <div class="meta"><span class="sh-tag">F1</span></div>
+              <p class="sh-heading">When the bank can't be reached</p>
+              <p class="expect"><b>Look for:</b> It says you haven't been charged, and offers Try again. Before, it showed a blank page.</p>
+              <div class="pair">
+                <figure class="fig">
+                  <div class="sh-product">
+                    <svg class="shot" viewBox="0 0 150 200" role="img" aria-label="Before: a blank checkout page">
+                      <rect x="0.5" y="0.5" width="149" height="199" rx="8" fill="#ffffff" stroke="#9a9a9a"/>
+                      <rect x="0.5" y="0.5" width="149" height="26" rx="8" fill="#eeeeee"/>
+                      <text x="10" y="18" font-family="Arial, sans-serif" font-size="11" fill="#333333">Checkout</text>
+                    </svg>
+                  </div>
+                  <figcaption class="sh-caption">Before</figcaption>
+                </figure>
+                <figure class="fig">
+                  <div class="sh-product">
+                    <svg class="shot" viewBox="0 0 150 200" role="img" aria-label="After: 'We couldn't reach your bank. You haven't been charged.' with a Try again button">
+                      <rect x="0.5" y="0.5" width="149" height="199" rx="8" fill="#ffffff" stroke="#9a9a9a"/>
+                      <rect x="0.5" y="0.5" width="149" height="26" rx="8" fill="#eeeeee"/>
+                      <text x="10" y="18" font-family="Arial, sans-serif" font-size="11" fill="#333333">Checkout</text>
+                      <text x="75" y="84" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#333333">We couldn't reach your bank.</text>
+                      <text x="75" y="98" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#333333">You haven't been charged.</text>
+                      <rect x="42" y="114" width="66" height="24" rx="5" fill="#ffffff" stroke="#555555"/>
+                      <text x="75" y="130" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#333333">Try again</text>
+                    </svg>
+                  </div>
+                  <figcaption class="sh-caption">After</figcaption>
+                </figure>
+              </div>
+              <p class="sh-caption">Tap a picture to see it full size.</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Looks right</span><span class="sh-button sh-button--second">Problem</span><span class="sh-button sh-button--second">Skip</span></div>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="screen">
+          <p class="sh-label">What you're accepting</p>
+          <div class="phone">
+            <div class="sh-box stack">
+              <span class="sh-badge start">Leftover</span>
+              <p class="sh-heading">The decline message names the customer's bank</p>
+              <p class="note">If left: a customer sees "Declined by Example Bank". Some may find it reassuring, some too revealing. The reviewer suggested a message that names no bank.</p>
+              <ul class="list">
+                <li><b>Keep it:</b> Ships as is; no follow-up.</li>
+                <li><b>Fix in a follow-up:</b> Ships now; a follow-up issue is filed with a revisit date.</li>
+                <li><b>Fix before merge:</b> The PR goes back for the fix and returns with a new sheet.</li>
+              </ul>
+              <p class="note"><b>Recommended:</b> Fix in a follow-up. It's harmless to ship and worth tidying.</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Keep it</span><span class="sh-button sh-button--main">Fix in a follow-up</span><span class="sh-button sh-button--second">Fix before merge</span><span class="sh-button sh-button--second">Something else</span></div>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+            </div>
+            <div class="sh-box stack">
+              <span class="sh-badge start">Leftover</span>
+              <p class="sh-heading">A retry can keep the customer waiting up to 30 seconds</p>
+              <p class="note">If left: on a slow bank, the spinner runs up to 30 seconds before an error.</p>
+              <p class="note"><b>Recommended:</b> Accept. A shorter wait would fail payments that would have gone through.</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Accept</span><span class="sh-button sh-button--second">Discuss</span></div>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+            </div>
+            <p class="sh-caption">Options appear only when there's a real choice; otherwise it's Accept or Discuss. An option that sends the PR back counts as not accepted.</p>
+            <div class="sh-box row"><span class="sh-label">Decided as craft, for your veto (3)</span><span class="sh-label nowrap">▶ Show</span></div>
+            <div class="sh-box row"><span class="sh-label">Already decided (1)</span><span class="sh-label nowrap">▶ Show</span></div>
+            <div class="sh-box row"><span class="sh-label">How the review went (2)</span><span class="sh-label nowrap">▶ Show</span></div>
+          </div>
+        </div>
+
+        <div class="screen">
+          <p class="sh-label">Bottom: the merge verdict, in its states</p>
+          <div class="phone">
+            <div class="sh-box stack">
+              <p class="sh-label">Merge verdict · locked</p>
+              <div class="buttons"><span class="sh-button sh-button--second" aria-disabled="true">Merge #214 · locked</span><span class="sh-button sh-button--second">Not yet</span></div>
+              <p class="sh-caption">Unlocks when every item above is accepted: 1 of 2 so far.</p>
+              <p class="sh-caption">1 walk problem needs a choice: fix before merge, or in a follow-up.</p>
+              <p class="note">1 walk stop not walked yet. That doesn't lock the merge.</p>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+              <p class="sh-caption">Saved as you tap. Your merge word is this verdict plus "done" in the chat.</p>
+            </div>
+            <div class="sh-box stack">
+              <p class="sh-label">Merge verdict · unlocked</p>
+              <div class="buttons"><span class="sh-button sh-button--second">Merge #214</span><span class="sh-button sh-button--second">Not yet</span></div>
+              <p class="note">1 walk problem goes to a follow-up.</p>
+              <p class="note">1 walk stop not walked yet. That doesn't lock the merge.</p>
+              <span class="sh-label">Note (optional)</span><span class="sh-field">&nbsp;</span>
+            </div>
+            <div class="sh-box stack">
+              <p class="sh-label">Merge verdict · after any "Fix before merge"</p>
+              <p class="note">You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here.</p>
+            </div>
+            <div class="sh-box stack">
+              <span class="sh-badge sh-badge--warning start">This PR changed</span>
+              <p class="note">The PR moved past commit 9b27d4e since this sheet was made. Your answers to unchanged items are kept; the merge verdict starts over on the new sheet.</p>
+            </div>
+            <p class="sh-caption">Optional stops are never counted as not walked. Un-accepting an item, or marking a new problem, clears a merge verdict you already gave.</p>
+          </div>
+        </div>
+
+        <div class="screen">
+          <p class="sh-label">A picture, opened</p>
+          <div class="phone">
+            <div class="sh-product">
+              <svg class="shot" viewBox="0 0 300 380" role="img" aria-label="An opened picture on a dark ground, zoomed in on the checkout spinner, with buttons for zoom out, zoom in, Fit and Close">
+                <rect x="0" y="0" width="300" height="380" rx="10" fill="#161616"/>
+                <rect x="20" y="16" width="260" height="270" fill="#ffffff"/>
+                <circle cx="150" cy="120" r="44" fill="none" stroke="#777777" stroke-width="11" stroke-dasharray="165 112"/>
+                <text x="150" y="222" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#333333">Still trying your card.</text>
+                <text x="150" y="254" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#333333">This can take up to</text>
+                <rect x="52" y="302" width="36" height="34" rx="6" fill="#ffffff" stroke="#000000" stroke-width="2"/>
+                <text x="70" y="325" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#000000">−</text>
+                <rect x="96" y="302" width="36" height="34" rx="6" fill="#ffffff" stroke="#000000" stroke-width="2"/>
+                <text x="114" y="325" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#000000">+</text>
+                <rect x="140" y="302" width="44" height="34" rx="6" fill="#ffffff" stroke="#000000" stroke-width="2"/>
+                <text x="162" y="324" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#000000">Fit</text>
+                <rect x="192" y="302" width="60" height="34" rx="6" fill="#2a4bd7" stroke="#000000" stroke-width="2"/>
+                <text x="222" y="324" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#ffffff">Close</text>
+                <text x="150" y="362" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#ffffff">Pinch or double-tap to zoom. Drag to move around.</text>
+              </svg>
+            </div>
+            <p class="sh-caption">A picture opens over the sheet. It zooms by pinch (trackpad or fingers), by double-tap or double-click, and by the buttons; it moves by dragging.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Risk and trust in configure -->
+    <section class="sh-card frame" aria-labelledby="s4">
+      <p class="sh-label">4 · In configure</p>
+      <h2 class="sh-heading" id="s4">"Risk and trust"</h2>
+      <div class="screens">
+        <div class="screen">
+          <div class="sh-box stack">
+            <p class="sh-label">Risk and trust</p>
+            <p class="sh-label">What we defend against</p>
+            <p class="note">Your threat model, as you wrote it. Unchanged by the upgrade.</p>
+            <p class="sh-label">Risk areas</p>
+            <ul class="list">
+              <li><b>Payments:</b> charging, refunds and receipts. Hard to undo once a customer is charged.</li>
+              <li><b>Customer data:</b> accounts, addresses and order history. A leak can't be undone.</li>
+              <li><b>Sign-in and access:</b> who can see or change what.</li>
+              <li><b>Database changes:</b> undoable only from a backup.</li>
+            </ul>
+            <p class="sh-caption">A change that touches a risk area gets the full lane, the specialists it calls for, and break-it tests on that area. Until risk areas are set, unclear changes get the full lane and every leftover with a consequence comes to you.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <div class="sh-box stack">
+            <p class="sh-label">Set up in one sitting with the advisor</p>
+            <ol class="list">
+              <li>Who the product is for, and what it's for. When that's already set, the advisor only offers to read it back.</li>
+              <li>Where money, customer data, access and irreversible actions live.</li>
+              <li>Which outcomes are unacceptable.</li>
+              <li>How quickly a bad change can be undone.</li>
+              <li>What can be run to try the product.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. A learning proposal -->
+    <section class="sh-card frame" aria-labelledby="s5">
+      <p class="sh-label">5 · A learning proposal</p>
+      <h2 class="sh-heading" id="s5">How a proposal reaches you, in batch 2 of your decisions</h2>
+      <div class="sh-box stack">
+        <p class="note"><b>4. Make "database changes" a risk area?</b></p>
+        <p class="note">Two changes this month left a leftover about database changes, and both became bugs after merge (#188, #201). Neither went through the full lane, because no risk area covered them.</p>
+        <ul class="list">
+          <li><b>a. Add it as a risk area.</b> Database changes get the full lane and break-it tests. About one extra reviewer on two or three PRs a month.</li>
+          <li><b>b. Leave it.</b> Nothing changes. The next escape of this kind comes back as stronger evidence.</li>
+        </ul>
+        <p class="note"><b>Recommendation:</b> a. Both escapes were seen and left, the exact case the rule exists for.</p>
+        <p class="sh-caption">Your answer is recorded in Canon, and the profile changes from the next review on. Loosening proposals look the same and also need your yes.</p>
+      </div>
+    </section>
+  </div>
+</div>
