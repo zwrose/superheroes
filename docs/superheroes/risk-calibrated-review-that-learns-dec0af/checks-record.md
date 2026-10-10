@@ -171,9 +171,40 @@ The owner answered remainder sheet 1 on 2026-10-10. The checks re-ran on the par
 
 This round closed the cycle: all three checks returned real results, the two reviewers confirmed the rulings were carried in right, and none raised anything new.
 
-## The owner's queue
+## After vet round 1
 
-- gap-002: settled on remainder sheet 1, card reviewer-own-tests. The owner picked "Its own tests don't make it a maker" (Canon 2026-10-10-d6064e1d-5). Applied in FR-18, FR-22 and the glossary; confirmed fixed.
-- SRC-2: settled on remainder sheet 1, card decision-on-record. The owner picked "The PR's saved answers count for one-PR decisions" (Canon 2026-10-10-d6064e1d-4). Applied in FR-38; confirmed fixed.
+### Round 1
 
-Nothing is waiting in the queue.
+The advisor's vet, round 1, raised 23 craft findings and 3 owner calls. The craft findings were fixed in the spec and the requirements renumbered into document order. The checks re-ran on the changed parts, with the journeys board and the vet record added to the source check's inputs.
+
+#### Gap review
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r5-gap-run
+- Result: real (terminal, ok, 1 attempt, engaged: 31 tool calls, 275.2 s)
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| gap-read-evidence-unknown | Gap review | Important, line 124: Cover unknown read evidence in the retry rule. The new retry rule requires an engine record showing that the reviewer did not read the change, but the retained engine evidence distinguishes only `engaged` from `unknown` and expressly never proves inaction. A completed review with empty findings, an accepted investigated path and unavailable tool telemetry can return `ok: true` with reading still unknown. After the planted probe retires, this reachable case has no specified retry or escalation outcome, although it cannot satisfy FR-18's requirement to demonstrate reading. Builders must choose between an unspecified recovery and accepting insufficient evidence. | craft | Fixed. FR-18's acceptance now turns on an engine record that does not show the reviewer read the change, so a missing or unknown reading takes the same retry and move-up path as a known failure to read. | fixed in round 1 of this cycle |
+
+#### Source check
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r5-source-run
+- Result: real (terminal, ok, 1 attempt, engaged: 41 tool calls, 395.3 s)
+- Approved board, for the source check: docs/superheroes/risk-calibrated-review-that-learns-dec0af/board/build-board.html
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Source check | no new findings | | | |
+
+#### Grounding
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r5-grounding-run
+- Result: real (terminal, ok, 1 attempt, engaged: 32 tool calls, 249.4 s)
+- Grounding base, for grounding: origin/main, 48a7881e07318177c598deadef2d8bbf96d4894d
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Grounding | no new findings | | | |
+
+#### Citation check
+[]

@@ -121,7 +121,8 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* A light-lane review record lists exactly one reviewer. (source: board · 2 Small sheet and stack sheet)
 
 **FR-18.** On the light and micro lanes, the review record shall show, from the engine's own record, that the one reviewer read the change. (source: craft, for your veto)
-  - *Acceptance (Given-When-Then):* Given a reviewer whose engine record shows it did not read the change, when the review ends, then the review counts as not run: the plugin runs the reviewer once more, and if the reviewer still did not read the change, the change moves up to the full lane or parks. (source: craft, for your veto)
+  - *Acceptance (Given-When-Then):* Given a reviewer whose engine record does not show that it read the change, when the review ends, then the review counts as not run: the plugin runs the reviewer once more, and if the record still does not show a reading, the change moves up to the full lane or parks. (source: craft, for your veto)
+  - *Acceptance (rule):* A record that is missing, or that cannot tell whether the reviewer read the change, counts as not showing it. (source: craft, for your veto)
   - *Acceptance (rule):* This takes the place of the planted-bug probe those two lanes carry today [cite: plugins/superheroes/rubric/review-discipline.md § mandatory planted-defect control probe]. (source: Canon 2026-10-08-d6064e1d-19; vet round 1)
 
 **FR-19.** Every reviewer shall come from a different model family than every maker of the change. (source: Canon 2026-10-10-d6064e1d-12)
