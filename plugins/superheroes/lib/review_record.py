@@ -347,7 +347,7 @@ def _name(f):
 
 
 def _unaccounted(prior, findings):
-    """The only reader of an earlier record: the names of its findings this account leaves without an outcome.
+    """The only reader of an earlier record: the names of its findings this account does not list.
 
     Compared by stored identity key (session_contract.finding_identity_key), never by id. A malformed
     findings list is never read as an empty one.
@@ -357,7 +357,7 @@ def _unaccounted(prior, findings):
     earlier = prior.get("findings")
     if not isinstance(earlier, list) or not all(isinstance(i, dict) for i in earlier):
         raise Refusal("review-record-unreadable", "the latest record's findings list is malformed")
-    present = {_key(f) for f in findings if f.get("outcome") in rfs.OUTCOMES}
+    present = {_key(f) for f in findings}
     return [i.get("id") or _key(i) for i in earlier if _key(i) not in present]
 
 

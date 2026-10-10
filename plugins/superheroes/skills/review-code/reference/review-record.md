@@ -8,8 +8,8 @@ Earlier ones are never edited; the latest is the current record, and it links th
 (`<!-- superheroes:review-raw-output -->`), verbatim with secrets redacted, and the record links it
 under `rawOutputs`. Each review ends by writing it.
 
-Across sessions the account must give an outcome for every finding the latest earlier record listed
-(matched by identity key), or the write refuses `review-record-unaccounted`, naming them.
+Across sessions the account must relist every finding the latest earlier record listed (matched by identity
+key; an unresolved one stays pending, null), or the write refuses `review-record-unaccounted`.
 
 The writer holds some facts in code: the lane, the final commit, CI on it, and whether an engine-run
 reviewer ran. Those win over your account. A reviewer run counts as run by code only when its engine's
@@ -60,7 +60,7 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 
 - `review-record-unreadable`: the latest record could not be parsed; park and report. Never delete or
   overwrite a record by hand.
-- `review-record-unaccounted`: give each named earlier finding an outcome in the account and write again.
+- `review-record-unaccounted`: relist each named earlier finding in the account and write again.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
 - `review-record-too-large`: shorten the account's long text (or split the raw output file) and write again.
 - `review-record-forbidden-claim`: rewrite the account text the writer quotes in its summary.

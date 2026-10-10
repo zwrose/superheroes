@@ -519,17 +519,19 @@ def test_w1_only_creates(tmp_path):
 
 
 def test_w2_the_one_check_across_sessions(tmp_path):
-    # axis: the unaccounted check; an earlier finding dropped, or relisted without an outcome, by a later account
+    # axis: the unaccounted check; an earlier finding dropped by a later account, or a pending one refused on relisting
     fake = Fake()
     send(tmp_path, fake, findings=[finding("a-1", outcome="left-for-owner", reason="owner call")])
-    for later in ([], [finding("a-1", outcome=None, reason="")]):
-        out = rr.write(put(tmp_path, account(findings=later)), str(tmp_path), fake.readers())
-        assert (out["ok"], out["reason"]) == (False, "review-record-unaccounted")
-        assert out["detail"] == "earlier findings with no outcome in this account: a-1"
-        assert len(fake.comments) == 1
+    out = rr.write(put(tmp_path, account(findings=[])), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"]) == (False, "review-record-unaccounted")
+    assert out["detail"] == "earlier findings with no outcome in this account: a-1"
+    assert len(fake.comments) == 1
+    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="")])), str(tmp_path), fake.readers())
+    assert out["ok"] and out["action"] == "created" and len(fake.comments) == 2
+    assert rr.read(7, readers=fake.readers())["status"] == "not-reviewed"
     out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome="shown-wrong", reason="not a bug here")])),
                    str(tmp_path), fake.readers())
-    assert out["ok"] and out["action"] == "created" and len(fake.comments) == 2
+    assert out["ok"] and out["action"] == "created" and len(fake.comments) == 3
 
 
 def test_w3_raw_output_verbatim_and_linked(tmp_path):
