@@ -2,11 +2,9 @@
 
 - [Frame and product](#frame-and-product)
 - [Where the design system comes from](#where-the-design-system-comes-from)
-- [Claude Design choices in Canon](#claude-design-choices-in-canon)
 - [Publishing on a host that shows HTML artifacts](#publishing-on-a-host-that-shows-html-artifacts)
 - [Hosts that cannot show an HTML artifact](#hosts-that-cannot-show-an-html-artifact)
 - [Saving the approved build board](#saving-the-approved-build-board)
-- [Syncing to Claude Design](#syncing-to-claude-design)
 - [Skipping the board, the board winning, and redraws](#skipping-the-board-the-board-winning-and-redraws)
 
 # Boards
@@ -66,25 +64,11 @@ The two design-system links are examples. Link the files the project has. The pa
 
 ## Where the design system comes from
 
-Where the project uses Claude Design, its boards' design system comes from Claude Design, whether
-or not syncing is on.
+A board's design system comes from the project's own design-system files: its tokens,
+stylesheets, and components.
 
-Otherwise it comes from the project's own design-system files: its tokens, stylesheets, and
-components.
-
-Where the project has neither, tell the owner so. Draw in a plain neutral style, and state on the
+Where the project has no design-system files, tell the owner so. Draw in a plain neutral style, and state on the
 board that the project has no design system. The theme never stands in for one.
-
-## Claude Design choices in Canon
-
-Two choices belong to the owner as standing rulings. The first is whether the project uses Claude
-Design. The second is whether approved boards sync to it.
-
-Read both from Canon, as `rubric/canon-contract.md` says in its section Reading Canon. Where
-Canon holds no ruling on either, ask the owner once, before the first board. Record the answer in
-Canon, as that file says in its section Writing a ruling. Never assume an answer either way.
-
-Syncing stays the project's choice.
 
 ## Publishing on a host that shows HTML artifacts
 
@@ -137,15 +121,6 @@ The saved set:
   was approved.
 
 The saved page loads its stylesheets by relative path, so it opens in a browser from the folder.
-
-## Syncing to Claude Design
-
-Where the project has turned syncing on, the approved build board syncs to Claude Design once, at
-approval, through the host's Claude Design path. It does not sync before approval. It does not
-sync again on later edits.
-
-Where the host has no Claude Design path, tell the owner that the sync did not happen and why.
-Never claim a sync that did not run.
 
 ## Skipping the board, the board winning, and redraws
 
