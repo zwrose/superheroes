@@ -513,7 +513,7 @@ def test_shot_whose_inventory_never_returns_is_returned_false_with_no_labels(fak
 def test_a_driver_exit_code_zero_is_not_a_step_passing_and_nonzero_is_not_ok(fake):
     fake(helper_sim(["up"], axe=(True, 3, "oops")))
     assert ic.drive(U, ["type", "hello"], 5) == {"ok": False, "returned": True, "exit": 3, "stdout": "oops",
-                                                 "helper": "running"}
+                                                 "helper": "up"}
 
 
 def test_boot_runs_boot_then_bootstatus_and_only_bootstatus_decides(fake):
@@ -564,7 +564,7 @@ def test_drive_cli_splits_axe_args_after_the_double_dash(fake, capsys):
 
 
 # ---------------------------------------------------------------- typing helper
-REFUSED = {"ok": False, "returned": True, "exit": None, "stdout": "", "helper": "not running",
+REFUSED = {"ok": False, "returned": True, "exit": None, "stdout": "", "helper": "down",
            "reason": "the phone's typing helper is not running"}
 NEVER = {"ok": False, "returned": False, "exit": None, "stdout": ""}
 
@@ -572,7 +572,7 @@ NEVER = {"ok": False, "returned": False, "exit": None, "stdout": ""}
 def test_drive_with_the_helper_running_checks_once_then_runs_axe(fake):
     f = fake(helper_sim(["up"]))
     out = ic.drive(U, ["type", "hello"], 30)
-    assert out == {"ok": True, "returned": True, "exit": 0, "stdout": "", "helper": "running"}
+    assert out == {"ok": True, "returned": True, "exit": 0, "stdout": "", "helper": "up"}
     assert verbs(f) == ["list", "axe"]
 
 

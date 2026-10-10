@@ -185,7 +185,7 @@ def drive(phone, args, timeout):
     if args[0] not in READ_ONLY_VERBS:
         returned, running = _typing_helper(phone, end)
         if running:
-            helper = "running"
+            helper = "up"
         elif returned:
             # Axis: a stopped helper drops every keystroke while AXe exits 0, so it is restarted and the re-check alone decides
             left = end - time.monotonic()
@@ -194,12 +194,12 @@ def drive(phone, args, timeout):
                                           "system/" + TYPING_HELPER], left)[0]
             if returned:
                 returned, running = _typing_helper(phone, end)
-            helper = "restarted" if running else "not running"
+            helper = "restarted" if running else "down"
         # Axis: a helper call that never returned leaves the phone unchecked, so AXe is not run
         if not returned:
             return {"ok": False, "returned": False, "exit": None, "stdout": ""}
         # Axis: a helper that is still down after the restart gets no keystroke
-        if helper == "not running":
+        if helper == "down":
             return {"ok": False, "returned": True, "exit": None, "stdout": "", "helper": helper, "reason": HELPER_DOWN}
     argv = ["axe", *args]
     if args[0] == "tap" and not any(a.startswith("--post-delay") for a in args):

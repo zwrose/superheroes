@@ -196,10 +196,10 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   phone's typing helper is running. That helper is Device Hub's `dtuhidd`,
   inside the phone; while it is down, every keystroke is dropped and AXe still
   reports success. When it is not running, `drive` restarts it inside the handed
-  phone and checks again. The result's `helper` reads `running`, `restarted` or
-  `not running`; a call that never returned has none, and ends its part as any
-  driver step that never returned. With `not running`, `drive` sends nothing and
-  returns a `reason`: end that part with `iPhone check did not run — <part>: the
+  phone and checks again. The result's `helper` reads `up`, `restarted` or
+  `down`; a call that never returned has none, and ends its part as any driver
+  step that never returned. With `down`, `drive` sends nothing and returns
+  a `reason`: end that part with `iPhone check did not run — <part>: the
   phone's typing helper is not running`. Before the first type in each app
   (Safari, and the installed app), tap the field and take a reading with the
   keyboard up, and keep its height as that app's keyboard-up height. After a

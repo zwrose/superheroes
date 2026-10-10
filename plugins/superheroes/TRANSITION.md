@@ -11,7 +11,7 @@ belongs to and lists every change with its replacement.
 
 ### Pilot: iPhone typing helper
 
-- `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `running`, `restarted` or `not running` (absent when a call never returned).
+- `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
 - When the helper stays down, `drive` sends nothing and returns `ok: false` with `reason: "the phone's typing helper is not running"`; the pilot ends that part with `iPhone check did not run — <part>: the phone's typing helper is not running`. Before, such keystrokes were dropped while `drive` reported `ok: true`.
 - A checked step makes up to three extra simulator calls inside its `--timeout` (about 0.25 s when the helper is up).
 
