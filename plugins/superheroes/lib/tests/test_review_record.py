@@ -791,6 +791,12 @@ def test_x3_none_and_false_are_accepted_as_given():
     ('password: "line1\nMULTILINEQUOTED"', "MULTILINEQUOTED"),
     ('{"passphrase": [\n  "MULTILINEARRAY"\n]}', "MULTILINEARRAY"),
     ("private_key: |\n  AAAA\n  BLOCKSCALARLEAK\nnext: ok", "BLOCKSCALARLEAK"),
+    ('{"credentials": {"user":"u","password":"p1","deep":{"k":["NESTEDLEAK"]}}, "ok": 1}', "NESTEDLEAK"),
+    ('{"credentials": {"value": "example-password-94"}}', "example-password-94"),
+    ('{"token": [["first"], ["ARRAYOBJLEAK"]]}', "ARRAYOBJLEAK"),
+    ('{"secret": [{"a":"x"},{"b":"ARRAYOFOBJLEAK"}]}', "ARRAYOFOBJLEAK"),
+    ('{"secret": {"a": "has ] bracket", "b": "QUOTEDBRACKETLEAK"}}', "QUOTEDBRACKETLEAK"),
+    ('{"secret": {"a": "UNBALANCEDLEAK", "b": [1,', "UNBALANCEDLEAK"),
     ("note\n-----BEGIN RSA PRIVATE KEY-----\nPEMBODYLEAK\n-----END RSA PRIVATE KEY-----\nafter", "PEMBODYLEAK"),
 ])
 def test_every_secret_value_form_is_redacted_by_the_one_keyed_pass(text, leaked):

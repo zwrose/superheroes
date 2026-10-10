@@ -467,19 +467,42 @@ _KEYED_SECRET = re.compile(
     r"(?:" + _PEM_BLOCK + r"|"                       # a PEM block after the key, unquoted
     r"\\?\"(?:[^\"\\]|\\[\s\S])*\\?\""            # double-quoted string, escape-aware, may span lines
     r"|\\?'(?:[^'\\]|\\[\s\S])*\\?'"              # single-quoted string, escape-aware, may span lines
-    r"|\[[^\]]*\]"                                  # bracketed array, may span lines, to its matching bracket
+    r"|(?P<open>[\[{])"                            # a bracketed value: its end is found by _balanced_end
     r"|[|>][+-]?\d?[ \t]*(?:\n[ \t]+[^\n]*|\n(?=\n[ \t]+\S))*"  # YAML block scalar and its indented lines
     r"|(?:(?:Basic|Bearer|Digest|Token)\s+)?[^\s,;}&]+)"  # unquoted token (with an auth scheme word)
     r"|" + _PEM_BLOCK + r")")                        # free-form: any PEM private key block, whatever precedes it
 
 
-def _redact_keyed(m):
-    return (m.group(1) or "") + "[REDACTED]"
+def _balanced_end(text, start):
+    """Index just past the bracket that closes text[start] ({ or [); the end of text when unbalanced (fails closed)."""
+    depth, i, n = 0, start, len(text)
+    while i < n:
+        c = text[i]
+        if c in "\"'":
+            i += 1
+            while i < n and text[i] != c:
+                i += 2 if text[i] == "\\" else 1
+        elif c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
 
 
 def _scrub_text(text):
     """One key-anchored pass over every secret-named key and its value, then pr_comment.scrub's free-form patterns."""
-    return pr_comment.scrub(_KEYED_SECRET.sub(_redact_keyed, text))
+    out, pos = [], 0
+    while True:
+        m = _KEYED_SECRET.search(text, pos)
+        if m is None:
+            break
+        out.append(text[pos:m.start()] + (m.group(1) or "") + "[REDACTED]")
+        pos = _balanced_end(text, m.start("open")) if m.group("open") else m.end()
+    out.append(text[pos:])
+    return pr_comment.scrub("".join(out))
 
 
 def _scrubbed(value):
