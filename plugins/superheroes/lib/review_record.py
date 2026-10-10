@@ -205,6 +205,12 @@ def _validate(a):
         for k in ("planned", "ran"):
             chk(isinstance(r.get(k), bool), f"reviewers[{i}].{k}")
         chk(sn(r.get("runDir")), f"reviewers[{i}].runDir")
+        chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
+        chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
+    makers = a.get("makers")
+    chk(makers is None or isinstance(makers, list), "makers")
+    for i, m in enumerate(makers or []):
+        chk(isinstance(m, dict) and ne(m.get("family")), f"makers[{i}]")
     for i, f in enumerate(lst("findings")):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
@@ -221,7 +227,8 @@ def _validate(a):
         and (rounds.get("cap") is None or isinstance(rounds["cap"], int))
         and isinstance(rounds.get("stoppedAtCap"), bool), "rounds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
-            "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], **a, "rounds": rounds}
+            "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], **a,
+            "makers": makers or [], "rounds": rounds}
 
 
 # --- code facts ---
@@ -306,6 +313,10 @@ def _reviewer(r, rd, dis, head):
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
         out["ran"] = "reported-by-session" if r["ran"] else "not-run"
+    if isinstance(r.get("notIndependent"), bool):
+        out["notIndependent"] = r["notIndependent"]
+    if isinstance(r.get("ownerWord"), dict):
+        out["ownerWord"] = r["ownerWord"]
     return out
 
 
@@ -393,7 +404,8 @@ def build_record(account, readers):
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
-        "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
+        "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
+        "finalCommit": fc,
         "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
@@ -447,7 +459,12 @@ def render(record):
     for v in r["reviewers"]:
         label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
             v["ran"], "did not run")
-        who.append(f"- {v['name']}: {label}; findings: {v['findingsCoverage']}")
+        word = v.get("ownerWord")
+        who.append(f"- {v['name']}: {label}"
+                   + ("; not independent of the makers" if v.get("notIndependent") else "")
+                   + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
+                      and isinstance(word.get("where"), str) and word["where"] else "")
+                   + f"; findings: {v['findingsCoverage']}")
     waits = []
     if r["leftForOwner"]:
         waits.append("findings left for the owner (" + ", ".join(r["leftForOwner"]) + ") wait for the owner's decision")
@@ -458,6 +475,7 @@ def render(record):
         + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
         ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner.",
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "") + ".",
+        *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         "Reviewers:", *who])
     _assert_no_bug_free_claim(summary)

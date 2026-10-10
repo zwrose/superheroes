@@ -645,3 +645,51 @@ def test_w10_a_malformed_earlier_findings_list_is_unreadable(tmp_path, bad):
     fake.comments = [{"id": 1, "author": "a", "body": rr.render(rec), "url": "u1"}]
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-unreadable") and len(fake.comments) == 1
+
+
+MAKERS = [{"family": "anthropic", "source": "builder"}]
+OWNER_WORD = {"words": "go ahead", "where": "http://c/9"}
+
+
+def test_x1_maker_and_independence_fields_pass_through_and_show(tmp_path):
+    # axis: pass-through fields; makers, notIndependent or ownerWord dropped, altered or left out of the summary
+    fake = Fake()
+    send(tmp_path, fake, makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)])
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["makers"] == MAKERS
+    assert rec["reviewers"][0]["notIndependent"] is True and rec["reviewers"][0]["ownerWord"] == OWNER_WORD
+    body = fake.marked()[0]["body"]
+    assert "Makers: anthropic." in body and "not independent of the makers" in body
+    assert "owner's word: http://c/9" in body
+
+
+def test_x2_the_pass_through_fields_change_no_status():
+    # axis: no logic on the pass-through fields; status, parked or whatIsMissing depending on them
+    with_fields = build(account(makers=MAKERS, reviewers=[reviewer(notIndependent=True, ownerWord=OWNER_WORD)]))
+    without = build(account())
+    assert [with_fields[k] for k in ("status", "parked", "whatIsMissing")] == \
+        [without[k] for k in ("status", "parked", "whatIsMissing")]
+    assert without["makers"] == [] and not {"notIndependent", "ownerWord"} & set(without["reviewers"][0])
+
+
+@pytest.mark.parametrize("over, key", [
+    ({"makers": "anthropic"}, "makers"),
+    ({"makers": [{}]}, "makers[0]"),
+    ({"makers": [{"family": ""}]}, "makers[0]"),
+    ({"makers": [{"family": 3}]}, "makers[0]"),
+    ({"reviewers": [reviewer(notIndependent="yes")]}, "reviewers[0].notIndependent"),
+    ({"reviewers": [reviewer(ownerWord="ok")]}, "reviewers[0].ownerWord"),
+])
+def test_x3_malformed_pass_through_fields_refuse(tmp_path, over, key):
+    # axis: validation of the pass-through fields; a malformed value accepted, or refused without naming its key
+    fake = Fake()
+    out = rr.write(put(tmp_path, account(**over)), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"], out["detail"]) == (False, "review-account-invalid", key)
+    assert fake.writes == []
+
+
+def test_x3_none_and_false_are_accepted_as_given():
+    # axis: optional fields; None refused, or False dropped instead of carried as given
+    rec = build(account(makers=None, reviewers=[reviewer(notIndependent=False, ownerWord=None)]))
+    assert rec["makers"] == [] and rec["reviewers"][0]["notIndependent"] is False
+    assert "ownerWord" not in rec["reviewers"][0]

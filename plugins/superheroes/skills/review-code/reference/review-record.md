@@ -22,14 +22,14 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 
 - `pr`: the PR number. `sessionId`: this review session. `lane` and `laneReason`: the lane and why.
 - `finalCommit`: the commit the review ended on. `ci`: CI on it, as you saw it.
-- `reviewers`: each as `{name, vendor, model, planned, ran, runDir}`. List every
-  planned reviewer, whether or not it ran. `runDir` is its run directory; with none, leave it empty.
+- `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool),
+  `ownerWord` (`{words, where}`). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
   reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
-- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked).
+- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked), optional `makers` (each `{family, source}`).
 - `goAheads`: the owner's word to go on without a planned review. Either
-  `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`.
+  `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`. A reviewer's `ownerWord` is a separate channel: the owner's word that let a same-family reviewer run.
 
 Every finding gets a reason and an outcome (`null` while undecided): fixed, shown wrong, a craft call,
 left for the owner, or settled by an owner ruling. Exact spellings: `review_findings_schema.OUTCOMES`.
@@ -74,6 +74,7 @@ The record says reviewed only when all five hold: CI is green on the PR's final 
 finding in the account has an outcome and a reason; no planned review is missing and a planned
 reviewer ran; no raw output file is unread; and the final commit was read from the PR.
 Any finding short of that is listed in what is left.
+The writer carries `makers`, `notIndependent` and `ownerWord` as given and shows them. It does not check independence, and they do not change whether the record says reviewed.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed.
