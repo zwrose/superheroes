@@ -50,8 +50,8 @@ detection. Follow-up: `/superheroes:configure`.
 
 ## Step 3 — Browser tooling gate
 
-Use ToolSearch to check which browser MCPs are connected (search
-"chrome-devtools", "Claude_in_Chrome", "playwright").
+Use ToolSearch to check which browser MCPs are connected (search "chrome-devtools", "Claude_in_Chrome", "playwright").
+For a Google sign-in or a pilot launched from a worktree, read `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` § Browser launch recipes.
 
 <!-- decision-point: id=tp-init-browser-tools mode=proceed kind=interview-step default="chrome-devtools, playwright, Claude_in_Chrome — detected subset in that order" carrier=test-pilot-layer -->
 **`browserTools` provisional default.** When one or more tools are detected,

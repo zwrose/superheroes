@@ -35,6 +35,9 @@ dependency."
 that retired with the v1 execution spine (#478); surviving contracts keep their
 original numbers so existing citations stay valid.
 
+**Number steps with plain digits** (`## 8`, `step 8`, `steps 4–6`), never circled-number glyphs:
+circled glyphs render poorly in a terminal and do not survive search.
+
 ## Contents
 
 1. [Vocabulary: the v2 loop and cast](#1-vocabulary-the-v2-loop-and-cast)
