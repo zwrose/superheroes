@@ -460,17 +460,26 @@ def _secret_key(k):
     return isinstance(k, str) and bool(_SECRET_KEY.search(k))
 
 
+_PEM_BLOCK = r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+
 _KEYED_SECRET = re.compile(
-    r"(?i)(\\?[\"']?[\w-]*(?:" + _SECRET_KEY.pattern + r")[\w-]*\\?[\"']?\s*[:=]\s*)"
-    r"(?:\\?\"(?:[^\"\\\n]|\\.)*\\?\""            # double-quoted string, escape-aware
-    r"|\\?'(?:[^'\\\n]|\\.)*\\?'"              # single-quoted string, escape-aware
-    r"|\[[^\]\n]*\]"                               # one-line bracketed array
-    r"|(?:(?:Basic|Bearer|Digest|Token)\s+)?[^\s,;}&]+)")  # unquoted token (with an auth scheme word)
+    r"(?i)(?:(\\?[\"']?[\w-]*(?:" + _SECRET_KEY.pattern + r")[\w-]*\\?[\"']?\s*[:=]\s*)"
+    r"(?:" + _PEM_BLOCK + r"|"                       # a PEM block after the key, unquoted
+    r"\\?\"(?:[^\"\\]|\\[\s\S])*\\?\""            # double-quoted string, escape-aware, may span lines
+    r"|\\?'(?:[^'\\]|\\[\s\S])*\\?'"              # single-quoted string, escape-aware, may span lines
+    r"|\[[^\]]*\]"                                  # bracketed array, may span lines, to its matching bracket
+    r"|[|>][+-]?\d?[ \t]*(?:\n[ \t]+[^\n]*|\n(?=\n[ \t]+\S))*"  # YAML block scalar and its indented lines
+    r"|(?:(?:Basic|Bearer|Digest|Token)\s+)?[^\s,;}&]+)"  # unquoted token (with an auth scheme word)
+    r"|" + _PEM_BLOCK + r")")                        # free-form: any PEM private key block, whatever precedes it
+
+
+def _redact_keyed(m):
+    return (m.group(1) or "") + "[REDACTED]"
 
 
 def _scrub_text(text):
     """One key-anchored pass over every secret-named key and its value, then pr_comment.scrub's free-form patterns."""
-    return pr_comment.scrub(_KEYED_SECRET.sub(r"\1[REDACTED]", text))
+    return pr_comment.scrub(_KEYED_SECRET.sub(_redact_keyed, text))
 
 
 def _scrubbed(value):

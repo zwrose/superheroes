@@ -788,6 +788,10 @@ def test_x3_none_and_false_are_accepted_as_given():
     ('Authorization: "Basic abc123"', "abc123"),
     ('{\\"cookie\\": \\"sess-value-9\\"}', "sess-value-9"),
     ("api_key = hunter2value", "hunter2value"),
+    ('password: "line1\nMULTILINEQUOTED"', "MULTILINEQUOTED"),
+    ('{"passphrase": [\n  "MULTILINEARRAY"\n]}', "MULTILINEARRAY"),
+    ("private_key: |\n  AAAA\n  BLOCKSCALARLEAK\nnext: ok", "BLOCKSCALARLEAK"),
+    ("note\n-----BEGIN RSA PRIVATE KEY-----\nPEMBODYLEAK\n-----END RSA PRIVATE KEY-----\nafter", "PEMBODYLEAK"),
 ])
 def test_every_secret_value_form_is_redacted_by_the_one_keyed_pass(text, leaked):
     # axis: redaction; a credential value form (quoted, escaped, array, scheme word) surviving past its secret-named key
