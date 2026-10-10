@@ -75,7 +75,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* Both checks still run after the release in FR-5. (source: Canon 2026-10-08-d6064e1d-19)
 
 **FR-7.** Every plugin rule that requires a certified review loop [cite: plugins/superheroes/rubric/review-discipline.md § The driver mandate] shall require the review record instead. (source: Canon 2026-10-08-d6064e1d-8)
-  - *Acceptance (Given-When-Then):* Given a full-lane PR with no review record, when it is handed back, then it is parked, or its PR body says in plain words that no record exists and why. (source: Canon 2026-10-08-d6064e1d-8)
+  - *Acceptance (Given-When-Then):* Given a full-lane PR with no review record, when it is handed back, then it is parked. (source: Canon 2026-10-08-d6064e1d-8)
 
 **FR-8.** When the advisor vets a PR, the advisor shall check three things from the review record: that the record exists, that the checks ran on the final commit, and that no leftover skipped the owner's review. (source: Canon 2026-10-08-d6064e1d-18)
   - *Acceptance (Given-When-Then):* Given a PR whose record is missing, or whose checks ran on an earlier commit, or that has a leftover the owner was never shown, when the advisor vets it, then the vet does not return it as ready. (source: Canon 2026-10-08-d6064e1d-18)
@@ -89,7 +89,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (rule):* The review loop decides whether a change touches a risk area from the risk area itself, with no model judgment needed for a change that plainly sits inside one. (source: Canon 2026-10-09-d6064e1d-2)
 
 **FR-11.** The advisor shall set up Risk and trust with the owner in one sitting, in product terms. (source: Canon 2026-10-08-d6064e1d-5)
-  - *Acceptance (rule):* The sitting asks where money, customer data, access and irreversible actions live, which outcomes are unacceptable, how quickly a bad change can be undone, and what can be run to try the product. (source: board · 4 Risk and trust)
+  - *Acceptance (rule):* The sitting asks, in this order: who the product is for and what it is for, where money, customer data, access and irreversible actions live, which outcomes are unacceptable, how quickly a bad change can be undone, and what can be run to try the product. (source: board · 4 Risk and trust; Canon 2026-10-05-3dbeb858-46)
 
 **FR-12.** Where who the product is for is already set, the sitting shall offer to read that answer back and shall not ask it again. (source: Canon 2026-10-09-d6064e1d-13)
   - *Acceptance (Given-When-Then):* Given a project whose who-it's-for answer is set, when the sitting starts, then the advisor offers to read it back and moves to the risk questions. (source: Canon 2026-10-09-d6064e1d-13)
@@ -184,7 +184,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **FR-40.** The plugin shall bring the owner's decisions in three batches, in order. (source: Canon 2026-10-09-d6064e1d-6)
   - *Acceptance (rule):* Batch 1 holds what blocks work. Batch 2 holds decisions not tied to one PR. Batch 3 holds one sheet per PR. (source: Canon 2026-10-09-d6064e1d-6)
 
-**FR-41.** The plugin shall put each batch-1 question both in the chat and at the top of the index. (source: Canon 2026-10-09-d6064e1d-6; board · 1 The index)
+**FR-41.** The plugin shall put each batch-1 question both in the chat and at the top of the index, with the chat linking to the index. (source: Canon 2026-10-09-d6064e1d-6; board · 1 The index)
   - *Acceptance (rule):* The first answer given, in either place, is the answer. (source: Canon 2026-10-09-d6064e1d-6)
 
 **FR-42.** When a batch-1 question is answered, the plugin shall remove it from the index. (source: Canon 2026-10-09-d6064e1d-9)
@@ -198,6 +198,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **FR-45.** The index shall list every PR with a sheet under one of three headings: "Needs you", "Being fixed" or "Ready". (source: Canon 2026-10-09-d6064e1d-16; board · 1 The index)
   - *Acceptance (rule):* Each row names the PR, shows how many items are accepted and how many walk stops are walked, and opens that PR's sheet. (source: board · 1 The index)
+  - *Acceptance (rule):* A row under "Needs you" says where the PR falls in the merge order, for example "merges first". The advisor sets that order. (source: board · 1 The index; Canon 2026-10-09-d6064e1d-16)
 
 **FR-46.** A PR's sheet shall be one scrolling page whose parts come in this order: what changed, the walk, what you're accepting, the three folded parts, the merge verdict. (source: Canon 2026-10-09-d6064e1d-15; board · 3 Big PR sheet)
   - *Acceptance (rule):* A part with nothing in it is left out, except "What you're accepting", which then reads "Nothing. The review left nothing for you." (source: board · 2 Small sheet and stack sheet)
@@ -250,11 +251,13 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **FR-61.** When the owner un-accepts an item or marks a new walk problem after giving a merge verdict, the sheet shall clear that verdict. (source: board · 3 Big PR sheet)
   - *Acceptance (Given-When-Then):* Given a saved merge verdict, when the owner changes an item from accepted to "Discuss", then the sheet shows no merge verdict and the index no longer lists the PR under "Ready". (source: board · 3 Big PR sheet)
 
-**FR-62.** The plugin shall take a saved merge verdict together with the owner saying "done" in the chat as the owner's word to merge that PR. (source: Canon 2026-10-09-d6064e1d-8)
-  - *Acceptance (rule):* Neither a saved verdict alone nor "done" alone is taken as that word. (source: Canon 2026-10-09-d6064e1d-8)
+**FR-62.** The plugin shall take a saved "Merge" verdict together with the owner saying "done" in the chat as the owner's word to merge that PR. (source: Canon 2026-10-09-d6064e1d-8)
+  - *Acceptance (rule):* Neither a saved "Merge" verdict alone nor "done" alone is taken as that word. (source: Canon 2026-10-09-d6064e1d-8)
+  - *Acceptance (rule):* A saved "Not yet", or no saved verdict, together with "done" is not that word. (source: board · 3 Big PR sheet)
 
 **FR-63.** The plugin shall take a "Fix in a follow-up" answer as the owner's word to file that follow-up. (source: Canon 2026-10-09-d6064e1d-8; Canon 2026-10-09-d6064e1d-21)
   - *Acceptance (Given-When-Then):* Given that answer and a merged PR, when the advisor finishes the merge, then a follow-up exists that carries the owner's note. (source: board · 3 Big PR sheet)
+  - *Acceptance (rule):* A follow-up filed for a leftover carries a date to revisit it. (source: board · 3 Big PR sheet)
 
 **FR-64.** The plugin shall write the owner's answers and verdict back to the PR as its receipt. (source: Canon 2026-10-09-d6064e1d-7)
   - *Acceptance (rule):* After the merge, the PR shows each answer, each walk result and the verdict. (source: Canon 2026-10-09-d6064e1d-7; Canon 2026-10-09-d6064e1d-19)
@@ -264,6 +267,16 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **FR-66.** When an owner answer sets a rule for later work, the plugin shall record that rule in Canon. (source: Canon 2026-10-08-d6064e1d-27)
   - *Acceptance (rule):* A permanent acceptance, an approved calibration change and a ceded call are each recorded in Canon. (source: Canon 2026-10-08-d6064e1d-27)
+
+**FR-78.** A PR sheet shall save each tap as a draft, and the plugin shall act on the sheet's answers only after the owner says "done" in the chat, reading them together. (source: Canon 2026-10-05-3dbeb858-39)
+  - *Acceptance (rule):* The owner may change an answer, and the last tap is the answer. (source: Canon 2026-10-05-3dbeb858-39)
+  - *Acceptance (Given-When-Then):* Given a sheet with saved answers and no "done" yet, when the advisor looks at it, then nothing is merged, sent back, filed or recorded in Canon from it. (source: Canon 2026-10-05-3dbeb858-39)
+
+**FR-79.** When a note disagrees with the answer beside it, the plugin shall treat that question as "Discuss", and the advisor shall ask the owner about it. (source: Canon 2026-10-05-3dbeb858-38)
+  - *Acceptance (Given-When-Then):* Given "Keep it" on a leftover with a note that says to fix it first, when the advisor reads the sheet after "done", then the advisor does not merge the PR and asks the owner which one stands. (source: Canon 2026-10-05-3dbeb858-38)
+
+**FR-80.** Before a sheet with a walk is sent, the advisor shall walk its stops. (source: board · 3 Big PR sheet)
+  - *Acceptance (rule):* The walk part says that the advisor walked it first and where its pictures come from. (source: board · 3 Big PR sheet)
 
 ### Part E · Learning from escapes
 
@@ -326,21 +339,24 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **UFR-7.** If a picture cannot be put on the sheet, then the sheet shall say that the picture is missing. (source: Canon 2026-10-09-d6064e1d-20; craft, for your veto)
   - *Acceptance:* Given a stop whose picture could not be copied, when the sheet opens, then the stop says a picture is missing and shows no link to another page. (source: Canon 2026-10-09-d6064e1d-20)
 
+**UFR-9.** If the advisor could not walk a stop before the sheet was sent, then the sheet shall say so on that stop. (source: craft, for your veto)
+  - *Acceptance:* Given a stop that needs the owner's own sign-in, when the sheet opens, then that stop says the advisor did not walk it and why. (source: craft, for your veto)
+
 **UFR-8.** If a review is in flight when its project takes the release in FR-5, then the review shall finish on the old version or restart once on the new one. (source: Canon 2026-10-09-d6064e1d-14)
   - *Acceptance:* Given such a review, when it restarts, then it restarts once, and the old certification files stay on disk, unread. (source: Canon 2026-10-09-d6064e1d-14)
 
 ## Non-functional requirements
 
 - **Reach:** Every sheet and the index can be read and answered at phone width with no sideways scrolling. (source: craft, for your veto)
-- **Privacy:** A sheet and the index are private to the owner until the owner shares them, and only the owner's answers count. (source: craft, for your veto)
-- **Reliability:** Answers save as the owner taps, each question holds one answer, and a sheet that cannot save says so on the page. (source: board · 3 Big PR sheet; craft, for your veto)
+- **Privacy:** A sheet and the index are private to the owner until the owner shares them, and only the owner's answers count. (source: Canon 2026-10-05-3dbeb858-40)
+- **Reliability:** Answers save as the owner taps, each question holds one answer, and a sheet that cannot save says so on the page. (source: board · 3 Big PR sheet; Canon 2026-10-05-3dbeb858-39; craft, for your veto)
 - **Time:** The loop has no time target. It spends the time the project's calibration calls for. (source: Canon 2026-10-08-d6064e1d-6)
 
 ## UI / UX
 
 The approved build board is the design: `board/build-board.html` beside this spec, also at https://claude.ai/artifact/J1c4SduWJVf2CZkrWSNncH. (source: board · 1 The index)
 The wording on the board is the product's wording. (source: board · 3 Big PR sheet)
-The artboards that matter are "1 The index" for FR-41 to FR-45, "2 Small sheet and stack sheet" for FR-46 and FR-47, "3 Big PR sheet" for FR-48 to FR-65, "4 Risk and trust" for FR-9 to FR-14, and "5 A learning proposal" for FR-69 to FR-72. (source: craft, for your veto)
+The artboards that matter are "1 The index" for FR-41 to FR-45, "2 Small sheet and stack sheet" for FR-46 and FR-47, "3 Big PR sheet" for FR-48 to FR-65 and FR-78 to FR-80, "4 Risk and trust" for FR-9 to FR-14, and "5 A learning proposal" for FR-69 to FR-72. (source: craft, for your veto)
 The sheets and the index are built on the plugin's shared review template [cite: plugins/superheroes/theme/review-template.html]. (source: Canon 2026-10-08-d6064e1d-25)
 
 ## Definition of done / success
@@ -373,7 +389,6 @@ The sheets and the index are built on the plugin's shared review template [cite:
 - A long-running inbox for all the owner's open decisions and merge words. It is its own later piece of work. (source: Canon 2026-10-09-d6064e1d-6)
 - Guarding against an agent that deliberately fakes a review record. (source: Canon 2026-10-08-d6064e1d-20)
 - A project's error tracker as a source of review escapes. It joins later, where a project has one. (source: Canon 2026-10-09-d6064e1d-11)
-- Showing merge order on the index. Merge order stays the advisor's to handle. (source: Canon 2026-10-09-d6064e1d-16)
 - The review of specs. This work changes code review only. (source: craft, for your veto)
 
 ## Glossary
@@ -400,7 +415,7 @@ _No amendments since the last full approval._
 | Empty & first-run | Specify | No | UFR-1: a project with no risk areas set |
 | Invalid & malformed input | Specify | No | UFR-1, second acceptance: a Risk and trust item the loop cannot read |
 | Boundaries & limits | Specify | No | UFR-2: the round cap. The cap's number is the build's |
-| Errors & failures | Specify | Yes | UFR-3, UFR-4 and UFR-7 |
+| Errors & failures | Specify | Yes | UFR-3, UFR-4, UFR-7 and UFR-9 |
 | Access & permissions | Defer-to-build | No | The promise is in the privacy line: only the owner's answers count |
 | Duplicates & double-actions | Defer-to-build | No | The promise is in the reliability line: each question holds one answer |
 | Conflicting / simultaneous use | Specify | Yes | UFR-5 and UFR-6 |
