@@ -1136,8 +1136,8 @@ def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_rea
 
     class FreezeSignalling(ic.Listener):
         def shutdown(self):  # `shot` shuts the listener down only once it has the reading after the capture: the window freezes
-            frozen.set()
             super().shutdown()
+            frozen.set()
     monkeypatch.setattr(ic, "Listener", FreezeSignalling)
 
     def during():
