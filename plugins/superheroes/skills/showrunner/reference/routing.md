@@ -76,7 +76,8 @@ premise did the right thing. Three amendments have a fixed home:
 - A continuation or adoption order goes in the **issue body's STATE block**, because comments and
   PR receipts never reach a builder's intake.
 - A re-handback premise's `baseCommit` is the **PR branch head**, never the stack base — a stack
-  base spawns a duplicate build.
+  base spawns a duplicate build. A stacked layer's adoption is the exception; its fields follow
+  `rubric/launch-doctrine.md` § Recovery, "An adoption of a stack layer keeps the stack fields".
 - A fold into a live lane lands in **both** the issue body and an order amendment, so neither the
   builder's intake nor its live order is left stale.
 
