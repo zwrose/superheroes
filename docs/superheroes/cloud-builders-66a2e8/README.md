@@ -11,7 +11,7 @@ The spec's own working files stay where discovery left them: [`board/`](board/) 
 board and the journeys board, with the board README and the redraw record), [`sheets/`](sheets/)
 (discovery's sheets) and [`checks-record.md`](checks-record.md) (the spec checks' record).
 
-**Status:** breakdown drafted; package read not yet run.
+**Status:** breakdown complete; the package read converged in three rounds (full weight, two codex seats, ceiling 4), with its verification pass and filing dry-run recorded in [`package-read-audit.md`](package-read-audit.md). The children file when the owner's merge word lands.
 
 The breakdown:
 
@@ -26,8 +26,7 @@ The breakdown:
 - `children/C1.md` to `children/C8.md`: the child issue bodies, as they would be filed. Each child is
   a direct sub-issue of the epic and one layer of the stack, numbered by its position; each names the
   entries that bind it, and its register-quote check runs on the epic's body with its token.
-- The package-read audit trail is not here yet: the independent package read writes it before the
-  children file, with its filing dry-run.
+- [`package-read-audit.md`](package-read-audit.md): the independent package read's audit trail, with its verification pass and filing dry-run.
 
 ## The children
 
