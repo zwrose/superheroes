@@ -151,7 +151,7 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" preflight [--issue-names-check]
 python3 -B "$ROOT_DIR/lib/iphone_check.py" boot --phone <id>
 python3 -B "$ROOT_DIR/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
 python3 -B "$ROOT_DIR/lib/iphone_check.py" drive --phone <id> -- type hello
-python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --page <page-url> --where browser
+python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --run-dir <dir> --token <token>
 python3 -B "$ROOT_DIR/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
 python3 -B "$ROOT_DIR/lib/iphone_check.py" judge < step.json
 python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
@@ -191,14 +191,40 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   through `drive --phone <id> -- <axe args>` (`drive --phone <id> -- type hello`
   types). It carries the workaround for AXe dropping a tap whose process exits
   at once (`AXE_HID_STABILIZATION_MS=2000`, and `--post-delay 1` on a tap), so
-  never call `axe` yourself to tap or type. Find a control with
+  never call `axe` yourself to tap or type. A hardware button is
+  `drive --phone <id> -- button home` (AXe takes lower-case names; `drive`
+  lower-cases them). Before every step except
+  `describe-ui`, `list-simulators` and `screenshot`, `drive` checks that the
+  phone's typing helper is running. That helper is Device Hub's `dtuhidd`,
+  inside the phone; while it is down, every keystroke is dropped and AXe still
+  reports success. When it is not running, `drive` restarts it inside the handed
+  phone and checks again. The result's `helper` reads `up`, `restarted` or
+  `down`; a call that never returned has none, and ends its part as any driver
+  step that never returned. With `down`, `drive` sends nothing and returns
+  a `reason`: end that part with `iPhone check did not run — <part>: the
+  phone's typing helper is not running`. Before the first type in each app
+  (Safari, and the installed app), tap the field and take a reading with the
+  keyboard up, and keep its height as that app's keyboard-up height. On a fresh
+  phone the first field focus can show a sheet over the keyboard: "Speed up
+  your typing by sliding your finger across the letters to compose a word."
+  with a **Continue** button. Dismiss it with
+  `drive --phone <id> -- tap --label Continue`. That is preparation, not a plan
+  step; tap the field again and judge that tap. After a
+  restart, the soft keyboard can stay hidden in an app that already received a
+  dropped keystroke, so from a `restarted` result on, judge typing in that app by
+  the field's value, not by whether the keyboard shows. Find a control with
   `axe describe-ui --udid <phone>`, then tap by `--label` or by coordinates.
   `describe-ui` can time out right after boot; retry it once. The page's own
   contents and Safari's sheets may be missing from it; then tap by coordinates
   read off a screenshot, in points (screenshot pixels divided by the phone's
-  scale; 3 on current iPhones). Take a screenshot with `shot --phone <id> --out <png> --page <page-url>
-  --where <part>`. Look at every screenshot yourself: you judge `keyboardSeen`
-  and `expectedSeen` from the image.
+  scale; 3 on current iPhones). Take a screenshot with
+  `shot --phone <id> --out <png> --run-dir <dir> --token <token>`, the `<dir>` you gave
+  `open` and the `<token>` it returned for the page on screen. `shot` labels `page` and
+  `where` from the readings the page posts during the capture, so a page without the
+  reporting script, or one that changes while the shot is taken, gets
+  `could not be established` for that label and the result's `labelNote` says why. Such a
+  piece does not count as evidence: take the shot again on a settled page. Look at every
+  screenshot yourself: you judge `keyboardSeen` and `expectedSeen` from the image.
 - **Readings.** After each step the plan checks, take a reading with
   `read --run-dir <dir> --token <token> --where <part>`, where `<part>` is
   `browser` or `installed`. A reading gives the visible height, the focused
@@ -215,8 +241,8 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   `no page reading from the installed app` until its development build keeps it.
 - **The installed app.** When the check includes it, add the page to the Home
   Screen from Safari: Share → Add to Home Screen, keep "Open as Web App" on,
-  Add. Find each control with `axe describe-ui --udid <phone>`. Dismiss a
-  one-time keyboard tip if one covers the screen. After returning to the Home
+  Add. Find each control with `axe describe-ui --udid <phone>`. If the one-time
+  keyboard tip covers the screen, dismiss it as Driving says. After returning to the Home
   Screen, take a screenshot before tapping an icon; it may be on another Home
   Screen page (swipe to it). Open the app from its Home
   Screen icon and read with `--where installed`. Judge these preparation taps
@@ -227,12 +253,41 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   before and after readings and what the screenshot showed. Its fields are
   `kind` (`tap-field`, `type` or `other`), `step`, `before`, `after`,
   `keyboardSeen`, `screenChanged`, `expected`, `expectedSeen` and `password`;
-  a `tap-field` step also carries `target`, the intended field's `id` (or
-  `name:<name>` for a field with no id) as a reading reports it in `focused`, and
+  a `tap-field` step also carries `target`, the intended field's `id`, or
+  `name:<name>` — matched on the field's name whether or not it has an id — as a
+  reading reports it in `focused`, and
   is completed only when the after reading's field is that `target` and a keyboard
-  was seen; a typing step completes only when its before and after readings name the same field.
+  was seen. Use `name:<name>` only for a name that appears once on the page
+  (check the page source once); a field whose name repeats is judged as an
+  `other` step. A typing step completes only when its before and after readings name the same field.
   A driver that reports success proves nothing; only `judge` decides. A step
-  `judge` calls not completed ends that part with `no response to input (<step>)`.
+  `judge` calls not completed ends that part with the `partReason` judge
+  returned (`no response to input (<step>)`); never compose your own wording.
+- **Retrying a part.** A part gets at most one retry, and only when the
+  evidence shows a cause outside the app: the keyboard tip, a `restarted`
+  typing helper, or Safari falling back to its Start Page after the first
+  reading (the first-reading re-open in Boot and open is preparation and does
+  not spend this retry). Start it from a fresh `open` (new token). Never retry
+  once a step may have changed saved app data. This is the iPhone check's own
+  exception to the no-retry rule in Steps 5–8 (the paragraph that begins
+  "Provisioning is finished"), alongside that paragraph's carve-out. The first
+  attempt stays in the results: mark its pieces `"superseded": true` and put
+  its reason in `parts.<part>.superseded`; the part's `completed` and `reason`
+  describe the retry.
+- **The zoom control.** When a step grades whether focusing a field zooms the
+  page, first measure a control in the same context: a field known to be under
+  16 px and a 16-px field, each focused with the keyboard up. The plugin's
+  reading page (`lib/tests/fixtures/iphone/reading-page.html`) has 14-px
+  fields; in the installed app, use a field the app already has under 16 px,
+  or a development-only control page the build provides. The pilot never edits
+  the app to make a control: it is provisioned before execution, not by the
+  pilot. When neither exists in a context, zoom is not established in that
+  context and the results say so. The control works only
+  when the under-16-px field reads a lower `visibleHeight` (an iPhone 17 in
+  Safari reads 336 for a 14-px field against 384 for a 16-px one). Grade
+  against those measured readings, never a computed figure. A control that does
+  not read lower means zoom is not established in that context; say so in the
+  results.
 - **Stops.** Every call has a time limit. A call that never returns ends its
   part: `a driver step never returned (<step>)`, `a screenshot never returned`
   or `a page reading never returned`. A boot that never returns ends the whole
@@ -241,11 +296,16 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   `not attempted`. Evidence gathered before a stop stays in the results.
 - **Labels and posting.** Every screenshot and reading carries the six labels
   that `shot` and `read` return: `phone`, `model`, `iOS`, `page`, `where`,
-  `source`. Never type a label by hand, and never copy the phone ID from the
-  environment. Write the check JSON (`noPhone`, `whole`, `where`, `chosenBy`,
-  `parts` with `included`, `completed` and `reason` for `browser` and
-  `installed`, and `evidence`), then run `render --in <file>`; it refuses
-  unlabelled evidence. A PR comment shows a screenshot only by a URL its
+  `source`. Never type a label by hand (`shot` takes no `page` or `where`
+  argument), and never copy the phone ID from the environment. Write the check
+  JSON (`noPhone`, `whole`, `where`, `chosenBy`, `parts` with `included`,
+  `completed` and `reason` for `browser` and `installed`, `commit`, and `evidence`), then run `render --in <file>`; it refuses
+  unlabelled evidence. `commit` is `git rev-parse HEAD` of the app being served
+  when the check runs, and the check runs only on a clean checkout
+  (`git status --porcelain` empty); with uncommitted changes the check is not
+  complete. The results state that the served checkout was clean at that
+  commit. After any later change to what the page serves, run the
+  check again. A PR comment shows a screenshot only by a URL its
   readers can open: publish each screenshot where the PR readers can reach it
   and pass its `url` in the evidence; else the results name the local file and
   its `sha256` (pass `path` and `sha256` from `shot`). The plugin makes no

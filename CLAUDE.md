@@ -42,6 +42,12 @@ plus a permanent Backlog; areas live on as `area:*` labels; epic issues are rese
 decomposing one sizable piece of work into native sub-issues) — never in ROADMAP.md, and
 no individual work item is ever named in a milestone entry.
 
+## This repo is public
+
+Never cite another repository's issue by bare `#NNN` in an issue, PR or doc here — it
+renders as a live link to an unrelated issue in this repo. Write `owner/repo#NNN`, and leave out
+private project specifics.
+
 ## Versioning (SemVer)
 
 The `superheroes` plugin owns its version in `plugins/superheroes/.claude-plugin/plugin.json`.

@@ -162,6 +162,12 @@ Resume (`claude --resume <session-uuid> -p`) reopens the dead session's own cont
 the full one, not a prefix. A resumed session **appends to its original transcript file** rather
 than creating a new one; the transcript you were watching stays the transcript.
 
+A spawned `claude -p` that reports "OAuth session expired" was started without
+`CLAUDE_CONFIG_DIR`. Pin it on every manual canary, probe or resume, as the launcher already does
+for launches. Without it the child reads the default config dir's sign-in, which belongs to a
+different instance. If a call with the variable pinned still fails, that instance's stored sign-in
+has expired and needs a re-login with the variable set.
+
 Adoption is the other move: a **fresh** session takes the build over from durable artifacts only —
 **the pushed branch at a named sha**, the issue, the PR, the posted receipts — and nothing travels
 from the dead session's head. Across a different instance or account, **adoption is the only path**,
@@ -206,6 +212,15 @@ then adopt from what you preserved. **An adoption that records no sweep is an ad
 looked.** The advisor runs this sweep before composing the successor's launch and records what it
 found for handoff; the adopting builder re-runs the sweep at intake and reconciles against that
 handoff — both halves run, neither replaces the other.
+
+### Check for a sibling build at a clean-base intake
+
+A builder launched on a clean base, with no branch handed over, checks at intake for another build
+of the same issue: `git branch -a --list "*<issue>*"`, `git worktree list`, and
+`git ls-remote --heads origin "*<issue>*"`. It reports any sibling it finds on the issue before
+building, and it never deletes a sibling's branch or worktree. The unpushed-work sweep above runs
+only on adoption, so a relaunch onto a clean base cannot otherwise see an earlier build of the same
+issue, and two builds then diverge or one's work is lost.
 
 ### Pin the transcript; never re-discover it
 

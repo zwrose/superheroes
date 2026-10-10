@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Write or check the advisor-vet slot of a PR body against its vet receipt.
 
-Consumers: the showrunner vet's owner-half write (``write``) and the merged or
-closed-PR follow-ups sweep (``check``). The writer compares two machine-readable
+Consumers: the showrunner vet's owner-half write (``write``), the merged or
+closed-PR follow-ups sweep (``check``), and the workhorse's ready-PR step
+(``handback``: the same body read ``write`` and ``check`` run first, over a body file or
+an open PR, with no receipt, so a builder fixes a bad marker while its lane is live). The writer compares two machine-readable
 marker lists and reads no other prose: the build record's
 ``<!-- superheroes:followups FU1 FU2 -->`` marker (or ``none``) and the latest vet
 receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
@@ -38,6 +40,7 @@ RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
 PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
+VERBS = ("write", "check", "handback")
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
@@ -134,6 +137,30 @@ def analyze_body(body):
         raise _Refusal("markers-invalid", "advisor-vet marker is not above the build-record marker")
     followups = read_marker_list(body, FOLLOWUPS_MARKER_NAME, after=offsets["build-record"])
     return offsets["advisor-vet"], offsets["build-record"], followups
+
+
+def check_handback(body):
+    """The builder's handback read: ``analyze_body`` itself, so it agrees with ``write`` and ``check``."""
+    try:
+        ids = analyze_body(body)[2]
+    except _Refusal as exc:
+        detail = exc.detail
+        # axis: a hyphenated follow-ups line where the followups marker belongs is named in the detail
+        if detail.startswith("%s marker appears 0 times" % FOLLOWUPS_MARKER_NAME) and any(
+                line.startswith("<!-- superheroes:follow-ups") for _o, line in _live_lines(body)):
+            detail += ("; a hyphenated <!-- superheroes:follow-ups ... --> line is not it: write"
+                       " <!-- superheroes:followups FU1 FU2 --> or <!-- superheroes:followups none -->")
+        return _refusal(exc.reason, detail)
+    return {"ok": True, "verb": "handback", "followups": ids or []}
+
+
+def _handback_file(body_file):
+    try:
+        with open(body_file, encoding="utf-8") as handle:
+            body = handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return _refusal("read-failed", "body file unreadable: %s" % exc)
+    return check_handback(body)
 
 
 def check_slot_text(slot_text):
@@ -265,13 +292,17 @@ def _normalize(text):
     return text.replace("\r\n", "\n").rstrip()
 
 
-def run_verb(verb, pr, repo, slot_file=None, run=None):
+def run_verb(verb, pr, repo, slot_file=None, run=None, body_file=None):
+    if body_file is not None:
+        if verb != "handback" or pr is not None or repo is not None or slot_file is not None:
+            return _refusal("bad-argument", "--body-file goes with handback alone")
+        return _handback_file(body_file)
     if not isinstance(pr, int) or isinstance(pr, bool) or pr < 1:
         return _refusal("bad-argument", "pr must be a positive integer")
     if not isinstance(repo, str) or not _REPO_RE.match(repo):
         return _refusal("bad-argument", "repo must be owner/name")
-    if verb not in ("write", "check") or (verb == "write") != (slot_file is not None):
-        return _refusal("bad-argument", "write needs --slot-file; check takes none")
+    if verb not in VERBS or (verb == "write") != (slot_file is not None):
+        return _refusal("bad-argument", "write needs --slot-file; check and handback take none")
     try:
         return _run_verb(verb, pr, repo, slot_file, run or subprocess.run)
     except _Refusal as exc:
@@ -282,6 +313,8 @@ def _run_verb(verb, pr, repo, slot_file, run):
     if not shutil.which("gh"):
         raise _Refusal("read-failed", "gh not on PATH")
     body = _read_body(run, pr, repo)
+    if verb == "handback":
+        return check_handback(body)
     analyze_body(body)
     slot_text = None
     if verb == "write":
@@ -332,19 +365,23 @@ def main(argv=None, run=None):
     try:
         parser = _Parser(prog="vet_slot", add_help=False)
         verbs = parser.add_subparsers(dest="verb")
-        for name in ("write", "check"):
+        for name in VERBS:
             sub = verbs.add_parser(name, add_help=False)
-            sub.add_argument("--pr", type=int, required=True)
-            sub.add_argument("--repo", required=True)
+            required = name != "handback"  # handback takes --pr/--repo or --body-file
+            sub.add_argument("--pr", type=int, required=required)
+            sub.add_argument("--repo", required=required)
             if name == "write":
                 sub.add_argument("--slot-file", required=True)
+            if name == "handback":
+                sub.add_argument("--body-file")
         args = parser.parse_args(argv)
-        if args.verb not in ("write", "check"):
+        if args.verb not in VERBS:
             raise SystemExit(2)
     except SystemExit:
         result = _refusal("bad-argument", "invalid command-line arguments")
     else:
-        result = run_verb(args.verb, args.pr, args.repo, getattr(args, "slot_file", None), run=run)
+        result = run_verb(args.verb, args.pr, args.repo, getattr(args, "slot_file", None), run=run,
+                          body_file=getattr(args, "body_file", None))
     sys.stdout.write(json.dumps(result) + "\n")
     return 0 if result["ok"] else 1
 

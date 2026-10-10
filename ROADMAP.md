@@ -125,30 +125,35 @@ the owner is the direct consumer of.
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
    logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)*
-2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+2. **Cloud builders** — a project's builds run in cloud sessions, under the same review, vet and
+   merge rules as a build on the owner's machine, so the owner's own machine stops bounding how
+   many builds run at once. One stack of children that merges and ships whole. *(Opened
+   2026-10-10 at the spec's merge, owner-ruled its own milestone to close once this work ships;
+   placed second, behind the reset, because its children are building now. The owner re-ranks at will.)*
+3. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-3. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
    what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
    under Review-spec keeps pace by the same word.)*
-4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+5. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
-5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+6. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
    hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
    garbage collection, the owner-authority gate's remaining side doors.
-6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+7. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
    two largest charters finally under one; the activation record bound to what it certifies;
    the harness tripwire leaving a durable result.
-7. **Cross-session messaging** — a discovery starter: where the host's cross-session
+8. **Cross-session messaging** — a discovery starter: where the host's cross-session
    messaging primitive replaces the deaf-session workarounds, per surface.
-8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+9. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
    actually is, for the owner first. Low priority.
-9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+10. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+11. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
