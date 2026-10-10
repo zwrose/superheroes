@@ -951,6 +951,73 @@ def test_shot_returns_within_its_budget_when_a_post_stalls(fake, tmp_path):
     assert r["ok"] is True and r["labels"] == established(NE, NE)
 
 
+def test_shot_when_the_page_leaves_the_foreground_during_the_capture_establishes_nothing(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def away_and_back():
+        phone.extra["visibility"] = "hidden"
+        time.sleep(0.3)  # hidden readings are posted mid-capture
+        phone.extra["visibility"] = "visible"
+    with Phone(port) as phone:
+        fake(on_screenshot(away_and_back))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path):
+    port, late = make_session(tmp_path), []
+
+    def during():
+        packet = json.dumps(reading(page=PAGE_B, where="browser", takenAt=int(time.time() * 1000))).encode()
+
+        def slow_post():
+            with socket.create_connection(("127.0.0.1", port), 2) as c:
+                c.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(packet) + packet[:5])
+                time.sleep(0.5)  # in flight while the post-capture reading arrives and the window is frozen
+                c.sendall(packet[5:])
+                c.recv(100)
+        late.append(threading.Thread(target=slow_post))
+        late[0].start()
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(during))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    late[0].join(5)
+    assert r["ok"] is True and r["labels"] == established(NE, "browser") and "page changed" in r["labelNote"]
+
+
+def test_shot_returns_within_its_budget_when_a_post_body_keeps_trickling(fake, tmp_path):
+    fake(sim(inventory((U, "Booted"))))
+    port, release = make_session(tmp_path), threading.Event()
+
+    def trickle():  # a promised 1000-byte body, one byte every 100 ms: never idle long enough for a socket timeout
+        for _ in range(100):
+            try:
+                conn = socket.create_connection(("127.0.0.1", port), 0.2)
+            except OSError:
+                time.sleep(0.02)
+                continue
+            with conn:
+                try:
+                    conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n")
+                    for _ in range(100):
+                        conn.sendall(b" ")
+                        if release.wait(0.1):
+                            break
+                except OSError:
+                    pass
+            return
+    thread = threading.Thread(target=trickle)
+    thread.start()
+    began = time.monotonic()
+    r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 0.5)
+    elapsed = time.monotonic() - began
+    release.set()
+    thread.join(5)
+    assert elapsed < 1.5, elapsed
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+
+
 def test_shot_never_returns_a_reading_value(fake, tmp_path):
     fake(sim(inventory((U, "Booted"))))
     port = make_session(tmp_path)

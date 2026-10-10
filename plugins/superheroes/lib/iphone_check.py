@@ -213,7 +213,8 @@ def shot(phone, out, run_dir, token, timeout):
     """Screenshot a phone. `page` and `where` come only from the readings the phone's page posts during the call."""
     call_start_ms, end = time.time() * 1000, time.monotonic() + timeout
     res = {"ok": False, "returned": False, "path": out, "sha256": None, "labels": None, "labelNote": None}
-    collected, cond = [], threading.Condition()
+    collected, cond, conns = [], threading.Condition(), set()
+    visible = lambda rd: rd.get("visibility") == "visible"
 
     def left():
         return max(end - time.monotonic(), 0.1)
@@ -228,6 +229,17 @@ def shot(phone, out, run_dir, token, timeout):
             return True
 
     class Handler(BaseHTTPRequestHandler):
+        def handle(self):
+            # Axis: a request still in flight when the call ends is tracked so it can be drained, then cut at the deadline
+            with cond:
+                conns.add(self.connection)
+            try:
+                super().handle()
+            finally:
+                with cond:
+                    conns.discard(self.connection)
+                    cond.notify_all()
+
         def setup(self):
             # Axis: a POST that stalls is dropped once the call's budget runs out, never outliving it
             self.timeout = max(min(2, end - time.monotonic()), 0.05)
@@ -238,18 +250,24 @@ def shot(phone, out, run_dir, token, timeout):
                 reading = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
             except (ValueError, OSError):
                 reading = None
-            if isinstance(reading, dict) and accept_reading(reading, self.path, token, reading.get("where"), call_start_ms):
+            # Axis: hidden readings are kept too (a fresh, token-matched one is a visibility-loss observation); only visible ones label
+            if isinstance(reading, dict) and accept_reading({**reading, "visibility": "visible"}, self.path, token,
+                                                            reading.get("where"), call_start_ms):
                 with cond:
                     collected.append((time.monotonic(), reading))
                     cond.notify_all()
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
+            try:
+                self.send_response(204)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+            except OSError:
+                pass  # the connection was cut at the call's deadline
 
         def log_message(self, *a):
             pass
 
-    server, note, window = None, None, []
+    server, note, after_ms = None, None, None
+    shot_start_ms = time.time() * 1000
     try:
         # Axis: a token or session the page's readings cannot be tied to (bad token, missing or malformed session file)
         try:
@@ -272,8 +290,9 @@ def shot(phone, out, run_dir, token, timeout):
         if server is not None:
             threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
             # Axis: no page reading arrived before the capture
-            if not wait_until(lambda: bool(collected)):
+            if not wait_until(lambda: any(visible(rd) for _, rd in collected)):
                 note = "no page reading arrived before the capture"
+        shot_start_ms = time.time() * 1000
         returned, code, _ = _run(["xcrun", "simctl", "io", phone, "screenshot", out], left())
         res["returned"] = returned
         shot_end_mono, shot_end_ms = time.monotonic(), time.time() * 1000
@@ -283,17 +302,35 @@ def shot(phone, out, run_dir, token, timeout):
             def first_after():
                 # Axis: a reading is "after" only if it was received after the screenshot returned AND taken after it
                 return next((i for i, (got, rd) in enumerate(collected)
-                             if got >= shot_end_mono and rd["takenAt"] >= shot_end_ms), None)
+                             if visible(rd) and got >= shot_end_mono and rd["takenAt"] >= shot_end_ms), None)
             if wait_until(lambda: first_after() is not None):
                 with cond:
-                    window = [rd for _, rd in collected[:first_after() + 1]]
+                    after_ms = collected[first_after()][1]["takenAt"]
             else:
                 note = "no page reading arrived after the capture"
     finally:
         if server is not None:
             server.shutdown()
+            # Axis: requests in flight are drained (a reading taken during the capture may land late), but never past the call's budget
+            drain = max(end, time.monotonic() + 0.2)
+            with cond:
+                while conns and (rest := drain - time.monotonic()) > 0:
+                    cond.wait(rest)
+                for conn in list(conns):
+                    try:
+                        conn.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
             server.server_close()
+    window, notes = [], []
+    if after_ms is not None:
+        # The window is every reading taken up to the first reading after the capture, whatever order the posts landed in
+        window = [rd for _, rd in collected if visible(rd) and rd["takenAt"] <= after_ms]
     page, where, notes = _derive_labels(window) if window else (NOT_ESTABLISHED, NOT_ESTABLISHED, [])
+    # Axis: the page left the foreground during the capture window — the screenshot may show something else
+    if window and any(rd.get("visibility") == "hidden" and shot_start_ms <= rd["takenAt"] <= after_ms for _, rd in collected):
+        page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
+        notes.append("the page left the foreground during the capture")
     res["returned"], res["labels"], err = _labels(phone, page, where, left())
     if err is not None:
         res["error"] = err
