@@ -19,7 +19,7 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
 RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
-            "observation": {"tokens": 100, "wallSeconds": 120}}
+            "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True}
 PHRASES = ("no bugs", "bug-free", "bug free")
 
 
@@ -560,7 +560,7 @@ def test_raw_comment_create_failure_posts_no_record(tmp_path):
 
 def test_w6_ran_means_a_run_record_for_the_final_commit():
     # axis: the final-commit run test; a run record of another or no commit, or an engine error, counted as a run
-    assert "resultKind" not in GOOD_RUN and "graded" not in GOOD_RUN
+    assert "resultKind" not in GOOD_RUN and GOOD_RUN["graded"] is True
     rec = build(account(), Fake(runs={"/run/code-reviewer": (copy.deepcopy(GOOD_RUN), None)}))
     v = rec["reviewers"][0]
     assert v["ran"] == "engine-record" and v["observation"] == GOOD_RUN["observation"]
@@ -581,6 +581,54 @@ def test_w6_ran_means_a_run_record_for_the_final_commit():
         assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
     rec = build(account(reviewers=[reviewer(ran=False)]), Fake(runs={"/run/code-reviewer": (dict(GOOD_RUN, viewHeadSha=EARLIER), None)}))
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["sessionDisagreements"] == []
+
+
+def test_w6b_a_run_record_on_the_final_commit_that_was_not_graded_is_not_a_review():
+    # axis: forfeit vs run; a forfeited or failed run on the final commit credited as a completed review
+    note = "the run on the final commit did not complete a review (forfeit or failure)"
+    for graded in (False, None):
+        bad = dict(GOOD_RUN, graded=graded)
+        rec = build(account(), Fake(runs={"/run/code-reviewer": (bad, None)}))
+        v = rec["reviewers"][0]
+        assert v["ran"] == "not-run" and v["runNote"] == note and "observation" not in v
+        assert rec["status"] == "not-reviewed" and rec["parked"] is True
+        assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
+    rec = build(account(reviewers=[reviewer(ran=False)]), Fake(runs={"/run/code-reviewer": (dict(GOOD_RUN, graded=False), None)}))
+    assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
+
+
+def test_an_account_that_omits_its_findings_is_refused():
+    # axis: findings presence; an omitted findings member published as a clean review
+    acct = account()
+    del acct["findings"]
+    with pytest.raises(rr.Refusal) as e:
+        build(acct)
+    assert (e.value.reason, e.value.detail) == ("review-account-invalid", "findings")
+
+
+@pytest.mark.parametrize("title", ["Hardcoded " + "ghp_" + "A" * 36, 'leaks "password": [REDACTED] in logs'])
+def test_the_stored_finding_key_is_opaque_and_survives_redaction(tmp_path, title):
+    # axis: identity under redaction; a key built from title text changed or leaked by the scrubber
+    fake = Fake()
+    titled = finding("a-1", title=title)
+    send(tmp_path, fake, findings=[titled])
+    stored = rr.read(7, readers=fake.readers())["findings"][0]
+    assert stored["findingKey"] == rr._key(titled) and stored["findingKey"].startswith("rr1:")
+    assert "s3cret" not in stored["findingKey"] and "ghp_" not in stored["findingKey"]
+    assert "password" not in stored["findingKey"]
+    out = rr.write(put(tmp_path, account(findings=[dict(titled, outcome="shown-wrong", reason="r")])),
+                   str(tmp_path), fake.readers())
+    assert out["ok"] and out["action"] == "created"
+
+
+@pytest.mark.parametrize("text", ['{"passphrase":"EXAMPLE_SECRET"}', '{\\"passphrase\\":\\"EXAMPLE_SECRET\\"}',
+                                  '{"Authorization":"Basic dXNlcjpwYXNz"}', "passphrase=EXAMPLE_SECRET"])
+def test_quoted_credentials_are_redacted_in_raw_output_and_record_strings(tmp_path, text):
+    # axis: quoted credentials; a passphrase or JSON Authorization value published from raw output or a finding string
+    assert "EXAMPLE_SECRET" not in rr.render_raw("r.txt", text) and "dXNlcjpwYXNz" not in rr.render_raw("r.txt", text)
+    f = finding("a-1", outcome="fixed", reason="r", body=text)
+    body = rr.render(build(account(findings=[f])))
+    assert "EXAMPLE_SECRET" not in body and "dXNlcjpwYXNz" not in body and "[REDACTED]" in body
 
 
 def test_w7_read_returns_the_latest(tmp_path):

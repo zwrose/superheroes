@@ -19,6 +19,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -190,6 +191,7 @@ def _validate(a):
     sn = lambda v: v is None or isinstance(v, str)  # noqa: E731
     lst = lambda k: a.get(k, []) if isinstance(a.get(k, []), list) else chk(False, k)  # noqa: E731
     chk(isinstance(a, dict), "account")
+    chk("findings" in a, "findings")  # an omitted findings member is unknown coverage, never an empty review
     chk(a.get("schema") == ACCOUNT_SCHEMA, "schema")
     pr = a.get("pr")
     chk(isinstance(pr, int) and not isinstance(pr, bool) and pr > 0, "pr")
@@ -299,13 +301,16 @@ def _reviewer(r, rd, dis, head):
     if r.get("runDir"):
         rec, err = rd["engine_run"](r["runDir"])
         seen = rec.get("viewHeadSha") if isinstance(rec, dict) else None
-        if isinstance(seen, str) and seen and seen == head:
+        graded = isinstance(rec, dict) and rec.get("graded") is True
+        if isinstance(seen, str) and seen and seen == head and graded:
             out.update(ran="engine-record", observation=rec.get("observation"))
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
-            elif isinstance(seen, str) and seen:
+            elif isinstance(seen, str) and seen and seen != head:
                 note = f"the run record covers {_short(seen)}, not the final commit {_short(head)}"
+            elif isinstance(seen, str) and seen:
+                note = "the run on the final commit did not complete a review (forfeit or failure)"
             else:
                 note = "the run record names no commit"
             out.update(ran="not-run", runNote=note)
@@ -320,8 +325,18 @@ def _reviewer(r, rd, dis, head):
     return out
 
 
+_OPAQUE_KEY = "rr1:"
+
+
 def _key(f):
-    return session_contract.finding_identity_key(f)
+    """A finding's stable opaque identity, derived from the unredacted account.
+
+    A hash, so redaction can neither change it nor expose text carried in the identity.
+    """
+    raw = session_contract.finding_identity_key(f)
+    if not isinstance(raw, str) or raw.startswith(_OPAQUE_KEY):
+        return raw
+    return _OPAQUE_KEY + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def _name(f):
@@ -395,8 +410,7 @@ def build_record(account, readers):
             missing.append({"name": v["name"], "goAhead": good})
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
-    findings = [dict(f) if f.get(session_contract.FINDING_KEY_FIELD) else
-                dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
+    findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
@@ -441,9 +455,22 @@ def _secret_key(k):
     return isinstance(k, str) and bool(_SECRET_KEY.search(k))
 
 
+_QUOTED_SECRET = re.compile(
+    r"""(?i)(\\?["'][\w-]*(?:password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase"""
+    r"""|authorization|cookie)[\w-]*\\?["']\s*:\s*)(?:\\?"[^"\n]*\\?"|\\?'[^'\n]*\\?')""")
+_EQUALS_SECRET = re.compile(r"(?i)\b(passphrase|authorization)=([^&\s;\"']+)")
+
+
+def _scrub_text(text):
+    """pr_comment.scrub plus the quoted credential forms it leaves intact (passphrase, JSON Authorization)."""
+    text = pr_comment.scrub(text)
+    text = _QUOTED_SECRET.sub(r"\1[REDACTED]", text)
+    return _EQUALS_SECRET.sub(r"\1=[REDACTED]", text)
+
+
 def _scrubbed(value):
     if isinstance(value, str):
-        return pr_comment.scrub(value)
+        return _scrub_text(value)
     if isinstance(value, list):
         return [_scrubbed(v) for v in value]
     if isinstance(value, dict):
@@ -492,7 +519,7 @@ def render_raw(name, text):
              "A review record on this PR links this comment.")
     # Only the sentence this writer authors is checked: the kept text is the reviewer's own.
     _assert_no_bug_free_claim(intro)
-    text = pr_comment.scrub(text)
+    text = _scrub_text(text)
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
     body = f"{RAW_MARKER}\n{intro}\n\n{fence}\n{text}\n{fence}"
     if len(body) > GITHUB_MAX_CHARS:
