@@ -246,6 +246,11 @@ def test_earlier_session_findings_survive_in_history(tmp_path):
     assert rec["sessionId"] == "B" and rec["findings"] == [] and len(fake.marked()) == 1
     assert [h["sessionId"] for h in rec["history"]] == ["A"]
     assert rec["history"][0]["findings"][0]["reason"] == "owner call"
+    # A's unresolved owner decision is still waiting in B's record and its visible summary.
+    assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
+    assert any("a-1" in m and "waits for the owner" in m for m in rec["whatIsMissing"])
+    shown = rr.render(rec)
+    assert "Nothing waits for the owner" not in shown and "a-1" in shown.split("Waiting for the owner:")[1]
     prior = rec
     again = build(account(sessionId="B"), fake, prior)
     assert [h["sessionId"] for h in again["history"]] == ["A"]
@@ -410,16 +415,35 @@ def test_credentials_are_scrubbed_before_the_record_is_published(tmp_path):
     assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == "key [REDACTED]"
 
 
-def test_inherited_history_that_would_overflow_is_compacted(tmp_path):
+def test_earlier_left_for_owner_clears_only_when_a_later_session_records_another_outcome(tmp_path):
     fake = Fake()
-    old = [finding("old-1", body="x" * 62700, outcome="left-for-owner", reason="owner call")]
+    old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
+    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
+    rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
+    rr.write(put(tmp_path, account(sessionId="C")), str(tmp_path), fake.readers())
+    assert rr.read(7, readers=fake.readers())["leftForOwner"] == ["a-1"]
+    decided = [finding("a-1", outcome="ruling", reason="owner ruled it out")]
+    rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["leftForOwner"] == [] and rec["status"] == "reviewed"
+
+
+def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment(tmp_path):
+    fake = Fake()
+    old = [finding("old-1", body="x" * 62000, consequence="it breaks", outcome="left-for-owner",
+                   reason="owner call " + "r" * 400)]
     assert rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())["ok"]
     out = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
     assert out["ok"] and out["action"] == "edited"
-    hist = rr.read(7, readers=fake.readers())["history"]
-    assert [h["sessionId"] for h in hist] == ["A"] and hist[0]["compacted"] is True
-    assert hist[0]["findings"][0]["id"] == "old-1" and hist[0]["findings"][0]["reason"] == "owner call"
-    assert "body" not in hist[0]["findings"][0]
+    assert len(fake.marked()) == 1 and len(fake.comments) == 2
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["history"] == [] and [a["sessionIds"] for a in rec["historyArchives"]] == [["A"]]
+    kept = rec["archivedHistory"][0]["findings"][0]
+    assert kept["body"] == "x" * 62000 and kept["consequence"] == "it breaks" and len(kept["reason"]) > 300
+    assert rec["leftForOwner"] == ["old-1"]
+    again = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
+    assert again["ok"] and len(fake.comments) == 2
+    assert [a["sessionIds"] for a in rr.read(7, readers=fake.readers())["historyArchives"]] == [["A"]]
 
 
 def test_ungraded_or_forfeited_engine_receipt_is_not_a_completed_review():

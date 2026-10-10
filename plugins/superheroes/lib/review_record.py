@@ -30,6 +30,8 @@ import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
+ARCHIVE_MARKER = "<!-- superheroes:review-record-archive -->"
+ARCHIVE_SCHEMA = "review-record-archive/1"
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
 FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
@@ -343,6 +345,8 @@ def _status(rec):
     for f in rec["findings"]:
         if f.get("outcome") == _LEFT_FOR_OWNER:
             lines.append(f"finding {f['id']} waits for the owner's decision")
+    for f in rec["carriedForOwner"]:
+        lines.append(f"finding {f['id']} from an earlier session still waits for the owner's decision")
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
     if not rec["makers"]:
@@ -380,10 +384,22 @@ def build_record(account, readers, prior=None):
     hist = list((prior or {}).get("history") or [])
     if prior and prior.get("sessionId") != a["sessionId"]:
         hist.append({k: prior.get(k) for k in ("sessionId", "finalCommit", "findings", "rawFindings")})
+    # An earlier session's finding left for the owner stays pending until a later session records a
+    # different outcome for the same finding id (a re-listed finding is judged from the new account).
+    listed = {f["id"] for f in findings}
+    earlier = list((prior or {}).get("carriedForOwner") or [])
+    if prior and prior.get("sessionId") != a["sessionId"]:
+        earlier += prior.get("findings") or []
+    carried = list({f["id"]: dict(f) for f in earlier
+                    if isinstance(f, dict) and f.get("outcome") == _LEFT_FOR_OWNER
+                    and f.get("id") not in listed}.values())
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
         "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw,
-        "leftForOwner": [f["id"] for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
+        "carriedForOwner": carried,
+        "leftForOwner": [f["id"] for f in findings if f.get("outcome") == _LEFT_FOR_OWNER]
+                        + [f["id"] for f in carried],
+        "historyArchives": list((prior or {}).get("historyArchives") or []),
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
@@ -419,23 +435,6 @@ def _scrubbed(value):
     return value
 
 
-_KEEP = ("id", "title", "severity", "file", "line", "outcome", "reason", "sourceFile", "reviewer")
-
-
-def _compact_entry(item):
-    if not isinstance(item, dict):
-        return item
-    return {k: (v[:300] if isinstance(v, str) else v) for k, v in item.items() if k in _KEEP}
-
-
-def compact_history(record):
-    """Shrink inherited history to one line per finding (id, outcome, reason) so a successor can write."""
-    hist = [dict(h, findings=[_compact_entry(f) for f in h.get("findings") or []],
-                 rawFindings=[_compact_entry(f) for f in h.get("rawFindings") or []], compacted=True)
-            for h in record.get("history") or []]
-    return dict(record, history=hist)
-
-
 def render(record):
     record = _scrubbed(record)
     r, lane, ci = record, record["lane"], record["ci"]
@@ -465,12 +464,24 @@ def render(record):
     return body
 
 
-def _parse_body(body):
+def render_archive(entries):
+    """An archive comment: complete earlier-session entries, verbatim, in one append-only comment."""
+    payload = _scrubbed({"schema": ARCHIVE_SCHEMA, "history": entries})
+    body = (f"{ARCHIVE_MARKER}\nEarlier sessions of this PR's review record, kept in full. "
+            "The review record comment names this comment.\n\n<details><summary>Earlier sessions</summary>\n\n```json\n"
+            f"{json.dumps(payload, indent=2, sort_keys=True)}\n```\n</details>")
+    _assert_no_bug_free_claim(body)
+    if len(body) > MAX_BODY_CHARS:
+        raise Refusal("review-record-too-large", f"an earlier session alone is {len(body)} characters")
+    return body
+
+
+def _parse_body(body, schema=RECORD_SCHEMA):
     try:
         rec = json.loads(body[body.index("```json\n") + 8:body.rindex("\n```\n</details>")])
     except ValueError:
         return None
-    return rec if isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA else None
+    return rec if isinstance(rec, dict) and rec.get("schema") == schema else None
 
 
 def _marker_comments(rd, pr, repo):
@@ -514,7 +525,15 @@ def write(account_path, repo_root, readers=None):
         except Refusal as e:
             if e.reason != "review-record-too-large" or not record["history"]:
                 raise
-            body = render(compact_history(record))
+            # Nothing is trimmed: the full earlier sessions move to their own comment on the PR,
+            # and the record names it. The archive is written first, so a failure loses nothing.
+            archive = rd["create_comment"](account["pr"], account.get("repo"), render_archive(record["history"]))
+            if archive is None:
+                raise Refusal("review-record-gh-failed", "the archive comment could not be written")
+            record = dict(record, history=[], historyArchives=record["historyArchives"] + [
+                {"id": archive["id"], "url": archive.get("url"),
+                 "sessionIds": [h.get("sessionId") for h in record["history"]]}])
+            body = render(record)
         sent = (rd["edit_comment"](found[0]["id"], account.get("repo"), body) if found
                 else rd["create_comment"](account["pr"], account.get("repo"), body))
         if sent is None:
@@ -526,13 +545,23 @@ def write(account_path, repo_root, readers=None):
 
 def read(pr, repo=None, readers=None):
     def go():
-        found = _marker_comments(_readers(readers), pr, repo)
+        rd = _readers(readers)
+        found = _marker_comments(rd, pr, repo)
         if not found:
             raise Refusal("review-record-missing", f"no review record on PR {pr}")
         rec = _parse_body(found[0]["body"])
         if rec is None:
             raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-        return {"ok": True, "url": found[0].get("url"), **rec}
+        archived = []
+        if rec.get("historyArchives"):
+            wanted = {x.get("id") for x in rec["historyArchives"] if isinstance(x, dict)}
+            for c in rd["list_comments"](pr, repo) or []:
+                if c.get("id") in wanted and str(c.get("body", "")).startswith(ARCHIVE_MARKER):
+                    parsed = _parse_body(c["body"], ARCHIVE_SCHEMA)
+                    if parsed is None:
+                        raise Refusal("review-record-unreadable", c.get("url") or "an archive comment")
+                    archived += parsed.get("history") or []
+        return {"ok": True, "url": found[0].get("url"), **rec, "archivedHistory": archived}
     return _guarded(go)
 
 

@@ -6,7 +6,8 @@ restate none of it.
 
 One PR comment whose first line is `<!-- superheroes:review-record -->`. A PR has exactly one. When
 a review is written again, the comment is edited in place, and earlier sessions' findings stay in
-it. Each review ends by writing it.
+it (whole, in an archive comment the record names, if they would not fit). An owner decision an
+earlier session left stays pending until a later session records another outcome. Each review ends by writing it.
 
 The record writer holds some facts in code: the lane, the final commit, CI on that commit, and
 whether an engine-run reviewer ran. Those win over your account. A reviewer whose run only you
@@ -52,16 +53,15 @@ python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>
 ```
 
 Each prints one JSON object and exits 0 on ok, 1 on a refusal.
-`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Put the record's URL in the PR
-body's build record. A PR names its record by that comment, and `read` finds it again.
+`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Put the record's URL in the PR body's build record; `read` finds it again.
 
 ## When it refuses
 
 - `review-record-duplicate` or `review-record-unreadable`: park the PR and report it on the PR.
   Never delete or overwrite a record by hand.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
-- `review-record-too-large`: shorten the account's long text and write again. Do not split the
-  record into a second comment.
+- `review-record-too-large`: shorten the account's long text and write again. (Earlier sessions
+  never cause it: they move whole to an archive comment, returned by `read` as `archivedHistory`.)
 - `review-record-missing`: on `read`, no record has been written for that PR.
 
 ## What "reviewed" means
@@ -86,7 +86,8 @@ when the engine's own record shows it graded as a success; a forfeited run is a 
 - A finding the session decided is code-quality only becomes `craft`, with the reason.
 - A finding put to a human (the undecided set) becomes `left-for-owner`.
 - An approved-to-fix finding has no outcome until it is fixed. The record says what is missing.
-- `rawFindingsFiles` are the round's `findings-*.json` files.
+- `rawFindingsFiles`: the round's `findings-*.json`, plus a file per stdout reviewer (codex, cursor)
+  holding its original findings, saved before compilation.
 
 **Light and micro lanes.**
 - A finding fixed and re-reviewed becomes `fixed`.
