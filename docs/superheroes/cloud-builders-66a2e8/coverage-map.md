@@ -55,7 +55,7 @@ each names the one owner and the register entry that binds the other child:
   machine) is **C8**'s. That a cloud launch makes no local worktree and pushes no launch branch is
   C1's, bound by R1.
 - **FR-36** (the advisor sends parked PRs back after the pass is renewed) is **C7**'s. The renewal
-  is read from the lapse date the pass command writes into the setup record (C3, R3; the record itself is C2's).
+  is read from the setup record's lapse date, which moves only when a cloud session confirms the new pass (C3, R3; the record itself is C2's).
 - **UFR-5** (a version mismatch runs the build on the owner's machine and names both versions) is
   **C5**'s: its readiness check keeps such a build off the cloud, and its launch report names both
   versions. Where a mismatch reaches a cloud builder anyway, C6's builder stops before building and
@@ -71,12 +71,12 @@ project up in one sitting, switches cloud builds on and launches a wave in which
 can run in the cloud does; those builds reach ready PRs with real independent reviews and no build
 work on the owner's machine; the work ships once the build has tested what it can; the build tests
 six named cases where a test can reach them; and what no test reaches is learned in use. No child
-can run the first two, because they need every layer of the stack together and a real wave. They
+can show the first two alone, because they need every layer of the stack together. They
 are the epic's **closure validation run** (`skills/showrunner/reference/closure.md` § The validation
 run). Because the whole epic is one native stack, closure follows that file's stacked-feature case
 (§ When closure fires): the receipt rides the top layer's vet, C8's, the last vet before the stack's
 one merge, when every other layer already has a green vet. So the validation run runs **before the
-merge**, against the stack's head, meaning the plugin as the whole stack has it: the plugin's automated conformance checks run on that head, supplemented by one recorded rehearsal in which the advisor and the cloud environment both run the stack head's plugin: a project set up in one sitting, cloud builds switched on, and a wave launched on fixture issues in which every build that can run in the cloud does, those builds reaching ready PRs with real independent reviews and no build work on the owner's machine, one of them a full-size build; the rehearsal's PRs are then closed unmerged. The run also collects the children's recorded runs for the spec's other five tested cases (several cloud builders at once: C1; a project that
+merge**, against the stack's head, meaning the plugin as the whole stack has it: the plugin's automated conformance checks run on that head, and the children's recorded runs are collected and graded against the spec's success bullets as far as they reach: a project set up in one sitting and its check session (C4), cloud builds switched on and builds routed (C5), cloud builds launched, listed and answered (C1, C7), a cloud build reaching a ready PR with its independent review run through the pass (C6), and cleanup (C8). No real wave and no full-size build is required before the merge: the spec's Definition of done says the work ships once the build has tested what it can, with nothing shown in a real wave first (Canon 2026-10-10-ca3e7e0d-15), so what the recorded runs do not reach, a real multi-build wave and a full-size cloud build among them, is recorded in the closure receipt as left to be learned in use. The run also collects the children's recorded runs for the spec's other five tested cases (several cloud builders at once: C1; a project that
 keeps its calibration outside the repository: C4; a lapsed pass sending builds to the owner's
 machine: C5; a builder's question answered mid-build and a stopped builder recovered: C7). Its
 result goes with C8's handback, in the closure receipt, presented to the owner with the delivery
