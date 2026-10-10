@@ -18,7 +18,7 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
          NO_STATUS)
 PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
 RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
-GOOD_RUN = {"runKind": "review", "resultKind": "findings", "resultDigest": "d1", "source": "codex",
+GOOD_RUN = {"runKind": "review", "resultKind": "findings", "resultDigest": "d1", "graded": True, "source": "codex",
             "engineModel": CODEX, "viewHeadSha": HEAD, "observation": {"tokens": 100, "wallSeconds": 120}}
 PHRASES = ("no bugs", "bug-free", "bug free")
 
@@ -216,7 +216,7 @@ def test_read_back_survives_the_session_dir(tmp_path, shape):
     raw = session / "code.json"
     members = [{"id": f"n{i}", "title": "nit", "severity": "Nit"} for i in range(7)] + [{"id": "c1", "severity": "Minor"}]
     raw.write_text(json.dumps(members if shape == "array" else {"findings": members}))
-    findings = [finding(f"n{i}", severity="Nit") for i in range(5)]
+    findings = [finding(f"n{i}", severity="Nit") for i in range(7)]
     findings += [finding("c1", outcome="craft", reason="style call"), finding("w1", outcome="shown-wrong", reason="x")]
     fake = Fake()
     out = rr.write(put(session, account(findings=findings, rawFindingsFiles=[str(raw)])), str(tmp_path), fake.readers())
@@ -420,3 +420,25 @@ def test_inherited_history_that_would_overflow_is_compacted(tmp_path):
     assert [h["sessionId"] for h in hist] == ["A"] and hist[0]["compacted"] is True
     assert hist[0]["findings"][0]["id"] == "old-1" and hist[0]["findings"][0]["reason"] == "owner call"
     assert "body" not in hist[0]["findings"][0]
+
+
+def test_ungraded_or_forfeited_engine_receipt_is_not_a_completed_review():
+    weak = dict(GOOD_RUN, graded=False)
+    rec = build(account(), Fake(runs={"/run/code-reviewer": (weak, None)}))
+    assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
+
+
+def test_raw_finding_without_a_recorded_outcome_keeps_the_record_not_reviewed(tmp_path):
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "raw-1", "severity": "Important", "body": "b"}]))
+    rec = build(account(rawFindingsFiles=[str(raw)]))
+    assert rec["status"] == "not-reviewed" and "reviewer finding raw-1 has no recorded outcome" in rec["whatIsMissing"]
+
+
+def test_left_for_owner_finding_is_not_reviewed_until_decided():
+    rec = build(account(findings=[finding("f1", outcome="left-for-owner", reason="needs owner")]))
+    assert rec["status"] == "not-reviewed" and "finding f1 waits for the owner's decision" in rec["whatIsMissing"]
+
+
+def test_build_lane_marker_layout_comes_from_build_lane():
+    assert rr.build_lane.BUILD_LANE_SCHEMA == "build-lane/1"

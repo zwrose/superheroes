@@ -67,7 +67,10 @@ body's build record. A PR names its record by that comment, and `read` finds it 
 ## What "reviewed" means
 
 The record says reviewed only when all three hold: CI is green on the PR's final commit, every
-finding has one of the five outcomes with its reason, and no planned review is missing.
+finding, including each one a reviewer raised, has one of the five outcomes with its reason, and no
+planned review is missing. A finding left for the owner keeps the record at not reviewed until the
+owner's decision is recorded as `fixed`, `shown-wrong`, or `ruling`. A reviewer run counts only
+when the engine's own record shows it graded as a success; a forfeited run is a missing review.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead. It still does not say reviewed.

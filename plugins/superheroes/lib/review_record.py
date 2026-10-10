@@ -24,6 +24,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import build_lane  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
@@ -99,7 +100,7 @@ def _lane_marker(repo_root):
     try:
         git_dir = _run(["git", "-C", repo_root, "rev-parse", "--git-dir"]).strip()
         branch = _run(["git", "-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"]).strip()
-        with open(os.path.join(repo_root, git_dir, "superheroes", "build-lane.json"), encoding="utf-8") as fh:
+        with open(os.path.join(repo_root, git_dir, build_lane.SIDECAR_DIRNAME, build_lane.BUILD_LANE_FILE), encoding="utf-8") as fh:
             marker = json.load(fh)
         return dict(marker, currentBranch=branch)
     except (AttributeError, TypeError, OSError, ValueError):
@@ -221,7 +222,7 @@ def _ci(rd, repo, sha):
 
 def _lane(a, rd, meta):
     m = rd["lane_marker"](a.get("repoRoot"))
-    if isinstance(m, dict) and m.get("schema") == "build-lane/1" and m.get("lane") == "full" \
+    if isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full" \
             and m.get("branch") == m.get("currentBranch"):
         return {"value": "full", "source": "build lane marker", "reason": None}
     if meta:
@@ -265,7 +266,7 @@ def _reviewer(r, makers, rd, dis, head=None):
     if r.get("runDir"):
         rec, err = rd["engine_run"](r["runDir"])
         if isinstance(rec, dict) and rec.get("runKind") == "review" \
-                and rec.get("resultKind") and rec.get("resultDigest"):
+                and rec.get("resultKind") and rec.get("resultDigest") and rec.get("graded") is True:
             seen = rec.get("viewHeadSha")
             if not head or seen != head:
                 # A review of another commit (or of an unknown one) never covers the final commit.
@@ -333,6 +334,15 @@ def _status(rec):
             lines.append(f"finding {f['id']} has no outcome")
         elif not f.get("reason"):
             lines.append(f"finding {f['id']} has no reason")
+    disposed = {f.get("id") for f in rec["findings"]}
+    for r in rec["rawFindings"]:
+        if not r.get("id"):
+            lines.append(f"a reviewer finding in {r.get('sourceFile')} has no id, so no outcome can be matched to it")
+        elif r["id"] not in disposed:
+            lines.append(f"reviewer finding {r['id']} has no recorded outcome")
+    for f in rec["findings"]:
+        if f.get("outcome") == _LEFT_FOR_OWNER:
+            lines.append(f"finding {f['id']} waits for the owner's decision")
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
     if not rec["makers"]:
