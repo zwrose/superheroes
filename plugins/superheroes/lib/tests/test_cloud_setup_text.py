@@ -705,3 +705,23 @@ def test_external_literals_are_pinned():
     assert CS.SOURCE_DIR == "/opt/superheroes/plugin-src"
     assert CS.STAMP_FILE == "cloud-setup-stamp"
     assert CS.PICKS_UP_VERSION_BY_ITSELF is False
+
+
+def _encoded_pass():
+    signin = {"auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+              "tokens": {"id_token": "i" * 20, "access_token": "a" * 20, "refresh_token": ""}}
+    return base64.b64encode(json.dumps(signin).encode()).decode("ascii")
+
+
+@pytest.mark.parametrize("form", [
+    "{value}",
+    '{{"SUPERHEROES_REVIEWER_PASS": " {value}"}}',
+    "**SUPERHEROES_REVIEWER_PASS**: {value}",
+], ids=["bare", "quoted-leading-space", "markdown-labelled"])
+def test_s9_encoded_reviewer_pass_is_refused(tmp_path, form):
+    w = _outside(tmp_path)
+    planted = _encoded_pass()
+    _put(w, "config/core.md", ("note: %s\n" % form.format(value=planted)).encode())
+    result = _compose(w)
+    _refusal(result, "secret-shaped-content")
+    assert planted not in json.dumps(result)

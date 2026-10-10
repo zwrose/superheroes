@@ -964,3 +964,61 @@ def test_cli_record_confirmation_that_is_not_json_exits_one(tmp_path, capsys):
     assert CP.main(_record_args(cwd, root, "{not json")) == 1
     assert _one_json_line(capsys)["reason"] == "confirmation-unreadable"
     assert open(path, "rb").read() == before
+
+
+# ---------------------------------------------------------------- advisor-guided fixes
+
+
+def _probe_module():
+    sys.path.insert(0, os.path.join(_HERE, ".."))
+    import preflight_probe
+    return preflight_probe
+
+
+def test_confirm_expected_word_follows_the_prompt_preflight_probe_sends(tmp_path, monkeypatch):
+    probe = _probe_module()
+    monkeypatch.setattr(probe, "PROBE_ASK", "Reply with the single word GO and nothing else.\n")
+    env = _placed_env(tmp_path)
+    assert CP.confirm(env=env, run=_fake_run(stdout="READY\n"), now=NOW)["reason"] == \
+        "reviewer-answer-unexpected"
+    assert CP.confirm(env=env, run=_fake_run(stdout="GO\n"), now=NOW)["reviewerAnswered"] is True
+
+
+def test_confirm_fails_closed_when_the_prompt_word_cannot_be_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(_probe_module(), "PROBE_ASK", "Say something.\n")
+    calls = []
+    result = CP.confirm(env=_placed_env(tmp_path), run=_fake_run(calls=calls), now=NOW)
+    assert result["reviewerAnswered"] is False and result["reason"] == "reviewer-did-not-answer"
+    assert calls == []
+
+
+@pytest.mark.parametrize("name", ["CODEX_API_KEY", "OPENAI_API_KEY"])
+def test_confirm_refuses_an_api_key_in_the_environment(tmp_path, name):
+    calls = []
+    env = _placed_env(tmp_path, **{name: "key-value"})
+    result = CP.confirm(env=env, run=_fake_run(calls=calls), now=NOW)
+    assert result["reviewerAnswered"] is False and result["reason"] == "api-key-in-environment"
+    assert calls == []
+
+
+def test_confirm_refuses_an_api_key_in_the_placed_sign_in(tmp_path):
+    calls = []
+    keyed = _pass_obj()
+    keyed["OPENAI_API_KEY"] = "key-value"
+    env = _placed_env(tmp_path, signin_obj=keyed, pass_value=_encode(keyed))
+    result = CP.confirm(env=env, run=_fake_run(calls=calls), now=NOW)
+    assert result["reviewerAnswered"] is False and result["reason"] == "api-key-in-sign-in"
+    assert calls == []
+
+
+def test_clipboard_command_runs_without_captured_pipes(monkeypatch):
+    seen = {}
+
+    def fake(argv, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(CP.subprocess, "run", fake)
+    CP._run_clipboard(("pbcopy",), "text")
+    assert not seen.get("capture_output")
+    assert seen["stdout"] == subprocess.DEVNULL and seen["stderr"] == subprocess.DEVNULL
+    assert seen["input"] == "text"

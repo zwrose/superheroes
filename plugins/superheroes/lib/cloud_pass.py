@@ -19,6 +19,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -316,6 +317,10 @@ def confirm(env=None, run=None, now=None):
     signin = _read_object(_default_signin_path(env))
     if signin is None or signin != expected:
         return no("pass-not-placed")
+    if any(env.get(k) for k in ("CODEX_API_KEY", "OPENAI_API_KEY")):
+        return no("api-key-in-environment")
+    if signin.get("OPENAI_API_KEY") is not None:
+        return no("api-key-in-sign-in")
     tokens = signin.get("tokens")
     token = tokens.get("access_token") if isinstance(tokens, dict) else None
     exp = _expiry(token) if isinstance(token, str) else None
@@ -329,6 +334,10 @@ def confirm(env=None, run=None, now=None):
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)
     import preflight_probe
+    # The expected reply is the word the probe prompt actually asks for, read from that prompt.
+    asked = re.findall(r"single word (\w+) and nothing else", preflight_probe.probe_prompt())
+    if len(asked) != 1:
+        return no("reviewer-did-not-answer")
     real = run if run is not None else subprocess.run
     kept = []
 
@@ -353,7 +362,7 @@ def confirm(env=None, run=None, now=None):
     if getattr(proc, "returncode", None) != 0:
         return no("reviewer-refused")
     stdout = getattr(proc, "stdout", "")
-    if not (isinstance(stdout, str) and stdout.strip() == preflight_probe.PROBE_ANSWER):
+    if not (isinstance(stdout, str) and stdout.strip() == asked[0]):
         return no("reviewer-answer-unexpected")
     out["reviewerAnswered"] = True
     return out

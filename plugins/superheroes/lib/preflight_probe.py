@@ -38,8 +38,7 @@ import seat_bundle             # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
 
-PROBE_ANSWER = "READY"
-PROBE_ASK = "Reply with the single word %s and nothing else.\n" % PROBE_ANSWER
+PROBE_ASK = "Reply with the single word READY and nothing else.\n"
 
 
 def probe_prompt():
