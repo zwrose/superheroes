@@ -4,6 +4,7 @@ The one exempt subprocess is `node`, which runs the fixture page's own script (F
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -455,8 +456,9 @@ def test_drive_shot_boot_and_open_that_never_return_are_returned_false(fake, tmp
     fake(lambda argv: (False, None, ""))
     d = ic.drive(U, ["tap", "-x", "1", "-y", "2"], 5)
     assert d == {"ok": False, "returned": False, "exit": None, "stdout": ""}
-    s = ic.shot(U, str(tmp_path / "a.png"), "http://x.test/", "browser", 5)
+    s = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
     assert s["ok"] is False and s["returned"] is False and s["labels"] is None and s["sha256"] is None
+    assert s["labelNote"] is None
     b = ic.boot(U, 5)
     assert b == {"ok": False, "returned": False, "line": PRE + "the phone's boot never returned"}
     o = ic.open_url(U, "http://x.test/", str(tmp_path), 5)
@@ -466,7 +468,7 @@ def test_drive_shot_boot_and_open_that_never_return_are_returned_false(fake, tmp
 
 def test_shot_whose_inventory_never_returns_is_returned_false_with_no_labels(fake, tmp_path):
     fake(sim((False, None, "")))
-    s = ic.shot(U, str(tmp_path / "a.png"), "http://x.test/", "browser", 5)
+    s = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
     assert s["ok"] is False and s["returned"] is False and s["labels"] is None and s["sha256"] is None
 
 
@@ -540,7 +542,8 @@ def test_shot_labels_the_phone_from_the_inventory_not_the_environment(fake, monk
     monkeypatch.setenv("SUPERHEROES_IPHONE_ID", U)
     f = fake(sim(inventory((U, "Booted", "com.apple.CoreSimulator.SimDeviceType.iPhone-16"), (V, "Booted"))))
     out = str(tmp_path / "a.png")
-    r = ic.shot(V, out, "http://x.test/p", "browser", 30)
+    with Phone(make_session(tmp_path, V), page="http://x.test/p"):
+        r = ic.shot(V, out, str(tmp_path), "abc123", 30)
     assert r["ok"] is True and r["returned"] is True and r["path"] == out
     assert r["labels"] == {"phone": V, "model": "iPhone 17", "iOS": "27.0", "page": "http://x.test/p",
                            "where": "browser", "source": "Simulator"}
@@ -551,14 +554,15 @@ def test_shot_labels_the_phone_from_the_inventory_not_the_environment(fake, monk
 def test_shot_refuses_a_phone_that_is_not_booted(fake, monkeypatch, tmp_path):
     monkeypatch.setenv("SUPERHEROES_IPHONE_ID", U)
     fake(sim(inventory((U, "Booted"), (V, "Shutdown"))))
-    r = ic.shot(V, str(tmp_path / "a.png"), "http://x.test/", "browser", 30)
+    with Phone(make_session(tmp_path, V)):
+        r = ic.shot(V, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
     assert r["ok"] is False and r["labels"] is None and r["sha256"] is None
 
 
 def test_shot_with_a_failed_screenshot_is_not_ok_and_has_no_labels(fake, tmp_path):
     fake(sim(inventory((U, "Booted")), screenshot=(True, 1, "")))
-    r = ic.shot(U, str(tmp_path / "a.png"), "http://x.test/", "browser", 30)
-    assert r["ok"] is False and r["returned"] is True and r["labels"] is None
+    r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is False and r["returned"] is True and r["labels"] is None and r["labelNote"] is None
 
 
 def test_open_appends_the_reading_param_and_writes_the_session(fake, tmp_path):
@@ -706,6 +710,512 @@ def test_accept_reading_and_strip_password_value_directly():
     assert "value" not in out and out["valueWithheld"] is True and pw["value"] == "x"
 
 
+# ---------------------------------------------------------------- shot (real loopback, the phone's page played by a thread)
+PAGE_A, PAGE_B = "http://x.test/a", "http://x.test/b"
+MISSING = object()
+NE = ic.NOT_ESTABLISHED
+
+
+def make_session(tmp_path, phone=U, token="abc123", **override):
+    """Write a session file for `token` and return its port; `override` replaces (or, with MISSING, drops) keys."""
+    port = _free_port()
+    sess = {"token": token, "port": port, "phone": phone, "url": "u", **override}
+    os.makedirs(tmp_path / "sessions", exist_ok=True)
+    (tmp_path / "sessions" / f"{token}.json").write_text(
+        json.dumps({k: v for k, v in sess.items() if v is not MISSING}))
+    return port
+
+
+def _post(port, token, body):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/{token}", method="POST", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "text/plain"})
+    try:
+        urllib.request.urlopen(req, timeout=1).close()
+        return True
+    except OSError:
+        return False  # no listener (yet, or any more): the page's fetch fails and the page tries again
+
+
+class Phone:
+    """The phone's page: posts a reading to the session's port every ~50 ms. `page` and `where` may be switched live;
+    a MISSING value drops the key; `max_posts` stops it after that many accepted posts."""
+
+    def __init__(self, port, page=PAGE_A, where="browser", token="abc123", max_posts=None, **extra):
+        self.port, self.token, self.page, self.where, self.max_posts, self.extra = port, token, page, where, max_posts, extra
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def reading(self):
+        r = reading(takenAt=math.ceil(time.time() * 1000), **self.extra)  # rounded up: never below the call-start `shot` races
+        r["page"], r["where"] = self.page, self.where
+        return {k: v for k, v in r.items() if v is not MISSING}
+
+    def _run(self):
+        # Wait for a listener first: a reading built before `shot` began is stale and would be dropped though it was posted
+        for _ in range(100):
+            try:
+                socket.create_connection(("127.0.0.1", self.port), 0.2).close()
+                break
+            except OSError:
+                if self.stop.wait(0.01):
+                    return
+        posted = 0
+        while not self.stop.is_set() and (self.max_posts is None or posted < self.max_posts):
+            if _post(self.port, self.token, self.reading()):
+                posted += 1
+            self.stop.wait(0.05)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(5)
+
+
+def on_screenshot(during):
+    """A responder that plays the inventory and the screenshot, and runs `during()` while the screenshot is taken."""
+    base = sim(inventory((U, "Booted")))
+
+    def respond(argv):
+        if "screenshot" in argv:
+            during()
+        return base(argv)
+    return respond
+
+
+def established(page, where):
+    return {"phone": U, "model": "iPhone 17", "iOS": "27.0", "page": page, "where": where, "source": "Simulator"}
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    """Pinned condition: READING_WAIT is 0.4 s. Production shape the pin makes unobservable: the 3 s patience for a slow page."""
+    monkeypatch.setattr(ic, "READING_WAIT", 0.4)
+
+
+def test_shot_labels_follow_the_page_the_phone_shows_now_not_the_one_before(fake, tmp_path):
+    f = fake(sim(inventory((U, "Booted"))))
+    port, out = make_session(tmp_path), str(tmp_path / "a.png")
+    with Phone(port, page=PAGE_A, where="browser") as phone:
+        first = ic.shot(U, out, str(tmp_path), "abc123", 30)
+        phone.page = PAGE_B
+        second = ic.shot(U, out, str(tmp_path), "abc123", 30)
+    assert first["ok"] is True and first["labels"] == established(PAGE_A, "browser") and first["labelNote"] is None
+    assert second["ok"] is True and second["labels"] == established(PAGE_B, "browser") and second["labelNote"] is None
+    assert f.calls[0][0] == ["xcrun", "simctl", "io", U, "screenshot", out]
+
+
+def test_shot_where_is_installed_when_the_readings_come_from_the_installed_app(fake, tmp_path):
+    fake(sim(inventory((U, "Booted"))))
+    port = make_session(tmp_path, phone=U.lower())
+    with Phone(port, where="installed"):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(PAGE_A, "installed") and r["labelNote"] is None
+
+
+def test_shot_with_a_session_from_another_phone_establishes_nothing_and_starts_no_listener(fake, tmp_path):
+    f = fake(sim(inventory((U, "Booted"))))
+    port = make_session(tmp_path, phone=V)
+    with Phone(port):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and r["labelNote"]
+    assert f.calls[0][0][:5] == ["xcrun", "simctl", "io", U, "screenshot"]
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", port), 0.2).close()
+
+
+@pytest.mark.parametrize("write", [None, "not json", '{"token": "abc123", "phone": "%s"}' % U, '["abc123"]'],
+                         ids=["no-file", "malformed", "no-port", "not-an-object"])
+def test_shot_without_a_usable_session_still_captures_and_establishes_nothing(fake, tmp_path, write):
+    f = fake(sim(inventory((U, "Booted"))))
+    out = str(tmp_path / "a.png")
+    if write is not None:
+        os.makedirs(tmp_path / "sessions")
+        (tmp_path / "sessions" / "abc123.json").write_text(write)
+    r = ic.shot(U, out, str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and r["labelNote"]
+    assert f.calls[0][0] == ["xcrun", "simctl", "io", U, "screenshot", out]
+
+
+@pytest.mark.parametrize("token", ["../x", "ABC", ""], ids=["traversal", "upper-case", "empty"])
+def test_shot_with_a_bad_token_still_captures_and_establishes_nothing(fake, tmp_path, token):
+    fake(sim(inventory((U, "Booted"))))
+    make_session(tmp_path)
+    r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), token, 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and r["labelNote"]
+
+
+def test_shot_with_no_reading_at_all_establishes_nothing(fake, tmp_path, quick):
+    fake(sim(inventory((U, "Booted"))))
+    make_session(tmp_path)
+    r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and "before" in r["labelNote"]
+
+
+def test_shot_with_a_reading_before_the_capture_and_none_after_establishes_nothing(fake, tmp_path, quick):
+    fake(sim(inventory((U, "Booted"))))
+    port = make_session(tmp_path)
+    with Phone(port, max_posts=1):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and "after" in r["labelNote"]
+
+
+def test_shot_when_the_page_changes_during_the_capture_establishes_no_page(fake, tmp_path):
+    port = make_session(tmp_path)
+    with Phone(port) as phone:
+        fake(on_screenshot(lambda: setattr(phone, "page", PAGE_B)))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, "browser") and "page" in r["labelNote"]
+
+
+def test_shot_when_the_page_goes_away_and_comes_back_establishes_no_page(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def away_and_back():
+        phone.page = PAGE_B
+        time.sleep(0.3)  # readings for the other page are received mid-capture
+        phone.page = PAGE_A
+    with Phone(port) as phone:
+        fake(on_screenshot(away_and_back))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, "browser")
+
+
+@pytest.mark.parametrize("page", [MISSING, None, "", "   ", 7, {"href": PAGE_A}, f"?{ic.READING_PARAM}=http://127.0.0.1:9/abc123"],
+                         ids=["missing", "null", "empty", "blank", "number", "object", "only-the-reading-param"])
+def test_shot_with_an_unusable_page_in_the_readings_establishes_no_page(fake, tmp_path, page):
+    fake(sim(inventory((U, "Booted"))))
+    port = make_session(tmp_path)
+    with Phone(port, page=page):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, "browser") and r["labelNote"]
+
+
+def test_shot_with_a_where_outside_browser_and_installed_establishes_no_where_but_keeps_the_page(fake, tmp_path):
+    fake(sim(inventory((U, "Booted"))))
+    port = make_session(tmp_path)
+    with Phone(port, where="Safari"):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(PAGE_A, NE) and r["labelNote"]
+
+
+def test_shot_does_not_count_a_late_pre_capture_packet_as_the_reading_after(fake, tmp_path, quick):
+    port, late = make_session(tmp_path), []
+
+    def during():
+        time.sleep(0.02)
+        # taken before the screenshot returned, but received only after it
+        packet = reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000) - 1)
+        late.append(threading.Thread(target=lambda: (time.sleep(0.15), _post(port, "abc123", packet))))
+        late[0].start()
+    fake(on_screenshot(during))
+    with Phone(port, max_posts=1):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    late[0].join(5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and "after" in r["labelNote"]
+
+
+def test_shot_does_not_count_a_reading_received_before_the_capture_returned_as_the_reading_after(fake, tmp_path, quick):
+    port = make_session(tmp_path)
+    # a page clock running ahead: taken "after" the capture, but received while it was still being taken
+    fake(on_screenshot(lambda: _post(port, "abc123", reading(page=PAGE_A, where="browser",
+                                                              takenAt=int(time.time() * 1000) + 60000))))
+    with Phone(port, max_posts=1):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE) and "after" in r["labelNote"]
+
+
+def test_shot_returns_within_its_budget_when_a_post_stalls(fake, tmp_path):
+    fake(sim(inventory((U, "Booted"))))
+    port, release = make_session(tmp_path), threading.Event()
+
+    def stall():
+        for _ in range(100):
+            try:
+                conn = socket.create_connection(("127.0.0.1", port), 0.2)
+            except OSError:
+                time.sleep(0.02)
+                continue
+            with conn:  # headers and a promised body, then silence
+                conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n{")
+                release.wait(8)
+            return
+    thread = threading.Thread(target=stall)
+    thread.start()
+    began = time.monotonic()
+    r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 0.5)
+    elapsed = time.monotonic() - began
+    release.set()
+    thread.join(5)
+    assert elapsed < 0.5 + 1, elapsed  # inside timeout + 3 s, and short of a fixed 2 s socket timeout
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+
+
+def test_shot_establishes_nothing_when_a_token_matched_reading_starts_during_the_capture_and_never_completes(fake, tmp_path):
+    port, release = make_session(tmp_path), threading.Event()
+    conns = []
+
+    def stall():  # a token-matched POST begins mid-capture: headers and a partial body, then silence until the call ends
+        conn = socket.create_connection(("127.0.0.1", port), 1)
+        conns.append(conn)
+        conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n{")
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):  # steady visible page-A readings before and after the capture
+        fake(on_screenshot(stall))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+        release.set()
+        for conn in conns:
+            conn.close()
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "cut off" in r["labelNote"]
+
+
+def test_shot_when_the_page_leaves_the_foreground_during_the_capture_establishes_nothing(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def away_and_back():
+        phone.extra["visibility"] = "hidden"
+        time.sleep(0.3)  # hidden readings are posted mid-capture
+        phone.extra["visibility"] = "visible"
+    with Phone(port) as phone:
+        fake(on_screenshot(away_and_back))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_when_the_page_was_already_hidden_as_the_capture_began_establishes_nothing(fake, tmp_path):
+    port = make_session(tmp_path)
+    captured, stop = threading.Event(), threading.Event()
+
+    def post(**kw):
+        _post(port, "abc123", reading(page=PAGE_A, where="browser", takenAt=math.ceil(time.time() * 1000), **kw))
+
+    def phone_page():
+        for _ in range(100):  # wait for the listener
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                time.sleep(0.02)
+        older_visible = reading(page=PAGE_A, where="browser", takenAt=math.ceil(time.time() * 1000))
+        time.sleep(0.01)
+        post(visibility="hidden")  # the newer hidden reading lands first ...
+        _post(port, "abc123", older_visible)  # ... then the older visible packet is delivered late
+        captured.wait(10)  # the screenshot is taken while the page is hidden
+        while not stop.is_set():  # the page returns to the foreground after the capture
+            post()
+            stop.wait(0.05)
+
+    def screenshot():
+        time.sleep(0.2)
+        captured.set()
+
+    thread = threading.Thread(target=phone_page)
+    thread.start()
+    fake(on_screenshot(screenshot))
+    try:
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    finally:
+        captured.set()
+        stop.set()
+        thread.join(5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_establishes_nothing_when_a_connection_stalls_inside_the_request_headers(fake, tmp_path):
+    port, conns = make_session(tmp_path), []
+
+    def stall():  # request bytes arrive, but the headers never finish: no reading was ever delivered
+        conn = socket.create_connection(("127.0.0.1", port), 1)
+        conns.append(conn)
+        conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Len")
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(stall))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+        for conn in conns:
+            conn.close()
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "cut off" in r["labelNote"]
+
+
+def test_shot_establishes_nothing_when_a_token_matched_reading_during_the_capture_has_no_visibility(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def unknown():
+        r = reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000))
+        del r["visibility"]
+        _post(port, "abc123", r)
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(unknown))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_establishes_nothing_when_an_other_context_reading_during_the_capture_has_no_visibility(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def unknown_other_context():
+        r = reading(page=PAGE_B, where="installed", takenAt=int(time.time() * 1000))
+        del r["visibility"]
+        _post(port, "abc123", r)
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):
+        fake(on_screenshot(unknown_other_context))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_latest_pre_capture_time(fake, tmp_path):
+    port = make_session(tmp_path)
+    captured, stop, tied_at, capture_ms = threading.Event(), threading.Event(), [], []
+
+    def post(**kw):
+        _post(port, "abc123", reading(page=PAGE_A, where="browser", **kw))
+
+    def phone_page():
+        for _ in range(100):  # wait for the listener
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                time.sleep(0.02)
+        tied = math.ceil(time.time() * 1000)
+        tied_at.append(tied)
+        time.sleep(0.01)  # the listener receives the pair, and `shot` can start capturing, only after the tied instant
+        post(takenAt=tied, visibility="visible")  # visible delivered first ...
+        post(takenAt=tied, visibility="hidden")  # ... then the hidden reading taken at the very same moment
+        captured.wait(10)
+        while not stop.is_set():  # the page is visible again after the capture
+            post(takenAt=math.ceil(time.time() * 1000))
+            stop.wait(0.05)
+
+    def screenshot():
+        capture_ms.append(time.time() * 1000)
+        time.sleep(0.2)
+        captured.set()
+
+    thread = threading.Thread(target=phone_page)
+    thread.start()
+    fake(on_screenshot(screenshot))
+    try:
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    finally:
+        captured.set()
+        stop.set()
+        thread.join(5)
+    # The pair is tied strictly before the capture began, so the hidden one meets the tie check, not the during-capture check
+    assert len(tied_at) == 1 and len(capture_ms) == 1 and tied_at[0] < capture_ms[0], (tied_at, capture_ms)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
+def test_shot_ignores_a_hidden_reading_from_the_other_context_during_the_capture(fake, tmp_path):
+    port = make_session(tmp_path)
+
+    def safari_hidden():
+        _post(port, "abc123", reading(page=PAGE_B, where="browser", visibility="hidden", takenAt=int(time.time() * 1000)))
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="installed"):
+        fake(on_screenshot(safari_hidden))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+    assert r["ok"] is True and r["labels"] == established(PAGE_A, "installed")
+    assert r["labelNote"] is None
+
+
+def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path, monkeypatch):
+    port, late, froze, in_flight = make_session(tmp_path), [], [], threading.Event()
+    frozen = threading.Event()
+
+    class FreezeSignalling(ic.Listener):
+        def shutdown(self):  # `shot` shuts the listener down only once it has the reading after the capture: the window freezes
+            super().shutdown()
+            frozen.set()
+    monkeypatch.setattr(ic, "Listener", FreezeSignalling)
+
+    def during():
+        packet = json.dumps(reading(page=PAGE_B, where="browser", takenAt=int(time.time() * 1000))).encode()
+
+        def slow_post():
+            with socket.create_connection(("127.0.0.1", port), 2) as c:
+                c.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(packet) + packet[:5])
+                in_flight.set()
+                # Release the rest of the body only once the listener is shutting down, i.e. the window is frozen
+                froze.append(frozen.wait(10))
+                c.sendall(packet[5:])
+                c.recv(100)
+        late.append(threading.Thread(target=slow_post, daemon=True))
+        late[0].start()
+        assert in_flight.wait(10)  # the partial request is in flight before the screenshot returns
+    with Phone(port, page=PAGE_A, where="browser") as phone:
+        fake(on_screenshot(during))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    late[0].join(5)
+    assert froze == [True]
+    assert r["ok"] is True and r["labels"] == established(NE, "browser") and "page changed" in r["labelNote"]
+
+
+def test_shot_returns_within_its_budget_when_a_post_body_keeps_trickling(fake, tmp_path):
+    fake(sim(inventory((U, "Booted"))))
+    port, release = make_session(tmp_path), threading.Event()
+
+    def trickle():  # a promised 1000-byte body, one byte every 100 ms: never idle long enough for a socket timeout
+        for _ in range(100):
+            try:
+                conn = socket.create_connection(("127.0.0.1", port), 0.2)
+            except OSError:
+                time.sleep(0.02)
+                continue
+            with conn:
+                try:
+                    conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n")
+                    for _ in range(100):
+                        conn.sendall(b" ")
+                        if release.wait(0.1):
+                            break
+                except OSError:
+                    pass
+            return
+    thread = threading.Thread(target=trickle)
+    thread.start()
+    began = time.monotonic()
+    r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 0.5)
+    elapsed = time.monotonic() - began
+    release.set()
+    thread.join(5)
+    assert elapsed < 1.5, elapsed
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+
+
+def test_shot_never_returns_a_reading_value(fake, tmp_path):
+    fake(sim(inventory((U, "Booted"))))
+    port = make_session(tmp_path)
+    with Phone(port, value="s3cret", focused={"tag": "input", "type": "text", "id": "name", "name": "name"}):
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    assert r["labels"] == established(PAGE_A, "browser")
+    assert "s3cret" not in json.dumps(r)
+
+
+@pytest.mark.parametrize("retired", [["--page", "http://x.test/"], ["--where", "browser"]], ids=["--page", "--where"])
+def test_shot_takes_no_page_or_where_argument(fake, tmp_path, capsys, retired):
+    argv = ["shot", "--phone", U, "--out", str(tmp_path / "a.png"), "--run-dir", str(tmp_path), "--token", "abc123",
+            "--timeout", "2"]
+    with pytest.raises(SystemExit) as e:
+        ic.main([*argv, *retired])
+    assert e.value.code == 2
+    fake(sim(inventory((U, "Booted"))))
+    assert ic.main(argv) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["labels"] == established(NE, NE) and isinstance(out["labelNote"], str)
+
+
 # ---------------------------------------------------------------- render
 @pytest.mark.parametrize("missing", ["phone", "model", "iOS", "page", "where", "source"])
 def test_render_refuses_a_piece_missing_a_label(missing):
@@ -760,6 +1270,14 @@ def test_render_accepts_a_reading_whose_focused_is_null():
     _, section = ic.render(chk(where=["installed"], parts={"browser": part(included=False),
                                                            "installed": part(completed=True)}, evidence=[ev]))
     assert "focused none" in section
+
+
+def test_render_prints_a_screenshot_whose_page_and_where_are_not_established_and_refuses_a_foreign_where():
+    ev = {**ev_shot("browser"), "labels": labels(page=ic.NOT_ESTABLISHED, where=ic.NOT_ESTABLISHED)}
+    _, section = ic.render(chk(where=["browser"], evidence=[ev]))
+    assert f"`page` {ic.NOT_ESTABLISHED} · `where` {ic.NOT_ESTABLISHED}" in section
+    with pytest.raises(ValueError, match="evidence 1"):
+        ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "labels": labels(where="Safari")}]))
 
 
 def test_render_a_screenshot_with_only_a_path_is_a_plain_line_never_an_image():

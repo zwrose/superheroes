@@ -174,7 +174,10 @@ iPhone, a phone the Mac imitates in software), or the issue's done-definition na
   A phone from an earlier launch of the same lane is still another phone;
 - (c) it has no `where` label;
 - (d) its `where` disagrees with its reading (for example `installed` on a piece whose reading says
-  the page runs in the browser).
+  the page runs in the browser);
+- (e) its `page` or `where` reads the not-established value — `NOT_ESTABLISHED` in the plugin's
+  `lib/iphone_check.py`, the one home of that text (the pilot's tool could not tell what the phone
+  showed).
 
 The ruling lists every invalid piece and its reason.
 
@@ -207,8 +210,9 @@ piece 1: no phone ID                        → invalid: no `phone` value (a)
 piece 2: phone from an earlier launch       → invalid: another phone (b)
 piece 3: where installed, reading: browser  → invalid: `where` disagrees with reading (d)
 piece 4: no `where` label                   → invalid: no `where` label (c)
+piece 5: page reads NOT_ESTABLISHED         → invalid: page not established (e)
 check not complete (condition 5) → advisor's own iPhone check recorded
-ruling: pieces 1–4 invalid, with the reasons above
+ruling: pieces 1–5 invalid, with the reasons above
 ```
 
 ## A new refusal needs a healthy-case check
