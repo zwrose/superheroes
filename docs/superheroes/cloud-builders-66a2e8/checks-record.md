@@ -174,10 +174,48 @@ Spec as reviewed: commit a320fa24. No fixes were needed.
 
 All three checks are clean after the rulings, in one round.
 
+## After vet round 1
+
+The advisor's vet, round 1 (https://github.com/zwrose/superheroes/pull/1740#issuecomment-6101254809),
+returned `findings`: eight craft findings (V1.1 to V1.4 and V1.6 to V1.9) and one owner call (V1.5).
+The eight were fixed in commit 32ef30c8. The checks then ran on the changed parts.
+
+### Round 1
+
+Spec as reviewed: commit 32ef30c8.
+
+#### Gap review
+- Run directory: `<checks>/av1r1/gap/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 17 tool calls, 13 files read)
+- Confirmations: cloud-gap-1 to cloud-gap-8 -> fixed
+- New findings: none. Gap review is clean.
+
+#### Source check
+- Run directory: `<checks>/av1r1/source/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 13 tool calls, 10 files read)
+- Approved board, for the source check: `board/build-board.html` and `board/journeys.html` (version 2) beside the spec
+- Confirmations: SC-1 to SC-10 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SC-11 | source, forward | The fix for vet finding V1.1 makes a parked cloud PR follow the approved review spec, which lets the owner's word send one PR through with a same-family reviewer. The approved cloud boards say "Never a same-family stand-in" (build board, "5 Mid-build trouble"; journeys, journey 3). The two disagree, and no ruling for this piece settles it. | owner's | Two approved sources conflict, so it is queued as O-3 with both sides. | queued |
+
+#### Grounding
+- Run directory: `<checks>/av1r1/grounding/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 16 tool calls, 14 files read)
+- Grounding base, for grounding: origin/main, ef8e6d3c049222c26513df581d34f13770b31638
+- Confirmations: GND-001 -> fixed; GND-002 -> decline-accepted; GND-003 -> decline-accepted
+- New findings: none. Grounding is clean.
+
+#### Citation check
+`[]` (run with `--root` set to the grounding base at origin/main ef8e6d3c)
+
 ## The owner's queue
 
-Nothing is waiting. Remainder sheet 1 settled every item:
+Settled on remainder sheet 1: O-1 (Canon 2026-10-10-ca3e7e0d-17, now UFR-13), O-2 (Canon
+2026-10-10-ca3e7e0d-18, now FR-37) and N-1 (Canon 2026-10-10-ca3e7e0d-19, all nine stand).
 
-- O-1 (from cloud-gap-4): settled by Canon 2026-10-10-ca3e7e0d-17. The spec carries it as UFR-13.
-- O-2 (from SC-2): settled by Canon 2026-10-10-ca3e7e0d-18. The spec carries it as FR-37.
-- N-1 (nine statements the author added): settled by Canon 2026-10-10-ca3e7e0d-19. All nine stand.
+Waiting, on remainder sheet 2:
+
+- O-3 (from SC-11): two approved sources conflict. The cloud boards say a parked cloud PR never gets a same-family stand-in. The approved review spec says no session picks one on its own, and the owner's word can send one PR through with a same-family reviewer, recorded as not independent, or without the review. Recommendation: follow the review spec, so one rule holds everywhere and nothing happens without the owner's word; the boards are then redrawn. Marks: none.
+- O-4 (the vet's owner call V1.5): a project that keeps its Canon or its specs outside the repository gives a cloud builder no way to read them. Recommendation, the advisor's and the author's: such a project's builds are judged as needing the owner's machine, so they run locally and the launch report says why. Marks: none.
