@@ -787,3 +787,18 @@ def test_s9_encoded_reviewer_pass_is_refused(tmp_path, form):
     result = _compose(w)
     _refusal(result, "secret-shaped-content")
     assert planted not in json.dumps(result)
+
+
+def test_provider_key_shape_covers_every_cloud_setup_prefix():
+    import cloud_setup
+    for prefix in cloud_setup._SECRET_PREFIXES:
+        assert CS._scan(prefix + "A1" * 10) == "provider key"
+
+
+def test_inside_policy_is_selected_by_the_owning_modules_filename(tmp_path, monkeypatch):
+    import architect_config
+    w = _inside(tmp_path)
+    _put(w, "moved-policy.json", b"{}\n")
+    monkeypatch.setattr(architect_config, "policy_path",
+                        lambda cwd, root=None: os.path.join(w.store, "moved-policy.json"))
+    assert list(CS.calibration_files(w.cwd, w.root)) == ["moved-policy.json"]

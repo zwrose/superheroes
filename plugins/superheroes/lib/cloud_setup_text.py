@@ -52,8 +52,8 @@ _STAMP_RE = re.compile(r"[A-Za-z0-9:._-]+")
 _SECRET_SHAPES = (
     ("signed token", re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("provider key", re.compile(
-        r"(?<![A-Za-z0-9])(?:(?:sk-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xoxb-|xoxp-|xoxa-|xoxr-|xoxs-|sess-|rt_)"
-        r"[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})")),
+        r"(?<![A-Za-z0-9])(?:(?:%s)[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})"
+        % "|".join(map(re.escape, cloud_setup._SECRET_PREFIXES)))),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(
         r"(?<![A-Za-z0-9_])(?:access_token|id_token|refresh_token|OPENAI_API_KEY|%s)"
@@ -168,9 +168,9 @@ def _discover(cwd, env):
     return url, commit, subdir[2:] if subdir.startswith("./") else subdir
 
 
-def _store_files(store):
+def _store_files(store, top=_TOP_FILES):
     """The calibration files that exist under `store`: relative path -> raw bytes."""
-    wanted = list(_TOP_FILES)
+    wanted = list(top)
     try:
         names = sorted(os.listdir(os.path.join(store, "config")))
     except FileNotFoundError:
@@ -205,7 +205,7 @@ def _calibration(cwd, root):
     if mode == mode_registry.IN_REPO:
         # doc-policy.json is machine-local for every project, so it is placed even here.
         policy = architect_config.policy_path(cwd, root)
-        found = _store_files(os.path.dirname(policy))
+        found = _store_files(os.path.dirname(policy), (os.path.basename(policy),))
         return False, {k: v for k, v in found.items() if k == os.path.basename(policy)}
     if mode != mode_registry.GLOBAL:
         raise unknown

@@ -794,7 +794,9 @@ def _cli_env(monkeypatch, tmp_path, cloud=True, pass_value=PASS):
     monkeypatch.setenv("HOME", str(_home(tmp_path)))
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.delenv(CP.CLOUD_ENV, raising=False)
-    monkeypatch.delenv(CP.PASS_ENV, raising=False)
+    for name in (CP.PASS_ENV, CP.PASS_MARKER_ENV, CP.SEPARATE_HOME_ENV, "CODEX_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(CP, "copy_to_clipboard", lambda *_a, **_k: False)
     if cloud:
         monkeypatch.setenv(CP.CLOUD_ENV, "true")
     if pass_value is not None:
