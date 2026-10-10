@@ -108,8 +108,8 @@ repository are put in place by hand, and hands-off upkeep comes later with its o
 **FR-17.** A cloud build shall follow the same order, review rules, advisor's vet and merge rules as a build on the owner's machine. (source: framing; journeys)
   - *Acceptance (Given-When-Then):* Given a build-ready issue, when it is built in the cloud, then its PR carries the same review record and receipts a local build's PR carries, and the advisor vets it by the same steps. (source: journeys)
 
-**FR-18.** A cloud build shall need no step from the owner between its launch and its ready PR. (source: framing)
-  - *Acceptance (Given-When-Then):* Given the cloud is ready, when a build that needs no owner decision is launched in the cloud, then it reaches a ready PR with no prompt, sign-in or other action from the owner. (source: framing)
+**FR-18.** A cloud build shall need no step from the owner between its launch and its ready PR. (source: craft, for your veto)
+  - *Acceptance (Given-When-Then):* Given the cloud is ready, when a build that needs no owner decision is launched in the cloud, then it reaches a ready PR with no prompt, sign-in or other action from the owner. (source: craft, for your veto)
 
 **FR-19.** The plugin shall record and count a cloud lane as it records and counts any lane. (source: journeys; board · 4 While a cloud build runs)
   - *Acceptance (rule):* Wherever the advisor lists lanes, a cloud lane appears with the word "cloud" beside it. (source: board · 4 While a cloud build runs)
@@ -161,9 +161,9 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
 
 ### Part E: keeping the reviewer pass alive
 
-The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/showrunner/reference/owner-decisions.md § The seven duties, a closed list]. This spec adds one duty to that list, for projects with cloud builds switched on. (source: Canon 2026-10-10-ca3e7e0d-12)
+The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/showrunner/reference/owner-decisions.md § The seven duties, a closed list]. This spec adds one duty to that list, for projects that have a cloud setup. (source: Canon 2026-10-10-ca3e7e0d-12)
 
-**FR-33.** When a gardening pass runs in a project with cloud builds switched on, the advisor shall report how many days the reviewer pass has left and the date it lapses. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
+**FR-33.** When a gardening pass runs in a project that has a cloud setup, the advisor shall report how many days the reviewer pass has left and the date it lapses. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
   - *Acceptance (rule):* The line reads as the board draws it, with the days left and the date. (source: board · 7 The gardening pass)
 
 **FR-34.** When the reviewer pass will lapse before the next gardening pass is owed, the advisor shall tell the owner to renew it at this pass and say how. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
@@ -172,8 +172,9 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 **FR-35.** The plugin shall give no warning ahead of the reviewer pass lapsing between gardening passes. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
   - *Acceptance (rule):* Between passes, nothing tells the owner the pass is about to lapse. Once it has lapsed, the launch report's reason, the line UFR-6 repeats and a parked PR's notice under UFR-8 still appear. (source: board · 7 The gardening pass; board · 3 The launch report; board · 5 Mid-build trouble)
 
-**FR-36.** When the reviewer pass is renewed, the advisor shall send each PR that UFR-7 parked back for review. (source: board · 5 Mid-build trouble)
+**FR-36.** When the reviewer pass is renewed, the advisor shall send each PR that UFR-7 parked and that is still open back for review. (source: board · 5 Mid-build trouble)
   - *Acceptance (Given-When-Then):* Given a PR parked because its review could not run, when the owner renews the pass, then the advisor sends that PR back for its review with no further word from the owner. (source: board · 5 Mid-build trouble)
+  - *Acceptance (rule):* A parked PR that was closed before the renewal is not sent back. (source: craft, for your veto)
 
 ## When things go wrong (significant unhappy paths)
 
@@ -183,8 +184,9 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 **UFR-2.** If the owner asks to switch cloud builds on before a check has passed on this Claude account, then the plugin shall refuse and offer the setup. (source: board · 2 The setting; craft, for your veto)
   - *Acceptance:* Given no cloud setup on this account, when the owner says to turn cloud builds on, then the advisor says they can't be switched on yet and how to start setup. (source: board · 2 The setting)
 
-**UFR-3.** If a build in a project with cloud builds switched on needs something only the owner's machine has, then the plugin shall run it on the owner's machine and name what it needs in the launch report. (source: Canon 2026-10-10-ca3e7e0d-7; board · 3 The launch report)
+**UFR-3.** If a build that the project's setting or the owner's launch word points at the cloud needs something only the owner's machine has, then the plugin shall run it on the owner's machine and name what it needs in the launch report. (source: Canon 2026-10-10-ca3e7e0d-7; journeys; board · 3 The launch report)
   - *Acceptance:* Given a build that needs the phone simulator, when it is launched, then it runs on the owner's machine and the launch report says it needs the phone simulator. (source: board · 3 The launch report)
+  - *Acceptance (rule):* A launch word that names the cloud overrides the project's setting and does not override what the build needs. (source: journeys)
 
 **UFR-4.** If the cloud is not ready at launch, then the plugin shall run the build on the owner's machine and state the reason and its fix in the launch report. (source: Canon 2026-10-10-ca3e7e0d-8; board · 3 The launch report)
   - *Acceptance:* Given a lapsed reviewer pass, when four builds are launched, then all four run on the owner's machine and the launch report says the pass has lapsed and how to renew it. (source: Canon 2026-10-10-ca3e7e0d-8; board · 3 The launch report)
@@ -203,8 +205,9 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 
 The approved review spec already treats a review as not run when no reviewer from a different model family can run [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § UFR-4]. UFR-7 applies that rule to a review that a lapsed pass stops from running. (source: craft, for your veto)
 
-**UFR-8.** If a cloud build's review did not run, then the advisor shall tell the owner that the PR is parked and that renewing the pass lets it go back for review. (source: board · 5 Mid-build trouble)
+**UFR-8.** If UFR-7 parks a cloud build's PR, then the advisor shall tell the owner that the PR is parked and that renewing the pass lets it go back for review. (source: board · 5 Mid-build trouble)
   - *Acceptance:* Given a PR parked by UFR-7, when the advisor next writes to the owner, then the message names the PR, the reason and the renewal. (source: board · 5 Mid-build trouble)
+  - *Acceptance (rule):* A review that did not run for any other reason is reported as the review rules already say, with no advice to renew the pass. (source: craft, for your veto)
 
 **UFR-9.** If a cloud builder stops or stalls, then the advisor shall recover the lane at once from its pushed work, routing the recovery as a launch is routed. (source: craft, for your veto; board · 5 Mid-build trouble)
   - *Acceptance:* Given a stopped cloud builder and the cloud ready, when the advisor recovers the lane, then the new builder runs in the cloud and starts from the pushed work. (source: board · 5 Mid-build trouble)
