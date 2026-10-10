@@ -633,6 +633,15 @@ def test_confirm_all_true_row(tmp_path):
     assert ["codex", "exec", "--sandbox", "read-only", "-"] in [argv for argv, _ in calls]
 
 
+def test_confirm_probe_child_environment_carries_no_pass(tmp_path):
+    calls = []
+    env = _placed_env(tmp_path)
+    assert CP.PASS_ENV in env
+    assert CP.confirm(env=env, run=_fake_run(calls=calls), now=NOW)["reviewerAnswered"] is True
+    probes = [kw for argv, kw in calls if argv[:2] == ["codex", "exec"]]
+    assert probes and all(CP.PASS_ENV not in kw["env"] for kw in probes)
+
+
 def _assert_no(result, reason, lapses=None):
     assert result["schema"] == CP.CONFIRMATION_SCHEMA
     assert result["reviewerAnswered"] is False

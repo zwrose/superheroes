@@ -21,6 +21,22 @@ def _load_hook(module_name="session_start_under_test"):
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _isolated_reviewer_home(tmp_path, monkeypatch):
+    """No hook test may read or write the real reviewer sign-in or see ambient cloud variables."""
+    home = tmp_path / "isolated-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("CODEX_HOME", "CLAUDE_CODE_REMOTE", "SUPERHEROES_REVIEWER_PASS"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_every_hook_test_starts_with_the_reviewer_home_isolated(tmp_path):
+    assert os.environ["HOME"] == str(tmp_path / "isolated-home")
+    assert not any(n in os.environ for n in ("CODEX_HOME", "CLAUDE_CODE_REMOTE",
+                                             "SUPERHEROES_REVIEWER_PASS"))
+
+
 def _stdin(monkeypatch, payload):
     if payload is None:
         monkeypatch.setattr(sys, "stdin", io.StringIO(""))

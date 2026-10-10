@@ -242,6 +242,23 @@ def test_script_places_calibration_stamp_and_link(tmp_path):
     assert "calibration: 6 of 6 files written" in setup_log and "setup end" in setup_log
 
 
+def test_script_destination_comes_from_the_shared_store_layout(tmp_path):
+    w = _outside(tmp_path)
+    expected = mode_registry.project_store_dir(w.cwd, "$HOME/.claude/superheroes")
+    assert 'DEST="%s"' % expected in _compose(w)["text"]
+
+
+def test_script_publishes_no_stamp_when_a_calibration_file_cannot_be_written(tmp_path):
+    w = _outside(tmp_path)
+    dest = w.home / ".claude" / "superheroes" / "projects" / w.key
+    (dest / "config" / "core.md").mkdir(parents=True)
+    (dest / "cloud-setup-stamp").write_text("stale\n")
+    proc, _ = _run_script(w, _compose(w)["text"])
+    assert proc.returncode == 0
+    assert not (dest / "cloud-setup-stamp").exists()
+    assert "calibration FAILED" in (w.home / "superheroes-cloud-setup.log").read_text()
+
+
 def test_script_exits_zero_even_when_every_tool_fails(tmp_path):
     w = _inside(tmp_path)
     text = _compose(w)["text"]

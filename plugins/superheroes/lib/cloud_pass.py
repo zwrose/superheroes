@@ -345,6 +345,7 @@ def confirm(env=None, run=None, now=None):
         # Always explicit, and never carrying an API key: the probe must exercise the placed pass.
         probe_env = dict(env)
         probe_env.pop("CODEX_API_KEY", None)
+        probe_env.pop(PASS_ENV, None)  # codex reads the placed sign-in; a snapshot would copy it
         kwargs["env"] = probe_env
         try:
             proc = real(argv, **kwargs)

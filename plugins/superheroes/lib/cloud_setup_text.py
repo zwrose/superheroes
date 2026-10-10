@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import cloud_pass
 import cloud_setup
 import config_dir
+import control_plane
 import core_md
 import mode_registry
 import project_config
@@ -284,7 +285,7 @@ def _scan(text):
     return _plain_shape(text) or _encoded_shape(text)
 
 
-def _script(head, source, commit, subdir, source_dir, plugin_dir, files, key, stamp):
+def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp):
     parent = os.path.dirname(plugin_dir.rstrip("/"))
     out = [
         "#!/bin/bash",
@@ -315,14 +316,17 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, key, st
     ]
     if files:
         out += ["", "# Place the project's calibration.",
-                'DEST="$HOME/.claude/superheroes/projects/%s"' % key,
+                'DEST="%s"' % dest, 'rm -f "$DEST/%s"' % STAMP_FILE,
                 'mkdir -p "$DEST"', "wrote=0"]
         for index, (rel, data) in enumerate(files.items(), 1):
             tag = _end_tag(index)
             out += ['mkdir -p "$(dirname "$DEST/%s")"' % rel,
                     """cat > "$DEST/%s" <<'%s'""" % (rel, tag)]
             out += [data.decode("utf-8")[:-1], tag, '[ "$?" = 0 ] && wrote=$((wrote + 1))']
-        out += ["printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
+        out += ['if [ "$wrote" = %d ]; then' % len(files),
+                "  printf '%%s\\n' '%s' > \"$DEST/%s\"" % (stamp, STAMP_FILE),
+                'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
+                % len(files),
                 'echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
     out += ["", "# The project's own tool steps, if any, go below this line.",
             'echo "setup end" >> "$LOG"', "exit 0", ""]
@@ -352,6 +356,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     bad = [rel for rel in files if not _plain_relative(rel)]
     if placed and not _plain_relative(key):
         bad.append(key)
+    dest = mode_registry.project_store_dir(
+        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if placed else None
     tags = {rel: _end_tag(i) for i, rel in enumerate(files, 1)}
     for rel, data in files.items():
         try:
@@ -381,7 +387,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
         part = "calibration in the repository"
     name = " ".join((project_name or _project_name(cwd)).splitlines())
     head = "%s · plugin %s · %s" % (name, version, part)
-    text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, key, stamp)
+    text = _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, stamp)
     shape = _scan(text)
     if shape:
         where = next((rel for rel, data in files.items()
