@@ -129,3 +129,9 @@ fix, and raised nothing new. Two items wait in the owner's queue.
 
 - gap-002: FR-18 says every reviewer comes from a different model family than every maker, while FR-21 and FR-22 have the test role write break-it tests that stay in the change, which makes that reviewer a maker under the glossary. Recommendation: a reviewer's own break-it tests do not make it a maker of the change; independence is measured against the models that built and fixed the product code, and the generalist still reads the break-it tests for bloat and false passes. Marks: none
 - SRC-2: FR-38 lets the review record name an owner decision that is on record in the PR's saved sheet answers, where Canon 2026-10-09-d6064e1d-5 says the record names one only when Canon holds it. Recommendation: an acceptance that concerns one PR is on record in that PR's saved answers, which are written back to the PR; an answer that sets a rule for later work is on record in Canon. Marks: none
+
+## Writing pass
+
+- What the pass changed: three statements. The list of artboards in UI / UX became a bulleted list, the first line of Definition of done became two sentences and now names the saved "Merge" verdict, and the last sentence of UFR-3's second acceptance was split in two.
+- Meaning check: run directory /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/meaning-run1. Result: real (terminal, ok, 1 attempt, engaged). Findings: meaning-001, meaning-002 and meaning-003, each meaning:kept. Every changed statement has exactly one finding.
+- The pass was kept.

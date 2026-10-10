@@ -328,7 +328,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **UFR-3.** If a planned reviewer could not run, or CI is not green on the final commit, then the plugin shall say so in the review record and shall not report the change as reviewed. (source: Canon 2026-10-08-d6064e1d-8; Canon 2026-10-09-d6064e1d-5)
   - *Acceptance:* Given a full-lane review whose specialist did not run, when the advisor vets the PR, then the record shows the gap and the vet does not return the PR as ready. (source: craft, for your veto)
-  - *Acceptance:* Given that PR, when no missing review has run, then the PR stays parked until the review runs or the owner says in plain words to go ahead without it, as the plugin's rule on degraded checks requires [cite: plugins/superheroes/rubric/covenant.md § Disclose every degradation]. (source: craft, for your veto)
+  - *Acceptance:* Given that PR, when no missing review has run, then the PR stays parked until the review runs or the owner says in plain words to go ahead without it. The plugin's rule on degraded checks requires this [cite: plugins/superheroes/rubric/covenant.md § Disclose every degradation]. (source: craft, for your veto)
   - *Acceptance:* Given the owner's word to go ahead, when the PR's sheet is built, then "How the review went" names the review that did not run. (source: craft, for your veto)
 
 **UFR-4.** If a review session is damaged partway, then the plugin shall repair it and carry on, and shall not abandon it. (source: Canon 2026-10-09-d6064e1d-5)
@@ -360,12 +360,19 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 The approved build board is the design: `board/build-board.html` beside this spec, also at https://claude.ai/artifact/J1c4SduWJVf2CZkrWSNncH. (source: board · 1 The index)
 The wording on the board is the product's wording. (source: board · 3 Big PR sheet)
-The artboards that matter are "1 The index" for FR-41 to FR-45, "2 Small sheet and stack sheet" for FR-46 and FR-47, "3 Big PR sheet" for FR-48 to FR-65 and FR-78 to FR-80, "4 Risk and trust" for FR-9 to FR-14, and "5 A learning proposal" for FR-69 to FR-72. (source: craft, for your veto)
+Each artboard is the design for these requirements. (source: craft, for your veto)
+
+- "1 The index": FR-41 to FR-45. (source: craft, for your veto)
+- "2 Small sheet and stack sheet": FR-46 and FR-47. (source: craft, for your veto)
+- "3 Big PR sheet": FR-48 to FR-65 and FR-78 to FR-80. (source: craft, for your veto)
+- "4 Risk and trust": FR-9 to FR-14. (source: craft, for your veto)
+- "5 A learning proposal": FR-69 to FR-72. (source: craft, for your veto)
+
 The sheets and the index are built on the plugin's shared review template [cite: plugins/superheroes/theme/review-template.html]. (source: Canon 2026-10-08-d6064e1d-25)
 
 ## Definition of done / success
 
-- An owner ships a change in a risk area without reading code: the full lane's panel reviewed it, a review record exists, the sheet shows the walk and the leftovers, and the merge happens on the saved verdict plus "done". (source: framing)
+- An owner ships a change in a risk area without reading code. The full lane's panel reviewed the change, a review record exists, the sheet shows the walk and the leftovers, and the merge happens on the saved "Merge" verdict plus "done". (source: framing)
 - No review is held up for lacking a certificate. (source: Canon 2026-10-08-d6064e1d-8)
 - A bug traced to a reviewed PR is logged as a review escape, and a proposal that rests on it reaches the owner at a gardening pass. (source: framing)
 
