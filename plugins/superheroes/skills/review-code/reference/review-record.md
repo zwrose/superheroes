@@ -34,14 +34,14 @@ Every finding gets one of five outcomes, spelled exactly, and a reason: `fixed`,
 ```json
 {"schema": "review-account/1", "pr": 12, "sessionId": "s1", "lane": "light",
  "laneReason": "one file, no contract change", "finalCommit": "abc1234", "ci": "green",
- "makers": [{"family": "claude", "source": "dispatch"}],
+ "makers": [{"family": "anthropic", "source": "dispatch"}],
  "reviewers": [{"name": "r1", "vendor": "codex", "model": "m", "planned": true, "ran": true,
    "runDir": "runs/r1", "ownerWord": null}],
  "findings": [{"id": "f1", "title": "Unchecked index", "severity": "Important",
    "file": "a.py", "line": 9, "body": "...", "consequence": null, "outcome": "fixed",
    "reason": "bounds check added, re-reviewed", "reviewer": "r1"}],
  "rawFindingsFiles": [], "rounds": {"count": 1, "cap": 3, "stoppedAtCap": false},
- "goAheads": [], "checked": "the diff, the tests it touches"}
+ "goAheads": [], "checked": ["the diff", "the tests it touches"]}
 ```
 
 ## Write it, read it
@@ -70,8 +70,7 @@ The record says reviewed only when all three hold: CI is green on the PR's final
 finding has one of the five outcomes with its reason, and no planned review is missing.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
-- With a go-ahead: the record names the missing review and the go-ahead. It still does not say
-  reviewed.
+- With a go-ahead: the record names the missing review and the go-ahead. It still does not say reviewed.
 - A reviewer from a maker's family counts as not run, unless the owner said so for that change.
   Then the record says the review was not independent.
 - The record and the PR text never say a change has no bugs. They say what was checked and what
@@ -89,7 +88,8 @@ finding has one of the five outcomes with its reason, and no planned review is m
 **Light and micro lanes.**
 - A finding fixed and re-reviewed becomes `fixed`.
 - A finding argued wrong becomes `shown-wrong`, with the argument as the reason.
-- A finding covered by a standing ruling becomes `ruling`, naming the ruling.
+- A finding covered by a standing ruling, or by a recorded residual under the review discipline's
+  review bars, becomes `ruling`, naming which.
 - Anything the owner must decide becomes `left-for-owner`.
 - The one reviewer's `runDir` is its `dispatch-review` run directory, so the engine's own record
   proves it ran.

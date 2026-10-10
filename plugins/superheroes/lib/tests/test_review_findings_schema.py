@@ -696,6 +696,7 @@ def test_outcomes_are_the_five_spellings_once():
     assert RFS.OUTCOMES == ("fixed", "shown-wrong", "craft", "left-for-owner", "ruling")
     assert len(set(RFS.OUTCOMES)) == len(RFS.OUTCOMES)
     assert RFS.OUTCOME_SET == frozenset(RFS.OUTCOMES)
+    assert RFS.LEFT_FOR_OWNER == "left-for-owner"
 
 
 @pytest.mark.parametrize("engine", ["codex", "cursor", "claude"])

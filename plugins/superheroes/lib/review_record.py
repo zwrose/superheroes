@@ -34,8 +34,7 @@ RECORD_SCHEMA = "review-record/1"
 FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
 MAX_BODY_CHARS = 65000
 SESSION = "reported by the session"
-# The home exports no name for this outcome and no lib module may re-spell one; derive it.
-_LEFT_FOR_OWNER = next(o for o in rfs.OUTCOMES if o.startswith("left-"))
+_LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 _LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(full|light|micro)\b[.:]?[ \t]*(.*)$")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,

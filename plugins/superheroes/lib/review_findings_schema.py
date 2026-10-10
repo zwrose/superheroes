@@ -67,6 +67,9 @@ OUTCOMES = ("fixed", "shown-wrong", "craft", "left-for-owner", "ruling")
 # Set form of OUTCOMES for membership checks.
 OUTCOME_SET = frozenset(OUTCOMES)
 
+# The outcome for a finding only the owner can decide.
+LEFT_FOR_OWNER = OUTCOMES[3]
+
 # Synonym key → canonical member key. Structural mappings are listed separately.
 SUBSTANCE_KEY_SYNONYMS = {
     # already tolerated today (engine_adapter.py legacy census)
