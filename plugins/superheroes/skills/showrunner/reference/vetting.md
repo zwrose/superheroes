@@ -184,7 +184,7 @@ The ruling lists every invalid piece and its reason.
 **A complete check** matters only when the issue names an iPhone check. The results show one unless
 **any** of these holds:
 
-1. a "did not run" line;
+1. a "did not run" line in the results' opening;
 2. no pilot's results;
 3. no iPhone evidence in the results;
 4. no evidence for a part the lane's check includes;
@@ -195,7 +195,20 @@ The ruling lists every invalid piece and its reason.
 9. results missing the statement of what a simulator cannot show (a real finger's touch and
    real-device speed);
 10. results missing the statement of where the check ran and who chose it;
-11. an installed-app part with no reading that reports the app installed.
+11. an installed-app part with no reading that reports the app installed;
+12. the results name no `commit`, or the `commit` does not resolve
+    (`git rev-parse --verify <commit>^{commit}` fails), or
+    `git diff --name-only <commit> <head>` fails, or it lists any file that can reach the checked
+    page (anything the app serves, a fixture page the check served included). Only later changes
+    that cannot reach the checked page (tests that are not served, docs) leave the check standing
+    for the head. The receipt quotes the command and its output;
+13. the results do not state that the served checkout was clean (`git status --porcelain` empty)
+    at that `commit` when the check ran. A commit alone does not show the page served matched it.
+
+**Superseded attempts.** Pieces under *Superseded attempts* are read and listed but count toward
+nothing: conditions 3–8 and 11 and the invalid-piece rules apply to the final attempt's pieces only.
+A superseded attempt never excuses a part whose final attempt did not complete. A retry the results
+do not show as such (no superseded entry) is graded as written.
 
 **Your own check.** When the issue names an iPhone check and the check is not complete, check the
 change on a simulated iPhone by hand **before** you rule. The vet receipt records what you checked,
@@ -205,13 +218,32 @@ checked. When neither names a place, the receipt records the place as undetermin
 the browser and in the installed web app alike, so that no place is preferred; never pick one of
 them. Use a phone of your own, never a lane's phone that is waiting to be reaped.
 
+1. Make a phone: `xcrun simctl create superheroes-advisor-<vet> <type>`, where `<type>` is the
+   value of `IPHONE_DEVICE_TYPE` in `lib/launcher.py` (read it from there; never type it here).
+   Keep the ID it prints.
+2. An advisor seat has no launch values, so set them for the check's commands:
+   `SUPERHEROES_IPHONE_ID=<your id> SUPERHEROES_DEVICE_HUB=available` before
+   `iphone_check.py preflight`. Preflight still proves Device Hub is running.
+3. `boot`, then drive the check as `test-pilot-execute`'s § The iPhone check says.
+4. To check against the plugin's reading page, fill its placeholder from `READING_PARAM` and serve
+   it (below). Served as-is, the page posts nothing and every `shot` reads not established.
+5. When done, delete only that phone: `xcrun simctl delete <your id>`. Never delete, shut down or
+   erase a lane's phone; the reap does that.
+
+```
+python3 -B -c "import sys; sys.path.insert(0, '<plugin root>/lib'); import iphone_check as c; print(open('<plugin root>/lib/tests/fixtures/iphone/reading-page.html').read().replace('__READING_PARAM__', c.READING_PARAM))" > <dir>/index.html
+python3 -B -m http.server <port> --bind 127.0.0.1 --directory <dir>
+```
+
 ```
 piece 1: no phone ID                        → invalid: no `phone` value (a)
 piece 2: phone from an earlier launch       → invalid: another phone (b)
 piece 3: where installed, reading: browser  → invalid: `where` disagrees with reading (d)
 piece 4: no `where` label                   → invalid: no `where` label (c)
 piece 5: page reads NOT_ESTABLISHED         → invalid: page not established (e)
+piece 6: under Superseded attempts          → read and listed; counts toward nothing
 check not complete (condition 5) → advisor's own iPhone check recorded
+check not complete (condition 12: git diff --name-only abc1234 <head> lists app/page.html) → recorded
 ruling: pieces 1–5 invalid, with the reasons above
 ```
 
