@@ -66,10 +66,10 @@ record's URL in the PR body's build record.
 
 ## What "reviewed" means
 
-The record says reviewed only when all five hold: CI is green on the PR's final commit; every
+The record says reviewed only when all six hold: CI is green on the PR's final commit; every
 finding (in the account, held or owed by the existing record, or in a raw findings file), matched by identity, has one of the five outcomes and a reason in this
-account; no planned review is missing; the final commit was read from the PR; and the makers'
-families are recorded. Any finding short of that is listed in `owed` and in what is left. One left
+account; no planned review is missing and a planned reviewer ran; no raw findings file is unread; the final commit
+was read from the PR; and the makers' families are recorded. Any finding short of that is listed in `owed` and in what is left. One left
 for the owner stays owed until `fixed`, `shown-wrong`, or `ruling` is recorded with its reason.
 A reviewer run counts only when the engine's record shows it graded a success; a forfeit is missing.
 

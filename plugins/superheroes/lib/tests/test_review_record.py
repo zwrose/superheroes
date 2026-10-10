@@ -281,6 +281,21 @@ def test_unreadable_raw_findings_file_is_named_not_fatal(tmp_path):
     assert rec["status"] == "not-reviewed" and "the findings file bad.json could not be read" in rec["whatIsMissing"]
 
 
+def test_unread_raw_file_stays_owed_across_a_rewrite_that_omits_it(tmp_path):
+    # axis: unread evidence across rewrites; an omitted unreadable file flipping the record to reviewed
+    gone = str(tmp_path / "gone.json")
+    first = build(account(rawFindingsFiles=[gone]))
+    assert first["status"] == "not-reviewed" and first["unreadFiles"] == ["gone.json"]
+    again = build(account(rawFindingsFiles=[]), prior=first)
+    assert again["status"] == "not-reviewed" and "the findings file gone.json could not be read" in again["whatIsMissing"]
+    good = tmp_path / "gone.json"
+    good.write_text("[]")
+    healed = build(account(rawFindingsFiles=[]), prior=again)
+    assert healed["status"] == "not-reviewed"
+    healed = build(account(rawFindingsFiles=[str(good)]), prior=again)
+    assert healed["unreadFiles"] == [] and healed["status"] == "reviewed"
+
+
 def test_earlier_session_findings_survive_in_history(tmp_path):
     # axis: history across sessions; an earlier session's findings or owner decision lost on a later write
     fake = Fake()

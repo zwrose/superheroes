@@ -322,7 +322,7 @@ def _raw_rows(members, source):
 
 
 def _raw_findings(paths):
-    raw, unread = [], []
+    raw, unread, read = [], [], []
     for p in paths:
         try:
             with open(p, encoding="utf-8") as fh:
@@ -331,10 +331,11 @@ def _raw_findings(paths):
                 members = members["findings"]
             assert isinstance(members, list) and all(isinstance(m, dict) for m in members)
         except (OSError, ValueError, KeyError, TypeError, AssertionError):
-            unread.append(f"the findings file {os.path.basename(p)} could not be read")
+            unread.append(os.path.basename(p))
             continue
+        read.append(os.path.basename(p))
         raw += _raw_rows(members, os.path.basename(p))
-    return raw, unread
+    return raw, unread, read
 
 
 def _key(f):
@@ -447,7 +448,11 @@ def build_record(account, readers, prior=None):
             if mine and not good:
                 notes.append(f"the go-ahead for {v['name']} is incomplete")
             missing.append({"name": v["name"], "goAhead": good})
-    raw, unread = _raw_findings(a["rawFindingsFiles"])
+    raw, unread, read = _raw_findings(a["rawFindingsFiles"])
+    # An unread file stays owed across rewrites until a later account supplies that file readably.
+    prior_unread = (prior or {}).get("unreadFiles")
+    unread = list(dict.fromkeys(unread + [n for n in (prior_unread if isinstance(prior_unread, list) else [])
+                                          if isinstance(n, str) and n not in read]))
     findings = [dict(f) for f in a["findings"]]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -461,7 +466,7 @@ def build_record(account, readers, prior=None):
     owed, finding_lines = _owed(findings, raw, prior)
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
-        "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw,
+        "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw, "unreadFiles": unread,
         "owed": owed, "leftForOwner": [_name(f) for f in owed if f.get("outcome") == _LEFT_FOR_OWNER],
         "historyArchives": list((prior or {}).get("historyArchives") or []),
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
@@ -475,7 +480,8 @@ def build_record(account, readers, prior=None):
         "history": [h for h in hist if h.get("sessionId") != a["sessionId"]],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    rec["status"], rec["parked"], lines = _status(rec, unread, finding_lines)
+    rec["status"], rec["parked"], lines = _status(
+        rec, [f"the findings file {n} could not be read" for n in unread], finding_lines)
     rec["whatIsMissing"] = notes + lines
     return rec
 
