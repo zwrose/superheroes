@@ -210,12 +210,51 @@ Spec as reviewed: commit 32ef30c8.
 #### Citation check
 `[]` (run with `--root` set to the grounding base at origin/main ef8e6d3c)
 
+## After rulings 2
+
+The owner answered remainder sheet 2 on 2026-10-10 (Canon 2026-10-10-ca3e7e0d-21 and -22, and
+Aligned on the journeys redraw). The spec changed in commit beacc7aa: UFR-7's rule cites the new
+ruling and says the cloud is not stricter than a local build, FR-13 gained the rule for a project
+that keeps its Canon or its specs outside the repository, and Out of scope gained a line for it.
+Both boards were redrawn for the same-family rule; `board/redraws.md` records the two redraws.
+
+### Round 1
+
+Spec as reviewed: commit beacc7aa. No fixes were needed.
+
+#### Gap review
+- Run directory: `<checks>/ar2r1/gap/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 19 tool calls, 11 files read)
+- Confirmations: cloud-gap-1 to cloud-gap-8 -> fixed
+- New findings: none. Gap review is clean.
+
+#### Source check
+- Run directory: `<checks>/ar2r1/source/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 11 tool calls, 9 files read)
+- Approved board, for the source check: `board/build-board.html` (version 2) and `board/journeys.html` (version 3) beside the spec
+- Confirmations: SC-1 to SC-11 -> fixed (SC-11 by the owner's ruling and the two redraws)
+- New findings: none. The source check is clean.
+
+#### Grounding
+- Run directory: `<checks>/ar2r1/grounding/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 22 tool calls, 10 files read)
+- Grounding base, for grounding: origin/main, ef8e6d3c049222c26513df581d34f13770b31638
+- Confirmations: GND-001 -> fixed; GND-002 -> decline-accepted; GND-003 -> decline-accepted
+- New findings: none. Grounding is clean.
+
+#### Citation check
+`[]` (run with `--root` set to the grounding base at origin/main ef8e6d3c)
+
+All three checks are clean after the second set of rulings, in one round. In all, six check rounds
+ran: three in the first review, one after each of the two sets of rulings, and one after the vet's
+first round. The checks fixed 17 findings and the vet's first round added 8 craft fixes.
+
 ## The owner's queue
 
-Settled on remainder sheet 1: O-1 (Canon 2026-10-10-ca3e7e0d-17, now UFR-13), O-2 (Canon
-2026-10-10-ca3e7e0d-18, now FR-37) and N-1 (Canon 2026-10-10-ca3e7e0d-19, all nine stand).
+Nothing is waiting.
 
-Waiting, on remainder sheet 2:
-
-- O-3 (from SC-11): two approved sources conflict. The cloud boards say a parked cloud PR never gets a same-family stand-in. The approved review spec says no session picks one on its own, and the owner's word can send one PR through with a same-family reviewer, recorded as not independent, or without the review. Recommendation: follow the review spec, so one rule holds everywhere and nothing happens without the owner's word; the boards are then redrawn. Marks: none.
-- O-4 (the vet's owner call V1.5): a project that keeps its Canon or its specs outside the repository gives a cloud builder no way to read them. Recommendation, the advisor's and the author's: such a project's builds are judged as needing the owner's machine, so they run locally and the launch report says why. Marks: none.
+- Settled on remainder sheet 1: O-1 (Canon 2026-10-10-ca3e7e0d-17, now UFR-13), O-2 (Canon
+  2026-10-10-ca3e7e0d-18, now FR-37) and N-1 (Canon 2026-10-10-ca3e7e0d-19, all nine stand).
+- Settled on remainder sheet 2: O-3 (from SC-11; Canon 2026-10-10-ca3e7e0d-21, the cloud follows the
+  review spec's rule and both boards were redrawn) and O-4 (the vet's owner call V1.5; Canon
+  2026-10-10-ca3e7e0d-22, such a project's builds run on the owner's machine for now).
