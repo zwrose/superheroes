@@ -461,8 +461,9 @@ def _assert_no_bug_free_claim(text):
 
 
 _SECRET_WORDS = frozenset({"password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "authorization",
-                           "cookie", "apikey", "privatekey"})
-_SECRET_PAIRS = frozenset({"apikey", "privatekey"})
+                           "cookie", "apikey", "privatekey", "passwords", "passphrases", "secrets", "credentials",
+                           "cookies"})
+_SECRET_PAIRS = frozenset({"apikey", "privatekey", "secretkey", "accesskey"})
 _KEY_QUOTES = "\"'`[]{}() \t\\"
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)[ \t\"'\\\])}]*[:=]")
@@ -472,13 +473,14 @@ _WITHHELD_FIELD = "[REDACTED FIELD]"
 
 def _secret_key(k):
     """The one home for "is this key secret-shaped". Cut the key into words (surrounding quotes and brackets
-    stripped, camelCase split, then split on '_', '-', '.' and spaces, lowercased); it is secret when its last
-    word is a secret word, or its last two words joined are apikey or privatekey. The value plays no part, so
-    "tokens", "tokenizer", "passwordless" and "secretary" are not secret while "access_token" and "api key" are."""
+    stripped, camelCase split, then split on '_', '-', '.' and spaces, lowercased); it is secret when any whole
+    word is a secret word, or any two adjacent words joined are a secret pair (apikey, privatekey, secretkey,
+    accesskey). The value plays no part, so "tokens", "tokenizer", "passwordless" and "secretary" are not secret
+    while "access_token", "SECRET_KEY", "password_hash" and "api key" are."""
     if not isinstance(k, str):
         return False
     words = [w for w in re.split(r"[_.\- ]+", _CAMEL_BOUNDARY.sub(" ", k.strip(_KEY_QUOTES)).lower()) if w]
-    return bool(words) and (words[-1] in _SECRET_WORDS or "".join(words[-2:]) in _SECRET_PAIRS)
+    return any(w in _SECRET_WORDS for w in words) or any(a + b in _SECRET_PAIRS for a, b in zip(words, words[1:]))
 
 
 def _has_secret(text):

@@ -834,6 +834,11 @@ SAFE_TAIL = "SAFE_TAIL_TEXT"
     'os.environ["PASSWORD"] = "LEAKMARK"',
     "params[password]=LEAKMARK",
     "{token}: LEAKMARK",
+    "db_password: LEAKMARK",
+    '"db.password": "LEAKMARK"',
+    "x-api-key=LEAKMARK",
+    'config.SECRET_KEY = "LEAKMARK"',
+    "aws_secret_access_key: LEAKMARK",
 ])
 def test_every_credential_form_is_withheld_or_redacted_whole(text):
     # axis: withholding; a credential value form (quoted, escaped, array, block, PEM, spaced, second key) reaching a posted comment
@@ -1016,7 +1021,8 @@ CODEX_STDOUT = "\n".join([
     '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\\"findings\\": [{\\"title\\": '
     '\\"Off by one in the loop\\", \\"file\\": \\"a.py\\", \\"line\\": 3, \\"severity\\": \\"Minor\\", '
     '\\"body\\": \\"The range stops one short.\\"}]}"}}',
-    '{"type":"turn.completed","usage":{"input_tokens":1234,"cached_input_tokens":0,"output_tokens":56}}',
+    '{"type":"turn.completed","usage":{"input_tokens":1234,"cached_input_tokens":0,"cache_write_input_tokens":0,'
+    '"output_tokens":56,"reasoning_output_tokens":12}}',
 ])
 
 
@@ -1031,11 +1037,16 @@ def test_codex_stdout_with_usage_counts_is_posted_not_withheld():
     ("access_token", True), ("api_token", True), ("client_secret", True), ("db_password", True),
     ("API_KEY", True), ("api key", True), ("private key", True), ("privateKey", True),
     ("accessToken", True), ("Authorization", True), ("x-auth-token", True),
+    ("SECRET_KEY", True), ("aws_secret_access_key", True), ("secretKey", True), ("credentials", True),
+    ("db_passwords", True), ("password_hash", True),
+    # fail-closed over-redaction: "token" is a whole word here, so a count named token_count is withheld too
+    ("token_count", True),
     ("input_tokens", False), ("output_tokens", False), ("cached_tokens", False), ("tokens", False),
     ("tokenizer", False), ("passwordless", False), ("secretary", False), ("note", False),
+    ("cached_input_tokens", False),
 ])
 def test_key_shape_decides_secret(key, secret):
-    # axis: key shape; a key judged secret by a substring instead of its last word (or last two words joined)
+    # axis: key shape; a key judged secret by a substring, or by only its last word, instead of any whole word or any adjacent pair
     assert rr._secret_key(key) is secret
 
 
