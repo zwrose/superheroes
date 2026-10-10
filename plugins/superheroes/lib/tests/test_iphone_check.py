@@ -4,6 +4,7 @@ The one exempt subprocess is `node`, which runs the fixture page's own script (F
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -737,15 +738,16 @@ def _post(port, token, body):
 
 class Phone:
     """The phone's page: posts a reading to the session's port every ~50 ms. `page` and `where` may be switched live;
-    a MISSING value drops the key; `max_posts` stops it after that many accepted posts."""
+    a MISSING value drops the key; `max_posts` stops it after that many accepted posts.
+    `refused` is set whenever a post fails: once `shot` has its reading after the capture it stops listening."""
 
     def __init__(self, port, page=PAGE_A, where="browser", token="abc123", max_posts=None, **extra):
         self.port, self.token, self.page, self.where, self.max_posts, self.extra = port, token, page, where, max_posts, extra
-        self.stop = threading.Event()
+        self.stop, self.refused = threading.Event(), threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def reading(self):
-        r = reading(takenAt=int(time.time() * 1000), **self.extra)
+        r = reading(takenAt=math.ceil(time.time() * 1000), **self.extra)  # rounded up: never below the call-start `shot` races
         r["page"], r["where"] = self.page, self.where
         return {k: v for k, v in r.items() if v is not MISSING}
 
@@ -760,7 +762,10 @@ class Phone:
                     return
         posted = 0
         while not self.stop.is_set() and (self.max_posts is None or posted < self.max_posts):
-            posted += _post(self.port, self.token, self.reading())
+            if _post(self.port, self.token, self.reading()):
+                posted += 1
+            else:
+                self.refused.set()
             self.stop.wait(0.05)
 
     def __enter__(self):
@@ -989,7 +994,7 @@ def test_shot_when_the_page_was_already_hidden_as_the_capture_began_establishes_
     captured, stop = threading.Event(), threading.Event()
 
     def post(**kw):
-        _post(port, "abc123", reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000), **kw))
+        _post(port, "abc123", reading(page=PAGE_A, where="browser", takenAt=math.ceil(time.time() * 1000), **kw))
 
     def phone_page():
         for _ in range(100):  # wait for the listener
@@ -998,7 +1003,7 @@ def test_shot_when_the_page_was_already_hidden_as_the_capture_began_establishes_
                 break
             except OSError:
                 time.sleep(0.02)
-        older_visible = reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000))
+        older_visible = reading(page=PAGE_A, where="browser", takenAt=math.ceil(time.time() * 1000))
         time.sleep(0.01)
         post(visibility="hidden")  # the newer hidden reading lands first ...
         _post(port, "abc123", older_visible)  # ... then the older visible packet is delivered late
@@ -1085,12 +1090,12 @@ def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_
                 break
             except OSError:
                 time.sleep(0.02)
-        tied = int(time.time() * 1000)
+        tied = math.ceil(time.time() * 1000)
         post(takenAt=tied, visibility="visible")  # visible delivered first ...
         post(takenAt=tied, visibility="hidden")  # ... then the hidden reading taken at the very same moment
         captured.wait(10)
         while not stop.is_set():  # the page is visible again after the capture
-            post(takenAt=int(time.time() * 1000))
+            post(takenAt=math.ceil(time.time() * 1000))
             stop.wait(0.05)
 
     def screenshot():
@@ -1124,7 +1129,7 @@ def test_shot_ignores_a_hidden_reading_from_the_other_context_during_the_capture
 
 
 def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path):
-    port, late = make_session(tmp_path), []
+    port, late, froze, in_flight = make_session(tmp_path), [], [], threading.Event()
 
     def during():
         packet = json.dumps(reading(page=PAGE_B, where="browser", takenAt=int(time.time() * 1000))).encode()
@@ -1132,15 +1137,20 @@ def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_rea
         def slow_post():
             with socket.create_connection(("127.0.0.1", port), 2) as c:
                 c.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(packet) + packet[:5])
-                time.sleep(0.5)  # in flight while the post-capture reading arrives and the window is frozen
+                in_flight.set()
+                # The listener refuses the phone's posts only once it has the reading after the capture and froze the window
+                froze.append(phone.refused.wait(10))
                 c.sendall(packet[5:])
                 c.recv(100)
-        late.append(threading.Thread(target=slow_post))
+        late.append(threading.Thread(target=slow_post, daemon=True))
         late[0].start()
-    with Phone(port, page=PAGE_A, where="browser"):
+        assert in_flight.wait(10)  # the partial request is in flight before the screenshot returns
+        phone.refused.clear()
+    with Phone(port, page=PAGE_A, where="browser") as phone:
         fake(on_screenshot(during))
         r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
     late[0].join(5)
+    assert froze == [True]
     assert r["ok"] is True and r["labels"] == established(NE, "browser") and "page changed" in r["labelNote"]
 
 
@@ -1185,14 +1195,14 @@ def test_shot_never_returns_a_reading_value(fake, tmp_path):
     assert "s3cret" not in json.dumps(r)
 
 
-def test_shot_takes_no_page_or_where_argument(fake, tmp_path, capsys):
-    with pytest.raises(SystemExit) as e:
-        ic.main(["shot", "--phone", U, "--out", str(tmp_path / "a.png"), "--run-dir", str(tmp_path), "--token", "abc123",
-                 "--page", "http://x.test/", "--where", "browser"])
-    assert e.value.code == 2
-    fake(sim(inventory((U, "Booted"))))
+@pytest.mark.parametrize("retired", [["--page", "http://x.test/"], ["--where", "browser"]], ids=["--page", "--where"])
+def test_shot_takes_no_page_or_where_argument(fake, tmp_path, capsys, retired):
     argv = ["shot", "--phone", U, "--out", str(tmp_path / "a.png"), "--run-dir", str(tmp_path), "--token", "abc123",
             "--timeout", "2"]
+    with pytest.raises(SystemExit) as e:
+        ic.main([*argv, *retired])
+    assert e.value.code == 2
+    fake(sim(inventory((U, "Booted"))))
     assert ic.main(argv) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True and out["labels"] == established(NE, NE) and isinstance(out["labelNote"], str)
