@@ -138,8 +138,46 @@ and UFR-8. It added, dropped and moved no requirement, and every statement kept 
 - Reconciled: seven changed statements, seven findings, each matching one statement.
 - The pass was kept.
 
+## After rulings 1
+
+The owner answered remainder sheet 1 on 2026-10-10 (Canon 2026-10-10-ca3e7e0d-17 to -20). The spec
+changed in commit a320fa24: UFR-13 and UFR-10's rule (unpushed work), a new Part F with FR-37 and
+the reworded assumption and scope (plugin version pickup), and a new constraint (no over-investment
+in recovery machinery). The journeys board was redrawn for the pickup; `board/redraws.md` records it.
+
+### Round 1
+
+Spec as reviewed: commit a320fa24. No fixes were needed.
+
+#### Gap review
+- Run directory: `<checks>/ar1r1/gap/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 15 tool calls, 11 files read)
+- Confirmations: cloud-gap-1 to cloud-gap-8 -> fixed (cloud-gap-4 by the owner's ruling, now UFR-13)
+- New findings: none. Gap review is clean.
+
+#### Source check
+- Run directory: `<checks>/ar1r1/source/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 8 tool calls, 8 files read)
+- Approved board, for the source check: `board/build-board.html` and `board/journeys.html` (version 2) beside the spec
+- Confirmations: SC-1 to SC-10 -> fixed (SC-2 by the owner's ruling, now FR-37)
+- New findings: none. The source check is clean.
+
+#### Grounding
+- Run directory: `<checks>/ar1r1/grounding/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 15 tool calls, 9 files read)
+- Grounding base, for grounding: origin/main, ef8e6d3c049222c26513df581d34f13770b31638
+- Confirmations: GND-001 -> fixed; GND-002 -> decline-accepted; GND-003 -> decline-accepted
+- New findings: none. Grounding is clean.
+
+#### Citation check
+`[]` (run with `--root` set to the grounding base at origin/main ef8e6d3c)
+
+All three checks are clean after the rulings, in one round.
+
 ## The owner's queue
 
-- O-1 (from cloud-gap-4): a cloud builder that stops with work it never pushed, or before its first push, has no stated outcome. Recommendation: the advisor first tries to get the stopped builder's unpushed work pushed; what cannot be saved is redone, the advisor says how much, and a build that never pushed restarts from the beginning. Marks: none.
-- O-2 (from SC-2): the spec says the build should make the cloud pick up the advisor's plugin version with no hand step after each release, and the approved journeys leave hands-off upkeep of the setup to the later piece. Recommendation: keep it in this piece as an aim, with the pasted setup text as the fallback the boards already show, because the plugin releases often and each release would otherwise send builds back to the owner's machine until the owner pastes. Marks: none.
-- N-1 (statements the author added at spec time, tagged "craft, for your veto", that the owner has not yet seen): FR-18 no owner step between launch and ready PR; FR-27 a cloud builder does not change calibration; FR-31 a build's pushed branch is kept until its PR is merged or closed; FR-32 the same cleanup when a PR is closed unmerged; UFR-7's rule that a review finished before a lapse stays as recorded; UFR-9's rule that a recovery never leaves two builders on one issue; UFR-12 a builder with no answer parks with its work pushed; FR-36's rule that a parked PR closed before the renewal is not sent back; UFR-8's rule that a review that did not run for another reason gets no advice to renew. Recommendation: keep all nine. Marks: none.
+Nothing is waiting. Remainder sheet 1 settled every item:
+
+- O-1 (from cloud-gap-4): settled by Canon 2026-10-10-ca3e7e0d-17. The spec carries it as UFR-13.
+- O-2 (from SC-2): settled by Canon 2026-10-10-ca3e7e0d-18. The spec carries it as FR-37.
+- N-1 (nine statements the author added): settled by Canon 2026-10-10-ca3e7e0d-19. All nine stand.
