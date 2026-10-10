@@ -249,6 +249,14 @@ All three checks are clean after the second set of rulings, in one round. In all
 ran: three in the first review, one after each of the two sets of rulings, and one after the vet's
 first round. The checks fixed 17 findings and the vet's first round added 8 craft fixes.
 
+## The advisor's vet
+
+- Round 1 (https://github.com/zwrose/superheroes/pull/1740#issuecomment-6101254809): `findings`. Eight craft findings, fixed in commit 32ef30c8, and one owner call (V1.5), settled on remainder sheet 2.
+- Round 2 (https://github.com/zwrose/superheroes/pull/1740#issuecomment-6101601110): `clean`, on spec hash e3dc491c03c3d96febfe8ef10526b252bf9c9fc9ce4e8ddde0ccfb9a0a4cecb4, with no owner calls.
+
+The final sheet went out on 2026-10-10 after the clean round 2 record. It also lists the six
+statements tagged "craft, for your veto" that were added while fixing the vet's findings.
+
 ## The owner's queue
 
 Nothing is waiting.
