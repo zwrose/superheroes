@@ -460,49 +460,95 @@ def _secret_key(k):
     return isinstance(k, str) and bool(_SECRET_KEY.search(k))
 
 
-_PEM_BLOCK = r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
-
-_KEYED_SECRET = re.compile(
-    r"(?i)(?:(\\?[\"']?[\w-]*(?:" + _SECRET_KEY.pattern + r")[\w-]*\\?[\"']?\s*[:=]\s*)"
-    r"(?:" + _PEM_BLOCK + r"|"                       # a PEM block after the key, unquoted
-    r"\\?\"(?:[^\"\\]|\\[\s\S])*\\?\""            # double-quoted string, escape-aware, may span lines
-    r"|\\?'(?:[^'\\]|\\[\s\S])*\\?'"              # single-quoted string, escape-aware, may span lines
-    r"|(?P<open>[\[{])"                            # a bracketed value: its end is found by _balanced_end
-    r"|[|>][+-]?\d?[ \t]*(?:\n[ \t]+[^\n]*|\n(?=\n[ \t]+\S))*"  # YAML block scalar and its indented lines
-    r"|(?:(?:Basic|Bearer|Digest|Token)\s+)?[^\s,;}&]+)"  # unquoted token (with an auth scheme word)
-    r"|" + _PEM_BLOCK + r")")                        # free-form: any PEM private key block, whatever precedes it
+_REDACTED_LINE = "[REDACTED LINE]"
+_KEY_SEP = re.compile(r"(?:" + _SECRET_KEY.pattern.replace("api[_-]?key", "api[ _-]?key").replace("private[_-]?key", "private[ _-]?key")
+                      + r")[\w-]{0,24}[ \t\"'\\]*[:=]", re.I)
+_PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+_PEM_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
+_BLOCK_INDICATOR = re.compile(r"(?:\A|(?<=\s))[|>][+-]?\d?[+-]?[ \t]*\Z")
 
 
-def _balanced_end(text, start):
-    """Index just past the bracket that closes text[start] ({ or [); the end of text when unbalanced (fails closed)."""
-    depth, i, n = 0, start, len(text)
+def _open_after(segment, depth, quote):
+    """Carry (bracket depth, open quote) across one line segment of a value, escape-aware, left to right.
+    The value is the first quoted string or bracketed group; it ends where that closes, so a plain value is
+    closed at once and the text after a closed value (the enclosing string's own quotes) is never read."""
+    i, n, prev = 0, len(segment), ""
     while i < n:
-        c = text[i]
-        if c in "\"'":
-            i += 1
-            while i < n and text[i] != c:
-                i += 2 if text[i] == "\\" else 1
-        elif c in "{[":
-            depth += 1
-        elif c in "}]":
-            depth -= 1
-            if depth == 0:
-                return i + 1
+        c = segment[i]
+        if c == "\\":
+            i += 2
+            prev = "x"
+            continue
+        if quote:
+            if c == quote:
+                quote = None
+                if not depth:
+                    return 0, None
+        elif depth:
+            if c in "\"'":
+                if not (prev.isalnum() and c == "'"):  # an apostrophe inside a word does not open a quote
+                    quote = c
+            elif c in "{[(":
+                depth += 1
+            elif c in "}])":
+                depth -= 1
+                if not depth:
+                    return 0, None
+        elif c in "\"'":
+            quote = c
+        elif c in "{[(":
+            depth = 1
+        elif not c.isspace():
+            return 0, None
+        prev = c
         i += 1
-    return n
+    return depth, quote
 
 
 def _scrub_text(text):
-    """One key-anchored pass over every secret-named key and its value, then pr_comment.scrub's free-form patterns."""
-    out, pos = [], 0
-    while True:
-        m = _KEYED_SECRET.search(text, pos)
+    """The one keyed redaction home: whole lines carrying a secret-shaped assignment (and any value they open) go,
+    failing closed, in one linear left-to-right pass; then pr_comment.scrub's free-form token shapes."""
+    out, lines = [], text.split("\n")
+    pem = False        # inside a private-key block
+    depth, quote = 0, None   # an open bracket/quote value carried from a redacted line
+    block_indent = None      # indent of the key line whose YAML block scalar is running
+    for line in lines:
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if pem:
+            out.append(_REDACTED_LINE)
+            pem = _PEM_END.search(line) is None
+            continue
+        if block_indent is not None:
+            if not stripped:
+                out.append(line)
+                continue
+            if indent > block_indent:
+                out.append(_REDACTED_LINE)
+                continue
+            block_indent = None
+        if depth or quote:
+            if not stripped:
+                out.append(line)
+                continue
+            out.append(_REDACTED_LINE)
+            depth, quote = _open_after(line, depth, quote)
+            continue
+        m = _PEM_BEGIN.search(line)
+        if m:
+            out.append(_REDACTED_LINE)
+            pem = _PEM_END.search(line, m.end()) is None
+            continue
+        m = _KEY_SEP.search(line)
         if m is None:
-            break
-        out.append(text[pos:m.start()] + (m.group(1) or "") + "[REDACTED]")
-        pos = _balanced_end(text, m.start("open")) if m.group("open") else m.end()
-    out.append(text[pos:])
-    return pr_comment.scrub("".join(out))
+            out.append(line)
+            continue
+        out.append(_REDACTED_LINE)
+        value = line[m.end():]
+        depth, quote = _open_after(value, 0, None)
+        if not (depth or quote) and _BLOCK_INDICATOR.search(value):
+            block_indent = indent
+    return pr_comment.scrub("\n".join(out))
 
 
 def _scrubbed(value):

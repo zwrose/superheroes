@@ -6,7 +6,7 @@ Each review session adds one new PR comment whose first line is `<!-- superheroe
 Earlier ones are never edited; the latest is the current record, and it links the one before it under
 `previousRecord`. Each raw output file named in the account gets its own comment
 (`<!-- superheroes:review-raw-output -->`), verbatim with secrets redacted, and the record links it
-under `rawOutputs`. Each review ends by writing it.
+under `rawOutputs`. Each review ends by writing it. Raw output and record text are redacted line by line: any line that assigns a secret-shaped field is replaced by `[REDACTED LINE]`, along with any value it opens.
 
 Across sessions the account must relist every finding the latest earlier record listed (matched by identity
 key; an unresolved one stays pending, null), or the write refuses `review-record-unaccounted`.

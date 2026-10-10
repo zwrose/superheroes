@@ -544,8 +544,8 @@ def test_w3_raw_output_verbatim_and_linked(tmp_path):
     (comment,) = fake.raws()
     body = comment["body"]
     assert body.startswith(rr.RAW_MARKER) and len(fake.comments) == 2
-    assert "hunter2" not in body and '"pwd": [REDACTED]' in body
-    assert pr_comment.scrub(text) in body and "no bugs here" in body
+    assert "hunter2" not in body and '[REDACTED LINE]' in body
+    assert text.replace('{"pwd": "hunter2"}', "[REDACTED LINE]") in body and "no bugs here" in body
     assert "\n````\n" in body and body.endswith("\n````")
     rec = rr.read(7, readers=fake.readers())
     assert rec["rawOutputs"] == [{"file": "raw.txt", "id": comment["id"], "url": comment["url"]}]
@@ -661,7 +661,7 @@ def test_quoted_credentials_are_redacted_in_raw_output_and_record_strings(tmp_pa
     assert "EXAMPLE_SECRET" not in rr.render_raw("r.txt", text) and "dXNlcjpwYXNz" not in rr.render_raw("r.txt", text)
     f = finding("a-1", outcome="fixed", reason="r", body=text)
     body = rr.render(build(account(findings=[f])))
-    assert "EXAMPLE_SECRET" not in body and "dXNlcjpwYXNz" not in body and "[REDACTED]" in body
+    assert "EXAMPLE_SECRET" not in body and "dXNlcjpwYXNz" not in body and "[REDACTED LINE]" in body
 
 
 def test_w7_read_returns_the_latest(tmp_path):
@@ -776,36 +776,67 @@ def test_x3_none_and_false_are_accepted_as_given():
     assert "ownerWord" not in rec["reviewers"][0]
 
 
+SAFE_TAIL = "SAFE_TAIL_TEXT"
+
+
 @pytest.mark.parametrize("text,leaked", [
-    ('PASSPHRASE="a b"', "a b"),
-    ("PASSPHRASE='a b'", "a b"),
-    ("PASSPHRASE=plainvalue", "plainvalue"),
+    ('password: "quotedvalue"', "quotedvalue"),
     ('"password": "pre\\"suffix"', "suffix"),
-    ("'password': 'pre\\'suffix'", "suffix"),
     ('{"token": ["x1y2z3","q4r5s6"]}', "x1y2z3"),
-    ('{"passphrase": ["EXAMPLE_SECRET"]}', "EXAMPLE_SECRET"),
+    ('PASSPHRASE="a b"', "a b"),
     ("authorization=Basic abc123", "abc123"),
-    ('Authorization: "Basic abc123"', "abc123"),
-    ('{\\"cookie\\": \\"sess-value-9\\"}', "sess-value-9"),
-    ("api_key = hunter2value", "hunter2value"),
     ('password: "line1\nMULTILINEQUOTED"', "MULTILINEQUOTED"),
     ('{"passphrase": [\n  "MULTILINEARRAY"\n]}', "MULTILINEARRAY"),
     ("private_key: |\n  AAAA\n  BLOCKSCALARLEAK\nnext: ok", "BLOCKSCALARLEAK"),
-    ('{"credentials": {"user":"u","password":"p1","deep":{"k":["NESTEDLEAK"]}}, "ok": 1}', "NESTEDLEAK"),
-    ('{"credentials": {"value": "example-password-94"}}', "example-password-94"),
-    ('{"token": [["first"], ["ARRAYOBJLEAK"]]}', "ARRAYOBJLEAK"),
-    ('{"secret": [{"a":"x"},{"b":"ARRAYOFOBJLEAK"}]}', "ARRAYOFOBJLEAK"),
-    ('{"secret": {"a": "has ] bracket", "b": "QUOTEDBRACKETLEAK"}}', "QUOTEDBRACKETLEAK"),
-    ('{"secret": {"a": "UNBALANCEDLEAK", "b": [1,', "UNBALANCEDLEAK"),
     ("note\n-----BEGIN RSA PRIVATE KEY-----\nPEMBODYLEAK\n-----END RSA PRIVATE KEY-----\nafter", "PEMBODYLEAK"),
+    ('{"credentials": {"user":"u","password":"p1",\n"deep":{"k":["NESTEDLEAK"]}}, "ok": 1}', "NESTEDLEAK"),
+    ('{"secret": [{"a":"x"},\n{"b":"ARRAYOFOBJLEAK"}]}', "ARRAYOFOBJLEAK"),
+    ('{"secret": {"a": "has ] bracket",\n "b": "QUOTEDBRACKETLEAK"}}', "QUOTEDBRACKETLEAK"),
+    ('{"secret": {"a": "UNBALANCEDLEAK", "b": [1,\nmore', "more"),
+    ("password: hunter 2 & more", "hunter"),
+    ("password: &db_password EXAMPLE_SECRET", "EXAMPLE_SECRET"),
+    ('{\\"cookie\\": \\"sess-value-9\\"}', "sess-value-9"),
+    ("api key = hunter2value", "hunter2value"),
 ])
-def test_every_secret_value_form_is_redacted_by_the_one_keyed_pass(text, leaked):
-    # axis: redaction; a credential value form (quoted, escaped, array, scheme word) surviving past its secret-named key
+def test_every_secret_value_form_is_redacted_by_the_one_line_pass(text, leaked):
+    # axis: redaction; a credential value form (quoted, escaped, array, block, PEM, spaced) surviving past its secret-named key
     assert leaked not in rr._scrub_text(text)
-    assert "[REDACTED]" in rr._scrub_text(text)
+    assert "[REDACTED LINE]" in rr._scrub_text(text)
     f = finding("a-1", body=text, reason="r")
     assert leaked not in rr.render_raw("raw.json", text)
     assert leaked not in json.dumps(rr._scrubbed(f))
+
+
+def test_text_after_an_escaped_credential_object_survives():
+    # axis: collateral damage; a redacted escaped credential object eating the text and fields that follow it
+    obj = json.dumps({"credentials": {"password": "EXAMPLE_SECRET"}})
+    text = json.dumps({"body": "see " + obj}) + "\n" + SAFE_TAIL
+    out = rr._scrub_text(text)
+    assert "EXAMPLE_SECRET" not in out and out.endswith("\n" + SAFE_TAIL)
+    nested = json.dumps({"body": obj, "suggestion": "keep", "evidence": SAFE_TAIL}, indent=1)
+    out = rr._scrub_text(nested)
+    assert "EXAMPLE_SECRET" not in out and "keep" in out and SAFE_TAIL in out
+
+
+def test_a_prose_mention_without_a_separator_is_kept():
+    # axis: over-redaction; a line that only names a secret-shaped word treated as an assignment
+    text = "the password field is unchecked\nsecond line"
+    assert rr._scrub_text(text) == text
+
+
+def test_scrub_text_is_linear_on_adversarial_input():
+    # axis: resource exhaustion; key-prefix runs making redaction quadratic before publication
+    import time
+    for n in ("pass" * 50000, "p" * 200000, "password " * 22000, "password" + " " * 200000 + "x", '"' * 200000):
+        start = time.monotonic()
+        rr._scrub_text(n[:200000])
+        assert time.monotonic() - start < 2
+
+
+def test_the_module_has_one_keyed_redaction_home():
+    # axis: one home; an old per-form regex or bracket-balancer left beside the line scanner
+    for gone in ("_balanced_end", "_KEYED_SECRET", "_PEM_BLOCK"):
+        assert not hasattr(rr, gone)
 
 
 @pytest.mark.parametrize("row", [
@@ -867,7 +898,7 @@ else:
     gh.chmod(0o755)
     env = {"PATH": f"{gh_dir}:/usr/bin:/bin", "HOME": str(tmp_path)}
     raw = tmp_path / "code.json"
-    raw.write_text(json.dumps([{"id": "n1", "title": "nit", "token": "ghp_" + "A" * 36}]))
+    raw.write_text(json.dumps([{"id": "n1", "title": "nit", "token": "ghp_" + "A" * 36}], indent=1))
     acct = account(finalCommit=head, reviewers=[reviewer(runDir=run_dir)], findings=[finding("f1")],
                    rawFindingsFiles=[str(raw)])
     proc = subprocess.run([sys.executable, "-B", rr.__file__, "write", "--account", put(tmp_path, acct),
