@@ -13,6 +13,7 @@ Standard library plus the plugin's own lib modules. Expected failures are refusa
 token and one plain sentence, never a raise.
 """
 import argparse
+import base64
 import json
 import os
 import re
@@ -250,9 +251,31 @@ def _utc_date(now):
     return moment.astimezone(timezone.utc).date()
 
 
+_ENCODED_RUN_RE = re.compile(r"[A-Za-z0-9+/_-]{40,}={0,2}")
+
+
+def _plain_shape(text):
+    return next((name for name, pattern in _SECRET_SHAPES if pattern.search(text)), None)
+
+
+def _encoded_shape(text):
+    """A base64 run (standard or URL-safe alphabet, any label or none) that decodes to text
+    carrying a secret-shaped form, such as an encoded reviewer pass."""
+    for match in _ENCODED_RUN_RE.finditer(text):
+        run = match.group(0).rstrip("=").replace("-", "+").replace("_", "/")
+        run += "=" * (-len(run) % 4)
+        try:
+            decoded = base64.b64decode(run).decode("utf-8")
+        except Exception:
+            continue
+        if _plain_shape(decoded) is not None:
+            return "encoded credential"
+    return None
+
+
 def _scan(text):
     """The name of the first secret-shaped form in `text`, else None."""
-    return next((name for name, pattern in _SECRET_SHAPES if pattern.search(text)), None)
+    return _plain_shape(text) or _encoded_shape(text)
 
 
 def _script(head, source, commit, subdir, source_dir, plugin_dir, files, key, stamp):

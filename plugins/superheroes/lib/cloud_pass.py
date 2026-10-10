@@ -39,7 +39,6 @@ _CODEX_HOME_ENV = "CODEX_HOME"
 _AUTH_FILE = "auth.json"
 _CLIPBOARD_COMMANDS = (("pbcopy",), ("wl-copy",), ("xclip", "-selection", "clipboard"))
 _CLIPBOARD_TIMEOUT = 30
-_ANSWER = "READY"
 
 
 def _env(env):
@@ -148,8 +147,9 @@ def _find_clipboard(env):
 
 
 def _run_clipboard(argv, text):
-    proc = subprocess.run(list(argv), input=text, text=True, capture_output=True,
-                          timeout=_CLIPBOARD_TIMEOUT)
+    # DEVNULL, not pipes: xclip forks a selection owner that keeps inherited pipes open.
+    proc = subprocess.run(list(argv), input=text, text=True, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=_CLIPBOARD_TIMEOUT)
     if proc.returncode != 0:
         raise RuntimeError("clipboard command exited non-zero")
 
@@ -333,8 +333,10 @@ def confirm(env=None, run=None, now=None):
     kept = []
 
     def keeping_run(argv, **kwargs):
-        if env is not os.environ:
-            kwargs["env"] = dict(env)
+        # Always explicit, and never carrying an API key: the probe must exercise the placed pass.
+        probe_env = dict(env)
+        probe_env.pop("CODEX_API_KEY", None)
+        kwargs["env"] = probe_env
         try:
             proc = real(argv, **kwargs)
         except Exception:
@@ -351,7 +353,7 @@ def confirm(env=None, run=None, now=None):
     if getattr(proc, "returncode", None) != 0:
         return no("reviewer-refused")
     stdout = getattr(proc, "stdout", "")
-    if not (isinstance(stdout, str) and stdout.strip() == _ANSWER):
+    if not (isinstance(stdout, str) and stdout.strip() == preflight_probe.PROBE_ANSWER):
         return no("reviewer-answer-unexpected")
     out["reviewerAnswered"] = True
     return out
