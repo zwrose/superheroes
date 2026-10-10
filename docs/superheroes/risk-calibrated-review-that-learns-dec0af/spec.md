@@ -157,8 +157,9 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **FR-32.** The loop shall run fix rounds until every finding has an outcome, within its round caps. (source: Canon 2026-10-08-d6064e1d-14; framing)
   - *Acceptance (rule):* The loop ends when every finding is fixed, shown wrong, decided as craft, left for the owner, or decided by a named ruling. (source: Canon 2026-10-09-d6064e1d-5)
 
-**FR-33.** When a fix lands, the next review round shall look at that fix, not at the whole change again. (source: framing)
-  - *Acceptance (Given-When-Then):* Given a round that fixed two findings, when the next round runs, then its reviewers are asked about those two fixes. (source: framing)
+**FR-33.** When a fix lands, the next review round shall focus on that fix. (source: craft, for your veto)
+  - *Acceptance (Given-When-Then):* Given a round that fixed two findings, when the next round runs, then its reviewers are asked about those two fixes. (source: craft, for your veto)
+  - *Acceptance (rule):* When a round looks wider than the fixes, the review record says why. (source: craft, for your veto)
 
 **FR-34.** The plugin shall give every finding a recorded outcome, and shall not drop a finding or lower it without recording why. (source: Canon 2026-10-09-d6064e1d-5)
   - *Acceptance (rule):* The number of findings with a recorded outcome equals the number of findings the reviewers raised. (source: Canon 2026-10-09-d6064e1d-5)
@@ -186,6 +187,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **FR-41.** The plugin shall put each batch-1 question both in the chat and at the top of the index, with the chat linking to the index. (source: Canon 2026-10-09-d6064e1d-6; board · 1 The index)
   - *Acceptance (rule):* The first answer given, in either place, is the answer. (source: Canon 2026-10-09-d6064e1d-6)
+  - *Acceptance (rule):* Where pictures bear on a batch-1 question, the index shows them with the question. (source: Canon 2026-10-09-d6064e1d-6; Canon 2026-10-05-3dbeb858-24)
 
 **FR-42.** When a batch-1 question is answered, the plugin shall remove it from the index. (source: Canon 2026-10-09-d6064e1d-9)
   - *Acceptance (Given-When-Then):* Given the only batch-1 question is answered, when the index is next shown, then its "Blocks work" part reads "Nothing is blocking work right now." (source: board · 1 The index)
@@ -325,7 +327,9 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance:* Given a capped loop with one open finding that has a real consequence, when the sheet is built, then that finding is under "What you're accepting" and "How the review went" says the loop reached its cap. (source: craft, for your veto)
 
 **UFR-3.** If a planned reviewer could not run, or CI is not green on the final commit, then the plugin shall say so in the review record and shall not report the change as reviewed. (source: Canon 2026-10-08-d6064e1d-8; Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance:* Given a full-lane review whose specialist did not run, when the advisor vets the PR, then the record shows the gap and the PR's sheet says so under "How the review went". (source: craft, for your veto)
+  - *Acceptance:* Given a full-lane review whose specialist did not run, when the advisor vets the PR, then the record shows the gap and the vet does not return the PR as ready. (source: craft, for your veto)
+  - *Acceptance:* Given that PR, when no missing review has run, then the PR stays parked until the review runs or the owner says in plain words to go ahead without it, as the plugin's rule on degraded checks requires [cite: plugins/superheroes/rubric/covenant.md § Disclose every degradation]. (source: craft, for your veto)
+  - *Acceptance:* Given the owner's word to go ahead, when the PR's sheet is built, then "How the review went" names the review that did not run. (source: craft, for your veto)
 
 **UFR-4.** If a review session is damaged partway, then the plugin shall repair it and carry on, and shall not abandon it. (source: Canon 2026-10-09-d6064e1d-5)
   - *Acceptance:* Given a session damaged after its second round, when the review resumes, then every finding and outcome from the first two rounds is still in the record. (source: Canon 2026-10-09-d6064e1d-5)
@@ -378,6 +382,7 @@ The sheets and the index are built on the plugin's shared review template [cite:
 ## Constraints
 
 - No automated gate is added at handback. The advisor's vet carries that check. (source: Canon 2026-10-08-d6064e1d-18)
+- That choice is looked at again if vets start sending PRs back for missing review records. (source: Canon 2026-10-08-d6064e1d-18)
 - No new review gate runs in a watch-only mode first. (source: Canon 2026-10-08-d6064e1d-10)
 - No date is set for the release. (source: Canon 2026-10-10-d6064e1d-3)
 - The plugin's specs and long-lived records name nothing specific to one project that uses the plugin. (source: Canon 2026-10-09-d6064e1d-10)

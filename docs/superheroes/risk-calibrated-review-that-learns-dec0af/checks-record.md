@@ -51,3 +51,39 @@
 
 #### Citation check
 []
+
+### Round 2
+
+#### Gap review
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r2-gap-run
+- Result: real (terminal, ok, 1 attempt, engaged: 29 tool calls, 359.7 s)
+- Confirmations: gap-001 -> fixed; gap-003 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| gap-004 | Gap review | Important, line 328: Define the merge outcome when a required reviewer cannot run. In this specialist-failure scenario, the record can exist, final-commit CI can be green, and the reviewers that ran can leave no findings. FR-8's stated readiness checks and FR-58's unlock conditions then have no explicit failure, while UFR-3 requires only a disclosure inside the folded “How the review went” part. The spec does not settle whether this PR must remain unready or whether the owner must expressly accept the missing required review. A builder can therefore offer the ordinary Merge-plus-done path despite the incomplete panel required by FR-16. | craft | Fixed, following the plugin's standing rule on degraded checks. UFR-3 now says the vet does not return the PR as ready, the PR stays parked until the missing review runs or the owner says in plain words to go ahead, and the sheet then names the review that did not run. | fixed in round 2 |
+
+#### Source check
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r2-source-run
+- Result: real (terminal, ok, 1 attempt, engaged: 22 tool calls, 232.3 s)
+- Approved board, for the source check: docs/superheroes/risk-calibrated-review-that-learns-dec0af/board/build-board.html
+- Confirmations: SRC-1 -> fixed; SRC-3 -> fixed; SRC-4 -> fixed; SRC-5 -> fixed; SRC-6 -> fixed; SRC-7 -> fixed; SRC-8 -> fixed; SRC-9 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SRC-10 | Source check | Important, line 160: The framing does not authorize prohibiting broader re-review. FR-33 categorically prohibits reviewing the whole change after a fix, but its cited framing only promises a fixer scoped to its finding; it does not restrict subsequent review coverage. The existing round contract uses delta rounds with exceptions for Critical findings, cross-cutting rework and an unknown changed surface. This requirement would remove those exceptions without an approved source, changing review coverage rather than merely retaining the scoped fixer. | craft | Fixed. FR-33 now says the next round focuses on the fix and no longer forbids a wider look; a round that looks wider says why in the record. Its source is now marked as the author's choice, for the owner's veto. | fixed in round 2 |
+| SRC-11 | Source check | Minor, line 187: Batch-1 decision visuals are not carried into the requirements. The batch-1 ruling requires visuals on the index, but FR-41 specifies only the question's placement and chat link. The picture requirements concern PR sheets and walks; none requires relevant visuals for a blocking index question. A text-only blocking question could satisfy the spec while omitting the visual context the owner ruled should accompany it. | craft | Fixed from the ruling and a standing ruling. FR-41 now says the index shows the pictures that bear on a batch-1 question. | fixed in round 2 |
+| SRC-12 | Source check | Minor, line 380: The handback policy loses its ruled revisit trigger. The spec retains the no-automated-handback-gate decision but omits its explicit contingency: revisit that choice if vets start bouncing PRs for missing records. FR-8 specifies rejection, while learning requirements concern escapes and reviewer evidence; neither carries this trigger. Repeated missing-record bounces could therefore continue without the reconsideration the owner required. | craft | Fixed. Constraints now carries the revisit trigger from Canon 2026-10-08-d6064e1d-18. | fixed in round 2 |
+
+#### Grounding
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r2-grounding-run
+- Result: real (terminal, ok, 1 attempt, engaged: 19 tool calls, 116.0 s)
+- Grounding base, for grounding: origin/main, 48a7881e07318177c598deadef2d8bbf96d4894d
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Grounding | no new findings | | | |
+
+#### Citation check
+[]
