@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""The review record: one marker-tagged PR comment per PR, decided in one place.
+"""The review record: one marker-tagged PR comment per review session, decided in one place.
 
-Each write is a complete account. The previous version is kept verbatim in its own archive comment,
-which the record names under `archives`; archive comments are only ever created, never edited. The one
-check that crosses writes is a set difference of finding identity keys against the immediately
-previous record (_earlier_keys): a key it held that this account omits is owed, by key.
+A write only creates. It adds one new record comment, plus one new comment per raw reviewer output
+file, and never edits a comment. The record links the record before it (previousRecord) and each raw
+comment (rawOutputs), so everything stays retrievable. The one thing a write reads from an earlier
+record is the identity key of each finding in the latest one (_unaccounted): every such key must
+appear in the new account's findings with an outcome, or the write refuses before anything is posted.
 
 build_record() is the only place a status, a reviewer's ran-state or a code fact is decided;
-write() and read() do I/O only. Facts that code holds (lane, final commit, CI, whether a
-reviewer with a run directory ran) come from code, never from the session's account.
+write() is the only path that posts, and read() does I/O only. Facts that code holds (lane, final
+commit, CI, whether a reviewer with a run directory ran on the final commit) come from code, never
+from the session's account.
 
 CLI:
   review_record.py write --account FILE --repo-root DIR
@@ -37,7 +39,7 @@ import session_contract  # noqa: E402
 import store_core  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
-ARCHIVE_MARKER = "<!-- superheroes:review-record-archive -->"
+RAW_MARKER = "<!-- superheroes:review-raw-output -->"
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
 FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
@@ -47,6 +49,7 @@ SESSION = "reported by the session"
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 _LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(full|light|micro)\b[.:]?[ \t]*(.*)$")
+_REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
 
@@ -63,9 +66,9 @@ def _refuse(reason, detail):
 
 # --- default readers: each wraps a tool and never raises; an error becomes None ---
 
-def _run(argv):
+def _run(argv, cwd=None):
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=cwd)
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 else None
@@ -76,6 +79,23 @@ def _gh_json(*args):
     try:
         return None if out is None else json.loads(out)
     except ValueError:
+        return None
+
+
+def _repo_name(repo_root):
+    out = _run(["gh", "repo", "view", "--json", "nameWithOwner"], cwd=repo_root)
+    try:
+        name = None if out is None else json.loads(out).get("nameWithOwner")
+    except (ValueError, AttributeError):
+        return None
+    return name if isinstance(name, str) and _REPO_RE.fullmatch(name) else None
+
+
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, ValueError):  # ValueError covers UnicodeDecodeError
         return None
 
 
@@ -153,14 +173,11 @@ def _create_comment(pr, repo, body):
     return _send("POST", _api(repo, f"issues/{pr}/comments"), body)
 
 
-def _edit_comment(cid, repo, body):
-    return _send("PATCH", _api(repo, f"issues/comments/{cid}"), body)
-
-
 def _readers(overrides):
     return {"pr_meta": _pr_meta, "issue_body": _issue_body, "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
-            "create_comment": _create_comment, "edit_comment": _edit_comment, **(overrides or {})}
+            "create_comment": _create_comment, "repo_name": _repo_name, "read_text": _read_text,
+            **(overrides or {})}
 
 
 # --- the account ---
@@ -176,12 +193,10 @@ def _validate(a):
     chk(a.get("schema") == ACCOUNT_SCHEMA, "schema")
     pr = a.get("pr")
     chk(isinstance(pr, int) and not isinstance(pr, bool) and pr > 0, "pr")
-    chk(a.get("repo") is None or (isinstance(a["repo"], str) and re.fullmatch(r"[^/\s]+/[^/\s]+", a["repo"])), "repo")
+    chk(a.get("repo") is None or (isinstance(a["repo"], str) and _REPO_RE.fullmatch(a["repo"])), "repo")
     chk(ne(a.get("sessionId")), "sessionId")
     for k in ("lane", "laneReason", "finalCommit", "ci"):
         chk(sn(a.get(k)), k)
-    for i, m in enumerate(lst("makers")):
-        chk(isinstance(m, dict) and ne(m.get("family")), f"makers[{i}]")
     chk(isinstance(a.get("reviewers"), list) and a["reviewers"], "reviewers")
     for i, r in enumerate(a["reviewers"]):
         chk(isinstance(r, dict), f"reviewers[{i}]")
@@ -190,7 +205,6 @@ def _validate(a):
         for k in ("planned", "ran"):
             chk(isinstance(r.get(k), bool), f"reviewers[{i}].{k}")
         chk(sn(r.get("runDir")), f"reviewers[{i}].runDir")
-        chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
     for i, f in enumerate(lst("findings")):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
@@ -206,7 +220,7 @@ def _validate(a):
     chk(isinstance(rounds, dict) and isinstance(rounds.get("count"), int)
         and (rounds.get("cap") is None or isinstance(rounds["cap"], int))
         and isinstance(rounds.get("stoppedAtCap"), bool), "rounds")
-    return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None, "makers": [],
+    return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], **a, "rounds": rounds}
 
 
@@ -256,10 +270,6 @@ def _family(vendor, model):
     return shared.pop() if len(shared) == 1 else None
 
 
-def _owner_word_ok(w):
-    return isinstance(w, dict) and bool(w.get("words")) and bool(w.get("where"))
-
-
 def _go_ahead_ok(g):
     if g.get("kind") == "standing-ruling":
         return bool(g.get("canonId"))
@@ -274,153 +284,64 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, makers, rd, dis, head=None):
+def _reviewer(r, rd, dis, head):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
-    out["findingsCoverage"] = "reported by the session"
+    out["findingsCoverage"] = SESSION
     if r.get("runDir"):
         rec, err = rd["engine_run"](r["runDir"])
-        if isinstance(rec, dict) and rec.get("runKind") == "review" \
-                and rec.get("resultKind") and rec.get("resultDigest") and rec.get("graded") is True:
-            seen = rec.get("viewHeadSha")
-            if not head or seen != head:
-                # A review of another commit (or of an unknown one) never covers the final commit.
-                out.update(ran="not-run", runNote=f"the review covered {_short(seen)}, not the final commit "
-                                                  f"{_short(head)}" if seen else "the commit the review covered is unknown")
-                if r["ran"]:
-                    dis.append({"fact": f"{r['name']} ran on the final commit", "session": True, "code": "not-run"})
-            else:
-                out.update(ran="engine-record", observation=rec.get("observation"))
-            source, model = rec.get("source"), rec.get("engineModel") or rec.get("model")
-            if isinstance(source, str) and source:
-                # The run's own engine and model decide the family; the account's claim is only a claim.
-                run_family = _family(source, model) if isinstance(model, str) and model else None
-                if run_family != out["family"]:
-                    dis.append({"fact": f"{r['name']} family", "session": out["family"], "code": run_family})
-                    out["family"] = run_family
+        seen = rec.get("viewHeadSha") if isinstance(rec, dict) else None
+        if isinstance(seen, str) and seen and seen == head:
+            out.update(ran="engine-record", observation=rec.get("observation"))
         else:
-            out.update(ran="not-run", runNote=err or "no review result")
+            if not isinstance(rec, dict):
+                note = err if isinstance(err, str) and err else "no run record"
+            elif isinstance(seen, str) and seen:
+                note = f"the run record covers {_short(seen)}, not the final commit {_short(head)}"
+            else:
+                note = "the run record names no commit"
+            out.update(ran="not-run", runNote=note)
             if r["ran"]:
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
         out["ran"] = "reported-by-session" if r["ran"] else "not-run"
-    if not makers:
-        out["independent"], out["independenceNote"] = None, "makers not recorded"
-    else:
-        out["independent"] = None if out["family"] is None else out["family"] not in {m["family"] for m in makers}
-    if out["ran"] != "not-run" and makers and out["independent"] is not True:
-        if _owner_word_ok(r.get("ownerWord")):
-            out.update(notIndependent=True, ownerWord=r["ownerWord"])
-        else:
-            out.update(ran="not-run", runNote="not shown independent of the makers")
     return out
-
-
-def _raw_rows(members, source):
-    """The whole reviewer member (every canonical key it carries) plus where it came from.
-
-    Its line is normalized as the compiler does, so a raw " 291 " and an account 291 share one key.
-    """
-    rows = []
-    for m in members:
-        if isinstance(m, dict):
-            row = {k: m[k] for k in rfs.CANONICAL_MEMBER_KEYS if k in m}
-            if "line" in row:
-                ok, n = session_contract.coerce_line(row["line"])
-                if ok:
-                    row["line"] = n
-            rows.append({**row, "sourceFile": source})
-    return rows
-
-
-def _raw_findings(paths):
-    raw, unread, read = [], [], []
-    for p in paths:
-        try:
-            with open(p, encoding="utf-8") as fh:
-                members = json.load(fh)
-            if isinstance(members, dict):
-                members = members["findings"]
-            assert isinstance(members, list) and all(isinstance(m, dict) for m in members)
-        except (OSError, ValueError, KeyError, TypeError, AssertionError):
-            unread.append(str(p))
-            continue
-        read.append(str(p))
-        raw += _raw_rows(members, os.path.basename(p))
-    return raw, unread, read
 
 
 def _key(f):
     return session_contract.finding_identity_key(f)
 
 
-def _decided(f, settles=rfs.OUTCOMES):
-    return f.get("outcome") in settles and bool(f.get("reason"))
-
-
 def _name(f):
     return f.get("id") or f"at {f.get('file')}:{f.get('line')}"
 
 
-_ENTRY_KEYS = ("id", "title", "outcome")
+def _unaccounted(prior, findings):
+    """The only reader of an earlier record: the names of its findings this account leaves without an outcome.
 
-
-def _earlier_keys(prior):
-    """The identity keys the previous record held, each with a small entry; the only reader of `prior`.
-
-    `since` is the writtenAt of the archived record that holds the finding's full body.
+    Compared by stored identity key (session_contract.finding_identity_key), never by id. A malformed
+    findings list is never read as an empty one.
     """
-    out = {}
-    if not isinstance(prior, dict):
-        return out
-
-    def items(field):
-        v = prior.get(field)
-        return [p for p in v if isinstance(p, dict)] if isinstance(v, list) else []
-
-    def entry(p, since, keys=_ENTRY_KEYS):
-        e = {session_contract.FINDING_KEY_FIELD: _key(p), **{k: p[k] for k in keys if k in p}}
-        if since is not None:
-            e["since"] = since
-        return e
-
-    for p in items("findings"):
-        out.setdefault(_key(p), entry(p, prior.get("writtenAt")))
-    for p in items("rawFindings"):
-        out.setdefault(_key(p), entry(p, prior.get("writtenAt"), ("id", "title")))
-    for p in items("owed"):
-        out.setdefault(_key(p), entry(p, p.get("since")))
-    return out
+    if prior is None:
+        return []
+    earlier = prior.get("findings")
+    if not isinstance(earlier, list) or not all(isinstance(i, dict) for i in earlier):
+        raise Refusal("review-record-unreadable", "the latest record's findings list is malformed")
+    present = {_key(f) for f in findings if f.get("outcome") in rfs.OUTCOMES}
+    return [i.get("id") or _key(i) for i in earlier if _key(i) not in present]
 
 
-def _owed(findings, raw, prior):
-    """One check, by finding identity (session_contract.finding_identity_key), never by id.
-
-    Every finding in this account, and every reviewer finding, must have one of the outcomes and a
-    reason. A key the previous record held that this account omits is owed, by key only; its full
-    text is in the archived record. Nothing is cleared by omission.
-    """
-    by_key, lines = {}, []
+def _finding_lines(findings):
+    lines = []
     for f in findings:
-        by_key.setdefault(_key(f), []).append(f)
         if f.get("outcome") not in rfs.OUTCOMES:
             lines.append(f"finding {_name(f)} has no outcome")
         elif not f.get("reason"):
             lines.append(f"finding {_name(f)} has no reason")
         elif f["outcome"] == _LEFT_FOR_OWNER:
             lines.append(f"finding {_name(f)} waits for the owner's decision")
-    for r in raw:
-        if not any(_decided(f) for f in by_key.get(_key(r), [])):
-            lines.append(f"reviewer finding {_name(r)} in {r.get('sourceFile')} has no recorded outcome")
-    present = set(by_key) | {_key(r) for r in raw}
-    owed = []
-    for k, e in _earlier_keys(prior).items():
-        if k not in present:
-            owed.append(e)
-            lines.append(f"finding {e.get('id') or k} from the earlier record is not in this account, so it is "
-                         f"still owed; its full text is in the archived record written {e.get('since') or 'earlier'}")
-    return owed, lines
+    return lines
 
 
 def _status(rec, unread=(), finding_lines=()):
@@ -439,12 +360,10 @@ def _status(rec, unread=(), finding_lines=()):
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
     if not any(v["planned"] and v["ran"] != "not-run" for v in rec["reviewers"]):
         lines.append("no planned reviewer ran")
-    if not rec["makers"]:
-        lines.append("the makers' model families were not recorded")
     return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
-def build_record(account, readers, prior=None):
+def build_record(account, readers):
     a, rd, dis = _validate(account), _readers(readers), []
     meta = rd["pr_meta"](a["pr"], a["repo"])
     fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
@@ -454,7 +373,7 @@ def build_record(account, readers, prior=None):
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
         if from_code and session is not None and session != code:
             dis.append({"fact": fact, "session": session, "code": code})
-    reviewers = [_reviewer(r, a["makers"], rd, dis, fc["sha"]) for r in a["reviewers"]]
+    reviewers = [_reviewer(r, rd, dis, fc["sha"]) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -463,24 +382,20 @@ def build_record(account, readers, prior=None):
             if mine and not good:
                 notes.append(f"the go-ahead for {v['name']} is incomplete")
             missing.append({"name": v["name"], "goAhead": good})
-    raw, unread, _ = _raw_findings(a["rawFindingsFiles"])
-    findings = [dict(f) for f in a["findings"]]
+    unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
+    # Identity is stamped on the unredacted account, so a later write compares the stored key.
+    findings = [dict(f) if f.get(session_contract.FINDING_KEY_FIELD) else
+                dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
-    owed, finding_lines = _owed(findings, raw, prior)
-    archives = (prior or {}).get("archives")
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
-        "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw, "unreadFiles": unread,
-        "owed": owed,
-        "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER]
-                        + [e.get("id") or e[session_contract.FINDING_KEY_FIELD] for e in owed
-                           if e.get("outcome") == _LEFT_FOR_OWNER],
-        "archives": [x for x in archives if isinstance(x, dict)] if isinstance(archives, list) else [],
+        "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
+        "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
@@ -489,10 +404,11 @@ def build_record(account, readers, prior=None):
         "sessionDisagreements": dis,
         "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
                     "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
+        "previousRecord": None,
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     rec["status"], rec["parked"], lines = _status(
-        rec, [f"the findings file {n} could not be read" for n in unread], finding_lines)
+        rec, [f"the raw output file {n} could not be read" for n in unread], _finding_lines(findings))
     rec["whatIsMissing"] = notes + lines
     return rec
 
@@ -506,7 +422,7 @@ def _assert_no_bug_free_claim(text):
             raise Refusal("review-record-forbidden-claim", phrase)
 
 
-_SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase", re.I)
+_SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase|authorization|cookie", re.I)
 
 
 def _secret_key(k):
@@ -531,8 +447,7 @@ def render(record):
     for v in r["reviewers"]:
         label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
             v["ran"], "did not run")
-        note = "; same family as a maker, owner's word on record" if v.get("notIndependent") else ""
-        who.append(f"- {v['name']}: {label}{note}; findings: {v['findingsCoverage']}")
+        who.append(f"- {v['name']}: {label}; findings: {v['findingsCoverage']}")
     waits = []
     if r["leftForOwner"]:
         waits.append("findings left for the owner (" + ", ".join(r["leftForOwner"]) + ") wait for the owner's decision")
@@ -553,15 +468,17 @@ def render(record):
     return body
 
 
-def render_archive(prior_body):
-    """An archive comment: the previous record comment, copied verbatim under a short writer-authored intro."""
-    intro = ("An earlier version of this PR's review record, kept verbatim. "
-             "The current review record comment names this comment.")
-    # Only the sentence this writer authors is checked: the kept body is the record as it was.
+def render_raw(name, text):
+    """A raw-output comment: one reviewer's output file, verbatim with secrets redacted, under a short intro."""
+    intro = (f"Raw output of one reviewer, kept verbatim with secrets redacted: {name}. "
+             "A review record on this PR links this comment.")
+    # Only the sentence this writer authors is checked: the kept text is the reviewer's own.
     _assert_no_bug_free_claim(intro)
-    body = ARCHIVE_MARKER + "\n" + intro + "\n\n" + prior_body
+    text = pr_comment.scrub(text)
+    fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
+    body = f"{RAW_MARKER}\n{intro}\n\n{fence}\n{text}\n{fence}"
     if len(body) > GITHUB_MAX_CHARS:
-        raise Refusal("review-record-too-large", f"an archive of the earlier record is {len(body)} characters")
+        raise Refusal("review-record-too-large", f"the raw output file {name} is {len(body)} characters")
     return body
 
 
@@ -574,13 +491,11 @@ def _parse_body(body):
 
 
 def _marker_comments(rd, pr, repo):
+    """The record comments on the PR, oldest first (comment ids only grow)."""
     comments = rd["list_comments"](pr, repo)
     if comments is None:
         raise Refusal("review-record-gh-failed", "the PR comments could not be listed")
-    found = [c for c in comments if str(c.get("body", "")).startswith(MARKER)]
-    if len(found) > 1:
-        raise Refusal("review-record-duplicate", f"{len(found)} review-record comments on PR {pr}")
-    return found
+    return sorted((c for c in comments if str(c.get("body", "")).startswith(MARKER)), key=lambda c: c["id"])
 
 
 def _guarded(fn):
@@ -592,9 +507,6 @@ def _guarded(fn):
         return _refuse("review-record-internal-error", f"{type(e).__name__}: {e}")
 
 
-_PLACEHOLDER_ARCHIVE = {"id": 10 ** 15, "url": "u" * 120, "writtenAt": "0000-00-00T00:00:00Z"}
-
-
 def write(account_path, repo_root, readers=None):
     def go():
         try:
@@ -604,28 +516,50 @@ def write(account_path, repo_root, readers=None):
             raise Refusal("review-account-invalid", "account file")
         account = dict(account, repoRoot=repo_root) if isinstance(account, dict) else account
         rd = _readers(readers)
-        _validate(account)
-        found = _marker_comments(rd, account["pr"], account.get("repo"))
+        a = _validate(account)
+        if a["repo"] is None:
+            # Bind every GitHub call to the repo root's repository, before the first one.
+            repo = rd["repo_name"](repo_root)
+            if not (isinstance(repo, str) and _REPO_RE.fullmatch(repo)):
+                raise Refusal("review-record-gh-failed", "the repository could not be resolved from the repo root")
+            a = dict(a, repo=repo)
+        pr, repo = a["pr"], a["repo"]
+        texts, raw_reader = {}, rd["read_text"]  # one read per raw file, so the readability check and the posted text agree
+
+        def read_text(path):
+            if path not in texts:
+                texts[path] = raw_reader(path)
+            return texts[path]
+        rd = dict(rd, read_text=read_text)
+        found = _marker_comments(rd, pr, repo)
+        latest = found[-1] if found else None
         prior = None
-        if found:
-            prior = _parse_body(found[0]["body"])
+        if latest:
+            prior = _parse_body(latest["body"])
             if prior is None:
-                raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-        record = build_record(account, rd, prior)
-        # Refuse here, before any comment is created or edited, if the record cannot be posted.
-        render(dict(record, archives=record["archives"] + [_PLACEHOLDER_ARCHIVE]) if found else record)
-        if found:
-            archive = rd["create_comment"](account["pr"], account.get("repo"), render_archive(found[0]["body"]))
-            if archive is None:
-                raise Refusal("review-record-gh-failed", "the archive comment could not be written")
-            record["archives"].append({"id": archive["id"], "url": archive.get("url"),
-                                       "writtenAt": prior.get("writtenAt")})
-        body = render(record)
-        sent = (rd["edit_comment"](found[0]["id"], account.get("repo"), body) if found
-                else rd["create_comment"](account["pr"], account.get("repo"), body))
+                raise Refusal("review-record-unreadable", latest.get("url") or "the existing record")
+        missing = _unaccounted(prior, a["findings"])
+        if missing:
+            raise Refusal("review-record-unaccounted",
+                          "earlier findings with no outcome in this account: " + ", ".join(missing))
+        record = build_record(a, rd)
+        raws = [(os.path.basename(p), render_raw(os.path.basename(p), read_text(p)))
+                for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
+        previous = {"id": latest["id"], "url": latest.get("url")} if latest else None
+        # Refuse here, before any comment is created, if the record cannot be posted.
+        render(dict(record, previousRecord=previous and {"id": 10 ** 15, "url": "u" * 120},
+                    rawOutputs=[{"file": n, "id": 10 ** 15, "url": "u" * 120} for n, _ in raws]))
+        links = []
+        for name, body in raws:
+            sent = rd["create_comment"](pr, repo, body)
+            if sent is None:
+                raise Refusal("review-record-gh-failed", f"the raw output comment for {name} could not be written")
+            links.append({"file": name, "id": sent["id"], "url": sent.get("url")})
+        record.update(rawOutputs=links, previousRecord=previous)
+        sent = rd["create_comment"](pr, repo, render(record))
         if sent is None:
             raise Refusal("review-record-gh-failed", "the record comment could not be written")
-        return {"ok": True, "action": "edited" if found else "created", "url": sent.get("url"),
+        return {"ok": True, "action": "created", "url": sent.get("url"),
                 "status": record["status"], "parked": record["parked"], "whatIsMissing": record["whatIsMissing"]}
     return _guarded(go)
 
@@ -636,10 +570,11 @@ def read(pr, repo=None, readers=None):
         found = _marker_comments(rd, pr, repo)
         if not found:
             raise Refusal("review-record-missing", f"no review record on PR {pr}")
-        rec = _parse_body(found[0]["body"])
+        latest = found[-1]
+        rec = _parse_body(latest["body"])
         if rec is None:
-            raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-        return {"ok": True, "url": found[0].get("url"), **rec}
+            raise Refusal("review-record-unreadable", latest.get("url") or "the existing record")
+        return {"ok": True, "url": latest.get("url"), **rec, "earlierRecords": [c.get("url") for c in found[:-1]]}
     return _guarded(go)
 
 
