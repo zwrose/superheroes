@@ -214,6 +214,7 @@ def shot(phone, out, run_dir, token, timeout):
     call_start_ms, end = time.time() * 1000, time.monotonic() + timeout
     res = {"ok": False, "returned": False, "path": out, "sha256": None, "labels": None, "labelNote": None}
     collected, cond, conns = [], threading.Condition(), set()
+    reading_posts = {"begun": 0, "done": 0}  # token-matched POSTs begun vs. ones whose reading was fully read and parsed
     visible = lambda rd: rd.get("visibility") == "visible"
 
     def left():
@@ -246,8 +247,15 @@ def shot(phone, out, run_dir, token, timeout):
             super().setup()
 
         def do_POST(self):
+            # Axis: a POST to this session's token path that begins but whose reading never completes (timeout, cut at drain, bad body)
+            if self.path == "/" + token:
+                with cond:
+                    reading_posts["begun"] += 1
             try:
                 reading = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
+                if self.path == "/" + token:
+                    with cond:
+                        reading_posts["done"] += 1
             except (ValueError, OSError):
                 reading = None
             # Axis: hidden readings are kept too (a fresh, token-matched one is a visibility-loss observation); only visible ones label
@@ -334,6 +342,12 @@ def shot(phone, out, run_dir, token, timeout):
                    or any(rd.get("visibility") == "hidden" and shot_start_ms <= rd["takenAt"] <= after_ms for _, rd in collected)):
         page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
         notes.append("the page left the foreground during the capture")
+    # Axis: a token-matched reading was cut off or unreadable, so an observation that could contradict the labels is missing
+    with cond:
+        cut_off = reading_posts["begun"] > reading_posts["done"]
+    if cut_off:
+        page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
+        notes.append("a page reading was cut off")
     res["returned"], res["labels"], err = _labels(phone, page, where, left())
     if err is not None:
         res["error"] = err

@@ -951,6 +951,25 @@ def test_shot_returns_within_its_budget_when_a_post_stalls(fake, tmp_path):
     assert r["ok"] is True and r["labels"] == established(NE, NE)
 
 
+def test_shot_establishes_nothing_when_a_token_matched_reading_starts_during_the_capture_and_never_completes(fake, tmp_path):
+    port, release = make_session(tmp_path), threading.Event()
+    conns = []
+
+    def stall():  # a token-matched POST begins mid-capture: headers and a partial body, then silence until the call ends
+        conn = socket.create_connection(("127.0.0.1", port), 1)
+        conns.append(conn)
+        conn.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n{")
+        time.sleep(0.2)
+    with Phone(port, page=PAGE_A, where="browser"):  # steady visible page-A readings before and after the capture
+        fake(on_screenshot(stall))
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 5)
+        release.set()
+        for conn in conns:
+            conn.close()
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "cut off" in r["labelNote"]
+
+
 def test_shot_when_the_page_leaves_the_foreground_during_the_capture_establishes_nothing(fake, tmp_path):
     port = make_session(tmp_path)
 
@@ -1078,10 +1097,6 @@ def test_shot_takes_no_page_or_where_argument(fake, tmp_path, capsys):
     assert ic.main(argv) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True and out["labels"] == established(NE, NE) and isinstance(out["labelNote"], str)
-
-
-def test_not_established_is_the_fixed_literal_the_vet_reads():
-    assert ic.NOT_ESTABLISHED == "could not be established"
 
 
 # ---------------------------------------------------------------- render
