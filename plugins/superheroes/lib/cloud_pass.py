@@ -9,10 +9,13 @@ else; `place` opens exactly one path for writing.
   cloud_pass.py make      owner's machine: put the pass block on the clipboard
   cloud_pass.py place     cloud machine, session start: write the pass to the reviewer's sign-in
   cloud_pass.py confirm   cloud session: does the reviewer answer with the pass in this environment
+  cloud_pass.py record-confirmation --confirmation JSON [--cwd D] [--account A] [--environment E]
+                          [--root D]   owner's machine: move the setup record's lapse date
 
 Stdlib only. Every public function takes `env=None` (a mapping; default the process environment)
 and returns a plain dict; an expected failure is a refusal with a `reason` token, never a raise.
 """
+import argparse
 import base64
 import json
 import os
@@ -354,13 +357,59 @@ def confirm(env=None, run=None, now=None):
     return out
 
 
+def record_confirmation(cwd, confirmation, *, account=None, environment=None, now=None,
+                        root=None, env=None):
+    """Owner's machine: hand a confirmation the reviewer answered to the setup record, which then
+    moves only its lapse date. Every other case writes nothing."""
+    unreadable = {"action": "refused", "reason": "confirmation-unreadable"}
+    if not (isinstance(confirmation, dict) and confirmation.get("schema") == CONFIRMATION_SCHEMA
+            and isinstance(confirmation.get("reviewerAnswered"), bool)):
+        return unreadable
+    if not confirmation["reviewerAnswered"]:
+        return {"action": "noop", "reason": "reviewer-did-not-answer"}
+    lapses = confirmation.get("passLapses")
+    try:
+        day = datetime.strptime(lapses, "%Y-%m-%d").date()
+        if day.isoformat() != lapses:
+            return unreadable
+    except (TypeError, ValueError):
+        return unreadable
+    if day < datetime.fromtimestamp(time.time() if now is None else now, timezone.utc).date():
+        return {"action": "noop", "reason": "pass-lapsed"}
+    lib_dir = os.path.dirname(os.path.abspath(__file__))
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    import cloud_setup
+    account = cloud_setup.launching_account(env, cwd) if account is None else account
+    if account is None:
+        return {"action": "refused", "reason": "account-unknown"}
+    return cloud_setup.confirm_pass(cwd, account, lapses, environment=environment, root=root)
+
+
+def _record_main(argv):
+    parser = argparse.ArgumentParser(prog="cloud_pass.py record-confirmation")
+    for option in ("--cwd", "--account", "--environment", "--root"):
+        parser.add_argument(option, default=None)
+    parser.add_argument("--confirmation", required=True)
+    args = parser.parse_args(argv)
+    try:
+        confirmation = json.loads(args.confirmation)
+    except ValueError:
+        confirmation = None
+    return record_confirmation(args.cwd or os.getcwd(), confirmation, account=args.account,
+                               environment=args.environment, root=args.root)
+
+
 _VERBS = {"make": make, "place": place, "confirm": confirm}
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    if len(argv) != 1 or argv[0] not in _VERBS:
-        result = _refusal("unknown-verb", "Usage: cloud_pass.py make|place|confirm")
+    if argv[:1] == ["record-confirmation"]:
+        result = _record_main(argv[1:])
+    elif len(argv) != 1 or argv[0] not in _VERBS:
+        result = _refusal("unknown-verb",
+                          "Usage: cloud_pass.py make|place|confirm|record-confirmation")
     else:
         result = _VERBS[argv[0]]()
     sys.stdout.write(json.dumps(result) + "\n")

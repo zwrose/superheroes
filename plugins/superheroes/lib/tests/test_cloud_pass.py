@@ -11,11 +11,19 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.join(_HERE, "..")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import cloud_setup  # noqa: E402
+import mode_registry  # noqa: E402
+import store_core  # noqa: E402
 
 
 def _load():
@@ -801,3 +809,158 @@ def test_cli_unknown_verb_refuses(capsys, argv):
 ])
 def test_external_literal_is_pinned(name, value):
     assert getattr(CP, name) == value
+
+
+# ---------------------------------------------------------------- record-confirmation
+
+ACCOUNT = "acct-fixture-one"
+ENVIRONMENT = "env-fixture-one"
+RECORDED_LAPSE = "2026-08-01"
+NEW_LAPSE = "2027-01-25"
+
+
+def _project(tmp_path):
+    """A git repository under tmp_path whose store holds a real setup record for ACCOUNT."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (("init", "-q"), ("remote", "add", "origin", "https://github.com/acme/shop.git")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    cwd, root = str(repo), str(tmp_path / "store-root")
+    key = store_core.derive_identifiers(cwd)["remote_hash"]
+    mode_registry.write_registry(cwd, mode_registry.GLOBAL, key, root=root)
+    made = cloud_setup.record_check(
+        cwd, account=ACCOUNT, environment=ENVIRONMENT, plugin_version="1.2.3",
+        picks_up_version=False, calibration_stamp="none", calibration_date="2026-07-01",
+        pass_lapses=RECORDED_LAPSE, checked_at="2026-07-02", root=root)
+    assert made == {"action": "written"}
+    return cwd, root, cloud_setup.record_path(cwd, ACCOUNT, root)
+
+
+def _confirmation(answered=True, lapses=NEW_LAPSE, **over):
+    out = {"schema": CP.CONFIRMATION_SCHEMA, "reviewerAnswered": answered, "passLapses": lapses,
+           "reason": None}
+    out.update(over)
+    return out
+
+
+def _record(tmp_path, confirmation, **kw):
+    cwd, root, path = _project(tmp_path)
+    before = open(path, "rb").read()
+    kw = {"account": ACCOUNT, "now": NOW, "root": root, **kw}
+    result = CP.record_confirmation(cwd, confirmation, **kw)
+    return result, before, open(path, "rb").read()
+
+
+def test_record_confirmation_moves_the_lapse_date_when_the_reviewer_answered(tmp_path):
+    cwd, root, path = _project(tmp_path)
+    result = CP.record_confirmation(cwd, _confirmation(), account=ACCOUNT, now=NOW, root=root)
+    assert result == {"action": "written"}
+    record = cloud_setup.read(cwd, ACCOUNT, root=root)["record"]
+    assert record["passLapses"] == NEW_LAPSE and record["environment"] == ENVIRONMENT
+
+
+def test_record_confirmation_accepts_a_pass_that_lapses_today(tmp_path):
+    result, before, after = _record(tmp_path, _confirmation(lapses="2027-01-15"))
+    assert result == {"action": "written"} and before != after
+
+
+def test_record_confirmation_r2_reviewer_did_not_answer_moves_nothing(tmp_path):
+    result, before, after = _record(tmp_path, _confirmation(answered=False))
+    assert result == {"action": "noop", "reason": "reviewer-did-not-answer"}
+    assert after == before
+
+
+@pytest.mark.parametrize("bad", [
+    "not a dict", _confirmation(schema="other/1"), _confirmation(answered="true")],
+    ids=["not-a-dict", "wrong-schema", "answered-not-bool"])
+def test_record_confirmation_r1_unreadable_confirmation_moves_nothing(tmp_path, bad):
+    result, before, after = _record(tmp_path, bad)
+    assert result == {"action": "refused", "reason": "confirmation-unreadable"}
+    assert after == before
+
+
+@pytest.mark.parametrize("lapses", [None, 20270125, "2027-1-25", "2027-02-30", "tomorrow", ""])
+def test_record_confirmation_r3_unreadable_lapse_date_moves_nothing(tmp_path, lapses):
+    result, before, after = _record(tmp_path, _confirmation(lapses=lapses))
+    assert result == {"action": "refused", "reason": "confirmation-unreadable"}
+    assert after == before
+
+
+def test_record_confirmation_r4_lapsed_date_moves_nothing(tmp_path):
+    result, before, after = _record(tmp_path, _confirmation(lapses="2027-01-14"))
+    assert result == {"action": "noop", "reason": "pass-lapsed"}
+    assert after == before
+
+
+def test_record_confirmation_r5_unknown_account_moves_nothing(tmp_path):
+    env = {"HOME": str(_home(tmp_path)), "CLAUDE_CONFIG_DIR": str(tmp_path / "no-config")}
+    result, before, after = _record(tmp_path, _confirmation(), account=None, env=env)
+    assert result == {"action": "refused", "reason": "account-unknown"}
+    assert after == before
+
+
+def test_record_confirmation_reads_the_launching_account_when_none_is_given(tmp_path):
+    config = tmp_path / "claude-config"
+    _write(config / ".claude.json", {"oauthAccount": {"accountUuid": ACCOUNT}})
+    env = {"HOME": str(_home(tmp_path)), "CLAUDE_CONFIG_DIR": str(config)}
+    result, before, after = _record(tmp_path, _confirmation(), account=None, env=env)
+    assert result == {"action": "written"} and before != after
+
+
+def test_record_confirmation_r6_environment_mismatch_is_refused_and_moves_nothing(tmp_path):
+    result, before, after = _record(tmp_path, _confirmation(), environment="env-other")
+    assert result == {"action": "refused", "reason": "environment-mismatch"}
+    assert after == before
+
+
+def test_record_confirmation_r6_account_without_a_record_creates_no_file(tmp_path):
+    cwd, root, path = _project(tmp_path)
+    other = cloud_setup.record_path(cwd, "acct-fixture-two", root)
+    listing = _snapshot(os.path.dirname(path))
+    result = CP.record_confirmation(cwd, _confirmation(), account="acct-fixture-two", now=NOW,
+                                    root=root)
+    assert result == {"action": "refused", "reason": "cloud-setup-missing"}
+    assert not os.path.exists(other) and _snapshot(os.path.dirname(path)) == listing
+
+
+def test_make_leaves_a_real_setup_record_byte_identical(tmp_path):
+    _, _, path = _project(tmp_path)
+    _write(_separate(tmp_path), _signin())
+    before = open(path, "rb").read()
+    assert CP.make(env=_env(tmp_path), clipboard=lambda _t: None, now=NOW)["action"] == "copied"
+    assert open(path, "rb").read() == before
+
+
+def test_make_does_not_import_the_setup_record_module(tmp_path):
+    _write(_separate(tmp_path), _signin())
+    code = ("import importlib.util, json, sys\n"
+            "spec = importlib.util.spec_from_file_location('cloud_pass', sys.argv[1])\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "out = mod.make(env=json.loads(sys.argv[2]), clipboard=lambda t: None, now=%d)\n"
+            "print(out['action'], 'cloud_setup' in sys.modules)\n" % NOW)
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", code, os.path.join(_HERE, "..", "cloud_pass.py"),
+         json.dumps(_env(tmp_path))], capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == ["copied", "False"]
+
+
+def _record_args(cwd, root, confirmation, *extra):
+    return ["record-confirmation", "--cwd", cwd, "--root", root, "--account", ACCOUNT,
+            "--confirmation", confirmation, *extra]
+
+
+def test_cli_record_confirmation_prints_written_and_exits_zero(tmp_path, capsys):
+    cwd, root, path = _project(tmp_path)
+    assert CP.main(_record_args(cwd, root, json.dumps(_confirmation(lapses="2099-01-01")))) == 0
+    assert _one_json_line(capsys) == {"action": "written"}
+    assert cloud_setup.read(cwd, ACCOUNT, root=root)["record"]["passLapses"] == "2099-01-01"
+
+
+def test_cli_record_confirmation_that_is_not_json_exits_one(tmp_path, capsys):
+    cwd, root, path = _project(tmp_path)
+    before = open(path, "rb").read()
+    assert CP.main(_record_args(cwd, root, "{not json")) == 1
+    assert _one_json_line(capsys)["reason"] == "confirmation-unreadable"
+    assert open(path, "rb").read() == before

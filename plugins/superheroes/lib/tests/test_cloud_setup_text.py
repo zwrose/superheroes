@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -21,7 +22,9 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_pass  # noqa: E402
+import cloud_setup  # noqa: E402
 import mode_registry  # noqa: E402
+import project_config  # noqa: E402
 import store_core  # noqa: E402
 
 
@@ -447,11 +450,19 @@ def test_s7_calibration_unplaceable(tmp_path, case):
     _refusal(_compose(w), "calibration-unplaceable")
 
 
-@pytest.mark.parametrize("stamp_fn", [None, lambda files: 1 / 0, lambda files: "bad stamp!",
+@pytest.mark.parametrize("stamp_fn", [lambda files: 1 / 0, lambda files: "bad stamp!",
                                       lambda files: "", lambda files: 7])
 def test_s8_stamp_unavailable(tmp_path, stamp_fn):
     w = _outside(tmp_path)
     _refusal(_compose(w, stamp_fn=stamp_fn), "stamp-unavailable")
+
+
+def test_s8_with_no_stamp_function_the_real_stamp_is_used(tmp_path):
+    w = _outside(tmp_path)
+    result = _compose(w, stamp_fn=None)
+    assert result["action"] == "written"
+    expected = cloud_setup.calibration_stamp(CS.stamped_files(w.cwd, w.root))
+    assert result["calibration"]["stamp"] == expected
 
 
 def test_s8_does_not_apply_when_the_repository_carries_the_calibration(tmp_path):
@@ -599,11 +610,11 @@ def test_cli_refusal_prints_nothing_on_standard_output(tmp_path, capsys):
     assert json.loads(out.err)["reason"] == "plugin-source-invalid"
 
 
-def test_cli_has_no_stamp_function_yet_so_outside_calibration_is_s8(tmp_path, capsys):
+def test_cli_write_prints_the_script_for_outside_calibration(tmp_path, capsys):
     w = _outside(tmp_path)
-    assert CS.main(_cli_args(w)) == 1
+    assert CS.main(_cli_args(w)) == 0
     out = capsys.readouterr()
-    assert out.out == "" and json.loads(out.err)["reason"] == "stamp-unavailable"
+    assert out.out.startswith("#!/bin/bash\n# Corner Shop") and out.err == ""
 
 
 def test_cli_clipboard_prints_the_result_without_text(tmp_path, capsys, monkeypatch):
@@ -627,6 +638,63 @@ def test_cli_clipboard_missing_is_a_refusal(tmp_path, capsys, monkeypatch):
     assert CS.main(_cli_args(w, "--clipboard")) == 1
     out = capsys.readouterr()
     assert out.out == "" and json.loads(out.err)["reason"] == "no-clipboard"
+
+
+# --- the stamp leaves the cloud-builds setting out ------------------------------------------
+
+STAMP_SHAPE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _core(setting="absent", other="a", prose="intro"):
+    settings = {"other": other}
+    if setting != "absent":
+        settings[project_config.CLOUD_BUILDS_SLUG] = setting
+    body = json.dumps({"projectConfiguration": settings, "name": "x"}, indent=2)
+    return ("# Core\n%s\n```json superheroes-core\n%s\n```\ntail\n" % (prose, body)).encode()
+
+
+def _real(w, core=None, **kw):
+    if core is not None:
+        _put(w, "config/core.md", core)
+    return _compose(w, stamp_fn=None, **kw)
+
+
+def test_toggling_the_setting_leaves_the_stamp_unchanged(tmp_path):
+    w = _outside(tmp_path)
+    results = {state: _real(w, _core(state)) for state in ("absent", False, True)}
+    stamps = {r["calibration"]["stamp"] for r in results.values()}
+    assert len(stamps) == 1 and STAMP_SHAPE.fullmatch(stamps.pop())
+    texts = {state: r["text"] for state, r in results.items()}
+    assert len(set(texts.values())) == 3
+    for state, text in texts.items():
+        assert _core(state).decode()[:-1] in text
+
+
+@pytest.mark.parametrize("change", ["other-key", "prose", "other-file"])
+def test_any_other_change_moves_the_stamp(tmp_path, change):
+    w = _outside(tmp_path)
+    base = _real(w, _core())["calibration"]["stamp"]
+    if change == "other-file":
+        _put(w, "config/review-crew.md", b"# Crew\nchanged\n")
+        moved = _real(w)
+    else:
+        moved = _real(w, _core(other="b") if change == "other-key" else _core(prose="edited"))
+    assert STAMP_SHAPE.fullmatch(moved["calibration"]["stamp"])
+    assert moved["calibration"]["stamp"] != base
+
+
+@pytest.mark.parametrize("core", [
+    b"# Core\nno block here\n",
+    b"# Core\n```json superheroes-core\n{not json\n```\n",
+    b"# Core\n```json superheroes-core\n[1, 2]\n```\n",
+    b"# Core\n```json superheroes-core\n{}\n```\n```json superheroes-core\n{}\n```\n",
+], ids=["no-block", "not-json", "not-object", "two-blocks"])
+def test_a_core_without_a_readable_setting_is_stamped_as_placed(tmp_path, core):
+    w = _outside(tmp_path)
+    result = _real(w, core)
+    assert result["action"] == "written"
+    placed = cloud_setup.calibration_stamp(CS.calibration_files(w.cwd, w.root))
+    assert result["calibration"]["stamp"] == placed
 
 
 # --- external literals ----------------------------------------------------------------------

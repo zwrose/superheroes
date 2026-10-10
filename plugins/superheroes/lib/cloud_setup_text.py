@@ -21,14 +21,18 @@ import time
 from datetime import datetime, timezone
 
 import cloud_pass
+import cloud_setup
 import config_dir
+import core_md
 import mode_registry
+import project_config
 import store_core
 
 REVIEWER_CLI_PACKAGE = "@openai/codex"
 DUPLICATION_CHECKER_PACKAGE = "jscpd@5.0.12"
 SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
+_CORE_MD = "config/core.md"
 # The cloud platform runs nothing before a session starts except this cached script, so a setup
 # made at one plugin version stays at that version until new setup text is pasted.
 PICKS_UP_VERSION_BY_ITSELF = False
@@ -204,6 +208,34 @@ def calibration_files(cwd, root=None):
     return _calibration(cwd, root)[1]
 
 
+def _without_setting(data):
+    """`data` with the cloud-builds setting out of its json block, re-rendered whether or not the
+    key was there; `data` itself when it holds no readable setting."""
+    try:
+        text = data.decode("utf-8")
+        obj = json.loads(core_md._json_block_inner_text(text))
+        settings = obj.get("projectConfiguration")
+        if isinstance(settings, dict):
+            settings.pop(project_config.CLOUD_BUILDS_SLUG, None)
+        body = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False)
+        return core_md._splice_single_json_block(text, body).encode("utf-8")
+    except Exception:
+        return data
+
+
+def _stamp_view(files):
+    view = dict(files)
+    if _CORE_MD in view:
+        view[_CORE_MD] = _without_setting(view[_CORE_MD])
+    return view
+
+
+def stamped_files(cwd, root=None):
+    """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
+    switching cloud builds on or off never changes the stamp."""
+    return _stamp_view(calibration_files(cwd, root))
+
+
 def _project_name(cwd):
     try:
         remote = store_core.get_remote(cwd)
@@ -307,7 +339,8 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     stamp = date = None
     if placed:
         try:
-            stamp = stamp_fn(files)
+            stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
+                _stamp_view(files))
         except Exception:
             stamp = None
         if not (isinstance(stamp, str) and _STAMP_RE.fullmatch(stamp)):
