@@ -30,6 +30,7 @@ NOT_ESTABLISHED = "could not be established"
 READING_WAIT = 3.0  # seconds: the cap on each of the two page-reading waits inside `shot`
 TYPING_HELPER = "com.apple.coredevice.dtuhidd"  # the phone's keystroke helper: while it is down, AXe drops input and exits 0
 HELPER_DOWN = "the phone's typing helper is not running"
+NO_RESPONSE = "no response to input"  # the pilot's words for a step that judge calls not completed
 READ_ONLY_VERBS = frozenset({"describe-ui", "list-simulators", "screenshot"})
 SIX = ("phone", "model", "iOS", "page", "where", "source")
 GAPS = ("**What a simulator cannot show:** a real finger's touch (the timing and imprecision of a human "
@@ -202,6 +203,9 @@ def drive(phone, args, timeout):
         if helper == "down":
             return {"ok": False, "returned": True, "exit": None, "stdout": "", "helper": helper, "reason": HELPER_DOWN}
     argv = ["axe", *args]
+    # Axis: AXe takes only lower-case button names (`HOME` exits 64), so the name is lower-cased on its way in
+    if args[0] == "button" and len(args) > 1:
+        argv[2] = args[1].lower()
     if args[0] == "tap" and not any(a.startswith("--post-delay") for a in args):
         argv += ["--post-delay", "1"]  # AXe drops taps without it (cameroncooke/AXe#71)
     left = timeout if helper is None else end - time.monotonic()
@@ -532,9 +536,11 @@ def judge_step(step):
         # Axis: a tap with no keyboard seen
         if step.get("keyboardSeen") is not True:
             return False, "no keyboard seen after the tap"
-        # Axis: a tap whose after-reading does not focus the intended field (a missed tap leaves another field focused); the target is the field's id, or name:<name> when it has no id
-        target = step.get("target")
-        if not (isinstance(target, str) and target and (key := _field_key(after_focus)) and target == (after_focus["id"] if key[:3] == "id:" else key)):
+        target, focus = step.get("target"), after_focus if isinstance(after_focus, dict) else {}
+        by_name = isinstance(target, str) and target.startswith("name:")
+        want = target[5:] if by_name else target
+        # Axis: a tap whose after-reading does not focus the intended field (a missed tap leaves another field focused); a bare target is the field's id, name:<name> is its name whether or not it has an id
+        if not (isinstance(want, str) and want and focus.get("name" if by_name else "id") == want):
             return False, "the intended field did not receive focus"
         return True, "field focused and keyboard seen"
     if kind == "type":
@@ -577,8 +583,9 @@ def _complete_reading(rd):
 
 
 def _has_installed_reading(check):
+    # Axis: a superseded reading is an earlier attempt's, so it never completes the installed part
     return any(isinstance(e, dict) and e.get("kind") == "reading" and (e.get("labels") or {}).get("where") == "installed"
-               and _complete_reading(e.get("reading")) and e["reading"]["where"] == "installed"
+               and _complete_reading(e.get("reading")) and e["reading"]["where"] == "installed" and not e.get("superseded")
                for e in check.get("evidence") or [])
 
 
@@ -604,6 +611,29 @@ def did_not_run_lines(check):
     return lines
 
 
+def _piece(title, ev):
+    """The lines of one evidence piece under its heading."""
+    lb = ev["labels"]
+    out = [f"#### {title} — {ev['kind']} ({ev.get('part')}): {ev.get('caption', '')}",
+           " · ".join(f"`{k}` {lb[k]}" for k in SIX)]
+    if ev["kind"] == "screenshot":
+        # Axis: a PR comment shows an image only by a URL its readers can open; a local path is named, not embedded
+        if ev.get("url"):
+            out.append(f"![{ev.get('caption', '')}]({ev['url']})")
+        else:
+            out.append(f"screenshot file (on the capturing Mac, not posted): {ev['path']} · sha256 {ev['sha256']}")
+        return out
+    rd = ev["reading"]
+    f = rd.get("focused")
+    focus = "none" if not isinstance(f, dict) else f"{f.get('tag')}{'#' + f['id'] if f.get('id') else ''} ({f.get('type')})"
+    # Axis: a password-focused reading shows no value even if the evidence carries one
+    if rd.get("valueWithheld") is True or (isinstance(f, dict) and f.get("type") == "password"):
+        value = "withheld"
+    else:
+        value = f'"{rd["value"]}"' if isinstance(rd.get("value"), str) else "none"
+    return out + [f"visible height {rd.get('visibleHeight')} · focused {focus} · value {value}"]
+
+
 def render(check):
     """-> (opening, section). Raises ValueError rather than emit evidence it cannot label."""
     evidence = check.get("evidence") or []
@@ -615,6 +645,9 @@ def render(check):
         # Axis: evidence not taken from the Simulator
         if labels["source"] != "Simulator":
             raise ValueError(f"evidence {n} has source {labels['source']!r}, not Simulator")
+        # Axis: a superseded flag that is not a bool (a stray "no" would read as true)
+        if "superseded" in ev and not isinstance(ev["superseded"], bool):
+            raise ValueError(f"evidence {n}: superseded is not true or false")
         if ev.get("kind") == "reading":
             # Axis: a reading whose where label disagrees with the reading's own where
             if not isinstance(ev.get("reading"), dict) or labels["where"] != ev["reading"].get("where"):
@@ -627,33 +660,37 @@ def render(check):
         # Axis: a screenshot whose where label is neither a context nor the fixed not-established value
         elif labels["where"] not in ("browser", "installed", NOT_ESTABLISHED):
             raise ValueError(f"evidence {n}: a screenshot's where label is not browser, installed or {NOT_ESTABLISHED}")
+    parts = check.get("parts") if isinstance(check.get("parts"), dict) else {}
+    for name, p in parts.items():
+        # Axis: earlier-attempt reasons that are not a list of non-empty strings
+        if isinstance(p, dict) and "superseded" in p and not (
+                isinstance(p["superseded"], list) and all(isinstance(r, str) and r.strip() for r in p["superseded"])):
+            raise ValueError(f"parts.{name}.superseded is not a list of non-empty strings")
+    commit = check.get("commit")
+    # Axis: evidence with no app commit to stand against (missing, a ref like HEAD, or not 7-40 lower-case hex)
+    if evidence and not (isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,40}", commit)):
+        raise ValueError("commit is not 7 to 40 lower-case hex characters")
     opening = "\n\n".join(did_not_run_lines(check))
     if not evidence and (check.get("noPhone") or check.get("whole")):
         return opening, ""
     where = tuple(p for p in ("browser", "installed") if p in (check.get("where") or []))
     if where not in _WHERE or check.get("chosenBy") not in ("issue", "lane"):
         raise ValueError("where or chosenBy is not one of the contract's values")
-    out = ["### iPhone check", f"**Where the check ran:** {_WHERE[where]} — chosen by the {check['chosenBy']}.", GAPS]
-    for n, ev in enumerate(evidence, 1):
-        lb = ev["labels"]
-        out.append(f"#### iPhone evidence {n} — {ev['kind']} ({ev.get('part')}): {ev.get('caption', '')}")
-        out.append(" · ".join(f"`{k}` {lb[k]}" for k in SIX))
-        if ev["kind"] == "screenshot":
-            # Axis: a PR comment shows an image only by a URL its readers can open; a local path is named, not embedded
-            if ev.get("url"):
-                out.append(f"![{ev.get('caption', '')}]({ev['url']})")
-            else:
-                out.append(f"screenshot file (on the capturing Mac, not posted): {ev['path']} · sha256 {ev['sha256']}")
-            continue
-        rd = ev["reading"]
-        f = rd.get("focused")
-        focus = "none" if not isinstance(f, dict) else f"{f.get('tag')}{'#' + f['id'] if f.get('id') else ''} ({f.get('type')})"
-        # Axis: a password-focused reading shows no value even if the evidence carries one
-        if rd.get("valueWithheld") is True or (isinstance(f, dict) and f.get("type") == "password"):
-            value = "withheld"
-        else:
-            value = f'"{rd["value"]}"' if isinstance(rd.get("value"), str) else "none"
-        out.append(f"visible height {rd.get('visibleHeight')} · focused {focus} · value {value}")
+    out = ["### iPhone check", f"**Where the check ran:** {_WHERE[where]} — chosen by the {check['chosenBy']}."]
+    if evidence:
+        out.append(f"**Checked at commit:** `{commit}`")
+    out.append(GAPS)
+    live = [ev for ev in evidence if not ev.get("superseded")]
+    earlier = [ev for ev in evidence if ev.get("superseded")]
+    for n, ev in enumerate(live, 1):
+        out += _piece(f"iPhone evidence {n}", ev)
+    reasons = [f"`{label}`: earlier attempt did not complete — {r}"
+               for name, label in (("browser", "browser check"), ("installed", "installed-app check"))
+               for r in (parts.get(name) or {}).get("superseded") or []]
+    if reasons or earlier:
+        out += ["#### Superseded attempts", *reasons]
+        for k, ev in enumerate(earlier, 1):
+            out += _piece(f"Superseded evidence {k}", ev)
     return opening, "\n\n".join(out)
 
 
@@ -692,7 +729,10 @@ def _dispatch(a, rest):
             if not isinstance(step, dict):
                 raise ValueError("a step is a JSON object")
             completed, reason = judge_step(step)
-            return {"ok": True, "completed": completed, "reason": reason}
+            name = step.get("step")
+            # Axis: a not-completed step carries the shared no-response wording, so every pilot writes the same part reason
+            part_reason = {} if completed or not (isinstance(name, str) and name) else {"partReason": f"{NO_RESPONSE} ({name})"}
+            return {"ok": True, "completed": completed, "reason": reason, **part_reason}
         with open(a.__dict__["in"]) as fh:
             opening, section = render(json.load(fh))
         return {"ok": True, "opening": opening, "section": section}

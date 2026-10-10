@@ -211,6 +211,22 @@ def test_ufr4_tap_on_a_field_with_no_id_is_matched_by_name_form_target():
     assert done is False and "intended field" in reason
 
 
+def test_ufr4_name_target_matches_the_focused_fields_name_even_when_it_has_an_id():
+    after = focused_as(rd(), ":r1:", "email")
+    assert ic.judge_step(step(kind="tap-field", target="name:email", after=after, keyboardSeen=True))[0] is True
+    done, reason = ic.judge_step(step(kind="tap-field", target="name:other", after=after, keyboardSeen=True))
+    assert done is False and reason == "the intended field did not receive focus"
+    assert ic.judge_step(step(kind="tap-field", target="email", after=after, keyboardSeen=True))[0] is False
+    assert ic.judge_step(step(kind="tap-field", target=":r1:", after=after, keyboardSeen=True))[0] is True
+
+
+def test_ufr4_name_target_with_no_name_or_a_focused_field_with_no_name_is_not_completed():
+    for target, after in (("name:", focused_as(rd(), "a", "email")), ("name:", focused_as(rd(), "a", "")),
+                          ("name:email", focused_as(rd(), "email", None)), ("name:email", focused_as(rd(), None, None))):
+        done, reason = ic.judge_step(step(kind="tap-field", target=target, after=after, keyboardSeen=True))
+        assert done is False and "intended field" in reason
+
+
 def test_ufr4_typing_on_an_unkeyed_field_is_not_completed():
     done, reason = ic.judge_step(step(kind="type", before=focused_as(rd(value="a"), None, None),
                                       after=focused_as(rd(value="ab"), None, None)))
@@ -313,7 +329,7 @@ def part(included=True, completed=False, reason=""):
 
 def chk(**kw):
     base = {"noPhone": False, "whole": None, "where": ["browser", "installed"], "chosenBy": "issue",
-            "parts": {"browser": part(), "installed": part()}, "evidence": []}
+            "parts": {"browser": part(), "installed": part()}, "evidence": [], "commit": "abc1234"}
     base.update(kw)
     return base
 
@@ -550,6 +566,23 @@ def test_drive_non_tap_gets_no_post_delay_and_still_ends_with_the_udid(fake):
         assert "--post-delay" not in argv and argv[-2:] == ["--udid", U]
         assert env_["AXE_HID_STABILIZATION_MS"] == "2000"
     assert axe_calls(f)[0][0] == ["axe", "type", "hello", "--udid", U]
+
+
+def test_drive_button_names_reach_axe_in_lower_case(fake):
+    f = fake(helper_sim(["up"]))
+    ic.drive(U, ["button", "HOME"], 30)
+    ic.drive(U, ["button", "home"], 30)
+    ic.drive(U, ["button", "Side-Button", "--duration", "1"], 30)
+    assert [c[0] for c in axe_calls(f)] == [["axe", "button", "home", "--udid", U],
+                                            ["axe", "button", "home", "--udid", U],
+                                            ["axe", "button", "side-button", "--duration", "1", "--udid", U]]
+
+
+def test_drive_only_lower_cases_a_button_name_not_other_arguments(fake):
+    f = fake(helper_sim(["up"]))
+    ic.drive(U, ["type", "HOME"], 30)
+    ic.drive(U, ["button"], 30)
+    assert [c[0] for c in axe_calls(f)] == [["axe", "type", "HOME", "--udid", U], ["axe", "button", "--udid", U]]
 
 
 def test_drive_cli_splits_axe_args_after_the_double_dash(fake, capsys):
@@ -1481,6 +1514,7 @@ def test_render_lays_out_one_screenshot_and_one_reading_exactly():
     assert section == "\n\n".join([
         "### iPhone check",
         "**Where the check ran:** in the browser — chosen by the issue.",
+        "**Checked at commit:** `abc1234`",
         "**What a simulator cannot show:** a real finger's touch (the timing and imprecision of a human tap, and "
         "multi-finger gestures) and real-device speed.",
         "#### iPhone evidence 1 — screenshot (browser): Home",
@@ -1512,6 +1546,106 @@ def test_render_puts_each_did_not_run_line_in_its_own_paragraph_and_keeps_earlie
                                   "iPhone check did not run — installed-app check: b")
 
 
+def installed_done():
+    return {"browser": part(completed=True), "installed": part(completed=True)}
+
+
+def test_a_superseded_installed_reading_never_completes_the_installed_part():
+    old = {**ev_reading("installed", "installed"), "superseded": True}
+    c = chk(parts=installed_done(), evidence=[ev_reading("browser", "browser"), old])
+    assert ic.did_not_run_lines(c) == [
+        "iPhone check did not run — installed-app check: no page reading from the installed app"]
+    opening, _ = ic.render(c)
+    assert opening == "iPhone check did not run — installed-app check: no page reading from the installed app"
+    live = chk(parts=installed_done(), evidence=[old, ev_reading("installed", "installed")])
+    assert ic.did_not_run_lines(live) == []
+
+
+def test_render_lists_superseded_attempts_after_the_live_evidence_and_never_in_the_opening():
+    parts = {"browser": {**part(completed=True), "superseded": ["the keyboard tip covered the field"]},
+             "installed": {**part(completed=True), "superseded": ["Safari fell back to its Start Page", "second"]}}
+    old_shot = {**ev_shot("browser"), "caption": "First try", "superseded": True}
+    old_read = {**ev_reading("installed", "installed"), "caption": "Old read", "superseded": True}
+    c = chk(parts=parts, evidence=[old_shot, ev_reading("browser", "browser"), old_read,
+                                   {**ev_reading("installed", "installed"), "caption": "Final", "superseded": False}])
+    opening, section = ic.render(c)
+    assert opening == ""
+    paras = section.split("\n\n")
+    heads = [x for x in paras if x.startswith("#### ")]
+    assert heads == ["#### iPhone evidence 1 — reading (browser): c",
+                     "#### iPhone evidence 2 — reading (installed): Final",
+                     "#### Superseded attempts",
+                     "#### Superseded evidence 1 — screenshot (browser): First try",
+                     "#### Superseded evidence 2 — reading (installed): Old read"]
+    at = paras.index("#### Superseded attempts")
+    assert paras[at + 1:at + 4] == [
+        "`browser check`: earlier attempt did not complete — the keyboard tip covered the field",
+        "`installed-app check`: earlier attempt did not complete — Safari fell back to its Start Page",
+        "`installed-app check`: earlier attempt did not complete — second"]
+    assert "First try" not in "\n\n".join(paras[:at])
+
+
+def test_render_without_any_superseded_attempt_has_no_superseded_heading():
+    _, section = ic.render(chk(where=["browser"], evidence=[ev_shot("browser")]))
+    assert "Superseded" not in section
+
+
+@pytest.mark.parametrize("bad", ["keyboard tip", ["ok", " "], [""], [7], {"a": "b"}, None],
+                         ids=["string", "blank-entry", "empty-string", "non-string", "dict", "null"])
+def test_render_refuses_a_malformed_superseded_list(bad):
+    c = chk(parts={"browser": {**part(completed=True), "superseded": bad}, "installed": part(included=False)},
+            where=["browser"], evidence=[ev_shot("browser")])
+    with pytest.raises(ValueError, match="superseded"):
+        ic.render(c)
+
+
+@pytest.mark.parametrize("bad", ["true", 1, None, "no"])
+def test_render_refuses_a_piece_whose_superseded_is_not_a_bool(bad):
+    with pytest.raises(ValueError, match="superseded"):
+        ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "superseded": bad}]))
+
+
+def test_render_validates_a_superseded_piece_like_any_other():
+    old = {**ev_shot("browser", source="Device"), "superseded": True}
+    with pytest.raises(ValueError, match="Simulator"):
+        ic.render(chk(where=["browser"], evidence=[ev_shot("browser"), old]))
+    lb = labels(where="browser")
+    del lb["page"]
+    with pytest.raises(ValueError, match="six labels"):
+        ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "labels": lb, "superseded": True}]))
+
+
+def test_render_prints_the_commit_right_after_the_where_line():
+    _, section = ic.render(chk(where=["browser"], commit="0123abc", evidence=[ev_shot("browser")]))
+    paras = section.split("\n\n")
+    assert paras[1].startswith("**Where the check ran:**") and paras[2] == "**Checked at commit:** `0123abc`"
+    _, section = ic.render(chk(where=["browser"], commit="a" * 40, evidence=[ev_shot("browser")]))
+    assert "`" + "a" * 40 + "`" in section
+
+
+@pytest.mark.parametrize("bad", [None, "", "HEAD", "abcdef", "ABC1234", "abc123g", "a" * 41, 1234567, "abc1234\n"],
+                         ids=["null", "empty", "HEAD", "six-hex", "upper-case", "non-hex", "too-long", "non-string",
+                              "newline"])
+def test_render_refuses_evidence_without_a_usable_commit(bad):
+    c = chk(where=["browser"], evidence=[ev_shot("browser")])
+    c["commit"] = bad
+    with pytest.raises(ValueError, match="commit"):
+        ic.render(c)
+    del c["commit"]
+    with pytest.raises(ValueError, match="commit"):
+        ic.render(c)
+
+
+def test_render_needs_no_commit_without_evidence():
+    no_commit = {"noPhone": True, "whole": None, "where": [], "parts": {}, "evidence": []}
+    assert ic.render(no_commit) == (UFR5_LITERAL, "")
+    opening, section = ic.render({"noPhone": False, "whole": "Device Hub unavailable", "where": ["browser"],
+                                  "parts": {}, "evidence": []})
+    assert opening.endswith("Device Hub unavailable") and section == ""
+    _, section = ic.render({"where": ["browser"], "chosenBy": "lane", "parts": {}, "evidence": []})
+    assert "Checked at commit" not in section
+
+
 def test_render_no_phone_is_the_ufr5_line_alone_with_no_section():
     assert ic.render({"noPhone": True, "whole": None, "where": [], "parts": {}, "evidence": []}) == (UFR5_LITERAL, "")
 
@@ -1532,6 +1666,23 @@ def test_judge_and_render_cli(tmp_path, monkeypatch, capsys):
     assert ic.main(["render", "--in", str(path)]) == 0
     section = json.loads(capsys.readouterr().out)["section"]
     assert f"screenshot file (on the capturing Mac, not posted): /r/a.png · sha256 {SHA}" in section
+
+
+def test_judge_cli_hands_back_the_shared_part_reason_only_for_a_not_completed_named_step(monkeypatch, capsys):
+    def judged(st):
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(st)))
+        ic.main(["judge"])
+        return json.loads(capsys.readouterr().out)
+    assert ic.NO_RESPONSE == "no response to input"
+    out = judged(step(kind="other", step="tap Save", expected="menu", expectedSeen=False))
+    assert out["completed"] is False and out["partReason"] == "no response to input (tap Save)"
+    assert "partReason" not in judged(step(kind="other", step="tap Save", expected="menu", expectedSeen=True))
+    for nameless in ("", None, 7):
+        out = judged(step(kind="other", step=nameless, expected="menu", expectedSeen=False))
+        assert out["completed"] is False and "partReason" not in out
+    no_key = step(kind="other", expected="menu", expectedSeen=False)
+    del no_key["step"]
+    assert "partReason" not in judged(no_key)
 
 
 # ---------------------------------------------------------------- the fixture page
