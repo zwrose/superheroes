@@ -987,7 +987,7 @@ def test_a_credential_used_as_a_dictionary_key_is_redacted_and_colliding_keys_su
 
 
 def test_cost_and_observation_token_counts_survive_the_credential_scrub():
-    # axis: count fields; the number-of-tokens fields redacted because the key name contains "token"
+    # axis: count fields; the number-of-tokens fields redacted although "tokens" is not a secret-shaped key
     posted = rr.render(build(account()))
     rec = rr._parse_body(posted)
     assert rec["cost"]["tokens"] == 100
@@ -997,14 +997,66 @@ def test_cost_and_observation_token_counts_survive_the_credential_scrub():
     assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"token": "[REDACTED]"}
 
 
-@pytest.mark.parametrize("val", ["OPAQUE_CREDENTIAL", ["OPAQUE_CREDENTIAL"], {"service": "OPAQUE_CREDENTIAL"}])
-def test_tokens_key_holding_a_non_number_is_redacted(val):
-    # axis: the tokens exemption is numeric-only; any other value type is redacted like every secret-named key
+@pytest.mark.parametrize("val", ["password: LEAKMARK", ["password: LEAKMARK"], {"service": "password: LEAKMARK"}])
+def test_tokens_key_holding_a_credential_shaped_string_is_still_withheld(val):
+    # axis: "tokens" is not secret by key shape; a credential-shaped string under it is still caught by the text detector
     f = finding("a-1", outcome="fixed", reason="r")
     f["evidence"] = {"tokens": val}
     posted = rr.render(build(account(findings=[f])))
-    assert "OPAQUE_CREDENTIAL" not in posted
-    assert rr._parse_body(posted)["findings"][0]["evidence"] == {"tokens": "[REDACTED]"}
+    assert "LEAKMARK" not in posted
+    assert rr._parse_body(posted)["findings"][0]["evidence"] == {
+        "tokens": {"service": "[REDACTED FIELD]"} if isinstance(val, dict)
+        else ["[REDACTED FIELD]"] if isinstance(val, list) else "[REDACTED FIELD]"}
+
+
+CODEX_STDOUT = "\n".join([
+    '{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}',
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"Reading the diff for a.py"}}',
+    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\\"findings\\": [{\\"title\\": '
+    '\\"Off by one in the loop\\", \\"file\\": \\"a.py\\", \\"line\\": 3, \\"severity\\": \\"Minor\\", '
+    '\\"body\\": \\"The range stops one short.\\"}]}"}}',
+    '{"type":"turn.completed","usage":{"input_tokens":1234,"cached_input_tokens":0,"output_tokens":56}}',
+])
+
+
+def test_codex_stdout_with_usage_counts_is_posted_not_withheld():
+    # axis: over-withholding; ordinary Codex output withheld because a usage-count key contains the substring "token"
+    assert '"input_tokens":1234' in CODEX_STDOUT
+    body, withheld = rr.render_raw("codex.json", CODEX_STDOUT)
+    assert withheld is False and CODEX_STDOUT in body
+
+
+@pytest.mark.parametrize("key,secret", [
+    ("access_token", True), ("api_token", True), ("client_secret", True), ("db_password", True),
+    ("API_KEY", True), ("api key", True), ("private key", True), ("privateKey", True),
+    ("accessToken", True), ("Authorization", True), ("x-auth-token", True),
+    ("input_tokens", False), ("output_tokens", False), ("cached_tokens", False), ("tokens", False),
+    ("tokenizer", False), ("passwordless", False), ("secretary", False), ("note", False),
+])
+def test_key_shape_decides_secret(key, secret):
+    # axis: key shape; a key judged secret by a substring instead of its last word (or last two words joined)
+    assert rr._secret_key(key) is secret
+
+
+def test_numeric_values_under_secret_keys_stay_withheld_or_redacted():
+    # axis: value type; a number under a secret-shaped key exempted from withholding or redaction
+    assert rr.render_raw("f.json", '"access_token": "1234"')[1] is True
+    assert rr.render_raw("f.json", "password: 1234")[1] is True
+    for evidence in ({"password": 4321}, {"api key": 4321}):
+        f = finding("a-1", outcome="fixed", reason="r")
+        f["evidence"] = evidence
+        posted = rr.render(build(account(findings=[f])))
+        assert "4321" not in posted
+        assert rr._parse_body(posted)["findings"][0]["evidence"] == {next(iter(evidence)): "[REDACTED]"}
+
+
+def test_spaced_secret_keys_are_redacted_in_structured_fields():
+    # axis: spaced keys; "api key" and "private key" as mapping keys leaving their values in a posted record
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {"api key": "LEAKMARK", "private key": "LEAKMARK"}
+    posted = rr.render(build(account(findings=[f])))
+    assert "LEAKMARK" not in posted
 
 
 def test_one_run_record_claimed_by_two_reviewers_credits_neither(tmp_path):

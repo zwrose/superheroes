@@ -460,28 +460,33 @@ def _assert_no_bug_free_claim(text):
             raise Refusal("review-record-forbidden-claim", phrase)
 
 
-_SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase|authorization|cookie", re.I)
-
-
-def _secret_key(k):
-    return isinstance(k, str) and bool(_SECRET_KEY.search(k))
-
-
-def _is_token_count(k, v):
-    """A "tokens" key holding a plain number is the count field (cost.tokens, observation.tokens), not a credential."""
-    return isinstance(k, str) and k.lower() == "tokens" and isinstance(v, (int, float)) and not isinstance(v, bool)
-
-
-_KEY_SEP = re.compile(r"(?:" + _SECRET_KEY.pattern.replace("api[_-]?key", "api[ _-]?key").replace("private[_-]?key", "private[ _-]?key")
-                      + r")[\w-]{0,24}[ \t\"'\\\])}]*[:=]", re.I)
+_SECRET_WORDS = frozenset({"password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "authorization",
+                           "cookie", "apikey", "privatekey"})
+_SECRET_PAIRS = frozenset({"apikey", "privatekey"})
+_KEY_QUOTES = "\"'`[]{}() \t\\"
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)[ \t\"'\\\])}]*[:=]")
 _PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 _WITHHELD_FIELD = "[REDACTED FIELD]"
 
 
+def _secret_key(k):
+    """The one home for "is this key secret-shaped". Cut the key into words (surrounding quotes and brackets
+    stripped, camelCase split, then split on '_', '-', '.' and spaces, lowercased); it is secret when its last
+    word is a secret word, or its last two words joined are apikey or privatekey. The value plays no part, so
+    "tokens", "tokenizer", "passwordless" and "secretary" are not secret while "access_token" and "api key" are."""
+    if not isinstance(k, str):
+        return False
+    words = [w for w in re.split(r"[_.\- ]+", _CAMEL_BOUNDARY.sub(" ", k.strip(_KEY_QUOTES)).lower()) if w]
+    return bool(words) and (words[-1] in _SECRET_WORDS or "".join(words[-2:]) in _SECRET_PAIRS)
+
+
 def _has_secret(text):
-    """The one detector: a secret-named key followed by ':' or '=', or a private-key block, anywhere in the text.
-    Nothing tracks where a value ends; a text this matches is withheld whole."""
-    return bool(_KEY_SEP.search(text) or _PEM_BEGIN.search(text))
+    """The one text detector: a key-like run (one word, or two joined by a space) that _secret_key accepts and
+    that is followed by ':' or '=', or a private-key block, anywhere in the text. A two-word run is judged by
+    _secret_key on both words, so "the password: x" and "api key = x" count. Nothing tracks where a value ends;
+    a text this matches is withheld whole."""
+    return any(_secret_key(m.group("key")) for m in _KEY_CANDIDATE.finditer(text)) or bool(_PEM_BEGIN.search(text))
 
 
 def _secret_line_count(text):
@@ -513,7 +518,7 @@ def _scrubbed(value):
                 k2 = nk
             else:
                 k2 = k
-            secret = hidden_key or (_secret_key(k) and not _is_token_count(k, v))
+            secret = hidden_key or _secret_key(k)
             out[k2] = "[REDACTED]" if secret and v is not None else _scrubbed(v)
         return out
     return value
