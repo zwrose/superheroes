@@ -125,6 +125,12 @@
 Round 3 closed the first review: all three checks returned real results, confirmed every earlier
 fix, and raised nothing new. Two items wait in the owner's queue.
 
+## Writing pass
+
+- What the pass changed: three statements. The list of artboards in UI / UX became a bulleted list, the first line of Definition of done became two sentences and now names the saved "Merge" verdict, and the last sentence of UFR-3's second acceptance was split in two.
+- Meaning check: run directory /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/meaning-run1. Result: real (terminal, ok, 1 attempt, engaged). Findings: meaning-001, meaning-002 and meaning-003, each meaning:kept. Every changed statement has exactly one finding.
+- The pass was kept.
+
 ## After rulings 1
 
 ### Round 1
