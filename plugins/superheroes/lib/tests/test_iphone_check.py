@@ -1673,9 +1673,8 @@ def test_judge_cli_hands_back_the_shared_part_reason_only_for_a_not_completed_na
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(st)))
         ic.main(["judge"])
         return json.loads(capsys.readouterr().out)
-    assert ic.NO_RESPONSE == "no response to input"
     out = judged(step(kind="other", step="tap Save", expected="menu", expectedSeen=False))
-    assert out["completed"] is False and out["partReason"] == "no response to input (tap Save)"
+    assert out["completed"] is False and out["partReason"] == f"{ic.NO_RESPONSE} (tap Save)"
     assert "partReason" not in judged(step(kind="other", step="tap Save", expected="menu", expectedSeen=True))
     for nameless in ("", None, 7):
         out = judged(step(kind="other", step=nameless, expected="menu", expectedSeen=False))
