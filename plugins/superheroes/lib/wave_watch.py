@@ -1861,8 +1861,11 @@ def _evaluate_tick(
         else:
             repo_slug = None
 
+        # The cloud read gets half of what is left; the stack and vet reads that
+        # follow keep the other half, so a slow cloud endpoint cannot starve them.
+        cloud_deadline = monotonic() + max(0.0, (deadline - monotonic()) / 2)
         stale_cloud_launches = _evaluate_cloud_activity(
-            repo_root, live_lanes, deadline=deadline, env=env, gh_run=gh_run,
+            repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
             known_slug=repo_slug,
         )

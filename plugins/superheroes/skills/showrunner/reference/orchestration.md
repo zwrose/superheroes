@@ -83,7 +83,7 @@ the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`)
 message wakes an idle session. A `started` record that carries `cloudSessionUnconfirmed` in place of
 the id means a session may exist that was never confirmed. The lane stays live. Look in the host's
 session listing for a session of the recorded name; when there is none, record the lane's outcome as
-`died`.
+`died`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes: an older build reads the lane as a local one and reports `builder-exited` for a session still working.
 
 ## iPhone lanes: launching and reaping their phones
 

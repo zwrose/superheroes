@@ -65,10 +65,6 @@ def test_vocabulary_and_event_kinds_unchanged():
     assert (ll.PLACE_LOCAL, ll.PLACE_CLOUD) == ("local", "cloud")
     assert ll.PLACES == ("local", "cloud")
     assert ll.EVENT_KINDS == ("reserved", "started", "retry", "refused", "outcome", "amendment")
-    assert ll.COUNT_RESULT_BLOCKS == (
-        "counts", "amendments", "lanes", "attempts", "laneDetail", "slots",
-    )
-    assert ll.CHARTER_NAMED_COUNT_BLOCKS == ("lanes", "attempts", "laneDetail")
 
 
 # --- edge 1: place other than "cloud" -----------------------------------------

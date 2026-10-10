@@ -14,7 +14,7 @@ belongs to and lists every change with its replacement.
 - The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
 - `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
 - Heartbeat sweep entries gain `place`.
-- An older plugin build can still read a ledger that holds a cloud lane. It reads that lane as a local one.
+- An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
 
 ### Pilot: iPhone typing helper
 
