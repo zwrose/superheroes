@@ -17,14 +17,17 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import launch_ledger
 from launcher import (DEVICE_HUB_AVAILABLE, DEVICE_HUB_ENV, DEVICE_HUB_PROCESS, DEVICE_HUB_UNAVAILABLE,
                       IPHONE_ID_ENV, IPHONE_NONE)
 
 READING_PARAM = "superheroes-reading"
+NOT_ESTABLISHED = "could not be established"
+READING_WAIT = 3.0  # seconds: the cap on each of the two page-reading waits inside `shot`
 SIX = ("phone", "model", "iOS", "page", "where", "source")
 GAPS = ("**What a simulator cannot show:** a real finger's touch (the timing and imprecision of a human "
         "tap, and multi-finger gestures) and real-device speed.")
@@ -170,17 +173,135 @@ def drive(phone, args, timeout):
     return {"ok": returned and code == 0, "returned": returned, "exit": code, "stdout": out}
 
 
-def shot(phone, out, page, where, timeout):
-    res = {"ok": False, "returned": False, "path": out, "sha256": None, "labels": None}
-    returned, code, _ = _run(["xcrun", "simctl", "io", phone, "screenshot", out], timeout)
-    res["returned"] = returned
-    if not (returned and code == 0 and os.path.isfile(out)):
-        return res
-    res["returned"], res["labels"], res["error"] = _labels(phone, page, where, timeout)
+class Listener(ThreadingHTTPServer):
+    daemon_threads = False  # closing waits for a request in flight; its socket timeout bounds that wait
+
+
+def _derive_labels(window):
+    """-> (page, where, notes) from the page readings in the capture window; what cannot be established is NOT_ESTABLISHED."""
+    pages, wheres, notes = set(), set(), []
+    page_ok = where_ok = True
+    for rd in window:
+        page = rd.get("page")
+        label = _page_label(page) if isinstance(page, str) and page.strip() else ""
+        if label.strip():
+            pages.add(label)
+        else:
+            page_ok = False
+        if rd.get("where") in ("browser", "installed"):
+            wheres.add(rd["where"])
+        else:
+            where_ok = False
+    # Axis: a window reading with a missing, blank or non-string page (or a page that is blank once the reading parameter is stripped)
+    if not page_ok:
+        notes.append("a page reading carried no usable page")
+    # Axis: the readings in the window name more than one page (the page changed during the capture)
+    elif len(pages) != 1:
+        notes.append("the page changed during the capture")
+    # Axis: a window reading whose where is not browser or installed
+    if not where_ok:
+        notes.append("a page reading carried no usable where")
+    # Axis: the readings in the window name more than one context
+    elif len(wheres) != 1:
+        notes.append("the context changed during the capture")
+    page = next(iter(pages)) if page_ok and len(pages) == 1 else NOT_ESTABLISHED
+    where = next(iter(wheres)) if where_ok and len(wheres) == 1 else NOT_ESTABLISHED
+    return page, where, notes
+
+
+def shot(phone, out, run_dir, token, timeout):
+    """Screenshot a phone. `page` and `where` come only from the readings the phone's page posts during the call."""
+    call_start_ms, end = time.time() * 1000, time.monotonic() + timeout
+    res = {"ok": False, "returned": False, "path": out, "sha256": None, "labels": None, "labelNote": None}
+    collected, cond = [], threading.Condition()
+
+    def left():
+        return max(end - time.monotonic(), 0.1)
+
+    def wait_until(found):
+        stop = time.monotonic() + max(min(READING_WAIT, end - time.monotonic()), 0)
+        with cond:
+            while not found():
+                if (rest := stop - time.monotonic()) <= 0:
+                    return False
+                cond.wait(rest)
+            return True
+
+    class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            # Axis: a POST that stalls is dropped once the call's budget runs out, never outliving it
+            self.timeout = max(min(2, end - time.monotonic()), 0.05)
+            super().setup()
+
+        def do_POST(self):
+            try:
+                reading = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
+            except (ValueError, OSError):
+                reading = None
+            if isinstance(reading, dict) and accept_reading(reading, self.path, token, reading.get("where"), call_start_ms):
+                with cond:
+                    collected.append((time.monotonic(), reading))
+                    cond.notify_all()
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    server, note, window = None, None, []
+    try:
+        # Axis: a token or session the page's readings cannot be tied to (bad token, missing or malformed session file)
+        try:
+            if not re.fullmatch(r"[0-9a-f]+", token):
+                raise ValueError("bad token")
+            with open(os.path.join(run_dir, "sessions", token + ".json")) as fh:
+                session = json.load(fh)
+            session_phone, port = str(session["phone"]), int(session["port"])
+        except (OSError, ValueError, KeyError, TypeError):
+            note = "no usable session for this token, so no page reading could be matched to this capture"
+        else:
+            # Axis: a session opened on another phone — its readings are not this phone's
+            if session_phone.upper() != phone.upper():
+                note = "the session belongs to another phone"
+            else:
+                try:
+                    server = Listener(("127.0.0.1", port), Handler)
+                except OSError:
+                    note = "the page-reading listener could not start"
+        if server is not None:
+            threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+            # Axis: no page reading arrived before the capture
+            if not wait_until(lambda: bool(collected)):
+                note = "no page reading arrived before the capture"
+        returned, code, _ = _run(["xcrun", "simctl", "io", phone, "screenshot", out], left())
+        res["returned"] = returned
+        shot_end_mono, shot_end_ms = time.monotonic(), time.time() * 1000
+        if not (returned and code == 0 and os.path.isfile(out)):
+            return res
+        if server is not None and note is None:
+            def first_after():
+                # Axis: a reading is "after" only if it was received after the screenshot returned AND taken after it
+                return next((i for i, (got, rd) in enumerate(collected)
+                             if got >= shot_end_mono and rd["takenAt"] >= shot_end_ms), None)
+            if wait_until(lambda: first_after() is not None):
+                with cond:
+                    window = [rd for _, rd in collected[:first_after() + 1]]
+            else:
+                note = "no page reading arrived after the capture"
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+    page, where, notes = _derive_labels(window) if window else (NOT_ESTABLISHED, NOT_ESTABLISHED, [])
+    res["returned"], res["labels"], err = _labels(phone, page, where, left())
+    if err is not None:
+        res["error"] = err
     if res["labels"]:
         with open(out, "rb") as fh:
             res["sha256"] = hashlib.sha256(fh.read()).hexdigest()
         res["ok"] = True
+        res["labelNote"] = note or "; ".join(notes) or None
     return res
 
 
@@ -368,6 +489,9 @@ def render(check):
                 raise ValueError(f"evidence {n}: the reading lacks visibleHeight, where or focused")
         elif ev.get("kind") != "screenshot" or not _screenshot_located(ev):
             raise ValueError(f"evidence {n} is neither a located screenshot nor a reading")
+        # Axis: a screenshot whose where label is neither a context nor the fixed not-established value
+        elif labels["where"] not in ("browser", "installed", NOT_ESTABLISHED):
+            raise ValueError(f"evidence {n}: a screenshot's where label is not browser, installed or {NOT_ESTABLISHED}")
     opening = "\n\n".join(did_not_run_lines(check))
     if not evidence and (check.get("noPhone") or check.get("whole")):
         return opening, ""
@@ -403,7 +527,7 @@ def _parser():
     sub = p.add_subparsers(dest="verb", required=True)
     for verb, flags, timeout in (
             ("preflight", (), None), ("boot", ("phone",), 120), ("open", ("phone", "url", "run-dir"), 30),
-            ("drive", ("phone",), 30), ("shot", ("phone", "out", "page", "where"), 30),
+            ("drive", ("phone",), 30), ("shot", ("phone", "out", "run-dir", "token"), 30),
             ("read", ("run-dir", "token", "where"), 15), ("judge", (), None), ("render", ("in",), None)):
         s = sub.add_parser(verb)
         for f in flags:
@@ -424,7 +548,7 @@ def _dispatch(a, rest):
     if a.verb == "drive":
         return drive(a.phone, rest, a.timeout) if rest else {"ok": False, "error": "drive needs axe args after --"}
     if a.verb == "shot":
-        return shot(a.phone, a.out, a.page, a.where, a.timeout)
+        return shot(a.phone, a.out, a.run_dir, a.token, a.timeout)
     if a.verb == "read":
         return read(a.run_dir, a.token, a.where, a.timeout)
     try:

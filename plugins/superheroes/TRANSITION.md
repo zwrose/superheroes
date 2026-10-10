@@ -7,6 +7,14 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Pilot: iPhone screenshot labels
+
+- `shot` no longer takes `--page` or `--where`. It takes `--run-dir` and `--token` (the session `open` returned) and labels `page` and `where` from the page readings posted during the capture. Callers passing `--page` or `--where` now fail with an argument error.
+- When `shot` cannot establish a label, that label reads `could not be established`. The result gains a `labelNote` key: `null` when both labels were established, else a sentence saying why. The vet rules such a piece invalid.
+- `render` refuses a screenshot whose `where` is not `browser`, `installed` or `could not be established`.
+
 ## 0.42.0
 
 ### Before you upgrade
