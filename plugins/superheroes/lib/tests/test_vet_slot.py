@@ -886,6 +886,102 @@ def test_cli_help_prints_one_json_line(capsys, argv):
     assert json.loads(out)["reason"] == "bad-argument"
 
 
+# --- handback: the builder's ready-PR read, with the writer's own parser ----------------------
+
+HYPHEN_BODIES = [
+    _body_marker("<!-- superheroes:follow-ups FU1 FU2 -->\n"),
+    _body_marker("<!-- superheroes:follow-ups -->\n").replace(
+        "- FU1 [owner-call] decide the thing\n  - a sub-bullet with detail\n- FU2 [defect] fix the other thing\n",
+        "1. FU1 [owner-call] decide the thing\n2. FU2 [defect] fix the other thing\n"),
+]
+
+
+def _body_file(tmp_path, body):
+    path = tmp_path / "body.md"
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.parametrize("body", HYPHEN_BODIES)
+def test_handback_refuses_the_hyphen_form_and_names_the_marker(tmp_path, body):
+    result = vs.run_verb("handback", None, None, body_file=_body_file(tmp_path, body))
+    assert result["ok"] is False
+    assert result["reason"] == "markers-invalid"
+    assert result["detail"].startswith("followups marker appears 0 times; ")
+    assert "hyphenated <!-- superheroes:follow-ups" in result["detail"]
+    assert "<!-- superheroes:followups none -->" in result["detail"]
+
+
+def test_handback_refuses_the_missing_form_and_names_the_marker(tmp_path):
+    result = vs.run_verb("handback", None, None, body_file=_body_file(tmp_path, _body_marker("")))
+    assert result == {"ok": False, "reason": "markers-invalid",
+                      "detail": "followups marker appears 0 times"}
+
+
+def test_handback_hint_ignores_a_fenced_hyphen_line(tmp_path):
+    body = _body_marker("```\n<!-- superheroes:follow-ups -->\n```\n")
+    result = vs.run_verb("handback", None, None, body_file=_body_file(tmp_path, body))
+    assert result["detail"] == "followups marker appears 0 times"
+
+
+@pytest.mark.parametrize("body,ids", [(BODY, ["FU1", "FU2"]), (NONE_BODY, [])])
+def test_handback_ok_from_body_file(tmp_path, body, ids):
+    result = vs.run_verb("handback", None, None, body_file=_body_file(tmp_path, body))
+    assert result == {"ok": True, "verb": "handback", "followups": ids}
+
+
+@pytest.mark.parametrize("token,detail,body", BODY_CASES)
+def test_handback_agrees_with_check_on_every_body_refusal(token, detail, body):
+    via_check = vs.run_verb("check", PR, REPO, run=_ok_fake(body=body))
+    via_handback = vs.check_handback(body)
+    assert via_handback["reason"] == via_check["reason"] == token
+    assert via_handback["detail"].startswith(via_check["detail"])
+
+
+def test_handback_reads_with_analyze_body(monkeypatch):
+    seen = []
+
+    def spy(body):
+        seen.append(body)
+        raise vs._Refusal("markers-invalid", "spy refusal")
+
+    monkeypatch.setattr(vs, "analyze_body", spy)
+    assert vs.check_handback(BODY) == {"ok": False, "reason": "markers-invalid", "detail": "spy refusal"}
+    assert seen == [BODY]
+
+
+@pytest.mark.parametrize("body,ok", [(BODY, True), (HYPHEN_BODIES[0], False)])
+def test_handback_from_pr_reads_only_the_body(body, ok):
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("handback", PR, REPO, run=fake)
+    assert result["ok"] is ok
+    assert fake.calls == [list(VIEW)]  # no login, no comments, no edit: no receipt is needed
+
+
+def test_handback_unreadable_body_file_is_read_failed(tmp_path):
+    result = vs.run_verb("handback", None, None, body_file=str(tmp_path / "absent.md"))
+    assert result["reason"] == "read-failed"
+    assert "body file unreadable" in result["detail"]
+
+
+def test_cli_handback(capsys, tmp_path):
+    assert vs.main(["handback", "--body-file", _body_file(tmp_path, BODY)]) == 0
+    assert json.loads(capsys.readouterr().out)["verb"] == "handback"
+    assert vs.main(["handback", "--body-file", _body_file(tmp_path, HYPHEN_BODIES[0])]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "markers-invalid"
+
+
+@pytest.mark.parametrize("argv", [
+    ["handback"], ["handback", "--repo", REPO], ["handback", "--body-file", "b", "--pr", "42"],
+    ["handback", "--body-file", "b", "--repo", REPO], ["check", "--pr", "42", "--repo", REPO, "--body-file", "b"],
+])
+def test_cli_handback_bad_argument(capsys, argv):
+    fake = _ok_fake()
+    assert vs.main(argv, run=fake) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "bad-argument"
+    assert fake.calls == []
+
+
 # --- marker drift: the prose that teaches the markers matches what the writer reads ------------
 
 PLUGIN = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
