@@ -649,11 +649,42 @@ def test_drive_only_runs_axe_or_launchctl_inside_the_handed_phone(fake, states, 
         assert not {"shutdown", "erase", "delete", "kill", "bootout", "booted"} & set(argv)
 
 
-@pytest.mark.parametrize("states", [["up"], ["down", "up"], ["down", "down"]])
-def test_every_call_in_a_checked_drive_shares_the_callers_deadline(fake, states):
-    f = fake(helper_sim(states))
-    ic.drive(U, ["type", "hello"], 30)
-    assert f.calls and all(0 < t <= 30 for _, t, _ in f.calls)
+def ticking(monkeypatch, responder, steps):
+    """Wrap a responder so each recorded call advances a controllable clock by the next amount in `steps` (seconds)."""
+    now, queue = [0.0], list(steps)
+    monkeypatch.setattr(ic.time, "monotonic", lambda: now[0])
+
+    def respond(argv):
+        now[0] += queue.pop(0) if queue else 0
+        return responder(argv)
+    return respond
+
+
+def test_every_call_in_a_checked_drive_gets_exactly_the_time_remaining_on_the_callers_deadline(fake, monkeypatch):
+    f = fake(ticking(monkeypatch, helper_sim(["down", "up"]), [2, 3, 5]))
+    assert ic.drive(U, ["type", "hello"], 30)["helper"] == "restarted"
+    assert verbs(f) == ["list", "kickstart", "list", "axe"]
+    assert [t for _, t, _ in f.calls] == pytest.approx([30, 28, 25, 20])
+
+
+def test_a_spent_deadline_stops_a_checked_drive_before_axe(fake, monkeypatch):
+    f = fake(ticking(monkeypatch, helper_sim(["up"]), [31]))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f) == ["list"]
+
+
+@pytest.mark.parametrize("steps,calls", [([30], ["list"]), ([0, 30], ["list", "kickstart"])])
+def test_a_spent_deadline_stops_a_checked_drive_before_the_kickstart_and_before_the_recheck(fake, monkeypatch, steps, calls):
+    f = fake(ticking(monkeypatch, helper_sim(["down", "up"]), steps))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f) == calls
+
+
+@pytest.mark.parametrize("states", [["up"], ["down", "up"]])
+def test_an_axe_call_that_never_returns_after_a_checked_helper_carries_no_helper(fake, states):
+    f = fake(helper_sim(states, axe=(False, None, "")))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f)[-1] == "axe"
 
 
 # ---------------------------------------------------------------- labels / shot

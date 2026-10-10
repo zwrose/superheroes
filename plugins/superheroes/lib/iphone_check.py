@@ -170,8 +170,11 @@ def open_url(phone, url, run_dir, timeout):
 
 def _typing_helper(phone, end):
     """-> (returned, running). Running only when the call exited 0 and names a PID: a stopped helper still exits 0."""
-    returned, code, out = _run(["xcrun", "simctl", "spawn", phone, "launchctl", "list", TYPING_HELPER],
-                               max(end - time.monotonic(), 0.1))
+    left = end - time.monotonic()
+    # Axis: the shared deadline is spent, so the list call is not started
+    if left <= 0:
+        return False, False
+    returned, code, out = _run(["xcrun", "simctl", "spawn", phone, "launchctl", "list", TYPING_HELPER], left)
     return returned, returned and code == 0 and re.search(r'^\s*"PID" = \d+;\s*$', out, re.MULTILINE) is not None
 
 
@@ -185,8 +188,10 @@ def drive(phone, args, timeout):
             helper = "running"
         elif returned:
             # Axis: a stopped helper drops every keystroke while AXe exits 0, so it is restarted and the re-check alone decides
-            returned, _, _ = _run(["xcrun", "simctl", "spawn", phone, "launchctl", "kickstart", "system/" + TYPING_HELPER],
-                                  max(end - time.monotonic(), 0.1))
+            left = end - time.monotonic()
+            # Axis: the shared deadline is spent, so the kickstart is not started
+            returned = left > 0 and _run(["xcrun", "simctl", "spawn", phone, "launchctl", "kickstart",
+                                          "system/" + TYPING_HELPER], left)[0]
             if returned:
                 returned, running = _typing_helper(phone, end)
             helper = "restarted" if running else "not running"
@@ -199,10 +204,14 @@ def drive(phone, args, timeout):
     argv = ["axe", *args]
     if args[0] == "tap" and not any(a.startswith("--post-delay") for a in args):
         argv += ["--post-delay", "1"]  # AXe drops taps without it (cameroncooke/AXe#71)
-    returned, code, out = _run(argv + ["--udid", phone], timeout if helper is None else max(end - time.monotonic(), 0.1),
-                               {**os.environ, "AXE_HID_STABILIZATION_MS": "2000"})
+    left = timeout if helper is None else end - time.monotonic()
+    # Axis: the shared deadline is spent in a checked drive, so AXe is not started
+    if helper is not None and left <= 0:
+        return {"ok": False, "returned": False, "exit": None, "stdout": ""}
+    returned, code, out = _run(argv + ["--udid", phone], left, {**os.environ, "AXE_HID_STABILIZATION_MS": "2000"})
     return {"ok": returned and code == 0, "returned": returned, "exit": code, "stdout": out,
-            **({} if helper is None else {"helper": helper})}
+            # Axis: an AXe call that never returned carries no helper field
+            **({"helper": helper} if helper is not None and returned else {})}
 
 
 class Listener(ThreadingHTTPServer):
