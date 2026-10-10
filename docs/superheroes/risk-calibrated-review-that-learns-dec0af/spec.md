@@ -5,8 +5,9 @@ docType: spec
 workItem: risk-calibrated-review-that-learns-dec0af
 issue: null
 size: large
-status: in-review
-gates: {review: changes-requested}
+status: approved
+approved: "2026-10-10"
+gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-09"
 updated: "2026-10-10"
