@@ -257,6 +257,15 @@ first round. The checks fixed 17 findings and the vet's first round added 8 craf
 The final sheet went out on 2026-10-10 after the clean round 2 record. It also lists the six
 statements tagged "craft, for your veto" that were added while fixing the vet's findings.
 
+## Approval
+
+The owner approved the spec on 2026-10-10. The verdict saved for the published revision of the final
+sheet (https://claude.ai/artifact/EEfZUnn4CNAbUKGKJT75d9, data file digest
+f1af73029554dae17cf88f8367f94f3df68554f66e86c4f0a160c4a383f52106) reads Approve, the owner said in
+the chat that the sheet was done, and all three cards read Aligned, so no answer changed the spec.
+The review gate was set to `passed` on spec hash
+e3dc491c03c3d96febfe8ef10526b252bf9c9fc9ce4e8ddde0ccfb9a0a4cecb4, the hash of the round 2 vet.
+
 ## The owner's queue
 
 Nothing is waiting.

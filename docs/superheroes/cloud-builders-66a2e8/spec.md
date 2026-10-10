@@ -5,8 +5,9 @@ docType: spec
 workItem: cloud-builders-66a2e8
 issue: null
 size: large
-status: draft
-gates: {review: pending}
+status: approved
+approved: "2026-10-10"
+gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-10"
 updated: "2026-10-10"

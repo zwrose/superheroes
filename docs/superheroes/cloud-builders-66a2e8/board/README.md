@@ -21,3 +21,6 @@ remainder sheet 2, 2026-10-10), and after Canon 2026-10-10-ca3e7e0d-21. The spec
 source "journeys".
 
 The choices board was skipped: no choice was open when the boards were drawn.
+
+The owner answered Aligned to both redraws for Canon 2026-10-10-ca3e7e0d-21 (the build board's
+caption and the journeys board's journey 3 step) on the final sheet, 2026-10-10.
