@@ -133,7 +133,7 @@ def test_no_profile_renders_without_raising(tmp_path):
     block = _project_config_section(screen)
     assert "profile: no core calibration yet" in block
     rows = _numbered_rows(block)
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert all("unset" in row or "plugin default" in row or "derived from dial" in row for row in rows)
 
 
@@ -196,7 +196,7 @@ def test_dependencies_raises_shows_not_available(tmp_path, monkeypatch):
     screen = CV.render(repo, root=store)
     block = _project_config_section(screen)
     assert "dependencies: (not available)" in block
-    assert len(_numbered_rows(block)) == 14
+    assert len(_numbered_rows(block)) == 15
 
 
 def test_dependencies_absent_show_fallback(tmp_path, monkeypatch):
