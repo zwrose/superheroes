@@ -70,6 +70,19 @@ These obligations attach to the order on your side, when you write it.
   the implementer stops and reports it under the per-order test-command budget rule in
   `agents/implementer.md`. An order that names a long suite tends to forfeit after it has already
   landed good work.
+- **An order to an external engine carries a no-install, no-network block and a provenance-accuracy
+  block.** Every order to codex or cursor says: install nothing (no npm, pip, brew or npx, global or
+  local) and reach no network. It also says: report only what the engine itself did, and never
+  claim to have found code it wrote in this dispatch. After the dispatch, check the machine for
+  mutation, not only the diff: run `npm ls -g --depth=0` and `which <tool>` for the tools the order
+  touches, before and after. The sandboxed claude write channel has no network, so the gap is the
+  non-claude engines. An external engine runs with the host's network and global tool directories,
+  so an install it makes changes the machine for every later session, and neither the install nor a
+  misstated provenance shows in the diff.
+- **Run the order's rule against every measured row it cites before it goes out.** An order whose
+  rule disagrees with its own measurements is an order defect; fix the order first. The implementer
+  cannot satisfy both, so it invents a reconciliation, and that invention is what the next review
+  blocks on.
 
 ## Declared deliverables
 
