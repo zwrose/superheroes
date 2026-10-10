@@ -413,3 +413,26 @@ def test_reviewer_pass_call_raising_never_fails_the_hook(tmp_path, monkeypatch, 
     raw, ctx = _raw_and_context(capsys)
     assert "The reviewer pass could not be placed (RuntimeError)" in ctx
     assert "secret message" not in raw
+
+
+def test_reviewer_pass_leaves_later_shells_as_a_marker_only(tmp_path, monkeypatch, capsys):
+    # Axis: after placement the env file unsets the pass variable and exports only its SHA-256.
+    import hashlib
+    pass_value, _, _ = _pass_fixture()
+    dest = _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    env_file = tmp_path / "env-file"
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    lines = env_file.read_text().splitlines()
+    marker = hashlib.sha256(dest.read_bytes()).hexdigest()
+    assert "unset SUPERHEROES_REVIEWER_PASS" in lines
+    assert "export SUPERHEROES_REVIEWER_PASS_SHA256=%s" % marker in lines
+    assert pass_value not in env_file.read_text()
+
+
+def test_reviewer_pass_env_file_untouched_when_nothing_was_placed(tmp_path, monkeypatch, capsys):
+    # Axis: a refused placement must not unset the variable or export a marker.
+    pass_value, _, _ = _pass_fixture(refresh="renewal-fixture-key")
+    _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    env_file = tmp_path / "env-file"
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    assert "PASS" not in env_file.read_text()

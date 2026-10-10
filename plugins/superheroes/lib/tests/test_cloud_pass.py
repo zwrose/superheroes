@@ -733,6 +733,47 @@ def test_confirm_ready_with_surrounding_whitespace_still_answers(tmp_path):
     assert _confirm(tmp_path, stdout="\n READY \n")["reviewerAnswered"] is True
 
 
+def test_confirm_with_marker_needs_no_pass_variable_and_matches_file_bytes(tmp_path):
+    import hashlib
+    env = _placed_env(tmp_path, pass_value=None)
+    env[CP.PASS_MARKER_ENV] = hashlib.sha256(_default(tmp_path).read_bytes()).hexdigest()
+    assert CP.confirm(env=env, run=_fake_run(), now=NOW)["reviewerAnswered"] is True
+    env[CP.PASS_MARKER_ENV] = "0" * 64
+    _assert_no(CP.confirm(env=env, run=_fake_run(), now=NOW), "pass-not-placed", lapses=None)
+
+
+def test_pass_marker_is_the_hash_of_the_bytes_place_writes(tmp_path):
+    import hashlib
+    env = _cloud_env(tmp_path)
+    assert CP.place(env=env)["action"] == "placed"
+    assert CP.pass_marker(env) == hashlib.sha256(_default(tmp_path).read_bytes()).hexdigest()
+    assert CP.pass_marker({CP.PASS_ENV: "%%%"}) is None
+
+
+def _made_pass(tmp_path):
+    result, calls = _make_with(tmp_path, _signin())
+    encoded = calls[0].splitlines()[0].split("=", 1)[1]
+    assert encoded and encoded not in SECRETS
+    return result, encoded
+
+
+def test_make_result_never_carries_the_actual_encoded_pass(tmp_path, capsys):
+    result, encoded = _made_pass(tmp_path)
+    assert encoded not in json.dumps(result) + capsys.readouterr().out
+
+
+def test_cli_make_output_never_carries_the_actual_encoded_pass(tmp_path, monkeypatch, capsys):
+    _cli_env(monkeypatch, tmp_path, pass_value=None)
+    _write(_separate(tmp_path), _signin())
+    sent = []
+    monkeypatch.setattr(CP, "copy_to_clipboard", lambda text, env=None: sent.append(text))
+    monkeypatch.setattr(CP.time, "time", lambda: NOW)
+    assert CP.main(["make"]) == 0
+    encoded = sent[0].splitlines()[0].split("=", 1)[1]
+    out = capsys.readouterr().out
+    assert json.loads(out)["action"] == "copied" and encoded not in out
+
+
 # ---------------------------------------------------------------- invariant
 
 

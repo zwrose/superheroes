@@ -17,6 +17,7 @@ and returns a plain dict; an expected failure is a refusal with a `reason` token
 """
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,7 @@ import time
 from datetime import datetime, timezone
 
 PASS_ENV = "SUPERHEROES_REVIEWER_PASS"
+PASS_MARKER_ENV = "SUPERHEROES_REVIEWER_PASS_SHA256"  # SHA-256 of the placed sign-in bytes
 CLOUD_ENV = "CLAUDE_CODE_REMOTE"
 PLUGIN_DIRS_ENV = "CLAUDE_CODE_PLUGIN_DIRS"
 CLOUD_PLUGIN_DIR = "/opt/superheroes/plugin"
@@ -137,6 +139,12 @@ def _decode_pass(env):
     except Exception:
         return None, None
     return (raw, value) if isinstance(value, dict) else (None, None)
+
+
+def pass_marker(env=None):
+    """SHA-256 hex digest of the exact bytes `place` writes for PASS_ENV, or None when unreadable."""
+    raw, _ = _decode_pass(_env(env))
+    return None if raw is None else hashlib.sha256(raw).hexdigest()
 
 
 def _find_clipboard(env):
@@ -309,14 +317,27 @@ def confirm(env=None, run=None, now=None):
 
     if not _is_cloud(env):
         return no("not-a-cloud-session")
-    if not (isinstance(env.get(PASS_ENV), str) and env[PASS_ENV].strip()):
-        return no("no-pass-in-environment")
-    _, expected = _decode_pass(env)
-    if expected is None:
-        return no("pass-unreadable")
-    signin = _read_object(_default_signin_path(env))
-    if signin is None or signin != expected:
-        return no("pass-not-placed")
+    marker = env.get(PASS_MARKER_ENV)
+    if isinstance(marker, str) and marker.strip():
+        # The session start scrubbed the pass variable: the file must hash to the marker.
+        data = b""
+        try:
+            with open(_default_signin_path(env), "rb") as fh:
+                data = fh.read()
+            signin = json.loads(data)
+        except Exception:
+            signin = None
+        if not isinstance(signin, dict) or hashlib.sha256(data).hexdigest() != marker.strip().lower():
+            return no("pass-not-placed")
+    else:
+        if not (isinstance(env.get(PASS_ENV), str) and env[PASS_ENV].strip()):
+            return no("no-pass-in-environment")
+        _, expected = _decode_pass(env)
+        if expected is None:
+            return no("pass-unreadable")
+        signin = _read_object(_default_signin_path(env))
+        if signin is None or signin != expected:
+            return no("pass-not-placed")
     if any(env.get(k) for k in ("CODEX_API_KEY", "OPENAI_API_KEY")):
         return no("api-key-in-environment")
     if signin.get("OPENAI_API_KEY") is not None:

@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timezone
 
 import cloud_pass
+import architect_config
 import cloud_setup
 import config_dir
 import control_plane
@@ -202,15 +203,18 @@ def _calibration(cwd, root):
     except Exception:
         raise _Refused("storage-mode-unknown", "The project's storage mode cannot be determined.")
     if mode == mode_registry.IN_REPO:
-        return False, {}
+        # doc-policy.json is machine-local for every project, so it is placed even here.
+        policy = architect_config.policy_path(cwd, root)
+        found = _store_files(os.path.dirname(policy))
+        return False, {k: v for k, v in found.items() if k == os.path.basename(policy)}
     if mode != mode_registry.GLOBAL:
         raise unknown
     return True, _store_files(mode_registry.project_store_dir(cwd, root))
 
 
 def calibration_files(cwd, root=None):
-    """The calibration the setup text places: relative path -> bytes, sorted; empty when the
-    repository itself carries it."""
+    """The calibration the setup text places: relative path -> bytes, sorted; for a project whose
+    repository carries its calibration, only the machine-local doc-policy.json (when it exists)."""
     return _calibration(cwd, root)[1]
 
 
@@ -357,7 +361,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     if placed and not _plain_relative(key):
         bad.append(key)
     dest = mode_registry.project_store_dir(
-        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if placed else None
+        cwd, control_plane.DEFAULT_STORE_ROOT.replace("~", "$HOME", 1)) if files else None
     tags = {rel: _end_tag(i) for i, rel in enumerate(files, 1)}
     for rel, data in files.items():
         try:
@@ -372,7 +376,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
                        "into the script (not text, an unsafe path, or a line that ends its "
                        "here-document).")
     stamp = date = None
-    if placed:
+    if files:
         try:
             stamp = (cloud_setup.calibration_stamp if stamp_fn is None else stamp_fn)(
                 _stamp_view(files))
@@ -380,6 +384,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
             stamp = None
         if not (isinstance(stamp, str) and _STAMP_RE.fullmatch(stamp)):
             raise _Refused("stamp-unavailable", "The calibration's stamp is not available.")
+    if placed:
         moment = _utc_date(now)
         date = moment.strftime("%Y-%m-%d")
         part = "calibration from %d %s" % (moment.day, _MONTHS[moment.month - 1])

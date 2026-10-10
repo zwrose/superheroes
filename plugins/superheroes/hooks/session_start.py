@@ -60,6 +60,23 @@ def _write_host_model_env(value):
             % type(exc).__name__)
 
 
+def _scrub_pass_env(result):
+    """After a placement, drop the pass from later shells and export only its SHA-256 marker.
+    Best-effort, never raises."""
+    try:
+        import cloud_pass
+        env_file = os.environ.get("CLAUDE_ENV_FILE")
+        marker = cloud_pass.pass_marker() if result.get("action") == "placed" else None
+        if not (env_file and marker):
+            return
+        with open(env_file, "a", encoding="utf-8") as fh:
+            fh.write("unset %s\nexport %s=%s\n" % (
+                cloud_pass.PASS_ENV, cloud_pass.PASS_MARKER_ENV, shlex.quote(marker)))
+    except Exception as exc:
+        sys.stderr.write("superheroes session_start: could not scrub pass env (%s)\n"
+                         % type(exc).__name__)
+
+
 def _append_host_model_section(boot, value):
     if not boot:
         return boot
@@ -142,6 +159,7 @@ def main():
     try:
         import cloud_pass
         pass_result = cloud_pass.place()
+        _scrub_pass_env(pass_result)
     except Exception as exc:
         pass_raised = type(exc).__name__
 

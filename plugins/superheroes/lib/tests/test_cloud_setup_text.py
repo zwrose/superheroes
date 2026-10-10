@@ -199,6 +199,27 @@ def test_inside_fixture_has_no_calibration_in_the_text(tmp_path):
     assert result["header"] == "Corner Shop \u00b7 plugin %s \u00b7 calibration in the repository" % VERSION
 
 
+def test_inside_fixture_carries_exactly_the_machine_local_document_policy(tmp_path):
+    import architect_config
+    w = _inside(tmp_path)
+    policy = json.dumps({"location": "specs/custom", "visibility": "committed",
+                         "confirmed": True}).encode() + b"\n"
+    _put(w, "doc-policy.json", policy)
+    _put(w, "config/core.md", b"IN-REPO-CALIBRATION-MARKER\n")
+    assert CS.calibration_files(w.cwd, w.root) == {"doc-policy.json": policy}
+    result = _compose(w)
+    assert result["header"].endswith("calibration in the repository")
+    assert result["calibration"]["placed"] is False
+    assert result["calibration"]["files"] == ["doc-policy.json"]
+    assert result["calibration"]["stamp"] == _stamp({"doc-policy.json": policy})
+    assert "IN-REPO-CALIBRATION-MARKER" not in result["text"]
+    proc, _ = _run_script(w, result["text"])
+    assert proc.returncode == 0, proc.stderr
+    cloud_root = str(w.home / ".claude" / "superheroes")
+    assert architect_config.read_policy(w.cwd, cloud_root)["location"] == "specs/custom"
+    assert architect_config.read_policy(w.cwd, w.root)["location"] == "specs/custom"
+
+
 # --- the script runs ------------------------------------------------------------------------
 
 def _stubs(tmp_path):
