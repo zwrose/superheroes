@@ -18,8 +18,8 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
          NO_STATUS)
 PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
 RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
-GOOD_RUN = {"runKind": "review", "resultKind": "findings", "resultDigest": "d1",
-            "observation": {"tokens": 100, "wallSeconds": 120}}
+GOOD_RUN = {"runKind": "review", "resultKind": "findings", "resultDigest": "d1", "source": "codex",
+            "engineModel": CODEX, "viewHeadSha": HEAD, "observation": {"tokens": 100, "wallSeconds": 120}}
 PHRASES = ("no bugs", "bug-free", "bug free")
 
 
@@ -209,12 +209,13 @@ def test_bug_free_claim_guard_raises(phrase):
         rr._assert_no_bug_free_claim(f"This change is {phrase.upper()}.")
 
 
-def test_read_back_survives_the_session_dir(tmp_path):
+@pytest.mark.parametrize("shape", ["array", "object"])
+def test_read_back_survives_the_session_dir(tmp_path, shape):
     session = tmp_path / "session"
     session.mkdir()
     raw = session / "code.json"
-    raw.write_text(json.dumps({"findings": [{"id": f"n{i}", "title": "nit", "severity": "Nit"} for i in range(7)]
-                               + [{"id": "c1", "severity": "Minor"}]}))
+    members = [{"id": f"n{i}", "title": "nit", "severity": "Nit"} for i in range(7)] + [{"id": "c1", "severity": "Minor"}]
+    raw.write_text(json.dumps(members if shape == "array" else {"findings": members}))
     findings = [finding(f"n{i}", severity="Nit") for i in range(5)]
     findings += [finding("c1", outcome="craft", reason="style call"), finding("w1", outcome="shown-wrong", reason="x")]
     fake = Fake()
@@ -270,15 +271,16 @@ def test_engine_error_while_session_says_ran_is_a_disagreement():
 
 def test_same_family_reviewer_needs_the_owner_word():
     same = reviewer(vendor="claude", model="opus-5.5")
-    rec = build(account(reviewers=[same]))
+    claude = {"/run/code-reviewer": (dict(GOOD_RUN, source="claude", engineModel="opus-5.5"), None)}
+    rec = build(account(reviewers=[same]), Fake(runs=claude))
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
     assert rec["reviewers"][0]["runNote"] == "not shown independent of the makers"
     word = {"words": "fine by me", "where": "PR comment"}
-    rec = build(account(reviewers=[reviewer(vendor="claude", model="opus-5.5", ownerWord=word)]))
+    rec = build(account(reviewers=[reviewer(vendor="claude", model="opus-5.5", ownerWord=word)]), Fake(runs=claude))
     assert rec["reviewers"][0]["ran"] == "engine-record" and rec["reviewers"][0]["notIndependent"] is True
     assert rec["status"] == "reviewed"
     half = {"words": "fine by me", "where": ""}
-    assert build(account(reviewers=[reviewer(vendor="claude", model="opus-5.5", ownerWord=half)]))[
+    assert build(account(reviewers=[reviewer(vendor="claude", model="opus-5.5", ownerWord=half)]), Fake(runs=claude))[
         "reviewers"][0]["ran"] == "not-run"
 
 
@@ -381,3 +383,40 @@ def test_cli_read_without_gh_refuses(tmp_path):
                           text=True, env={"PATH": str(empty), "HOME": str(tmp_path)})
     assert proc.returncode == 1
     assert json.loads(proc.stdout)["ok"] is False
+
+
+def test_receipt_of_another_family_decides_independence():
+    claude_run = dict(GOOD_RUN, source="claude", engineModel="opus-5.5")
+    rec = build(account(), Fake(runs={"/run/code-reviewer": (claude_run, None)}))
+    v = rec["reviewers"][0]
+    assert v["family"] == "anthropic" and v["ran"] == "not-run" and rec["status"] == "not-reviewed"
+    assert {"fact": "code-reviewer family", "session": "openai", "code": "anthropic"} in rec["sessionDisagreements"]
+
+
+@pytest.mark.parametrize("seen", [EARLIER, None])
+def test_receipt_for_another_or_unknown_commit_is_not_a_review(seen):
+    run = dict(GOOD_RUN, viewHeadSha=seen)
+    rec = build(account(), Fake(runs={"/run/code-reviewer": (run, None)}))
+    assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
+    assert rec["reviewers"][0]["runNote"]
+
+
+def test_credentials_are_scrubbed_before_the_record_is_published(tmp_path):
+    token = "ghp_" + "A" * 36
+    fake = Fake()
+    acct = account(findings=[finding(body=f"key {token}", reason=f"saw {token}")])
+    assert rr.write(put(tmp_path, acct), str(tmp_path), fake.readers())["ok"]
+    assert token not in fake.marked()[0]["body"]
+    assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == "key [REDACTED]"
+
+
+def test_inherited_history_that_would_overflow_is_compacted(tmp_path):
+    fake = Fake()
+    old = [finding("old-1", body="x" * 62700, outcome="left-for-owner", reason="owner call")]
+    assert rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())["ok"]
+    out = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
+    assert out["ok"] and out["action"] == "edited"
+    hist = rr.read(7, readers=fake.readers())["history"]
+    assert [h["sessionId"] for h in hist] == ["A"] and hist[0]["compacted"] is True
+    assert hist[0]["findings"][0]["id"] == "old-1" and hist[0]["findings"][0]["reason"] == "owner call"
+    assert "body" not in hist[0]["findings"][0]

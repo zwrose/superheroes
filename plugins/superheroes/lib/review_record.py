@@ -255,14 +255,33 @@ def _go_text(g):
     return f"standing ruling {g['canonId']}" if g["kind"] == "standing-ruling" else f"owner's words ({g['where']})"
 
 
-def _reviewer(r, makers, rd, dis):
+def _short(sha):
+    return (sha or "")[:7] or "unknown"
+
+
+def _reviewer(r, makers, rd, dis, head=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     if r.get("runDir"):
         rec, err = rd["engine_run"](r["runDir"])
         if isinstance(rec, dict) and rec.get("runKind") == "review" \
                 and rec.get("resultKind") and rec.get("resultDigest"):
-            out.update(ran="engine-record", observation=rec.get("observation"))
+            seen = rec.get("viewHeadSha")
+            if not head or seen != head:
+                # A review of another commit (or of an unknown one) never covers the final commit.
+                out.update(ran="not-run", runNote=f"the review covered {_short(seen)}, not the final commit "
+                                                  f"{_short(head)}" if seen else "the commit the review covered is unknown")
+                if r["ran"]:
+                    dis.append({"fact": f"{r['name']} ran on the final commit", "session": True, "code": "not-run"})
+            else:
+                out.update(ran="engine-record", observation=rec.get("observation"))
+            source, model = rec.get("source"), rec.get("engineModel") or rec.get("model")
+            if isinstance(source, str) and source:
+                # The run's own engine and model decide the family; the account's claim is only a claim.
+                run_family = _family(source, model) if isinstance(model, str) and model else None
+                if run_family != out["family"]:
+                    dis.append({"fact": f"{r['name']} family", "session": out["family"], "code": run_family})
+                    out["family"] = run_family
         else:
             out.update(ran="not-run", runNote=err or "no review result")
             if r["ran"]:
@@ -286,7 +305,9 @@ def _raw_findings(paths):
     for p in paths:
         try:
             with open(p, encoding="utf-8") as fh:
-                members = json.load(fh)["findings"]
+                members = json.load(fh)
+            if isinstance(members, dict):
+                members = members["findings"]
             assert isinstance(members, list)
         except (OSError, ValueError, KeyError, TypeError, AssertionError):
             unread.append(f"the findings file {os.path.basename(p)} could not be read")
@@ -329,7 +350,7 @@ def build_record(account, readers, prior=None):
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
         if from_code and session is not None and session != code:
             dis.append({"fact": fact, "session": session, "code": code})
-    reviewers = [_reviewer(r, a["makers"], rd, dis) for r in a["reviewers"]]
+    reviewers = [_reviewer(r, a["makers"], rd, dis, fc["sha"]) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -378,7 +399,35 @@ def _assert_no_bug_free_claim(text):
             raise Refusal("review-record-forbidden-claim", phrase)
 
 
+def _scrubbed(value):
+    if isinstance(value, str):
+        return pr_comment.scrub(value)
+    if isinstance(value, list):
+        return [_scrubbed(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrubbed(v) for k, v in value.items()}
+    return value
+
+
+_KEEP = ("id", "title", "severity", "file", "line", "outcome", "reason", "sourceFile", "reviewer")
+
+
+def _compact_entry(item):
+    if not isinstance(item, dict):
+        return item
+    return {k: (v[:300] if isinstance(v, str) else v) for k, v in item.items() if k in _KEEP}
+
+
+def compact_history(record):
+    """Shrink inherited history to one line per finding (id, outcome, reason) so a successor can write."""
+    hist = [dict(h, findings=[_compact_entry(f) for f in h.get("findings") or []],
+                 rawFindings=[_compact_entry(f) for f in h.get("rawFindings") or []], compacted=True)
+            for h in record.get("history") or []]
+    return dict(record, history=hist)
+
+
 def render(record):
+    record = _scrubbed(record)
     r, lane, ci = record, record["lane"], record["ci"]
     who = []
     for v in r["reviewers"]:
@@ -450,7 +499,12 @@ def write(account_path, repo_root, readers=None):
             if prior is None:
                 raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
         record = build_record(account, rd, prior)
-        body = render(record)
+        try:
+            body = render(record)
+        except Refusal as e:
+            if e.reason != "review-record-too-large" or not record["history"]:
+                raise
+            body = render(compact_history(record))
         sent = (rd["edit_comment"](found[0]["id"], account.get("repo"), body) if found
                 else rd["create_comment"](account["pr"], account.get("repo"), body))
         if sent is None:
