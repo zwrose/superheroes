@@ -793,7 +793,7 @@ amendments** — a second terminal-outcome write, an advisor vet ruling, or an e
 recorded without mutating the terminal outcome and surfaced by `count` beside the terminal tallies.
 `count` reads **lanes** (a build intent keyed by issue number — retried attempts belong to one lane)
 with an `attempts` tally beside the terminal ones and per-lane `laneDetail`; overlapping same-lane
-launches still refuse — see `lib/launch_ledger.py` for the authoritative semantics. The ledger's event grammar is version-coupled: a record kind an older build does not understand makes
+launches still refuse — see `lib/launch_ledger.py` for the authoritative semantics. A lane's place (`cloud` or `local`) is recorded and listed in `laneDetail`. The ledger's event grammar is version-coupled: a record kind an older build does not understand makes
 every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
 `ledger_path()` reports). The
 Showrunner advisor invokes the launcher

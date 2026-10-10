@@ -248,3 +248,11 @@ empty or unchanging log says nothing about whether the session is working. **Nev
 by a global process match**: a `pgrep` on an engine's name catches long-lived daemons and, under
 parallel load, sibling sessions' dispatches — poll the thing you own (your own output file, your own
 recorded pid, your own task id).
+
+A [cloud lane](glossary.md#cloud-lane) has no local pid to probe, no session transcript, and no
+heartbeat, and none of those absences means anything. Its liveness is its activity on GitHub: the
+newest of its issue's last update, the last update of a PR that closes the issue, and the last commit
+on a branch whose name carries the issue number. Quiet past `LIVENESS_QUIET_WINDOW_SECONDS` is
+`lane-stale`. Read the session's state in the host's session listing before you treat it as a wedge,
+because a session the platform shows working is not wedged. The mechanics are in
+`skills/showrunner/reference/orchestration.md`.
