@@ -296,16 +296,20 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, rd, dis, head):
+def _reviewer(r, rd, dis, head, shared=frozenset()):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
     out["findingsCoverage"] = SESSION
-    if r.get("runDir"):
+    if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
+        out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
+        if r["ran"]:
+            dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
+    elif r.get("runDir"):
         rec, err = rd["engine_run"](r["runDir"])
         seen = rec.get("viewHeadSha") if isinstance(rec, dict) else None
         graded = isinstance(rec, dict) and rec.get("graded") is True
-        review = isinstance(rec, dict) and rec.get("runKind") == "review"
+        review = isinstance(rec, dict) and rec.get("runKind") == session_contract.RUN_KIND_REVIEW
         if isinstance(seen, str) and seen and seen == head and graded and review:
             out.update(ran="engine-record", observation=rec.get("observation"))
         else:
@@ -405,7 +409,9 @@ def build_record(account, readers):
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
         if from_code and session is not None and session != code:
             dis.append({"fact": fact, "session": session, "code": code})
-    reviewers = [_reviewer(r, rd, dis, fc["sha"]) for r in a["reviewers"]]
+    dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
+    shared = frozenset(d for d in dirs if dirs.count(d) > 1)
+    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -458,11 +464,12 @@ _SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|p
 
 
 def _secret_key(k):
-    return isinstance(k, str) and bool(_SECRET_KEY.search(k))
+    # "tokens" is the count field (cost.tokens, observation.tokens), not a credential name.
+    return isinstance(k, str) and k.lower() != "tokens" and bool(_SECRET_KEY.search(k))
 
 
 _KEY_SEP = re.compile(r"(?:" + _SECRET_KEY.pattern.replace("api[_-]?key", "api[ _-]?key").replace("private[_-]?key", "private[ _-]?key")
-                      + r")[\w-]{0,24}[ \t\"'\\]*[:=]", re.I)
+                      + r")[\w-]{0,24}[ \t\"'\\\])}]*[:=]", re.I)
 _PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 _WITHHELD_FIELD = "[REDACTED FIELD]"
 
@@ -491,7 +498,19 @@ def _scrubbed(value):
     if isinstance(value, list):
         return [_scrubbed(v) for v in value]
     if isinstance(value, dict):
-        return {k: ("[REDACTED]" if _secret_key(k) and v is not None else _scrubbed(v)) for k, v in value.items()}
+        out = {}
+        for k, v in value.items():
+            hidden_key = isinstance(k, str) and (_has_secret(k) or pr_comment.scrub(k) != k)
+            if hidden_key:
+                n, nk = 0, "[REDACTED KEY]"
+                while nk in out or nk in value:
+                    n += 1
+                    nk = f"[REDACTED KEY]-{n}"
+                k2 = nk
+            else:
+                k2 = k
+            out[k2] = "[REDACTED]" if (hidden_key or _secret_key(k)) and v is not None else _scrubbed(v)
+        return out
     return value
 
 

@@ -831,6 +831,9 @@ SAFE_TAIL = "SAFE_TAIL_TEXT"
     '{"password":"x","credentials":{\n"nested":"LEAKMARK"\n}}',
     "password: | # note\n  LEAKMARK",
     'password = """\nLEAKMARK\n"""',
+    'os.environ["PASSWORD"] = "LEAKMARK"',
+    "params[password]=LEAKMARK",
+    "{token}: LEAKMARK",
 ])
 def test_every_credential_form_is_withheld_or_redacted_whole(text):
     # axis: withholding; a credential value form (quoted, escaped, array, block, PEM, spaced, second key) reaching a posted comment
@@ -967,3 +970,44 @@ else:
     assert got["reviewers"][0]["ran"] == "engine-record"
     assert [r["file"] for r in got["rawOutputs"]] == ["code.json"] and got["rawOutputs"][0]["url"] == "http://c/1"
     assert got["rawOutputs"][0]["withheld"] is True
+
+
+def test_a_credential_used_as_a_dictionary_key_is_redacted_and_colliding_keys_survive():
+    # axis: key scrubbing; a credential quoted as a mapping key published verbatim, or two redacted keys overwriting each other
+    k1, k2 = "ghp_" + "A" * 36, "ghp_" + "B" * 36
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {k1: "source one", k2: "source two", "note": "ok", "password=x": "v"}
+    posted = rr.render(build(account(findings=[f])))
+    assert k1 not in posted and k2 not in posted and "password=x" not in posted
+    ev = rr._parse_body(posted)["findings"][0]["evidence"]
+    assert ev["note"] == "ok"
+    assert len([k for k in ev if k.startswith("[REDACTED KEY]")]) == 3
+    assert "[REDACTED KEY]" in ev and "[REDACTED KEY]-1" in ev and "[REDACTED KEY]-2" in ev
+    assert all(ev[k] == "[REDACTED]" for k in ev if k.startswith("[REDACTED KEY]"))
+
+
+def test_cost_and_observation_token_counts_survive_the_credential_scrub():
+    # axis: count fields; the number-of-tokens fields redacted because the key name contains "token"
+    posted = rr.render(build(account()))
+    rec = rr._parse_body(posted)
+    assert rec["cost"]["tokens"] == 100
+    assert rec["reviewers"][0]["observation"]["tokens"] == 100
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {"token": "x"}
+    assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"token": "[REDACTED]"}
+
+
+def test_one_run_record_claimed_by_two_reviewers_credits_neither(tmp_path):
+    # axis: run binding; one engine run credited to several reviewers (the same directory, even spelled differently)
+    real = tmp_path / "run"
+    real.mkdir()
+    alias = str(tmp_path / "x" / ".." / "run")
+    (tmp_path / "x").mkdir()
+    a, b = reviewer("code-reviewer", runDir=str(real)), reviewer("security-reviewer", runDir=alias)
+    fake = Fake(runs={str(real): (copy.deepcopy(GOOD_RUN), None), alias: (copy.deepcopy(GOOD_RUN), None)})
+    rec = build(account(reviewers=[a, b]), fake)
+    assert [v["ran"] for v in rec["reviewers"]] == ["not-run", "not-run"]
+    assert all(v["runNote"] == "the run record is claimed by more than one reviewer" for v in rec["reviewers"])
+    assert rec["status"] != "reviewed"
+    solo = build(account(reviewers=[a]), fake)
+    assert solo["reviewers"][0]["ran"] == "engine-record"
