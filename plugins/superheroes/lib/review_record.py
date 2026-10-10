@@ -182,7 +182,8 @@ def _validate(a):
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
     for i, f in enumerate(lst("findings")):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
-        chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES, f"findings[{i}].outcome")
+        chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
+            f"findings[{i}].outcome (allowed: {', '.join(rfs.OUTCOMES)}; or null while undecided)")
         chk(sn(f.get("reason")), f"findings[{i}].reason")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
     for k in ("rawFindingsFiles", "checked"):

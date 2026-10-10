@@ -417,6 +417,7 @@ def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):
     assert ok["ok"] and ok["status"] == "not-reviewed"
     bad = rr.write(put(tmp_path, account(findings=[finding(outcome="done")])), str(tmp_path), fake.readers())
     assert (bad["ok"], bad["reason"]) == (False, "review-account-invalid") and "outcome" in bad["detail"]
+    assert all(o in bad["detail"] for o in rr.rfs.OUTCOMES)
 
 
 @pytest.mark.parametrize("key", ["schema", "pr", "sessionId", "reviewers"])
@@ -494,6 +495,20 @@ def test_earlier_left_for_owner_clears_only_when_a_later_session_records_another
     rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
     rec = rr.read(7, readers=fake.readers())
     assert rec["leftForOwner"] == [] and rec["status"] == "reviewed"
+
+
+def test_relisting_an_owner_finding_without_an_outcome_keeps_it_pending(tmp_path):
+    # axis: carried owner decisions; a re-listing with a null outcome erasing the pending owner decision
+    fake = Fake()
+    old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
+    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
+    rr.write(put(tmp_path, account(sessionId="B", findings=[finding("a-1", outcome=None, reason="looked again")])),
+             str(tmp_path), fake.readers())
+    rec = rr.read(7, readers=fake.readers())
+    assert "a-1" in rec["leftForOwner"] and rec["status"] == "not-reviewed"
+    rr.write(put(tmp_path, account(sessionId="C")), str(tmp_path), fake.readers())
+    rec = rr.read(7, readers=fake.readers())
+    assert "a-1" in rec["leftForOwner"] and rec["status"] == "not-reviewed"
 
 
 def test_same_session_rewrite_keeps_an_owner_decision(tmp_path):

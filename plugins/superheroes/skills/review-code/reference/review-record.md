@@ -27,8 +27,8 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `goAheads`: the owner's word to go on without a planned review. Either
   `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`.
 
-Every finding gets a reason and one of five outcomes, spelled exactly: `fixed`, `shown-wrong`,
-`craft`, `left-for-owner`, `ruling`.
+Every finding gets a reason and an outcome (`null` while undecided): fixed, shown wrong, a craft call,
+left for the owner, or settled by an owner ruling. Exact spellings: `review_findings_schema.OUTCOMES`.
 
 ```json
 {"schema": "review-account/1", "pr": 12, "sessionId": "s1", "lane": "light",
