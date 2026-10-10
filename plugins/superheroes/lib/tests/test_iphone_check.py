@@ -738,12 +738,11 @@ def _post(port, token, body):
 
 class Phone:
     """The phone's page: posts a reading to the session's port every ~50 ms. `page` and `where` may be switched live;
-    a MISSING value drops the key; `max_posts` stops it after that many accepted posts.
-    `refused` is set whenever a post fails: once `shot` has its reading after the capture it stops listening."""
+    a MISSING value drops the key; `max_posts` stops it after that many accepted posts."""
 
     def __init__(self, port, page=PAGE_A, where="browser", token="abc123", max_posts=None, **extra):
         self.port, self.token, self.page, self.where, self.max_posts, self.extra = port, token, page, where, max_posts, extra
-        self.stop, self.refused = threading.Event(), threading.Event()
+        self.stop = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def reading(self):
@@ -764,8 +763,6 @@ class Phone:
         while not self.stop.is_set() and (self.max_posts is None or posted < self.max_posts):
             if _post(self.port, self.token, self.reading()):
                 posted += 1
-            else:
-                self.refused.set()
             self.stop.wait(0.05)
 
     def __enter__(self):
@@ -1078,7 +1075,7 @@ def test_shot_establishes_nothing_when_an_other_context_reading_during_the_captu
 
 def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_latest_pre_capture_time(fake, tmp_path):
     port = make_session(tmp_path)
-    captured, stop = threading.Event(), threading.Event()
+    captured, stop, tied_at, capture_ms = threading.Event(), threading.Event(), [], []
 
     def post(**kw):
         _post(port, "abc123", reading(page=PAGE_A, where="browser", **kw))
@@ -1091,6 +1088,8 @@ def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_
             except OSError:
                 time.sleep(0.02)
         tied = math.ceil(time.time() * 1000)
+        tied_at.append(tied)
+        time.sleep(0.01)  # the listener receives the pair, and `shot` can start capturing, only after the tied instant
         post(takenAt=tied, visibility="visible")  # visible delivered first ...
         post(takenAt=tied, visibility="hidden")  # ... then the hidden reading taken at the very same moment
         captured.wait(10)
@@ -1099,6 +1098,7 @@ def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_
             stop.wait(0.05)
 
     def screenshot():
+        capture_ms.append(time.time() * 1000)
         time.sleep(0.2)
         captured.set()
 
@@ -1111,6 +1111,8 @@ def test_shot_establishes_nothing_when_a_visible_and_a_hidden_reading_share_the_
         captured.set()
         stop.set()
         thread.join(5)
+    # The pair is tied strictly before the capture began, so the hidden one meets the tie check, not the during-capture check
+    assert len(tied_at) == 1 and len(capture_ms) == 1 and tied_at[0] < capture_ms[0], (tied_at, capture_ms)
     assert r["ok"] is True and r["labels"] == established(NE, NE)
     assert r["labelNote"] and "foreground" in r["labelNote"]
 
@@ -1128,8 +1130,15 @@ def test_shot_ignores_a_hidden_reading_from_the_other_context_during_the_capture
     assert r["labelNote"] is None
 
 
-def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path):
+def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path, monkeypatch):
     port, late, froze, in_flight = make_session(tmp_path), [], [], threading.Event()
+    frozen = threading.Event()
+
+    class FreezeSignalling(ic.Listener):
+        def shutdown(self):  # `shot` shuts the listener down only once it has the reading after the capture: the window freezes
+            frozen.set()
+            super().shutdown()
+    monkeypatch.setattr(ic, "Listener", FreezeSignalling)
 
     def during():
         packet = json.dumps(reading(page=PAGE_B, where="browser", takenAt=int(time.time() * 1000))).encode()
@@ -1138,14 +1147,13 @@ def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_rea
             with socket.create_connection(("127.0.0.1", port), 2) as c:
                 c.sendall(b"POST /abc123 HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(packet) + packet[:5])
                 in_flight.set()
-                # The listener refuses the phone's posts only once it has the reading after the capture and froze the window
-                froze.append(phone.refused.wait(10))
+                # Release the rest of the body only once the listener is shutting down, i.e. the window is frozen
+                froze.append(frozen.wait(10))
                 c.sendall(packet[5:])
                 c.recv(100)
         late.append(threading.Thread(target=slow_post, daemon=True))
         late[0].start()
         assert in_flight.wait(10)  # the partial request is in flight before the screenshot returns
-        phone.refused.clear()
     with Phone(port, page=PAGE_A, where="browser") as phone:
         fake(on_screenshot(during))
         r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
