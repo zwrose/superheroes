@@ -125,13 +125,49 @@
 Round 3 closed the first review: all three checks returned real results, confirmed every earlier
 fix, and raised nothing new. Two items wait in the owner's queue.
 
+## After rulings 1
+
+### Round 1
+
+The owner answered remainder sheet 1 on 2026-10-10. The checks re-ran on the parts the rulings changed.
+
+#### Gap review
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r4-gap-run
+- Result: real (terminal, ok, 1 attempt, engaged: 9 tool calls, 67.9 s)
+- Confirmations: gap-002 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Gap review | no new findings | | | |
+
+#### Source check
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r4-source-run
+- Result: real (terminal, ok, 1 attempt, engaged: 7 tool calls, 57.4 s)
+- Approved board, for the source check: docs/superheroes/risk-calibrated-review-that-learns-dec0af/board/build-board.html
+- Confirmations: SRC-2 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Source check | no new findings | | | |
+
+#### Grounding
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r4-grounding-run
+- Result: real (terminal, ok, 1 attempt, engaged: 9 tool calls, 76.2 s)
+- Grounding base, for grounding: origin/main, 48a7881e07318177c598deadef2d8bbf96d4894d
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Grounding | no new findings | | | |
+
+#### Citation check
+[]
+
+This round closed the cycle: all three checks returned real results, the two reviewers confirmed the rulings were carried in right, and none raised anything new.
+
 ## The owner's queue
 
-- gap-002: FR-18 says every reviewer comes from a different model family than every maker, while FR-21 and FR-22 have the test role write break-it tests that stay in the change, which makes that reviewer a maker under the glossary. Recommendation: a reviewer's own break-it tests do not make it a maker of the change; independence is measured against the models that built and fixed the product code, and the generalist still reads the break-it tests for bloat and false passes. Marks: none
-- SRC-2: FR-38 lets the review record name an owner decision that is on record in the PR's saved sheet answers, where Canon 2026-10-09-d6064e1d-5 says the record names one only when Canon holds it. Recommendation: an acceptance that concerns one PR is on record in that PR's saved answers, which are written back to the PR; an answer that sets a rule for later work is on record in Canon. Marks: none
+- gap-002: settled on remainder sheet 1, card reviewer-own-tests. The owner picked "Its own tests don't make it a maker" (Canon 2026-10-10-d6064e1d-5). Applied in FR-18, FR-22 and the glossary; confirmed fixed.
+- SRC-2: settled on remainder sheet 1, card decision-on-record. The owner picked "The PR's saved answers count for one-PR decisions" (Canon 2026-10-10-d6064e1d-4). Applied in FR-38; confirmed fixed.
 
-## Writing pass
-
-- What the pass changed: three statements. The list of artboards in UI / UX became a bulleted list, the first line of Definition of done became two sentences and now names the saved "Merge" verdict, and the last sentence of UFR-3's second acceptance was split in two.
-- Meaning check: run directory /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/meaning-run1. Result: real (terminal, ok, 1 attempt, engaged). Findings: meaning-001, meaning-002 and meaning-003, each meaning:kept. Every changed statement has exactly one finding.
-- The pass was kept.
+Nothing is waiting in the queue.
