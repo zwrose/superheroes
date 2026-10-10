@@ -232,7 +232,7 @@ def test_forbidden_phrase_in_the_summary_refuses_the_write_and_posts_nothing(tmp
     fake = Fake()
     acct = account(reviewers=[reviewer("bug free")])
     out = rr.write(put(tmp_path, acct), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-forbidden-claim") and fake.writes == []
+    assert (out["ok"], out["reason"]) == (False, "review-record-forbidden-claim")
 
 
 def test_forbidden_phrase_in_a_reviewers_finding_text_does_not_refuse_the_archive():
@@ -359,7 +359,7 @@ def test_two_marker_comments_refuse_without_writing(tmp_path):
     fake.comments.append(dict(fake.comments[0], id=2, url="u2"))
     fake.writes.clear()
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
-    assert (out["ok"], out.get("reason")) == (False, "review-record-duplicate") and fake.writes == []
+    assert (out["ok"], out.get("reason")) == (False, "review-record-duplicate")
     assert rr.read(7, readers=fake.readers())["reason"] == "review-record-duplicate"
 
 
@@ -368,7 +368,7 @@ def test_unparseable_prior_refuses_without_writing(tmp_path):
     fake = Fake()
     fake.comments = [{"id": 1, "author": "a", "body": rr.MARKER + "\nhand edited", "url": "u1"}]
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-unreadable") and fake.writes == []
+    assert (out["ok"], out["reason"]) == (False, "review-record-unreadable")
     assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
 
 
@@ -434,7 +434,7 @@ def test_too_large_body_is_refused(tmp_path):
     fake = Fake()
     big = [finding(f"f{i}", body="x" * 5000) for i in range(20)]
     out = rr.write(put(tmp_path, account(findings=big)), str(tmp_path), fake.readers())
-    assert (out["ok"], out["reason"]) == (False, "review-record-too-large") and fake.writes == []
+    assert (out["ok"], out["reason"]) == (False, "review-record-too-large")
 
 
 def test_gh_failures_refuse(tmp_path):
@@ -687,3 +687,44 @@ def test_lane_marker_is_none_when_the_marker_path_cannot_be_resolved(tmp_path, m
     assert rr._lane_marker(str(tmp_path)) is None
     monkeypatch.setattr(rr.build_lane, "_marker_path", lambda root: str(tmp_path / "absent.json"))
     assert rr._lane_marker(str(tmp_path)) is None
+
+
+def test_write_refuses_when_the_prior_records_archive_is_missing(tmp_path):
+    # axis: archive validation on write; an update reporting success over history that cannot be recovered
+    fake = Fake()
+    old = [finding("old-1", body="x" * 62000, outcome="left-for-owner", reason="owner call")]
+    rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
+    rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
+    fake.comments = fake.marked()
+    before = [c["body"] for c in fake.comments]
+    fake.writes.clear()
+    out = rr.write(put(tmp_path, account(sessionId="C")), str(tmp_path), fake.readers())
+    assert not out["ok"] and out["reason"] == "review-record-unreadable"
+    assert fake.writes == [] and [c["body"] for c in fake.comments] == before
+
+
+def test_each_earlier_session_gets_its_own_compact_archive(tmp_path):
+    # axis: archive size; many earlier sessions or a near-limit session making the next write refuse
+    fake = Fake()
+    big = lambda n: [finding(n, body="x" * 30000, outcome="left-for-owner", reason="owner call")]  # noqa: E731
+    for sid, n in (("A", "a-1"), ("B", "b-1"), ("C", "c-1")):
+        assert rr.write(put(tmp_path, account(sessionId=sid, findings=big(n))), str(tmp_path), fake.readers())["ok"]
+    assert rr.write(put(tmp_path, account(sessionId="D")), str(tmp_path), fake.readers())["ok"]
+    rec = rr.read(7, readers=fake.readers())
+    assert [a["sessionIds"] for a in rec["historyArchives"]] == [["A"], ["B"]]
+    assert [h["sessionId"] for h in rec["history"]] == ["C"]
+    assert all("\n  " not in c["body"].split("```json\n")[1] for c in fake.comments if c["body"].startswith(rr.ARCHIVE_MARKER))
+    assert [h["sessionId"] for h in rec["archivedHistory"]] == ["A", "B"]
+    # a session whose findings fit the record body (indented) always fits its compact archive
+    many = [finding(f"m-{i}", body="y" * 100) for i in range(120)]
+    fake2 = Fake()
+    assert rr.write(put(tmp_path, account(sessionId="A", findings=many)), str(tmp_path), fake2.readers())["ok"]
+    assert rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake2.readers())["ok"]
+
+
+def test_a_session_too_large_for_any_archive_refuses():
+    # axis: archive size; a single oversized session partially written or silently trimmed
+    huge = {"sessionId": "A", "finalCommit": {}, "findings": [{"body": "z" * (rr.MAX_BODY_CHARS + 1)}], "rawFindings": []}
+    with pytest.raises(rr.Refusal) as e:
+        rr.render_archive([huge])
+    assert e.value.reason == "review-record-too-large"

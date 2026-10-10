@@ -521,14 +521,17 @@ def render(record):
 
 
 def render_archive(entries):
-    """An archive comment: complete earlier-session entries, verbatim, in one append-only comment."""
+    """An archive comment: one earlier session's complete entry, verbatim, serialized compactly.
+
+    Compact (no indent) so an archive is never larger than the record body it came out of.
+    """
     payload = _scrubbed({"schema": ARCHIVE_SCHEMA, "history": entries})
     intro = ("Earlier sessions of this PR's review record, kept in full. "
              "The review record comment names this comment.")
     # Only the sentence this writer authors is checked: the entries are reviewers' verbatim text.
     _assert_no_bug_free_claim(intro)
     body = (f"{ARCHIVE_MARKER}\n{intro}\n\n<details><summary>Earlier sessions</summary>\n\n```json\n"
-            f"{json.dumps(payload, indent=2, sort_keys=True)}\n```\n</details>")
+            f"{json.dumps(payload, separators=(',', ':'), sort_keys=True)}\n```\n</details>")
     if len(body) > MAX_BODY_CHARS:
         raise Refusal("review-record-too-large", f"an earlier session alone is {len(body)} characters")
     return body
@@ -561,6 +564,27 @@ def _guarded(fn):
         return _refuse("review-record-internal-error", f"{type(e).__name__}: {e}")
 
 
+def _load_archives(rd, pr, repo, rec):
+    """The earlier sessions a record's archive comments hold; refuses if any is missing or unreadable."""
+    archived = []
+    if rec.get("historyArchives"):
+        wanted = {x.get("id") for x in rec["historyArchives"] if isinstance(x, dict)}
+        comments = rd["list_comments"](pr, repo)
+        if comments is None:
+            raise Refusal("review-record-unreadable", "the archive comments could not be fetched")
+        seen = set()
+        for c in comments:
+            if c.get("id") in wanted and str(c.get("body", "")).startswith(ARCHIVE_MARKER):
+                parsed = _parse_body(c["body"], ARCHIVE_SCHEMA)
+                if parsed is None:
+                    raise Refusal("review-record-unreadable", c.get("url") or "an archive comment")
+                seen.add(c.get("id"))
+                archived += parsed.get("history") or []
+        if wanted - seen:
+            raise Refusal("review-record-unreadable", "a referenced archive comment is missing")
+    return archived
+
+
 def write(account_path, repo_root, readers=None):
     def go():
         try:
@@ -577,20 +601,24 @@ def write(account_path, repo_root, readers=None):
             prior = _parse_body(found[0]["body"])
             if prior is None:
                 raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
+            _load_archives(rd, account["pr"], account.get("repo"), prior)  # refuse before editing if history is lost
         record = build_record(account, rd, prior)
         try:
             body = render(record)
         except Refusal as e:
             if e.reason != "review-record-too-large" or not record["history"]:
                 raise
-            # Nothing is trimmed: the full earlier sessions move to their own comment on the PR,
-            # and the record names it. The archive is written first, so a failure loses nothing.
-            archive = rd["create_comment"](account["pr"], account.get("repo"), render_archive(record["history"]))
-            if archive is None:
-                raise Refusal("review-record-gh-failed", "the archive comment could not be written")
-            record = dict(record, history=[], historyArchives=record["historyArchives"] + [
-                {"id": archive["id"], "url": archive.get("url"),
-                 "sessionIds": [h.get("sessionId") for h in record["history"]]}])
+            # Nothing is trimmed: each full earlier session moves to its own comment on the PR,
+            # and the record names them. All are rendered first (a session that cannot fit refuses
+            # before anything is written), and the archives are written before the record.
+            bodies = [render_archive([h]) for h in record["history"]]
+            made = []
+            for h, text in zip(record["history"], bodies):
+                archive = rd["create_comment"](account["pr"], account.get("repo"), text)
+                if archive is None:
+                    raise Refusal("review-record-gh-failed", "the archive comment could not be written")
+                made.append({"id": archive["id"], "url": archive.get("url"), "sessionIds": [h.get("sessionId")]})
+            record = dict(record, history=[], historyArchives=record["historyArchives"] + made)
             body = render(record)
         sent = (rd["edit_comment"](found[0]["id"], account.get("repo"), body) if found
                 else rd["create_comment"](account["pr"], account.get("repo"), body))
@@ -610,22 +638,7 @@ def read(pr, repo=None, readers=None):
         rec = _parse_body(found[0]["body"])
         if rec is None:
             raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-        archived = []
-        if rec.get("historyArchives"):
-            wanted = {x.get("id") for x in rec["historyArchives"] if isinstance(x, dict)}
-            comments = rd["list_comments"](pr, repo)
-            if comments is None:
-                raise Refusal("review-record-unreadable", "the archive comments could not be fetched")
-            seen = set()
-            for c in comments:
-                if c.get("id") in wanted and str(c.get("body", "")).startswith(ARCHIVE_MARKER):
-                    parsed = _parse_body(c["body"], ARCHIVE_SCHEMA)
-                    if parsed is None:
-                        raise Refusal("review-record-unreadable", c.get("url") or "an archive comment")
-                    seen.add(c.get("id"))
-                    archived += parsed.get("history") or []
-            if wanted - seen:
-                raise Refusal("review-record-unreadable", "a referenced archive comment is missing")
+        archived = _load_archives(rd, pr, repo, rec)
         return {"ok": True, "url": found[0].get("url"), **rec, "archivedHistory": archived}
     return _guarded(go)
 

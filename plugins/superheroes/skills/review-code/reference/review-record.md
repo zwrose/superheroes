@@ -53,11 +53,11 @@ record's URL in the PR body's build record.
 
 ## When it refuses
 
-- `review-record-duplicate` or `review-record-unreadable` (on `read` too, for a missing
+- `review-record-duplicate` or `review-record-unreadable` (on `read` and `write`, for a missing
   archive): park the PR and report it on the PR. Never delete or overwrite a record by hand.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
 - `review-record-too-large`: shorten the account's long text and write again. (Earlier sessions
-  move whole to an archive comment; `read` returns it as `archivedHistory`.)
+  move whole, one archive comment each; `read` returns it as `archivedHistory`.)
 - `review-record-forbidden-claim`: rewrite the account text the writer quotes in its summary.
 - `review-record-gh-failed`: GitHub could not be read or written. Retry; else park and report.
 - `review-record-internal-error`: park the PR and report it.

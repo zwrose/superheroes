@@ -12801,6 +12801,29 @@ def test_run_execution_record_native_forfeit_omits_result_binding(tmp_path, monk
     assert "resultKind" not in record
 
 
+def test_run_execution_record_graded_true_for_folded_ok_and_false_for_forfeit(tmp_path, monkeypatch):
+    """The review record counts a reviewer only on graded: True for a folded success, False for a forfeit."""
+    ok_dir = str(tmp_path / "ok-run")
+    stream = _codex_event_stream(json.dumps({"resultKind": "findings", **_native_review_branch("findings")}))
+    res = ED.dispatch_review(
+        seat=_codex_seat(), prompt_path=_valid_prompt(tmp_path), repo_root=_repo(tmp_path),
+        run_engine=FakeRunner([(stream, False, 0, "")]), build_view=_fake_build_view(tmp_path), run_dir=ok_dir)
+    assert res["ok"] is True
+    record, err = ED.run_execution_record(ok_dir)
+    assert err is None and record["graded"] is True
+    monkeypatch.setattr(
+        sys.modules[__name__], "_write_native_review_result", lambda *_a, **_k: None)
+    forfeit_dir = str(tmp_path / "forfeit-run")
+    stream = _codex_event_stream(_VALID_FINDINGS_STDOUT)
+    res = ED.dispatch_review(
+        seat=_codex_seat(), prompt_path=_valid_prompt(tmp_path), repo_root=_repo(tmp_path),
+        run_engine=FakeRunner([(stream, False, 0, ""), (stream, False, 0, "")]),
+        build_view=_fake_build_view(tmp_path), run_dir=forfeit_dir)
+    assert res["forfeited"] is True
+    record, err = ED.run_execution_record(forfeit_dir)
+    assert err is None and record["graded"] is False
+
+
 def test_codex_write_spawn_argv_uses_native_schema_not_last_message(tmp_path):
     """WO-2b: codex write runs open on the native channel with schema and -o argv."""
     cwd, _main = _linked_worktree_pair(tmp_path)
