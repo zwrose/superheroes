@@ -217,6 +217,8 @@ def _validate(a):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
             f"findings[{i}].outcome (allowed: {', '.join(rfs.OUTCOMES)}; or null while undecided)")
+        chk(ne(f.get("findingKey")) or (ne(f.get("file")) and ne(f.get("title"))),
+            f"findings[{i}] identity (needs findingKey, or file and title)")
         chk(sn(f.get("reason")), f"findings[{i}].reason")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
     for k in ("rawFindingsFiles", "checked"):
@@ -458,17 +460,17 @@ def _secret_key(k):
     return isinstance(k, str) and bool(_SECRET_KEY.search(k))
 
 
-_QUOTED_SECRET = re.compile(
-    r"""(?i)(\\?["'][\w-]*(?:password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase"""
-    r"""|authorization|cookie)[\w-]*\\?["']\s*:\s*)(?:\\?"(?:[^"\\\n]|\\.)*\\?"|\\?'(?:[^'\\\n]|\\.)*\\?')""")
-_EQUALS_SECRET = re.compile(r"(?i)\b(passphrase|authorization)=([^&\s;\"']+)")
+_KEYED_SECRET = re.compile(
+    r"(?i)(\\?[\"']?[\w-]*(?:" + _SECRET_KEY.pattern + r")[\w-]*\\?[\"']?\s*[:=]\s*)"
+    r"(?:\\?\"(?:[^\"\\\n]|\\.)*\\?\""            # double-quoted string, escape-aware
+    r"|\\?'(?:[^'\\\n]|\\.)*\\?'"              # single-quoted string, escape-aware
+    r"|\[[^\]\n]*\]"                               # one-line bracketed array
+    r"|(?:(?:Basic|Bearer|Digest|Token)\s+)?[^\s,;}&]+)")  # unquoted token (with an auth scheme word)
 
 
 def _scrub_text(text):
-    """pr_comment.scrub plus the quoted credential forms it leaves intact (passphrase, JSON Authorization)."""
-    text = pr_comment.scrub(text)
-    text = _QUOTED_SECRET.sub(r"\1[REDACTED]", text)
-    return _EQUALS_SECRET.sub(r"\1=[REDACTED]", text)
+    """One key-anchored pass over every secret-named key and its value, then pr_comment.scrub's free-form patterns."""
+    return pr_comment.scrub(_KEYED_SECRET.sub(r"\1[REDACTED]", text))
 
 
 def _scrubbed(value):

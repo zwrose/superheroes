@@ -774,3 +774,103 @@ def test_x3_none_and_false_are_accepted_as_given():
     rec = build(account(makers=None, reviewers=[reviewer(notIndependent=False, ownerWord=None)]))
     assert rec["makers"] == [] and rec["reviewers"][0]["notIndependent"] is False
     assert "ownerWord" not in rec["reviewers"][0]
+
+
+@pytest.mark.parametrize("text,leaked", [
+    ('PASSPHRASE="a b"', "a b"),
+    ("PASSPHRASE='a b'", "a b"),
+    ("PASSPHRASE=plainvalue", "plainvalue"),
+    ('"password": "pre\\"suffix"', "suffix"),
+    ("'password': 'pre\\'suffix'", "suffix"),
+    ('{"token": ["x1y2z3","q4r5s6"]}', "x1y2z3"),
+    ('{"passphrase": ["EXAMPLE_SECRET"]}', "EXAMPLE_SECRET"),
+    ("authorization=Basic abc123", "abc123"),
+    ('Authorization: "Basic abc123"', "abc123"),
+    ('{\\"cookie\\": \\"sess-value-9\\"}', "sess-value-9"),
+    ("api_key = hunter2value", "hunter2value"),
+])
+def test_every_secret_value_form_is_redacted_by_the_one_keyed_pass(text, leaked):
+    # axis: redaction; a credential value form (quoted, escaped, array, scheme word) surviving past its secret-named key
+    assert leaked not in rr._scrub_text(text)
+    assert "[REDACTED]" in rr._scrub_text(text)
+    f = finding("a-1", body=text, reason="r")
+    assert leaked not in rr.render_raw("raw.json", text)
+    assert leaked not in json.dumps(rr._scrubbed(f))
+
+
+@pytest.mark.parametrize("row", [
+    {"id": "f1", "outcome": "left-for-owner", "reason": "owner call"},
+    {"id": "f1", "title": "t", "outcome": "fixed", "reason": "r"},
+    {"id": "f1", "file": "a.py", "outcome": "fixed", "reason": "r"},
+])
+def test_a_finding_row_without_identity_inputs_is_refused(tmp_path, row):
+    # axis: finding identity; id-only rows sharing one key so the carry-forward guard cannot see an omission
+    fake = Fake()
+    out = rr.write(put(tmp_path, account(findings=[row])), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"]) == (False, "review-account-invalid")
+    assert fake.comments == []
+
+
+def test_cli_write_then_read_round_trip_through_a_real_journal_and_a_gh_process(tmp_path, monkeypatch):
+    # axis: the CLI entry point; write/read composed with the real engine journal and a gh executable at the process boundary
+    import test_engine_dispatch as ted
+    stream = ted._codex_event_stream(json.dumps({"resultKind": "findings", **ted._native_review_branch("findings")}))
+    run_dir = str(tmp_path / "run")
+    res = ted.ED.dispatch_review(
+        seat=ted._codex_seat(), prompt_path=ted._valid_prompt(tmp_path), repo_root=ted._repo(tmp_path),
+        run_engine=ted.FakeRunner([(stream, False, 0, "")]), build_view=ted._fake_build_view(tmp_path),
+        run_dir=run_dir)
+    assert res["ok"] is True
+    journal, jerr = ted.ED.run_execution_record(run_dir)
+    assert jerr is None and journal["graded"] is True
+    head = journal["viewHeadSha"]
+    state = tmp_path / "gh-state.json"
+    state.write_text(json.dumps({"comments": []}))
+    gh_dir = tmp_path / "bin"
+    gh_dir.mkdir()
+    gh = gh_dir / "gh"
+    gh.write_text(f"""#!{sys.executable}
+import json, sys
+a = sys.argv[1:]
+state = {str(state)!r}
+head = {head!r}
+s = json.load(open(state))
+if a[:2] == ["repo", "view"]:
+    print(json.dumps({{"nameWithOwner": "o/r"}}))
+elif a[:2] == ["pr", "view"]:
+    print(json.dumps({{"headRefOid": head, "body": "", "closingIssuesReferences": []}}))
+elif a[0] == "api" and a[1].endswith("/check-runs?per_page=100"):
+    print(json.dumps({{"total_count": 1, "check_runs": [{{"name": "v", "status": "completed", "conclusion": "success"}}]}}))
+elif a[0] == "api" and a[1].endswith("/status"):
+    print(json.dumps({{"state": "pending", "total_count": 0, "statuses": []}}))
+elif a[0] == "api" and "-X" in a:
+    body = open(a[a.index("-F") + 1].split("=@", 1)[1]).read()
+    n = len(s["comments"]) + 1
+    s["comments"].append({{"id": n, "user": {{"login": "bot"}}, "body": body, "html_url": "http://c/%d" % n}})
+    json.dump(s, open(state, "w"))
+    print(json.dumps({{"id": n, "html_url": "http://c/%d" % n}}))
+elif a[0] == "api" and a[1].endswith("/comments"):
+    print(json.dumps(s["comments"]))
+else:
+    sys.exit(2)
+""")
+    gh.chmod(0o755)
+    env = {"PATH": f"{gh_dir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "n1", "title": "nit", "token": "ghp_" + "A" * 36}]))
+    acct = account(finalCommit=head, reviewers=[reviewer(runDir=run_dir)], findings=[finding("f1")],
+                   rawFindingsFiles=[str(raw)])
+    proc = subprocess.run([sys.executable, "-B", rr.__file__, "write", "--account", put(tmp_path, acct),
+                           "--repo-root", str(tmp_path)], capture_output=True, text=True, env=env)
+    out = json.loads(proc.stdout)
+    assert proc.returncode == 0 and out["ok"] and out["action"] == "created", (proc.stdout, proc.stderr)
+    stored = json.loads(state.read_text())["comments"]
+    assert [c["body"].startswith(rr.RAW_MARKER) for c in stored] == [True, False]
+    assert "ghp_" not in stored[0]["body"] and '"title": "nit"' in stored[0]["body"]
+    proc = subprocess.run([sys.executable, "-B", rr.__file__, "read", "--pr", "7"], capture_output=True,
+                          text=True, env=env)
+    got = json.loads(proc.stdout)
+    assert proc.returncode == 0 and got["ok"] and got["url"] == "http://c/2", (proc.stdout, proc.stderr)
+    assert [f["id"] for f in got["findings"]] == ["f1"]
+    assert got["reviewers"][0]["ran"] == "engine-record"
+    assert [r["file"] for r in got["rawOutputs"]] == ["code.json"] and got["rawOutputs"][0]["url"] == "http://c/1"
