@@ -838,3 +838,34 @@ def test_a_roster_with_no_planned_reviewer_that_ran_is_not_reviewed():
     # axis: nothing ran; an unplanned, unrun roster counted as reviewed
     rec = build(account(reviewers=[reviewer(planned=False, ran=False, runDir=None)]))
     assert rec["status"] == "not-reviewed" and "no planned reviewer ran" in rec["whatIsMissing"]
+
+
+def test_three_sessions_of_30000_character_findings_archive_their_carried_bodies(tmp_path):
+    # axis: carried bodies; distinct outstanding findings piling up in the record until the third write refuses
+    fake = Fake()
+    big = lambda n: [finding(n, title=n, body=n[0] * 30000, outcome="left-for-owner", reason="owner call")]  # noqa: E731
+    for sid, n in (("A", "a-1"), ("B", "b-1"), ("C", "c-1")):
+        out = rr.write(put(tmp_path, account(sessionId=sid, findings=big(n))), str(tmp_path), fake.readers())
+        assert out["ok"], out
+    rec = rr.read(7, readers=fake.readers())
+    assert len(fake.marked()[0]["body"]) <= rr.MAX_BODY_CHARS and rec["carriedArchives"]
+    assert any(e.get("archived") for e in json.loads(fake.marked()[0]["body"].split("```json\n")[1].split("\n```")[0])["owed"])
+    bodies = {e["id"]: e["body"] for e in rec["owed"] if "body" in e}
+    assert bodies == {"a-1": "a" * 30000, "b-1": "b" * 30000}  # c-1 is in the current account, held as a reference
+    assert sorted(rec["leftForOwner"]) == ["a-1", "b-1", "c-1"]
+    # a later write rejoins the bodies before it rewrites them, and nothing is lost
+    assert rr.write(put(tmp_path, account(sessionId="D")), str(tmp_path), fake.readers())["ok"]
+    again = rr.read(7, readers=fake.readers())
+    assert {e["id"]: e["body"] for e in again["owed"] if "body" in e} == {
+        **bodies, "c-1": "c" * 30000}
+    # a missing carried archive refuses the read
+    fake.comments = [c for c in fake.comments if c["id"] not in {a["id"] for a in again["carriedArchives"]}]
+    assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
+
+
+def test_a_single_account_too_large_refuses_before_any_archive_is_written(tmp_path):
+    # axis: refusal ordering; an archive comment created and left unreferenced before the refusal
+    fake = Fake()
+    huge = [finding("h-1", body="h" * (rr.MAX_BODY_CHARS + 10))]
+    out = rr.write(put(tmp_path, account(findings=huge)), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"]) == (False, "review-record-too-large") and fake.comments == []

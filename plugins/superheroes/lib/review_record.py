@@ -475,6 +475,7 @@ def build_record(account, readers, prior=None):
         "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw, "unreadFiles": unread,
         "owed": owed, "leftForOwner": [_name(f) for f in owed if f.get("outcome") == _LEFT_FOR_OWNER],
         "historyArchives": list((prior or {}).get("historyArchives") or []),
+        "carriedArchives": [],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
@@ -548,12 +549,12 @@ def render(record):
     return body
 
 
-def render_archive(entries):
-    """An archive comment: one earlier session's complete entry, verbatim, serialized compactly.
+def render_archive(entries, carried=()):
+    """An archive comment: earlier sessions' complete entries and/or full carried finding bodies, verbatim.
 
     Compact (no indent) so an archive is never larger than the record body it came out of.
     """
-    payload = _scrubbed({"schema": ARCHIVE_SCHEMA, "history": entries})
+    payload = _scrubbed({"schema": ARCHIVE_SCHEMA, "history": entries, "carried": list(carried)})
     intro = ("Earlier sessions of this PR's review record, kept in full. "
              "The review record comment names this comment.")
     # Only the sentence this writer authors is checked: the entries are reviewers' verbatim text.
@@ -561,8 +562,70 @@ def render_archive(entries):
     body = (f"{ARCHIVE_MARKER}\n{intro}\n\n<details><summary>Earlier sessions</summary>\n\n```json\n"
             f"{json.dumps(payload, separators=(',', ':'), sort_keys=True)}\n```\n</details>")
     if len(body) > MAX_BODY_CHARS:
-        raise Refusal("review-record-too-large", f"an earlier session alone is {len(body)} characters")
+        raise Refusal("review-record-too-large", f"an archived entry alone is {len(body)} characters")
     return body
+
+
+_STUB_KEYS = ("id", "title", "file", "line", "severity", "outcome", "reason", "sourceFile")
+_STUB_SET = frozenset(_STUB_KEYS) | {session_contract.FINDING_KEY_FIELD, "archived"}
+
+
+def _stub(f):
+    """What stays in the record for a finding whose full body moved to an archive comment."""
+    return {**{k: f[k] for k in _STUB_KEYS if k in f}, session_contract.FINDING_KEY_FIELD: _key(f), "archived": True}
+
+
+def _compact(record):
+    """Every full body outside the current account (owed and raw copies) as archive entries, leaving stubs."""
+    entries, out = [], {}
+    for field, kind in (("owed", "owed"), ("rawFindings", "raw")):
+        kept = []
+        for e in record[field]:
+            if isinstance(e, dict) and not e.get("archived") and (field == "rawFindings" or set(e) - _STUB_SET):
+                entries.append({"kind": kind, "entry": e})
+                kept.append(_stub(e))
+            else:
+                kept.append(e)
+        out[field] = kept
+    return entries, dict(record, **out)
+
+
+def _carried_bodies(entries):
+    """Pack carried entries greedily into archive comments that each fit; an entry alone too big refuses."""
+    bodies, chunk = [], []
+    for e in entries:
+        try:
+            render_archive([], chunk + [e])
+        except Refusal:
+            if not chunk:
+                raise
+            bodies.append(render_archive([], chunk))
+            chunk = []
+            render_archive([], [e])
+        chunk.append(e)
+    if chunk:
+        bodies.append(render_archive([], chunk))
+    return bodies
+
+
+def _rejoin(rec, carried):
+    """Put the full bodies back in place of their stubs; a stub with no archived body refuses."""
+    pool = {}
+    for c in carried:
+        if isinstance(c, dict) and isinstance(c.get("entry"), dict):
+            pool.setdefault((c.get("kind"), _key(c["entry"])), []).append(c["entry"])
+    out = dict(rec)
+    for field, kind in (("owed", "owed"), ("rawFindings", "raw")):
+        joined = []
+        for e in rec.get(field) or []:
+            if isinstance(e, dict) and e.get("archived") is True:
+                found = pool.get((kind, _key(e)))
+                if not found:
+                    raise Refusal("review-record-unreadable", "an archived finding body is missing")
+                e = found.pop(0)
+            joined.append(e)
+        out[field] = joined
+    return out
 
 
 def _parse_body(body, schema=RECORD_SCHEMA):
@@ -593,10 +656,12 @@ def _guarded(fn):
 
 
 def _load_archives(rd, pr, repo, rec):
-    """The earlier sessions a record's archive comments hold; refuses if any is missing or unreadable."""
-    archived = []
-    if rec.get("historyArchives"):
-        wanted = {x.get("id") for x in rec["historyArchives"] if isinstance(x, dict)}
+    """(earlier sessions, carried finding bodies) the record's archive comments hold; refuses if any is lost."""
+    archived, carried = [], []
+    refs = [x for x in list(rec.get("historyArchives") or []) + list(rec.get("carriedArchives") or [])
+            if isinstance(x, dict)]
+    if refs:
+        wanted = {x.get("id") for x in refs}
         comments = rd["list_comments"](pr, repo)
         if comments is None:
             raise Refusal("review-record-unreadable", "the archive comments could not be fetched")
@@ -608,9 +673,17 @@ def _load_archives(rd, pr, repo, rec):
                     raise Refusal("review-record-unreadable", c.get("url") or "an archive comment")
                 seen.add(c.get("id"))
                 archived += parsed.get("history") or []
+                carried += parsed.get("carried") or []
         if wanted - seen:
             raise Refusal("review-record-unreadable", "a referenced archive comment is missing")
-    return archived
+    return archived, carried
+
+
+def _made(rd, account, text):
+    archive = rd["create_comment"](account["pr"], account.get("repo"), text)
+    if archive is None:
+        raise Refusal("review-record-gh-failed", "the archive comment could not be written")
+    return {"id": archive["id"], "url": archive.get("url")}
 
 
 def write(account_path, repo_root, readers=None):
@@ -629,24 +702,41 @@ def write(account_path, repo_root, readers=None):
             prior = _parse_body(found[0]["body"])
             if prior is None:
                 raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-            _load_archives(rd, account["pr"], account.get("repo"), prior)  # refuse before editing if history is lost
+            # Refuse before editing if history is lost; carried bodies rejoin so they are never thinned.
+            prior = _rejoin(prior, _load_archives(rd, account["pr"], account.get("repo"), prior)[1])
         record = build_record(account, rd, prior)
         try:
             body = render(record)
         except Refusal as e:
-            if e.reason != "review-record-too-large" or not record["history"]:
+            if e.reason != "review-record-too-large":
                 raise
-            # Nothing is trimmed: each full earlier session moves to its own comment on the PR,
-            # and the record names them. All are rendered first (a session that cannot fit refuses
-            # before anything is written), and the archives are written before the record.
+            # Nothing is trimmed. Each full earlier session moves to its own comment on the PR; if the
+            # record is still too large, every full body outside the current account (owed and raw
+            # copies) moves too, leaving stubs. The final record is rendered with placeholder pointers
+            # first, so a record that cannot fit refuses before any archive comment is written.
+            # (A carried archive from an earlier write is superseded by the new one, not edited.)
+            def pointers(made_h, made_c):
+                return dict(slim, historyArchives=record["historyArchives"] + made_h, carriedArchives=made_c)
+
+            ph = lambda sids: {"id": 10 ** 15, "url": "u" * 120, "sessionIds": sids}  # noqa: E731
+            slim, entries = dict(record, history=[]), []
+            holders = [ph([h.get("sessionId")]) for h in record["history"]]
+            try:
+                render(pointers(holders, []))
+            except Refusal as e2:
+                if e2.reason != "review-record-too-large":
+                    raise
+                entries, slim = _compact(record)
+                slim = dict(slim, history=[])
+                render(pointers(holders, [ph(None)] * max(1, len(_carried_bodies(entries)))))
             bodies = [render_archive([h]) for h in record["history"]]
-            made = []
+            carried_bodies = _carried_bodies(entries) if entries else []
+            made_h, made_c = [], []
             for h, text in zip(record["history"], bodies):
-                archive = rd["create_comment"](account["pr"], account.get("repo"), text)
-                if archive is None:
-                    raise Refusal("review-record-gh-failed", "the archive comment could not be written")
-                made.append({"id": archive["id"], "url": archive.get("url"), "sessionIds": [h.get("sessionId")]})
-            record = dict(record, history=[], historyArchives=record["historyArchives"] + made)
+                made_h.append({**_made(rd, account, text), "sessionIds": [h.get("sessionId")]})
+            for text in carried_bodies:
+                made_c.append(_made(rd, account, text))
+            record = pointers(made_h, made_c)
             body = render(record)
         sent = (rd["edit_comment"](found[0]["id"], account.get("repo"), body) if found
                 else rd["create_comment"](account["pr"], account.get("repo"), body))
@@ -666,8 +756,8 @@ def read(pr, repo=None, readers=None):
         rec = _parse_body(found[0]["body"])
         if rec is None:
             raise Refusal("review-record-unreadable", found[0].get("url") or "the existing record")
-        archived = _load_archives(rd, pr, repo, rec)
-        return {"ok": True, "url": found[0].get("url"), **rec, "archivedHistory": archived}
+        archived, carried = _load_archives(rd, pr, repo, rec)
+        return {"ok": True, "url": found[0].get("url"), **_rejoin(rec, carried), "archivedHistory": archived}
     return _guarded(go)
 
 
