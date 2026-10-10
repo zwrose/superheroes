@@ -71,6 +71,44 @@ def sim(inv, pgrep=(True, 0, "42"), screenshot=(True, 0, "")):
     return respond
 
 
+def _fixture(name):
+    with open(os.path.join(os.path.dirname(FIXTURE), name)) as fh:
+        return fh.read()
+
+
+HELPER_UP = _fixture("launchctl-list-dtuhidd-running.txt")
+HELPER_STOPPED = _fixture("launchctl-list-dtuhidd-stopped.txt")
+
+
+def helper_sim(states, axe=(True, 0, ""), kickstart=(True, 0, "")):
+    """A responder that plays `launchctl list` from `states` in order (the last repeats), `kickstart` and `axe`.
+
+    A state is "up" (the running fixture), "down" (the stopped fixture, still exit 0), "never", or an exit code."""
+    queue = list(states)
+
+    def respond(argv):
+        if argv[0] == "axe":
+            return axe
+        if argv[5] == "kickstart":
+            return kickstart
+        state = queue.pop(0) if len(queue) > 1 else queue[0]
+        if state == "never":
+            return False, None, ""
+        if isinstance(state, int):
+            return True, state, ""
+        return True, 0, HELPER_UP if state == "up" else HELPER_STOPPED
+    return respond
+
+
+def verbs(f):
+    """The recorded calls as short names: list, kickstart or axe."""
+    return [c[0][0] if c[0][0] == "axe" else c[0][5] for c in f.calls]
+
+
+def axe_calls(f):
+    return [c for c in f.calls if c[0][0] == "axe"]
+
+
 # ---------------------------------------------------------------- literal pins
 def test_literal_pins():
     assert ic.IPHONE_ID_ENV == "SUPERHEROES_IPHONE_ID"
@@ -473,8 +511,9 @@ def test_shot_whose_inventory_never_returns_is_returned_false_with_no_labels(fak
 
 
 def test_a_driver_exit_code_zero_is_not_a_step_passing_and_nonzero_is_not_ok(fake):
-    fake(lambda argv: (True, 3, "oops"))
-    assert ic.drive(U, ["type", "hello"], 5) == {"ok": False, "returned": True, "exit": 3, "stdout": "oops"}
+    fake(helper_sim(["up"], axe=(True, 3, "oops")))
+    assert ic.drive(U, ["type", "hello"], 5) == {"ok": False, "returned": True, "exit": 3, "stdout": "oops",
+                                                 "helper": "up"}
 
 
 def test_boot_runs_boot_then_bootstatus_and_only_bootstatus_decides(fake):
@@ -487,41 +526,165 @@ def test_boot_runs_boot_then_bootstatus_and_only_bootstatus_decides(fake):
 
 # ---------------------------------------------------------------- AXe workaround
 def test_drive_tap_gets_stabilization_env_and_a_post_delay_before_the_udid(fake):
-    f = fake()
+    f = fake(helper_sim(["up"]))
     out = ic.drive(U, ["tap", "-x", "1", "-y", "2"], 30)
-    argv, timeout, env_ = f.calls[0]
+    argv, timeout, env_ = axe_calls(f)[0]
     assert argv == ["axe", "tap", "-x", "1", "-y", "2", "--post-delay", "1", "--udid", U]
-    assert env_["AXE_HID_STABILIZATION_MS"] == "2000" and timeout == 30
+    assert env_["AXE_HID_STABILIZATION_MS"] == "2000" and 0 < timeout <= 30
     assert out["ok"] is True and out["returned"] is True and out["exit"] == 0
 
 
 def test_drive_tap_keeps_the_callers_post_delay(fake):
-    f = fake()
+    f = fake(helper_sim(["up"]))
     ic.drive(U, ["tap", "--post-delay", "2", "-x", "1", "-y", "2"], 30)
-    assert f.calls[0][0] == ["axe", "tap", "--post-delay", "2", "-x", "1", "-y", "2", "--udid", U]
+    assert axe_calls(f)[0][0] == ["axe", "tap", "--post-delay", "2", "-x", "1", "-y", "2", "--udid", U]
     ic.drive(U, ["tap", "-x", "1", "--post-delay=3"], 30)
-    assert f.calls[1][0] == ["axe", "tap", "-x", "1", "--post-delay=3", "--udid", U]
+    assert axe_calls(f)[1][0] == ["axe", "tap", "-x", "1", "--post-delay=3", "--udid", U]
 
 
 def test_drive_non_tap_gets_no_post_delay_and_still_ends_with_the_udid(fake):
-    f = fake()
+    f = fake(helper_sim(["up"]))
     ic.drive(U, ["type", "hello"], 30)
     ic.drive(U, ["swipe", "--start-x", "1"], 30)
-    for argv, _, env_ in f.calls:
+    for argv, _, env_ in [c for c in f.calls if c[0][0] == "axe"]:
         assert "--post-delay" not in argv and argv[-2:] == ["--udid", U]
         assert env_["AXE_HID_STABILIZATION_MS"] == "2000"
-    assert f.calls[0][0] == ["axe", "type", "hello", "--udid", U]
+    assert axe_calls(f)[0][0] == ["axe", "type", "hello", "--udid", U]
 
 
 def test_drive_cli_splits_axe_args_after_the_double_dash(fake, capsys):
-    f = fake()
+    f = fake(helper_sim(["up"]))
     assert ic.main(["drive", "--phone", U, "--timeout", "9", "--", "tap", "-x", "1", "-y", "2"]) == 0
-    assert f.calls[0][0] == ["axe", "tap", "-x", "1", "-y", "2", "--post-delay", "1", "--udid", U]
-    assert f.calls[0][1] == 9
+    assert axe_calls(f)[0][0] == ["axe", "tap", "-x", "1", "-y", "2", "--post-delay", "1", "--udid", U]
+    assert 0 < axe_calls(f)[0][1] <= 9
     assert json.loads(capsys.readouterr().out)["exit"] == 0
     with pytest.raises(SystemExit) as e:
         ic.main(["boot"])
     assert e.value.code == 2
+
+
+# ---------------------------------------------------------------- typing helper
+REFUSED = {"ok": False, "returned": True, "exit": None, "stdout": "", "helper": "down",
+           "reason": "the phone's typing helper is not running"}
+NEVER = {"ok": False, "returned": False, "exit": None, "stdout": ""}
+
+
+def test_drive_with_the_helper_running_checks_once_then_runs_axe(fake):
+    f = fake(helper_sim(["up"]))
+    out = ic.drive(U, ["type", "hello"], 30)
+    assert out == {"ok": True, "returned": True, "exit": 0, "stdout": "", "helper": "up"}
+    assert verbs(f) == ["list", "axe"]
+
+
+def test_drive_restarts_a_stopped_helper_and_runs_axe_once_it_is_up(fake):
+    f = fake(helper_sim(["down", "up"]))
+    out = ic.drive(U, ["type", "hello"], 30)
+    assert out["ok"] is True and out["helper"] == "restarted"
+    assert verbs(f) == ["list", "kickstart", "list", "axe"]
+    assert f.calls[1][0] == ["xcrun", "simctl", "spawn", U, "launchctl", "kickstart", "system/com.apple.coredevice.dtuhidd"]
+
+
+def test_drive_with_the_helper_still_down_refuses_and_never_runs_axe(fake):
+    f = fake(helper_sim(["down", "down"]))
+    assert ic.drive(U, ["type", "hello"], 30) == REFUSED
+    assert verbs(f) == ["list", "kickstart", "list"]
+
+
+def test_a_dropped_keystroke_is_never_reported_as_ok(fake):
+    fake(helper_sim(["down"], axe=(True, 0, "")))
+    assert ic.drive(U, ["type", "hello"], 30)["ok"] is False
+
+
+@pytest.mark.parametrize("state", ["down", 113, 149])
+def test_a_helper_that_is_stopped_or_unlisted_is_not_running_and_is_restarted(fake, state):
+    f = fake(helper_sim([state, "up"]))
+    assert ic.drive(U, ["type", "hello"], 30)["helper"] == "restarted"
+    assert verbs(f) == ["list", "kickstart", "list", "axe"]
+
+
+def test_the_kickstarts_exit_code_does_not_decide_the_recheck_does(fake):
+    fake(helper_sim(["down", "up"], kickstart=(True, 1, "")))
+    assert ic.drive(U, ["type", "hello"], 30)["helper"] == "restarted"
+    fake(helper_sim(["down", "down"], kickstart=(True, 0, "")))
+    assert ic.drive(U, ["type", "hello"], 30) == REFUSED
+
+
+@pytest.mark.parametrize("states,kickstart,calls", [
+    (["never"], (True, 0, ""), ["list"]),
+    (["down", "up"], (False, None, ""), ["list", "kickstart"]),
+    (["down", "never"], (True, 0, ""), ["list", "kickstart", "list"]),
+])
+def test_a_helper_call_that_never_returns_is_returned_false_and_axe_does_not_run(fake, states, kickstart, calls):
+    f = fake(helper_sim(states, kickstart=kickstart))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f) == calls
+
+
+@pytest.mark.parametrize("verb", ["describe-ui", "list-simulators", "screenshot"])
+def test_a_read_only_verb_makes_no_helper_call_and_keeps_the_callers_timeout(fake, verb):
+    f = fake(helper_sim(["down"]))
+    out = ic.drive(U, [verb], 30)
+    assert verbs(f) == ["axe"] and f.calls[0][1] == 30
+    assert out == {"ok": True, "returned": True, "exit": 0, "stdout": ""}
+
+
+@pytest.mark.parametrize("verb", ["type", "key", "key-sequence", "key-combo", "button", "tap", "swipe", "touch",
+                                  "drag", "gesture", "batch", "frobnicate"])
+def test_every_verb_outside_the_read_only_set_checks_the_helper_first(fake, verb):
+    f = fake(helper_sim(["up"]))
+    ic.drive(U, [verb], 30)
+    assert verbs(f) == ["list", "axe"]
+    assert f.calls[0][0] == ["xcrun", "simctl", "spawn", U, "launchctl", "list", "com.apple.coredevice.dtuhidd"]
+
+
+@pytest.mark.parametrize("states,kickstart", [
+    (["up"], (True, 0, "")), (["down", "up"], (True, 0, "")), (["down", "down"], (True, 0, "")),
+    (["never"], (True, 0, "")), (["down", "up"], (False, None, "")), (["down", "never"], (True, 0, "")),
+])
+def test_drive_only_runs_axe_or_launchctl_inside_the_handed_phone(fake, states, kickstart):
+    f = fake(helper_sim(states, kickstart=kickstart))
+    ic.drive(U, ["type", "hello"], 30)
+    for argv, _, _ in f.calls:
+        assert argv[0] == "axe" or (argv[:3] == ["xcrun", "simctl", "spawn"] and argv[3] == U and argv[4] == "launchctl")
+        assert not {"shutdown", "erase", "delete", "kill", "bootout", "booted"} & set(argv)
+
+
+def ticking(monkeypatch, responder, steps):
+    """Wrap a responder so each recorded call advances a controllable clock by the next amount in `steps` (seconds)."""
+    now, queue = [0.0], list(steps)
+    monkeypatch.setattr(ic.time, "monotonic", lambda: now[0])
+
+    def respond(argv):
+        now[0] += queue.pop(0) if queue else 0
+        return responder(argv)
+    return respond
+
+
+def test_every_call_in_a_checked_drive_gets_exactly_the_time_remaining_on_the_callers_deadline(fake, monkeypatch):
+    f = fake(ticking(monkeypatch, helper_sim(["down", "up"]), [2, 3, 5]))
+    assert ic.drive(U, ["type", "hello"], 30)["helper"] == "restarted"
+    assert verbs(f) == ["list", "kickstart", "list", "axe"]
+    assert [t for _, t, _ in f.calls] == pytest.approx([30, 28, 25, 20])
+
+
+def test_a_spent_deadline_stops_a_checked_drive_before_axe(fake, monkeypatch):
+    f = fake(ticking(monkeypatch, helper_sim(["up"]), [31]))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f) == ["list"]
+
+
+@pytest.mark.parametrize("steps,calls", [([30], ["list"]), ([0, 30], ["list", "kickstart"])])
+def test_a_spent_deadline_stops_a_checked_drive_before_the_kickstart_and_before_the_recheck(fake, monkeypatch, steps, calls):
+    f = fake(ticking(monkeypatch, helper_sim(["down", "up"]), steps))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f) == calls
+
+
+@pytest.mark.parametrize("states", [["up"], ["down", "up"]])
+def test_an_axe_call_that_never_returns_after_a_checked_helper_carries_no_helper(fake, states):
+    f = fake(helper_sim(states, axe=(False, None, "")))
+    assert ic.drive(U, ["type", "hello"], 30) == NEVER
+    assert verbs(f)[-1] == "axe"
 
 
 # ---------------------------------------------------------------- labels / shot
