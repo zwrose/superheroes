@@ -217,7 +217,7 @@ def _validate(a):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
             f"findings[{i}].outcome (allowed: {', '.join(rfs.OUTCOMES)}; or null while undecided)")
-        chk(ne(f.get("findingKey")) or (ne(f.get("file")) and ne(f.get("title"))),
+        chk(ne(f.get(session_contract.FINDING_KEY_FIELD)) or (ne(f.get("file")) and ne(f.get("title"))),
             f"findings[{i}] identity (needs findingKey, or file and title)")
         chk(sn(f.get("reason")), f"findings[{i}].reason")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
@@ -460,35 +460,99 @@ def _assert_no_bug_free_claim(text):
             raise Refusal("review-record-forbidden-claim", phrase)
 
 
-_SECRET_WORDS = frozenset({"password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "authorization",
-                           "cookie", "apikey", "privatekey", "passwords", "passphrases", "secrets", "credentials",
-                           "cookies"})
-_SECRET_PAIRS = frozenset({"apikey", "privatekey", "secretkey", "accesskey"})
+_SECRET_SUBSTRINGS = ("password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "authorization",
+                      "cookie", "apikey", "privatekey", "secretkey", "accesskey")
 _KEY_QUOTES = "\"'`[]{}() \t\\"
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)[ \t\"'\\\])}]*[:=]")
 _PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+_JSON_ESCAPE = re.compile(r'\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])')
+_JSON_ESCAPED = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 _WITHHELD_FIELD = "[REDACTED FIELD]"
 
 
 def _secret_key(k):
-    """The one home for "is this key secret-shaped". Cut the key into words (surrounding quotes and brackets
-    stripped, camelCase split, then split on '_', '-', '.' and spaces, lowercased); it is secret when any whole
-    word is a secret word, or any two adjacent words joined are a secret pair (apikey, privatekey, secretkey,
-    accesskey). The value plays no part, so "tokens", "tokenizer", "passwordless" and "secretary" are not secret
-    while "access_token", "SECRET_KEY", "password_hash" and "api key" are."""
+    """The one home for "is this key secret-shaped". Normalise the key (surrounding quotes and brackets stripped,
+    lowercased, every '_', '-', '.' and space removed; camelCase boundaries are only spaces, so splitting them
+    changes nothing once those are removed); it is secret when any secret substring (password, passwd, pwd,
+    passphrase, secret, token, credential, authorization, cookie, apikey, privatekey, secretkey, accesskey) appears
+    in it. The value plays no part, and a compound key written with no separator ("dbpassword", "apikeys") is
+    caught. This fails closed: "tokenizer", "passwordless" and "tokens" are secret too; _is_count_key is the one
+    exemption."""
+    if not isinstance(k, str):
+        return False
+    norm = re.sub(r"[_.\- ]+", "", k.strip(_KEY_QUOTES).lower())
+    return any(s in norm for s in _SECRET_SUBSTRINGS)
+
+
+def _is_count_key(k):
+    """The one exemption from _secret_key: an allowlisted count key. Cut the key into words (surrounding quotes and
+    brackets stripped, camelCase split, lowercased, split on '_', '-', '.' and spaces); it is a count key when the
+    last word is "tokens" or the last two are "tokens count" (tokens, *_tokens, *_tokens_count). It is exempt only
+    while its value is a number, which the callers check; any other value under it stays secret."""
     if not isinstance(k, str):
         return False
     words = [w for w in re.split(r"[_.\- ]+", _CAMEL_BOUNDARY.sub(" ", k.strip(_KEY_QUOTES)).lower()) if w]
-    return any(w in _SECRET_WORDS for w in words) or any(a + b in _SECRET_PAIRS for a, b in zip(words, words[1:]))
+    return words[-1:] == ["tokens"] or words[-2:] == ["tokens", "count"]
+
+
+def _number_follows(text, pos):
+    """True when the text at pos, past optional spaces and one optional quote, starts with a digit."""
+    while pos < len(text) and text[pos] == " ":
+        pos += 1
+    if pos < len(text) and text[pos] in "\"'":
+        pos += 1
+    return pos < len(text) and text[pos].isdigit()
+
+
+def _json_strings(value):
+    """Every string value and key of a parsed JSON structure, collected without recursion."""
+    out, stack = [], [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, list):
+            stack.extend(v)
+        elif isinstance(v, dict):
+            for k, item in v.items():
+                out.append(k)
+                stack.append(item)
+    return out
+
+
+def _decoded_views(text):
+    """The decoded views of a text: every string value and key when the whole text parses as JSON, and always the
+    text with each JSON escape (n, t, r, quote, backslash, slash, b, f, uXXXX after a backslash) replaced by its
+    character in one regex pass, a malformed escape left as it is."""
+    views = []
+    try:
+        views.append("\n".join(_json_strings(json.loads(text))))
+    except (ValueError, RecursionError):
+        pass
+    views.append(_JSON_ESCAPE.sub(
+        lambda m: chr(int(m.group()[2:], 16)) if m.group()[1] == "u" else _JSON_ESCAPED[m.group()[1]], text))
+    return views
+
+
+def _detects(text):
+    """The detector over one view: a key-like run that _secret_key accepts and that is followed by ':' or '=',
+    unless it is a count key whose value starts with a digit."""
+    for m in _KEY_CANDIDATE.finditer(text):
+        key = m.group("key")
+        if _secret_key(key) and not (_is_count_key(key) and _number_follows(text, m.end())):
+            return True
+    return False
 
 
 def _has_secret(text):
     """The one text detector: a key-like run (one word, or two joined by a space) that _secret_key accepts and
-    that is followed by ':' or '=', or a private-key block, anywhere in the text. A two-word run is judged by
-    _secret_key on both words, so "the password: x" and "api key = x" count. Nothing tracks where a value ends;
-    a text this matches is withheld whole."""
-    return any(_secret_key(m.group("key")) for m in _KEY_CANDIDATE.finditer(text)) or bool(_PEM_BEGIN.search(text))
+    that is followed by ':' or '=', or a private-key block, anywhere in the text or in a decoded view of it (the
+    JSON strings and keys, and the text with its JSON escapes decoded, so a literal backslash-n before
+    "password: x" and a backslash-u0077 in "password" both count). A count key followed by a number is not a match
+    (_is_count_key). A two-word run is judged by _secret_key on both words, so "the password: x" and "api key = x"
+    count. Nothing tracks where a value ends; a text this matches is withheld whole."""
+    return any(_detects(v) for v in [text, *_decoded_views(text)]) or bool(_PEM_BEGIN.search(text))
 
 
 def _secret_line_count(text):
@@ -520,7 +584,8 @@ def _scrubbed(value):
                 k2 = nk
             else:
                 k2 = k
-            secret = hidden_key or _secret_key(k)
+            counted = _is_count_key(k) and isinstance(v, (int, float)) and not isinstance(v, bool)
+            secret = hidden_key or (_secret_key(k) and not counted)
             out[k2] = "[REDACTED]" if secret and v is not None else _scrubbed(v)
         return out
     return value

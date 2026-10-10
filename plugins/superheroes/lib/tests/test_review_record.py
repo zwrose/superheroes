@@ -1004,14 +1004,53 @@ def test_cost_and_observation_token_counts_survive_the_credential_scrub():
 
 @pytest.mark.parametrize("val", ["password: LEAKMARK", ["password: LEAKMARK"], {"service": "password: LEAKMARK"}])
 def test_tokens_key_holding_a_credential_shaped_string_is_still_withheld(val):
-    # axis: "tokens" is not secret by key shape; a credential-shaped string under it is still caught by the text detector
+    # axis: "tokens" is an allowlisted count key, but only for a number; a non-number under it is secret at the key level
     f = finding("a-1", outcome="fixed", reason="r")
     f["evidence"] = {"tokens": val}
     posted = rr.render(build(account(findings=[f])))
     assert "LEAKMARK" not in posted
-    assert rr._parse_body(posted)["findings"][0]["evidence"] == {
-        "tokens": {"service": "[REDACTED FIELD]"} if isinstance(val, dict)
-        else ["[REDACTED FIELD]"] if isinstance(val, list) else "[REDACTED FIELD]"}
+    assert rr._parse_body(posted)["findings"][0]["evidence"] == {"tokens": "[REDACTED]"}
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps({"msg": "config:\npassword: LEAKMARK"}),
+    "note config:" + "\\" + "n" + "password: LEAKMARK",
+    '{"pass' + '\\' + 'u0077ord": "LEAKMARK"}',
+], ids=["json-escaped-newline", "non-json-escaped-newline", "unicode-escaped-key"])
+def test_escaped_newline_and_unicode_escaped_keys_are_withheld(text):
+    # axis: decoded view; a credential key hidden behind a JSON escape ("\npassword", "password") read as another key
+    assert "LEAKMARK" in text and "\n" not in text
+    if "u0077" in text:
+        assert "\\" + "u0077" in text
+    else:
+        assert "\\" + "n" in text
+    assert rr._has_secret(text) is True
+    body, withheld = rr.render_raw("f.json", text)
+    assert withheld is True and "LEAKMARK" not in body
+    assert rr._scrub_text(text) == "[REDACTED FIELD]"
+
+
+@pytest.mark.parametrize("key", ["dbpassword", "apikeys", "passwordhash", "mytoken", "xsecret", "PRIVATEKEYS"])
+def test_compound_keys_are_secret(key):
+    # axis: key shape; a compound key written with no separator slipping past whole-word matching
+    assert rr._secret_key(key) is True
+    body, withheld = rr.render_raw("f.json", f'"{key}": "LEAKMARK"')
+    assert withheld is True and "LEAKMARK" not in body
+
+
+def test_numeric_count_keys_post_and_non_numeric_ones_do_not():
+    # axis: count exemption; a count key exempted whatever its value, or a key outside the allowlist exempted
+    counts = '"input_tokens": 12, "output_tokens": 3, "output_tokens_count": 7'
+    body, withheld = rr.render_raw("f.json", counts)
+    assert withheld is False and counts in body
+    assert rr.render_raw("f.json", '"token_count": 7')[1] is True
+    body, withheld = rr.render_raw("f.json", '"input_tokens": "abc"')
+    assert withheld is True and "abc" not in body
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {"tokens": 100}
+    assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"tokens": 100}
+    f["evidence"] = {"tokens": "x"}
+    assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"tokens": "[REDACTED]"}
 
 
 CODEX_STDOUT = "\n".join([
@@ -1039,15 +1078,18 @@ def test_codex_stdout_with_usage_counts_is_posted_not_withheld():
     ("accessToken", True), ("Authorization", True), ("x-auth-token", True),
     ("SECRET_KEY", True), ("aws_secret_access_key", True), ("secretKey", True), ("credentials", True),
     ("db_passwords", True), ("password_hash", True),
-    # fail-closed over-redaction: "token" is a whole word here, so a count named token_count is withheld too
     ("token_count", True),
-    ("input_tokens", False), ("output_tokens", False), ("cached_tokens", False), ("tokens", False),
-    ("tokenizer", False), ("passwordless", False), ("secretary", False), ("note", False),
-    ("cached_input_tokens", False),
+    # fail-closed over-redaction: a secret substring anywhere makes the key secret; the count exemption (below)
+    # alone decides whether a number under a count key posts
+    ("tokenizer", True), ("passwordless", True), ("secretary", True), ("tokens", True),
+    ("input_tokens", True), ("output_tokens", True), ("cached_tokens", True), ("cached_input_tokens", True),
+    ("note", False),
 ])
 def test_key_shape_decides_secret(key, secret):
-    # axis: key shape; a key judged secret by a substring, or by only its last word, instead of any whole word or any adjacent pair
+    # axis: key shape; a key judged secret by whole words only, instead of any secret substring of the normalised key
     assert rr._secret_key(key) is secret
+    if key.endswith("tokens"):
+        assert rr._is_count_key(key) is True
 
 
 def test_numeric_values_under_secret_keys_stay_withheld_or_redacted():
