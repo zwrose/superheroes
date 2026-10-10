@@ -36,8 +36,9 @@ An owner who runs several builds at once is limited by the compute on their own 
 This work lets a project's builds run in cloud sessions instead, under the same review, vet and
 merge rules as a build on the owner's machine. (source: framing) A single build may run slower in
 the cloud, and that is acceptable because more builders can run side by side. (source: Canon 2026-10-10-ca3e7e0d-5)
-This is the first of two pieces: here the reviewer pass and any calibration kept outside the
-repository are put in place by hand, and hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e0d-1)
+This is the first of two pieces. (source: Canon 2026-10-10-ca3e7e0d-1) In this piece the owner puts
+the reviewer pass and any calibration kept outside the repository in place by hand. (source: Canon 2026-10-10-ca3e7e0d-1)
+Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e0d-1)
 
 ## Who it's for
 
@@ -92,7 +93,7 @@ repository are put in place by hand, and hands-off upkeep comes later with its o
   - *Acceptance (Given-When-Then):* Given cloud builds switched on and the cloud ready, when five builds are launched and three need nothing from the owner's machine, then those three run in the cloud. (source: board · 3 The launch report)
 
 **FR-13.** The advisor shall judge, from a build's order, whether the build needs something only the owner's machine has. (source: craft, for your veto; journeys)
-  - *Acceptance (rule):* A build that needs a phone simulator or the owner's signed-in browser is judged as not able to run in the cloud. (source: journeys; Canon 2026-10-10-ca3e7e0d-16)
+  - *Acceptance (rule):* The advisor judges a build that needs a phone simulator or the owner's signed-in browser as not able to run in the cloud. (source: journeys; Canon 2026-10-10-ca3e7e0d-16)
 
 **FR-14.** The plugin shall count the cloud as ready for a launch only when the reviewer pass is live, the project has a cloud setup on the launching Claude account, the cloud's plugin version equals the advisor's, the cloud's calibration matches the owner's machine, and the cloud platform can be reached. (source: Canon 2026-10-10-ca3e7e0d-8; Canon 2026-10-10-ca3e7e0d-13; craft, for your veto; journeys)
   - *Acceptance (rule):* A launch with any one of the five conditions false is a launch with the cloud not ready. (source: journeys)
@@ -132,7 +133,7 @@ repository are put in place by hand, and hands-off upkeep comes later with its o
   - *Acceptance (rule):* At handback, the review record and the receipts are on the PR, and nothing the vet needs exists only on the cloud machine. (source: journeys)
 
 **FR-25.** The independent reviewer of a cloud build shall run through the reviewer pass. (source: Canon 2026-10-10-ca3e7e0d-2; journeys)
-  - *Acceptance (rule):* The review of a cloud build is not dropped and not treated as second class. (source: Canon 2026-10-10-ca3e7e0d-2)
+  - *Acceptance (rule):* The plugin does not drop the review of a cloud build and does not treat it as second class. (source: Canon 2026-10-10-ca3e7e0d-2)
 
 **FR-26.** A cloud builder shall not merge. (source: framing; journeys)
   - *Acceptance (rule):* A cloud build's PR merges only on the owner's merge word, as any build's does. (source: journeys)
@@ -154,7 +155,7 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
   - *Acceptance (rule):* The archive prompt is the only step left to the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
 
 **FR-31.** While a cloud build's PR is neither merged nor closed, the plugin shall keep the build's pushed branch. (source: craft, for your veto)
-  - *Acceptance (rule):* A builder that hands back or parks is not cleaned up: its pushed work stays for the vet, a renewed review or a recovery. (source: craft, for your veto; board · 5 Mid-build trouble)
+  - *Acceptance (rule):* The plugin does not clean up a builder that hands back or parks. The builder's pushed work stays for the vet, a renewed review or a recovery. (source: craft, for your veto; board · 5 Mid-build trouble)
 
 **FR-32.** When a cloud build's PR is closed unmerged, the plugin shall run the same cleanup as after a merge. (source: craft, for your veto)
   - *Acceptance (Given-When-Then):* Given a cloud build whose PR is closed unmerged, when the advisor closes out the build, then the advisor asks the builder to archive itself, and nothing else is left behind, as FR-30 says. (source: craft, for your veto)
@@ -174,7 +175,7 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 
 **FR-36.** When the reviewer pass is renewed, the advisor shall send each PR that UFR-7 parked and that is still open back for review. (source: board · 5 Mid-build trouble)
   - *Acceptance (Given-When-Then):* Given a PR parked because its review could not run, when the owner renews the pass, then the advisor sends that PR back for its review with no further word from the owner. (source: board · 5 Mid-build trouble)
-  - *Acceptance (rule):* A parked PR that was closed before the renewal is not sent back. (source: craft, for your veto)
+  - *Acceptance (rule):* The advisor does not send back a parked PR that was closed before the renewal. (source: craft, for your veto)
 
 ## When things go wrong (significant unhappy paths)
 
@@ -190,7 +191,7 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 
 **UFR-4.** If the cloud is not ready at launch, then the plugin shall run the build on the owner's machine and state the reason and its fix in the launch report. (source: Canon 2026-10-10-ca3e7e0d-8; board · 3 The launch report)
   - *Acceptance:* Given a lapsed reviewer pass, when four builds are launched, then all four run on the owner's machine and the launch report says the pass has lapsed and how to renew it. (source: Canon 2026-10-10-ca3e7e0d-8; board · 3 The launch report)
-  - *Acceptance (rule):* A build is never held and never dropped because the cloud is not ready. (source: journeys)
+  - *Acceptance (rule):* The plugin never holds a build and never drops a build because the cloud is not ready. (source: journeys)
 
 **UFR-5.** If the cloud's plugin version differs from the advisor's, then the plugin shall run the build on the owner's machine and name both versions in the launch report. (source: Canon 2026-10-10-ca3e7e0d-13; board · 3 The launch report)
   - *Acceptance (rule):* A cloud builder never runs on an older copy of the plugin than the advisor's. (source: Canon 2026-10-10-ca3e7e0d-13)
@@ -207,7 +208,7 @@ The approved review spec already treats a review as not run when no reviewer fro
 
 **UFR-8.** If UFR-7 parks a cloud build's PR, then the advisor shall tell the owner that the PR is parked and that renewing the pass lets it go back for review. (source: board · 5 Mid-build trouble)
   - *Acceptance:* Given a PR parked by UFR-7, when the advisor next writes to the owner, then the message names the PR, the reason and the renewal. (source: board · 5 Mid-build trouble)
-  - *Acceptance (rule):* A review that did not run for any other reason is reported as the review rules already say, with no advice to renew the pass. (source: craft, for your veto)
+  - *Acceptance (rule):* The advisor reports a review that did not run for any other reason as the review rules already say, with no advice to renew the pass. (source: craft, for your veto)
 
 **UFR-9.** If a cloud builder stops or stalls, then the advisor shall recover the lane at once from its pushed work, routing the recovery as a launch is routed. (source: craft, for your veto; board · 5 Mid-build trouble)
   - *Acceptance:* Given a stopped cloud builder and the cloud ready, when the advisor recovers the lane, then the new builder runs in the cloud and starts from the pushed work. (source: board · 5 Mid-build trouble)

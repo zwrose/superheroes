@@ -126,6 +126,18 @@ Spec as reviewed: commit 8d949c4d. No fixes were needed.
 The first review stopped after round 3: all three checks are clean apart from the items already in
 the owner's queue. Three rounds ran and 17 findings were fixed (12 in round 1, 5 in round 2).
 
+## Writing pass
+
+The pass reworded seven statements to name who acts and to split one long sentence: the Purpose
+sentence about the two pieces, and one acceptance rule each under FR-13, FR-25, FR-31, FR-36, UFR-4
+and UFR-8. It added, dropped and moved no requirement, and every statement kept its source tag.
+
+- Meaning check 1: run directory `<checks>/wp/m1/run`, the same seat (codex, gpt-6.1-sol, xhigh).
+  Result: real (terminal, ok, 1 attempt, engaged). Findings: M1 to M7, one for each changed
+  statement, every one `meaning:kept`.
+- Reconciled: seven changed statements, seven findings, each matching one statement.
+- The pass was kept.
+
 ## The owner's queue
 
 - O-1 (from cloud-gap-4): a cloud builder that stops with work it never pushed, or before its first push, has no stated outcome. Recommendation: the advisor first tries to get the stopped builder's unpushed work pushed; what cannot be saved is redone, the advisor says how much, and a build that never pushed restarts from the beginning. Marks: none.
