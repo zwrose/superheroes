@@ -400,11 +400,20 @@ def test_check_runs_are_read_across_every_page_and_a_failed_page_is_unavailable(
     page2 = json.dumps({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "failure"}]})
     status = json.dumps(NO_STATUS)
 
+    seen = []
+
     def reader(out):
-        return lambda argv: status if argv[2].endswith("/status") else out
+        # Without --paginate the command returns page one only, as gh does.
+        def run(argv):
+            seen.append(list(argv))
+            if argv[2].endswith("/status"):
+                return status
+            return out if "--paginate" in argv else page1
+        return run
     monkeypatch.setattr(rr, "_run", reader(page1 + page2))
     runs, st = rr._check_data(HEAD, "o/r")
     assert len(runs["check_runs"]) == 2 and rr.ci_state(runs, st) == "red"
+    assert any("--paginate" in argv and "/check-runs" in argv[2] for argv in seen)
     monkeypatch.setattr(rr, "_run", reader(page1 + "{broken"))
     assert rr._check_data(HEAD, "o/r") is None
     monkeypatch.setattr(rr, "_run", reader(None))
@@ -466,6 +475,19 @@ def test_same_title_at_another_line_is_another_finding(tmp_path):
     out = rr.write(put(tmp_path, account(findings=[two[1]])), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-unaccounted") and "c1" in out["detail"]
     assert "c2" not in out["detail"]
+
+
+def test_finding_identity_is_not_the_reviewer_id(tmp_path):
+    # axis: finding identity; the unaccounted check comparing reviewer ids, which recur across sessions
+    fake = Fake()
+    send(tmp_path, fake, findings=[finding("code-001", title="Leak", line=10)])
+    other = finding("code-001", title="Leak", line=90)
+    out = rr.write(put(tmp_path, account(findings=[other])), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"]) == (False, "review-record-unaccounted")
+    assert len(fake.comments) == 1
+    renamed = finding("renamed-9", title="Leak", line=10)
+    out = rr.write(put(tmp_path, account(findings=[renamed])), str(tmp_path), fake.readers())
+    assert out["ok"] and len(fake.comments) == 2
 
 
 def test_only_the_current_accounts_raw_files_count(tmp_path):
