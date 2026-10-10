@@ -282,3 +282,48 @@ The owner answered the final sheet on 2026-10-10 with "Not yet" and three ruling
 
 #### Citation check
 []
+
+### Round 2
+
+#### Gap review
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r8-gap-run
+- Result: real (terminal, ok, 1 attempt, engaged: 12 tool calls, 70.0 s)
+- Confirmations: gap-answer-pattern-scope -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Gap review | no new findings | | | |
+
+#### Source check
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r8-source-run
+- Result: real (terminal, ok, 1 attempt, engaged: 5 tool calls, 37.1 s)
+- Approved board, for the source check: docs/superheroes/risk-calibrated-review-that-learns-dec0af/board/build-board.html
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Source check | no new findings | | | |
+
+#### Grounding
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r8-grounding-run
+- Result: real (terminal, ok, 1 attempt, engaged: 14 tool calls, 54.2 s)
+- Grounding base, for grounding: origin/main, 48a7881e07318177c598deadef2d8bbf96d4894d
+- Confirmations: GROUND-1 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Grounding | no new findings | | | |
+
+#### Citation check
+[]
+
+Round 2 closed this cycle: all three checks returned real results, the two fixes were confirmed, and none raised anything new.
+
+## The owner's queue
+
+- gap-002: settled on remainder sheet 1, card reviewer-own-tests. The owner picked "Its own tests don't make it a maker" (Canon 2026-10-10-d6064e1d-5). Applied in FR-18, FR-22 and the glossary; confirmed fixed.
+- SRC-2: settled on remainder sheet 1, card decision-on-record. The owner picked "The PR's saved answers count for one-PR decisions" (Canon 2026-10-10-d6064e1d-4). Applied in FR-38; confirmed fixed.
+
+Nothing is waiting in the queue.
+
+The advisor's three owner calls from vet round 1 (V1.24, V1.25 and V1.26) went on the final sheet. The owner answered all three on 2026-10-10, as the "After the final sheet" section records.
