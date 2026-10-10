@@ -7,6 +7,26 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Pilot: iPhone typing helper
+
+- `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
+- When the helper stays down, `drive` sends nothing and returns `ok: false` with `reason: "the phone's typing helper is not running"`; the pilot ends that part with `iPhone check did not run — <part>: the phone's typing helper is not running`. Before, such keystrokes were dropped while `drive` reported `ok: true`.
+- A checked step makes up to three extra simulator calls inside its `--timeout` (about 0.25 s when the helper is up).
+
+### Pilot: iPhone screenshot labels
+
+- `shot` no longer takes `--page` or `--where`. It takes `--run-dir` and `--token` (the session `open` returned) and labels `page` and `where` from the page readings posted during the capture. Callers passing `--page` or `--where` now fail with an argument error.
+- When `shot` cannot establish a label, that label reads `could not be established`. The result gains a `labelNote` key: `null` when both labels were established, else a sentence saying why. The vet rules such a piece invalid.
+- `render` refuses a screenshot whose `where` is not `browser`, `installed` or `could not be established`.
+
+### Discovery: no Claude Design
+
+- Discovery no longer asks the owner whether the project uses Claude Design or whether approved boards sync to it, and it no longer syncs an approved board anywhere. The approved build board is still saved as files with the spec, as before.
+- A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
+- A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
+
 ## 0.42.0
 
 ### Before you upgrade

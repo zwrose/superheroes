@@ -1,0 +1,19 @@
+{
+	"EnableTransactions" = true;
+	"LimitLoadToSessionType" = "Background";
+	"MachServices" = {
+		"com.apple.coredevice.feature.remote.universalhidservice" = mach-port-object;
+		"com.apple.coredevice.feature.remote.hid.vendordefined" = mach-port-object;
+		"com.apple.coredevice.feature.remote.hid.digitizer" = mach-port-object;
+		"com.apple.coredevice.feature.remote.hid.button" = mach-port-object;
+		"com.apple.coredevice.feature.remote.universalhid" = mach-port-object;
+		"com.apple.coredevice.feature.remote.hid.keyboard" = mach-port-object;
+	};
+	"Label" = "com.apple.coredevice.dtuhidd";
+	"OnDemand" = true;
+	"LastExitStatus" = 9;
+	"Program" = "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Resources/Platforms/iphoneos/usr/libexec/dtuhidd";
+	"ProgramArguments" = (
+		"/usr/libexec/dtuhidd";
+	);
+};

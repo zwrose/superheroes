@@ -35,6 +35,9 @@ dependency."
 that retired with the v1 execution spine (#478); surviving contracts keep their
 original numbers so existing citations stay valid.
 
+**Number steps with plain digits** (`## 8`, `step 8`, `steps 4–6`), never circled-number glyphs:
+circled glyphs render poorly in a terminal and do not survive search.
+
 ## Contents
 
 1. [Vocabulary: the v2 loop and cast](#1-vocabulary-the-v2-loop-and-cast)
@@ -369,9 +372,7 @@ judgment, not the deterministic check's.
 > **Naming note.** We do **not** name the `spec` "design": **"design" means UI/UX**
 > here, never a technical-approach doc. Discovery draws the design as boards the owner
 > approves, and the approved build board, saved beside the `spec`, is the design the `spec`
-> points at. Where a project uses **Claude Design** (Anthropic's UI/UX design tool), its
-> boards take their design system from it, and syncing an approved board there is the
-> project's choice.
+> points at.
 
 **Discovery's non-definition-doc artifacts.** A discovery that ends without a spec still lands a
 durable artifact. A **findings record** is `findings.md` in the

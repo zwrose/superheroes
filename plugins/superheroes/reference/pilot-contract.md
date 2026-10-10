@@ -2517,6 +2517,18 @@ These are recorded contract facts, not oversights pending silent fix:
   containment check to the slot's tree belongs with the sub-issues that own slot worktrees
   (B5/C8). As shipped, the check confines the base relative to the running process's repo.
 
+### Browser launch recipes
+
+- **Sign in to Google with real Chrome through a persistent profile.** Launch with
+  `channel: 'chrome'`, headed, `--disable-blink-features=AutomationControlled`, and
+  `ignoreDefaultArgs: ['--enable-automation']`. Google refuses sign-in from an
+  automation-controlled Chromium ("This browser or app may not be secure"); that check is
+  Google's own, and no app-side setting clears it.
+- **Set `PWTEST_SOCKETS_DIR` to a short directory for any pilot launched from a worktree**, for
+  example `pw-sock` directly under the system temp directory. Playwright MCP otherwise refuses to
+  start ("Socket directory path is too long"): the operating system caps a socket path's length,
+  and a nested worktree path exceeds it.
+
 ### Browser topology refusal tokens
 
 | Token | When returned |

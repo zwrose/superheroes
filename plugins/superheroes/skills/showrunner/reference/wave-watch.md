@@ -87,7 +87,10 @@ In an **interactive** session, a harness background task survives across turns a
 advisor when it exits — that is what keeps you from going blind between turns while `loop` runs.
 In a **headless** session (`claude -p`), the session exits when its turn ends, so a background task
 dies with the turn; do not arm `loop` there unless you have a continuation mechanism outside this
-tool.
+tool. In the Desktop app's Code tab, a background Bash task is killed at about 10 minutes (observed
+on Claude Code CLI 2.1.284), so there arm the watch under a `Monitor` instead, with
+`--max-total-seconds 1680` to stay inside its 30-minute cap (same CLI version), and re-arm at each
+end.
 
 Bash timeout on Claude Code has two layers (`hooks/bash_timeout.py`,
 `skills/workhorse/reference/dispatch-mechanics.md`): an **omitted** timeout is rewritten to 600000 ms
@@ -206,7 +209,8 @@ id the launcher recorded on the launch record** and compares its mtime to
 **The check fails toward the alert, never toward silence.** Every way the transcript read can fail to
 prove work — no session id on the lane's ledger record, no transcript on disk, two-or-more
 transcripts with the same id, an unreadable projects directory, a transcript dated into the future
-by any amount — leaves the lane stale and the event fires. Ambiguity additionally records
+by any amount — leaves the lane stale and the event fires (a missing transcript, only
+after the launch grace in [The quiet window](#the-quiet-window)). Ambiguity additionally records
 `transcript-ambiguous`.
 
 **A lookup that could not complete says so.** When the watcher could not *resolve* the transcript at

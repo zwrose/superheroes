@@ -1023,7 +1023,7 @@ _WRITING_DOCTRINE_BANNED = (
     ("requirement-or-register-number", r"\bU?FR-[0-9]{2,}|\bR[0-9]{1,2}\b"),
     (
         "handoff-reference",
-        r"Claude Design handoff|[Dd]esign-handoff|handoff (output|list)|HANDOFF|discovery-notes",
+        r"[Dd]esign[- ]handoff|handoff (output|list)|HANDOFF|discovery-notes",
     ),
     ("issue-or-pr-number", r"#[0-9]{2,}"),
 )

@@ -10,6 +10,8 @@
 - [A gate needs its unlock citation](#a-gate-needs-its-unlock-citation)
 - [Sequential orders need a commit between them](#sequential-orders-need-a-commit-between-them)
 - [iPhone evidence](#iphone-evidence)
+- [A new refusal needs a healthy-case check](#a-new-refusal-needs-a-healthy-case-check)
+- [A pending spec gate is not an unreviewed spec](#a-pending-spec-gate-is-not-an-unreviewed-spec)
 - [Vet-time escalation](#vet-time-escalation)
 - [Timing follows the show-it level](#timing-follows-the-show-it-level)
 
@@ -172,7 +174,10 @@ iPhone, a phone the Mac imitates in software), or the issue's done-definition na
   A phone from an earlier launch of the same lane is still another phone;
 - (c) it has no `where` label;
 - (d) its `where` disagrees with its reading (for example `installed` on a piece whose reading says
-  the page runs in the browser).
+  the page runs in the browser);
+- (e) its `page` or `where` reads the not-established value — `NOT_ESTABLISHED` in the plugin's
+  `lib/iphone_check.py`, the one home of that text (the pilot's tool could not tell what the phone
+  showed).
 
 The ruling lists every invalid piece and its reason.
 
@@ -205,9 +210,25 @@ piece 1: no phone ID                        → invalid: no `phone` value (a)
 piece 2: phone from an earlier launch       → invalid: another phone (b)
 piece 3: where installed, reading: browser  → invalid: `where` disagrees with reading (d)
 piece 4: no `where` label                   → invalid: no `where` label (c)
+piece 5: page reads NOT_ESTABLISHED         → invalid: page not established (e)
 check not complete (condition 5) → advisor's own iPhone check recorded
-ruling: pieces 1–4 invalid, with the reasons above
+ruling: pieces 1–5 invalid, with the reasons above
 ```
+
+## A new refusal needs a healthy-case check
+
+At a vet where a sibling build covers the same scope, run the sibling's healthy-case tests against
+this tree. For a lone build, write one healthy-case probe per new refusal and run it. A
+refusal-leg bite-proof shows the refusal fires on bad input; it cannot see the same refusal firing
+on good input, so over-refusal ships unseen.
+
+## A pending spec gate is not an unreviewed spec
+
+Before dispatching any review gate on a spec, read the linked issue's review receipts. A spec's
+`gates.review: pending` is its normal state until the owner approves, so it does not mean the spec
+checks never ran. `skills/architect-discovery/reference/spec-checks.md` § The review gate says what
+each gate state means. A review dispatched on `pending` alone re-runs checks that already ran, at
+the cost of a full multi-round review.
 
 ## Vet-time escalation
 
