@@ -328,7 +328,10 @@ def shot(phone, out, run_dir, token, timeout):
         window = [rd for _, rd in collected if visible(rd) and rd["takenAt"] <= after_ms]
     page, where, notes = _derive_labels(window) if window else (NOT_ESTABLISHED, NOT_ESTABLISHED, [])
     # Axis: the page left the foreground during the capture window — the screenshot may show something else
-    if window and any(rd.get("visibility") == "hidden" and shot_start_ms <= rd["takenAt"] <= after_ms for _, rd in collected):
+    # The page's state when the capture began is the latest observation taken at or before it, whatever order the posts landed in
+    before = max((rd for _, rd in collected if rd["takenAt"] <= shot_start_ms), key=lambda rd: rd["takenAt"], default=None)
+    if window and ((before is not None and before.get("visibility") == "hidden")
+                   or any(rd.get("visibility") == "hidden" and shot_start_ms <= rd["takenAt"] <= after_ms for _, rd in collected)):
         page, where = NOT_ESTABLISHED, NOT_ESTABLISHED
         notes.append("the page left the foreground during the capture")
     res["returned"], res["labels"], err = _labels(phone, page, where, left())

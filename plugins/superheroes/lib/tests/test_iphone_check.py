@@ -712,7 +712,7 @@ def test_accept_reading_and_strip_password_value_directly():
 # ---------------------------------------------------------------- shot (real loopback, the phone's page played by a thread)
 PAGE_A, PAGE_B = "http://x.test/a", "http://x.test/b"
 MISSING = object()
-NE = "could not be established"
+NE = ic.NOT_ESTABLISHED
 
 
 def make_session(tmp_path, phone=U, token="abc123", **override):
@@ -965,6 +965,46 @@ def test_shot_when_the_page_leaves_the_foreground_during_the_capture_establishes
     assert r["labelNote"] and "foreground" in r["labelNote"]
 
 
+def test_shot_when_the_page_was_already_hidden_as_the_capture_began_establishes_nothing(fake, tmp_path):
+    port = make_session(tmp_path)
+    captured, stop = threading.Event(), threading.Event()
+
+    def post(**kw):
+        _post(port, "abc123", reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000), **kw))
+
+    def phone_page():
+        for _ in range(100):  # wait for the listener
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                time.sleep(0.02)
+        older_visible = reading(page=PAGE_A, where="browser", takenAt=int(time.time() * 1000))
+        time.sleep(0.01)
+        post(visibility="hidden")  # the newer hidden reading lands first ...
+        _post(port, "abc123", older_visible)  # ... then the older visible packet is delivered late
+        captured.wait(10)  # the screenshot is taken while the page is hidden
+        while not stop.is_set():  # the page returns to the foreground after the capture
+            post()
+            stop.wait(0.05)
+
+    def screenshot():
+        time.sleep(0.2)
+        captured.set()
+
+    thread = threading.Thread(target=phone_page)
+    thread.start()
+    fake(on_screenshot(screenshot))
+    try:
+        r = ic.shot(U, str(tmp_path / "a.png"), str(tmp_path), "abc123", 30)
+    finally:
+        captured.set()
+        stop.set()
+        thread.join(5)
+    assert r["ok"] is True and r["labels"] == established(NE, NE)
+    assert r["labelNote"] and "foreground" in r["labelNote"]
+
+
 def test_shot_counts_a_reading_taken_during_the_capture_that_lands_after_the_reading_after(fake, tmp_path):
     port, late = make_session(tmp_path), []
 
@@ -1103,7 +1143,7 @@ def test_render_accepts_a_reading_whose_focused_is_null():
 def test_render_prints_a_screenshot_whose_page_and_where_are_not_established_and_refuses_a_foreign_where():
     ev = {**ev_shot("browser"), "labels": labels(page=ic.NOT_ESTABLISHED, where=ic.NOT_ESTABLISHED)}
     _, section = ic.render(chk(where=["browser"], evidence=[ev]))
-    assert "`page` could not be established · `where` could not be established" in section
+    assert f"`page` {ic.NOT_ESTABLISHED} · `where` {ic.NOT_ESTABLISHED}" in section
     with pytest.raises(ValueError, match="evidence 1"):
         ic.render(chk(where=["browser"], evidence=[{**ev_shot("browser"), "labels": labels(where="Safari")}]))
 
