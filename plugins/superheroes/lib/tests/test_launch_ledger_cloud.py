@@ -4,7 +4,6 @@ A cloud lane has no local process the build depends on, no session transcript, n
 no heartbeat file, so no ledger reader concludes anything about one from a pid.
 """
 import os
-import uuid
 
 import pytest
 
@@ -105,10 +104,10 @@ def test_edge2_cloud_reserved_bad_field(field, value):
     "extra",
     [
         {"worktree": "/abs/worktree"},
-        {"sessionId": str(uuid.uuid4())},
+        {"sessionId": "0f0e0d0c-0b0a-4908-8706-050403020100"},
         {"slot": "slot-a", "generation": 1},
         {"boundary": {}},
-        {"iphoneId": str(uuid.uuid4()).upper()},
+        {"iphoneId": "0F0E0D0C-0B0A-4908-8706-050403020100"},
     ],
     ids=["worktree", "sessionId", "slot-generation", "boundary", "iphoneId"],
 )
@@ -166,7 +165,7 @@ def test_edge6_local_started_refuses_cloud_field(field, value):
 # --- edge 7: field shapes -----------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["", "session_", str(uuid.uuid4()), 12, None, "session_ab-c",
+@pytest.mark.parametrize("value", ["", "session_", "0f0e0d0c-0b0a-4908-8706-050403020100", 12, None, "session_ab-c",
                                    "session_abc\n", " session_abc"])
 def test_edge7_bad_cloud_session_id_shape(value):
     started = _cloud_started("a", cloudSessionId=value)
