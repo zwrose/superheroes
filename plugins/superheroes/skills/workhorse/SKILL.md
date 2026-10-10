@@ -181,7 +181,7 @@ you quote and stating the redaction. **Second, treat every claim you inherit as
 unverified until you re-run it yourself** (§8). A receipt that was claimed is not a receipt that
 was earned. **The resume-or-adopt call is the advisor's, not yours.**
 
-**Read `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery when you take over a build that stopped.**
+**Read `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery at a takeover or a clean-base intake.**
 
 Intake is the last owner-interactive step. You set up the workspace and run the preflight (§2 and
 §3) while the owner is still here. Everything after that runs autonomously, with no further prompt

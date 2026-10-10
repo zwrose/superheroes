@@ -26,6 +26,20 @@ auto-update) and `.codex-plugin/plugin.json` — via the `extra-files` map in
 A change that touches **no** plugin files (repo-root `ci:`, `docs:`, `chore:`) triggers no
 release, whatever its type.
 
+### Release day
+
+- **Land a pre-release doc pass before the release PR is clickable.** Move
+  `plugins/superheroes/TRANSITION.md`'s `## Unreleased` section (it exists only between releases)
+  under the version being cut, with its Before-you-upgrade lines, and add the cut row to
+  [`ROADMAP.md`](ROADMAP.md) § The cut record. A release PR merged before the doc pass ships
+  stale upgrade notes.
+- **After any docs-only merge, freshen the open release PR with `gh pr update-branch`.** The
+  release PR is not a stack layer, so the stacked-PR bar on that command
+  (`plugins/superheroes/rubric/native-stacks.md` § How a stack stays current) does not apply to
+  it. A release PR left behind `main` runs CI on a tree that will not ship.
+- **Post-merge green means both the `CI` and the `Release Please` workflows passed on `main`,
+  read per commit.**
+
 ## Pre-release verification — the advisor vet
 
 **There is no release-time harness, benchmark, or `release-evidence` check to discharge.** The
