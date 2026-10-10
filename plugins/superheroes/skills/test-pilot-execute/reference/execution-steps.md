@@ -151,7 +151,7 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" preflight [--issue-names-check]
 python3 -B "$ROOT_DIR/lib/iphone_check.py" boot --phone <id>
 python3 -B "$ROOT_DIR/lib/iphone_check.py" open --phone <id> --url <page-url> --run-dir <dir>
 python3 -B "$ROOT_DIR/lib/iphone_check.py" drive --phone <id> -- type hello
-python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --page <page-url> --where browser
+python3 -B "$ROOT_DIR/lib/iphone_check.py" shot --phone <id> --out <png> --run-dir <dir> --token <token>
 python3 -B "$ROOT_DIR/lib/iphone_check.py" read --run-dir <dir> --token <token> --where browser
 python3 -B "$ROOT_DIR/lib/iphone_check.py" judge < step.json
 python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
@@ -196,9 +196,14 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   `describe-ui` can time out right after boot; retry it once. The page's own
   contents and Safari's sheets may be missing from it; then tap by coordinates
   read off a screenshot, in points (screenshot pixels divided by the phone's
-  scale; 3 on current iPhones). Take a screenshot with `shot --phone <id> --out <png> --page <page-url>
-  --where <part>`. Look at every screenshot yourself: you judge `keyboardSeen`
-  and `expectedSeen` from the image.
+  scale; 3 on current iPhones). Take a screenshot with
+  `shot --phone <id> --out <png> --run-dir <dir> --token <token>`, the `<dir>` you gave
+  `open` and the `<token>` it returned for the page on screen. `shot` labels `page` and
+  `where` from the readings the page posts during the capture, so a page without the
+  reporting script, or one that changes while the shot is taken, gets
+  `could not be established` for that label and the result's `labelNote` says why. Such a
+  piece does not count as evidence: take the shot again on a settled page. Look at every
+  screenshot yourself: you judge `keyboardSeen` and `expectedSeen` from the image.
 - **Readings.** After each step the plan checks, take a reading with
   `read --run-dir <dir> --token <token> --where <part>`, where `<part>` is
   `browser` or `installed`. A reading gives the visible height, the focused
@@ -241,10 +246,10 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   `not attempted`. Evidence gathered before a stop stays in the results.
 - **Labels and posting.** Every screenshot and reading carries the six labels
   that `shot` and `read` return: `phone`, `model`, `iOS`, `page`, `where`,
-  `source`. Never type a label by hand, and never copy the phone ID from the
-  environment. Write the check JSON (`noPhone`, `whole`, `where`, `chosenBy`,
-  `parts` with `included`, `completed` and `reason` for `browser` and
-  `installed`, and `evidence`), then run `render --in <file>`; it refuses
+  `source`. Never type a label by hand (`shot` takes no `page` or `where`
+  argument), and never copy the phone ID from the environment. Write the check
+  JSON (`noPhone`, `whole`, `where`, `chosenBy`, `parts` with `included`,
+  `completed` and `reason` for `browser` and `installed`, and `evidence`), then run `render --in <file>`; it refuses
   unlabelled evidence. A PR comment shows a screenshot only by a URL its
   readers can open: publish each screenshot where the PR readers can reach it
   and pass its `url` in the evidence; else the results name the local file and
