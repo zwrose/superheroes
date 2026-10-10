@@ -50,7 +50,7 @@ _STAMP_RE = re.compile(r"[A-Za-z0-9:._-]+")
 _SECRET_SHAPES = (
     ("signed token", re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("provider key", re.compile(
-        r"(?<![A-Za-z0-9])(?:(?:sk-|ghp_|gho_|ghu_|ghs_|github_pat_|xoxb-|xoxp-|xoxa-)"
+        r"(?<![A-Za-z0-9])(?:(?:sk-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xoxb-|xoxp-|xoxa-|xoxr-|xoxs-|sess-|rt_)"
         r"[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})")),
     ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("credential assignment", re.compile(

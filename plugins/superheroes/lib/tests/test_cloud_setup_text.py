@@ -532,7 +532,8 @@ SHAPE_CASES = [
     ("signed token", "signed-token",
      lambda: "ey" + "J" + "h" * 10 + "." + "p" * 10 + "." + "s" * 10),
     *[("provider key", "prefix-" + p, _provider(p)) for p in (
-        "sk-", "ghp_", "gho_", "ghu_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "xoxa-")],
+        "sk-", "ghp_", "gho_", "ghu_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "xoxa-",
+        "ghr_", "xoxr-", "xoxs-", "sess-", "rt_")],
     ("provider key", "prefix-AKIA", lambda: "AKIA" + "A1" * 8),
     ("private key block", "private-key",
      lambda: "-----BEGIN " + "RSA PRIVATE" + " KEY-----"),
