@@ -27,8 +27,9 @@ Every statement ends with its source in plain text. The sources are:
 - **framing**: the framing the owner approved on 2026-10-10.
 - **craft, for your veto**: a choice the author made, recorded for the owner's veto.
 
-The requirements are grouped in five parts, A to E, in the order an owner meets them: setup, where
-a build runs, a cloud build's life, cleanup, and keeping the reviewer pass alive. (source: journeys)
+The requirements are grouped in six parts, A to F, in the order an owner meets them: setup, where
+a build runs, a cloud build's life, cleanup, keeping the reviewer pass alive, and keeping the plugin
+version in step. (source: journeys; Canon 2026-10-10-ca3e7e0d-18)
 
 ## Purpose
 
@@ -177,6 +178,12 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
   - *Acceptance (Given-When-Then):* Given a PR parked because its review could not run, when the owner renews the pass, then the advisor sends that PR back for its review with no further word from the owner. (source: board · 5 Mid-build trouble)
   - *Acceptance (rule):* The advisor does not send back a parked PR that was closed before the renewal. (source: craft, for your veto)
 
+### Part F: keeping the plugin version in step
+
+**FR-37.** When the advisor runs a newer plugin version than the cloud setup was made with, the cloud shall pick up the advisor's version with no step from the owner, where the cloud platform allows it. (source: Canon 2026-10-10-ca3e7e0d-18)
+  - *Acceptance (Given-When-Then):* Given a cloud setup made on an earlier plugin version and a platform that allows the pickup, when a build is launched, then the cloud builder runs the advisor's version and the owner pastes nothing. (source: Canon 2026-10-10-ca3e7e0d-18)
+  - *Acceptance (rule):* Where the platform does not allow the pickup, UFR-5 applies and the launch report tells the owner to paste new setup text. (source: Canon 2026-10-10-ca3e7e0d-18; board · 3 The launch report)
+
 ## When things go wrong (significant unhappy paths)
 
 **UFR-1.** If the check session fails, then the plugin shall keep cloud builds switched off and name the part that failed and its fix. (source: board · 1 Setup; craft, for your veto)
@@ -215,13 +222,18 @@ The approved review spec already treats a review as not run when no reviewer fro
   - *Acceptance (rule):* A recovery never leaves two builders working one issue. (source: craft, for your veto)
 
 **UFR-10.** If a cloud builder is recovered, then the advisor shall tell the owner when the builder stopped, where the lane was recovered, and how much work is being redone. (source: board · 5 Mid-build trouble)
-  - *Acceptance (rule):* The work redone is the work since the builder's last push. (source: board · 5 Mid-build trouble)
+  - *Acceptance (rule):* The work redone is the work since the builder's last push that could not be saved. (source: board · 5 Mid-build trouble; Canon 2026-10-10-ca3e7e0d-17)
 
 **UFR-11.** If the owner does not answer the archive prompt, then the plugin shall leave the session listed and carry on. (source: Canon 2026-10-10-ca3e7e0d-11; board · 6 Cleanup)
   - *Acceptance (rule):* The plugin sends no reminder about an unanswered archive prompt. (source: board · 6 Cleanup)
 
 **UFR-12.** If a cloud builder posts a question while the advisor is away, then the question shall wait on the issue until the advisor is back. (source: craft, for your veto; board · 4 While a cloud build runs)
   - *Acceptance:* Given the advisor is not running, when a cloud builder's question gets no answer, then the builder parks with its work pushed, and the advisor answers and resumes the lane when it is back. (source: craft, for your veto)
+
+**UFR-13.** If a cloud builder stops with work it has not pushed, then the advisor shall first try to get that work pushed. (source: Canon 2026-10-10-ca3e7e0d-17)
+  - *Acceptance:* Given a stalled cloud builder that still answers, when the advisor recovers the lane, then the advisor asks the builder once to push its work, and the new builder starts from what was pushed. (source: Canon 2026-10-10-ca3e7e0d-17; Canon 2026-10-10-ca3e7e0d-20)
+  - *Acceptance (rule):* Work that cannot be saved is redone, and the advisor says how much. (source: Canon 2026-10-10-ca3e7e0d-17)
+  - *Acceptance (rule):* A build that never pushed starts again from the beginning. (source: Canon 2026-10-10-ca3e7e0d-17)
 
 ## UI / UX
 
@@ -252,9 +264,8 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - The owner has a sign-in for an independent reviewer that can be placed in the cloud as a pass.
   The pass used in the discovery's pilot lasts 10 days. (source: board · 1 Setup; journeys)
 - The platform lets a session archive itself only when a person approves the prompt. (source: journeys; board · 6 Cleanup)
-- Making the cloud carry the advisor's plugin version without a hand step after each release is
-  the build's to solve. Where it cannot be done, the owner pastes new setup text, as the board
-  shows. (source: Canon 2026-10-10-ca3e7e0d-13; board · 3 The launch report)
+- Whether the cloud platform lets the cloud pick up a new plugin version by itself is not yet
+  proven. FR-37 states the aim, and the pasted setup text is the fallback. (source: Canon 2026-10-10-ca3e7e0d-18; board · 3 The launch report)
 
 ## Constraints
 
@@ -262,13 +273,15 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - The reviewer pass comes from the owner's ordinary sign-in to the independent reviewer. Separately
   paid business access tokens are ruled out as the way a cloud builder signs in. (source: Canon 2026-10-10-ca3e7e0d-3)
 - The plugin sets no ceiling on how many cloud builders run at once. (source: craft, for your veto)
+- This piece adds no recovery machinery beyond what these requirements name. Cloud builders are
+  assumed reliable, and more recovery is built only after failures show what shape it needs. (source: Canon 2026-10-10-ca3e7e0d-20)
 - A cloud builder runs on the project's rules and the plugin's rules only. (source: Canon 2026-10-10-ca3e7e0d-14)
 - Cleanup of a finished cloud builder takes one tap from the owner, for now. (source: Canon 2026-10-10-ca3e7e0d-11)
 
 ## Out of scope
 
-- Hands-off upkeep: renewing and delivering the reviewer pass, the calibration copy and the setup
-  with no hand step. It is the later piece. (source: Canon 2026-10-10-ca3e7e0d-1)
+- Hands-off upkeep of the reviewer pass and of the calibration copy: renewing and delivering them
+  with no hand step. It is the later piece. (source: Canon 2026-10-10-ca3e7e0d-1; Canon 2026-10-10-ca3e7e0d-18)
 - The advisor, discovery and the detective in the cloud. They stay on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-16)
 - Any check that needs a phone or the owner's signed-in browser. (source: Canon 2026-10-10-ca3e7e0d-16)
 - Cleanup with no tap from the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
@@ -299,7 +312,7 @@ _No amendments since the last full approval._
 | Empty & first-run | Specify | Yes | FR-1 to FR-6, UFR-2: the setup sitting and asking before setup is done |
 | Invalid & malformed input | Specify | No | UFR-1: a pass pasted wrong fails the check, which names the part and the fix |
 | Boundaries & limits | Specify | No | Constraints: no ceiling on cloud builders; FR-33: the pass's remaining life |
-| Errors & failures | Specify | Yes | UFR-4 to UFR-10: the cloud not ready, a lapsed pass mid-build, a stopped builder |
+| Errors & failures | Specify | Yes | UFR-4 to UFR-10 and UFR-13: the cloud not ready, a lapsed pass mid-build, a stopped builder, unpushed work |
 | Access & permissions | Specify | No | FR-3: who can read the reviewer pass; FR-10: one Claude account per cloud setup |
 | Duplicates & double-actions | Defer-to-build | No | UFR-9: a recovery never leaves two builders on one issue; the mechanism is the build's |
 | Conflicting / simultaneous use | Specify | No | FR-27: a cloud builder does not change calibration |

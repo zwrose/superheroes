@@ -12,7 +12,8 @@ platform's own prompt. Its artboards are "1 Setup", "2 The setting", "3 The laun
 "4 While a cloud build runs", "5 Mid-build trouble", "6 Cleanup" and "7 The gardening pass".
 
 `journeys.html` is the journeys board the owner approved on 2026-10-10 ("approved"),
-https://claude.ai/artifact/DZ8VeQQdoFyLYVswRsg5MY, version 1 (version id 1791651346-689c). The
-spec cites it as the source "journeys".
+https://claude.ai/artifact/DZ8VeQQdoFyLYVswRsg5MY, at version 1 (version id 1791651346-689c). The
+file here is version 2 (version id 1791657711-648f): one part was redrawn after the owner's ruling
+Canon 2026-10-10-ca3e7e0d-18, as `redraws.md` records. The spec cites it as the source "journeys".
 
 The choices board was skipped: no choice was open when the boards were drawn.
