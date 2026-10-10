@@ -25,7 +25,8 @@
           "suggestion",
           "evidence",
           "confidence",
-          "tradeoff"
+          "tradeoff",
+          "consequence"
         ],
         "properties": {
           "id": {
@@ -89,6 +90,10 @@
           "tradeoff": {
             "type": ["boolean", "null"],
             "description": "Rubric-optional — required key; null unless multiple valid fix approaches exist."
+          },
+          "consequence": {
+            "type": ["string", "null"],
+            "description": "What goes wrong for the owner or the user if this finding is left unfixed, in plain words; null only where no consequence was stated."
           }
         }
       }

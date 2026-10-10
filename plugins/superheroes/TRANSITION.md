@@ -7,6 +7,12 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Before you upgrade
+
+- After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
+
 ## 0.42.0
 
 ### Before you upgrade

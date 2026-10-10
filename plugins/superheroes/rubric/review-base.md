@@ -1,4 +1,4 @@
-<!-- rubric-version: 11 -->
+<!-- rubric-version: 12 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -135,7 +135,8 @@ reads the channel, never your reasoning.
     "suggestion": "<what to do, or null>",
     "evidence": "<for Important/Critical: trigger + impact / the reachable path; omit or null for Minor/Nit>",
     "confidence": "High | Low",
-    "tradeoff": "<true only if multiple valid fix approaches exist; omit otherwise>"
+    "tradeoff": "<true only if multiple valid fix approaches exist; omit otherwise>",
+    "consequence": "<what goes wrong for the owner or the user if this is left unfixed, in plain words; code quality only when that is all it costs>"
   }
 ]
 ```
@@ -143,6 +144,7 @@ reads the channel, never your reasoning.
 - `confidence` is the agent's own confidence after running the in-pass Chain-of-Verification (below). **High** = the chain passed cleanly. **Low** = emitted but genuinely unsure — it flags the finding for scrutiny rather than dropping a possibly-real issue. Required on Critical/Important (a **Low** Critical/Important MUST name exactly what is uncertain in its `evidence` line); may be omitted on Minor/Nit (treated as High). Low confidence does not, on its own, change the verdict beyond what the finding's severity already implies.
 - `taxonomy` carries the dimension's named taxonomy term where one applies (e.g. OWASP class for Security, defect class for Code, test smell for Test, failure class for Failure-Mode). Optional for most agents; **required** by the Failure-Mode reviewer. Omit when no named term applies to the finding.
 - `severity` is a **closed enum** — exactly one of `Critical`, `Important`, `Minor`, `Nit`. Do **not** emit any other scale: no `high`/`medium`/`low`, no `blocker`/`major`/`info`, no lowercase variants. A blocker is `Critical` or `Important`. Consumers fail **closed** — any unrecognized severity is treated as **blocking**, so an off-scale label mis-routes your finding rather than silently downgrading it.
+- `consequence` states what happens if the finding is left unfixed. A finding whose only cost is code quality says so. Emit the key on every finding (null only when you cannot state one).
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,
