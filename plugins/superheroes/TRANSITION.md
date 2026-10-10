@@ -34,6 +34,12 @@ belongs to and lists every change with its replacement.
 - A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
 - A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
 
+### Configure: cloud builds setting
+
+- New configuration item 15, slug `cloudBuilds` (in `projectConfiguration`), "Cloud builds". It is off by default, and nothing changes for a project while it is off.
+- `set --item cloudBuilds` refuses `true` with the reason `cloud-setup-missing` while the project has no cloud setup on the launching Claude account. The result's `message` carries the words to say to the owner. Switching off keeps the setup.
+- New `lib/cloud_setup.py`. Its `read` answers the setting and the setup record for an account, and `record-check` and `confirm-pass` are the record's only writers. The record lives in the project's store, outside the repository, and holds no secret.
+
 ## 0.42.0
 
 ### Before you upgrade

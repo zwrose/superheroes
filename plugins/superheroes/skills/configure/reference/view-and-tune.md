@@ -80,6 +80,24 @@ action that owns it, leaving the rest of the calibration untouched:
   line, flush left, with no indent before the closing `SUPERHEROES_ANSWER` line. Read the result
   the same way as the `stackingTool` write above: only `written` or `noop` means it was saved.
 
+- **Switch cloud builds on or off (item 15)** → write only item 15, with `true` or `false` on
+  stdin. Switching on needs a [cloud setup](../../../rubric/glossary.md#cloud-setup) on the Claude
+  account this session runs under, and the command checks that itself.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' 'true' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudBuilds --cwd .
+  ```
+
+  Read the result the same way as the `stackingTool` write above. On `written` or `noop`, say the
+  result's `message` to the owner word for word. The message names the project by its folder name;
+  when the project goes by another name, say that name in its place when repeating the message. A
+  refusal with the reason `cloud-setup-missing`
+  carries the `message` to say instead: cloud builds can't be switched on yet, and the owner starts
+  the setup by saying "set up cloud builds". Never switch the item on any other way. Switching off
+  keeps the cloud setup, so switching back on needs no new setup. To see what the setup record
+  holds, run `python3 -B "$ROOT_DIR/lib/cloud_setup.py" read --cwd .`.
+
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a
   new example of what counts as a material consequence in Canon as a standing ruling, by

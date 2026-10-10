@@ -375,3 +375,29 @@ contests.
 
 The owner's word that the spec may go to the advisor's vet. It is not approval, and a
 [sheet](#sheet)'s answers or silence never stand in for it.
+
+## Cloud builds
+
+### Cloud environment
+
+The place on the cloud platform where the owner pastes the [setup text](#setup-text) and the
+[reviewer pass](#reviewer-pass).
+
+### Cloud setup
+
+A project's [cloud environment](#cloud-environment) after a [check session](#check-session) has
+passed. It belongs to the Claude account it was made on.
+
+### Setup text
+
+The block the plugin writes for the owner to paste into the [cloud environment](#cloud-environment).
+It holds no secret.
+
+### Reviewer pass
+
+The sign-in the owner places in the [cloud environment](#cloud-environment) so the independent
+reviewer can run there.
+
+### Check session
+
+The one short cloud session that proves a [cloud setup](#cloud-setup).
