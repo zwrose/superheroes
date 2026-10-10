@@ -76,27 +76,14 @@ commit. It records the path on the `reserved` record and starts the session insi
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
 
-**Cloud launch.** `launch --place cloud --cloud-environment <id>` starts the builder as a [cloud
-session](../../../rubric/glossary.md#cloud-builder) in that environment, under the launching account,
-at the builder tier and effort the launch resolved. It returns once the session exists. `compose`
-takes the same two flags.
-
-- A cloud launch provisions no worktree, leaves no process on the owner's machine that the build
-  depends on, and pushes no branch.
-- The session starts from the commit of the checkout the launcher ran in, as the remote has it. When
-  that commit is on no remote branch, the launch refuses (`launch-cloud-head-not-on-remote`). The
-  builder branches from the base its order names.
-- The prompt is the composed order of a local launch, standing rulings verbatim, plus two lines: that
-  the builder runs in a cloud session, and your plugin version.
-- The lane record names the session: its name (the launcher sets `issue-<n>-<launch hex>`, and the
-  host lists the session under it), its id, and its URL.
-- A cloud launch takes no pilot slot and no iPhone. A launch that asks for either with
-  `--place cloud` refuses.
-- To reach a running cloud builder, message the session the lane record names. A message wakes an
-  idle session.
-- `cloud-session-unconfirmed` means the command may have made a session the launcher could not
-  confirm. The lane stays live. Look in the host's session listing for a session of the recorded
-  name. When there is none, record the lane's outcome as `died`.
+**Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
+`reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
+the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`) and its URL
+(`cloudSessionUrl`). To reach a running cloud builder, message the session the lane record names. A
+message wakes an idle session. A `started` record that carries `cloudSessionUnconfirmed` in place of
+the id means a session may exist that was never confirmed. The lane stays live. Look in the host's
+session listing for a session of the recorded name; when there is none, record the lane's outcome as
+`died`.
 
 ## iPhone lanes: launching and reaping their phones
 
@@ -163,7 +150,7 @@ start and its last activity, is `lane-stale`, with `place: "cloud"` and `activit
 
 - A cloud lane has no pid, transcript, or heartbeat to read, and none of those absences means
   anything. The watch never reports `builder-exited` or `lane-never-stamped` for it and never reads a
-  transcript for it. `canary` refuses a cloud lane (`canary-cloud-lane`).
+  transcript for it.
 - The watch never reports `lane-terminal` or `lane-blocked` for a cloud lane. Its ending reaches you
   through its PR and its issue.
 - Before you treat its `lane-stale` as a wedge, read the session's state in the host's session

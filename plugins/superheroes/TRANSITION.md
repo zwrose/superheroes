@@ -9,10 +9,9 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
-### Launcher: cloud lanes
+### Launch ledger: cloud lanes
 
-- `launch` and `compose` take `--place cloud --cloud-environment <id>` and can start a builder in a cloud session.
-- Launches without `--place` behave exactly as before.
+- The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
 - `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
 - Heartbeat sweep entries gain `place`.
 - An older plugin build can still read a ledger that holds a cloud lane. It reads that lane as a local one.
