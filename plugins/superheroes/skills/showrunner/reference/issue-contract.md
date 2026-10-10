@@ -4,6 +4,7 @@
 - [The three-slot skeleton](#the-three-slot-skeleton)
 - [The Anchor slot](#the-anchor-slot)
 - [The build-ready block](#the-build-ready-block)
+- [Verifying board membership](#verifying-board-membership)
 - [The four routing-time calls](#the-four-routing-time-calls)
 - [The priority tiers and what each commits to](#the-priority-tiers-and-what-each-commits-to)
 - [The size-consideration slot](#the-size-consideration-slot)
@@ -131,6 +132,13 @@ reading the JSON result from stdout.
 
 **Empty What or DoD** are **reported but never blocking** at filing — they are graded at vet,
 not refused at build-ready marking.
+
+## Verifying board membership
+
+Verify an issue's project-board membership per issue with `gh issue view <n> --json projectItems`.
+Never list the board with `gh project item-list` and a large limit to check one issue: one large
+`item-list` call costs about 850 GraphQL points against a 5,000-point hourly budget that every
+session on the account shares.
 
 ## The four routing-time calls
 
