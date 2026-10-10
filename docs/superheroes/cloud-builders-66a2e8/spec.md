@@ -29,7 +29,8 @@ Every statement ends with its source in plain text. The sources are:
 
 The requirements are grouped in six parts, A to F, in the order an owner meets them: setup, where
 a build runs, a cloud build's life, cleanup, keeping the reviewer pass alive, and keeping the plugin
-version in step. (source: journeys; Canon 2026-10-10-ca3e7e0d-18)
+version in step. (source: craft, for your veto) Parts A to E follow the journeys board. (source: journeys)
+Part F follows the owner's ruling on picking up a new plugin version. (source: Canon 2026-10-10-ca3e7e0d-18)
 
 ## Purpose
 
@@ -133,7 +134,7 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
   - *Acceptance (rule):* A builder that stops mid-build has pushed work for the advisor to recover the lane from. (source: journeys; board · 5 Mid-build trouble)
   - *Acceptance (rule):* At handback, the review record and the receipts are on the PR, and nothing the vet needs exists only on the cloud machine. (source: journeys)
 
-**FR-25.** The independent reviewer of a cloud build shall run through the reviewer pass. (source: Canon 2026-10-10-ca3e7e0d-2; journeys)
+**FR-25.** Every independent review seat of a cloud build, on every lane, shall run through the reviewer pass. (source: Canon 2026-10-10-ca3e7e0d-2; journeys)
   - *Acceptance (rule):* The plugin does not drop the review of a cloud build and does not treat it as second class. (source: Canon 2026-10-10-ca3e7e0d-2)
 
 **FR-26.** A cloud builder shall not merge. (source: framing; journeys)
@@ -152,7 +153,7 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
 **FR-29.** When the advisor has asked a cloud builder to archive itself, the advisor shall tell the owner to expect one prompt and to tap Allow once. (source: board · 6 Cleanup)
   - *Acceptance (rule):* The advisor's message names the merged build and the one tap. (source: board · 6 Cleanup)
 
-**FR-30.** When a cloud build's PR is merged, the plugin shall leave nothing behind for that build except its session: no branch on the repository and no files on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-9; board · 6 Cleanup)
+**FR-30.** When a cloud build's PR is merged, the plugin shall leave nothing behind for that build except its session and its lane record: no branch on the repository, and no checkout or worktree on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-9; board · 6 Cleanup)
   - *Acceptance (rule):* The archive prompt is the only step left to the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
 
 **FR-31.** While a cloud build's PR is neither merged nor closed, the plugin shall keep the build's pushed branch. (source: craft, for your veto)
@@ -163,7 +164,7 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
 
 ### Part E: keeping the reviewer pass alive
 
-The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/showrunner/reference/owner-decisions.md § The seven duties, a closed list]. This spec adds one duty to that list, for projects that have a cloud setup. (source: Canon 2026-10-10-ca3e7e0d-12)
+The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/showrunner/reference/owner-decisions.md § The seven duties, a closed list]. This spec adds one duty to that list, for projects that have a cloud setup. (source: Canon 2026-10-10-ca3e7e0d-12) The new duty is appended as duty 8, so the seven existing duties keep their numbers and the list stays closed at eight. (source: craft, for your veto)
 
 **FR-33.** When a gardening pass runs in a project that has a cloud setup, the advisor shall report how many days the reviewer pass has left and the date it lapses. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
   - *Acceptance (rule):* The line reads as the board draws it, with the days left and the date. (source: board · 7 The gardening pass)
@@ -177,6 +178,7 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 **FR-36.** When the reviewer pass is renewed, the advisor shall send each PR that UFR-7 parked and that is still open back for review. (source: board · 5 Mid-build trouble)
   - *Acceptance (Given-When-Then):* Given a PR parked because its review could not run, when the owner renews the pass, then the advisor sends that PR back for its review with no further word from the owner. (source: board · 5 Mid-build trouble)
   - *Acceptance (rule):* The advisor does not send back a parked PR that was closed before the renewal. (source: craft, for your veto)
+  - *Acceptance (rule):* The advisor does not send back a parked PR that the owner has already let through by the review spec's own rules. (source: craft, for your veto)
 
 ### Part F: keeping the plugin version in step
 
@@ -209,9 +211,9 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 **UFR-7.** If a cloud build's independent review cannot run because the reviewer pass has lapsed, then the builder shall park the PR with its review recorded as not run. (source: Canon 2026-10-10-ca3e7e0d-2; board · 5 Mid-build trouble)
   - *Acceptance:* Given a cloud build whose pass lapses before its review, when the builder reaches the review, then the builder's comment on the PR says the review did not run, that the work is pushed, and that the PR is not ready. (source: board · 5 Mid-build trouble)
   - *Acceptance (rule):* A review that finished before the pass lapsed stays as it was recorded. (source: craft, for your veto)
-  - *Acceptance (rule):* No reviewer from the builder's own model family stands in. (source: Canon 2026-10-10-ca3e7e0d-2)
+  - *Acceptance (rule):* A PR parked this way follows the approved review spec's rules for a review that did not run, the owner's own ways past them included. No session picks a reviewer from a maker's model family on its own. (source: Canon 2026-10-10-d6064e1d-12)
 
-The approved review spec already treats a review as not run when no reviewer from a different model family can run [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § UFR-4]. UFR-7 applies that rule to a review that a lapsed pass stops from running. (source: craft, for your veto)
+The approved review spec already says what happens when a planned reviewer could not run [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § UFR-3], and treats a review as not run when no reviewer from a different model family can run [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § UFR-4]. UFR-7 applies those rules to a review that a lapsed pass stops from running, and changes neither. (source: craft, for your veto)
 
 **UFR-8.** If UFR-7 parks a cloud build's PR, then the advisor shall tell the owner that the PR is parked and that renewing the pass lets it go back for review. (source: board · 5 Mid-build trouble)
   - *Acceptance:* Given a PR parked by UFR-7, when the advisor next writes to the owner, then the message names the PR, the reason and the renewal. (source: board · 5 Mid-build trouble)
@@ -255,7 +257,8 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - The build tests each of these where a test can reach it: several cloud builders at once, a
   full-size build, a builder's question answered mid-build, a stopped builder recovered, a project
   that keeps its calibration outside the repository, and a lapsed pass sending builds to the
-  owner's machine. What a test cannot reach is learned in use and fixed as it comes up. (source: Canon 2026-10-10-ca3e7e0d-15)
+  owner's machine. (source: craft, for your veto)
+- What a test cannot reach is learned in use and fixed as it comes up. (source: Canon 2026-10-10-ca3e7e0d-15)
 
 ## Assumptions & dependencies
 
@@ -264,6 +267,12 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - The owner has a sign-in for an independent reviewer that can be placed in the cloud as a pass.
   The pass used in the discovery's pilot lasts 10 days. (source: board · 1 Setup; journeys)
 - The platform lets a session archive itself only when a person approves the prompt. (source: journeys; board · 6 Cleanup)
+- The platform delivers a message from the advisor to a running cloud session, and does not deliver
+  one from a cloud session to the advisor. FR-22, FR-28 and UFR-13 rely on the first, and FR-21 uses
+  a comment because of the second. (source: craft, for your veto; journeys)
+- This work builds on the approved review spec's release, which is not built yet. The review record
+  that FR-17, FR-24 and UFR-7 name comes from that release
+  [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § FR-3]. (source: craft, for your veto; Canon 2026-10-10-d6064e1d-3)
 - Whether the cloud platform lets the cloud pick up a new plugin version by itself is not yet
   proven. FR-37 states the aim, and the pasted setup text is the fallback. (source: Canon 2026-10-10-ca3e7e0d-18; board · 3 The launch report)
 
@@ -282,6 +291,10 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 
 - Hands-off upkeep of the reviewer pass and of the calibration copy: renewing and delivering them
   with no hand step. It is the later piece. (source: Canon 2026-10-10-ca3e7e0d-1; Canon 2026-10-10-ca3e7e0d-18)
+  Until that piece ships, a project that keeps its calibration outside the repository meets a hand
+  step after every calibration change: the cloud's copy is then out of date, FR-14 counts the cloud
+  as not ready, and every build runs on the owner's machine until the owner pastes new setup text.
+  That recurs with each calibration update, and with each sitting that changes calibration. (source: craft, for your veto; Canon 2026-10-10-ca3e7e0d-1)
 - The advisor, discovery and the detective in the cloud. They stay on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-16)
 - Any check that needs a phone or the owner's signed-in browser. (source: Canon 2026-10-10-ca3e7e0d-16)
 - Cleanup with no tap from the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
@@ -319,7 +332,7 @@ _No amendments since the last full approval._
 | Misuse & abuse | N-A | — | The project's stated threat model excludes malicious code; FR-3 discloses who can read the pass |
 | Reach (i18n / a11y) | N-A | — | No screens of its own; the wording is plain chat text and comments |
 | Wording & tone | Specify | Yes | The build board's wording, all seven artboards |
-| Workflow shape | Specify | No | The journeys board; parts A to E follow it |
+| Workflow shape | Specify | No | The journeys board; parts A to E follow it, and Part F follows Canon 2026-10-10-ca3e7e0d-18 |
 | Placement & prominence | Specify | Yes | FR-15, FR-19, UFR-6: the launch report, the cloud mark, the line at the top of later messages |
 | Limits & defaults | Specify | No | FR-7: off until switched on; FR-12: the cloud is the default once on |
 | Tier & access boundaries | N-A | — | Works the same for every owner whose plan offers cloud sessions |
