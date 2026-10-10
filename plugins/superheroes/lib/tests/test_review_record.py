@@ -530,14 +530,80 @@ def test_reused_finding_id_for_another_finding_does_not_clear_an_owner_decision(
     rr.write(put(tmp_path, account(sessionId="B", findings=other)), str(tmp_path), fake.readers())
     rec = rr.read(7, readers=fake.readers())
     assert rec["leftForOwner"] == ["code-001"] and rec["status"] == "not-reviewed"
-    assert rec["carriedForOwner"][0]["file"] == "auth.py"
-    # the same finding under a new id, decided, clears it; an explicit key matches across titles
-    keyed = [finding("v0", title="Auth gap reworded", file="auth.py", key="k1", outcome="left-for-owner", reason="r")]
+    assert [f["file"] for f in rec["owed"]] == ["auth.py"]
+    # an explicit findingKey is the identity across titles and ids; it settles only its own finding
+    keyed = [finding("v0", title="Auth gap reworded", file="auth.py", findingKey="k1", outcome="left-for-owner",
+                     reason="r"), dict(old[0]), dict(other[0])]
     rr.write(put(tmp_path, account(sessionId="C", findings=keyed)), str(tmp_path), fake.readers())
-    decided = [finding("v9", title="x", file="y.py", key="k1", outcome="ruling", reason="owner ruled")]
+    decided = [finding("v9", title="x", file="y.py", findingKey="k1", outcome="ruling", reason="owner ruled"),
+               dict(other[0])]
     rr.write(put(tmp_path, account(sessionId="D", findings=decided)), str(tmp_path), fake.readers())
     rec = rr.read(7, readers=fake.readers())
-    assert [f["file"] for f in rec["carriedForOwner"]] == ["auth.py"]
+    assert [(f["file"], f["outcome"]) for f in rec["owed"]] == [("auth.py", "left-for-owner")]
+    assert rec["status"] == "not-reviewed"
+
+
+def test_same_title_at_another_line_is_another_finding():
+    # axis: finding identity; two findings sharing file and title collapsing into one, so settling one settles both
+    two = [finding("c1", title="Leak", line=10, outcome="left-for-owner", reason="r"),
+           finding("c2", title="Leak", line=90, outcome="left-for-owner", reason="r")]
+    old = build(account(sessionId="A", findings=two))
+    rec = build(account(sessionId="B", findings=[finding("c2", title="Leak", line=90, reason="fixed it")]), prior=old)
+    assert [f["line"] for f in rec["owed"]] == [10] and rec["status"] == "not-reviewed"
+
+
+def test_an_unsettled_finding_omitted_later_stays_owed_in_the_same_session_and_the_next():
+    # axis: nothing cleared by omission; an approved-to-fix finding (null outcome) dropped by a rewrite
+    old = build(account(sessionId="A", findings=[finding("a-1", outcome=None)]))
+    same = build(account(sessionId="A"), prior=old)
+    assert [f["id"] for f in same["owed"]] == ["a-1"] and same["status"] == "not-reviewed"
+    assert same["owed"][0]["body"] == "b"  # held whole: this account no longer holds it
+    assert any("a-1" in m and "not in this account" in m for m in same["whatIsMissing"])
+    nxt = build(account(sessionId="B"), prior=same)
+    assert [f["id"] for f in nxt["owed"]] == ["a-1"] and nxt["status"] == "not-reviewed"
+    done = build(account(sessionId="B", findings=[finding("a-1")]), prior=nxt)
+    assert done["owed"] == [] and done["status"] == "reviewed"
+
+
+def test_a_settled_finding_must_still_reappear_in_the_next_account():
+    # axis: nothing cleared by omission; a prior finding missing from the new account silently dropped
+    old = build(account(sessionId="A", findings=[finding("a-1")]))
+    assert old["status"] == "reviewed"
+    rec = build(account(sessionId="B"), prior=old)
+    assert [f["id"] for f in rec["owed"]] == ["a-1"] and rec["status"] == "not-reviewed"
+
+
+def test_an_owner_decision_needs_a_settling_outcome_and_a_reason():
+    # axis: owner decisions; a reasonless ruling or a craft call erasing the pending owner decision
+    old = build(account(sessionId="A", findings=[finding("a-1", outcome="left-for-owner", reason="r")]))
+    for bad in (dict(outcome="ruling", reason=None), dict(outcome="craft", reason="style")):
+        rec = build(account(sessionId="B", findings=[finding("a-1", **bad)]), prior=old)
+        assert rec["leftForOwner"] == ["a-1"] and rec["status"] == "not-reviewed"
+        later = build(account(sessionId="C"), prior=rec)
+        assert later["leftForOwner"] == ["a-1"] and later["status"] == "not-reviewed"
+    rec = build(account(sessionId="B", findings=[finding("a-1", outcome="craft", reason="style")]), prior=old)
+    assert any("only fixed, shown-wrong, ruling settles it" in m for m in rec["whatIsMissing"])
+
+
+def test_raw_findings_match_by_identity_not_by_reused_id(tmp_path):
+    # axis: raw coverage; one outcome for a reused reviewer id covering a different, undecided finding
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "code-001", "title": "t", "file": "a.py", "line": 3, "severity": "Minor"},
+                               {"id": "code-001", "title": "Auth gap", "file": "auth.py", "line": 5,
+                                "severity": "Important"}]))
+    rec = build(account(rawFindingsFiles=[str(raw)], findings=[finding("code-001")]))
+    assert rec["status"] == "not-reviewed" and [f["file"] for f in rec["owed"]] == ["auth.py"]
+    assert "reviewer finding code-001 in code.json has no recorded outcome" in rec["whatIsMissing"]
+
+
+def test_a_graded_runs_own_findings_need_outcomes_even_when_the_account_omits_them():
+    # axis: raw coverage; a counted engine run's findings hidden by leaving them out of the account
+    run = dict(GOOD_RUN, resultContent={"findings": [{"id": "r-1", "title": "Gap", "file": "b.py", "line": 2}]})
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    rec = build(account(), fake)
+    assert rec["status"] == "not-reviewed" and [f["id"] for f in rec["owed"]] == ["r-1"]
+    covered = build(account(findings=[finding("x", title="Gap", file="b.py", line=2)]), fake)
+    assert covered["status"] == "reviewed"
 
 
 def test_null_outcome_does_not_clear_an_owner_decision():
@@ -598,7 +664,8 @@ def test_raw_finding_without_a_recorded_outcome_keeps_the_record_not_reviewed(tm
     raw = tmp_path / "code.json"
     raw.write_text(json.dumps([{"id": "raw-1", "severity": "Important", "body": "b"}]))
     rec = build(account(rawFindingsFiles=[str(raw)]))
-    assert rec["status"] == "not-reviewed" and "reviewer finding raw-1 has no recorded outcome" in rec["whatIsMissing"]
+    assert rec["status"] == "not-reviewed"
+    assert "reviewer finding raw-1 in code.json has no recorded outcome" in rec["whatIsMissing"]
 
 
 def test_left_for_owner_finding_is_not_reviewed_until_decided():

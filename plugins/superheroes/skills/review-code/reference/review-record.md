@@ -4,12 +4,11 @@ The review record: the plain account of one PR's review. This file is the one ho
 
 One PR comment whose first line is `<!-- superheroes:review-record -->`. A PR has exactly one. A
 later review edits it in place; earlier sessions' findings stay in it (whole, in an archive comment
-the record names, if they would not fit). An owner decision an earlier session left stays pending
-until a later session, or a rewrite, lists that finding with another outcome. Each review ends by writing it.
+the record names, if they would not fit). Nothing is cleared by omission: every finding the record
+holds or lists as `owed` must reappear in your account. Each review ends by writing it.
 
-The writer holds some facts in code: the lane, the final commit, CI on it, and whether an
-engine-run reviewer ran. Those win over your account. A reviewer whose run only you report is
-marked "reported by the session".
+The writer holds some facts in code: the lane, the final commit, CI on it, and whether an engine-run
+reviewer ran. Those win over your account. A run only you report is marked "reported by the session".
 
 ## Write the account
 
@@ -21,8 +20,8 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `reviewers`: each as `{name, vendor, model, planned, ran, runDir, ownerWord}`. List every
   planned reviewer, whether or not it ran. `runDir` is its run directory; with none, leave it empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
-  reviewer, key}`; `consequence` and `key` may be null. `id` is the reviewer's own id, not a staged
-  `v0`. Across sessions a finding is its `key`, else its file plus title.
+  reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
+  a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
 - `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked).
 - `goAheads`: the owner's word to go on without a planned review. Either
   `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`.
@@ -67,11 +66,12 @@ record's URL in the PR body's build record.
 ## What "reviewed" means
 
 The record says reviewed only when all five hold: CI is green on the PR's final commit; every
-finding, including each one a reviewer raised, has one of the five outcomes with its reason; no
-planned review is missing; the final commit was read from the PR; and the makers' model families
-are recorded. A finding left for the owner keeps the record at not reviewed until the owner's
-decision is recorded as `fixed`, `shown-wrong`, or `ruling`. A reviewer run counts only when the
-engine's own record shows it graded as a success; a forfeited run is a missing review.
+finding (in the account, held or owed by the existing record, in a raw findings file or a counted
+engine record's result), matched by identity, has one of the five outcomes and a reason in this
+account; no planned review is missing; the final commit was read from the PR; and the makers'
+families are recorded. Any finding short of that is listed in `owed` and in what is left. One left
+for the owner stays owed until `fixed`, `shown-wrong`, or `ruling` is recorded with its reason.
+A reviewer run counts only when the engine's record shows it graded a success; a forfeit is missing.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed.

@@ -28,6 +28,7 @@ import build_lane  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import session_contract  # noqa: E402
 import store_core  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
@@ -263,7 +264,7 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, makers, rd, dis, head=None):
+def _reviewer(r, makers, rd, dis, head=None, results=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     if r.get("runDir"):
@@ -279,6 +280,10 @@ def _reviewer(r, makers, rd, dis, head=None):
                     dis.append({"fact": f"{r['name']} ran on the final commit", "session": True, "code": "not-run"})
             else:
                 out.update(ran="engine-record", observation=rec.get("observation"))
+                content = rec.get("resultContent")
+                if results is not None and isinstance(content, dict) and isinstance(content.get("findings"), list):
+                    # The graded run's own findings: each must have an outcome, whatever the account lists.
+                    results += _raw_rows(content["findings"], f"{r['name']} engine record")
             source, model = rec.get("source"), rec.get("engineModel") or rec.get("model")
             if isinstance(source, str) and source:
                 # The run's own engine and model decide the family; the account's claim is only a claim.
@@ -304,6 +309,14 @@ def _reviewer(r, makers, rd, dis, head=None):
     return out
 
 
+_RAW_KEYS = ("id", "title", "severity", "file", "line", "body", session_contract.FINDING_KEY_FIELD)
+_SETTLES_OWNER = tuple(o for o in rfs.OUTCOMES if o not in (_LEFT_FOR_OWNER, "craft"))
+
+
+def _raw_rows(members, source):
+    return [{"sourceFile": source, **{k: m.get(k) for k in _RAW_KEYS}} for m in members if isinstance(m, dict)]
+
+
 def _raw_findings(paths):
     raw, unread = [], []
     for p in paths:
@@ -316,18 +329,77 @@ def _raw_findings(paths):
         except (OSError, ValueError, KeyError, TypeError, AssertionError):
             unread.append(f"the findings file {os.path.basename(p)} could not be read")
             continue
-        raw += [{"sourceFile": os.path.basename(p), **{k: m.get(k) for k in ("id", "title", "severity", "file", "line", "body")}}
-                for m in members if isinstance(m, dict)]
+        raw += _raw_rows(members, os.path.basename(p))
     return raw, unread
 
 
-def _finding_key(f):
-    if isinstance(f.get("key"), str) and f["key"]:
-        return f["key"]
-    return f"{f.get('file')}::{' '.join(str(f.get('title') or '').lower().split())}"
+def _key(f):
+    return session_contract.finding_identity_key(f)
 
 
-def _status(rec, unread=()):
+def _decided(f, settles=rfs.OUTCOMES):
+    return f.get("outcome") in settles and bool(f.get("reason"))
+
+
+def _name(f):
+    return f.get("id") or f"at {f.get('file')}:{f.get('line')}"
+
+
+def _ref(f):
+    """An owed entry for a finding the record already holds in full: its identity and what names it."""
+    keep = ("id", "title", "file", "line", "outcome", "sourceFile")
+    return {**{k: f[k] for k in keep if k in f}, session_contract.FINDING_KEY_FIELD: _key(f)}
+
+
+def _owed(findings, raw, prior):
+    """One check, by finding identity (session_contract.finding_identity_key), never by id.
+
+    Every finding the prior record held (its findings and its owed list) must reappear in this
+    account with one of the outcomes and a reason; every reviewer finding must match an account
+    finding that has both. Anything else is owed. Nothing is cleared by omission.
+    """
+    by_key, owed, lines = {}, {}, []
+    for f in findings:
+        by_key.setdefault(_key(f), []).append(f)
+        if f.get("outcome") not in rfs.OUTCOMES:
+            lines.append(f"finding {_name(f)} has no outcome")
+        elif not f.get("reason"):
+            lines.append(f"finding {_name(f)} has no reason")
+        elif f["outcome"] == _LEFT_FOR_OWNER:
+            lines.append(f"finding {_name(f)} waits for the owner's decision")
+    earlier = {}
+    for p in list((prior or {}).get("findings") or []) + list((prior or {}).get("owed") or []):
+        if isinstance(p, dict):
+            # The fullest copy (the findings list) is kept; any copy still left for the owner keeps it so.
+            kept = earlier.setdefault(_key(p), dict(p))
+            if p.get("outcome") == _LEFT_FOR_OWNER:
+                kept["outcome"] = _LEFT_FOR_OWNER
+    for k, p in earlier.items():
+        mine = by_key.get(k, [])
+        settles = _SETTLES_OWNER if p.get("outcome") == _LEFT_FOR_OWNER else rfs.OUTCOMES
+        if any(_decided(f, settles) and f["outcome"] != _LEFT_FOR_OWNER for f in mine):
+            continue
+        if any(f.get("outcome") == _LEFT_FOR_OWNER and f.get("reason") for f in mine):
+            continue  # still left for the owner: owed below, from this account's copy
+        # Held in full only when this account no longer holds it; otherwise a reference.
+        owed.setdefault(k, dict(p) if not mine else _ref(p))
+        if not mine:
+            lines.append(f"finding {_name(p)} from the earlier record is not in this account, so it is still owed"
+                         + ("; it waits for the owner's decision" if p.get("outcome") == _LEFT_FOR_OWNER else ""))
+        elif any(_decided(f) and f["outcome"] != _LEFT_FOR_OWNER for f in mine):
+            lines.append(f"finding {_name(p)} was left for the owner; only "
+                         + ", ".join(_SETTLES_OWNER) + " settles it")
+    for f in findings:
+        if not _decided(f) or f["outcome"] == _LEFT_FOR_OWNER:
+            owed.setdefault(_key(f), _ref(f))
+    for r in raw:
+        if not any(_decided(f) for f in by_key.get(_key(r), [])):
+            owed.setdefault(_key(r), _ref(r))
+            lines.append(f"reviewer finding {_name(r)} in {r.get('sourceFile')} has no recorded outcome")
+    return list(owed.values()), lines
+
+
+def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
     if fc["source"] != "GitHub PR":
@@ -338,22 +410,7 @@ def _status(rec, unread=()):
         lines.append(f"CI is {ci['state']} on {s7(ci['sha'])}")
     elif ci["sha"] != fc["sha"]:
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
-    for f in rec["findings"]:
-        if f.get("outcome") not in rfs.OUTCOMES:
-            lines.append(f"finding {f['id']} has no outcome")
-        elif not f.get("reason"):
-            lines.append(f"finding {f['id']} has no reason")
-    disposed = {f.get("id") for f in rec["findings"]}
-    for r in rec["rawFindings"]:
-        if not r.get("id"):
-            lines.append(f"a reviewer finding in {r.get('sourceFile')} has no id, so no outcome can be matched to it")
-        elif r["id"] not in disposed:
-            lines.append(f"reviewer finding {r['id']} has no recorded outcome")
-    for f in rec["findings"]:
-        if f.get("outcome") == _LEFT_FOR_OWNER:
-            lines.append(f"finding {f['id']} waits for the owner's decision")
-    for f in rec["carriedForOwner"]:
-        lines.append(f"finding {f['id']} from an earlier session still waits for the owner's decision")
+    lines += finding_lines
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
     if not rec["makers"]:
@@ -371,7 +428,8 @@ def build_record(account, readers, prior=None):
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
         if from_code and session is not None and session != code:
             dis.append({"fact": fact, "session": session, "code": code})
-    reviewers = [_reviewer(r, a["makers"], rd, dis, fc["sha"]) for r in a["reviewers"]]
+    results = []
+    reviewers = [_reviewer(r, a["makers"], rd, dis, fc["sha"], results) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -381,6 +439,7 @@ def build_record(account, readers, prior=None):
                 notes.append(f"the go-ahead for {v['name']} is incomplete")
             missing.append({"name": v["name"], "goAhead": good})
     raw, unread = _raw_findings(a["rawFindingsFiles"])
+    raw += results
     findings = [dict(f) for f in a["findings"]]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -391,21 +450,11 @@ def build_record(account, readers, prior=None):
     hist = list((prior or {}).get("history") or [])
     if prior and prior.get("sessionId") != a["sessionId"]:
         hist.append({k: prior.get(k) for k in ("sessionId", "finalCommit", "findings", "rawFindings")})
-    # An earlier finding left for the owner (from any session, this one included) stays pending until a
-    # later account lists the same finding, by key, with another recorded outcome. Ids are review-local
-    # and recur, so identity is the finding's own `key`, else its file plus normalized title.
-    cleared = {_finding_key(f) for f in findings if f.get("outcome") in rfs.OUTCOMES and f["outcome"] != _LEFT_FOR_OWNER}
-    listed = {_finding_key(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER}
-    earlier = list((prior or {}).get("carriedForOwner") or []) + list((prior or {}).get("findings") or [])
-    carried = list({_finding_key(f): dict(f) for f in earlier
-                    if isinstance(f, dict) and f.get("outcome") == _LEFT_FOR_OWNER
-                    and _finding_key(f) not in cleared | listed}.values())
+    owed, finding_lines = _owed(findings, raw, prior)
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "finalCommit": fc,
         "ci": ci, "makers": a["makers"], "reviewers": reviewers, "findings": findings, "rawFindings": raw,
-        "carriedForOwner": carried,
-        "leftForOwner": [f["id"] for f in findings if f.get("outcome") == _LEFT_FOR_OWNER]
-                        + [f["id"] for f in carried],
+        "owed": owed, "leftForOwner": [_name(f) for f in owed if f.get("outcome") == _LEFT_FOR_OWNER],
         "historyArchives": list((prior or {}).get("historyArchives") or []),
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
         "cost": {"unit": "reviewer-minutes",
@@ -418,7 +467,7 @@ def build_record(account, readers, prior=None):
         "history": [h for h in hist if h.get("sessionId") != a["sessionId"]],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    rec["status"], rec["parked"], lines = _status(rec, unread)
+    rec["status"], rec["parked"], lines = _status(rec, unread, finding_lines)
     rec["whatIsMissing"] = notes + lines
     return rec
 
