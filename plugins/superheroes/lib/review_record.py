@@ -312,12 +312,13 @@ def _reviewer(r, makers, rd, dis, head=None):
     return out
 
 
-_RAW_KEYS = ("id", "title", "severity", "file", "line", "body", rfs.CONSEQUENCE_KEY, session_contract.FINDING_KEY_FIELD)
 _SETTLES_OWNER = tuple(o for o in rfs.OUTCOMES if o not in (_LEFT_FOR_OWNER, "craft"))
 
 
 def _raw_rows(members, source):
-    return [{"sourceFile": source, **{k: m.get(k) for k in _RAW_KEYS}} for m in members if isinstance(m, dict)]
+    """The whole reviewer member (every canonical key it carries) plus where it came from."""
+    return [{**{k: m[k] for k in rfs.CANONICAL_MEMBER_KEYS if k in m}, "sourceFile": source}
+            for m in members if isinstance(m, dict)]
 
 
 def _raw_findings(paths):
@@ -328,7 +329,7 @@ def _raw_findings(paths):
                 members = json.load(fh)
             if isinstance(members, dict):
                 members = members["findings"]
-            assert isinstance(members, list)
+            assert isinstance(members, list) and all(isinstance(m, dict) for m in members)
         except (OSError, ValueError, KeyError, TypeError, AssertionError):
             unread.append(f"the findings file {os.path.basename(p)} could not be read")
             continue
@@ -350,7 +351,7 @@ def _name(f):
 
 def _ref(f):
     """An owed entry for a finding the record already holds in full: its identity and what names it."""
-    keep = ("id", "title", "file", "line", "outcome", "sourceFile")
+    keep = ("id", "title", "file", "line", "outcome", "reason", "sourceFile")
     return {**{k: f[k] for k in keep if k in f}, session_contract.FINDING_KEY_FIELD: _key(f)}
 
 
@@ -377,6 +378,7 @@ def _owed(findings, raw, prior):
             kept = earlier.setdefault(_key(p), dict(p))
             if p.get("outcome") == _LEFT_FOR_OWNER:
                 kept["outcome"] = _LEFT_FOR_OWNER
+                kept["reason"] = kept.get("reason") or p.get("reason")
     for k, p in earlier.items():
         mine = by_key.get(k, [])
         settles = _SETTLES_OWNER if p.get("outcome") == _LEFT_FOR_OWNER else rfs.OUTCOMES
@@ -398,7 +400,9 @@ def _owed(findings, raw, prior):
     for r in raw:
         if not any(_decided(f) for f in by_key.get(_key(r), [])):
             # Whole: the raw file may be gone on a later write, and this is then the only copy of its text.
-            owed.setdefault(_key(r), {**r, session_contract.FINDING_KEY_FIELD: _key(r)})
+            mine = by_key.get(_key(r), [{}])[0]
+            owed.setdefault(_key(r), {**r, **{k: mine[k] for k in ("outcome", "reason") if k in mine},
+                                      session_contract.FINDING_KEY_FIELD: _key(r)})
             lines.append(f"reviewer finding {_name(r)} in {r.get('sourceFile')} has no recorded outcome")
     return list(owed.values()), lines
 
@@ -417,6 +421,8 @@ def _status(rec, unread=(), finding_lines=()):
     lines += finding_lines
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
+    if not any(v["planned"] and v["ran"] != "not-run" for v in rec["reviewers"]):
+        lines.append("no planned reviewer ran")
     if not rec["makers"]:
         lines.append("the makers' model families were not recorded")
     return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines

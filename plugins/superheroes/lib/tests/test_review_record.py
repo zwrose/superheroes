@@ -757,3 +757,30 @@ def test_a_session_too_large_for_any_archive_refuses():
     with pytest.raises(rr.Refusal) as e:
         rr.render_archive([huge])
     assert e.value.reason == "review-record-too-large"
+
+
+def test_raw_finding_keeps_every_canonical_member_and_a_non_object_member_blocks_reviewed(tmp_path):
+    # axis: raw evidence fidelity; evidence/suggestion/tradeoff dropped, or a malformed member read as an empty file
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "c-1", "title": "t", "file": "a.py", "line": 3, "severity": "Minor",
+                                "body": "b", "evidence": "receipt", "suggestion": "fix", "tradeoff": True}]))
+    row = build(account(rawFindingsFiles=[str(raw)]))["rawFindings"][0]
+    assert (row["evidence"], row["suggestion"], row["tradeoff"], row["sourceFile"]) == ("receipt", "fix", True, "code.json")
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps([None, "reviewer error"]))
+    rec = build(account(rawFindingsFiles=[str(bad)]))
+    assert rec["status"] == "not-reviewed" and "the findings file bad.json could not be read" in rec["whatIsMissing"]
+
+
+def test_a_same_session_relist_keeps_the_owner_wait_reason():
+    # axis: owed reason; a carried owner decision losing why it waits
+    old = build(account(sessionId="A", findings=[finding("a-1", outcome="left-for-owner", reason="needs budget decision")]))
+    mid = build(account(sessionId="A", findings=[finding("a-1", outcome=None, reason=None)]), prior=old)
+    last = build(account(sessionId="A"), prior=mid)
+    assert [o["reason"] for o in last["owed"]] == ["needs budget decision"]
+
+
+def test_a_roster_with_no_planned_reviewer_that_ran_is_not_reviewed():
+    # axis: nothing ran; an unplanned, unrun roster counted as reviewed
+    rec = build(account(reviewers=[reviewer(planned=False, ran=False, runDir=None)]))
+    assert rec["status"] == "not-reviewed" and "no planned reviewer ran" in rec["whatIsMissing"]
