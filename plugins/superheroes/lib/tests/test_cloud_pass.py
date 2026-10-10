@@ -829,6 +829,7 @@ def test_cli_confirm_prints_one_json_line_and_exits_zero_either_way(tmp_path, mo
     _cli_env(monkeypatch, tmp_path)
     _write(_default(tmp_path), _pass_obj())
     monkeypatch.setattr(subprocess, "run", _fake_run())
+    monkeypatch.setattr(CP.time, "time", lambda: NOW)
     assert CP.main(["confirm"]) == 0
     assert _one_json_line(capsys)["reviewerAnswered"] is True
     _default(tmp_path).unlink()
@@ -902,14 +903,15 @@ def _confirmation(answered=True, lapses=NEW_LAPSE, **over):
 def _record(tmp_path, confirmation, **kw):
     cwd, root, path = _project(tmp_path)
     before = open(path, "rb").read()
-    kw = {"account": ACCOUNT, "now": NOW, "root": root, **kw}
+    kw = {"account": ACCOUNT, "environment": ENVIRONMENT, "now": NOW, "root": root, **kw}
     result = CP.record_confirmation(cwd, confirmation, **kw)
     return result, before, open(path, "rb").read()
 
 
 def test_record_confirmation_moves_the_lapse_date_when_the_reviewer_answered(tmp_path):
     cwd, root, path = _project(tmp_path)
-    result = CP.record_confirmation(cwd, _confirmation(), account=ACCOUNT, now=NOW, root=root)
+    result = CP.record_confirmation(cwd, _confirmation(), account=ACCOUNT, environment=ENVIRONMENT,
+                                    now=NOW, root=root)
     assert result == {"action": "written"}
     record = cloud_setup.read(cwd, ACCOUNT, root=root)["record"]
     assert record["passLapses"] == NEW_LAPSE and record["environment"] == ENVIRONMENT
@@ -969,12 +971,19 @@ def test_record_confirmation_r6_environment_mismatch_is_refused_and_moves_nothin
     assert after == before
 
 
+@pytest.mark.parametrize("environment", [None, ""], ids=["none", "empty"])
+def test_record_confirmation_r6_missing_environment_is_refused_and_moves_nothing(tmp_path, environment):
+    result, before, after = _record(tmp_path, _confirmation(), environment=environment)
+    assert result == {"action": "refused", "reason": "environment-unknown"}
+    assert after == before
+
+
 def test_record_confirmation_r6_account_without_a_record_creates_no_file(tmp_path):
     cwd, root, path = _project(tmp_path)
     other = cloud_setup.record_path(cwd, "acct-fixture-two", root)
     listing = _snapshot(os.path.dirname(path))
-    result = CP.record_confirmation(cwd, _confirmation(), account="acct-fixture-two", now=NOW,
-                                    root=root)
+    result = CP.record_confirmation(cwd, _confirmation(), account="acct-fixture-two",
+                                    environment=ENVIRONMENT, now=NOW, root=root)
     assert result == {"action": "refused", "reason": "cloud-setup-missing"}
     assert not os.path.exists(other) and _snapshot(os.path.dirname(path)) == listing
 
@@ -1004,7 +1013,7 @@ def test_make_does_not_import_the_setup_record_module(tmp_path):
 
 def _record_args(cwd, root, confirmation, *extra):
     return ["record-confirmation", "--cwd", cwd, "--root", root, "--account", ACCOUNT,
-            "--confirmation", confirmation, *extra]
+            "--environment", ENVIRONMENT, "--confirmation", confirmation, *extra]
 
 
 def test_cli_record_confirmation_prints_written_and_exits_zero(tmp_path, capsys):

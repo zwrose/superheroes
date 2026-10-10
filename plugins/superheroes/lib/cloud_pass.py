@@ -416,6 +416,8 @@ def record_confirmation(cwd, confirmation, *, account=None, environment=None, no
     account = cloud_setup.launching_account(env, cwd) if account is None else account
     if account is None:
         return {"action": "refused", "reason": "account-unknown"}
+    if not environment:
+        return {"action": "refused", "reason": "environment-unknown"}
     return cloud_setup.confirm_pass(cwd, account, lapses, environment=environment, root=root)
 
 
