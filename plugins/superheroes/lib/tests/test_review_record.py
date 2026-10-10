@@ -273,27 +273,51 @@ def test_read_back_survives_the_session_dir(tmp_path, shape):
 def test_unreadable_raw_findings_file_is_named_not_fatal(tmp_path):
     # axis: unreadable raw findings; a missing file hidden, or one that aborts the write
     rec = build(account(rawFindingsFiles=[str(tmp_path / "gone.json")]))
-    assert rec["whatIsMissing"] == ["the findings file gone.json could not be read"]
+    assert rec["whatIsMissing"] == [f"the findings file {tmp_path / 'gone.json'} could not be read"]
     assert rec["status"] == "not-reviewed"
     bad = tmp_path / "bad.json"
     bad.write_text("{not json")
     rec = build(account(rawFindingsFiles=[str(bad)]))
-    assert rec["status"] == "not-reviewed" and "the findings file bad.json could not be read" in rec["whatIsMissing"]
+    assert rec["status"] == "not-reviewed" and f"the findings file {bad} could not be read" in rec["whatIsMissing"]
 
 
 def test_unread_raw_file_stays_owed_across_a_rewrite_that_omits_it(tmp_path):
     # axis: unread evidence across rewrites; an omitted unreadable file flipping the record to reviewed
     gone = str(tmp_path / "gone.json")
     first = build(account(rawFindingsFiles=[gone]))
-    assert first["status"] == "not-reviewed" and first["unreadFiles"] == ["gone.json"]
+    assert first["status"] == "not-reviewed" and first["unreadFiles"] == [gone]
     again = build(account(rawFindingsFiles=[]), prior=first)
-    assert again["status"] == "not-reviewed" and "the findings file gone.json could not be read" in again["whatIsMissing"]
+    assert again["status"] == "not-reviewed" and f"the findings file {gone} could not be read" in again["whatIsMissing"]
     good = tmp_path / "gone.json"
     good.write_text("[]")
     healed = build(account(rawFindingsFiles=[]), prior=again)
     assert healed["status"] == "not-reviewed"
     healed = build(account(rawFindingsFiles=[str(good)]), prior=again)
     assert healed["unreadFiles"] == [] and healed["status"] == "reviewed"
+
+
+def test_a_same_named_file_in_another_round_does_not_clear_an_unread_one(tmp_path):
+    # axis: unread evidence identity; a basename match clearing another round's unread file
+    (tmp_path / "round-1").mkdir()
+    (tmp_path / "round-2").mkdir()
+    one, two = tmp_path / "round-1" / "findings-code.json", tmp_path / "round-2" / "findings-code.json"
+    first = build(account(rawFindingsFiles=[str(one)]))
+    two.write_text("[]")
+    second = build(account(rawFindingsFiles=[str(two)]), prior=first)
+    assert second["unreadFiles"] == [str(one)] and second["status"] == "not-reviewed"
+    one.write_text("[]")
+    third = build(account(rawFindingsFiles=[str(one), str(two)]), prior=second)
+    assert third["unreadFiles"] == [] and third["status"] == "reviewed"
+
+
+def test_a_secret_named_field_is_redacted_whole_in_the_record_and_the_archive():
+    # axis: structured credentials; a value scrubbed without its field name keeping a password
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {"password": "hunter2", "Nested": {"API_KEY": "abc", "note": "ok"}}
+    rec = build(account(findings=[f]))
+    body = rr.render(rec)
+    assert "hunter2" not in body and "abc" not in body and '"note": "ok"' in body
+    assert "hunter2" not in rr.render_archive([{"findings": [f]}])
 
 
 def test_earlier_session_findings_survive_in_history(tmp_path):
@@ -644,10 +668,25 @@ def test_a_raw_finding_keeps_its_consequence_and_stays_whole_when_owed_and_the_f
     first = build(account(sessionId="A", rawFindingsFiles=[str(raw)]))
     assert first["rawFindings"][0]["consequence"] == "data leaks"
     again = build(account(sessionId="A"), prior=first)
-    assert again["status"] == "not-reviewed" and again["rawFindings"] == []
+    assert again["status"] == "not-reviewed" and again["rawFindings"] == first["rawFindings"]
     (owed,) = again["owed"]
     assert (owed["body"], owed["severity"], owed["consequence"], owed["file"], owed["line"], owed["title"]) == \
         ("the explanation", "Important", "data leaks", "auth.py", 5, "Auth gap")
+
+
+def test_raw_findings_survive_a_relist_then_an_omission_in_the_same_session(tmp_path):
+    # axis: raw text survival; an account reference replacing the raw member, or a rewrite dropping it
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "c-1", "title": "Auth gap", "file": "auth.py", "line": 5,
+                                "severity": "Important", "body": "the explanation", "consequence": "data leaks"}]))
+    first = build(account(sessionId="A", rawFindingsFiles=[str(raw)]))
+    relist = build(account(sessionId="A", findings=[finding("c-1", title="Auth gap", file="auth.py", line=5,
+                                                            outcome=None, reason=None)]), prior=first)
+    omit = build(account(sessionId="A"), prior=relist)
+    for rec in (relist, omit):
+        (owed,) = rec["owed"]
+        assert (owed["body"], owed["severity"], owed["consequence"]) == ("the explanation", "Important", "data leaks")
+        assert rec["rawFindings"][0]["body"] == "the explanation"
 
 
 def test_null_outcome_does_not_clear_an_owner_decision():
@@ -784,7 +823,7 @@ def test_raw_finding_keeps_every_canonical_member_and_a_non_object_member_blocks
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps([None, "reviewer error"]))
     rec = build(account(rawFindingsFiles=[str(bad)]))
-    assert rec["status"] == "not-reviewed" and "the findings file bad.json could not be read" in rec["whatIsMissing"]
+    assert rec["status"] == "not-reviewed" and f"the findings file {bad} could not be read" in rec["whatIsMissing"]
 
 
 def test_a_same_session_relist_keeps_the_owner_wait_reason():

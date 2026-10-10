@@ -331,9 +331,9 @@ def _raw_findings(paths):
                 members = members["findings"]
             assert isinstance(members, list) and all(isinstance(m, dict) for m in members)
         except (OSError, ValueError, KeyError, TypeError, AssertionError):
-            unread.append(os.path.basename(p))
+            unread.append(str(p))
             continue
-        read.append(os.path.basename(p))
+        read.append(str(p))
         raw += _raw_rows(members, os.path.basename(p))
     return raw, unread, read
 
@@ -402,8 +402,11 @@ def _owed(findings, raw, prior):
         if not any(_decided(f) for f in by_key.get(_key(r), [])):
             # Whole: the raw file may be gone on a later write, and this is then the only copy of its text.
             mine = by_key.get(_key(r), [{}])[0]
-            owed.setdefault(_key(r), {**r, **{k: mine[k] for k in ("outcome", "reason") if k in mine},
-                                      session_contract.FINDING_KEY_FIELD: _key(r)})
+            # A raw member always wins over an account reference; the account's outcome and reason ride on it.
+            base = owed.get(_key(r), {})
+            owed[_key(r)] = {**r, **{k: (mine if k in mine else base)[k] for k in ("outcome", "reason")
+                                     if k in mine or k in base},
+                             session_contract.FINDING_KEY_FIELD: _key(r)}
             lines.append(f"reviewer finding {_name(r)} in {r.get('sourceFile')} has no recorded outcome")
     return list(owed.values()), lines
 
@@ -449,7 +452,10 @@ def build_record(account, readers, prior=None):
                 notes.append(f"the go-ahead for {v['name']} is incomplete")
             missing.append({"name": v["name"], "goAhead": good})
     raw, unread, read = _raw_findings(a["rawFindingsFiles"])
-    # An unread file stays owed across rewrites until a later account supplies that file readably.
+    # Raw findings accumulate across every write, by identity key, and are never dropped; a fresh read wins.
+    fresh = {_key(m) for m in raw}
+    raw = [m for m in (prior or {}).get("rawFindings") or [] if isinstance(m, dict) and _key(m) not in fresh] + raw
+    # An unread file (tracked by the exact path given) stays owed until a later account reads that same path.
     prior_unread = (prior or {}).get("unreadFiles")
     unread = list(dict.fromkeys(unread + [n for n in (prior_unread if isinstance(prior_unread, list) else [])
                                           if isinstance(n, str) and n not in read]))
@@ -495,13 +501,21 @@ def _assert_no_bug_free_claim(text):
             raise Refusal("review-record-forbidden-claim", phrase)
 
 
+_SECRET_KEY = re.compile(r"password|passwd|secret|token|api[_-]?key|credential|private[_-]?key", re.I)
+
+
+def _secret_key(k):
+    return isinstance(k, str) and bool(_SECRET_KEY.search(k))
+
+
 def _scrubbed(value):
     if isinstance(value, str):
         return pr_comment.scrub(value)
     if isinstance(value, list):
         return [_scrubbed(v) for v in value]
     if isinstance(value, dict):
-        return {k: _scrubbed(v) for k, v in value.items()}
+        return {k: ("[REDACTED]" if _secret_key(k) and isinstance(v, (str, list, dict))
+                    else _scrubbed(v)) for k, v in value.items()}
     return value
 
 
