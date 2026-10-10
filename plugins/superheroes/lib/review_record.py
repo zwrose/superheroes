@@ -302,13 +302,16 @@ def _reviewer(r, rd, dis, head):
         rec, err = rd["engine_run"](r["runDir"])
         seen = rec.get("viewHeadSha") if isinstance(rec, dict) else None
         graded = isinstance(rec, dict) and rec.get("graded") is True
-        if isinstance(seen, str) and seen and seen == head and graded:
+        review = isinstance(rec, dict) and rec.get("runKind") == "review"
+        if isinstance(seen, str) and seen and seen == head and graded and review:
             out.update(ran="engine-record", observation=rec.get("observation"))
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
             elif isinstance(seen, str) and seen and seen != head:
                 note = f"the run record covers {_short(seen)}, not the final commit {_short(head)}"
+            elif isinstance(seen, str) and seen and not review:
+                note = "the run on the final commit was not a completed review run"
             elif isinstance(seen, str) and seen:
                 note = "the run on the final commit did not complete a review (forfeit or failure)"
             else:
@@ -457,7 +460,7 @@ def _secret_key(k):
 
 _QUOTED_SECRET = re.compile(
     r"""(?i)(\\?["'][\w-]*(?:password|passwd|secret|token|api[_-]?key|credential|private[_-]?key|pwd|passphrase"""
-    r"""|authorization|cookie)[\w-]*\\?["']\s*:\s*)(?:\\?"[^"\n]*\\?"|\\?'[^'\n]*\\?')""")
+    r"""|authorization|cookie)[\w-]*\\?["']\s*:\s*)(?:\\?"(?:[^"\\\n]|\\.)*\\?"|\\?'(?:[^'\\\n]|\\.)*\\?')""")
 _EQUALS_SECRET = re.compile(r"(?i)\b(passphrase|authorization)=([^&\s;\"']+)")
 
 

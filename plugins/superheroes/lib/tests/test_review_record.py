@@ -19,7 +19,7 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 PENDING = ({"check_runs": [{"name": "validate", "status": "in_progress", "conclusion": None}]}, NO_STATUS)
 RED = ({"check_runs": [{"name": "validate", "status": "completed", "conclusion": "failure"}]}, NO_STATUS)
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
-            "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True}
+            "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
 PHRASES = ("no bugs", "bug-free", "bug free")
 
 
@@ -619,6 +619,14 @@ def test_w6b_a_run_record_on_the_final_commit_that_was_not_graded_is_not_a_revie
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
 
 
+def test_w6c_a_graded_write_run_on_the_final_commit_is_not_a_review():
+    # axis: run kind; a successful dispatch-write on the final commit credited as a completed review
+    rec = build(account(), Fake(runs={"/run/code-reviewer": (dict(GOOD_RUN, runKind="write"), None)}))
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["runNote"] == "the run on the final commit was not a completed review run"
+    assert "observation" not in v and rec["status"] == "not-reviewed" and rec["parked"] is True
+
+
 def test_an_account_that_omits_its_findings_is_refused():
     # axis: findings presence; an omitted findings member published as a clean review
     acct = account()
@@ -644,7 +652,8 @@ def test_the_stored_finding_key_is_opaque_and_survives_redaction(tmp_path, title
 
 
 @pytest.mark.parametrize("text", ['{"passphrase":"EXAMPLE_SECRET"}', '{\\"passphrase\\":\\"EXAMPLE_SECRET\\"}',
-                                  '{"Authorization":"Basic dXNlcjpwYXNz"}', "passphrase=EXAMPLE_SECRET"])
+                                  '{"Authorization":"Basic dXNlcjpwYXNz"}', "passphrase=EXAMPLE_SECRET",
+                                  '{"passphrase":"pre\\"EXAMPLE_SECRET"}'])
 def test_quoted_credentials_are_redacted_in_raw_output_and_record_strings(tmp_path, text):
     # axis: quoted credentials; a passphrase or JSON Authorization value published from raw output or a finding string
     assert "EXAMPLE_SECRET" not in rr.render_raw("r.txt", text) and "dXNlcjpwYXNz" not in rr.render_raw("r.txt", text)
