@@ -201,7 +201,9 @@ The ruling lists every invalid piece and its reason.
     `git diff --name-only <commit> <head>` fails, or it lists any file that can reach the checked
     page (anything the app serves, a fixture page the check served included). Only later changes
     that cannot reach the checked page (tests that are not served, docs) leave the check standing
-    for the head. The receipt quotes the command and its output.
+    for the head. The receipt quotes the command and its output;
+13. the results do not state that the served checkout was clean (`git status --porcelain` empty)
+    at that `commit` when the check ran. A commit alone does not show the page served matched it.
 
 **Superseded attempts.** Pieces under *Superseded attempts* are read and listed but count toward
 nothing: conditions 3–8 and 11 and the invalid-piece rules apply to the final attempt's pieces only.
@@ -216,8 +218,9 @@ checked. When neither names a place, the receipt records the place as undetermin
 the browser and in the installed web app alike, so that no place is preferred; never pick one of
 them. Use a phone of your own, never a lane's phone that is waiting to be reaped.
 
-1. Make a phone: `xcrun simctl create superheroes-advisor-<vet> com.apple.CoreSimulator.SimDeviceType.iPhone-17`
-   (the type the launcher uses, `IPHONE_DEVICE_TYPE` in `lib/launcher.py`). Keep the ID it prints.
+1. Make a phone: `xcrun simctl create superheroes-advisor-<vet> <type>`, where `<type>` is the
+   value of `IPHONE_DEVICE_TYPE` in `lib/launcher.py` (read it from there; never type it here).
+   Keep the ID it prints.
 2. An advisor seat has no launch values, so set them for the check's commands:
    `SUPERHEROES_IPHONE_ID=<your id> SUPERHEROES_DEVICE_HUB=available` before
    `iphone_check.py preflight`. Preflight still proves Device Hub is running.

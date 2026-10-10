@@ -278,8 +278,11 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   page, first measure a control in the same context: a field known to be under
   16 px and a 16-px field, each focused with the keyboard up. The plugin's
   reading page (`lib/tests/fixtures/iphone/reading-page.html`) has 14-px
-  fields; in the installed app, use a field of the app whose text is under
-  16 px, made so for the control if the app has none. The control works only
+  fields; in the installed app, use a field the app already has under 16 px,
+  or a development-only control page the build provides. The pilot never edits
+  the app to make a control: it is provisioned before execution, not by the
+  pilot. When neither exists in a context, zoom is not established in that
+  context and the results say so. The control works only
   when the under-16-px field reads a lower `visibleHeight` (an iPhone 17 in
   Safari reads 336 for a 14-px field against 384 for a 16-px one). Grade
   against those measured readings, never a computed figure. A control that does
@@ -298,7 +301,10 @@ python3 -B "$ROOT_DIR/lib/iphone_check.py" render --in check.json
   JSON (`noPhone`, `whole`, `where`, `chosenBy`, `parts` with `included`,
   `completed` and `reason` for `browser` and `installed`, `commit`, and `evidence`), then run `render --in <file>`; it refuses
   unlabelled evidence. `commit` is `git rev-parse HEAD` of the app being served
-  when the check runs; after any later change to what the page serves, run the
+  when the check runs, and the check runs only on a clean checkout
+  (`git status --porcelain` empty); with uncommitted changes the check is not
+  complete. The results state that the served checkout was clean at that
+  commit. After any later change to what the page serves, run the
   check again. A PR comment shows a screenshot only by a URL its
   readers can open: publish each screenshot where the PR readers can reach it
   and pass its `url` in the evidence; else the results name the local file and
