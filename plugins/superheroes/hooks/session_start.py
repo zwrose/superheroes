@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""SessionStart hook (best-effort, non-fatal). One responsibility, delivered
-via `additionalContext`:
+"""SessionStart hook (best-effort, non-fatal). Two responsibilities, both delivered via
+`additionalContext`. The second is cloud-only: place the reviewer pass (`cloud_pass.place`) so
+review seats can run, and append a short `### Reviewer pass` section saying whether it is in
+place. The first:
 
 **Bootstrap (ALWAYS — all four sources `startup|resume|clear|compact`).** Inject
 the two records only this bootstrap uniquely supplies — the resolved ABSOLUTE
@@ -72,6 +74,34 @@ def _append_host_model_section(boot, value):
     return boot + "\n\n### Host model\n" + line
 
 
+def _append_reviewer_pass_section(boot, result, raised):
+    """Name the reviewer pass's state in the bootstrap — only in a cloud session. Never carries
+    the pass itself, only the reason token (or the exception's type name) and the lapse date."""
+    if not boot:
+        return boot
+    if raised is not None:
+        # The call raised, so there is no result to read; CLAUDE_CODE_REMOTE is cloud_pass.CLOUD_ENV.
+        if os.environ.get("CLAUDE_CODE_REMOTE") != "true":
+            return boot
+        reason = raised
+    elif result.get("reason") == "not-a-cloud-session":
+        return boot
+    elif result.get("action") == "placed":
+        lapses = result.get("passLapses")
+        line = ("The reviewer pass is in place; it lapses %s." % lapses if lapses
+                else "The reviewer pass is in place; its lapse date could not be read.")
+        return boot + "\n\n### Reviewer pass\n" + line
+    elif result.get("action") == "skipped":
+        line = ("No reviewer pass is set in this cloud environment, so review seats cannot run "
+                "here until one is pasted into the environment's variables.")
+        return boot + "\n\n### Reviewer pass\n" + line
+    else:
+        reason = result.get("reason")
+    line = ("The reviewer pass could not be placed (%s), so review seats cannot run here until a "
+            "fresh pass is pasted into the environment's variables." % reason)
+    return boot + "\n\n### Reviewer pass\n" + line
+
+
 def _bootstrap(cwd, transcript_path, host, source=None):
     """The always-on project-context block. On a TOTAL failure (assemble unimportable/raised),
     return a minimal in-context breadcrumb (B6, #315) rather than '' — so a fully-failed bootstrap
@@ -108,8 +138,16 @@ def main():
     host_model = _host_model(payload)
     _write_host_model_env(host_model)
 
+    pass_result, pass_raised = None, None
+    try:
+        import cloud_pass
+        pass_result = cloud_pass.place()
+    except Exception as exc:
+        pass_raised = type(exc).__name__
+
     boot = _bootstrap(cwd, transcript_path, args.host, source=source)   # always-on, gated by nothing
     boot = _append_host_model_section(boot, host_model)
+    boot = _append_reviewer_pass_section(boot, pass_result, pass_raised)
     if boot:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",
