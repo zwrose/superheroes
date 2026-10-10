@@ -142,23 +142,10 @@ one-off rescue when something feels wrong.
 The sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it
 never resumes anything on its own. You act on what it reports.
 
-**A cloud lane's liveness is its activity on GitHub:** the newest of its issue's last update, the last
-update of a PR that closes the issue, and the last commit on a branch whose name carries the issue
-number. The watch reads this with one request per tick, at most once a minute, and only while a cloud
-lane is live. A cloud lane quiet past `LIVENESS_QUIET_WINDOW_SECONDS`, counted from the later of its
-start and its last activity, is `lane-stale`, with `place: "cloud"` and `activityAgeSeconds`.
-
-- A cloud lane has no pid, transcript, or heartbeat to read, and none of those absences means
-  anything. The watch never reports `builder-exited` or `lane-never-stamped` for it and never reads a
-  transcript for it.
-- The watch never reports `lane-terminal` or `lane-blocked` for a cloud lane. Its ending reaches you
-  through its PR and its issue.
-- Before you treat its `lane-stale` as a wedge, read the session's state in the host's session
-  listing. A session the platform shows working is not wedged. A branch whose name omits the issue
-  number is not read until its PR opens, so a builder on such a branch can read quiet while it works.
-- `cloud-activity-unavailable` means the activity read could not be made. The lane is neither stale
-  nor clean, and the reading is partial.
-- While a batch has a live cloud lane, every watch result carries `cloudLanes`, which lists them.
+**A cloud lane's liveness is its activity on GitHub**, not a pid, transcript, or heartbeat, and the
+sweep reports it `nonterminal` for want of a heartbeat. The watch reads that activity and raises
+`lane-stale` when it goes quiet; the procedure, and what to check before treating that as a wedge, is
+in [Before treating `lane-stale` as a wedge](wave-watch.md#before-treating-lane-stale-as-a-wedge).
 
 **Wave watch.** Arm one harness **background task per batch** — a `loop` invocation that re-arms
 internally — instead of hand-rolling a per-session watch loop. There is no daemon to orphan. The
