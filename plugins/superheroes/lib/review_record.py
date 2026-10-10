@@ -28,6 +28,7 @@ import build_lane  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import store_core  # noqa: E402
 
 MARKER = "<!-- superheroes:review-record -->"
 ARCHIVE_MARKER = "<!-- superheroes:review-record-archive -->"
@@ -100,12 +101,11 @@ def _check_data(sha, repo):
 
 def _lane_marker(repo_root):
     try:
-        git_dir = _run(["git", "-C", repo_root, "rev-parse", "--git-dir"]).strip()
         branch = _run(["git", "-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"]).strip()
-        with open(os.path.join(repo_root, git_dir, build_lane.SIDECAR_DIRNAME, build_lane.BUILD_LANE_FILE), encoding="utf-8") as fh:
+        with open(build_lane._marker_path(repo_root), encoding="utf-8") as fh:
             marker = json.load(fh)
         return dict(marker, currentBranch=branch)
-    except (AttributeError, TypeError, OSError, ValueError):
+    except (AttributeError, TypeError, OSError, ValueError, store_core.RepoRootUnavailable):
         return None
 
 
@@ -467,10 +467,12 @@ def render(record):
 def render_archive(entries):
     """An archive comment: complete earlier-session entries, verbatim, in one append-only comment."""
     payload = _scrubbed({"schema": ARCHIVE_SCHEMA, "history": entries})
-    body = (f"{ARCHIVE_MARKER}\nEarlier sessions of this PR's review record, kept in full. "
-            "The review record comment names this comment.\n\n<details><summary>Earlier sessions</summary>\n\n```json\n"
+    intro = ("Earlier sessions of this PR's review record, kept in full. "
+             "The review record comment names this comment.")
+    # Only the sentence this writer authors is checked: the entries are reviewers' verbatim text.
+    _assert_no_bug_free_claim(intro)
+    body = (f"{ARCHIVE_MARKER}\n{intro}\n\n<details><summary>Earlier sessions</summary>\n\n```json\n"
             f"{json.dumps(payload, indent=2, sort_keys=True)}\n```\n</details>")
-    _assert_no_bug_free_claim(body)
     if len(body) > MAX_BODY_CHARS:
         raise Refusal("review-record-too-large", f"an earlier session alone is {len(body)} characters")
     return body

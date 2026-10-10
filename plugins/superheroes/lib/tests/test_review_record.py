@@ -89,6 +89,7 @@ def build(acct, fake=None, prior=None):
 
 
 def test_each_lane_writes_one_record_with_every_key(tmp_path):
+    # axis: lane resolution and the record's key set; a lane taking the wrong source or a record missing a key
     marker = {"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b"}
     cases = [
         (Fake(meta={"head": HEAD, "body": "x\n**Lane call:** light. small and safe\n", "issues": []}),
@@ -112,17 +113,20 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
 
 
 def test_branch_mismatched_marker_does_not_count():
+    # axis: the build-lane marker's branch check; a marker from another branch deciding the lane
     marker = {"schema": "build-lane/1", "lane": "full", "branch": "other", "currentBranch": "b"}
     assert build(account(lane="micro"), Fake(marker=marker))["lane"]["source"] == "reported by the session"
 
 
 def test_planned_reviewer_that_did_not_run_is_missing():
+    # axis: planned-review accounting; a planned reviewer that did not run going unlisted
     rec = build(account(reviewers=[reviewer(ran=False, runDir=None)]))
     assert rec["reviewers"][0]["ran"] == "not-run"
     assert [m["name"] for m in rec["missingReviews"]] == ["code-reviewer"]
 
 
 def test_session_only_run_counts_and_is_labelled():
+    # axis: the session-reported run label; a run only the session reports shown as an engine record
     fake = Fake()
     acct = account(reviewers=[reviewer(runDir=None)])
     rec = build(acct, fake)
@@ -132,6 +136,7 @@ def test_session_only_run_counts_and_is_labelled():
 
 
 def test_code_wins_over_the_session_account():
+    # axis: code over account; lane, final commit and CI taking the session's claim over code's reading
     fake = Fake(ci=PENDING, marker={"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b"})
     rec = build(account(lane="light", finalCommit=EARLIER, ci="green"), fake)
     assert (rec["lane"]["value"], rec["finalCommit"]["sha"], rec["ci"]["state"]) == ("full", HEAD, "pending")
@@ -140,27 +145,36 @@ def test_code_wins_over_the_session_account():
 
 
 def test_null_outcome_is_not_reviewed():
+    # axis: the outcome condition; a finding with no outcome counted as reviewed
     rec = build(account(findings=[finding(outcome=None)]))
     assert rec["status"] == "not-reviewed" and "finding code-001 has no outcome" in rec["whatIsMissing"]
 
 
 def test_finding_without_reason_is_not_reviewed():
+    # axis: the reason condition; a finding with no reason counted as reviewed
     rec = build(account(findings=[finding(reason="")]))
     assert rec["status"] == "not-reviewed" and "finding code-001 has no reason" in rec["whatIsMissing"]
 
 
 @pytest.mark.parametrize("ci,word", [(RED, "red"), (PENDING, "pending"), (None, "none")])
 def test_ci_that_is_not_green_is_not_reviewed(ci, word):
+    # axis: the CI condition; red, pending or unreadable CI counted as reviewed
     rec = build(account(), Fake(ci=ci))
     assert rec["status"] == "not-reviewed" and rec["ci"]["state"] == word
 
 
 def test_green_claimed_on_an_earlier_sha_is_not_reviewed():
-    fake = Fake(ci=None, meta={"head": HEAD, "body": "", "issues": []})
-    assert build(account(finalCommit=EARLIER, ci="green"), fake)["status"] == "not-reviewed"
+    # axis: final-commit CI; CI read on the account's earlier commit rather than the PR head, or the disagreement going unrecorded
+    seen = []
+    readers = dict(Fake().readers(), check_data=lambda sha, repo: seen.append(sha) or GREEN)
+    rec = rr.build_record(account(finalCommit=EARLIER, ci="green"), readers)
+    assert seen == [HEAD]
+    assert {"fact": "finalCommit", "session": EARLIER, "code": HEAD} in rec["sessionDisagreements"]
+    assert rec["finalCommit"]["sha"] == HEAD and rec["ci"]["sha"] == HEAD
 
 
 def test_status_rejects_ci_read_on_a_different_sha_than_the_final_commit():
+    # axis: status CI-sha check; green CI read on another commit counted as reviewed
     rec = build(account())
     assert rec["status"] == "reviewed"
     rec["ci"] = dict(rec["ci"], sha=EARLIER)
@@ -169,6 +183,7 @@ def test_status_rejects_ci_read_on_a_different_sha_than_the_final_commit():
 
 
 def test_missing_security_review_parks_unless_the_owner_went_ahead():
+    # axis: go-ahead handling; a missing review not parked, or a go-ahead lifting the not-reviewed status
     sec = reviewer("security-reviewer", ran=False, runDir=None)
     base = account(reviewers=[reviewer(), sec])
     rec = build(base)
@@ -186,6 +201,7 @@ def test_missing_security_review_parks_unless_the_owner_went_ahead():
 
 
 def test_go_ahead_missing_its_proof_does_not_count():
+    # axis: go-ahead proof; a go-ahead without its canon id or words accepted
     sec = reviewer("security-reviewer", ran=False, runDir=None)
     for bad in ({"kind": "standing-ruling"}, {"kind": "owner-words", "words": "go"}):
         rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", **bad}]))
@@ -194,6 +210,7 @@ def test_go_ahead_missing_its_proof_does_not_count():
 
 
 def test_clean_fixture_is_reviewed_and_never_claims_bug_free(tmp_path):
+    # axis: the clean path; a complete account not reviewed, or any rendering claiming no bugs
     fake = Fake()
     rec = build(account(findings=[finding()]), fake)
     assert rec["status"] == "reviewed" and rec["whatIsMissing"] == [] and rec["parked"] is False
@@ -205,12 +222,36 @@ def test_clean_fixture_is_reviewed_and_never_claims_bug_free(tmp_path):
 
 @pytest.mark.parametrize("phrase", PHRASES)
 def test_bug_free_claim_guard_raises(phrase):
+    # axis: the forbidden-claim helper; a bug-free phrase in any case passing it
     with pytest.raises(rr.Refusal):
         rr._assert_no_bug_free_claim(f"This change is {phrase.upper()}.")
 
 
+def test_forbidden_phrase_in_the_summary_refuses_the_write_and_posts_nothing(tmp_path):
+    # axis: the render guard at the publication boundary; a forbidden phrase in writer-authored summary text being posted
+    fake = Fake()
+    acct = account(reviewers=[reviewer("bug free")])
+    out = rr.write(put(tmp_path, acct), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"]) == (False, "review-record-forbidden-claim") and fake.writes == []
+
+
+def test_forbidden_phrase_in_a_reviewers_finding_text_does_not_refuse_the_archive():
+    # axis: the archive guard's scope; reviewers' quoted finding text refusing the archive write
+    entries = [{"sessionId": "A", "findings": [finding(body="the README claims no bugs")]}]
+    assert "the README claims no bugs" in rr.render_archive(entries)
+
+
+def test_forbidden_phrase_in_the_archive_intro_still_refuses(monkeypatch):
+    # axis: the archive guard; a forbidden phrase in the writer's own archive intro passing
+    monkeypatch.setattr(rr, "FORBIDDEN_CLAIMS", ("kept in full",))
+    with pytest.raises(rr.Refusal) as e:
+        rr.render_archive([])
+    assert e.value.reason == "review-record-forbidden-claim"
+
+
 @pytest.mark.parametrize("shape", ["array", "object"])
 def test_read_back_survives_the_session_dir(tmp_path, shape):
+    # axis: the record as the one source; read-back needing the session's files, or raw findings lost
     session = tmp_path / "session"
     session.mkdir()
     raw = session / "code.json"
@@ -230,11 +271,13 @@ def test_read_back_survives_the_session_dir(tmp_path, shape):
 
 
 def test_unreadable_raw_findings_file_is_named_not_fatal(tmp_path):
+    # axis: unreadable raw findings; a missing file hidden, or one that aborts the write
     rec = build(account(rawFindingsFiles=[str(tmp_path / "gone.json")]))
     assert rec["whatIsMissing"] == ["the findings file gone.json could not be read"]
 
 
 def test_earlier_session_findings_survive_in_history(tmp_path):
+    # axis: history across sessions; an earlier session's findings or owner decision lost on a later write
     fake = Fake()
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir(), b.mkdir()
@@ -257,6 +300,7 @@ def test_earlier_session_findings_survive_in_history(tmp_path):
 
 
 def test_engine_record_without_result_kind_is_not_run():
+    # axis: the engine receipt's result kind; a receipt with no result counted as a run
     weak = {k: v for k, v in GOOD_RUN.items() if k != "resultKind"}
     rec = build(account(), Fake(runs={"/run/code-reviewer": (weak, None)}))
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["reviewers"][0]["runNote"] == "no review result"
@@ -264,17 +308,20 @@ def test_engine_record_without_result_kind_is_not_run():
 
 
 def test_engine_record_of_another_run_kind_is_not_run():
+    # axis: the engine receipt's run kind; a non-review run counted as a review
     rec = build(account(), Fake(runs={"/run/code-reviewer": (dict(GOOD_RUN, runKind="write"), None)}))
     assert rec["reviewers"][0]["ran"] == "not-run"
 
 
 def test_engine_error_while_session_says_ran_is_a_disagreement():
+    # axis: engine errors; a run the session claims but the engine cannot show passing unrecorded
     rec = build(account(), Fake(runs={"/run/code-reviewer": (None, "attempt-not-completed")}))
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["reviewers"][0]["runNote"] == "attempt-not-completed"
     assert rec["sessionDisagreements"] == [{"fact": "code-reviewer ran", "session": True, "code": "not-run"}]
 
 
 def test_same_family_reviewer_needs_the_owner_word():
+    # axis: reviewer independence; a maker-family reviewer counted without complete owner words
     same = reviewer(vendor="claude", model="opus-5.5")
     claude = {"/run/code-reviewer": (dict(GOOD_RUN, source="claude", engineModel="opus-5.5"), None)}
     rec = build(account(reviewers=[same]), Fake(runs=claude))
@@ -290,6 +337,7 @@ def test_same_family_reviewer_needs_the_owner_word():
 
 
 def test_unknown_model_takes_the_one_family_of_its_vendor(monkeypatch):
+    # axis: family inference; an unknown model given a family when its vendor has several
     assert rr._family("claude", "opus-9") == "anthropic"
     assert rr._family("elsewhere", "x") is None
     two = {"claude": lambda: ("opus-5.5", CODEX)}
@@ -300,6 +348,7 @@ def test_unknown_model_takes_the_one_family_of_its_vendor(monkeypatch):
 
 
 def test_two_marker_comments_refuse_without_writing(tmp_path):
+    # axis: one record per PR; duplicate marker comments written over or read past
     fake = Fake()
     assert rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())["ok"]
     fake.comments.append(dict(fake.comments[0], id=2, url="u2"))
@@ -310,6 +359,7 @@ def test_two_marker_comments_refuse_without_writing(tmp_path):
 
 
 def test_unparseable_prior_refuses_without_writing(tmp_path):
+    # axis: hand-edited record; an unreadable prior overwritten
     fake = Fake()
     fake.comments = [{"id": 1, "author": "a", "body": rr.MARKER + "\nhand edited", "url": "u1"}]
     out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
@@ -318,10 +368,12 @@ def test_unparseable_prior_refuses_without_writing(tmp_path):
 
 
 def test_read_with_no_record_is_missing():
+    # axis: read with no record; a missing record not refused as missing
     assert rr.read(7, readers=Fake().readers())["reason"] == "review-record-missing"
 
 
 def test_ci_state_truth_table():
+    # axis: CI state mapping; a check-run or status combination mapped to the wrong state
     done = lambda c: {"check_runs": [{"status": "completed", "conclusion": c}]}  # noqa: E731
     assert rr.ci_state({"check_runs": []}, NO_STATUS) == "none"
     assert rr.ci_state({"check_runs": []}, {"state": "success", "total_count": 1, "statuses": [{"state": "success"}]}) == "green"
@@ -335,6 +387,7 @@ def test_ci_state_truth_table():
 
 
 def test_unreadable_pr_is_not_reviewed():
+    # axis: unreadable PR; a final commit from the session counted as read from the PR, or CI read without a commit
     fake = Fake()
     fake.meta = None
     rec = build(account(finalCommit=EARLIER), fake)
@@ -346,12 +399,14 @@ def test_unreadable_pr_is_not_reviewed():
 
 
 def test_no_makers_is_not_reviewed():
+    # axis: makers recorded; a record with no maker families counted as reviewed
     rec = build(account(makers=[]))
     assert rec["status"] == "not-reviewed" and "the makers' model families were not recorded" in rec["whatIsMissing"]
     assert rec["reviewers"][0]["independent"] is None and rec["reviewers"][0]["ran"] == "engine-record"
 
 
 def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):
+    # axis: outcome spelling; a foreign outcome accepted, or a null outcome refused
     fake = Fake()
     ok = rr.write(put(tmp_path, account(findings=[finding(outcome=None)])), str(tmp_path), fake.readers())
     assert ok["ok"] and ok["status"] == "not-reviewed"
@@ -361,6 +416,7 @@ def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):
 
 @pytest.mark.parametrize("key", ["schema", "pr", "sessionId", "reviewers"])
 def test_missing_required_key_is_refused_naming_the_key(tmp_path, key):
+    # axis: account validation; a missing required key accepted or refused without naming it
     acct = account()
     del acct[key]
     out = rr.write(put(tmp_path, acct), str(tmp_path), Fake().readers())
@@ -368,6 +424,7 @@ def test_missing_required_key_is_refused_naming_the_key(tmp_path, key):
 
 
 def test_too_large_body_is_refused(tmp_path):
+    # axis: body size; an oversized record posted or trimmed
     fake = Fake()
     big = [finding(f"f{i}", body="x" * 5000) for i in range(20)]
     out = rr.write(put(tmp_path, account(findings=big)), str(tmp_path), fake.readers())
@@ -375,6 +432,7 @@ def test_too_large_body_is_refused(tmp_path):
 
 
 def test_gh_failures_refuse(tmp_path):
+    # axis: GitHub failures; an unreadable comment list or failed create treated as success
     readers = dict(Fake().readers(), list_comments=lambda pr, repo: None)
     assert rr.write(put(tmp_path, account()), str(tmp_path), readers)["reason"] == "review-record-gh-failed"
     readers = dict(Fake().readers(), create_comment=lambda pr, repo, body: None)
@@ -382,6 +440,7 @@ def test_gh_failures_refuse(tmp_path):
 
 
 def test_cli_read_without_gh_refuses(tmp_path):
+    # axis: the CLI without gh; a missing gh raising instead of printing a refusal and exiting 1
     empty = tmp_path / "empty"
     empty.mkdir()
     proc = subprocess.run([sys.executable, "-B", rr.__file__, "read", "--pr", "1"], capture_output=True,
@@ -391,6 +450,7 @@ def test_cli_read_without_gh_refuses(tmp_path):
 
 
 def test_receipt_of_another_family_decides_independence():
+    # axis: receipt family; the account's family claim winning over the run's own engine and model
     claude_run = dict(GOOD_RUN, source="claude", engineModel="opus-5.5")
     rec = build(account(), Fake(runs={"/run/code-reviewer": (claude_run, None)}))
     v = rec["reviewers"][0]
@@ -400,6 +460,7 @@ def test_receipt_of_another_family_decides_independence():
 
 @pytest.mark.parametrize("seen", [EARLIER, None])
 def test_receipt_for_another_or_unknown_commit_is_not_a_review(seen):
+    # axis: receipt commit; a review of another or unknown commit counted for the final commit
     run = dict(GOOD_RUN, viewHeadSha=seen)
     rec = build(account(), Fake(runs={"/run/code-reviewer": (run, None)}))
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
@@ -407,6 +468,7 @@ def test_receipt_for_another_or_unknown_commit_is_not_a_review(seen):
 
 
 def test_credentials_are_scrubbed_before_the_record_is_published(tmp_path):
+    # axis: scrubbing; a credential in account text reaching the posted comment
     token = "ghp_" + "A" * 36
     fake = Fake()
     acct = account(findings=[finding(body=f"key {token}", reason=f"saw {token}")])
@@ -416,6 +478,7 @@ def test_credentials_are_scrubbed_before_the_record_is_published(tmp_path):
 
 
 def test_earlier_left_for_owner_clears_only_when_a_later_session_records_another_outcome(tmp_path):
+    # axis: carried owner decisions; one cleared by a later session that did not decide it, or kept after it did
     fake = Fake()
     old = [finding("a-1", outcome="left-for-owner", reason="owner call")]
     rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
@@ -429,6 +492,7 @@ def test_earlier_left_for_owner_clears_only_when_a_later_session_records_another
 
 
 def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment(tmp_path):
+    # axis: archive overflow; earlier sessions trimmed or lost instead of moved whole to an archive comment
     fake = Fake()
     old = [finding("old-1", body="x" * 62000, consequence="it breaks", outcome="left-for-owner",
                    reason="owner call " + "r" * 400)]
@@ -447,12 +511,14 @@ def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment
 
 
 def test_ungraded_or_forfeited_engine_receipt_is_not_a_completed_review():
+    # axis: receipt grading; an ungraded or forfeited run counted as a review
     weak = dict(GOOD_RUN, graded=False)
     rec = build(account(), Fake(runs={"/run/code-reviewer": (weak, None)}))
     assert rec["reviewers"][0]["ran"] == "not-run" and rec["status"] == "not-reviewed"
 
 
 def test_raw_finding_without_a_recorded_outcome_keeps_the_record_not_reviewed(tmp_path):
+    # axis: raw findings; a reviewer's finding with no recorded outcome counted as reviewed
     raw = tmp_path / "code.json"
     raw.write_text(json.dumps([{"id": "raw-1", "severity": "Important", "body": "b"}]))
     rec = build(account(rawFindingsFiles=[str(raw)]))
@@ -460,9 +526,21 @@ def test_raw_finding_without_a_recorded_outcome_keeps_the_record_not_reviewed(tm
 
 
 def test_left_for_owner_finding_is_not_reviewed_until_decided():
+    # axis: left-for-owner; an undecided owner finding counted as reviewed
     rec = build(account(findings=[finding("f1", outcome="left-for-owner", reason="needs owner")]))
     assert rec["status"] == "not-reviewed" and "finding f1 waits for the owner's decision" in rec["whatIsMissing"]
 
 
 def test_build_lane_marker_layout_comes_from_build_lane():
+    # axis: marker layout; the writer spelling the marker's schema itself instead of reading it from build_lane
     assert rr.build_lane.BUILD_LANE_SCHEMA == "build-lane/1"
+
+
+def test_lane_marker_is_none_when_the_marker_path_cannot_be_resolved(tmp_path, monkeypatch):
+    # axis: marker read; an unresolvable or absent marker raising instead of reading as no marker
+    def unresolvable(root):
+        raise rr.store_core.RepoRootUnavailable("git could not be run")
+    monkeypatch.setattr(rr.build_lane, "_marker_path", unresolvable)
+    assert rr._lane_marker(str(tmp_path)) is None
+    monkeypatch.setattr(rr.build_lane, "_marker_path", lambda root: str(tmp_path / "absent.json"))
+    assert rr._lane_marker(str(tmp_path)) is None

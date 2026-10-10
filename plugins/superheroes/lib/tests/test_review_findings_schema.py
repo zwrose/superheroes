@@ -712,6 +712,14 @@ def test_strict_mode_accepts_every_declared_review_schema(engine, kind):
     assert '"consequence"' in json.dumps(schema)
 
 
+_OUTCOME_SPELLINGS = ("shown-wrong", "left-for-owner")
+
+
+def _source_spells_an_outcome(source):
+    return any(isinstance(n, ast.Constant) and n.value in _OUTCOME_SPELLINGS
+               for n in ast.walk(ast.parse(source)))
+
+
 def _modules_spelling_outcomes_outside_home():
     home = os.path.join(_LIB, "review_findings_schema.py")
     offenders = []
@@ -724,10 +732,16 @@ def _modules_spelling_outcomes_outside_home():
             if os.path.samefile(path, home):
                 continue
             with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-            if '"left-for-owner"' in text or '"shown-wrong"' in text:
-                offenders.append(os.path.relpath(path, _LIB))
+                if _source_spells_an_outcome(fh.read()):
+                    offenders.append(os.path.relpath(path, _LIB))
     return offenders
+
+
+def test_outcome_census_flags_either_quote_style():
+    # axis: outcome census scan — a module quoting an outcome with single quotes slipping past it
+    assert _source_spells_an_outcome('x = "shown-wrong"\n')
+    assert _source_spells_an_outcome("x = 'left-for-owner'\n")
+    assert not _source_spells_an_outcome("x = 'fixed'\n")
 
 
 def test_outcome_spellings_live_only_in_review_findings_schema():
