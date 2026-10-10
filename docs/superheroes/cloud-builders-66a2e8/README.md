@@ -51,8 +51,10 @@ One native stack, the unit of merge (R8; owner ruling Canon 2026-10-10-dcc2b5e5-
 the bottom and C8 at the top. Wave 0, now: C1, C2 and C3. Wave 1: C4 once C1, C2 and C3 have handed
 back; C5 once C1 and C2 have; C6 once C1 and C3 have and epic #1708's review record is on main; C8
 once C1 and C2 have and epic #1708's #1716 and #1718 are on main. Wave 2: C7. Launches are the
-owner's word, one wave at a time. No PR merges on its own: the stack merges with one
-`gh stack merge` once every layer is vetted, and it never ships partly in any release.
+owner's word, one wave at a time. No PR merges on its own: C8 hands back last, the epic's
+closure validation run runs against the stack's head at C8's vet and goes to the owner with the
+delivery decision, and only then does the stack merge with one `gh stack merge`; it never ships
+partly in any release.
 
 ## Cross-epic seam
 

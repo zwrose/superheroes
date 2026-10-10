@@ -57,8 +57,11 @@ each names the one owner and the register entry that binds the other child:
 - **FR-36** (the advisor sends parked PRs back after the pass is renewed) is **C7**'s. The renewal
   is read from the lapse date the pass command writes into the setup record (C3, R3; the record itself is C2's).
 - **UFR-5** (a version mismatch runs the build on the owner's machine and names both versions) is
-  **C5**'s. The builder's own check at intake that it runs the advisor's version, which keeps a
-  cloud builder off an older copy whatever reaches it, is C6's, bound by R2.
+  **C5**'s: its readiness check keeps such a build off the cloud, and its launch report names both
+  versions. Where a mismatch reaches a cloud builder anyway, C6's builder stops before building and
+  ends with `refusal`, and C7 relaunches the build routed as a launch, so it runs on the owner's
+  machine with both versions named; R2 binds C5, C6 and C7. No bullet moves, so this is not a
+  split.
 - **UFR-9** (a stopped cloud builder is recovered at once, routed as a launch is) is **C7**'s. The
   routing it reuses is C5's one routing step (R5), and the liveness that shows the builder stopped
   is C1's (R1).
@@ -68,15 +71,16 @@ project up in one sitting, switches cloud builds on and launches a wave in which
 can run in the cloud does; those builds reach ready PRs with real independent reviews and no build
 work on the owner's machine; the work ships once the build has tested what it can; the build tests
 six named cases where a test can reach them; and what no test reaches is learned in use. No child
-can run the first two, because they need the whole stack merged in one release (R8) and a real wave.
-They are the epic's **closure validation run**, recorded under
-`skills/showrunner/reference/closure.md` § The validation run, after the stack merges. The fourth
-bullet's six cases are tested inside the children where a test can reach them (several cloud
-builders at once: C1; a project that keeps its calibration outside the repository:
-C4; a lapsed pass sending builds to the owner's machine: C5; a builder's question answered
-mid-build and a stopped builder recovered: C7); the closure run collects those records and runs
-the one case no child can, a full-size build in the cloud. Its five rows are the last rows of the
-table.
+can run the first two, because they need every layer of the stack together and a real wave. They
+are the epic's **closure validation run** (`skills/showrunner/reference/closure.md` § The validation
+run). Because the whole epic is one native stack, closure follows that file's stacked-feature case
+(§ When closure fires): the receipt rides the top layer's vet, C8's, the last vet before the stack's
+one merge, when every other layer already has a green vet. So the validation run runs **before the
+merge**, against the stack's head, meaning the plugin as the whole stack has it: the plugin's automated conformance checks run on that head, supplemented by one recorded rehearsal in which the advisor and the cloud environment both run the stack head's plugin: a project set up in one sitting, cloud builds switched on, and a wave launched on fixture issues in which every build that can run in the cloud does, those builds reaching ready PRs with real independent reviews and no build work on the owner's machine, one of them a full-size build; the rehearsal's PRs are then closed unmerged. The run also collects the children's recorded runs for the spec's other five tested cases (several cloud builders at once: C1; a project that
+keeps its calibration outside the repository: C4; a lapsed pass sending builds to the owner's
+machine: C5; a builder's question answered mid-build and a stopped builder recovered: C7). Its
+result goes with C8's handback, in the closure receipt, presented to the owner with the delivery
+decision in one sitting before the stack merges. Its five rows are the last rows of the table.
 
 **Spec sections that are not criteria but have a builder home.** These carry no acceptance
 criterion under the rule above and are not in the counts; each is named so nothing in the spec
