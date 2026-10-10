@@ -9,3 +9,6 @@
 The board uses a made-up shop app for its examples. It draws the index, a small PR sheet, a stack's
 sheet, a big PR sheet with its walk, pictures and merge-verdict states, the Risk and trust item, and
 a learning proposal.
+
+`journeys.html` is the journeys board the owner approved on 2026-10-09 ("This board looks good, next"),
+https://claude.ai/artifact/VGc2XjMUJZsXAfMubVtrLW. The spec cites it as the source "journeys".
