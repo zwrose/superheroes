@@ -55,7 +55,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **FR-1.** The plugin shall report a change as reviewed only when the checks its lane requires passed on the final commit and every finding with a real consequence was fixed, shown wrong, or left under an owner decision. (source: Canon 2026-10-08-d6064e1d-8)
   - *Acceptance (rule):* A change that has a finding with a real consequence that is not fixed, not shown wrong and not covered by an owner decision is not reported as reviewed. (source: Canon 2026-10-08-d6064e1d-8)
-  - *Acceptance (rule):* "The checks ran on the final code" is true only when CI is green on the PR's final commit. (source: Canon 2026-10-09-d6064e1d-5)
+  - *Acceptance (rule):* "The checks ran on the final code" is true only when CI is green on the PR's final commit. (source: Canon 2026-10-10-d6064e1d-4)
 
 **FR-2.** The plugin shall describe a reviewed change by what was checked and what is left, and shall not describe it as free of bugs. (source: Canon 2026-10-08-d6064e1d-8)
   - *Acceptance (rule):* No review record, PR sheet or PR text produced by the review says that a change has no bugs. (source: Canon 2026-10-08-d6064e1d-8)
@@ -109,11 +109,12 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **FR-17.** The light lane's review shall be one independent reviewer. (source: Canon 2026-10-08-d6064e1d-16)
   - *Acceptance (rule):* A light-lane review record lists exactly one reviewer. (source: board · 2 Small sheet and stack sheet)
 
-**FR-18.** Every reviewer shall come from a different model family than every maker of the change. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (Given-When-Then):* Given a change built by one model family, when its reviewers are picked, then none of them is from that family. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-18.** Every reviewer shall come from a different model family than every maker of the change. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (Given-When-Then):* Given a change built by one model family, when its reviewers are picked, then none of them is from that family. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* A reviewer that writes break-it tests for a change is not a maker of that change. (source: Canon 2026-10-10-d6064e1d-5)
 
-**FR-19.** Every reviewer that confirms, audits, fixes or grades a finding shall be given the project's threat model. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (rule):* No such reviewer runs without the threat model in what it is given. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-19.** Every reviewer that confirms, audits, fixes or grades a finding shall be given the project's threat model. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* No such reviewer runs without the threat model in what it is given. (source: Canon 2026-10-10-d6064e1d-4)
 
 **FR-20.** The test role shall replace today's test reviewer [cite: plugins/superheroes/agents/test-reviewer.md]. (source: Canon 2026-10-08-d6064e1d-17)
   - *Acceptance (rule):* No review runs both a test reviewer and the test role. (source: Canon 2026-10-08-d6064e1d-17)
@@ -123,6 +124,7 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 
 **FR-22.** When a break-it test fails, the plugin shall treat the failure as a finding and keep the test with the change once the finding is fixed. (source: board · 3 Big PR sheet)
   - *Acceptance (Given-When-Then):* Given a break-it test that catches a double charge, when the fix lands, then the test stays in the change and passes. (source: board · 3 Big PR sheet)
+  - *Acceptance (rule):* The generalist code reviewer reads the break-it tests for bloat and for tests that pass without checking anything. (source: Canon 2026-10-10-d6064e1d-5)
 
 **FR-23.** The test role shall report a test that passes without checking the behaviour it claims to check. (source: Canon 2026-10-08-d6064e1d-17)
   - *Acceptance (rule):* Such a test is reported as a finding with its consequence. (source: Canon 2026-10-08-d6064e1d-17)
@@ -155,27 +157,28 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance (Given-When-Then):* Given a low-severity finding with a real consequence, left unfixed, when the sheet is built, then the finding reaches the owner as in FR-30. (source: Canon 2026-10-09-d6064e1d-4)
 
 **FR-32.** The loop shall run fix rounds until every finding has an outcome, within its round caps. (source: Canon 2026-10-08-d6064e1d-14; framing)
-  - *Acceptance (rule):* The loop ends when every finding is fixed, shown wrong, decided as craft, left for the owner, or decided by a named ruling. (source: Canon 2026-10-09-d6064e1d-5)
+  - *Acceptance (rule):* The loop ends when every finding is fixed, shown wrong, decided as craft, left for the owner, or decided by a named ruling. (source: Canon 2026-10-10-d6064e1d-4)
 
 **FR-33.** When a fix lands, the next review round shall focus on that fix. (source: craft, for your veto)
   - *Acceptance (Given-When-Then):* Given a round that fixed two findings, when the next round runs, then its reviewers are asked about those two fixes. (source: craft, for your veto)
   - *Acceptance (rule):* When a round looks wider than the fixes, the review record says why. (source: craft, for your veto)
 
-**FR-34.** The plugin shall give every finding a recorded outcome, and shall not drop a finding or lower it without recording why. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (rule):* The number of findings with a recorded outcome equals the number of findings the reviewers raised. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-34.** The plugin shall give every finding a recorded outcome, and shall not drop a finding or lower it without recording why. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* The number of findings with a recorded outcome equals the number of findings the reviewers raised. (source: Canon 2026-10-10-d6064e1d-4)
 
-**FR-35.** When the owner rules on a finding, the next fix for that finding shall follow the ruling. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (Given-When-Then):* Given an owner ruling on a finding, when the finding is reworded in a later round, then the ruling still applies to it. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (rule):* No round runs on guidance that a later ruling replaced. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-35.** When the owner rules on a finding, the next fix for that finding shall follow the ruling. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (Given-When-Then):* Given an owner ruling on a finding, when the finding is reworded in a later round, then the ruling still applies to it. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* No round runs on guidance that a later ruling replaced. (source: Canon 2026-10-10-d6064e1d-4)
 
-**FR-36.** When a finding is outside the change's scope, the loop shall take it off the fix list or bring it to the owner. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (rule):* An out-of-scope finding is not sent to a fixer in more than one round. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-36.** When a finding is outside the change's scope, the loop shall take it off the fix list or bring it to the owner. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* An out-of-scope finding is not sent to a fixer in more than one round. (source: Canon 2026-10-10-d6064e1d-4)
 
-**FR-37.** A fix shall change only what its finding needs. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance (Given-When-Then):* Given a fix that would change behaviour its finding does not name, when no owner ruling allows that change, then the fix is not accepted. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-37.** A fix shall change only what its finding needs. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (Given-When-Then):* Given a fix that would change behaviour its finding does not name, when no owner ruling allows that change, then the fix is not accepted. (source: Canon 2026-10-10-d6064e1d-4)
 
-**FR-38.** The review record shall say the owner decided something only when that decision is on record, in Canon or in the PR's saved sheet answers. (source: Canon 2026-10-09-d6064e1d-5; Canon 2026-10-09-d6064e1d-7)
-  - *Acceptance (rule):* Every owner decision the record names can be found in Canon or in that PR's saved answers. (source: Canon 2026-10-09-d6064e1d-5)
+**FR-38.** The review record shall say the owner decided something only when that decision is on record. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* A decision about one PR is on record in that PR's saved sheet answers. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance (rule):* A decision that sets a rule for later work is on record in Canon. (source: Canon 2026-10-10-d6064e1d-4)
 
 **FR-39.** The plugin shall keep everything the review did not show the owner retrievable. (source: Canon 2026-10-08-d6064e1d-11)
   - *Acceptance (Given-When-Then):* Given a bug found after merge, when the advisor looks up the PR's review, then every craft decision and every finding shown wrong is still readable. (source: Canon 2026-10-08-d6064e1d-11)
@@ -323,16 +326,16 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
   - *Acceptance:* Given a project with no risk areas, when a change that might touch money is routed, then it gets the full lane. (source: Canon 2026-10-09-d6064e1d-14)
   - *Acceptance:* Given a Risk and trust item the review loop cannot read, when a change is routed, then the plugin treats the risk areas as not set. (source: craft, for your veto)
 
-**UFR-2.** If the fix rounds reach their cap with findings still open, then the loop shall stop and bring those findings out as leftovers. (source: Canon 2026-10-08-d6064e1d-14; Canon 2026-10-09-d6064e1d-5)
+**UFR-2.** If the fix rounds reach their cap with findings still open, then the loop shall stop and bring those findings out as leftovers. (source: Canon 2026-10-08-d6064e1d-14; Canon 2026-10-10-d6064e1d-4)
   - *Acceptance:* Given a capped loop with one open finding that has a real consequence, when the sheet is built, then that finding is under "What you're accepting" and "How the review went" says the loop reached its cap. (source: craft, for your veto)
 
-**UFR-3.** If a planned reviewer could not run, or CI is not green on the final commit, then the plugin shall say so in the review record and shall not report the change as reviewed. (source: Canon 2026-10-08-d6064e1d-8; Canon 2026-10-09-d6064e1d-5)
+**UFR-3.** If a planned reviewer could not run, or CI is not green on the final commit, then the plugin shall say so in the review record and shall not report the change as reviewed. (source: Canon 2026-10-08-d6064e1d-8; Canon 2026-10-10-d6064e1d-4)
   - *Acceptance:* Given a full-lane review whose specialist did not run, when the advisor vets the PR, then the record shows the gap and the vet does not return the PR as ready. (source: craft, for your veto)
   - *Acceptance:* Given that PR, when no missing review has run, then the PR stays parked until the review runs or the owner says in plain words to go ahead without it. The plugin's rule on degraded checks requires this [cite: plugins/superheroes/rubric/covenant.md § Disclose every degradation]. (source: craft, for your veto)
   - *Acceptance:* Given the owner's word to go ahead, when the PR's sheet is built, then "How the review went" names the review that did not run. (source: craft, for your veto)
 
-**UFR-4.** If a review session is damaged partway, then the plugin shall repair it and carry on, and shall not abandon it. (source: Canon 2026-10-09-d6064e1d-5)
-  - *Acceptance:* Given a session damaged after its second round, when the review resumes, then every finding and outcome from the first two rounds is still in the record. (source: Canon 2026-10-09-d6064e1d-5)
+**UFR-4.** If a review session is damaged partway, then the plugin shall repair it and carry on, and shall not abandon it. (source: Canon 2026-10-10-d6064e1d-4)
+  - *Acceptance:* Given a session damaged after its second round, when the review resumes, then every finding and outcome from the first two rounds is still in the record. (source: Canon 2026-10-10-d6064e1d-4)
 
 **UFR-5.** If the PR's head commit moves after its sheet was published, then the plugin shall replace the sheet with an unsigned one for the new commit. (source: Canon 2026-10-09-d6064e1d-7)
   - *Acceptance:* Given answers saved on the old sheet, when the new sheet opens, then it shows "This PR changed", keeps the answers to unchanged items, and starts the merge verdict over. (source: board · 3 Big PR sheet)
@@ -407,7 +410,7 @@ The sheets and the index are built on the plugin's shared review template [cite:
 
 - **Review record:** the plain account of one PR's review, written when the review ends. (source: Canon 2026-10-08-d6064e1d-8)
 - **Risk area:** a named part of the project where a mistake costs money, data, access or something that cannot be undone. (source: Canon 2026-10-09-d6064e1d-2)
-- **Maker:** any model that wrote or changed the code under review. (source: Canon 2026-10-09-d6064e1d-5)
+- **Maker:** any model that built or fixed the product's code under review. A reviewer that writes break-it tests is not a maker. (source: Canon 2026-10-10-d6064e1d-5)
 - **Test role:** the full-lane reviewer that writes break-it tests and checks the change's tests. (source: Canon 2026-10-08-d6064e1d-17)
 - **Break-it test:** a test a reviewer writes to try to break a change on a named risky scenario. (source: Canon 2026-10-08-d6064e1d-15)
 - **Craft:** a finding with no consequence beyond code quality. (source: Canon 2026-10-09-d6064e1d-4)
