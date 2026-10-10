@@ -86,7 +86,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf '%s\n' 'true' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudBuilds --cwd . --project-name "<the project's name>"
+  printf '%s\n' 'true' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudBuilds --cwd . --project-name '<the project's name>'
   ```
 
   Read the result the same way as the `stackingTool` write above. On `written` or `noop`, say the

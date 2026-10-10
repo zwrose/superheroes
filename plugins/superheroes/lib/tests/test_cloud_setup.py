@@ -143,7 +143,7 @@ def test_switch_on_refused_without_record_stores_nothing(tmp_path):
     repo, store = _setup_repo(tmp_path)
     got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
     assert got["action"] == "refused"
-    assert got["reason"] == PC.REASON_CLOUD_SETUP_MISSING
+    assert got["reason"] == CS.REASON_MISSING
     assert got["message"] == CS.switch_message("refused", "fixture")
     stored = _stored(repo, store)
     assert stored["raw"] is None
@@ -155,7 +155,7 @@ def test_switch_on_refused_with_record_for_another_account_only(tmp_path):
     assert _check(repo, store, account=OTHER_ACCOUNT)["action"] == "written"
     got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT)
     assert got["action"] == "refused"
-    assert got["reason"] == PC.REASON_CLOUD_SETUP_MISSING
+    assert got["reason"] == CS.REASON_MISSING
     assert _stored(repo, store)["raw"] is None
 
 
@@ -164,7 +164,7 @@ def test_switch_on_refused_without_account(tmp_path):
     _check(repo, store)
     got = PC.set_item(repo, "cloudBuilds", True, root=store)
     assert got["action"] == "refused"
-    assert got["reason"] == PC.REASON_CLOUD_SETUP_MISSING
+    assert got["reason"] == CS.REASON_MISSING
     assert _stored(repo, store)["raw"] is None
 
 
@@ -212,6 +212,18 @@ def test_secret_shaped_value_refused_at_write(tmp_path, field, value):
     assert _record_files(repo, store) == []
 
 
+@pytest.mark.parametrize("field,value", [
+    ("environment", "env-fixture-one\n"),
+    ("plugin_version", "1.2.3\n"),
+    ("calibration_stamp", STAMP + "\n"),
+])
+def test_trailing_newline_refused_at_write(tmp_path, field, value):
+    repo, store = _setup_repo(tmp_path)
+    got = _check(repo, store, **{field: value})
+    assert got["action"] == "refused"
+    assert _record_files(repo, store) == []
+
+
 def test_unknown_field_refused_at_write(tmp_path):
     repo, store = _setup_repo(tmp_path)
     bad = dict(_record_dict(), extra="x")
@@ -239,6 +251,9 @@ _UNREADABLE = {
     "bad-stamp": json.dumps(dict(_record_dict(), calibrationStamp="sha256:xyz")),
     "bad-date": json.dumps(dict(_record_dict(), passLapses="2026-13-45")),
     "non-string-date": json.dumps(dict(_record_dict(), checkedAt=20260702)),
+    "trailing-newline-environment": json.dumps(dict(_record_dict(), environment="env-fixture-one\n")),
+    "trailing-newline-version": json.dumps(dict(_record_dict(), pluginVersion="1.2.3\n")),
+    "trailing-newline-stamp": json.dumps(dict(_record_dict(), calibrationStamp=STAMP + "\n")),
     "secret-in-record": json.dumps(dict(_record_dict(), environment="sk-abc123def456")),
 }
 
