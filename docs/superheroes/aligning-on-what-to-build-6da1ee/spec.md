@@ -266,11 +266,12 @@ record. (source: ruling 2; board round 1 comments; advisor vet round 1, F10)
 **FR-29.** When the owner approves the build board, the approved board shall be saved as a file
 the project controls, kept with its spec. (source: ruling 3)
 
-**FR-29a.** Where a project has turned on syncing to Claude Design, the approved board shall
-sync to it once, at approval; syncing stays the project's choice. (source: rulings 2, 3)
+**FR-29a.** *Retired 2026-10-10 (amendment 2).* Approved boards are not synced anywhere; the
+approved board's record is the file FR-29 names. (source: Canon 2026-10-10-dcc2b5e5-1)
 
-**FR-29b.** Where a project uses Claude Design, its boards' design system shall come from Claude
-Design, whether or not syncing is turned on. (source: ruling 2)
+**FR-29b.** *Retired 2026-10-10 (amendment 2).* A board's design system comes from the project's
+own design-system files; the plugin does not depend on Claude Design. (source: Canon
+2026-10-10-dcc2b5e5-1)
 
 **FR-30.** Where a small piece of work has nothing to draw, discovery may skip the board; the spec
 is then written from the framing and the rulings, and still carries source tags and goes through
@@ -522,6 +523,16 @@ summarizes)
   Instructions for one act and records with another home now stay where they are, and a ruling with
   bookkeeping goes in without it; the detail lives in Canon's contract (issue #1680, owner ruling
   2026-10-08). Sections touched: Purpose, FR-14, Definition of done / success, Glossary (Canon).
+- **2026-10-10 (owner-stamped 2026-10-10 at the advisor's decision walk, item 9 = a: "9 a, launch it
+  now", after "we should remove dependencies on claude design from our plugin"; substantive):**
+  standalone Claude Design closes on 2026-12-14 and moves into Claude, where designs and design
+  systems become artifacts with no sync path. The plugin no longer depends on it: FR-29a (sync the
+  approved board to Claude Design) and FR-29b (take the design system from Claude Design) are
+  retired, so a board's design system comes from the project's own design-system files and the
+  approved board's record is only the file FR-29 names. Canon 2026-10-10-dcc2b5e5-1 supersedes the
+  Claude Design clauses of 2026-10-05-3dbeb858-2 and -3. The package this spec landed through is
+  delivered and closed (accepted 2026-10-08), so no register entry or unstarted child needs
+  re-injection; the build is issue #1729's scope. Sections touched: FR-29a, FR-29b, Amendments.
 
 ## Coverage
 

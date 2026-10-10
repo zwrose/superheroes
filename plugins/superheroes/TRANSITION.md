@@ -7,6 +7,14 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Discovery: no Claude Design
+
+- Discovery no longer asks the owner whether the project uses Claude Design or whether approved boards sync to it, and it no longer syncs an approved board anywhere. The approved build board is still saved as files with the spec, as before.
+- A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
+- A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
+
 ## 0.42.0
 
 ### Before you upgrade
