@@ -245,11 +245,40 @@ The advisor's vet, round 1, raised 23 craft findings and 3 owner calls. The craf
 
 Round 2 closed this cycle: all three checks returned real results, gap review confirmed its one fix, and none raised anything new.
 
-## The owner's queue
+## After the final sheet
 
-- gap-002: settled on remainder sheet 1, card reviewer-own-tests. The owner picked "Its own tests don't make it a maker" (Canon 2026-10-10-d6064e1d-5). Applied in FR-18, FR-22 and the glossary; confirmed fixed.
-- SRC-2: settled on remainder sheet 1, card decision-on-record. The owner picked "The PR's saved answers count for one-PR decisions" (Canon 2026-10-10-d6064e1d-4). Applied in FR-38; confirmed fixed.
+### Round 1
 
-Nothing is waiting in the queue.
+The owner answered the final sheet on 2026-10-10 with "Not yet" and three rulings: no way back (Canon 2026-10-10-d6064e1d-15), craft everywhere (2026-10-10-d6064e1d-16), and four accepted answer patterns (2026-10-10-d6064e1d-17, settled in the chat). The gate was recorded as changes-requested, the rulings were applied, and the checks re-ran on the changed parts.
 
-The advisor's three owner calls from vet round 1 (V1.24, V1.25 and V1.26) are not in this queue. They go on the final sheet, as the vet record carries them.
+#### Gap review
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r7-gap-run
+- Result: real (terminal, ok, 1 attempt, engaged: 18 tool calls, 89.5 s)
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| gap-answer-pattern-scope | Gap review | Important, line 437: Put the all-sheet pattern change in the core. The new annex sentence replaces the shared review-surface FR-6 globally, while the core's new FR-55 rules cover only PR sheets and the index, and line 459 still excludes spec review. The shared rule also governs discovery's remainder and final sheets. A builder reading only the core could preserve discovery's existing options-based button selection; the annex instead changes its governing rule to the four patterns. Canon 2026-10-10-d6064e1d-17 approves the broader scope, but that scope is currently decided only in the annex. | craft | Fixed. FR-55 now says in the core that the four patterns are a standing rule for every sheet, that discovery's sheets already use three of them and do not change, and that this spec builds the rule for PR sheets and the index. The line under "What this spec changes elsewhere" now only names the matching amendment. | fixed in round 1 of this cycle |
+
+#### Source check
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r7-source-run
+- Result: real (terminal, ok, 1 attempt, engaged: 6 tool calls, 76.0 s)
+- Approved board, for the source check: docs/superheroes/risk-calibrated-review-that-learns-dec0af/board/build-board.html
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| none | Source check | no new findings | | | |
+
+#### Grounding
+- Run directory: /private/tmp/claude-501/-Users-zwrose-superheroes--claude-worktrees-showrunner-resume-30e427/d6064e1d-b3f5-4a78-9db3-4fe1e5265200/scratchpad/spec-checks/r7-grounding-run
+- Result: real (terminal, ok, 1 attempt, engaged: 19 tool calls, 126.8 s)
+- Grounding base, for grounding: origin/main, 48a7881e07318177c598deadef2d8bbf96d4894d
+- Confirmations: none owed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| GROUND-1 | Grounding | Minor, line 435: The FR-D9 back-out duration is misstated. The added sentence describes FR-D9 as keeping the prior plugin version runnable for one release. The repository's approved C13 scope instead records one window, pinned at the deleting release. The new ruling can retire that back-out, but the description of the requirement being superseded is inaccurate. | craft | Fixed. Both sentences now describe the retired way back as the prior plugin version kept runnable for one window after the deletion, as the earlier spec words it. | fixed in round 1 of this cycle |
+
+#### Citation check
+[]
