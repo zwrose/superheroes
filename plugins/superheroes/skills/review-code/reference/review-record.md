@@ -5,8 +5,8 @@ The review record: the plain account of one PR's review. This file is the one ho
 Each review session adds one new PR comment whose first line is `<!-- superheroes:review-record -->`.
 Earlier ones are never edited; the latest is the current record, and it links the one before it under
 `previousRecord`. Each raw output file named in the account gets its own comment
-(`<!-- superheroes:review-raw-output -->`), verbatim with secrets redacted, and the record links it
-under `rawOutputs`. Each review ends by writing it. Raw output and record text are redacted line by line: any line that assigns a secret-shaped field is replaced by `[REDACTED LINE]`, along with any value it opens.
+(`<!-- superheroes:review-raw-output -->`), verbatim unless withheld (below), and the record links it
+under `rawOutputs`. Each review ends by writing it. A raw output that holds a credential-shaped assignment (a secret-named field followed by `:` or `=`) or a private-key block is withheld: its comment says so and gives the line count, and its findings stay in the record. Any record text holding one reads `[REDACTED FIELD]`, and secret-named structured fields read `[REDACTED]`.
 
 Across sessions the account must relist every finding the latest earlier record listed (matched by identity
 key; an unresolved one stays pending, null), or the write refuses `review-record-unaccounted`.

@@ -461,95 +461,28 @@ def _secret_key(k):
     return isinstance(k, str) and bool(_SECRET_KEY.search(k))
 
 
-_REDACTED_LINE = "[REDACTED LINE]"
 _KEY_SEP = re.compile(r"(?:" + _SECRET_KEY.pattern.replace("api[_-]?key", "api[ _-]?key").replace("private[_-]?key", "private[ _-]?key")
                       + r")[\w-]{0,24}[ \t\"'\\]*[:=]", re.I)
 _PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
-_PEM_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
-_BLOCK_INDICATOR = re.compile(r"(?:\A|(?<=\s))[|>][+-]?\d?[+-]?[ \t]*\Z")
+_WITHHELD_FIELD = "[REDACTED FIELD]"
 
 
-def _open_after(segment, depth, quote):
-    """Carry (bracket depth, open quote) across one line segment of a value, escape-aware, left to right.
-    The value is the first quoted string or bracketed group; it ends where that closes, so a plain value is
-    closed at once and the text after a closed value (the enclosing string's own quotes) is never read."""
-    i, n, prev = 0, len(segment), ""
-    while i < n:
-        c = segment[i]
-        if c == "\\":
-            i += 2
-            prev = "x"
-            continue
-        if quote:
-            if c == quote:
-                quote = None
-                if not depth:
-                    return 0, None
-        elif depth:
-            if c in "\"'":
-                if not (prev.isalnum() and c == "'"):  # an apostrophe inside a word does not open a quote
-                    quote = c
-            elif c in "{[(":
-                depth += 1
-            elif c in "}])":
-                depth -= 1
-                if not depth:
-                    return 0, None
-        elif c in "\"'":
-            quote = c
-        elif c in "{[(":
-            depth = 1
-        elif not c.isspace():
-            return 0, None
-        prev = c
-        i += 1
-    return depth, quote
+def _has_secret(text):
+    """The one detector: a secret-named key followed by ':' or '=', or a private-key block, anywhere in the text.
+    Nothing tracks where a value ends; a text this matches is withheld whole."""
+    return bool(_KEY_SEP.search(text) or _PEM_BEGIN.search(text))
+
+
+def _secret_line_count(text):
+    """How many lines of the text the detector matches (1 when only the whole text matches)."""
+    return sum(1 for line in text.split("\n") if _has_secret(line)) or 1
 
 
 def _scrub_text(text):
-    """The one keyed redaction home: whole lines carrying a secret-shaped assignment (and any value they open) go,
-    failing closed, in one linear left-to-right pass; then pr_comment.scrub's free-form token shapes."""
-    out, lines = [], text.split("\n")
-    pem = False        # inside a private-key block
-    depth, quote = 0, None   # an open bracket/quote value carried from a redacted line
-    block_indent = None      # indent of the key line whose YAML block scalar is running
-    for line in lines:
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip())
-        if pem:
-            out.append(_REDACTED_LINE)
-            pem = _PEM_END.search(line) is None
-            continue
-        if block_indent is not None:
-            if not stripped:
-                out.append(line)
-                continue
-            if indent > block_indent:
-                out.append(_REDACTED_LINE)
-                continue
-            block_indent = None
-        if depth or quote:
-            if not stripped:
-                out.append(line)
-                continue
-            out.append(_REDACTED_LINE)
-            depth, quote = _open_after(line, depth, quote)
-            continue
-        m = _PEM_BEGIN.search(line)
-        if m:
-            out.append(_REDACTED_LINE)
-            pem = _PEM_END.search(line, m.end()) is None
-            continue
-        m = _KEY_SEP.search(line)
-        if m is None:
-            out.append(line)
-            continue
-        out.append(_REDACTED_LINE)
-        value = line[m.end():]
-        depth, quote = _open_after(value, 0, None)
-        if not (depth or quote) and (_BLOCK_INDICATOR.search(value) or not value.strip(" \t\r\"'")):
-            block_indent = indent
-    return pr_comment.scrub("\n".join(out))
+    """A record string: withheld whole when it holds a credential-shaped assignment, else scrubbed of token shapes."""
+    if _has_secret(text):
+        return _WITHHELD_FIELD
+    return pr_comment.scrub(text)
 
 
 def _scrubbed(value):
@@ -558,8 +491,7 @@ def _scrubbed(value):
     if isinstance(value, list):
         return [_scrubbed(v) for v in value]
     if isinstance(value, dict):
-        return {k: ("[REDACTED]" if _secret_key(k) and isinstance(v, (str, list, dict))
-                    else _scrubbed(v)) for k, v in value.items()}
+        return {k: ("[REDACTED]" if _secret_key(k) and v is not None else _scrubbed(v)) for k, v in value.items()}
     return value
 
 
@@ -598,17 +530,23 @@ def render(record):
 
 
 def render_raw(name, text):
-    """A raw-output comment: one reviewer's output file, verbatim with secrets redacted, under a short intro."""
-    intro = (f"Raw output of one reviewer, kept verbatim with secrets redacted: {name}. "
+    """A raw-output comment as (body, withheld). One reviewer's output file goes verbatim under a short intro,
+    unless it holds a credential-shaped assignment or a private-key block: then none of it is posted."""
+    if _has_secret(text):
+        note = (f"Raw output of one reviewer withheld: {name}. It contains credential-shaped assignments on "
+                f"{_secret_line_count(text)} line(s), so it is not posted. Its findings are in the review record on this PR.")
+        _assert_no_bug_free_claim(note)
+        return f"{RAW_MARKER}\n{note}", True
+    intro = (f"Raw output of one reviewer, kept verbatim: {name}. "
              "A review record on this PR links this comment.")
     # Only the sentence this writer authors is checked: the kept text is the reviewer's own.
     _assert_no_bug_free_claim(intro)
-    text = _scrub_text(text)
+    text = pr_comment.scrub(text)
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
     body = f"{RAW_MARKER}\n{intro}\n\n{fence}\n{text}\n{fence}"
     if len(body) > GITHUB_MAX_CHARS:
         raise Refusal("review-record-too-large", f"the raw output file {name} is {len(body)} characters")
-    return body
+    return body, False
 
 
 def _parse_body(body):
@@ -672,18 +610,18 @@ def write(account_path, repo_root, readers=None):
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         record = build_record(a, rd)
-        raws = [(os.path.basename(p), render_raw(os.path.basename(p), read_text(p)))
+        raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
         previous = {"id": latest["id"], "url": latest.get("url")} if latest else None
         # Refuse here, before any comment is created, if the record cannot be posted.
         render(dict(record, previousRecord=previous and {"id": 10 ** 15, "url": "u" * 120},
-                    rawOutputs=[{"file": n, "id": 10 ** 15, "url": "u" * 120} for n, _ in raws]))
+                    rawOutputs=[{"file": n, "id": 10 ** 15, "url": "u" * 120, "withheld": w} for n, _, w in raws]))
         links = []
-        for name, body in raws:
+        for name, body, withheld in raws:
             sent = rd["create_comment"](pr, repo, body)
             if sent is None:
                 raise Refusal("review-record-gh-failed", f"the raw output comment for {name} could not be written")
-            links.append({"file": name, "id": sent["id"], "url": sent.get("url")})
+            links.append({"file": name, "id": sent["id"], "url": sent.get("url"), "withheld": withheld})
         record.update(rawOutputs=links, previousRecord=previous)
         sent = rd["create_comment"](pr, repo, render(record))
         if sent is None:

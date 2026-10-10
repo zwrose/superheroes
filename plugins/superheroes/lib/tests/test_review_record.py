@@ -546,7 +546,7 @@ def test_w2_the_one_check_across_sessions(tmp_path):
 
 
 def test_w3_raw_output_verbatim_and_linked(tmp_path):
-    # axis: raw output; a raw file scrubbed wrongly, fenced short, refused for the reviewer's own words, or not linked
+    # axis: raw output; a raw file holding a credential posted, or not linked as withheld
     text = 'intro\n```python\nprint(1)\n```\n{"pwd": "hunter2"}\nthe reviewer says no bugs here\n'
     raw = tmp_path / "raw.txt"
     raw.write_text(text)
@@ -554,12 +554,30 @@ def test_w3_raw_output_verbatim_and_linked(tmp_path):
     send(tmp_path, fake, rawFindingsFiles=[str(raw)])
     (comment,) = fake.raws()
     body = comment["body"]
-    assert body.startswith(rr.RAW_MARKER) and len(fake.comments) == 2
-    assert "hunter2" not in body and '[REDACTED LINE]' in body
-    assert text.replace('{"pwd": "hunter2"}', "[REDACTED LINE]") in body and "no bugs here" in body
-    assert "\n````\n" in body and body.endswith("\n````")
+    assert len(fake.comments) == 2
+    assert body == (f"{rr.RAW_MARKER}\nRaw output of one reviewer withheld: raw.txt. It contains credential-shaped "
+                    "assignments on 1 line(s), so it is not posted. Its findings are in the review record on this PR.")
+    assert "hunter2" not in body and "no bugs here" not in body and "print(1)" not in body
     rec = rr.read(7, readers=fake.readers())
-    assert rec["rawOutputs"] == [{"file": "raw.txt", "id": comment["id"], "url": comment["url"]}]
+    assert rec["rawOutputs"] == [{"file": "raw.txt", "id": comment["id"], "url": comment["url"], "withheld": True}]
+
+
+def test_a_withheld_and_a_clean_raw_file_are_posted_as_withheld_and_verbatim(tmp_path):
+    # axis: per-file withholding; a clean raw file withheld with its neighbour, or a credential file posted verbatim
+    secret, clean = tmp_path / "secret.txt", tmp_path / "clean.txt"
+    secret.write_text('line one\npassword = "LEAKMARK"\n')
+    text = 'intro\n```python\nprint(1)\n```\nthe reviewer says no bugs here\n'
+    clean.write_text(text)
+    fake = Fake()
+    send(tmp_path, fake, rawFindingsFiles=[str(secret), str(clean)])
+    first, second = fake.raws()
+    assert first["body"].startswith(f"{rr.RAW_MARKER}\nRaw output of one reviewer withheld: secret.txt.")
+    assert "LEAKMARK" not in first["body"] and "line one" not in first["body"]
+    assert second["body"].startswith(f"{rr.RAW_MARKER}\nRaw output of one reviewer, kept verbatim: clean.txt.")
+    assert text in second["body"] and "\n````\n" in second["body"] and second["body"].endswith("\n````")
+    rec = rr.read(7, readers=fake.readers())
+    assert [(r["file"], r["withheld"]) for r in rec["rawOutputs"]] == [("secret.txt", True), ("clean.txt", False)]
+    assert "LEAKMARK" not in "".join(c["body"] for c in fake.comments)
 
 
 def test_w4_unreadable_raw_file_is_listed_and_not_posted(tmp_path):
@@ -669,10 +687,11 @@ def test_the_stored_finding_key_is_opaque_and_survives_redaction(tmp_path, title
                                   '{"passphrase":"pre\\"EXAMPLE_SECRET"}'])
 def test_quoted_credentials_are_redacted_in_raw_output_and_record_strings(tmp_path, text):
     # axis: quoted credentials; a passphrase or JSON Authorization value published from raw output or a finding string
-    assert "EXAMPLE_SECRET" not in rr.render_raw("r.txt", text) and "dXNlcjpwYXNz" not in rr.render_raw("r.txt", text)
+    raw, withheld = rr.render_raw("r.txt", text)
+    assert withheld and "EXAMPLE_SECRET" not in raw and "dXNlcjpwYXNz" not in raw
     f = finding("a-1", outcome="fixed", reason="r", body=text)
     body = rr.render(build(account(findings=[f])))
-    assert "EXAMPLE_SECRET" not in body and "dXNlcjpwYXNz" not in body and "[REDACTED LINE]" in body
+    assert "EXAMPLE_SECRET" not in body and "dXNlcjpwYXNz" not in body and "[REDACTED FIELD]" in body
 
 
 def test_w7_read_returns_the_latest(tmp_path):
@@ -790,65 +809,84 @@ def test_x3_none_and_false_are_accepted_as_given():
 SAFE_TAIL = "SAFE_TAIL_TEXT"
 
 
-@pytest.mark.parametrize("text,leaked", [
-    ('password: "quotedvalue"', "quotedvalue"),
-    ('"password": "pre\\"suffix"', "suffix"),
-    ('{"token": ["x1y2z3","q4r5s6"]}', "x1y2z3"),
-    ('PASSPHRASE="a b"', "a b"),
-    ("authorization=Basic abc123", "abc123"),
-    ('password: "line1\nMULTILINEQUOTED"', "MULTILINEQUOTED"),
-    ('{"passphrase": [\n  "MULTILINEARRAY"\n]}', "MULTILINEARRAY"),
-    ("private_key: |\n  AAAA\n  BLOCKSCALARLEAK\nnext: ok", "BLOCKSCALARLEAK"),
-    ("note\n-----BEGIN RSA PRIVATE KEY-----\nPEMBODYLEAK\n-----END RSA PRIVATE KEY-----\nafter", "PEMBODYLEAK"),
-    ('{"credentials": {"user":"u","password":"p1",\n"deep":{"k":["NESTEDLEAK"]}}, "ok": 1}', "NESTEDLEAK"),
-    ('{"secret": [{"a":"x"},\n{"b":"ARRAYOFOBJLEAK"}]}', "ARRAYOFOBJLEAK"),
-    ('{"secret": {"a": "has ] bracket",\n "b": "QUOTEDBRACKETLEAK"}}', "QUOTEDBRACKETLEAK"),
-    ('{"secret": {"a": "UNBALANCEDLEAK", "b": [1,\nmore', "more"),
-    ("password: hunter 2 & more", "hunter"),
-    ("password: &db_password EXAMPLE_SECRET", "EXAMPLE_SECRET"),
-    ('{\\"cookie\\": \\"sess-value-9\\"}', "sess-value-9"),
-    ("api key = hunter2value", "hunter2value"),
-    ("credentials:\n  plainnested\n  EMPTYKEYLEAK\nafter: ok", "EMPTYKEYLEAK"),
+@pytest.mark.parametrize("text", [
+    'password: "LEAKMARK"',
+    '"password": "pre\\"LEAKMARK"',
+    '{"token": ["LEAKMARK","q4r5s6"]}',
+    'PASSPHRASE="a b LEAKMARK"',
+    "authorization=Basic LEAKMARK",
+    'password: "line1\nLEAKMARK"',
+    '{"passphrase": [\n  "LEAKMARK"\n]}',
+    "private_key: |\n  AAAA\n  LEAKMARK\nnext: ok",
+    "note\n-----BEGIN RSA PRIVATE KEY-----\nLEAKMARK\n-----END RSA PRIVATE KEY-----\nafter",
+    '{"credentials": {"user":"u","password":"p1",\n"deep":{"k":["LEAKMARK"]}}, "ok": 1}',
+    '{"secret": [{"a":"x"},\n{"b":"LEAKMARK"}]}',
+    '{"secret": {"a": "has ] bracket",\n "b": "LEAKMARK"}}',
+    '{"secret": {"a": "LEAKMARK", "b": [1,\nmore',
+    "password: hunter LEAKMARK & more",
+    "password: &db_password LEAKMARK",
+    '{\\"cookie\\": \\"LEAKMARK\\"}',
+    "api key = LEAKMARK",
+    "credentials:\n  plainnested\n  LEAKMARK\nafter: ok",
+    '{"password":"x","credentials":{\n"nested":"LEAKMARK"\n}}',
+    "password: | # note\n  LEAKMARK",
+    'password = """\nLEAKMARK\n"""',
 ])
-def test_every_secret_value_form_is_redacted_by_the_one_line_pass(text, leaked):
-    # axis: redaction; a credential value form (quoted, escaped, array, block, PEM, spaced) surviving past its secret-named key
-    assert leaked not in rr._scrub_text(text)
-    assert "[REDACTED LINE]" in rr._scrub_text(text)
+def test_every_credential_form_is_withheld_or_redacted_whole(text):
+    # axis: withholding; a credential value form (quoted, escaped, array, block, PEM, spaced, second key) reaching a posted comment
+    assert "LEAKMARK" in text
+    body, withheld = rr.render_raw("f.json", text)
+    assert withheld is True and "LEAKMARK" not in body
     f = finding("a-1", body=text, reason="r")
-    assert leaked not in rr.render_raw("raw.json", text)
-    assert leaked not in json.dumps(rr._scrubbed(f))
+    posted = rr.render(build(account(findings=[f])))
+    assert "LEAKMARK" not in posted
+    assert rr._parse_body(posted)["findings"][0]["body"] == "[REDACTED FIELD]"
 
 
-def test_text_after_an_escaped_credential_object_survives():
-    # axis: collateral damage; a redacted escaped credential object eating the text and fields that follow it
+def test_numeric_and_other_typed_secret_fields_are_redacted():
+    # axis: typed redaction; a number, bool or float under a secret-named key published because only str/list/dict were redacted
+    f = finding("a-1", outcome="fixed", reason="r")
+    f["evidence"] = {"password": 123456, "token": True, "pwd": 1.5, "note": "ok", "cookie": None}
+    posted = rr.render(build(account(findings=[f])))
+    assert "123456" not in posted and '"token": true' not in posted and '"pwd": 1.5' not in posted
+    assert rr._parse_body(posted)["findings"][0]["evidence"] == {
+        "password": "[REDACTED]", "token": "[REDACTED]", "pwd": "[REDACTED]", "note": "ok", "cookie": None}
+
+
+def test_text_holding_an_escaped_credential_object_is_withheld():
+    # axis: whole-text withholding; an escaped credential object inside a larger text posted with the text around it
     obj = json.dumps({"credentials": {"password": "EXAMPLE_SECRET"}})
     text = json.dumps({"body": "see " + obj}) + "\n" + SAFE_TAIL
-    out = rr._scrub_text(text)
-    assert "EXAMPLE_SECRET" not in out and out.endswith("\n" + SAFE_TAIL)
+    assert rr._scrub_text(text) == "[REDACTED FIELD]"
     nested = json.dumps({"body": obj, "suggestion": "keep", "evidence": SAFE_TAIL}, indent=1)
-    out = rr._scrub_text(nested)
-    assert "EXAMPLE_SECRET" not in out and "keep" in out and SAFE_TAIL in out
+    assert rr._scrub_text(nested) == "[REDACTED FIELD]"
+    body, withheld = rr.render_raw("r.json", text)
+    assert withheld is True and "EXAMPLE_SECRET" not in body and SAFE_TAIL not in body
 
 
 def test_a_prose_mention_without_a_separator_is_kept():
-    # axis: over-redaction; a line that only names a secret-shaped word treated as an assignment
+    # axis: over-withholding; a text that only names a secret-shaped word treated as an assignment
     text = "the password field is unchecked\nsecond line"
-    assert rr._scrub_text(text) == text
+    assert rr._has_secret(text) is False and rr._scrub_text(text) == text
+    body, withheld = rr.render_raw("r.txt", text)
+    assert withheld is False and text in body and "kept verbatim: r.txt." in body
 
 
 def test_scrub_text_is_linear_on_adversarial_input():
-    # axis: resource exhaustion; key-prefix runs making redaction quadratic before publication
+    # axis: resource exhaustion; key-prefix runs making detection quadratic before publication
     import time
     for n in ("pass" * 50000, "p" * 200000, "password " * 22000, "password" + " " * 200000 + "x", '"' * 200000):
         start = time.monotonic()
+        rr._has_secret(n[:200000])
         rr._scrub_text(n[:200000])
         assert time.monotonic() - start < 2
 
 
-def test_the_module_has_one_keyed_redaction_home():
-    # axis: one home; an old per-form regex or bracket-balancer left beside the line scanner
-    for gone in ("_balanced_end", "_KEYED_SECRET", "_PEM_BLOCK"):
+def test_the_module_has_one_detector_and_no_value_end_tracking():
+    # axis: one home; an old line scanner, block indicator or bracket-balancer left beside the detector
+    for gone in ("_open_after", "_REDACTED_LINE", "_BLOCK_INDICATOR", "_PEM_END", "_balanced_end", "_KEYED_SECRET"):
         assert not hasattr(rr, gone)
+    assert callable(rr._has_secret)
 
 
 @pytest.mark.parametrize("row", [
@@ -919,7 +957,8 @@ else:
     assert proc.returncode == 0 and out["ok"] and out["action"] == "created", (proc.stdout, proc.stderr)
     stored = json.loads(state.read_text())["comments"]
     assert [c["body"].startswith(rr.RAW_MARKER) for c in stored] == [True, False]
-    assert "ghp_" not in stored[0]["body"] and '"title": "nit"' in stored[0]["body"]
+    assert stored[0]["body"].startswith(f"{rr.RAW_MARKER}\nRaw output of one reviewer withheld: code.json.")
+    assert "ghp_" not in stored[0]["body"] and "nit" not in stored[0]["body"]
     proc = subprocess.run([sys.executable, "-B", rr.__file__, "read", "--pr", "7"], capture_output=True,
                           text=True, env=env)
     got = json.loads(proc.stdout)
@@ -927,3 +966,4 @@ else:
     assert [f["id"] for f in got["findings"]] == ["f1"]
     assert got["reviewers"][0]["ran"] == "engine-record"
     assert [r["file"] for r in got["rawOutputs"]] == ["code.json"] and got["rawOutputs"][0]["url"] == "http://c/1"
+    assert got["rawOutputs"][0]["withheld"] is True
