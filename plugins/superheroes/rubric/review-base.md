@@ -1,4 +1,4 @@
-<!-- rubric-version: 10 -->
+<!-- rubric-version: 11 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -60,7 +60,10 @@ Minor and Nit findings never change the verdict regardless of strictness.
 6. **Single source of truth for cross-boundary facts.** A second hand-maintained
    copy of a fact used across a module or language boundary is review-blocking,
    whether or not a drift test guards it; a contract test that restates the constant
-   instead of reading the home proves nothing. Homes: **CONVENTIONS.md** section 11
+   instead of reading the home proves nothing. One exception covers both clauses: a
+   name whose spelling is fixed outside the repository, one another system matches on,
+   is pinned by its literal in one test, and that pin is neither a copy nor a
+   restatement (CONVENTIONS §11.3). Homes: **CONVENTIONS.md** section 11
    for this repository's statement; `rubric/review-discipline.md` under
    `### One home per rule, and the pin rule` for the band rule.
 7. **A review seat never changes the repository, and never claims a run it did not make.**

@@ -7,11 +7,18 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.42.0
 
 ### Before you upgrade
 
-- Nothing to do. Launches without `iphoneCheck` behave exactly as before.
+- Finish or discard any in-flight review session that holds owner guidance over 2000 bytes, or a fix batch whose guidance, as rendered in the fixer order (each finding's header and quoting included), comes to more than 8000 bytes. Four guidances of about 1,900 bytes each are already enough. Under 0.42.0 its next fixer order refuses instead of carrying cut or missing guidance.
+- After upgrading, run configure once. `rubric-version` moves from 10 to 11, so each project's review profile reads as behind until configure refreshes it.
+- Launches without `iphoneCheck` behave exactly as before. Nothing else needs doing before you upgrade.
+
+### Review: pinning an external identifier
+
+- Review-base rule 6 now excepts a name whose spelling is fixed outside the repository (a config key, an env-var name, a query parameter, a marker another tool reads): one test pins its literal, and a review seat no longer flags that pin as a copy or as restating the constant. CONVENTIONS §11.3 is the one home of the exception and its reason; the bite-proof rubric and the test-reviewer's literal-pin check point there.
+- `rubric-version` in `rubric/review-base.md` moves from 10 to 11, so a project's review profile reads as behind until configure refreshes it.
 
 ### Canon: what stays out
 
@@ -30,6 +37,24 @@ belongs to and lists every change with its replacement.
 - Phone creation and the Device Hub check together run under their own 90-second ceiling, and the launch's own deadline is extended by exactly the time they took. Turning the check on never makes a launch time out that would have started without it.
 - The launch fold gains two keys on every lane: `iphoneCheck` (a bool, false when the premise does not ask) and `iphoneId` (the UDID, or `None`). A `reserved` record whose `iphoneId` is malformed, or is present without `iphoneCheck: true` in its premise, makes the fold refuse with `fold-bad-field:reserved:iphoneId`. An older fold ignores the new field.
 - The launch result gains an `iphone` key when the check is on. On success it is `{"id": <udid or None>, "deviceHub": <value>}`. When the reservation is refused before the record is written, it is `{"id": <udid>, "recorded": false, "deleted": <bool>}`. When the reservation's append fails, it is `{"id": <udid>, "recorded": "uncertain"}`, and the phone is kept.
+
+### Pilot: the iPhone check
+
+- The pilot drives the lane's phone through `lib/iphone_check.py`, a stdlib-only CLI. Its verbs are `preflight`, `boot`, `open`, `drive`, `shot`, `read`, `judge` and `render`. Each prints one JSON object and exits 0 when its `ok` is true. The rules live in `skills/test-pilot-execute/reference/execution-steps.md` § The iPhone check.
+- The check runs when `SUPERHEROES_IPHONE_ID` or `SUPERHEROES_DEVICE_HUB` is in the lane's environment (the launcher sets both for an iPhone launch), or when the issue's done-definition names an iPhone check. It needs no browser MCP, so a lane without a browser tool still runs and posts it.
+- Readings come from the page. A development-only reporting script on the page posts each reading as JSON to the loopback address in the page URL's `superheroes-reading` query parameter, and `read` listens there for one call. A password field's value is never sent.
+- A check that cannot run says so in the results with `iPhone check did not run — <part>: <reason>`, where `<part>` is `browser check`, `installed-app check` or `whole check`. A lane with no phone reads `iPhone check did not run — whole check: no phone for this lane`. Every screenshot and reading carries six labels: `phone`, `model`, `iOS`, `page`, `where`, `source`. A check that did not run never holds the PR.
+- A project whose page has no reporting script gets `iPhone check did not run — whole check: the app lacks its reporting script`.
+- New guidance for a project adding its reporting script: `skills/test-pilot-init/reference/reporting-script.md`, reached from the test-pilot set-up.
+- Nothing changes for lanes launched without the check.
+
+### Review driver: oversized owner-gate guidance refuses
+
+- A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at `present-judgment` submit with the new token `gate-guidance-oversize`; nothing folds and the owner resubmits shorter guidance. On the library `run_loop` path, which has no submit, the fold parks `cannot-certify` with the same token.
+- The fixer order no longer truncates guidance and no longer carries the `bytes withheld` line. A render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`.
+- The ruling path (`rule --file`) now measures stripped text, as the gate does, so guidance that is over 2000 bytes only through surrounding whitespace no longer refuses with `ruling-guidance-oversize`.
+- The 8000-byte aggregate cap refuses rather than leave any guidance out. A `present-judgment` submit whose fix batch would carry more guidance than one order's 8000 bytes, counting guidance carried from earlier rounds and rulings, is refused with `gate-guidance-aggregate-oversize`; nothing folds and the owner resubmits shorter. On the library `run_loop` path the fold parks `cannot-certify` with the same token. The measure is the whole batch as one order, so it can refuse a batch the fixer would have split across orders. A render that would still overflow refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `order-render-refused:ruling-guidance-omitted` when the overflow reaches guidance from a ruling), and no order carries the `not rendered in full` line.
+- A session that already folded guidance over 2000 bytes now refuses its next fixer order render with `order-render-refused:gate-guidance-oversize`. A session whose fixer order was already emitted under the old driver, with the `bytes withheld` line or the `not rendered in full` line, should be discarded, not replayed.
 
 ### Showrunner: iPhone lanes
 
