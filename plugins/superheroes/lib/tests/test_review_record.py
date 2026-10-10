@@ -117,8 +117,9 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
 
 def test_branch_mismatched_marker_does_not_count():
     # axis: the build-lane marker's branch check; a marker from another branch deciding the lane
-    marker = {"schema": "build-lane/1", "lane": "full", "branch": "other", "currentBranch": "b"}
-    assert build(account(lane="micro"), Fake(marker=marker))["lane"]["source"] == "reported by the session"
+    marker = {"schema": "build-lane/1", "lane": "full", "branch": "other", "currentBranch": "b", "issue": 9}
+    fake = Fake(marker=marker, meta={"head": HEAD, "body": "", "issues": [9]}, issue_bodies={9: "no call"})
+    assert build(account(lane="micro"), fake)["lane"]["source"] == "reported by the session"
 
 
 def test_marker_for_another_issue_does_not_count():
@@ -145,6 +146,25 @@ def test_session_only_run_counts_and_is_labelled():
     assert rec["reviewers"][0]["ran"] == "reported-by-session" and rec["missingReviews"] == []
     assert rec["status"] == "reviewed"
     assert "- code-reviewer: ran (reported by the session)" in rr.render(rec)
+
+
+def test_session_only_review_counts_only_on_the_final_commit():
+    # axis: commit binding; a session-only review of an earlier or unstated commit credited as a review of the final commit
+    reviewers = [reviewer(runDir=None)]
+    rec = build(account(reviewers=reviewers, finalCommit=EARLIER))
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run"
+    assert v["runNote"] == f"the session reported a review of {EARLIER[:7]}, not the final commit {HEAD[:7]}"
+    assert {"fact": "code-reviewer ran", "session": True, "code": "not-run"} in rec["sessionDisagreements"]
+    assert [m["name"] for m in rec["missingReviews"]] == ["code-reviewer"]
+    assert (rec["status"], rec["parked"]) == ("not-reviewed", True)
+    rec = build(account(reviewers=reviewers, finalCommit=None))
+    assert rec["reviewers"][0]["ran"] == "not-run"
+    assert rec["reviewers"][0]["runNote"] == "the session did not say which commit it reviewed"
+    assert (rec["status"], rec["parked"]) == ("not-reviewed", True)
+    rec = build(account(reviewers=reviewers, finalCommit=HEAD))
+    assert rec["reviewers"][0]["ran"] == "reported-by-session"
+    assert rec["missingReviews"] == [] and rec["status"] == "reviewed"
 
 
 def test_code_wins_over_the_session_account():
@@ -216,7 +236,9 @@ def test_missing_security_review_parks_unless_the_owner_went_ahead():
 def test_go_ahead_missing_its_proof_does_not_count():
     # axis: go-ahead proof; a go-ahead without its canon id or words accepted
     sec = reviewer("security-reviewer", ran=False, runDir=None)
-    for bad in ({"kind": "standing-ruling"}, {"kind": "owner-words", "words": "go"}):
+    for bad in ({"kind": "standing-ruling"}, {"kind": "owner-words", "words": "go"},
+                {"kind": "owner-words", "where": "PR comment"},
+                {"kind": "owner-words", "where": "PR comment", "words": ""}):
         rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", **bad}]))
         assert rec["parked"] is True and rec["missingReviews"][0]["goAhead"] is None
         assert "the go-ahead for security-reviewer is incomplete" in rec["whatIsMissing"]
@@ -445,6 +467,12 @@ def test_build_lane_marker_layout_comes_from_build_lane():
 
 def test_lane_marker_is_none_when_the_marker_path_cannot_be_resolved(tmp_path, monkeypatch):
     # axis: marker read; an unresolvable or absent marker raising instead of reading as no marker
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    # a real repo with no marker file: _lane_marker reaches the real _marker_path and finds the file absent
+    assert rr._lane_marker(str(tmp_path)) is None
+
     def unresolvable(root):
         raise rr.store_core.RepoRootUnavailable("git could not be run")
     monkeypatch.setattr(rr.build_lane, "_marker_path", unresolvable)
@@ -1051,6 +1079,20 @@ def test_numeric_count_keys_post_and_non_numeric_ones_do_not():
     assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"tokens": 100}
     f["evidence"] = {"tokens": "x"}
     assert rr._parse_body(rr.render(build(account(findings=[f]))))["findings"][0]["evidence"] == {"tokens": "[REDACTED]"}
+
+
+def test_count_exemption_needs_the_whole_value_to_be_a_number():
+    # axis: count exemption; a count key exempted because its value merely starts with a digit
+    leak = '{"tokens":"1234LEAKMARK"}'
+    body, withheld = rr.render_raw("f.json", leak)
+    assert withheld is True and "LEAKMARK" not in body
+    ok = '{"input_tokens": 1234, "output_tokens": "56"}'
+    body, withheld = rr.render_raw("f.json", ok)
+    assert withheld is False and ok in body
+    assert rr.render_raw("f.json", '"input_tokens": 12abc')[1] is True
+    # fail-closed edges: text after the number, and a mismatched quote pair, are not counts
+    assert rr.render_raw("f.json", '"input_tokens": 12 abc')[1] is True
+    assert rr.render_raw("f.json", '"input_tokens": "123' + "'")[1] is True
 
 
 CODEX_STDOUT = "\n".join([

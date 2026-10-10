@@ -296,7 +296,7 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, rd, dis, head, shared=frozenset()):
+def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
@@ -326,8 +326,15 @@ def _reviewer(r, rd, dis, head, shared=frozenset()):
             out.update(ran="not-run", runNote=note)
             if r["ran"]:
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
+    elif r["ran"] and reported_commit and reported_commit == head:
+        out["ran"] = "reported-by-session"
+    elif r["ran"]:
+        note = (f"the session reported a review of {_short(reported_commit)}, not the final commit {_short(head)}"
+                if reported_commit else "the session did not say which commit it reviewed")
+        out.update(ran="not-run", runNote=note)
+        dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
-        out["ran"] = "reported-by-session" if r["ran"] else "not-run"
+        out["ran"] = "not-run"
     if isinstance(r.get("notIndependent"), bool):
         out["notIndependent"] = r["notIndependent"]
     if isinstance(r.get("ownerWord"), dict):
@@ -411,7 +418,7 @@ def build_record(account, readers):
             dis.append({"fact": fact, "session": session, "code": code})
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
-    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared) for r in a["reviewers"]]
+    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"]) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -496,13 +503,14 @@ def _is_count_key(k):
     return words[-1:] == ["tokens"] or words[-2:] == ["tokens", "count"]
 
 
-def _number_follows(text, pos):
-    """True when the text at pos, past optional spaces and one optional quote, starts with a digit."""
-    while pos < len(text) and text[pos] == " ":
-        pos += 1
-    if pos < len(text) and text[pos] in "\"'":
-        pos += 1
-    return pos < len(text) and text[pos].isdigit()
+_NUMBER_VALUE = re.compile(r" *(?P<q>[\"']?)-?\d+(?:\.\d+)?(?P=q) *(?:[,}\]\n]|\Z)")
+
+
+def _number_value_follows(text, pos):
+    """True when the whole value at pos is a number: past optional spaces, an optional quote, an int or a float,
+    the same closing quote if one opened, then optional spaces and a ',', '}', ']', newline or the end of the text.
+    Anything else after the number, or a mismatched quote pair, is not a count."""
+    return _NUMBER_VALUE.match(text, pos) is not None
 
 
 def _json_strings(value):
@@ -537,10 +545,10 @@ def _decoded_views(text):
 
 def _detects(text):
     """The detector over one view: a key-like run that _secret_key accepts and that is followed by ':' or '=',
-    unless it is a count key whose value starts with a digit."""
+    unless it is a count key whose whole value is a number."""
     for m in _KEY_CANDIDATE.finditer(text):
         key = m.group("key")
-        if _secret_key(key) and not (_is_count_key(key) and _number_follows(text, m.end())):
+        if _secret_key(key) and not (_is_count_key(key) and _number_value_follows(text, m.end())):
             return True
     return False
 
