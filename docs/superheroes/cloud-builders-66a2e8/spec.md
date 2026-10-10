@@ -96,6 +96,7 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
 
 **FR-13.** The advisor shall judge, from a build's order, whether the build needs something only the owner's machine has. (source: craft, for your veto; journeys)
   - *Acceptance (rule):* The advisor judges a build that needs a phone simulator or the owner's signed-in browser as not able to run in the cloud. (source: journeys; Canon 2026-10-10-ca3e7e0d-16)
+  - *Acceptance (rule):* The advisor judges every build of a project that keeps its Canon or its specs outside the repository as not able to run in the cloud, and the launch report says that the build needs those files, which only the owner's machine has. (source: Canon 2026-10-10-ca3e7e0d-22)
 
 **FR-14.** The plugin shall count the cloud as ready for a launch only when the reviewer pass is live, the project has a cloud setup on the launching Claude account, the cloud's plugin version equals the advisor's, the cloud's calibration matches the owner's machine, and the cloud platform can be reached. (source: Canon 2026-10-10-ca3e7e0d-8; Canon 2026-10-10-ca3e7e0d-13; craft, for your veto; journeys)
   - *Acceptance (rule):* A launch with any one of the five conditions false is a launch with the cloud not ready. (source: journeys)
@@ -211,7 +212,8 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
 **UFR-7.** If a cloud build's independent review cannot run because the reviewer pass has lapsed, then the builder shall park the PR with its review recorded as not run. (source: Canon 2026-10-10-ca3e7e0d-2; board · 5 Mid-build trouble)
   - *Acceptance:* Given a cloud build whose pass lapses before its review, when the builder reaches the review, then the builder's comment on the PR says the review did not run, that the work is pushed, and that the PR is not ready. (source: board · 5 Mid-build trouble)
   - *Acceptance (rule):* A review that finished before the pass lapsed stays as it was recorded. (source: craft, for your veto)
-  - *Acceptance (rule):* A PR parked this way follows the approved review spec's rules for a review that did not run, the owner's own ways past them included. No session picks a reviewer from a maker's model family on its own. (source: Canon 2026-10-10-d6064e1d-12)
+  - *Acceptance (rule):* A PR parked this way follows the approved review spec's rules for a review that did not run, the owner's own ways past them included. No session picks a reviewer from a maker's model family on its own. (source: Canon 2026-10-10-ca3e7e0d-21; Canon 2026-10-10-d6064e1d-12)
+  - *Acceptance (rule):* The cloud is not stricter than a build on the owner's machine here. (source: Canon 2026-10-10-ca3e7e0d-21)
 
 The approved review spec already says what happens when a planned reviewer could not run [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § UFR-3], and treats a review as not run when no reviewer from a different model family can run [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § UFR-4]. UFR-7 applies those rules to a review that a lapsed pass stops from running, and changes neither. (source: craft, for your veto)
 
@@ -299,6 +301,8 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - Any check that needs a phone or the owner's signed-in browser. (source: Canon 2026-10-10-ca3e7e0d-16)
 - Cleanup with no tap from the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
 - A build machine the owner hosts. (source: Canon 2026-10-10-ca3e7e0d-6)
+- Carrying a project's Canon or specs to the cloud when the project keeps them outside the
+  repository. For now such a project's builds run on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-22)
 
 ## Glossary
 
