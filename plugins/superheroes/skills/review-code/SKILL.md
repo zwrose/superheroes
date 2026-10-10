@@ -371,6 +371,8 @@ Write `$SESSION_DIR/round-1/presentation.md` per `headless-presentation.md` § T
 
 Print the artifact's path and a terminal report for the **approved** set only — grouped by severity, verdict label in bold. For each approved finding: severity tag, `file:line`, title, body, and the orchestrator POV line. State in one line that the `ask-set` went undecided because the review gate went unanswered. `compiled.json` already holds the full record; the artifact is the durable presentation.
 
+In PR mode, end the review by writing the review record per `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/review-record.md`. Branch mode has no PR, so it writes no record.
+
 **Record no `decisions.py` entries on this path.** The learning loop learns from decisions a human made; a gate nobody answered produced none. Then run the end-of-run steps from `## Learning Loop & Staleness Nudge`: the **staleness nudge** only. The **learning-loop proposal** and **provisional-profile confirmation** are not run — the learning loop learns from decisions a human made, and a gate nobody answered produced none.
 
 ## The verify command

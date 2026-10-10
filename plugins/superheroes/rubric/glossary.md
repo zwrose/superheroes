@@ -358,3 +358,7 @@ contests.
 
 The owner's word that the spec may go to the advisor's vet. It is not approval, and a
 [sheet](#sheet)'s answers or silence never stand in for it.
+
+### Review record
+
+The plain account of one PR's review, written when the review ends on any lane. It holds what was checked, which reviewers ran, every finding and what happened to it, CI on the final commit, and what is left. It is kept as one comment on the PR. The rule for writing it is in [the review record reference](../skills/review-code/reference/review-record.md).
