@@ -60,8 +60,44 @@ Spec as reviewed: commit 91082742 on branch `claude/superheroes-cloud-settings-f
 #### Citation check
 `[]` (run with `--root` set to the grounding base at origin/main 4e505f3a)
 
+### Round 2
+
+Spec as reviewed: commit a5a41289. Fixes: commit 8d949c4d.
+
+#### Gap review
+- Run directory: `<checks>/r2/gap/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 25 tool calls, 25 files read)
+- Confirmations: cloud-gap-1 -> fixed; cloud-gap-2 -> fixed; cloud-gap-3 -> fixed; cloud-gap-4 -> not-fixed (it is O-1 in the owner's queue, unfixed until the owner rules); cloud-gap-5 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| cloud-gap-6 | gap | UFR-3's local fallback for a build that needs the owner's machine applied only when the project's setting was on, not when the launch word asked for the cloud. | craft | UFR-3 now applies however the cloud was chosen, and says a launch word does not override what the build needs. | fixed |
+| cloud-gap-7 | gap | FR-36 would send a parked PR back for review even after it was closed and cleaned up. | craft | FR-36 now covers only PRs still open. | fixed |
+| cloud-gap-8 | gap | UFR-8 promised that renewing the pass helps for every review that did not run, including ones a live pass cannot repair. | craft | UFR-8 now applies only to a PR that UFR-7 parked; other reasons are reported as the review rules already say. | fixed |
+
+#### Source check
+- Run directory: `<checks>/r2/source/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 17 tool calls, 20 files read)
+- Approved board, for the source check: `board/build-board.html` and `board/journeys.html` beside the spec
+- Confirmations: SC-1 -> fixed; SC-2 -> not-fixed (it is O-2 in the owner's queue, unfixed until the owner rules); SC-3 -> fixed; SC-4 -> fixed; SC-5 -> fixed; SC-6 -> fixed; SC-7 -> fixed; SC-8 -> fixed
+
+| id | check | finding | pile | recommendation, or decline reason and proof | status |
+| --- | --- | --- | --- | --- | --- |
+| SC-9 | source, backward | The gardening-pass check was limited to projects with cloud builds switched on; the board and Canon 2026-10-10-ca3e7e0d-12 do not limit it, and a project with the switch off keeps its setup and can still launch in the cloud by launch word. | craft | FR-33 and Part E's opening now apply to every project that has a cloud setup. | fixed |
+| SC-10 | source, forward | FR-18 cited the framing, which does not hold that promise. | craft | FR-18 is now tagged "craft, for your veto"; it is in N-1 for the owner. | fixed |
+
+#### Grounding
+- Run directory: `<checks>/r2/grounding/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 38 tool calls, 20 files read)
+- Grounding base, for grounding: origin/main, 4e505f3a4865278a8920e93f7ff1fd047f9723a9
+- Confirmations: GND-001 -> fixed; GND-002 -> decline-accepted; GND-003 -> decline-accepted
+- New findings: none. Grounding is clean in this round.
+
+#### Citation check
+`[]` (run with `--root` set to the grounding base at origin/main 4e505f3a)
+
 ## The owner's queue
 
 - O-1 (from cloud-gap-4): a cloud builder that stops with work it never pushed, or before its first push, has no stated outcome. Recommendation: the advisor first tries to get the stopped builder's unpushed work pushed; what cannot be saved is redone, the advisor says how much, and a build that never pushed restarts from the beginning. Marks: none.
 - O-2 (from SC-2): the spec says the build should make the cloud pick up the advisor's plugin version with no hand step after each release, and the approved journeys leave hands-off upkeep of the setup to the later piece. Recommendation: keep it in this piece as an aim, with the pasted setup text as the fallback the boards already show, because the plugin releases often and each release would otherwise send builds back to the owner's machine until the owner pastes. Marks: none.
-- N-1 (statements the author added at spec time, tagged "craft, for your veto", that the owner has not yet seen): FR-18 no owner step between launch and ready PR; FR-27 a cloud builder does not change calibration; FR-31 a build's pushed branch is kept until its PR is merged or closed; FR-32 the same cleanup when a PR is closed unmerged; UFR-7's rule that a review finished before a lapse stays as recorded; UFR-9's rule that a recovery never leaves two builders on one issue; UFR-12 a builder with no answer parks with its work pushed. Recommendation: keep all seven. Marks: none.
+- N-1 (statements the author added at spec time, tagged "craft, for your veto", that the owner has not yet seen): FR-18 no owner step between launch and ready PR; FR-27 a cloud builder does not change calibration; FR-31 a build's pushed branch is kept until its PR is merged or closed; FR-32 the same cleanup when a PR is closed unmerged; UFR-7's rule that a review finished before a lapse stays as recorded; UFR-9's rule that a recovery never leaves two builders on one issue; UFR-12 a builder with no answer parks with its work pushed; FR-36's rule that a parked PR closed before the renewal is not sent back; UFR-8's rule that a review that did not run for another reason gets no advice to renew. Recommendation: keep all nine. Marks: none.
