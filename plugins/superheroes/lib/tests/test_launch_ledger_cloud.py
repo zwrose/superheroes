@@ -166,7 +166,7 @@ def test_edge6_local_started_refuses_cloud_field(field, value):
 # --- edge 7: field shapes -----------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["", "session_", str(uuid.uuid4()), 12, None, "session_ab-c",
+@pytest.mark.parametrize("value", ["", "session_", "0f0e0d0c-0b0a-4908-8706-050403020100", 12, None, "session_ab-c",
                                    "session_abc\n", " session_abc"])
 def test_edge7_bad_cloud_session_id_shape(value):
     started = _cloud_started("a", cloudSessionId=value)

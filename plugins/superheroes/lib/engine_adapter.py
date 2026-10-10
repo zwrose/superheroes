@@ -742,6 +742,50 @@ def claude_builder_argv(token, session_id, prompt):
     return _ok(argv)
 
 
+# The two refusals below are the cloud argv's own. They are deliberately not members of
+# BUILD_ARGV_REFUSAL_TOKENS: that roster is the engine-config surface the dispatch-entry doc
+# renders, and a cloud builder is not dispatched through it.
+REFUSAL_CLOUD_ENVIRONMENT_INVALID = "cloud-environment-invalid"
+REFUSAL_CLOUD_SESSION_NAME_INVALID = "cloud-session-name-invalid"
+_CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
+_CLOUD_SESSION_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_name):
+    """Build the argv that starts a builder in a cloud session. Never raises.
+
+    The command needs a pseudo-terminal and refuses `-p`, so the prompt rides as the argument of
+    `--cloud`. The environment is chosen through `--settings`, and `-n` names the session.
+    """
+    if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
+        return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _refuse(
+            REFUSAL_BUILDER_PROMPT_MISSING,
+            detail="builder prompt must be a non-empty string",
+        )
+    if not isinstance(environment_id, str) or not _CLOUD_ENVIRONMENT_ID_RE.fullmatch(environment_id):
+        return {
+            "argv": [],
+            "reason": REFUSAL_CLOUD_ENVIRONMENT_INVALID,
+            "detail": "a cloud environment id of the form env_<letters and digits>",
+        }
+    if not isinstance(session_name, str) or not _CLOUD_SESSION_NAME_RE.fullmatch(session_name):
+        return {
+            "argv": [],
+            "reason": REFUSAL_CLOUD_SESSION_NAME_INVALID,
+            "detail": "1 to 64 characters from letters, digits, '.', '_' and '-'",
+        }
+    settings = json.dumps(
+        {"remote": {"defaultEnvironmentId": environment_id}}, separators=(",", ":"),
+    )
+    argv = [CLAUDE_EXECUTABLE, "--cloud", prompt, "--settings", settings, "--model", token]
+    if isinstance(effort, str) and effort:
+        argv += ["--effort", effort]
+    argv += ["-n", session_name]
+    return _ok(argv)
+
+
 def build_argv(seat, role_kind, opts):
     """Return the argv list to dispatch the validated ``seat`` bundle for ``role_kind``.
 
