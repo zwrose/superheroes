@@ -9,6 +9,13 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Launch ledger: cloud lanes
+
+- The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
+- `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
+- Heartbeat sweep entries gain `place`.
+- An older plugin build can still read a ledger that holds a cloud lane. It reads that lane as a local one.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).

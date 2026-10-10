@@ -82,6 +82,15 @@ Contract:
   (1.0), strict — so a window of exactly one second DOES poll (with timeout=1.0), and
   only a window shorter than one second is skipped. (Loop's final truncated arm polls
   when at least one full second remains.)
+- Cloud lanes: a lane whose folded place is cloud has no pid, transcript or heartbeat
+  to read — its recorded pid is the launch command's own and has already exited. The
+  watch never concludes anything about it from those; it reads the lane's GitHub activity
+  (its issue, the PRs that close it, the branches carrying its issue number) with one
+  GraphQL request for all cloud lanes, at most once per CLOUD_ACTIVITY_POLL_SECONDS per
+  watch. Activity (or the lane's start, if newer) quiet past LIVENESS_QUIET_WINDOW_SECONDS
+  is lane-stale, as is a future-dated reference. A read that could not be made records
+  cloud-activity-unavailable and the lane is neither stale nor clean. Every non-refusal
+  tick/timer result carries cloudLanes while the batch has a live cloud lane.
 - Standing guarantees: the watcher never writes ledger or heartbeat state; under
   the store its only write is its own loop-lock sidecar (`wave-watch-locks/`);
   `--log` writes the caller-selected log. It never signals any process (pid
@@ -94,10 +103,12 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -112,6 +123,14 @@ _GH_PR_LIST_ARGV = [
 ]
 
 _MIN_PR_POLL_SECONDS = 1.0
+
+CLOUD_ACTIVITY_POLL_SECONDS = 60
+_CLOUD_ACTIVITY_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+_CLOUD_ACTIVITY_QUERY_HEAD = (
+    "query($owner: String!, $name: String!) "
+    "{ repository(owner: $owner, name: $name) { "
+)
+_CLOUD_ACTIVITY_QUERY_TAIL = "} }"
 
 # --- session-transcript liveness oracle (#1023) -------------------------------
 #
@@ -237,6 +256,7 @@ DEGRADATION_LOG_UNWRITABLE = "log-unwritable"
 DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
 DEGRADATION_TRANSCRIPT_UNRESOLVED = "transcript-unresolved"
 DEGRADATION_STACK_SIGNAL_UNAVAILABLE = "stack-signal-unavailable"
+DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE = "cloud-activity-unavailable"
 
 STACK_STATE_COMPLETE = "stack-complete"
 STACK_STATE_INCOMPLETE = "stack-incomplete"
@@ -257,6 +277,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_TRANSCRIPT_AMBIGUOUS,
     DEGRADATION_TRANSCRIPT_UNRESOLVED,
     DEGRADATION_STACK_SIGNAL_UNAVAILABLE,
+    DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE,
 })
 
 EVENT_PRECEDENCE = (
@@ -462,12 +483,20 @@ def _derive_batch_lanes(
     return all_lanes, live_lanes, True
 
 
+def _is_cloud_lane(info):
+    return info.get("place") == ll.PLACE_CLOUD
+
+
 def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
-    """One heartbeat read per lane; derive E1 terminal, E2 blocked, and hb states."""
+    """One heartbeat read per local lane; derive E1 terminal, E2 blocked, and hb states."""
     terminal_launches = []
     blocked_launches = []
     hb_states = {}
     for lid in sorted(live_lanes):
+        # bite-axis: CLOUD LANE — a cloud lane never stamps a heartbeat, so a stray file
+        # at its path is no evidence about it.
+        if _is_cloud_lane(live_lanes[lid]):
+            continue
         hb_result = hb.read_heartbeat(repo_root, lid, env=env)
         hb_class = hb_result.get("class")
         hb_reason = hb_result.get("reason")
@@ -496,6 +525,10 @@ def _lane_never_stamped_at_deadline(repo_root, live_lanes, env):
         info = live_lanes[lid]
         if not info.get("started"):
             continue
+        # bite-axis: CLOUD LANE — a cloud lane never stamps, so a missing heartbeat is not
+        # a lane that never stamped.
+        if _is_cloud_lane(info):
+            continue
         hb_result = hb.read_heartbeat(repo_root, lid, env=env)
         if (
             hb_result.get("class") == HB_CLASS_UNKNOWN
@@ -514,6 +547,10 @@ def _evaluate_pid_signals(live_lanes, exclude_ids, degraded):
     for lid in sorted(live_lanes):
         info = live_lanes[lid]
         if not info.get("started"):
+            continue
+        # bite-axis: CLOUD LANE — the recorded pid is the launch command's own and has
+        # already exited; it says nothing about the lane, so it is never probed.
+        if _is_cloud_lane(info):
             continue
         pid = info.get("pid")
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
@@ -901,6 +938,200 @@ def _poll_open_pr_numbers(
         pr_sampled[0] = True
 
     return sorted(numbers), True
+
+
+def _valid_issue_number(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _parse_activity_time(value):
+    """Epoch seconds for an ISO-8601 UTC `...Z` timestamp, else None. Never raises."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.strptime(value, _CLOUD_ACTIVITY_TIME_FORMAT)
+        return parsed.replace(tzinfo=timezone.utc).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _cloud_activity_query(issues):
+    parts = []
+    for number in issues:
+        parts.append(
+            "i%d: issue(number: %d) { updatedAt "
+            "closedByPullRequestsReferences(first: 10, includeClosedPrs: true) "
+            "{ nodes { number updatedAt headRefName } } } "
+            "b%d: refs(refPrefix: \"refs/heads/\", query: \"%d\", first: 50) "
+            "{ nodes { name target { ... on Commit { committedDate } } } } "
+            % (number, number, number, number)
+        )
+    return _CLOUD_ACTIVITY_QUERY_HEAD + "".join(parts) + _CLOUD_ACTIVITY_QUERY_TAIL
+
+
+def _lane_activity_epoch(repository, number):
+    """Newest GitHub activity for one issue number, or None when it cannot be read whole."""
+    issue = repository.get("i%d" % number)
+    branches = repository.get("b%d" % number)
+    if not isinstance(issue, dict) or not isinstance(branches, dict):
+        return None
+    stamps = [issue.get("updatedAt")]
+    closing = issue.get("closedByPullRequestsReferences")
+    pr_nodes = closing.get("nodes") if isinstance(closing, dict) else None
+    if not isinstance(pr_nodes, list):
+        return None
+    for pr_node in pr_nodes:
+        if not isinstance(pr_node, dict):
+            return None
+        stamps.append(pr_node.get("updatedAt"))
+    branch_nodes = branches.get("nodes")
+    if not isinstance(branch_nodes, list):
+        return None
+    # The refs query matches substrings, so keep only a branch carrying this issue number
+    # as a whole number.
+    whole_number = re.compile(r"(?<!\d)%d(?!\d)" % number)
+    for node in branch_nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("name"), str):
+            return None
+        # bite-axis: WHOLE NUMBER — a branch for issue 170 is not activity on issue 17.
+        if not whole_number.search(node["name"]):
+            continue
+        target = node.get("target")
+        stamps.append(target.get("committedDate") if isinstance(target, dict) else None)
+    epochs = [_parse_activity_time(stamp) for stamp in stamps]
+    if any(epoch is None for epoch in epochs):
+        return None
+    return max(epochs)
+
+
+def _fetch_cloud_activity(
+    repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
+):
+    """One GraphQL read for every issue; {issue: epoch or None}. None = unreadable. Never raises."""
+    unreadable = {number: None for number in issues}
+    slug = known_slug
+    if slug is None:
+        slug, _refusal_result = _resolve_repo_slug(
+            repo_root, deadline, monotonic, gh_run, env,
+        )
+    if slug is None:
+        return unreadable
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return unreadable
+    timeout = min(30.0, remaining)
+    if timeout < _MIN_PR_POLL_SECONDS:
+        return unreadable
+    owner, _sep, name = slug.partition("/")
+    argv = [
+        "gh", "api", "graphql",
+        "-F", "owner=%s" % owner,
+        "-F", "name=%s" % name,
+        "-f", "query=%s" % _cloud_activity_query(issues),
+    ]
+    try:
+        proc = gh_run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=repo_root,
+            env=_gh_scrub_env(env),
+        )
+        if proc.returncode != 0:
+            return unreadable
+        parsed = json.loads(proc.stdout)
+        if not isinstance(parsed, dict) or "errors" in parsed:
+            return unreadable
+        data = parsed.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        if not isinstance(repository, dict):
+            return unreadable
+        return {
+            number: _lane_activity_epoch(repository, number) for number in issues
+        }
+    except Exception:
+        return unreadable
+
+
+def _evaluate_cloud_activity(
+    repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
+    cloud_state, known_slug=None,
+):
+    """Stale started cloud lanes by their GitHub activity. No request without one."""
+    started = {
+        lid: info for lid, info in live_lanes.items()
+        if _is_cloud_lane(info) and info.get("started")
+    }
+    if not started:
+        return []
+    issues = sorted({
+        info.get("issue") for info in started.values()
+        if _valid_issue_number(info.get("issue"))
+    })
+    activity = {}
+    if issues:
+        if cloud_state is None:
+            cloud_state = [None]
+        read_at = monotonic()
+        cached = cloud_state[0]
+        if (
+            cached is not None
+            and 0 <= read_at - cached[0] < CLOUD_ACTIVITY_POLL_SECONDS
+            and all(number in cached[1] for number in issues)
+        ):
+            activity = cached[1]
+        else:
+            activity = _fetch_cloud_activity(
+                repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
+            )
+            cloud_state[0] = (read_at, activity)
+    now = time.time()
+    stale = []
+    for lid in sorted(started):
+        info = started[lid]
+        activity_time = activity.get(info.get("issue"))
+        # bite-axis: DISCLOSURE — a read that could not be made is neither stale nor clean.
+        if activity_time is None:
+            degraded.add(DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE)
+            continue
+        reference = activity_time
+        started_ts = info.get("startedTs")
+        if (
+            isinstance(started_ts, (int, float))
+            and not isinstance(started_ts, bool)
+            and math.isfinite(started_ts)
+        ):
+            reference = max(reference, started_ts)
+        age = now - reference
+        # bite-axis: QUIET WINDOW — activity quiet past the window is stale; a
+        # future-dated reference fails toward the alert like a future-dated transcript.
+        if age < 0 or age > LIVENESS_QUIET_WINDOW_SECONDS:
+            stale.append({
+                "launchId": lid,
+                "state": None,
+                "place": ll.PLACE_CLOUD,
+                "activityAgeSeconds": round(age, 3),
+                "quietWindowSeconds": LIVENESS_QUIET_WINDOW_SECONDS,
+                "cloudSessionName": info.get("cloudSessionName"),
+                "cloudSessionId": info.get("cloudSessionId"),
+            })
+    return stale
+
+
+def _cloud_lanes_payload(live_lanes):
+    """The `cloudLanes` result key for a batch's live cloud lanes; {} when there are none."""
+    entries = [
+        {
+            "launchId": lid,
+            "issue": info.get("issue"),
+            "cloudSessionName": info.get("cloudSessionName"),
+            "cloudSessionId": info.get("cloudSessionId"),
+        }
+        for lid, info in sorted(live_lanes.items())
+        if _is_cloud_lane(info)
+    ]
+    return {"cloudLanes": entries} if entries else {}
 
 
 def _evaluate_pr_set_changed(
@@ -1559,6 +1790,8 @@ def _evaluate_tick(
     pr_sampled,
     first_tick,
     ignore_set,
+    cloud_state=None,
+    cloud_payload_out=None,
 ):
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
@@ -1589,6 +1822,7 @@ def _evaluate_tick(
         exited_launches,
         ignore_set,
     )
+    stale_cloud_launches = []
     if lane_event_due:
         open_pr_numbers = None
         repo_slug = None
@@ -1618,6 +1852,17 @@ def _evaluate_tick(
                 degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
         else:
             repo_slug = None
+
+        stale_cloud_launches = _evaluate_cloud_activity(
+            repo_root, live_lanes, deadline=deadline, env=env, gh_run=gh_run,
+            monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
+            known_slug=repo_slug,
+        )
+        stale_live_launches = stale_live_launches + stale_cloud_launches
+
+    cloud_payload = _cloud_lanes_payload(live_lanes)
+    if cloud_payload_out is not None:
+        cloud_payload_out.update(cloud_payload)
 
     event_ctx = {
         "terminal_launches": terminal_launches,
@@ -1649,7 +1894,7 @@ def _evaluate_tick(
         if payload is not None:
             return _event_result(
                 event, batch_id, degraded,
-                **payload
+                **payload, **cloud_payload
             )
     return None
 
@@ -1677,6 +1922,7 @@ def _timer_at_deadline(
             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
     return _event_result(
         EVENT_TIMER, batch_id, degraded,
+        **_cloud_lanes_payload(live_lanes)
     )
 
 
@@ -1754,6 +2000,7 @@ def watch_arm(
     pr_state=None,
     stack_state=None,
     pr_sampled=None,
+    cloud_state=None,
 ):
     """Windowed watch — one arm until the first event or arm deadline."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -1796,6 +2043,8 @@ def watch_arm(
             stack_state = [None]
         if pr_sampled is None:
             pr_sampled = [False]
+        if cloud_state is None:
+            cloud_state = [None]
 
         start = monotonic()
         deadline = start + max_seconds
@@ -1820,6 +2069,7 @@ def watch_arm(
                 pr_sampled=pr_sampled,
                 first_tick=first_tick,
                 ignore_set=ignore_set,
+                cloud_state=cloud_state,
             )
             if tick_result is not None:
                 return _with_ledger_path(tick_result, resolved_ledger_path)
@@ -1892,6 +2142,8 @@ def run(
         pr_state = [None]
         stack_state = [None]
         pr_sampled = [False]
+        cloud_state = [None]
+        cloud_payload = {}
 
         start = monotonic()
         deadline = start + RUN_READ_BUDGET_SECONDS
@@ -1914,6 +2166,8 @@ def run(
             pr_sampled=pr_sampled,
             first_tick=first_tick,
             ignore_set=ignore_set,
+            cloud_state=cloud_state,
+            cloud_payload_out=cloud_payload,
         )
         if tick_result is not None:
             return _with_ledger_path(tick_result, resolved_ledger_path)
@@ -1922,6 +2176,7 @@ def run(
             EVENT_TIMER,
             batch_id,
             degraded,
+            **cloud_payload
         )
     except Exception as exc:
         result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal)
@@ -2012,6 +2267,7 @@ def loop(
         pr_state = [None]
         stack_state = [None]
         pr_sampled = [False]
+        cloud_state = [None]
         total_start = monotonic()
         total_deadline = (
             total_start + max_total_seconds
@@ -2066,6 +2322,7 @@ def loop(
                 pr_state=pr_state,
                 stack_state=stack_state,
                 pr_sampled=pr_sampled,
+                cloud_state=cloud_state,
             )
 
             result_degraded = set(result.get("degraded", []))

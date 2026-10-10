@@ -221,6 +221,23 @@ a floor of one when a non-zero dial would round to zero. A project may pin N dir
 `kind:machinery` or `kind:product` on an issue: the advisor's judgment at routing, the owner's at
 an epic's ratification, and never set or checked by a tool.
 
+## Cloud builds
+
+### Cloud build
+
+A build that runs in a cloud session of the host platform instead of on the owner's machine. It
+follows the same order, review rules, advisor's vet, and merge rules as any build.
+
+### Cloud builder
+
+The builder session of a [cloud build](#cloud-build).
+
+### Cloud lane
+
+A lane of the launch ledger whose builder is a [cloud builder](#cloud-builder). The ledger records
+and counts it and gives it the same terminal outcomes as any lane, and every listing of lanes marks
+it with the word "cloud".
+
 ## Backlog fold-in
 
 ### Fold-in rules
