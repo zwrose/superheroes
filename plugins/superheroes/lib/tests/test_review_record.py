@@ -103,13 +103,13 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
     ]
     keys = {"schema", "pr", "sessionId", "lane", "finalCommit", "ci", "reviewers", "findings", "unreadFiles",
             "rawOutputs", "leftForOwner", "missingReviews", "rounds", "cost", "sessionDisagreements", "checked",
-            "previousRecord", "writtenAt", "status", "parked", "whatIsMissing"}
+            "previousRecord", "writtenAt", "status", "parked", "whatIsMissing", "makers"}
     for fake, lane, source, reason in cases:
         out = rr.write(put(tmp_path, account()), str(tmp_path), fake.readers())
         assert out["ok"] and out["action"] == "created"
         assert len(fake.marked()) == 1
         rec = rr.read(7, readers=fake.readers())
-        assert keys <= set(rec) and not {"makers", "owed", "archives", "rawFindings", "ownerWord"} & set(rec)
+        assert keys <= set(rec) and not {"owed", "archives", "rawFindings", "ownerWord"} & set(rec)
         assert (rec["lane"]["value"], rec["lane"]["source"], rec["lane"]["reason"]) == (lane, source, reason)
         assert rec["finalCommit"]["sha"] == HEAD and rec["ci"]["state"] == "green" and rec["writtenAt"]
 

@@ -73,8 +73,7 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 The record says reviewed only when all five hold: CI is green on the PR's final commit; every
 finding in the account has an outcome and a reason; no planned review is missing and a planned
 reviewer ran; no raw output file is unread; and the final commit was read from the PR.
-Any finding short of that is listed in what is left.
-The writer carries `makers`, `notIndependent` and `ownerWord` as given and shows them. It does not check independence, and they do not change whether the record says reviewed.
+Any finding short of that is listed in what is left. `makers`, `notIndependent` and `ownerWord` are shown as given, never checked, and never change "reviewed".
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed.
