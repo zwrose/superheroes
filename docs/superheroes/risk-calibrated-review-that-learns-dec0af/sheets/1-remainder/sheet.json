@@ -1,0 +1,62 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "remainder",
+  "title": "Review redesign spec: what the checks left for you",
+  "remainder": {"roundsRun": 3, "fixesMade": 15, "unsettled": []},
+  "cards": [
+    {
+      "id": "reviewer-own-tests",
+      "callKind": "Two rulings pull apart",
+      "warning": true,
+      "question": "Does a reviewer that writes break-it tests still count as independent?",
+      "context": [
+        {
+          "title": "What the spec says now",
+          "blocks": [
+            {"paragraph": "Two of your rulings are both in the spec. One says every reviewer comes from a different model family than every maker of the change. The other says the test role writes break-it tests, and a test that caught something stays in the change to guard it."},
+            {"paragraph": "Read strictly, the second makes the test role a maker of part of the change. From then on the first rule would bar it, and its whole model family, from reviewing the later rounds."}
+          ]
+        },
+        {
+          "title": "Why it needs you",
+          "blocks": [
+            {"paragraph": "The reviewer flagged the clash. Settling it decides how far your independence promise reaches, so it isn't mine to pick."}
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {"id": "tests-not-maker", "label": "Its own tests don't make it a maker", "consequence": "Independence is measured against the models that built and fixed the product's code. The generalist still reads the break-it tests for bloat and false passes. No extra reviewer. Where your whole panel is one model family, the reviewer reading those tests is from the same family that wrote them."},
+        {"id": "third-family", "label": "A different family must review the break-it tests", "consequence": "A third model family reads every break-it test. That adds a reviewer to every full-lane change in a risk area, and a project with only two model families set up can't run it."}
+      ],
+      "recommendation": {"text": "Its own tests don't make it a maker.", "reason": "The promise is that the builder never marks its own work. A break-it test is the reviewer's attack on that work, and it either fails or it doesn't.", "optionId": "tests-not-maker"}
+    },
+    {
+      "id": "decision-on-record",
+      "callKind": "The spec differs from a ruling",
+      "warning": true,
+      "question": "Where must your acceptance of a leftover be on record?",
+      "context": [
+        {
+          "title": "What you ruled",
+          "blocks": [
+            {"paragraph": "The review record never says you decided something unless Canon holds that ruling."}
+          ]
+        },
+        {
+          "title": "What changed since",
+          "blocks": [
+            {"paragraph": "Canon's own rules changed in 0.42.0. A decision about one PR that sets no rule for later work now stays on that PR, not in Canon."},
+            {"paragraph": "When you tap \"Keep it\" on one leftover, that answer is written back to the PR as its receipt. So the spec, as drafted, lets the record name your decision when it is in Canon or in that PR's saved answers. The reviewer flagged that this is wider than your ruling."}
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {"id": "pr-answers-count", "label": "The PR's saved answers count for one-PR decisions", "consequence": "A \"Keep it\" on one PR is on record in that PR. An answer that sets a rule for later work still goes to Canon. Canon stays a list of your rules, and the record still can't claim a decision you didn't make."},
+        {"id": "always-canon", "label": "Every acceptance goes to Canon", "consequence": "Canon gains an entry for each leftover you accept, on each PR. It grows quickly, and it goes against Canon's newer rule about one-PR decisions."}
+      ],
+      "recommendation": {"text": "The PR's saved answers count for one-PR decisions.", "reason": "Your answer is on the PR either way, and Canon stays readable.", "optionId": "pr-answers-count"}
+    }
+  ]
+}

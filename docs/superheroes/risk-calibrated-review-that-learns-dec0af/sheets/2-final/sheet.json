@@ -1,0 +1,20 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "final",
+  "title": "Review redesign spec: final sheet",
+  "final": {
+    "history": {
+      "reviewRounds": 8,
+      "fixesMade": 41,
+      "vet": "The advisor vetted the spec three times. Round 1 found 23 things to fix and 3 calls for you, and round 2 came back clean. You answered the 3 calls on this sheet's first version: no way back, craft everywhere, and four accepted answer patterns. Those answers are in the spec, and round 3 came back clean. The wording was tidied after the first checks, and an independent reviewer confirmed no meaning moved."
+    },
+    "declinedFindings": [
+      {
+        "summary": "Three format points on Canon entries this discovery wrote: two entries give a time without marking it UTC, four give a date with no time, and two sheet answers read \"none recorded\" for your words.",
+        "reason": "Canon entries can't be edited once written, the first six were written before that format rule shipped, and a tap on a sheet carries no typed words. The advisor accepted this in its second vet."
+      }
+    ],
+    "approval": {"approvedBoard": true, "boardSavedWithSpec": true}
+  },
+  "cards": []
+}
