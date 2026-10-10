@@ -596,14 +596,43 @@ def test_raw_findings_match_by_identity_not_by_reused_id(tmp_path):
     assert "reviewer finding code-001 in code.json has no recorded outcome" in rec["whatIsMissing"]
 
 
-def test_a_graded_runs_own_findings_need_outcomes_even_when_the_account_omits_them():
-    # axis: raw coverage; a counted engine run's findings hidden by leaving them out of the account
-    run = dict(GOOD_RUN, resultContent={"findings": [{"id": "r-1", "title": "Gap", "file": "b.py", "line": 2}]})
-    fake = Fake(runs={"/run/code-reviewer": (run, None)})
-    rec = build(account(), fake)
-    assert rec["status"] == "not-reviewed" and [f["id"] for f in rec["owed"]] == ["r-1"]
-    covered = build(account(findings=[finding("x", title="Gap", file="b.py", line=2)]), fake)
-    assert covered["status"] == "reviewed"
+def test_every_reviewers_findings_coverage_is_marked_as_reported_by_the_session():
+    # axis: findings coverage; a graded engine run shown as if the code held its findings
+    fake = Fake(runs={"/run/code-reviewer": (copy.deepcopy(GOOD_RUN), None)})
+    rec = build(account(reviewers=[reviewer(runDir="/run/code-reviewer")]), fake)
+    assert rec["reviewers"][0]["ran"] == "engine-record"
+    assert all(v["findingsCoverage"] == "reported by the session" for v in rec["reviewers"])
+    assert "findings: reported by the session" in rr.render(rec)
+
+
+def test_check_runs_are_read_across_every_page_and_a_failed_page_is_unavailable(monkeypatch):
+    # axis: CI pagination; a failing check on a later page hidden behind a green first page
+    page1 = json.dumps({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "success"}]})
+    page2 = json.dumps({"total_count": 2, "check_runs": [{"status": "completed", "conclusion": "failure"}]})
+    status = json.dumps(NO_STATUS)
+    def reader(out):
+        return lambda argv: status if argv[2].endswith("/status") else out
+    monkeypatch.setattr(rr, "_run", reader(page1 + page2))
+    runs, st = rr._check_data(HEAD, "o/r")
+    assert len(runs["check_runs"]) == 2 and rr.ci_state(runs, st) == "red"
+    monkeypatch.setattr(rr, "_run", reader(page1 + "{broken"))
+    assert rr._check_data(HEAD, "o/r") is None
+    monkeypatch.setattr(rr, "_run", reader(None))
+    assert rr._check_data(HEAD, "o/r") is None
+
+
+def test_a_raw_finding_keeps_its_consequence_and_stays_whole_when_owed_and_the_file_is_gone(tmp_path):
+    # axis: raw text survival; an owed raw finding reduced to a reference once the raw file is not an input
+    raw = tmp_path / "code.json"
+    raw.write_text(json.dumps([{"id": "c-1", "title": "Auth gap", "file": "auth.py", "line": 5,
+                                "severity": "Important", "body": "the explanation", "consequence": "data leaks"}]))
+    first = build(account(sessionId="A", rawFindingsFiles=[str(raw)]))
+    assert first["rawFindings"][0]["consequence"] == "data leaks"
+    again = build(account(sessionId="A"), prior=first)
+    assert again["status"] == "not-reviewed" and again["rawFindings"] == []
+    (owed,) = again["owed"]
+    assert (owed["body"], owed["severity"], owed["consequence"], owed["file"], owed["line"], owed["title"]) == \
+        ("the explanation", "Important", "data leaks", "auth.py", 5, "Auth gap")
 
 
 def test_null_outcome_does_not_clear_an_owner_decision():
@@ -616,7 +645,7 @@ def test_null_outcome_does_not_clear_an_owner_decision():
 def test_read_refuses_when_an_archive_is_missing_or_cannot_be_fetched(tmp_path):
     # axis: archive read; lost history returned as a complete record
     fake = Fake()
-    old = [finding("old-1", body="x" * 62000, outcome="left-for-owner", reason="owner call " + "r" * 400)]
+    old = [finding("old-1", body="x" * 61000, outcome="left-for-owner", reason="owner call " + "r" * 400)]
     rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
     rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
     assert rr.read(7, readers=fake.readers())["ok"]
@@ -636,7 +665,7 @@ def test_read_refuses_when_an_archive_is_missing_or_cannot_be_fetched(tmp_path):
 def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment(tmp_path):
     # axis: archive overflow; earlier sessions trimmed or lost instead of moved whole to an archive comment
     fake = Fake()
-    old = [finding("old-1", body="x" * 62000, consequence="it breaks", outcome="left-for-owner",
+    old = [finding("old-1", body="x" * 61000, consequence="it breaks", outcome="left-for-owner",
                    reason="owner call " + "r" * 400)]
     assert rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())["ok"]
     out = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
@@ -645,7 +674,7 @@ def test_inherited_history_that_would_overflow_moves_whole_to_an_archive_comment
     rec = rr.read(7, readers=fake.readers())
     assert rec["history"] == [] and [a["sessionIds"] for a in rec["historyArchives"]] == [["A"]]
     kept = rec["archivedHistory"][0]["findings"][0]
-    assert kept["body"] == "x" * 62000 and kept["consequence"] == "it breaks" and len(kept["reason"]) > 300
+    assert kept["body"] == "x" * 61000 and kept["consequence"] == "it breaks" and len(kept["reason"]) > 300
     assert rec["leftForOwner"] == ["old-1"]
     again = rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
     assert again["ok"] and len(fake.comments) == 2
@@ -692,7 +721,7 @@ def test_lane_marker_is_none_when_the_marker_path_cannot_be_resolved(tmp_path, m
 def test_write_refuses_when_the_prior_records_archive_is_missing(tmp_path):
     # axis: archive validation on write; an update reporting success over history that cannot be recovered
     fake = Fake()
-    old = [finding("old-1", body="x" * 62000, outcome="left-for-owner", reason="owner call")]
+    old = [finding("old-1", body="x" * 61000, outcome="left-for-owner", reason="owner call")]
     rr.write(put(tmp_path, account(sessionId="A", findings=old)), str(tmp_path), fake.readers())
     rr.write(put(tmp_path, account(sessionId="B")), str(tmp_path), fake.readers())
     fake.comments = fake.marked()

@@ -95,9 +95,14 @@ def _issue_body(n, repo):
 
 def _check_data(sha, repo):
     base = _api(repo, f"commits/{sha}")
-    runs = _gh_json("api", base + "/check-runs?per_page=100")
+    out = _run(["gh", "api", base + "/check-runs?per_page=100", "--paginate"])
     status = _gh_json("api", base + "/status")
-    return (runs, status) if isinstance(runs, dict) and isinstance(status, dict) else None
+    try:
+        # Every page, merged: a failed page read leaves CI unavailable, never green on a partial read.
+        runs = {"check_runs": [r for page in pr_comment._parse_paginated_arrays(out) for r in page["check_runs"]]}
+    except (ValueError, KeyError, TypeError):
+        return None
+    return (runs, status) if isinstance(status, dict) else None
 
 
 def _lane_marker(repo_root):
@@ -264,9 +269,11 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, makers, rd, dis, head=None, results=None):
+def _reviewer(r, makers, rd, dis, head=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
+    # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
+    out["findingsCoverage"] = "reported by the session"
     if r.get("runDir"):
         rec, err = rd["engine_run"](r["runDir"])
         if isinstance(rec, dict) and rec.get("runKind") == "review" \
@@ -280,10 +287,6 @@ def _reviewer(r, makers, rd, dis, head=None, results=None):
                     dis.append({"fact": f"{r['name']} ran on the final commit", "session": True, "code": "not-run"})
             else:
                 out.update(ran="engine-record", observation=rec.get("observation"))
-                content = rec.get("resultContent")
-                if results is not None and isinstance(content, dict) and isinstance(content.get("findings"), list):
-                    # The graded run's own findings: each must have an outcome, whatever the account lists.
-                    results += _raw_rows(content["findings"], f"{r['name']} engine record")
             source, model = rec.get("source"), rec.get("engineModel") or rec.get("model")
             if isinstance(source, str) and source:
                 # The run's own engine and model decide the family; the account's claim is only a claim.
@@ -309,7 +312,7 @@ def _reviewer(r, makers, rd, dis, head=None, results=None):
     return out
 
 
-_RAW_KEYS = ("id", "title", "severity", "file", "line", "body", session_contract.FINDING_KEY_FIELD)
+_RAW_KEYS = ("id", "title", "severity", "file", "line", "body", rfs.CONSEQUENCE_KEY, session_contract.FINDING_KEY_FIELD)
 _SETTLES_OWNER = tuple(o for o in rfs.OUTCOMES if o not in (_LEFT_FOR_OWNER, "craft"))
 
 
@@ -394,7 +397,8 @@ def _owed(findings, raw, prior):
             owed.setdefault(_key(f), _ref(f))
     for r in raw:
         if not any(_decided(f) for f in by_key.get(_key(r), [])):
-            owed.setdefault(_key(r), _ref(r))
+            # Whole: the raw file may be gone on a later write, and this is then the only copy of its text.
+            owed.setdefault(_key(r), {**r, session_contract.FINDING_KEY_FIELD: _key(r)})
             lines.append(f"reviewer finding {_name(r)} in {r.get('sourceFile')} has no recorded outcome")
     return list(owed.values()), lines
 
@@ -428,8 +432,7 @@ def build_record(account, readers, prior=None):
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
         if from_code and session is not None and session != code:
             dis.append({"fact": fact, "session": session, "code": code})
-    results = []
-    reviewers = [_reviewer(r, a["makers"], rd, dis, fc["sha"], results) for r in a["reviewers"]]
+    reviewers = [_reviewer(r, a["makers"], rd, dis, fc["sha"]) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -439,7 +442,6 @@ def build_record(account, readers, prior=None):
                 notes.append(f"the go-ahead for {v['name']} is incomplete")
             missing.append({"name": v["name"], "goAhead": good})
     raw, unread = _raw_findings(a["rawFindingsFiles"])
-    raw += results
     findings = [dict(f) for f in a["findings"]]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -499,7 +501,7 @@ def render(record):
         label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
             v["ran"], "did not run")
         note = "; same family as a maker, owner's word on record" if v.get("notIndependent") else ""
-        who.append(f"- {v['name']}: {label}{note}")
+        who.append(f"- {v['name']}: {label}{note}; findings: {v['findingsCoverage']}")
     waits = []
     if r["leftForOwner"]:
         waits.append("findings left for the owner (" + ", ".join(r["leftForOwner"]) + ") wait for the owner's decision")

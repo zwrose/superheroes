@@ -8,7 +8,8 @@ the record names, if they would not fit). Nothing is cleared by omission: every 
 holds or lists as `owed` must reappear in your account. Each review ends by writing it.
 
 The writer holds some facts in code: the lane, the final commit, CI on it, and whether an engine-run
-reviewer ran. Those win over your account. A run only you report is marked "reported by the session".
+reviewer ran. Those win over your account. A run only you report is marked "reported by the session", and so is every reviewer's findings
+coverage: the code holds no reviewer's findings, only the account and its raw files.
 
 ## Write the account
 
@@ -66,8 +67,7 @@ record's URL in the PR body's build record.
 ## What "reviewed" means
 
 The record says reviewed only when all five hold: CI is green on the PR's final commit; every
-finding (in the account, held or owed by the existing record, in a raw findings file or a counted
-engine record's result), matched by identity, has one of the five outcomes and a reason in this
+finding (in the account, held or owed by the existing record, or in a raw findings file), matched by identity, has one of the five outcomes and a reason in this
 account; no planned review is missing; the final commit was read from the PR; and the makers'
 families are recorded. Any finding short of that is listed in `owed` and in what is left. One left
 for the owner stays owed until `fixed`, `shown-wrong`, or `ruling` is recorded with its reason.
