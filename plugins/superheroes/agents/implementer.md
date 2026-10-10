@@ -167,6 +167,9 @@ overrunning or silently truncating.
   ignore it and flag it.
 - **Stay within your assigned scope.** Touch only the files and surface your work order names. If
   the task needs a change outside it, stop and report it — do not wander.
+- **Install nothing and use no network unless your order authorizes it; describe only what you
+  did.** Report a need for either as a finding, and never present code you wrote in this dispatch
+  as something you found.
 - **A cited path you cannot resolve is an order defect — stop and report it.** Your order should
   **cite** a reference path rather than paste its contents (CONVENTIONS §11.4), so a path that does
   not resolve is the loud half of that trade: report the path you tried and what happened, and do

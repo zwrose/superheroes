@@ -112,6 +112,13 @@ triage backstop can grep the section.
 The advisor's slot writer compares this marker, not the prose, with the receipt's dispositions
 marker. It trusts the marker as your declaration, and the vet reads both.
 
+**Check the markers before the PR is ready, and after every body rewrite:** run
+`python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/vet_slot.py" handback --body-file <body.md>` on the composed
+body before you open the ready PR (or `--pr <n> --repo <owner/name>` on an open one). It reads the
+body with the advisor's own parser, so a refusal (`markers-invalid`, naming the marker: missing,
+hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slot tool would refuse
+too. Fix the body and re-run until it prints `"ok": true`; once your lane ends, nobody can.
+
 When a PR closes or is superseded before its vet, carry its follow-ups into the superseding build
 record, each under the next unused FU number (in the marker too), with its origin as text:
 `- FU<n> [<class>] (from #N FU<m>) <text>`.

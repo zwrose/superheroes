@@ -108,6 +108,15 @@ positive instruction so attention lands on what to do.
 - Put stable text first and volatile text last, so the part that changes does not invalidate the
   part that does not.
 
+### Markdown traps no gate checks
+
+- A bare angle-bracketed word outside a code span is parsed as an HTML tag and vanishes from the
+  rendered page, so backtick it.
+- A paragraph that follows a nested bullet list with no blank line between them becomes part of
+  the last bullet, so leave a blank line.
+
+Both render wrong while the source looks right, and no validator checks either.
+
 ## The sentence layer
 
 ### Pick the mode first
