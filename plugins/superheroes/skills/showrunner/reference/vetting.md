@@ -232,7 +232,7 @@ them. Use a phone of your own, never a lane's phone that is waiting to be reaped
 
 ```
 python3 -B -c "import sys; sys.path.insert(0, '<plugin root>/lib'); import iphone_check as c; print(open('<plugin root>/lib/tests/fixtures/iphone/reading-page.html').read().replace('__READING_PARAM__', c.READING_PARAM))" > <dir>/index.html
-python3 -m http.server <port> --bind 127.0.0.1 --directory <dir>
+python3 -B -m http.server <port> --bind 127.0.0.1 --directory <dir>
 ```
 
 ```
