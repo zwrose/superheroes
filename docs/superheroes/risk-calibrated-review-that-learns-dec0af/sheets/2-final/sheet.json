@@ -4,9 +4,9 @@
   "title": "Review redesign spec: final sheet",
   "final": {
     "history": {
-      "reviewRounds": 6,
-      "fixesMade": 39,
-      "vet": "The advisor vetted the spec twice. Round 1 found 23 things to fix and 3 calls for you. All 23 are fixed, and round 2 came back clean. The wording was tidied after the first checks, and an independent reviewer confirmed no meaning moved."
+      "reviewRounds": 8,
+      "fixesMade": 41,
+      "vet": "The advisor vetted the spec three times. Round 1 found 23 things to fix and 3 calls for you, and round 2 came back clean. You answered the 3 calls on this sheet's first version: no way back, craft everywhere, and four accepted answer patterns. Those answers are in the spec, and round 3 came back clean. The wording was tidied after the first checks, and an independent reviewer confirmed no meaning moved."
     },
     "declinedFindings": [
       {
@@ -16,75 +16,5 @@
     ],
     "approval": {"approvedBoard": true, "boardSavedWithSpec": true}
   },
-  "cards": [
-    {
-      "id": "backout-window",
-      "callKind": "The advisor's vet found a gap",
-      "warning": true,
-      "question": "Keep a one-release way back when the certificate parts retire?",
-      "context": [
-        {
-          "title": "What's true now",
-          "blocks": [
-            {"paragraph": "An earlier spec you approved says that when the certification loop is deleted, the previous plugin version stays runnable for one release as the way back, and the release notes name it."},
-            {"paragraph": "This spec retires the certificate parts in one step and says nothing about a way back. The advisor's vet caught that it dropped the promise without saying so."}
-          ]
-        }
-      ],
-      "images": [],
-      "options": [
-        {"id": "keep-backout", "label": "Keep the one-release way back", "consequence": "The release notes name the previous plugin version as the fallback for one release. A project that hits trouble with the new review record can go back to it. It costs one line in the release notes. This changes the spec, so it goes through one more short check and vet before your approval counts."},
-        {"id": "no-backout", "label": "No way back", "consequence": "Nothing is added. A project that hits trouble waits for a fix release. The earlier spec's promise is recorded as replaced."}
-      ],
-      "recommendation": {"text": "Keep the one-release way back.", "reason": "It's nearly free, and this release removes a lot at once.", "optionId": "keep-backout"}
-    },
-    {
-      "id": "craft-in-risk-area",
-      "callKind": "Two rulings pull apart",
-      "warning": true,
-      "question": "A code-quality-only finding inside a risk area: does it come to you, or is it craft?",
-      "context": [
-        {
-          "title": "The two rulings",
-          "blocks": [
-            {"paragraph": "On 2026-10-08 you ruled that leftovers that are a material consequence, or that sit in a high-risk area, come to you."},
-            {"paragraph": "On 2026-10-09 you ruled that a finding with no consequence beyond code quality is craft: the loop decides it and lists it on the PR's sheet for your veto. That ruling makes no exception for risk areas."},
-            {"paragraph": "The spec follows the later ruling. Neither ruling says it replaces the other, so the advisor asks you to settle it."}
-          ]
-        }
-      ],
-      "images": [],
-      "options": [
-        {"id": "craft-everywhere", "label": "Craft, for my veto, everywhere", "consequence": "A code-quality-only finding in a risk area shows under \"Decided as craft, for your veto\" on the PR's sheet. Risk areas still get the full lane and break-it tests. The spec stays as written, and Canon records that this replaces the earlier ruling's risk-area clause."},
-        {"id": "risk-area-to-owner", "label": "In a risk area, it comes to me", "consequence": "Every code-quality-only finding left unfixed inside a risk area becomes an item for you to accept on that PR's sheet. Sheets for risk-area PRs get longer. This changes the spec, so it goes through one more short check and vet."}
-      ],
-      "recommendation": {"text": "Craft, for my veto, everywhere.", "reason": "Risk areas already get the stricter review, and you can still veto any craft decision from the sheet.", "optionId": "craft-everywhere"}
-    },
-    {
-      "id": "pr-sheet-buttons",
-      "callKind": "The board differs from a standing rule",
-      "warning": true,
-      "question": "Should PR sheets carry their own answer buttons?",
-      "context": [
-        {
-          "title": "The standing rule",
-          "blocks": [
-            {"paragraph": "A standing ruling and the approved review surface spec say every review sheet uses one card shape: Aligned and Discuss, or one button per option plus Something else. No review adds its own buttons."}
-          ]
-        },
-        {
-          "title": "What the board you approved shows",
-          "blocks": [
-            {"paragraph": "PR sheets with their own buttons: Accept, Works, Problem, Skip, Looks right and Fix before merge, plus the merge verdict. Nothing recorded so far says the board replaces the older rule."}
-          ]
-        }
-      ],
-      "images": [],
-      "options": [
-        {"id": "own-buttons", "label": "Yes, PR sheets carry their own buttons", "consequence": "Canon records that PR sheets are an exception to the one-card-shape rule, and the review surface spec is amended to match. Sheets from discovery, like this one, keep the card shape. The spec stays as written."},
-        {"id": "one-shape", "label": "No, keep one card shape everywhere", "consequence": "PR sheets use Aligned and Discuss or option picks only. The walk and the merge verdict are redrawn to fit, the board is redrawn for your approval, and the spec goes back through its checks and vet."}
-      ],
-      "recommendation": {"text": "Yes, PR sheets carry their own buttons.", "reason": "The walk needs answers the card shape doesn't have, and you approved the board with them.", "optionId": "own-buttons"}
-    }
-  ]
+  "cards": []
 }
