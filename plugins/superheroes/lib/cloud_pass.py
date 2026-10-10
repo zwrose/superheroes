@@ -151,6 +151,16 @@ def _run_clipboard(argv, text):
         raise RuntimeError("clipboard command exited non-zero")
 
 
+def copy_to_clipboard(text, env=None):
+    """Feed `text` to the first clipboard command on the path. Raises LookupError when none is
+    there; any other failure raises as it happened."""
+    env = _env(env)
+    argv = _find_clipboard(env)
+    if argv is None:
+        raise LookupError("no clipboard command (pbcopy, wl-copy or xclip) is on the path")
+    _run_clipboard(argv, text)
+
+
 def make(env=None, clipboard=None, now=None):
     """Owner's machine: build the pass from the separate sign-in and put the four-line block on
     the clipboard. Reads no setup record and writes no file."""
@@ -201,17 +211,19 @@ def make(env=None, clipboard=None, now=None):
              "%s=%s" % (PLUGIN_DIRS_ENV, CLOUD_PLUGIN_DIR)]
     lines += ["%s=%s" % (name, DEAD_ENDPOINT) for name in RENEWAL_ENDPOINT_ENVS]
     block = "\n".join(lines) + "\n"
-    if clipboard is None:
-        argv = _find_clipboard(env)
-        if argv is None:
-            return _refusal("no-clipboard",
-                            "No clipboard command (pbcopy, wl-copy or xclip) is on the path, so "
-                            "the pass was not made.")
-
-        def clipboard(text):
-            _run_clipboard(argv, text)
+    use_default = clipboard is None
     try:
-        clipboard(block)
+        if use_default:
+            copy_to_clipboard(block, env)
+        else:
+            clipboard(block)
+    except LookupError:
+        if not use_default:
+            return _refusal("clipboard-failed",
+                            "The clipboard command failed, so nothing was copied.")
+        return _refusal("no-clipboard",
+                        "No clipboard command (pbcopy, wl-copy or xclip) is on the path, so "
+                        "the pass was not made.")
     except Exception:
         return _refusal("clipboard-failed",
                         "The clipboard command failed, so nothing was copied.")
