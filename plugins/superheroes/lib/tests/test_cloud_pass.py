@@ -413,7 +413,7 @@ def test_make_m7_no_clipboard_never_prints_the_pass(tmp_path, capsys):
     assert captured.out == "" and captured.err == ""
 
 
-def test_make_m8_clipboard_failed(tmp_path):
+def test_make_m8_clipboard_failed(tmp_path, capsys):
     calls = []
 
     def boom(text):
@@ -424,6 +424,10 @@ def test_make_m8_clipboard_failed(tmp_path):
     assert result["action"] == "refused" and result["reason"] == "clipboard-failed"
     assert len(calls) == 1
     assert "exploded" not in json.dumps(result)
+    value = calls[0].splitlines()[0].split("=", 1)[1]
+    captured = capsys.readouterr()
+    assert value and value not in json.dumps(result)
+    assert captured.out == "" and captured.err == ""
 
 
 def _fake_clipboard_bin(tmp_path, name, body):

@@ -165,16 +165,19 @@ def test_outside_fixture_text_carries_everything_and_nothing_else(tmp_path):
 
 def test_scan_finds_nothing_for_pass_token_shapes_and_main_sign_in(tmp_path):
     w = _outside(tmp_path)
-    text = _compose(w)["text"]
-    assert CS._scan(text) is None
     signin = w.home / ".codex" / "auth.json"
     signin.parent.mkdir()
     tokens = {name: "ey" + "J" + name[:2] * 6 + "." + name[:3] * 5 + "." + name[:4] * 4
               for name in ("access_token", "id_token", "refresh_token")}
     signin.write_text(json.dumps({"auth_mode": "chatgpt", "tokens": tokens}))
     pass_value = base64.b64encode(signin.read_bytes()).decode("ascii")
+    w.env[cloud_pass.PASS_ENV] = pass_value
+    result = _compose(w)
+    assert result["action"] == "written"
+    text = result["text"]
+    assert CS._scan(text) is None
     for value in list(tokens.values()) + [pass_value, cloud_pass.PASS_ENV]:
-        assert value not in text
+        assert value not in text and value not in json.dumps(result["calibration"])
     for builder in (b for _, _, b in SHAPE_CASES):
         assert builder() not in text
 
@@ -387,10 +390,22 @@ def test_s2_plugin_source_unsupported(tmp_path):
     w = _inside(tmp_path)
 
     def tweak(parts):
-        parts["markets"]["superheroes"]["source"] = {"source": "github", "repo": "acme/superheroes"}
+        parts["markets"]["superheroes"]["source"] = {"source": "directory", "path": "/x"}
 
     _write_records(w, tweak)
     _refusal(_discovering(w), "plugin-source-unsupported")
+
+
+def test_discovery_accepts_the_github_marketplace_source(tmp_path):
+    w = _inside(tmp_path)
+
+    def tweak(parts):
+        parts["markets"]["superheroes"]["source"] = {"source": "github", "repo": "acme/superheroes"}
+
+    _write_records(w, tweak)
+    result = _discovering(w)
+    assert result["action"] == "written"
+    assert 'git fetch -q --depth 1 "%s" %s' % (SOURCE, COMMIT) in result["text"]
 
 
 # --- the edges ------------------------------------------------------------------------------
@@ -668,6 +683,14 @@ def test_toggling_the_setting_leaves_the_stamp_unchanged(tmp_path):
     assert len(set(texts.values())) == 3
     for state, text in texts.items():
         assert _core(state).decode()[:-1] in text
+
+
+def test_the_first_setting_leaves_the_stamp_of_a_core_without_configuration(tmp_path):
+    w = _outside(tmp_path)
+    bare = b'# Core\n```json superheroes-core\n{\n  "name": "x"\n}\n```\n'
+    first = bare.replace(b'"name": "x"', b'"name": "x",\n  "projectConfiguration": {"%s": true}'
+                         % project_config.CLOUD_BUILDS_SLUG.encode())
+    assert (_real(w, bare)["calibration"]["stamp"] == _real(w, first)["calibration"]["stamp"])
 
 
 @pytest.mark.parametrize("change", ["other-key", "prose", "other-file"])

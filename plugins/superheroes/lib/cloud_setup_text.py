@@ -146,11 +146,15 @@ def _discover(cwd, env):
     source = market.get("source") if isinstance(market, dict) else None
     if not isinstance(source, dict):
         raise unknown("the plugin's marketplace is not recorded")
-    if source.get("source") != "git":
+    kind, repo = source.get("source"), source.get("repo")
+    if kind == "github" and isinstance(repo, str) and repo:
+        url = "https://github.com/%s.git" % repo
+    elif kind == "git":
+        url = source.get("url")
+    else:
         raise _Refused("plugin-source-unsupported",
                        "The plugin's marketplace is not a git source, which this setup text "
                        "cannot fetch from.")
-    url = source.get("url")
     install = market.get("installLocation")
     listing = _read_json(os.path.join(install, ".claude-plugin", "marketplace.json")) \
         if isinstance(install, str) else None
@@ -218,6 +222,8 @@ def _without_setting(data):
         settings = obj.get("projectConfiguration")
         if isinstance(settings, dict):
             settings.pop(project_config.CLOUD_BUILDS_SLUG, None)
+            if not settings:
+                del obj["projectConfiguration"]
         body = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False)
         return core_md._splice_single_json_block(text, body).encode("utf-8")
     except Exception:
