@@ -355,7 +355,7 @@ def test_one_graphql_request_covers_every_cloud_lane(repo):
     assert result["event"] == "timer"
     [argv] = gh.api_calls()
     assert argv[:9] == [
-        "gh", "api", "graphql", "-F", "owner=owner", "-F", "name=repo", "-f", argv[8],
+        "gh", "api", "graphql", "-f", "owner=owner", "-f", "name=repo", "-f", argv[8],
     ]
     query = argv[8]
     assert query.startswith("query=query($owner: String!, $name: String!) { repository(")
@@ -434,6 +434,29 @@ def test_edge6_an_unreadable_read_degrades_and_the_lane_is_not_stale(repo, graph
     assert result["event"] == "timer"
     assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in result["degraded"]
     assert [lane["launchId"] for lane in result["cloudLanes"]] == ["cloud-a"]
+
+
+@pytest.mark.parametrize("truncated", ["prs", "branches"])
+def test_edge6_a_truncated_connection_degrades_instead_of_reading_stale(repo, truncated):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    lane = _lane_activity(issue_age=_QUIET)
+    connection = (
+        lane["branches"] if truncated == "branches"
+        else lane["issue"]["closedByPullRequestsReferences"]
+    )
+    connection["pageInfo"] = {"hasNextPage": True}
+    result = _run(repo, _Gh(_graphql_body({101: lane})))
+    assert result["event"] == "timer"
+    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in result["degraded"]
+
+
+def test_edge6_a_complete_page_is_read_normally(repo):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    lane = _lane_activity(issue_age=_QUIET)
+    lane["branches"]["pageInfo"] = {"hasNextPage": False}
+    lane["issue"]["closedByPullRequestsReferences"]["pageInfo"] = {"hasNextPage": False}
+    result = _run(repo, _Gh(_graphql_body({101: lane})))
+    assert result["event"] == "lane-stale"
 
 
 def test_edge6_an_unresolvable_slug_degrades_and_the_lane_is_not_stale(repo):
@@ -573,6 +596,10 @@ def test_edge10_loop_threads_the_cache_across_arms(repo):
     assert result["event"] == "timer"
     assert result["arms"] >= 3
     assert len(gh.api_calls()) == 1
+    assert result["cloudLanes"] == [{
+        "launchId": "cloud-a", "issue": 101,
+        "cloudSessionName": "cloud-101", "cloudSessionId": "session_101",
+    }]
 
 
 # --- the public entry points carry the result key -----------------------------

@@ -961,12 +961,17 @@ def _cloud_activity_query(issues):
         parts.append(
             "i%d: issue(number: %d) { updatedAt "
             "closedByPullRequestsReferences(first: 10, includeClosedPrs: true) "
-            "{ nodes { number updatedAt headRefName } } } "
+            "{ pageInfo { hasNextPage } nodes { number updatedAt headRefName } } } "
             "b%d: refs(refPrefix: \"refs/heads/\", query: \"%d\", first: 50) "
-            "{ nodes { name target { ... on Commit { committedDate } } } } "
+            "{ pageInfo { hasNextPage } nodes { name target { ... on Commit { committedDate } } } } "
             % (number, number, number, number)
         )
     return _CLOUD_ACTIVITY_QUERY_HEAD + "".join(parts) + _CLOUD_ACTIVITY_QUERY_TAIL
+
+
+def _has_next_page(connection):
+    page_info = connection.get("pageInfo") if isinstance(connection, dict) else None
+    return isinstance(page_info, dict) and page_info.get("hasNextPage") is not False
 
 
 def _lane_activity_epoch(repository, number):
@@ -980,12 +985,15 @@ def _lane_activity_epoch(repository, number):
     pr_nodes = closing.get("nodes") if isinstance(closing, dict) else None
     if not isinstance(pr_nodes, list):
         return None
+    # A truncated page is a partial read: never let it stand for "no newer activity".
+    if _has_next_page(closing):
+        return None
     for pr_node in pr_nodes:
         if not isinstance(pr_node, dict):
             return None
         stamps.append(pr_node.get("updatedAt"))
     branch_nodes = branches.get("nodes")
-    if not isinstance(branch_nodes, list):
+    if not isinstance(branch_nodes, list) or _has_next_page(branches):
         return None
     # The refs query matches substrings, so keep only a branch carrying this issue number
     # as a whole number.
@@ -1025,8 +1033,8 @@ def _fetch_cloud_activity(
     owner, _sep, name = slug.partition("/")
     argv = [
         "gh", "api", "graphql",
-        "-F", "owner=%s" % owner,
-        "-F", "name=%s" % name,
+        "-f", "owner=%s" % owner,
+        "-f", "name=%s" % name,
         "-f", "query=%s" % _cloud_activity_query(issues),
     ]
     try:
@@ -1975,12 +1983,15 @@ def _ceiling_timer_result(
     loop_degraded,
     passed_over,
     passed_over_count,
+    cloud_lanes=None,
 ):
     final = _event_result(
         EVENT_TIMER,
         batch_id,
         loop_degraded,
     )
+    if cloud_lanes:
+        final["cloudLanes"] = cloud_lanes
     return _loop_attach_passed_over(final, passed_over, passed_over_count)
 
 
@@ -2268,6 +2279,7 @@ def loop(
         stack_state = [None]
         pr_sampled = [False]
         cloud_state = [None]
+        last_cloud_lanes = [None]
         total_start = monotonic()
         total_deadline = (
             total_start + max_total_seconds
@@ -2290,6 +2302,7 @@ def loop(
                         loop_degraded,
                         passed_over,
                         passed_over_count,
+                        last_cloud_lanes[0],
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
@@ -2327,6 +2340,7 @@ def loop(
 
             result_degraded = set(result.get("degraded", []))
             loop_degraded.update(result_degraded)
+            last_cloud_lanes[0] = result.get("cloudLanes")
 
             if _loop_exits_on(result):
                 final = dict(result)
@@ -2374,6 +2388,7 @@ def loop(
                         loop_degraded,
                         passed_over,
                         passed_over_count,
+                        last_cloud_lanes[0],
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
