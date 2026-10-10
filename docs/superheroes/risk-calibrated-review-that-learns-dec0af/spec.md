@@ -25,8 +25,9 @@ Every statement ends with its source in plain text. The sources are:
 - **framing**: the framing the owner approved on 2026-10-09.
 - **craft, for your veto**: a choice the author made, recorded for the owner's veto.
 
-The requirements are grouped in six parts, A to F. Parts A to E follow the order the work ships
-in, which Assumptions & dependencies states. (source: Canon 2026-10-09-d6064e1d-1)
+The requirements are grouped in six parts, A to F. Parts A to E follow the order the work is
+built in. (source: Canon 2026-10-09-d6064e1d-1) All six parts ship in one release. (source: Canon
+2026-10-10-d6064e1d-3)
 
 ## Purpose
 
@@ -350,7 +351,8 @@ The sheets and the index are built on the plugin's shared review template [cite:
 
 ## Assumptions & dependencies
 
-- The parts ship in order: A first, then B, then C and D, then E. Part F ships with the parts it describes. (source: Canon 2026-10-09-d6064e1d-1)
+- All six parts ship in one plugin release. (source: Canon 2026-10-10-d6064e1d-3)
+- The parts are built in order: A first, then B, then C and D, then E. (source: Canon 2026-10-09-d6064e1d-1)
 - The engines' own records say which reviewers ran, and the review record relies on them. (source: Canon 2026-10-08-d6064e1d-14)
 - The gardening pass, the misses log and the keep-or-retire list already exist, and Part E adds to them. (source: Canon 2026-10-08-d6064e1d-9)
 - Earlier approved specs that require a certificate are amended to require the review record. Scheduling those amendments is the advisor's. (source: Canon 2026-10-08-d6064e1d-8)
@@ -361,7 +363,7 @@ The sheets and the index are built on the plugin's shared review template [cite:
 
 - No automated gate is added at handback. The advisor's vet carries that check. (source: Canon 2026-10-08-d6064e1d-18)
 - No new review gate runs in a watch-only mode first. (source: Canon 2026-10-08-d6064e1d-10)
-- No release dates are set for the parts. (source: Canon 2026-10-08-d6064e1d-28)
+- No date is set for the release. (source: Canon 2026-10-10-d6064e1d-3)
 - The plugin's specs and long-lived records name nothing specific to one project that uses the plugin. (source: Canon 2026-10-09-d6064e1d-10)
 - The plugin's default sends every leftover with a real consequence to the owner. Only a project's own standing rulings change that for the project. (source: Canon 2026-10-08-d6064e1d-26)
 - The round caps, the stuck-loop stop, the engines' own records and the fixer that works only on its finding are kept. (source: Canon 2026-10-08-d6064e1d-14)
