@@ -96,6 +96,36 @@ Spec as reviewed: commit a5a41289. Fixes: commit 8d949c4d.
 #### Citation check
 `[]` (run with `--root` set to the grounding base at origin/main 4e505f3a)
 
+### Round 3
+
+Spec as reviewed: commit 8d949c4d. No fixes were needed.
+
+#### Gap review
+- Run directory: `<checks>/r3/gap/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 15 tool calls, 26 files read)
+- Confirmations: cloud-gap-1, cloud-gap-2, cloud-gap-3, cloud-gap-5, cloud-gap-6, cloud-gap-7, cloud-gap-8 -> fixed; cloud-gap-4 -> not-fixed (it is O-1 in the owner's queue)
+- New findings: none. Gap review is clean apart from O-1, which is queued.
+
+#### Source check
+- Run directory: `<checks>/r3/source/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 15 tool calls, 14 files read)
+- Approved board, for the source check: `board/build-board.html` and `board/journeys.html` beside the spec
+- Confirmations: SC-1, SC-3, SC-4, SC-5, SC-6, SC-7, SC-8, SC-9, SC-10 -> fixed; SC-2 -> not-fixed (it is O-2 in the owner's queue)
+- New findings: none. The source check is clean apart from O-2, which is queued.
+
+#### Grounding
+- Run directory: `<checks>/r3/grounding/run`
+- Result: real (terminal, ok, 1 attempt, engaged, 25 tool calls, 15 files read)
+- Grounding base, for grounding: origin/main, 4e505f3a4865278a8920e93f7ff1fd047f9723a9
+- Confirmations: GND-001 -> fixed; GND-002 -> decline-accepted; GND-003 -> decline-accepted
+- New findings: none. Grounding is clean.
+
+#### Citation check
+`[]` (run with `--root` set to the grounding base at origin/main 4e505f3a)
+
+The first review stopped after round 3: all three checks are clean apart from the items already in
+the owner's queue. Three rounds ran and 17 findings were fixed (12 in round 1, 5 in round 2).
+
 ## The owner's queue
 
 - O-1 (from cloud-gap-4): a cloud builder that stops with work it never pushed, or before its first push, has no stated outcome. Recommendation: the advisor first tries to get the stopped builder's unpushed work pushed; what cannot be saved is redone, the advisor says how much, and a build that never pushed restarts from the beginning. Marks: none.
