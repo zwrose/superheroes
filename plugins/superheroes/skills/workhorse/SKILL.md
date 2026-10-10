@@ -601,6 +601,7 @@ implementer dispatch is an escalation. An escalated build records every maker fa
 provenance. Panel composition excludes only one author family, so any additional maker family is a
 disclosed independence limitation in the PR body. Prefer keeping an escalated light build to one
 maker family. Re-review to convergence on that single seat, or honestly park on an open blocker.
+The light lane's review ends by writing the review record per `skills/review-code/reference/review-record.md`, and its URL goes in the build record.
 
 **Record each finding's handling in a dispositions table** in the PR body. Post the review results
 on the PR as a durable receipt that names the head commit it reviewed, so a later reader can tell
