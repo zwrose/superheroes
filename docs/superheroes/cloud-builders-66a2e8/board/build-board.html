@@ -1,0 +1,265 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cloud builders build board</title>
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .board { display: grid; gap: 28px; padding-inline: 16px; padding-block: 24px; max-width: 1320px; margin: 0 auto; }
+  .intro { display: grid; gap: 8px; max-width: 74ch; }
+  .frame { display: grid; gap: 14px; }
+  .screens { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); align-items: start; }
+  .screen { display: grid; gap: 10px; min-width: 0; }
+  .msg { display: grid; gap: 8px; min-width: 0; }
+  .msg p { margin: 0; }
+  .list { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .start { justify-self: start; }
+  .reasons { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
+</style>
+<div class="sh-theme">
+  <div class="board">
+    <div class="intro">
+      <p class="sh-label">Cloud builders · Board 3 of 3 · build board</p>
+      <h1 class="sh-heading">What you'll read, settled</h1>
+      <p class="sh-caption">Only the settled design, with the real wording. Board 2 was skipped because no choices are open. The examples use a made-up shop project called Corner Shop. This piece has no screens of its own: everything the plugin shows you is a message from the advisor, a comment from a builder, or the platform's own prompt, so those are what is drawn. The project has no design system, so the examples are drawn plainly.</p>
+    </div>
+
+    <!-- 1. Setup -->
+    <section class="sh-card frame" aria-labelledby="s1">
+      <p class="sh-label">1 · Once per project, per Claude account</p>
+      <h2 class="sh-heading" id="s1">Setting a project up for the cloud</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">The advisor, in chat, when you ask for cloud builds</p>
+          <div class="sh-box msg">
+            <p><b>Setting up cloud builds for Corner Shop.</b> You do three things by hand, once, on claude.ai. It takes about ten minutes.</p>
+            <ol class="list">
+              <li>Make a cloud environment for this project.</li>
+              <li>Paste the setup text into it. I've written it below.</li>
+              <li>Paste the reviewer pass into it. Run the pass command on your machine and it puts the pass on your clipboard.</li>
+            </ol>
+            <p><b>Two things to know before you start.</b></p>
+            <p>The reviewer pass will sit in that environment's settings, and any session started in that environment can read it. It is a separate sign-in from your main one, it cannot renew itself, and it stops working after 10 days.</p>
+            <p>Cloud builders do not get your personal instructions or permission rules. They follow this project's rules and the plugin's rules, and nothing else.</p>
+            <p>Tell me when all three are done and I'll run a short check.</p>
+          </div>
+          <div class="sh-box msg">
+            <div class="meta"><span class="sh-badge sh-badge--standing">Setup text</span><span class="sh-label">Corner Shop · plugin 0.42.0 · calibration from 10 Oct</span></div>
+            <p class="sh-caption">A block to copy and paste. It holds no secret. The pass never goes in here.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">The check passed</p>
+          <div class="sh-box msg">
+            <p><b>The check passed.</b></p>
+            <ul class="list">
+              <li>The cloud's plugin is 0.42.0, the same as mine.</li>
+              <li>Its calibration matches this machine's.</li>
+              <li>The reviewer answered.</li>
+            </ul>
+            <p>Cloud builds are ready for Corner Shop and still switched off. Say "turn cloud builds on" when you want them.</p>
+          </div>
+          <p class="sh-label">The check failed</p>
+          <div class="sh-box msg">
+            <p><b>The check failed on one part.</b> The reviewer did not answer, so the pass is missing or was pasted wrong.</p>
+            <p>Cloud builds stay off. To fix it, paste a fresh pass into the environment and say "check again".</p>
+          </div>
+          <p class="sh-caption">The check is one short cloud session. A failed check always names the part that failed and the fix.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. The setting -->
+    <section class="sh-card frame" aria-labelledby="s2">
+      <p class="sh-label">2 · A per-project setting</p>
+      <h2 class="sh-heading" id="s2">Switching cloud builds on and off</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">Switched on</p>
+          <div class="sh-box msg">
+            <p><b>Cloud builds are on for Corner Shop.</b> From the next launch, every build that can run in the cloud will.</p>
+            <p>Say "this one local" at any launch to keep a build on your machine.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">Switched off</p>
+          <div class="sh-box msg">
+            <p><b>Cloud builds are off for Corner Shop.</b> Builds run on your machine, as before.</p>
+            <p>The cloud setup is kept, so switching back on needs no new setup.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">Asked for before setup is done</p>
+          <div class="sh-box msg">
+            <p><b>Cloud builds can't be switched on yet.</b> This project has no cloud setup on this Claude account. Say "set up cloud builds" and I'll walk you through it.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. The launch report -->
+    <section class="sh-card frame" aria-labelledby="s3">
+      <p class="sh-label">3 · Every launch</p>
+      <h2 class="sh-heading" id="s3">The launch report says which build went where</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">A normal launch</p>
+          <div class="sh-box msg">
+            <p><b>Launched 5 builds.</b></p>
+            <p><b>In the cloud:</b> #412 Fix the export date format, #413 Add a low-stock badge, #417 Tidy the receipt email.</p>
+            <p><b>On your machine:</b></p>
+            <ul class="list">
+              <li>#415 Phone checkout layout. It needs the phone simulator, which only your machine has.</li>
+              <li>#418 Speed up the orders list. You said "this one local".</li>
+            </ul>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">The cloud wasn't ready</p>
+          <div class="sh-box msg">
+            <p><b>Launched 4 builds, all on your machine.</b> The cloud wasn't ready: its plugin is 0.41.0 and mine is 0.42.0.</p>
+            <p>To fix it, paste the new setup text into the environment. Say "setup text" and I'll write it.</p>
+          </div>
+          <p class="sh-label">At the top of each later message, until it's fixed</p>
+          <div class="sh-box msg">
+            <p><span class="sh-badge sh-badge--warning">Still on your machine</span></p>
+            <p>The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">Every reason a build runs on your machine, as worded</p>
+          <div class="sh-box msg">
+            <ul class="reasons">
+              <li>You said "this one local".</li>
+              <li>It needs the phone simulator, which only your machine has. (Or whatever it needs.)</li>
+              <li>The reviewer pass has lapsed.</li>
+              <li>There is no reviewer pass in the cloud environment.</li>
+              <li>This project has no cloud setup on this Claude account.</li>
+              <li>The cloud's plugin is 0.41.0 and mine is 0.42.0.</li>
+              <li>The cloud's calibration doesn't match this machine's.</li>
+              <li>The cloud platform couldn't be reached.</li>
+            </ul>
+          </div>
+          <p class="sh-caption">Each reason the cloud wasn't ready comes with its fix. A build is never held and never dropped.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. While a cloud build runs -->
+    <section class="sh-card frame" aria-labelledby="s4">
+      <p class="sh-label">4 · Every cloud build</p>
+      <h2 class="sh-heading" id="s4">While a cloud build runs</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">Wherever the advisor lists lanes</p>
+          <div class="sh-box msg">
+            <p>#412 Fix the export date format · <span class="sh-pill sh-pill--open">cloud</span> · review running</p>
+            <p>#413 Add a low-stock badge · <span class="sh-pill sh-pill--open">cloud</span> · waiting on CI</p>
+            <p>#415 Phone checkout layout · your machine · building</p>
+          </div>
+          <p class="sh-caption">A cloud lane is counted and watched like any lane, and marked with the word cloud. It keeps running while your machine is asleep.</p>
+        </div>
+        <div class="screen">
+          <p class="sh-label">A builder's question, as a comment on its issue</p>
+          <div class="sh-box msg">
+            <p><b>Builder note for the advisor (cloud build).</b></p>
+            <p>The order says to reuse the stock page's badge, but that badge has no "low" state. Should I add the state there, or make a new badge here? I'm waiting for your answer.</p>
+          </div>
+          <p class="sh-caption">The advisor answers the builder directly. If the advisor is away, the note waits here. On a public repo this comment is public, as builder comments already are.</p>
+        </div>
+        <div class="screen">
+          <p class="sh-label">The builder's first comment on its issue</p>
+          <div class="sh-box msg">
+            <p><b>Builder intake (cloud build).</b> Plugin 0.42.0. Commits from this build carry the cloud's own author name; the PR will be under the owner's name.</p>
+          </div>
+          <p class="sh-caption">The usual intake comment, with the cloud facts added.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. When something goes wrong mid-build -->
+    <section class="sh-card frame" aria-labelledby="s5">
+      <p class="sh-label">5 · Rare</p>
+      <h2 class="sh-heading" id="s5">When something goes wrong mid-build</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">The pass lapsed during a build · the builder, on its PR</p>
+          <div class="sh-box msg">
+            <p><b>Parked: the review did not run.</b></p>
+            <p>The reviewer pass lapsed during this build, so no independent review happened. The work is pushed and this PR is not ready. It needs a fresh pass, then a review.</p>
+          </div>
+          <p class="sh-label">The advisor, to you</p>
+          <div class="sh-box msg">
+            <p><b>#413 is parked.</b> The reviewer pass lapsed mid-build, so its review didn't run. Renew the pass and I'll send it back for review.</p>
+          </div>
+          <p class="sh-caption">Never a same-family stand-in for the missing reviewer.</p>
+        </div>
+        <div class="screen">
+          <p class="sh-label">A cloud builder stopped · the advisor, to you</p>
+          <div class="sh-box msg">
+            <p><b>The cloud builder on #412 stopped at 14:02.</b> I recovered the lane from its pushed work in a new cloud session. About 6 minutes of work since its last push is being redone.</p>
+          </div>
+          <p class="sh-caption">Recovered at once, like any dead lane, and routed like a launch: in the cloud if the cloud is ready, otherwise on your machine.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. After the merge -->
+    <section class="sh-card frame" aria-labelledby="s6">
+      <p class="sh-label">6 · After each merge</p>
+      <h2 class="sh-heading" id="s6">Cleaning up a finished cloud builder</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">The advisor, to you</p>
+          <div class="sh-box msg">
+            <p><b>#412 is merged.</b> I've asked its cloud builder to archive itself. You'll get one prompt for it: tap Allow once.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">The platform's own prompt, as it appears</p>
+          <div class="sh-box msg">
+            <p><b>Allow Claude to use archive session (claude-code-remote)?</b></p>
+            <p class="sh-label">Session ID · session_01X9TMQNcZH7BZsq8bZxSJxw</p>
+            <div class="buttons"><span class="sh-button sh-button--second">Deny</span><span class="sh-button sh-button--main">Allow once</span></div>
+          </div>
+          <p class="sh-caption">These are the platform's words, not the plugin's, so they can't be changed. One prompt per finished builder, and it works from your phone.</p>
+        </div>
+        <div class="screen">
+          <p class="sh-label">If you don't answer</p>
+          <div class="sh-box msg">
+            <p>The session stays in your list, and nothing breaks. The PR branch is already gone, the cloud machine is reclaimed, the lane's record is closed, and nothing was ever on your machine.</p>
+          </div>
+          <p class="sh-caption">The plugin doesn't nag about unanswered prompts.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Gardening pass -->
+    <section class="sh-card frame" aria-labelledby="s7">
+      <p class="sh-label">7 · Each gardening pass</p>
+      <h2 class="sh-heading" id="s7">The reviewer pass, checked at the gardening pass</h2>
+      <div class="screens">
+        <div class="screen">
+          <p class="sh-label">It won't last to the next pass</p>
+          <div class="sh-box msg">
+            <p><span class="sh-badge sh-badge--warning">Renew now</span></p>
+            <p><b>Cloud reviewer pass: 3 days left, lapses 19 Oct.</b> It won't last to the next gardening pass. Run the pass command and paste the new pass into the environment.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">It will last</p>
+          <div class="sh-box msg">
+            <p><b>Cloud reviewer pass: 9 days left, lapses 25 Oct.</b> Nothing to do.</p>
+          </div>
+        </div>
+        <div class="screen">
+          <p class="sh-label">Between gardening passes</p>
+          <div class="sh-box msg">
+            <p>Nothing warns you. If the pass lapses, builds run on your machine and the launch report says so (card 3).</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
