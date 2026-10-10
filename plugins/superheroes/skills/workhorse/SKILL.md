@@ -601,7 +601,6 @@ implementer dispatch is an escalation. An escalated build records every maker fa
 provenance. Panel composition excludes only one author family, so any additional maker family is a
 disclosed independence limitation in the PR body. Prefer keeping an escalated light build to one
 maker family. Re-review to convergence on that single seat, or honestly park on an open blocker.
-The light lane's review ends by writing the review record per `skills/review-code/reference/review-record.md`, and its URL goes in the build record.
 
 **Record each finding's handling in a dispositions table** in the PR body. Post the review results
 on the PR as a durable receipt that names the head commit it reviewed, so a later reader can tell
@@ -674,7 +673,7 @@ the section.
 The build record carries a **dispatch provenance** section that lists each dispatch (the brief-check reviewer, every implementer, every `check-runner`, every `order-linter` seat, the pilot, the review-code seats) with the engine and model it ran on, each validated against the registry allowlist. It also carries the
 keyed **Follow-ups for the advisor** list with its marker, the size tripwire row §4's size step
 filled, and the bite-proof records. The PR body carries a DoD disposition table (the
-`superheroes:dod-table` marker), one row per Definition-of-Done bullet.
+`superheroes:dod-table` marker), one row per Definition-of-Done bullet. On the light lane, once this PR exists, write the review record per `skills/review-code/reference/review-record.md` and put its URL in the build record.
 
 **Never auto-close an issue that must stay open.** GitHub's closing-keyword parser is negation-blind,
 so use a non-closing verb ("addresses", "part of", "relates to") for an issue this PR must not close.
