@@ -246,6 +246,28 @@ def test_go_ahead_missing_its_proof_does_not_count():
         assert "the go-ahead for security-reviewer is incomplete" in rec["whatIsMissing"]
 
 
+def test_malformed_go_ahead_does_not_lift_the_park():
+    # axis: go-ahead proof; a go-ahead whose words, where or canon id is not a non-blank string lifting the park
+    sec = reviewer("security-reviewer", ran=False, runDir=None)
+    for bad in ({"kind": "owner-words", "words": True, "where": "PR comment"},
+                {"kind": "owner-words", "words": "go", "where": True},
+                {"kind": "owner-words", "words": "", "where": "PR comment"},
+                {"kind": "owner-words", "words": "go"},
+                {"kind": "owner-words", "words": "   ", "where": "PR comment"},
+                {"kind": "owner-words", "words": ["go"], "where": "PR comment"},
+                {"kind": "owner-words", "words": "go", "where": 7},
+                {"kind": "standing-ruling", "canonId": True},
+                {"kind": "standing-ruling", "canonId": ""},
+                {"kind": "standing-ruling", "canonId": 7}):
+        rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", **bad}]))
+        assert rec["parked"] is True and rec["missingReviews"][0]["goAhead"] is None
+        assert "the go-ahead for security-reviewer is incomplete" in rec["whatIsMissing"]
+    good = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
+    rec = build(account(reviewers=[sec], goAheads=[{"reviewer": "security-reviewer", "kind": "standing-ruling",
+                                                    "canonId": True}, good]))
+    assert rec["parked"] is False and rec["missingReviews"][0]["goAhead"] == good
+
+
 def test_clean_fixture_is_reviewed_and_never_claims_bug_free(tmp_path):
     # axis: the clean path; a complete account not reviewed, or any rendering claiming no bugs
     fake = Fake()
@@ -1054,6 +1076,24 @@ def test_escaped_newline_and_unicode_escaped_keys_are_withheld(text):
         assert "\\" + "u0077" in text
     else:
         assert "\\" + "n" in text
+    assert rr._has_secret(text) is True
+    body, withheld = rr.render_raw("f.json", text)
+    assert withheld is True and "LEAKMARK" not in body
+    assert rr._scrub_text(text) == "[REDACTED FIELD]"
+
+
+_ESCAPED_SPACE = "\\" + "u0020"
+_ESCAPED_HEADER = _ESCAPED_SPACE.join(["-----BEGIN", "RSA", "PRIVATE", "KEY-----"])
+
+
+@pytest.mark.parametrize("text", [
+    '{"note": "' + _ESCAPED_HEADER + "\\" + 'nLEAKMARK"}',
+    "see the attached block " + _ESCAPED_HEADER + " LEAKMARK",
+], ids=["json-escaped-spaces", "non-json-escaped-spaces"])
+def test_private_key_block_behind_json_escapes_is_withheld(text):
+    # axis: decoded view; a private-key header written with JSON-escaped spaces posted because only the raw text was matched
+    assert "LEAKMARK" in text
+    assert rr._PEM_BEGIN.search(text) is None
     assert rr._has_secret(text) is True
     body, withheld = rr.render_raw("f.json", text)
     assert withheld is True and "LEAKMARK" not in body

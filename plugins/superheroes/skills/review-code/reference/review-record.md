@@ -39,7 +39,7 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
 - `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked), optional `makers` (each `{family, source}`).
 - `goAheads`: the owner's word to go on without a planned review. Either
-  `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`. A reviewer's `ownerWord` is a separate channel: the owner's word that let a same-family reviewer run.
+  `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`. Each of `canonId`, `words` and `where` is a non-empty string; a go-ahead missing one, or carrying anything else there, does not count and the PR stays parked. A reviewer's `ownerWord` is a separate channel: the owner's word that let a same-family reviewer run.
 
 Every finding gets a reason and an outcome (`null` while undecided): fixed, shown wrong, a craft call,
 left for the owner, or settled by an owner ruling. Exact spellings: `review_findings_schema.OUTCOMES`.

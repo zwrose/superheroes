@@ -299,9 +299,8 @@ def _family(vendor, model):
 
 
 def _go_ahead_ok(g):
-    if g.get("kind") == "standing-ruling":
-        return bool(g.get("canonId"))
-    return bool(g.get("words")) and bool(g.get("where"))
+    need = ("canonId",) if g.get("kind") == "standing-ruling" else ("words", "where")
+    return all(isinstance(g.get(k), str) and g[k].strip() for k in need)
 
 
 def _go_text(g):
@@ -585,7 +584,7 @@ def _has_secret(text):
     "password: x" and a backslash-u0077 in "password" both count). A count key followed by a number is not a match
     (_is_count_key). A two-word run is judged by _secret_key on both words, so "the password: x" and "api key = x"
     count. Nothing tracks where a value ends; a text this matches is withheld whole."""
-    return any(_detects(v) for v in [text, *_decoded_views(text)]) or bool(_PEM_BEGIN.search(text))
+    return any(_detects(v) or bool(_PEM_BEGIN.search(v)) for v in [text, *_decoded_views(text)])
 
 
 def _secret_line_count(text):
