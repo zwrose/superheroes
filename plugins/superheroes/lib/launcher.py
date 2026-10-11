@@ -136,13 +136,15 @@ _CLOUD_UNCONFIRMED_APPEND_REMEDY = (
     "identity of, and the `started` record could not be written (`startedAppend` holds why). The "
     "lane is live on its `reserved` record alone. Look for a session with the name in "
     "`cloudSessionName` in the host's session listing. `record-outcome` refuses a lane with no "
-    "`started` record, so it cannot end this lane."
+    "`started` record, so it cannot end this lane. The result carries the record a later repair "
+    "needs in `pendingStarted`."
 )
 _CLOUD_STARTED_APPEND_REMEDY = (
     "A cloud session exists and is working: its identity is in `cloudSessionId`. The `started` "
     "record could not be written, and `startedAppend` holds why. The lane is left live on its "
     "`reserved` record alone. `record-outcome` refuses a lane with no `started` record, so keep "
-    "the session's identity from this result and reach the session by it."
+    "the session's identity from this result and reach the session by it. The result carries the "
+    "record a later repair needs in `pendingStarted`."
 )
 
 # What a reader of a `started` record sees when its lane launched over a recorded surface
@@ -1313,6 +1315,14 @@ def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
     )
 
 
+class _LauncherTerminated(Exception):
+    """The launcher was sent SIGTERM while a cloud launch command was running."""
+
+
+def _raise_launcher_terminated(signum, frame):
+    raise _LauncherTerminated()
+
+
 def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     """Run the cloud launch command once under a pseudo-terminal and return what it printed.
 
@@ -1350,6 +1360,14 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
         chunks = []
         timed_out = False
         read_error = None
+        # axis: a launcher cancelled mid-launch still ends the group it started — SIGTERM is turned
+        # into an exception the read loop's handler catches, so the finally below runs, the output
+        # captured so far is logged, and the caller still records the lane.
+        previous_term = None
+        try:
+            previous_term = signal.signal(signal.SIGTERM, _raise_launcher_terminated)
+        except (ValueError, OSError):
+            previous_term = None  # not the main thread: no handler can be installed here
         try:
             try:
                 deadline = time.monotonic() + timeout
@@ -1377,6 +1395,11 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             except Exception as exc:
                 read_error = type(exc).__name__
         finally:
+            if previous_term is not None:
+                try:
+                    signal.signal(signal.SIGTERM, previous_term)
+                except (ValueError, OSError):
+                    pass
             # axis: no process the launch started outlives it — the signal goes to the process group
             # the Popen this function holds leads (its pid), on every path out, never to a caller's.
             try:
@@ -1547,6 +1570,7 @@ def _run_cloud_spawn(
                 cloudSessionUrl=session_url,
                 logPath=log_path,
                 startedAppend=append_result["reason"],
+                pendingStarted=dict(started),
                 remedy=_CLOUD_STARTED_APPEND_REMEDY,
             )
         success = dict(success_base)
@@ -1568,6 +1592,7 @@ def _run_cloud_spawn(
     remedy = _CLOUD_UNCONFIRMED_REMEDY
     if not append_result["ok"]:
         extra["startedAppend"] = append_result["reason"]
+        extra["pendingStarted"] = dict(started)
         remedy = _CLOUD_UNCONFIRMED_APPEND_REMEDY
     return post_reserve_fail(
         "cloud-session-unconfirmed",

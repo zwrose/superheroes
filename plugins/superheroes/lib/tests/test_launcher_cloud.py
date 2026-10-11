@@ -1227,6 +1227,51 @@ def test_edge6_started_append_failure_after_a_coherent_receipt_leaves_the_lane_l
     assert _records(repo, result["launchId"], "started") == []
 
 
+def test_pending_started_is_returned_when_the_receipt_path_append_fails(tmp_path, monkeypatch):
+    repo = _cloud_repo(tmp_path)
+    tries = _flaky_started_appends(monkeypatch, failures=99)
+    result = _launch(repo, tmp_path, _fake_spawn())
+    assert result["reason"] == "cloud-started-append-failed"
+    assert len(tries) == 3
+    assert result["pendingStarted"] == tries[-1]
+    assert result["pendingStarted"]["cloudSessionId"] == SESSION_ID
+    assert "pendingStarted" in result["remedy"]
+
+
+def test_pending_started_is_returned_when_the_unconfirmed_path_append_fails(
+    tmp_path, monkeypatch,
+):
+    repo = _cloud_repo(tmp_path)
+    tries = _flaky_started_appends(monkeypatch, failures=99)
+    result = _launch(repo, tmp_path, _fake_spawn(_spawned("", rc=None, timed_out=True)))
+    assert result["reason"] == "cloud-session-unconfirmed"
+    assert len(tries) == 3
+    assert result["pendingStarted"] == tries[-1]
+    assert result["pendingStarted"]["cloudSessionUnconfirmed"] is True
+    assert "pendingStarted" in result["remedy"]
+
+
+def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(tmp_path):
+    import os as _os
+    import signal as _signal
+    import threading
+
+    log = tmp_path / "term.stdout"
+    timer = threading.Timer(0.5, lambda: _os.kill(_os.getpid(), _signal.SIGTERM))
+    timer.start()
+    try:
+        result = L._default_cloud_spawn(
+            ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
+        )
+    finally:
+        timer.cancel()
+    assert result["readError"] == "_LauncherTerminated"
+    assert "hello" in result["output"]
+    assert "hello" in log.read_text()
+    assert result["rc"] is not None
+    assert _signal.getsignal(_signal.SIGTERM) is not L._raise_launcher_terminated
+
+
 def _flaky_started_appends(monkeypatch, failures):
     """The first `failures` tries of a `started` append fail; the count of tries made."""
     real_append = ll.append
