@@ -411,7 +411,8 @@ owner unchanged.
 
 The environment's id comes only from Claude Code's settings, read before and after the owner picks
 the environment by name with Claude Code's `/remote-env` picker. Never ask the owner to type, copy
-or paste the id, and never use an id from anywhere but a `picked` result.
+or paste the id, and never use an id from anywhere but a `picked` result or a `mismatched` result's
+`environment`.
 
 1. **Read the current pick.** Before anything else, read what the account's settings hold before
    the owner picks, and keep the result's `environment` (it may be null).
@@ -427,7 +428,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-message --cwd .
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-message
    ```
 
    A refusal means the [setup text](../../../rubric/glossary.md#setup-text) cannot be written: say
@@ -464,11 +465,21 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" sign-in
    ```
-5. **Give the pass command, naming the id.** Tell the owner to run it on their own machine. It puts
+5. **Give the pass command, naming the id.** Before giving it, check the id against the picker
+   (steps 6 and 7 repeat this check). Tell the owner to run it on their own machine. It puts
    the [reviewer pass](../../../rubric/glossary.md#reviewer-pass) block on their clipboard, and they
    paste the block into the environment's variables. Never run it for them, and never ask to see
    what it copied. The owner's terminal does not hold `ROOT_DIR`, so give them the command with
    the plugin root's absolute path written out in the quoted script path.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --environment <id>
+   ```
+
+   Go ahead only on `matched`. On `mismatched`, say its `message`, take its `environment` as the
+   environment now in use for this step and every later step, and run this check again with it. On
+   `unchecked`, say its `message` and stop before this step.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -481,7 +492,14 @@ or paste the id, and never use an id from anywhere but a `picked` result.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --cwd . --environment <id> [--issue <n>]
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --environment <id>
+   ```
+
+   Go ahead only on `matched`; `mismatched` and `unchecked` are handled as in step 5.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> [--issue <n>]
    ```
 
    Keep the `nonce` it returns. A refusal starts nothing: say its `message`.
@@ -491,24 +509,23 @@ or paste the id, and never use an id from anywhere but a `picked` result.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --cwd . --environment <id> --nonce <nonce> --line-file <file>
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --environment <id>
    ```
 
-   After a `passed` result, and before saying its message, compare the record with the pick:
+   Go ahead only on `matched`; `mismatched` and `unchecked` are handled as in step 5.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --cwd .
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --environment <id> --nonce <nonce> --line-file <file>
    ```
 
-   On `matched`, say judge's `message`. On `mismatched`, do not say the check is ready: say compare's
-   `message`, and repeat steps 6 and 7 naming compare's `environment`. On `unchecked`, say its
-   `message` and stop. For any result other than `passed`, say judge's `message`. A passed check
+   Say judge's `message`. A passed check
    has written the setup record for this account and changed no setting. A failed check, or a result that could not be read, has written nothing; when cloud
    builds were on, it has switched them off and the message says so. Never write the setup record
    any other way, and never tell the owner a check passed without a `passed` result.
 8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the environment now in use (the id step 3
-   returned, or the one the latest recovery pick returned).
+   returned, the one the latest recovery pick returned, or the one the latest `mismatched` check
+   returned, whichever came last).
    When the failed part was the environment, run `snapshot` (step 1's command) before relaying the
    failure message, so the baseline is the value as the owner leaves it. When the owner says the
    repair is done, read the pick with both the new baseline and the environment now in use, and use the
@@ -525,7 +542,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text --cwd .
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
 
 A launch that names an id matching no environment lands in the account's default environment

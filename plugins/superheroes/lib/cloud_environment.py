@@ -2,7 +2,7 @@
 
   cloud_environment.py snapshot [--cwd D]
   cloud_environment.py pick [--before ID] [--confirmed ID] [--cwd D]
-  cloud_environment.py compare [--cwd D]
+  cloud_environment.py compare --environment ID [--cwd D]
 
 Claude Code saves the pick as `remote.defaultEnvironmentId` in the user settings file of the
 account it runs on. `snapshot` reads that value before the owner picks; `pick` reads it again and
@@ -13,20 +13,19 @@ same environment kept, not a missing pick.
 
 On a machine where several Claude accounts share one settings file, the second read is made right
 after the pick, because another account's pick in between would be read as this one's. Standard
-library plus `config_dir`, `engine_adapter` and `cloud_setup`. Every public function returns a plain dict and
+library plus `config_dir` and `engine_adapter`. Every public function returns a plain dict and
 never raises; nothing here prints, logs or writes a file except the one result line of the command
 line.
 
-`compare` runs after a check passes: it reads the environment the setup record names and the one
-the picker holds now, and says whether they are the same one, so a record can never name an
-environment other than the one the owner picked.
+`compare` runs just before a step uses an environment id: it reads the one the picker holds now
+and says whether it is the id about to be used, so no step runs against an environment other than
+the one the owner picked.
 """
 import argparse
 import json
 import os
 import sys
 
-import cloud_setup
 import config_dir
 import engine_adapter
 
@@ -45,12 +44,11 @@ _UNREADABLE = ("I can't read this account's Claude Code settings, so I can't see
 _BEFORE_INVALID = "The value read before the pick is not an environment id."
 _CONFIRMED_INVALID = "The environment confirmed earlier is not an environment id."
 _KEPT = "Got it: I can see you kept the same environment."
-_MISMATCHED = ("The environment the check recorded does not match the one picked in /remote-env, "
-               "so I won't call this ready. The check will run again with the picked environment.")
-_UNCHECKED = ("I can't confirm that the environment the check recorded is the one picked in "
-              "/remote-env, so I won't call this ready. Check that the picked environment shows "
-              "in /remote-env and that the check's record is readable, then tell me and I'll "
-              "look again.")
+_MISMATCHED = ("The environment picked in /remote-env is a different one from the one I was about "
+               "to use. The sitting will use the picked one.")
+_UNCHECKED = ("I can't confirm which environment is picked in /remote-env, so I'm stopping here. "
+              "Check that Claude Code's settings file on this machine is readable and that an "
+              "environment shows as picked in /remote-env, then tell me and I'll look again.")
 
 
 def _is_id(value):
@@ -88,10 +86,10 @@ def _read(env, cwd):
         return False, None
     if not isinstance(data, dict):
         return False, None
-    remote = data.get("remote")
+    remote = data.get(engine_adapter.CLOUD_SETTINGS_SECTION)
     if not isinstance(remote, dict):
         return True, None
-    value = remote.get("defaultEnvironmentId")
+    value = remote.get(engine_adapter.CLOUD_SETTINGS_ENVIRONMENT_KEY)
     if not _is_id(value):
         return True, None
     return True, value
@@ -145,21 +143,17 @@ def _unchecked(reason):
     return {"action": "unchecked", "reason": reason, "environment": None, "message": _UNCHECKED}
 
 
-def compare(env=None, cwd=None, account=None, root=None):
-    """Compare the setup record's environment with the one the picker holds now. Never raises."""
+def compare(environment, env=None, cwd=None):
+    """Compare the id about to be used with the one the picker holds now. Never raises."""
     try:
-        if account is None:
-            account = cloud_setup.launching_account(env, cwd)
-        recorded = cloud_setup.read(cwd, account, root).get("record")
-        recorded = recorded.get("environment") if isinstance(recorded, dict) else None
-        if not _is_id(recorded):
-            return _unchecked("record-unreadable")
+        if not _is_id(environment):
+            return _unchecked("environment-invalid")
         readable, current = _read(env, cwd)
         if not readable or current is None:
             return _unchecked("pick-unreadable")
-        if recorded == current:
+        if environment == current:
             return {"action": "matched", "reason": None, "environment": current}
-        return {"action": "mismatched", "reason": "record-differs", "environment": current,
+        return {"action": "mismatched", "reason": "picked-differs", "environment": current,
                 "message": _MISMATCHED}
     except Exception:
         return _unchecked("compare-failed")
@@ -171,12 +165,13 @@ def main(argv=None):
     parser.add_argument("--cwd", default=None)
     parser.add_argument("--before", default=None)
     parser.add_argument("--confirmed", default=None)
+    parser.add_argument("--environment", default=None)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.verb == "snapshot":
         result = snapshot(cwd=cwd)
     elif args.verb == "compare":
-        result = compare(cwd=cwd)
+        result = compare(args.environment, cwd=cwd)
     else:
         result = pick(before=args.before, confirmed=args.confirmed, cwd=cwd)
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
