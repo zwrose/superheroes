@@ -350,6 +350,18 @@ def test_u6_a_half_done_commit_in_staging_is_not_recovered(tmp_path, capsys, mon
     assert os.listdir(os.path.join(session_dir, "commits"))
 
 
+# U6b — axis: called directly, `cmd_next` gates before commit recovery; staging stays byte-identical.
+def test_u6b_cmd_next_called_directly_gates_before_commit_recovery(tmp_path, monkeypatch):
+    session_dir, _n = _half_done_commit(tmp_path, monkeypatch)
+    _strip_generation(session_dir)
+    staged = os.path.join(session_dir, "commits")
+    before = _snapshot(staged)
+    assert before
+    out = RD.cmd_next(session_dir)
+    _assert_refusal(out, already_restarted=False)
+    assert _snapshot(staged) == before
+
+
 # U7 — axis: a finished earlier-generation session is left alone — `next` re-emits its terminal
 # answer and no marker is made.
 def test_u7_a_finished_earlier_version_session_still_replays_its_terminal(tmp_path):
