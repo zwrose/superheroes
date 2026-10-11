@@ -1142,3 +1142,44 @@ def test_clipboard_command_runs_without_captured_pipes(monkeypatch):
     assert not seen.get("capture_output")
     assert seen["stdout"] == subprocess.DEVNULL and seen["stderr"] == subprocess.DEVNULL
     assert seen["input"] == "text"
+
+
+# ---------------------------------------------------------------- placed_pass_state
+
+
+def _state_env(tmp_path, signin):
+    if signin is not None:
+        _write(_default(tmp_path), signin)
+    return _env(tmp_path, **{CP.PASS_ENV: PASS})
+
+
+def test_placed_pass_state_absent(tmp_path):
+    for signin in (None, "not json", "[1, 2]"):
+        env = _state_env(tmp_path, signin)
+        assert CP.placed_pass_state(env=env, now=NOW) == {"state": "absent", "passLapses": None}
+
+
+def test_placed_pass_state_unreadable(tmp_path):
+    no_tokens = _signin()
+    del no_tokens["tokens"]
+    no_access = _signin()
+    del no_access["tokens"]["access_token"]
+    for bad in (no_tokens, no_access, _signin(access="not-a-token"), _signin(access=7),
+                _signin(tokens="nope")):
+        env = _state_env(tmp_path, bad)
+        assert CP.placed_pass_state(env=env, now=NOW) == {"state": "unreadable",
+                                                          "passLapses": None}
+
+
+def test_placed_pass_state_lapsed_and_valid(tmp_path):
+    env = _state_env(tmp_path, _signin())
+    assert CP.placed_pass_state(env=env, now=EXP - 1) == {"state": "valid", "passLapses": EXP_DATE}
+    assert CP.placed_pass_state(env=env, now=EXP) == {"state": "lapsed", "passLapses": EXP_DATE}
+    assert CP.placed_pass_state(env=env, now=EXP + 5) == {"state": "lapsed", "passLapses": EXP_DATE}
+
+
+def test_placed_pass_state_reads_only_the_placed_file(tmp_path):
+    # PASS_ENV is set but no sign-in is placed: the state is absent, and nothing is written.
+    env = _env(tmp_path, **{CP.PASS_ENV: PASS})
+    assert CP.placed_pass_state(env=env, now=NOW)["state"] == "absent"
+    assert not _default(tmp_path).exists()

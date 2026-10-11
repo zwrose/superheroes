@@ -13,6 +13,9 @@ else; `place` opens exactly one path for writing.
   cloud_pass.py confirm   cloud session: does the reviewer answer with the pass in this environment
   cloud_pass.py record-confirmation --confirmation JSON [--cwd D] [--account A] [--environment E]
                           [--root D]   owner's machine: move the setup record's lapse date
+  placed_pass_state(env, now)
+                          library only: read the placed sign-in's state (absent, unreadable,
+                          lapsed, valid) and lapse date, without calling the reviewer
 
 Stdlib only. Every public function takes `env=None` (a mapping; default the process environment)
 and returns a plain dict; an expected failure is a refusal with a `reason` token, never a raise.
@@ -405,6 +408,24 @@ def confirm(env=None, run=None, now=None):
         return no("reviewer-answer-unexpected")
     out["reviewerAnswered"] = True
     return out
+
+
+def placed_pass_state(env=None, now=None):
+    """The state of the sign-in already placed at the reviewer's default path, read from the file
+    alone: never calls the reviewer and never reads PASS_ENV. `state` is "absent" (no readable JSON
+    object there), "unreadable" (no readable access-token expiry), "lapsed" (expiry at or before
+    `now`) or "valid"; `passLapses` is the expiry date when it was readable, else None."""
+    env = _env(env)
+    now = time.time() if now is None else now
+    signin = _read_object(_default_signin_path(env))
+    if signin is None:
+        return {"state": "absent", "passLapses": None}
+    tokens = signin.get("tokens")
+    token = tokens.get("access_token") if isinstance(tokens, dict) else None
+    exp = _expiry(token) if isinstance(token, str) else None
+    if exp is None:
+        return {"state": "unreadable", "passLapses": None}
+    return {"state": "valid" if exp > now else "lapsed", "passLapses": _date(exp)}
 
 
 def record_confirmation(cwd, confirmation, *, account=None, environment=None, now=None,
