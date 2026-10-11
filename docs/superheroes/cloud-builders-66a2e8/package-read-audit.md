@@ -874,3 +874,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C5 size split into C5 and C5b (advisor craft call at the 600 bar): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv6",
+ "kind": "invocation",
+ "measurables": {
+  "children": 2,
+  "registerEntries": 7
+ },
+ "override": "seven consumer lines gain C5b but only R8's first paragraph changes; light weight is enough for a mechanical re-allocation",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
