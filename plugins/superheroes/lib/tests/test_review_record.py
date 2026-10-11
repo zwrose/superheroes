@@ -1,6 +1,7 @@
 import copy
 import json
 import shutil
+import string
 import subprocess
 import sys
 
@@ -1107,6 +1108,62 @@ def test_private_key_block_behind_json_escapes_is_withheld(text):
     body, withheld = rr.render_raw("f.json", text)
     assert withheld is True and "LEAKMARK" not in body
     assert rr._scrub_text(text) == "[REDACTED FIELD]"
+
+
+@pytest.mark.parametrize("text", [
+    "the `password`: LEAKMARK",
+    "`db_password` = LEAKMARK",
+    "**password**: LEAKMARK",
+    "*api_key*: LEAKMARK",
+    "<password>: LEAKMARK",
+], ids=["backtick-quoted", "backtick-spaced", "bold", "italic", "angle-brackets"])
+def test_a_marked_up_secret_key_is_withheld(text):
+    # axis: withholding of a marked-up key; a backtick, asterisk or angle bracket between the key and its separator hid the assignment
+    assert "LEAKMARK" in text
+    body, withheld = rr.render_raw("f.md", text)
+    assert withheld is True and "LEAKMARK" not in body
+    assert rr._scrub_text(text) == "[REDACTED FIELD]"
+    f = finding("a-1", outcome="fixed", reason="r", body=text)
+    posted = rr.render(build(account(findings=[f])))
+    assert "[REDACTED FIELD]" in posted and "LEAKMARK" not in posted
+
+
+def test_any_non_word_run_before_the_separator_is_detected():
+    # axis: withholding at the gap; a mark or a run of marks between a secret key and its separator listed instead of excluded
+    for c in (ch for ch in string.punctuation + " \t" if ch not in ":=_"):
+        for s in ":=":
+            assert rr._has_secret(f"password{c}{s} LEAKMARK") is True, (c, s)
+            assert rr._has_secret(f"password{c}{c} {s}LEAKMARK") is True, (c, s)
+    assert rr._has_secret("“password”: LEAKMARK") is True
+    assert rr._has_secret("password" + "*" * 64 + ": LEAKMARK") is True
+    assert rr._has_secret("password" + " " * 64 + "= LEAKMARK") is True
+    for gap in (65, 200):
+        for sep in ("= ", ": "):
+            text = "password" + " " * gap + sep + "LEAKMARK"
+            assert rr._has_secret(text) is True, (gap, sep)
+            body, withheld = rr.render_raw("f.md", text)
+            assert withheld is True and "LEAKMARK" not in body
+            assert rr._scrub_text(text) == "[REDACTED FIELD]"
+    assert rr._has_secret("password" + "*" * 5000 + ": LEAKMARK") is True
+
+
+def test_marked_up_count_keys_and_split_lines_stay_readable():
+    # axis: over-withholding; a marked-up count key with a number, or a key and separator on different lines, withheld
+    for text in ("tokens: 12", "**input_tokens**: 12"):
+        body, withheld = rr.render_raw("f.md", text)
+        assert withheld is False and text in body
+        assert rr._scrub_text(text) == text
+    assert rr.render_raw("f.md", "**input_tokens**: abc")[1] is True
+    assert rr._has_secret("the password\n: see the note below") is False
+
+
+def test_a_long_run_with_no_separator_is_kept():
+    # axis: over-withholding; a secret-shaped word followed by a long run of marks and no ':' or '=' withheld
+    text = "the password " + "-" * 70 + " rotated last week"
+    assert rr._has_secret(text) is False
+    body, withheld = rr.render_raw("f.md", text)
+    assert withheld is False and text in body
+    assert rr._scrub_text(text) == text
 
 
 @pytest.mark.parametrize("key", ["dbpassword", "apikeys", "passwordhash", "mytoken", "xsecret", "PRIVATEKEYS"])
