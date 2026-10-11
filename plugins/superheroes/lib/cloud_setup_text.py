@@ -272,8 +272,8 @@ def _plain_shape(text):
 def _encoded_shape(text):
     """A base64 run (standard or URL-safe alphabet, any label or none) that decodes to text
     carrying a secret-shaped form, such as an encoded reviewer pass."""
-    for match in _ENCODED_RUN_RE.finditer(text):
-        run = match.group(0).rstrip("=").replace("-", "+").replace("_", "/")
+    for match in _ENCODED_RUN_RE.finditer(re.sub(r"[*`~]", "", text)):
+        run = match.group(0).strip("_").rstrip("=").replace("-", "+").replace("_", "/")
         run += "=" * (-len(run) % 4)
         try:
             decoded = base64.b64decode(run).decode("utf-8")

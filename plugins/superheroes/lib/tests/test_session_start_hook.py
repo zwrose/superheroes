@@ -379,6 +379,18 @@ def test_reviewer_pass_placed_in_a_cloud_session(tmp_path, monkeypatch, capsys):
         assert secret not in raw
 
 
+def test_reviewer_pass_section_says_so_when_the_variable_could_not_be_removed(
+        tmp_path, monkeypatch, capsys):
+    # Axis: placed but no env file to record the removal, so the section says the pass is still visible.
+    pass_value, _, _ = _pass_fixture()
+    _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    ctx = _context_from_stdout(capsys)
+    assert "The reviewer pass is in place; it lapses 2096-10-02." in ctx
+    assert "still visible to processes in this session" in ctx
+
+
 def test_reviewer_pass_section_says_none_is_set(tmp_path, monkeypatch, capsys):
     # Axis: a cloud session with no pass tells the agent review seats cannot run.
     dest = _cloud_session(monkeypatch, tmp_path)

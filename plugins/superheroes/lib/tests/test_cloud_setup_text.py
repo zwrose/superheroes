@@ -779,7 +779,8 @@ def _encoded_pass():
     "{value}",
     '{{"SUPERHEROES_REVIEWER_PASS": " {value}"}}',
     "**SUPERHEROES_REVIEWER_PASS**: {value}",
-], ids=["bare", "quoted-leading-space", "markdown-labelled"])
+    "__{value}__",
+], ids=["bare", "quoted-leading-space", "markdown-labelled", "underscore-emphasis"])
 def test_s9_encoded_reviewer_pass_is_refused(tmp_path, form):
     w = _outside(tmp_path)
     planted = _encoded_pass()
@@ -787,6 +788,11 @@ def test_s9_encoded_reviewer_pass_is_refused(tmp_path, form):
     result = _compose(w)
     _refusal(result, "secret-shaped-content")
     assert planted not in json.dumps(result)
+
+
+def test_encoded_pass_split_by_markdown_emphasis_is_still_found():
+    planted = _encoded_pass()
+    assert CS._scan("note: " + planted[:50] + "**" + planted[50:]) == "encoded credential"
 
 
 def test_provider_key_shape_covers_every_cloud_setup_prefix():

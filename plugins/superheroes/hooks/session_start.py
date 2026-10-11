@@ -68,14 +68,16 @@ def _scrub_pass_env(result):
         env_file = os.environ.get("CLAUDE_ENV_FILE")
         marker = cloud_pass.pass_marker() if result.get("action") == "placed" else None
         if not env_file or result.get("reason") == "not-a-cloud-session":
-            return
+            return False
         with open(env_file, "a", encoding="utf-8") as fh:
             fh.write("unset %s\n" % cloud_pass.PASS_ENV)
             if marker:
                 fh.write("export %s=%s\n" % (cloud_pass.PASS_MARKER_ENV, shlex.quote(marker)))
+        return True
     except Exception as exc:
         sys.stderr.write("superheroes session_start: could not scrub pass env (%s)\n"
                          % type(exc).__name__)
+        return False
 
 
 def _append_host_model_section(boot, value):
@@ -92,7 +94,7 @@ def _append_host_model_section(boot, value):
     return boot + "\n\n### Host model\n" + line
 
 
-def _append_reviewer_pass_section(boot, result, raised):
+def _append_reviewer_pass_section(boot, result, raised, scrubbed=True):
     """Name the reviewer pass's state in the bootstrap — only in a cloud session. Never carries
     the pass itself, only the reason token (or the exception's type name) and the lapse date."""
     if not boot:
@@ -108,6 +110,8 @@ def _append_reviewer_pass_section(boot, result, raised):
         lapses = result.get("passLapses")
         line = ("The reviewer pass is in place; it lapses %s." % lapses if lapses
                 else "The reviewer pass is in place; its lapse date could not be read.")
+        if not scrubbed:
+            line += " The pass is still visible to processes in this session (its variable stayed set)."
         return boot + "\n\n### Reviewer pass\n" + line
     elif result.get("action") == "skipped":
         line = ("No reviewer pass is set in this cloud environment, so review seats cannot run "
@@ -156,18 +160,18 @@ def main():
     host_model = _host_model(payload)
     _write_host_model_env(host_model)
 
-    pass_result, pass_raised = None, None
+    pass_result, pass_raised, scrubbed = None, None, True
     try:
         import cloud_pass
         pass_result = cloud_pass.place()
-        _scrub_pass_env(pass_result)
+        scrubbed = _scrub_pass_env(pass_result)
     except Exception as exc:
         pass_raised = type(exc).__name__
         _scrub_pass_env({})
 
     boot = _bootstrap(cwd, transcript_path, args.host, source=source)   # always-on, gated by nothing
     boot = _append_host_model_section(boot, host_model)
-    boot = _append_reviewer_pass_section(boot, pass_result, pass_raised)
+    boot = _append_reviewer_pass_section(boot, pass_result, pass_raised, scrubbed)
     if boot:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",
