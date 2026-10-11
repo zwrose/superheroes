@@ -352,3 +352,22 @@ Owner rulings the package says are drafted in, and where each sits:
 - Canon 2026-10-10-ca3e7e0d-22 (Canon or specs outside the repo means a local build) is in register R5 and C5.
 
 No State line calls any of them open. Result: verified.
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "substantive amendments 1 and 2 (owner rulings 25 c and 27 a): touched-parts re-read before injection into C4",
+ "ceiling": 2,
+ "invocation": "inv2",
+ "kind": "invocation",
+ "measurables": {
+  "children": 1,
+  "registerEntries": 0
+ },
+ "override": null,
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
