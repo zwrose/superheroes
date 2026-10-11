@@ -89,23 +89,6 @@ def test_disposition_ledger_owner_refusal_terminal_pending_not_refused(tmp_path)
     assert refusal is None
 
 
-def test_re_emit_refuses_unrecognized_disposition_ledger_owner(tmp_path):
-    """A2: re-emit refuses before superseding when dispositionLedgerOwner is unrecognized."""
-    session_dir = str(tmp_path)
-    n = RD.cmd_next(session_dir, _cfg())
-    assert n["ok"], n
-    ok, state = RD.load_state(session_dir)
-    assert ok and state is not None
-    old_attempt = state["pending"]["attempt"]
-    state["dispositionLedgerOwner"] = "ledger-v2"
-    RD.save_state(session_dir, state)
-    out = RD.cmd_re_emit(session_dir, "tester")
-    assert out["ok"] is False
-    assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
-    ok, state = RD.load_state(session_dir)
-    assert state["pending"]["attempt"] == old_attempt
-
-
 def test_next_response_call_sites_pass_state():
     """T4: every _next_response call site passes state (four-argument form)."""
     path = os.path.join(_LIB, "round_driver.py")

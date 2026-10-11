@@ -119,10 +119,10 @@ class FakeAdapters(object):
             return RD.verify_result_fault(payload)
         return "orchestrator-payload-unknown-phase:%s" % phase
 
-    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
                  session_dir=None):
         self.assembled.append({"phase": phase, "envelopes": envelopes,
-                               "dispatch_manifest": dispatch_manifest, "canary": canary,
+                               "dispatch_manifest": dispatch_manifest,
                                "session_dir": session_dir})
         if self.assemble_reason is not None:
             return None, self.assemble_reason
@@ -542,16 +542,23 @@ def test_new_state_mints_at_the_current_version_and_load_accepts_every_supported
 
 @pytest.mark.parametrize("cmd", ["advance", "record-result", "record-missing", "attest"])
 def test_v2_session_is_refused_by_every_new_subcommand(tmp_path, adapters, cmd):
-    """A/B — the SAME call against a v3 session gets past this gate (it fails later, on its own
-    merits, or succeeds); only the v2 session is refused `legacy-session-use-next-submit`."""
-    v3 = _session(tmp_path, name="v3")
-    v2 = str(tmp_path / "v2")
-    os.makedirs(v2)
-    state = copy.deepcopy(_state(v3))
-    state["schemaVersion"] = 2
-    with open(os.path.join(v2, RD.STATE_FILE), "w", encoding="utf-8") as fh:
-        json.dump(state, fh)
-    RR.atomic_write_json(os.path.join(v2, RR.META_FILE), {"sessionId": _session_id(v3)})
+    """A/B — the SAME call against a current session gets past both gates (it fails later, on its own
+    merits, or succeeds). An unfinished v2 session is refused `session-from-earlier-version` by the
+    upgrade gate, with no journal row; a finished v2 session is refused
+    `legacy-session-use-next-submit`."""
+    current = _session(tmp_path, name="current")
+
+    def v2_copy(name, terminal):
+        d = str(tmp_path / name)
+        os.makedirs(d)
+        state = copy.deepcopy(_state(current))
+        state["schemaVersion"] = 2
+        if terminal:
+            state["terminal"] = "converged"
+        with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        RR.atomic_write_json(os.path.join(d, RR.META_FILE), {"sessionId": _session_id(current)})
+        return d
 
     def call(session_dir):
         if cmd == "advance":
@@ -562,25 +569,29 @@ def test_v2_session_is_refused_by_every_new_subcommand(tmp_path, adapters, cmd):
             return RD.cmd_record_missing(session_dir, "code-reviewer", 0, "forfeit")
         return RD.cmd_attest(session_dir, "1", "note")
 
-    assert call(v2)["reason"] == RD.LEGACY_SESSION_REFUSAL
-    assert call(v3).get("reason") != RD.LEGACY_SESSION_REFUSAL
-    assert any(e.get("reason") == RD.LEGACY_SESSION_REFUSAL for e in _journal(v2))
+    unfinished = v2_copy("v2-unfinished", terminal=False)
+    finished = v2_copy("v2-finished", terminal=True)
+    assert call(unfinished)["reason"] == RD.SESSION_FROM_EARLIER_VERSION
+    assert not any(e.get("reason") == RD.LEGACY_SESSION_REFUSAL for e in _journal(unfinished))
+    assert call(finished)["reason"] == RD.LEGACY_SESSION_REFUSAL
+    from_current = call(current)
+    assert from_current.get("reason") != RD.LEGACY_SESSION_REFUSAL
+    assert from_current.get("reason") != RD.SESSION_FROM_EARLIER_VERSION
+    assert any(e.get("reason") == RD.LEGACY_SESSION_REFUSAL for e in _journal(finished))
 
 
-def test_next_and_submit_still_finish_a_v2_session_unchanged(tmp_path):
-    """`next`/`submit` are NOT gated on v3 — an in-flight v2 session finishes exactly as before,
-    and its receipt is `receipt-certified/2` (today's shape)."""
+def test_next_and_submit_refuse_an_unfinished_v2_session(tmp_path):
+    """An unfinished earlier-schema session is not continued by `next` or `submit`: both answer
+    `session-from-earlier-version`, and the saved state keeps its version."""
     d = _session(tmp_path)
     state = _state(d)
     state["schemaVersion"] = 2
     with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
         json.dump(state, fh)
-    pend = RD.cmd_next(d)
-    assert pend["ok"] and pend["phase"] == RD.P_PANEL
+    assert RD.cmd_next(d)["reason"] == RD.SESSION_FROM_EARLIER_VERSION
     seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
-    out = RD.cmd_submit(d, pend["phase"], pend["attempt"], pend["expectedStateHash"],
-                        {"seats": seats})
-    assert out["ok"] is True
+    out = RD.cmd_submit(d, RD.P_PANEL, 0, "x", {"seats": seats})
+    assert out["reason"] == RD.SESSION_FROM_EARLIER_VERSION
     assert _state(d)["schemaVersion"] == 2
 
 
@@ -781,7 +792,7 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 canary=None, session_dir=None):
+                                 session_dir=None):
         seats = {}
         for env in (envelopes or []):
             seat = env.get("seat")
@@ -815,7 +826,7 @@ def test_adapter_provenance_accumulates_per_phase_in_one_round(tmp_path, adapter
     verifier_omitted = [{"seat": "src/f.py:3", "occurrence": 0, "reason": "timeout"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 canary=None, session_dir=None):
+                                 session_dir=None):
         if phase == RD.P_PANEL:
             seats = {}
             for env in (envelopes or []):
@@ -2420,7 +2431,7 @@ def test_advance_refuses_a_fold_the_submit_chokepoint_rejects(tmp_path, adapters
     d = _session(tmp_path)
     _record_all_panel_seats(d)
 
-    def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+    def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None,
                      session_dir=None):
         return {"seats": {"architecture": {"findings": []}}}, None
 
@@ -2438,7 +2449,7 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     d = _session(tmp_path)
     _record_all_panel_seats(d)
 
-    def boom(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+    def boom(phase, envelopes, state, config, dispatch_manifest=None,
              session_dir=None):
         raise RuntimeError("adapter exploded")
 

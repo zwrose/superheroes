@@ -134,19 +134,16 @@ is disclosed in the PR body, because a timeout can truncate stdout so you can ve
 contains but never what it never reached. **Salvage usage trending to zero is the success metric** — a
 high salvage rate **indicts our caps and our transport; it does not vindicate salvage.**
 
-That one reviewer carries a **mandatory planted-defect control probe on every light or
-micro review** — the control that makes single-seat review trustworthy. The probe must
-come back **engaged**. A probe that returns **not engaged** — for any reason — means **that
-review did not happen:** **re-dispatch once**, and if it is still not engaged, **resolve
-upward to the full lane or park.** A not-engaged probe is **never** a pass, and exiting
-zero is not evidence of engagement. For a single-seat review the probe's seat key is
-`code-reviewer`. The **investigation-record floor** (an empty external
-review seat must prove it actually investigated, or forfeit as vacuous) already applies
-automatically to **every external review seat**, single-seat lanes included; it is a
-standing safeguard, not something these lanes add. What single-reviewer lanes **add** is
-that the planted-defect probe runs on **every** light or micro review, not only when a
-vendor's seats all came back empty. This is doctrine in prose only; lane assignment has no
-mechanical check.
+On every light or micro review, **the review record shows that the one reviewer read the
+change**, taken from the engine's own record of the run — the control that makes single-seat
+review trustworthy. A record that is missing, or that cannot tell whether the reviewer read the
+change, does not show it, and then **that review did not happen:** **run the reviewer once more**,
+and if the record still does not show a reading, **resolve upward to the full lane or park.** A
+record that does not show a reading is **never** a pass, and exiting zero is not evidence of a
+reading. The **investigation-record floor** (an empty external review seat must prove it actually
+investigated, or forfeit as vacuous) applies automatically to **every external review seat**,
+single-seat lanes included; it is a standing safeguard, not something these lanes add. This is
+doctrine in prose only; lane assignment has no mechanical check.
 
 ### The spine
 
@@ -178,8 +175,8 @@ family** plus the owner's per-change authorization.
 
 **Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
 itself** is the one named home for both halves of the independent check. The **reviewer
-receipt** — the cross-vendor reviewer's result, including the mandatory planted-defect
-control probe's **engaged** reading — is posted as a **comment on the micro PR**,
+receipt** — the cross-vendor reviewer's result, with the review record showing that
+reviewer's reading — is posted as a **comment on the micro PR**,
 durably, not left in the advisor's session. Every receipt **names the reviewed head
 commit sha** it covers — the same pin the vet receipt's spine requires — and each
 re-review after findings are fixed **posts or updates a receipt for the new sha**; a
@@ -204,8 +201,8 @@ when they state the risk explicitly — **owner-only, per change, never a standi
 The advisor must say what could go wrong before the owner decides.
 
 **Re-review to convergence.** After the advisor resolves reviewer findings, the
-**reviewer outside the maker's family re-reviews the final head**, carrying the mandatory control probe
-on each re-review, until no blocking findings remain — or the change **parks**. When the
+**reviewer outside the maker's family re-reviews the final head**, with the review record showing its
+reading on each re-review, until no blocking findings remain — or the change **parks**. When the
 contract under review is **prose**, the bounded acceptance bar in
 `### Bounded acceptance — prose-contract DoDs` below is the scoped exception to this paragraph.
 
@@ -220,11 +217,10 @@ fast-follow):
 - **The full lane** ends a direct build with `/superheroes:review-code` (the full panel
   and fix loop) before handback. An **explicit owner-directed review** remains a valid
   ending, and it is **recorded as a cited skip of the driver loop with the owner's
-  direction as the citation** (owner-ruled 2026-08-23: subordinate, don't remove) — the
-  skip accounting stays whole and the owner's hands stay free. The skip rule below names
-  this citation class; the flip clause below names its post-flip fate. **The light and
-  micro lanes** run **one** independent cross-vendor reviewer instead, carrying the
-  mandatory control on every such review (see above). The loop is cheap on small diffs —
+  direction as the citation** — the skip accounting stays whole and the owner's hands stay
+  free. The driver mandate below names this citation class. **The light and micro lanes**
+  run **one** independent cross-vendor reviewer instead, whose reading the review record
+  shows (see above). The loop is cheap on small diffs —
   scoped rounds, capped confirmations — so "too small to review" is never a reason to
   skip. The evidence behind this rule: the worst defects in the plugin's own history
   shipped in exactly the handful of PRs that skipped review, not in the large reviewed
@@ -245,67 +241,51 @@ table above and *Micro — owner authorization*.
 conflicts and authors nothing — carries **no** review expectation; re-panelling it is a race the
 branch cannot win. A post-handback commit that **authors content** — a conflict resolution, an
 advisor integration fold — keeps the union-fix **micro floor** in
-`skills/showrunner/reference/merge-train.md`: one cross-vendor reviewer plus an **engaged** control
-probe on the final head.
+`skills/showrunner/reference/merge-train.md`: one cross-vendor reviewer on the final head, whose reading the
+review record shows.
 
-## The driver mandate — the certified loop, its skips, and the flip
+## The driver mandate — the review record
 
-The **full lane's** review is the **certified loop** — the round driver's one entrypoint, which
-records what it seated, what each seat returned, and whether the round converged. A hand-driven
-panel can read identically in a PR body and carry none of that record. Three field specimens
-substituted "panel + hand-driven fix round" on exactly the builds that would have exercised the
-loop hardest, each on a stated excuse that does not survive contact with the skill text: no owner
-gate exists in the default loop, and the verify step's foreground cap is friction, not a wall. This
-section closes the excuses by making a skip **citable** rather than merely disclosable.
+The **full lane's** review is the round driver's loop — the one entrypoint, which records what it
+seated, what each seat returned, and whether the round converged — and it **ends by writing the
+review record** (`skills/review-code/reference/review-record.md`). What "reviewed" rests on is that
+record. A hand-driven panel can read identically in a PR body and carry none of it.
 
-**A skip is disclosed, and the disclosure cites a blocker by number.** A full-lane build that does
-not run the certified loop **discloses the skip in the PR body, citing a filed `driver-blocker`
-issue by number** — or, for the subordinated owner-directed ending above, **citing the owner's
-direction as a dated record per the venue-citation convention**
-(`skills/showrunner/reference/issue-contract.md` § Anchor resolution — a venue name is never a
-record; the citation is an exact permalink to a dated record) — the second and only other
-citation class. **A skip citing nothing, and a skip citing a closed issue, are each a vet
-finding.** This binds now, on every full-lane PR — it does not wait for the flip below.
+**A full-lane PR handed back without a review record is parked.** The builder parks instead of
+handing back, and the park names the review that is missing. When such a PR reaches the advisor
+anyway, the vet does not return it as ready (`skills/showrunner/reference/vet-receipt.md`).
+
+**A skip is disclosed, cited, and still recorded.** A full-lane build that does not run the driver
+loop **discloses the skip in the PR body, citing a filed `driver-blocker` issue by number** — or,
+for the owner-directed ending below, **citing the owner's direction as a dated record per the
+venue-citation convention** (`skills/showrunner/reference/issue-contract.md` § Anchor resolution —
+a venue name is never a record; the citation is an exact permalink to a dated record). A skip
+does not lift the record: the session writes the review record by hand, as its reference says,
+listing every planned reviewer and whether it ran.
 
 **The `driver-blocker` label is the standing view of what still blocks the loop.** Any bug that
 prevents proper use of the driver carries the project's `driver-blocker` label, and the label query
-— not anyone's memory — is what says whether the blockers are cleared. That is what makes the skip
-rule self-feeding: every honest skip either points at a tracked blocker or is a finding, so the
-list of things standing between this project and a certified loop maintains itself.
+— not anyone's memory — is what says whether the blockers are cleared.
 
-**Seat-provenance parity — a hand-driven panel owes what the build must record.** The driver path
-records which vendor **ran** each seat against the vendor that seat's seat map assigns — a mismatch
-is disclosed, but neither the driver receipt nor the panel submission contract carries proof that
-the assigned vendor was actually attempted. A hand-driven panel owes the **build record**: each seat's
-seat-map assignment, plus a recorded attempt or **terminal forfeit** on that assigned vendor. A mixed
-panel — different seats on different vendors by design — is normal and is not itself a finding.
-**A seat that ran on a vendor other than its seat-map assignment with no recorded forfeit on the
-assigned vendor is a vet finding** — the record is the only thing separating an engine that was
-tried and failed from one that was never asked, and a panel that records neither is exactly the
-silent degradation this lane exists to prevent.
+**Who ran each seat is read from the record.** The review record lists which reviewers were
+planned and which ran, each with its model family. It takes a run from the engine's own run record
+where one exists, and marks a run "reported by the session" where only the session reports it. A
+mixed panel — different seats on different vendors by design — is normal. A planned reviewer that
+did not run is a review that did not run: the PR stays parked until it runs, unless a standing
+ruling of the owner covers the missing review or the owner says in plain words to go ahead without
+it, and the record carries that word.
 
-**The flip — a dated conditional that arms itself.** Ruled **2026-08-21**. **When the milestone
-*Review panels can't silently degrade* closes, a full-lane review that is not the certified loop
-stops being a disclosable degradation and becomes a vet finding**, and the only valve is
-**driver-or-park** — never driver-or-improvise. Until that close, the skip rule above governs:
-disclose, cite an open `driver-blocker`, and the vet weighs it. After it, a citation is no longer a
-pass — the build runs the loop or parks, and the blocker it would have cited is the reason the park
-is honest. The **subordinated owner-directed ending survives the flip** — "don't remove" carries no
-sunset — but post-flip it is graded as the owner's **recorded override** of driver-or-park (same
-dated-direction citation, named as an override in the vet receipt), never as a citation-pass. The arming event is the **milestone's close** — the owner's judgment that its exit
-condition is met, read off the receipts, as ROADMAP.md's standing rule already defines closure; the
-release cut carrying that milestone's work is how the close is **stamped**, not a second and
-separate trigger. It is written as a dated conditional precisely so that nobody has to remember to
-arm it: a reader at the close needs no context beyond this paragraph. **The milestone named here
-and ROADMAP.md's closure rule are this band's arming record in the superheroes project itself** —
-a consuming project inherits the portable **driver-or-park** valve from the sentences above, not an
-obligation to evaluate this repository's milestone state. For a consuming project the skip rule
-above binds now and continuously; the dated flip conditional is this band's own arming record,
-not a second regime they must evaluate.
+**The valve.** When the driver cannot continue, the only valve is driver-or-park — never
+driver-or-improvise: park citing the blocker, and never hand-drive the remainder of a loop the
+driver started.
 
-**No mechanical enforcement gate ships for any of this:** the skip rule, the parity rule, and the
-flip are vet doctrine, and **the advisor at vet is the enforcement**. A guard that parsed PR bodies
-to grade a skip is out of class under *Mechanical guards over prose*, below.
+**The owner-directed review stays the owner's.** An explicit owner-directed review is a valid
+ending of a full-lane build. It is recorded as a cited skip of the driver loop, with the owner's
+direction as the citation, and it owes the review record like any other review.
+
+**No mechanical enforcement gate ships for any of this.** The record rule, the skip rule and the
+valve are doctrine, and the advisor's vet reads the record. A guard that parsed PR bodies to grade
+a skip is out of class under *Mechanical guards over prose*, below.
 
 ## Review bars and recorded residuals
 
@@ -363,7 +343,7 @@ keeps meaning: you name what you are shipping with, not pretend the bar was met 
 
 After two reworks of the same surface in one build, **a third rework of the same surface is the tripwire**: that third rework is not dispatched, so the fourth patch on that surface never happens.
 The count is of reworks the orchestrator dispatches against a surface. A mechanical fix the
-certified loop applies inside its own rounds is not a rework for this count — the loop's round cap
+review loop applies inside its own rounds is not a rework for this count — the loop's round cap
 bounds those — so a loop re-dispatching a mechanical fix adds nothing to the count, and a rework
 the orchestrator dispatches against the surface adds one.
 What the tripwire demands is that the design signal is named, not that the build goes idle. On a
@@ -394,11 +374,11 @@ the valve governs only what the **advisor** does with that signal once it arrive
 ### Standing authorization — venue-1 folds
 
 Post-review folds on an open PR need no per-fold owner word when they are micro-sized at roughly 100
-non-test lines or fewer, run under the full micro floor of a cross-vendor seat, the planted-defect
-control probe, and the salvage valve, and are disclosed in the PR body and the owner half; the owner's
+non-test lines or fewer, run under the full micro floor of a cross-vendor seat whose reading the review
+record shows, and the salvage valve, and are disclosed in the PR body and the owner half; the owner's
 click remains the gate. The four bounds, checkable one at a time: **micro-sized** at roughly 100
-non-test lines or fewer; the **full micro floor** — a cross-vendor seat, the planted-defect control
-probe, the salvage valve; **disclosure** in the PR body **and** the owner half; and the **owner's click**
+non-test lines or fewer; the **full micro floor** — a cross-vendor seat whose reading the review record
+shows, the salvage valve; **disclosure** in the PR body **and** the owner half; and the **owner's click**
 remaining the gate. A residual larger than that bound routes to one bounded builder re-dispatch under
 the lane's existing route, and the standalone micro lane's per-change owner word is explicitly unchanged.
 The preservation is checkable in place at `### Micro — owner authorization` above.
@@ -473,7 +453,7 @@ verification diet, for its whole life, is three things and nothing else: its bir
 the sampled probes a vet runs, and its entry on the [keep-or-retire list](rubric/glossary.md#keep-or-retire-list).
 
 Evidence that a single act of work actually ran, riding in-band with that act, is part of the
-work and is fine. A control probe inside one review and CI running one pull request are the
+work and is fine. A reviewer's own run record inside one review and CI running one pull request are the
 examples. What this rule forbids is standing machinery whose **subject** is other machinery: a
 watcher, a census, or a gate that exists to check a guard.
 

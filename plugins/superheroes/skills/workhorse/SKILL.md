@@ -72,10 +72,9 @@ Everything below that names the light lane is an exception. Otherwise the build 
   panel loop. You typed the change, so you are the maker, and the reviewer sits outside your maker
   family. Only the owner may choose a disclosed same-family reviewer at kickoff, when no
   cross-vendor reviewer is available. A mid-run forfeit follows the rubric's three-case rule.
-- **Every light-lane review carries the mandatory planted-defect control probe** from
-  `review-discipline.md`, and the probe must come back engaged. Not engaged means that review did
-  not happen, so re-dispatch once, then resolve upward to the full lane or park. It is never a
-  pass, and exit zero is not evidence of engagement.
+- **Every light-lane review answers to the review record's reading rule** in `review-discipline.md`
+  (§ What never changes in any lane), which owns the criterion, the retry, and what a missing
+  reading means.
 - **The investigation-record floor for empty external seats applies to every external review
   seat**, single-seat lanes included (`review-discipline.md`).
 - **Preflight is kept** (§3). Without a brief post, the first `gh` write may be the PR itself, so a
@@ -433,7 +432,7 @@ way to recover the maker, and the review seat map's author-family exclusion need
 and the sequencing you assumed are yours. When the world moves under a live order, amend the order.
 An implementer that parks on a stale premise did the right thing.
 
-**Stop before a third rework of one surface.** Do not dispatch a third rework of the same surface in one build; mechanical fixes the certified loop applies inside its own rounds do not count. On a lane you can affirmatively call converged, refuse the fourth patch, name the seam problem, state in the handback that the tripwire fired, and ship the remaining minors as disclosed follow-ups. Otherwise park, and only the owner or the advisor lifts that park.
+**Stop before a third rework of one surface.** Do not dispatch a third rework of the same surface in one build; mechanical fixes the review loop applies inside its own rounds do not count. On a lane you can affirmatively call converged, refuse the fourth patch, name the seam problem, state in the handback that the tripwire fired, and ship the remaining minors as disclosed follow-ups. Otherwise park, and only the owner or the advisor lifts that park.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § The third-rework tripwire when a surface reaches its third rework.**
 
@@ -595,8 +594,8 @@ loop reviews, routes each fix back as an implementer work order, and re-reviews,
 finding remains or you honestly park on an open blocker. Round scoping and cap economics are
 `review-code`'s own contract, and §12's delta grading does not apply here.
 
-**Light lane: one independent cross-vendor reviewer** outside the maker family, carrying the engaged
-control probe, as Build lanes says. Review fixes stay orchestrator-typed, and work that needs an
+**Light lane: one independent cross-vendor reviewer** outside the maker family, with the review
+record showing its reading, as Build lanes says. Review fixes stay orchestrator-typed, and work that needs an
 implementer dispatch is an escalation. An escalated build records every maker family in dispatch
 provenance. Panel composition excludes only one author family, so any additional maker family is a
 disclosed independence limitation in the PR body. Prefer keeping an escalated light build to one
@@ -673,10 +672,10 @@ the section.
 The build record carries a **dispatch provenance** section that lists each dispatch (the brief-check reviewer, every implementer, every `check-runner`, every `order-linter` seat, the pilot, the review-code seats) with the engine and model it ran on, each validated against the registry allowlist. It also carries the
 keyed **Follow-ups for the advisor** list with its marker, the size tripwire row §4's size step
 filled, and the bite-proof records. The PR body carries a DoD disposition table (the
-`superheroes:dod-table` marker), one row per Definition-of-Done bullet.
+`superheroes:dod-table` marker), one row per Definition-of-Done bullet. On the light lane, once this PR exists, write the review record per `skills/review-code/reference/review-record.md` and put its URL in the build record. A light-lane review that ends in a park while this PR is open writes the record too.
 
 **Never auto-close an issue that must stay open.** GitHub's closing-keyword parser is negation-blind,
-so use a non-closing verb ("addresses", "part of", "relates to") for an issue this PR must not close.
+so use a non-closing verb ("addresses", "part of", "relates to") for an issue this PR must not close. **A full-lane build hands back only with its review record written.** Without one, park and name the review that is missing (`rubric/review-discipline.md` § The driver mandate — the review record).
 **Verify the remote head before you declare ready.** A commit that lives only in your local worktree
 is not a receipt the advisor can see. **Keep the PR body current**, edited in place. **You never
 merge.** Hand back to the owner.

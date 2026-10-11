@@ -316,12 +316,12 @@ def test_prior_comments_on_non_fresh_state_refused_when_canonical_absent(tmp_pat
 
 
 def test_prior_comments_on_unreadable_state_refused(tmp_path, capsys):
-    # axis: load_state refusal (v1 state) is not fresh — same loud refusal, no materialization
+    # axis: load_state refusal (v1 state of the current generation) is not fresh — same loud refusal, no materialization
     from test_round_driver import _guard_argv
 
     session_dir = str(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
-        json.dump({"schemaVersion": 1, "rounds": {}}, fh)
+        json.dump({"schemaVersion": 1, "rounds": {}, "sessionGeneration": RD.SESSION_GENERATION}, fh)
     prior_path = str(tmp_path / "prior.json")
     with open(prior_path, "w", encoding="utf-8") as fh:
         json.dump([], fh)

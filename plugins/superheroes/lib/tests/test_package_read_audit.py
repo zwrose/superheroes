@@ -751,7 +751,7 @@ def test_nonconformity_element_missing_parts(tmp_path):
     )
 
 
-def test_nonconformity_element_missing_control_probe(tmp_path):
+def test_round_without_control_probe_is_not_a_nonconformity(tmp_path):
     trail, _ = _open_default(tmp_path)
     _hand_append_record(trail, {
         "kind": "round",
@@ -759,21 +759,55 @@ def test_nonconformity_element_missing_control_probe(tmp_path):
         "round": 1,
         "lenses": [pra.LENS_COLLISIONS],
         "parts": [{"part": "slice-a", "status": "unreviewed"}],
-        "controlProbe": None,
         "findings": [],
         "declinedExtension": [],
         "mechanicalOnly": False,
     })
     code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_NONCONFORMING
     findings = json.loads(out.strip())["findings"]
-    kinds = {item["kind"] for item in findings}
-    assert pra.NONCONFORMITY_ELEMENT_MISSING in kinds
-    assert any(
-        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
-        and "controlProbe" in item["detail"]
+    assert not any(
+        "controlProbe" in item["detail"] or item.get("path") == "controlProbe"
         for item in findings
     )
+
+
+def test_record_round_without_control_probe_conforms(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    code, out, _err = _run_cli(
+        "record-round",
+        "--trail", str(trail),
+        "--invocation", "inv-1",
+        "--round", "1",
+        "--lens", pra.LENS_COLLISIONS,
+        "--part", "slice-a:unreviewed",
+    )
+    assert code == pra.EXIT_RECORDED, out
+    payload = json.loads(out.strip())
+    assert "controlProbe" not in payload["record"]
+    assert "controlProbe" not in trail.read_text(encoding="utf-8")
+    _record_verification(trail, findings=[], sync_checks=["c1:pass", "c2:pass"])
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING, out
+    payload = json.loads(out.strip())
+    assert payload["result"] == pra.RESULT_CONFORMING
+    assert payload["findings"] == []
+
+
+@pytest.mark.parametrize("slug", [
+    "cloud-builders-66a2e8",
+    "reset-landing-2026-09-14",
+    "risk-calibrated-review-that-learns-dec0af",
+    "spec-alignment-landing-2026-10-05",
+])
+def test_committed_trail_still_validates(slug):
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))
+    trail = os.path.join(repo_root, "docs", "superheroes", slug, "package-read-audit.md")
+    code, out, _err = _run_cli("check", "--trail", trail)
+    assert code == pra.EXIT_CONFORMING, out
+    payload = json.loads(out.strip())
+    assert payload["result"] == pra.RESULT_CONFORMING
+    assert payload["ok"] is True
+    assert payload["findings"] == []
 
 
 def test_nonconformity_finding_unverified(tmp_path):

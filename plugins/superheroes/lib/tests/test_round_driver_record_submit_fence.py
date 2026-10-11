@@ -88,10 +88,8 @@ _EXPECTED_CMD_NAMES = (
     "cmd_attest",
     "cmd_checkpoint",
     "cmd_next",
-    "cmd_re_emit",  # no durable seat records: new-attempt orders + journal
     "cmd_record_missing",
     "cmd_record_result",
-    "cmd_relocate",  # no durable seat records: rewrites checkout keys + journal
     "cmd_rule",  # session state + journal; no durable seat records
     "cmd_submit",
 )

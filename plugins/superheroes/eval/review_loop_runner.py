@@ -27,7 +27,6 @@ LIB = EVAL_DIR.parent / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import canary_outcome  # noqa: E402
 import circuit_breaker as CB  # noqa: E402
 import coverage_decisions as cov  # noqa: E402
 import model_registry  # noqa: E402
@@ -36,32 +35,6 @@ import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
 import seat_map as SM  # noqa: E402
-
-
-def fabricate_canary_probes_for(seat_map):
-    """Fabricate always-engaged canary probes for eval/test fixtures only.
-
-    NOT evidence of cross-vendor liveness — real engagement comes from
-    ``seat_canary.run_canary`` dispatching through the actual seat path.
-    """
-    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
-    if not isinstance(seats, dict):
-        return []
-    vendors = set()
-    for cell in seats.values():
-        if not isinstance(cell, dict):
-            continue
-        vendor = cell.get("vendor")
-        if isinstance(vendor, str) and vendor and vendor != "claude":
-            vendors.add(vendor)
-    return [{
-        "engine": v,
-        "outcome": canary_outcome.OUTCOME_OK,
-        "engaged": True,
-        "detectedPlant": True,
-        "evidence": {},
-        "detail": "",
-    } for v in sorted(vendors)]
 
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
@@ -120,17 +93,6 @@ _TERMINAL_MAP = {
     "capped-with-open-critical": "halted",
     "cannot-certify": "halted",
 }
-
-
-def _run_loop_return_kind(result):
-    """Distinguish a certification refusal from a driver receipt — never read refusal through receipt keys."""
-    if not isinstance(result, dict):
-        return "unexpected", result
-    if "class" in result and "verdict" not in result:
-        return "refusal", result
-    if "verdict" in result:
-        return "receipt", result
-    return "unexpected", result
 
 # INV-15: the harness's simulated maker vendor must not be seated on its review panel —
 # choose a vendor whose family is absent from the live pool so barring it yields a mixed panel.
@@ -296,16 +258,15 @@ def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
     )
 
 
-def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False,
-                supply_seat_map=True, supply_canary_probes=True):
+def run_fixture(fixture, fail_telemetry=False, run_dir=None,
+                supply_seat_map=True):
     """Drive ``round_driver.run_loop`` for one fixture; return the observational JSON dict.
 
-    ``fixture`` may be a path (str/Path) or an already-loaded dict. ``corrupt_records`` writes a
-    mangled round-records.json so the driver's fail-closed resume seam parks (cannot-certify).
+    ``fixture`` may be a path (str/Path) or an already-loaded dict.
 
-    ``supply_seat_map`` / ``supply_canary_probes`` default True so every existing caller and golden
-    still receives the verified-clean seat map and fabricated engaged probes. Set either False to
-    exercise the driver's fail-closed disclosures without pre-satisfying that gate.
+    ``supply_seat_map`` defaults True so every existing caller and golden still receives the
+    verified-clean seat map. Set it False to exercise the driver's fail-closed disclosures without
+    pre-satisfying that gate.
     """
     if isinstance(fixture, (str, Path)):
         fixture_path = Path(fixture)
@@ -323,18 +284,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         run_dir = tempfile.mkdtemp(prefix="%s-" % name)
 
     records_path = os.path.join(run_dir, "round-records.json")
-    coverage_path = os.path.join(run_dir, "review-coverage-decisions.json")
-    if fixture.get("seedRoundRecords") is not None:
-        _write_json(records_path, fixture["seedRoundRecords"])
-    else:
-        _write_json(records_path, [])
-    if fixture.get("seedCoverageDecisions") is not None:
-        _write_json(coverage_path, fixture["seedCoverageDecisions"])
-    else:
-        _write_json(coverage_path, [])
-    if corrupt_records:
-        with open(records_path, "w", encoding="utf-8") as fh:
-            fh.write("{corrupt json — not a records array")
+    _write_json(records_path, [])
 
     # Post-round-1 event translation (#507 WO-D §B). The driver's schedule is delta rounds (a
     # scoped-finder re-scan) plus re-armed confirmation PANELS — it does NOT re-run every named
@@ -364,10 +314,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     coverage_decision_ids = []
     fix_contexts = []
     fix_results = []
-    # Live coverage decisions accumulated during the run (plus seeds).
+    # Live coverage decisions accumulated during the run.
     live_coverage = []
-    if fixture.get("seedCoverageDecisions"):
-        live_coverage.extend(fixture["seedCoverageDecisions"])
 
     # Track last panel dim→findings for round-record persistence.
     last_panel = {"dims": {}, "round": None, "kind": "baseline"}
@@ -648,14 +596,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     RD._fold_panel = _fold_panel_persist
     try:
         io = {"stall_menu": lambda payload: "hold"}
-        eval_seat_map = None
         fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
         _validate_fixer_vendor_override(fixer_vendor)
         if supply_seat_map:
-            eval_seat_map = _eval_clean_seat_map(fixer_vendor)
-            io["seatMap"] = eval_seat_map
-        if supply_canary_probes and eval_seat_map is not None:
-            io["canaryResult"] = fabricate_canary_probes_for(eval_seat_map)
+            io["seatMap"] = _eval_clean_seat_map(fixer_vendor)
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,
@@ -675,47 +619,19 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "vendors": list(_EVAL_LIVE_POOL),
             "fixerVendor": fixer_vendor,
             "verifyCommand": "none",
-            # The driver reads these ONCE at new_state to resume from the durable seeds and to seed
-            # the challenged-coverage breaker's accumulated decisions (#507 WO-D resume/records seam).
-            "recordsPath": records_path,
-            # This harness owns round-records.json via _fold_panel_persist — not the driver producer.
-            "persistRecords": False,
-            "coveragePath": coverage_path,
             "baseGuard": RD.BASE_GUARD_CHECKED,
         }
         receipt = RD.run_loop(seams, config)
     finally:
         RD._fold_panel = _orig_fold_panel
 
-    return_kind, driver_result = _run_loop_return_kind(receipt)
-    certification_refusal = None
-    if return_kind == "refusal":
-        loop_terminal = driver_result.get("loopTerminal")
-        if loop_terminal in _TERMINAL_MAP:
-            terminal = _TERMINAL_MAP[loop_terminal]
-        elif loop_terminal is not None:
-            terminal = loop_terminal
-        else:
-            terminal = "unexpected-driver-return"
-        artifact = driver_result.get("artifact")
-        if isinstance(artifact, str) and ("/" in artifact or os.sep in artifact):
-            artifact = os.path.basename(artifact)
-        certification_refusal = {
-            "class": driver_result.get("class"),
-            "artifact": artifact,
-            "detail": driver_result.get("detail"),
-            "bindingFailure": driver_result.get("bindingFailure"),
-        }
-    elif return_kind == "receipt":
-        driver_terminal = driver_result.get("verdict")
-        if driver_terminal is None:
-            terminal = "unexpected-driver-return"
-        elif driver_terminal in _TERMINAL_MAP:
-            terminal = _TERMINAL_MAP[driver_terminal]
-        else:
-            terminal = driver_terminal
-    else:
+    driver_terminal = receipt.get("verdict") if isinstance(receipt, dict) else None
+    if driver_terminal is None:
         terminal = "unexpected-driver-return"
+    elif driver_terminal in _TERMINAL_MAP:
+        terminal = _TERMINAL_MAP[driver_terminal]
+    else:
+        terminal = driver_terminal
 
     round_count = max((c["round"] for c in seen), default=0)
     # Expected leaves: prefer the JS finalize schedule shape when every roster seat ran
@@ -775,12 +691,6 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     else:
         token_total = fallback_total
 
-    driver_receipt = receipt
-    if return_kind == "refusal":
-        driver_receipt = dict(driver_result)
-        driver_receipt["certificationShape"] = driver_result.get("loopCertificationShape")
-        driver_receipt["rounds"] = driver_result.get("loopRounds") or []
-
     observed = {
         "terminal": terminal,
         "roundCount": round_count,
@@ -791,11 +701,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         "seen": seen,
         "fixContexts": fix_contexts,
         "fixResults": fix_results,
-        "_driverReceipt": driver_receipt,
+        "_driverReceipt": receipt,
         "_runDir": run_dir if not own_dir else None,
     }
-    if certification_refusal is not None:
-        observed["certificationRefusal"] = certification_refusal
     return observed
 
 
