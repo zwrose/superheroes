@@ -108,13 +108,13 @@ once C1, C2 and C3 have handed back; C5 once C1 and C2 have; C6 once C1 and C3 h
 #1708's #1716 and #1718 are on main. Wave 2: C7, once C5 and C6 have handed back. The stack merges with
 one `gh stack merge` when every layer is vetted.
 
-**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 7 · C5 15 · C6 13 · C7 14 ·
+**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 15 · C6 13 · C7 14 ·
 C8 9 · closure validation run 5. Total 73 rows: 68 bullet rows (66 bullets, two of them split in
 two) and 5 Definition of done rows.
 
 | Ref | Bullet | Kind | Criterion (opening words) | Owner |
 | --- | --- | --- | --- | --- |
-| FR-1 | 1 | GWT | Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message… | **C4** |
+| FR-1 | 1 | GWT | Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message… | **C4b** |
 | FR-1 | 2 | rule | The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on… | **C4** |
 | FR-2 | 1 | rule | The setup text holds no reviewer pass and no other secret. | **C3** |
 | FR-3 | 1 | rule | The setup message carries all five facts in the board's wording. | **C4** |
@@ -195,3 +195,9 @@ once, the two split bullets each appear as exactly their two declared parts, no 
 the spec lacks, each Definition of done bullet appears once, and every row names exactly one owner.
 
 **Coverage re-check after spec amendments 1 and 2 (advisor, 2026-10-11; owner rulings "25 c" and "27 a").** FR-1's statement and both acceptances changed wording and gained two hand steps, but no acceptance criterion was added or removed: the map still holds its bullets and rows, FR-1's rows stay C4's, and every criterion is still owned exactly once. Register R3 now records how the setup learns the environment as the owner's ruling, not a C2 decide-by. Package read invocation 2 (package-read-audit.md) re-read the touched parts and verified both fixes.
+
+**Coverage re-check after spec amendments 4 and 5 (advisor, 2026-10-11; owner rulings "35 a" and "33 a").** Amendment 4 rewrote FR-1's statement, its hand-step list and its rule (the owner copies the environment's id; the default-environment step is retired); amendment 5 rewrote the messaging assumption (a relay session on the builders' account). No acceptance criterion was added or removed: FR-1's rows stay C4's, FR-22's stay C7's, and every criterion is still owned exactly once. Register R3 records the new source of the environment's id; R6 gains the relay, with how it is started, kept alive and checked as decide-by C7. The touched parts go through package read invocation 4 (package-read-audit.md).
+
+**Coverage re-check after the C4 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C4 split into C4 (the setup sitting's library, #1745) and C4b (its skill text, #1771). FR-1's Given-When-Then acceptance (the sitting as the owner meets it: the hand steps, the sign-in walked, the id asked once) moved to C4b, whose recorded setup sitting grades it; C4 keeps FR-1's rule, FR-3 to FR-6 and UFR-1. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C4b in the stack's order; R8, R9 and R11 name it as a consumer.
+
+**Coverage re-check after ruling 37 b (advisor, 2026-10-11).** Amendment 4 now records rulings "35 a" and "37 b" together: the owner picks the environment in Claude Code's picker and the plugin reads its id. FR-1's statement, its Given-When-Then (C4b) and its rule (C4) changed wording; no acceptance criterion was added or removed, and every criterion is still owned exactly once. Register R3 records the new source and names C4b as a consumer (C4b holds the reader).

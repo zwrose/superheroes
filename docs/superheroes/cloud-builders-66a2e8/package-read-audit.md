@@ -624,3 +624,253 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "substantive amendments 4 (35 a: the owner copies the environment's id) and 5 (33 a: relay on the builders' account): touched-parts re-read before injection into C4 and C7",
+ "ceiling": 2,
+ "invocation": "inv4",
+ "kind": "invocation",
+ "measurables": {
+  "children": 2,
+  "registerEntries": 2
+ },
+ "override": null,
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv4",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "C1b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C2",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "spec",
+   "status": "reviewed"
+  },
+  {
+   "part": "board",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [],
+ "invocation": "inv4",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C4",
+   "result": "pass"
+  },
+  {
+   "child": "C7",
+   "result": "pass"
+  }
+ ]
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "ruling 37 b restates substantive amendment 4 (the owner picks the environment in Claude Code's picker; the plugin reads the id) and the C4/C4b split: touched-parts re-read before injection",
+ "ceiling": 2,
+ "invocation": "inv5",
+ "kind": "invocation",
+ "measurables": {
+  "children": 2,
+  "registerEntries": 2
+ },
+ "override": null,
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "collisions"
+  },
+  {
+   "finding": "code-002",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "code-003",
+   "lens": "coverage-exactly-once"
+  }
+ ],
+ "invocation": "inv5",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "spec",
+   "status": "reviewed"
+  },
+  {
+   "part": "board",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv5",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "R11 now assigns the set-up path section and the showrunner pointer to C4b; epic quote regenerated; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C4 live-run DoD names the picked id passed to the start function (issue #1745 and C4.md); round 2 clean",
+   "finding": "code-002",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C4 dry-run DoD claims FR-1's rule and names C4b as owner of the Given-When-Then; round 2 clean",
+   "finding": "code-003",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv5",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C4",
+   "result": "pass"
+  },
+  {
+   "child": "C4b",
+   "result": "pass"
+  }
+ ]
+}
+```
