@@ -76,6 +76,53 @@ commit. It records the path on the `reserved` record and starts the session insi
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
 
+**Cloud launch.** A launch can start the builder in a
+[cloud session](../../../rubric/glossary.md#cloud-builder). `launch` and `compose` take
+`--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. Without `--place`, or with
+`--place local`, the launch is a local launch. A cloud launch runs every gate a local launch runs:
+preflight, premise, the stack and dependency gates, compose, and reservation. It then runs the
+platform's command once, reads the session's identity from what the command prints, writes the
+lane's `started` record, and returns once the session exists. It does not wait for the build.
+
+- It provisions no worktree, leaves no process on the owner's machine, and pushes no branch.
+- The session starts under the launching account's config dir, at the builder tier and effort the
+  launch resolved.
+- The session starts from the commit of the checkout the launcher ran in. When the checkout's
+  remote-tracking branches hold no branch that contains that commit, the launch refuses with
+  `launch-cloud-head-not-on-remote`. The launcher never pushes to make it so. The builder branches
+  from the base its order names.
+- The launcher runs the command from its checkout, which must be a folder the platform's command line
+  already trusts. In an untrusted folder the command waits on its trust question until the launch's
+  time limit, and the launch reads `cloud-session-unconfirmed`.
+- The launch prompt is the composed order of a local launch, with the standing rulings verbatim, plus
+  two lines between the issue pointer and the rulings: `Place: cloud session` and
+  `Advisor plugin version: <version>`.
+- The session is named `issue-<issue number>-<the launch id without its launch- prefix>`. The host
+  lists it under that name.
+- These refuse before anything is written to the ledger, each with its own reason: a slot, a
+  generation, or a boundary given with `--place cloud` (`launch-cloud-with-slot`); a premise asking
+  for the iPhone check (`launch-cloud-with-iphone-check`); an environment id that is not `env_`
+  followed by letters and digits (`launch-cloud-environment-invalid`); an issue that is not a whole
+  number above zero (`launch-cloud-issue-invalid`); a plugin version the launcher cannot read from
+  its own manifest (`launch-cloud-plugin-version-unreadable`).
+- When the command could not be started at all, the launch refuses and ends the lane, as a local
+  launch does when it cannot spawn.
+- Once the command has run, the launcher never ends the lane. The launch returns one of three
+  results.
+  - Success. The result and the lane's `started` record carry `cloudSessionName`, `cloudSessionId`,
+    and, when the command printed one, `cloudSessionUrl`.
+  - `cloud-session-unconfirmed`. The launcher could not read a creation receipt for the session it
+    asked for, because a time limit was reached, the command exited non-zero, or its output names
+    some other session. A session may exist. The lane has a `started` record that carries
+    `cloudSessionUnconfirmed` in place of the id, so `record-outcome` works on it. The lane stays
+    live, so the issue cannot be launched a second time. The steps to take are in **Cloud lanes**
+    below.
+  - `cloud-started-append-failed`. A session exists and is working, and its `started` record could
+    not be written. The result names the session (`cloudSessionId`, `cloudSessionName`) and why the
+    write failed (`startedAppend`). The lane stays live on its `reserved` record alone, and
+    `record-outcome` refuses it (`outcome-without-started`). Keep the session's identity from the
+    result and reach the session by it.
+
 **Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
 `reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
 the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`) and its URL
@@ -146,6 +193,8 @@ never resumes anything on its own. You act on what it reports.
 sweep reports it `nonterminal` for want of a heartbeat. The watch reads that activity and raises
 `lane-stale` when it goes quiet; the procedure, and what to check before treating that as a wedge, is
 in [Before treating `lane-stale` as a wedge](wave-watch.md#before-treating-lane-stale-as-a-wedge).
+`canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript
+for it to read.
 
 **Wave watch.** Arm one harness **background task per batch** — a `loop` invocation that re-arms
 internally — instead of hand-rolling a per-session watch loop. There is no daemon to orphan. The
