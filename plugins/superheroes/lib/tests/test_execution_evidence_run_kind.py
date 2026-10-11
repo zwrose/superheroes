@@ -1,4 +1,4 @@
-"""Layer 4c certification finish — run-kind (#1272 WO-A)."""
+"""The run kind on execution evidence."""
 import round_records as RR
 import session_contract
 

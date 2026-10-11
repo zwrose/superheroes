@@ -39,15 +39,15 @@ named exception in `review-discipline.md`). When recommending micro, **say what 
 why you believe it will not, before the owner decides** — most of all when asking for that waiver.
 
 **Re-review to convergence** (as bounded in `review-discipline.md`): after you resolve reviewer
-findings, the **reviewer outside the maker's family re-reviews the final head**, carrying the mandatory control
-probe on each re-review, until no blocking findings remain — or the change **parks**. When the micro review ends, whether it converges or parks, end it by writing the review record on the micro PR per `skills/review-code/reference/review-record.md`.
+findings, the **reviewer outside the maker's family re-reviews the final head**, with the review record showing its
+reading on each re-review, until no blocking findings remain — or the change **parks**. When the micro review ends, whether it converges or parks, end it by writing the review record on the micro PR per `skills/review-code/reference/review-record.md`.
 
 **Resolving upward** stops the in-session micro change — **file the issue, disclose the
 already-typed work and its maker family**, then:
 - **Routine escalation** (the change outgrew micro): **route it as a normal build** and **call
   the lane as usual**; if that is not possible, **park**.
 - **Forced upward resolution** — an unavailable reviewer outside the maker's family at kickoff, a mid-run
-  forfeit, or a planted-defect control probe still **not engaged** after one re-dispatch:
+  forfeit, or a review record that still does not show the reviewer's reading after one more run:
   route to the **full lane specifically**, or **park** — **never light**, because light is
   also a single-reviewer lane and would inherit the same unverified-review problem.
 
@@ -328,10 +328,9 @@ above).
    bounded in `review-discipline.md`). **Mid-run forfeit** follows the rubric's three-case rule
    (kickoff unavailability, mid-run forfeit with disclosed stand-in on the host model on **light**
    only, **micro** resolving upward to the full lane or parking — silence is not forfeit; a terminal
-   forfeit result is). That seat carries a **mandatory planted-defect control probe on every such
-   review**; the probe must come back **engaged** — not engaged means that review did not happen
-   (re-dispatch once, then resolve upward to the full lane or park; never a pass; exit zero is not
-   evidence of engagement). The investigation-record floor applies automatically to **every
+   forfeit result is). The single reviewer's review record answers to the reading rule in
+   `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
+   and what a missing reading means. The investigation-record floor applies automatically to **every
    external review seat**, single-seat lanes included (see `review-discipline.md`).
 
    **Done when:** every issue you routed records exactly one route and its anchor with your

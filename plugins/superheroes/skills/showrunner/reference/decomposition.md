@@ -185,8 +185,8 @@ Two things this file does state:
   package — so the author's model family is excluded from every seat.
 - Reviewer unavailability or mid-run loss follows that same rubric's rules.
 
-Every external seat carries the **planted-defect control probe** that rubric already mandates, and
-the round's audit record carries the probe's engagement read.
+Whether an external seat read the package is shown by that seat's own run record; the round's audit
+record carries no separate probe read.
 
 ### The five lenses
 

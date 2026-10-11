@@ -1,4 +1,4 @@
-"""#1272 layer 3B: the write-run phase rule has one definition."""
+"""The write-run phase rule has one definition."""
 import importlib.util
 import inspect
 import os
