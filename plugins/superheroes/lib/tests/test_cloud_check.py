@@ -8,6 +8,7 @@ cloud session, runs the reviewer tool or touches the network.
 """
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -23,7 +24,9 @@ import cloud_pass  # noqa: E402
 import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 import core_md  # noqa: E402
+import engine_adapter  # noqa: E402
 import mode_registry  # noqa: E402
+import model_registry  # noqa: E402
 import project_config  # noqa: E402
 from test_cloud_setup_text import _put, _world  # noqa: E402
 
@@ -864,3 +867,272 @@ def test_cli_other_verbs_exit_codes(tmp_path, monkeypatch, capsys, composing):
     assert json.loads(capsys.readouterr().out)["action"] == "refused"
     assert CC.main(["setup-text", "--cwd", w.cwd, "--root", w.root]) == 1
     assert json.loads(capsys.readouterr().out)["action"] == "refused"
+
+
+# --- start ---------------------------------------------------------------------------------
+
+def _receipt(name):
+    return ("Created cloud session: %s\n"
+            "View: https://claude.ai/code/session_01ABCdef?from=cli\n"
+            "Resume with: claude --teleport session_01ABCdef\n" % name)
+
+
+class Spawner:
+    """A fake spawn function: records every call and answers with canned output."""
+
+    def __init__(self, output=None, raises=None, timed_out=False):
+        self.calls = []
+        self.output = output
+        self.raises = raises
+        self.timed_out = timed_out
+
+    def __call__(self, argv, cwd, log_path, child_env, timeout):
+        self.calls.append({"argv": list(argv), "cwd": cwd, "log_path": log_path,
+                           "env": child_env, "timeout": timeout})
+        if self.raises is not None:
+            raise self.raises
+        name = argv[argv.index("-n") + 1]
+        output = _receipt(name) if self.output is None else self.output
+        return {"pid": 1, "rc": 0, "timedOut": self.timed_out, "output": output}
+
+
+def _start(local, spawner, **kw):
+    args = dict(environment=ENV_ID, env=local.env, spawn_fn=spawner, nonce=NONCE)
+    args.update(kw)
+    return CC.start(local.cwd, **args)
+
+
+def _prompt(spawner):
+    argv = spawner.calls[0]["argv"]
+    return argv[argv.index("--cloud") + 1]
+
+
+def test_start_names_the_environment_in_the_launch(tmp_path):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    result = _start(local, spawner)
+    assert result["action"] == "started" and len(spawner.calls) == 1
+    argv = spawner.calls[0]["argv"]
+    cell = model_registry.resolve_dispatch("mechanical", "claude", None)
+    assert argv == engine_adapter.claude_cloud_builder_argv(
+        cell["dispatch_token"], cell["effort"], _prompt(spawner), ENV_ID,
+        "cloud-check-" + NONCE[:8])["argv"]
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings == {"remote": {"defaultEnvironmentId": ENV_ID}}
+    assert result["environment"] == ENV_ID and OTHER_ENV_ID not in " ".join(argv)
+
+
+@pytest.mark.parametrize("bad", [None, "", "env_", "env-01ABC", "env_01 ABC", "xenv_01ABC",
+                                 "env_01ABC\n", 42, ["env_01ABC"], b"env_01ABC"])
+def test_start_refuses_without_an_environment_id(tmp_path, bad):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    result = _start(local, spawner, environment=bad)
+    assert result["action"] == "refused" and result["reason"] == "check-environment-invalid"
+    assert result["message"] == ("I need the cloud environment's id before I can run the check. "
+                                 "Copy it from the environment's page and paste it here.")
+    assert spawner.calls == []
+
+
+def test_start_refuses_a_bad_issue_or_nonce_before_spawning(tmp_path):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    for bad in (0, -3, "0", "12a", "", True, 1.5, "#12"):
+        assert _start(local, spawner, issue=bad)["reason"] == "check-issue-invalid"
+    for bad in ("short", "has space1234", "x" * 65, 12345678, ""):
+        assert _start(local, spawner, nonce=bad)["reason"] == "check-nonce-invalid"
+    assert spawner.calls == []
+
+
+def test_start_refuses_when_the_model_cannot_be_resolved_or_the_argv_is_refused(
+        tmp_path, monkeypatch):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    with monkeypatch.context() as patch:
+        patch.setattr(model_registry, "resolve_dispatch",
+                      lambda *a: {"ok": False, "detail": "no seat"})
+        assert _start(local, spawner)["reason"] == "check-model-unresolved"
+    monkeypatch.setattr(engine_adapter, "claude_cloud_builder_argv",
+                        lambda *a: {"argv": [], "reason": "cloud-session-name-invalid"})
+    result = _start(local, spawner)
+    assert result["action"] == "refused" and result["reason"] == "check-launch-refused"
+    assert result["detail"] == "cloud-session-name-invalid"
+    assert spawner.calls == []
+
+
+def test_start_reports_a_launch_that_could_not_run(tmp_path):
+    local = _build(tmp_path)
+    spawner = Spawner(raises=OSError("no terminal"))
+    result = _start(local, spawner)
+    assert result["action"] == "refused" and result["reason"] == "check-session-not-started"
+    assert result["message"] == ("The check session did not start: the cloud launch command could "
+                                 "not be run.")
+    assert len(spawner.calls) == 1
+
+
+@pytest.mark.parametrize("output,timed_out", [
+    ("", False),
+    (_receipt("cloud-check-zzzzzzzz"), False),
+    ("Starting...\n", True),
+])
+def test_start_never_reports_started_without_a_receipt(tmp_path, output, timed_out):
+    local = _build(tmp_path)
+    spawner = Spawner(output=output, timed_out=timed_out)
+    result = _start(local, spawner)
+    assert result["action"] == "refused" and result["reason"] == "check-session-unconfirmed"
+    assert result["sessionName"] == "cloud-check-abcd1234"
+    assert result["message"] == (
+        "I could not confirm that the check session started. Look for a session named "
+        "cloud-check-abcd1234 in your session list; say \"check again\" and I'll start a new "
+        "one.")
+    assert len(spawner.calls) == 1
+
+
+def test_start_reports_started_when_a_timed_out_launch_printed_its_receipt(tmp_path):
+    local = _build(tmp_path)
+    spawner = Spawner(output="\x1b[2K" + _receipt("cloud-check-abcd1234"), timed_out=True)
+    result = _start(local, spawner, issue="1745")
+    assert result == {"action": "started", "reason": None, "environment": ENV_ID, "nonce": NONCE,
+                      "sessionName": "cloud-check-abcd1234", "sessionId": "session_01ABCdef",
+                      "sessionUrl": "https://claude.ai/code/session_01ABCdef", "issue": 1745,
+                      "message": "The check session is running. I'll read its result in about a "
+                                 "minute."}
+
+
+def test_start_spawns_in_the_repository_root_with_a_copy_of_the_environment(tmp_path):
+    local = _build(tmp_path)
+    sub = os.path.join(local.cwd, "nested")
+    os.makedirs(sub)
+    env = dict(local.env, SOME_VALUE="kept")
+    spawner = Spawner()
+    _start(local, spawner, env=env, timeout=7)
+    call = spawner.calls[0]
+    assert os.path.realpath(call["cwd"]) == os.path.realpath(local.cwd)
+    assert call["env"] == env and call["env"] is not env and call["timeout"] == 7
+    assert os.path.isdir(os.path.dirname(call["log_path"]))
+    spawner2 = Spawner()
+    CC.start(sub, environment=ENV_ID, env=env, spawn_fn=spawner2, nonce=NONCE)
+    assert os.path.realpath(spawner2.calls[0]["cwd"]) == os.path.realpath(local.cwd)
+
+
+def test_start_makes_a_fresh_nonce_when_none_is_given(tmp_path):
+    local = _build(tmp_path)
+    one = _start(local, Spawner(), nonce=None)
+    two = _start(local, Spawner(), nonce=None)
+    assert re.fullmatch(r"[0-9a-f]{16}", one["nonce"]) and one["nonce"] != two["nonce"]
+    assert one["sessionName"] == "cloud-check-" + one["nonce"][:8]
+
+
+def _expected_prompt(issue=None):
+    fallback = CC.MARKER + " " + json.dumps(
+        {"schema": "cloud-check-report/1", "nonce": NONCE, "environment": None,
+         "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
+         "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
+                          "passLapses": None, "reason": "plugin-missing"}},
+        sort_keys=True, separators=(",", ":"))
+    text = ("This is a short setup check. Edit nothing, commit nothing, push nothing, and invoke "
+            "no skill.\n\n"
+            "Run exactly this one command from the repository's root:\n\n"
+            "python3 -B %s/lib/cloud_check.py report --nonce %s\n\n"
+            "It prints one line that starts with SUPERHEROES-CLOUD-CHECK. If the command cannot "
+            "run because that file does not exist, use this line instead, exactly as written:\n\n"
+            "%s\n\n"
+            "Give that one line, alone and unchanged, as your final message."
+            % (cloud_pass.CLOUD_PLUGIN_DIR, NONCE, fallback))
+    if issue is not None:
+        text += ("\n\nAlso post that one line, alone inside a fenced code block, as one comment on "
+                 "issue #%d of this repository." % issue)
+    return text
+
+
+def test_start_prompt_carries_the_nonce_the_report_command_and_the_fallback_line(tmp_path):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    _start(local, spawner)
+    assert _prompt(spawner) == _expected_prompt()
+    assert "/opt/superheroes/plugin/lib/cloud_check.py report --nonce " + NONCE in _prompt(spawner)
+
+
+def test_start_prompt_never_carries_the_pass_or_an_environment_variable(tmp_path):
+    local = _build(tmp_path)
+    secret = "sk-secret-value-9f8e7d"
+    spawner = Spawner()
+    _start(local, spawner, env=dict(local.env, REVIEWER_PASS=secret, OTHER=secret + "2"))
+    prompt = _prompt(spawner)
+    assert secret not in prompt and secret not in " ".join(spawner.calls[0]["argv"])
+    assert local.env["HOME"] not in prompt and local.root not in prompt
+
+
+def test_start_fallback_line_judges_as_failed_not_passed(tmp_path):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    _start(local, spawner)
+    line = [l for l in _prompt(spawner).splitlines() if l.startswith(CC.MARKER + " {")]
+    assert len(line) == 1
+    result = _judge(local, line[0])
+    assert result["action"] == "failed" and "reviewer" in result["failedParts"]
+    assert "environment" in result["failedParts"] and result["recordWritten"] is False
+    assert _record_state(local) == "none"
+
+
+def test_start_posts_to_an_issue_only_when_one_is_named(tmp_path):
+    local = _build(tmp_path)
+    without, with_issue = Spawner(), Spawner()
+    _start(local, without)
+    _start(local, with_issue, issue=1745)
+    assert "issue #" not in _prompt(without) and _prompt(without) == _expected_prompt()
+    assert _prompt(with_issue) == _expected_prompt(1745)
+    assert _prompt(with_issue).endswith("as one comment on issue #1745 of this repository.")
+    assert _prompt(with_issue).startswith(_prompt(without))
+
+
+def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
+    local, cloud = _pair(tmp_path)
+    # 1. the instructions ask for the id and never for a change to the account's default
+    message = CC.setup_message(local.cwd, project_name="demo", root=local.root, env=local.env,
+                               now=NOW)["message"]
+    assert "copy its id from the environment's page and paste it here" in message
+    assert message.count("default") == 1 and "so your account's default never changes" in message
+    # 2. a machine with no separate sign-in is walked through one, then finds it in place
+    (tmp_path / "owner").mkdir()
+    home, env = _home_env(tmp_path / "owner")
+    walk = CC.sign_in(env)
+    assert walk["signedIn"] is False and "codex login" in walk["message"]
+    _auth(home / ".codex-cloud")
+    assert CC.sign_in(env) == {"action": "checked", "signedIn": True,
+                               "message": "The separate reviewer sign-in is in place."}
+    # 3. no id, no launch
+    spawner = Spawner()
+    assert _start(local, spawner, environment=None)["action"] == "refused"
+    assert spawner.calls == []
+    # 4. the launch names the id the owner gave
+    started = _start(local, spawner, nonce=None)
+    assert started["action"] == "started" and len(spawner.calls) == 1
+    argv = spawner.calls[0]["argv"]
+    assert json.loads(argv[argv.index("--settings") + 1]) == {
+        "remote": {"defaultEnvironmentId": ENV_ID}}
+    # 5. the cloud machine reports under the same nonce, and the judgment passes
+    obj = CC.report(env={cloud_pass.ENVIRONMENT_ENV: ENV_ID}, cwd=cloud.cwd, root=cloud.root,
+                    nonce=started["nonce"], confirm_fn=_confirm())
+    judged = _judge(local, obj, nonce=started["nonce"])
+    assert judged["action"] == "passed" and judged["recordWritten"] is True
+    record = cloud_setup.read(local.cwd, ACCOUNT, local.root)["record"]
+    assert record["environment"] == ENV_ID
+
+
+def test_cli_start_exit_codes(tmp_path, capsys):
+    local = _build(tmp_path)
+    spawner = Spawner()
+    code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID, "--issue", "1745"],
+                   spawn_fn=spawner)
+    printed = json.loads(capsys.readouterr().out)
+    assert code == 0 and printed["action"] == "started" and printed["issue"] == 1745
+    assert printed["environment"] == ENV_ID and len(spawner.calls) == 1
+    refused_spawner = Spawner()
+    code = CC.main(["start", "--cwd", local.cwd], spawn_fn=refused_spawner)
+    printed = json.loads(capsys.readouterr().out)
+    assert code == 1 and printed["reason"] == "check-environment-invalid"
+    assert refused_spawner.calls == []
+    code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID],
+                   spawn_fn=Spawner(output=""))
+    assert code == 1 and json.loads(capsys.readouterr().out)["reason"] == "check-session-unconfirmed"

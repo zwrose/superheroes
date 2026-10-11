@@ -3,11 +3,13 @@ the judgment of that check on the owner's machine.
 
   cloud_check.py setup-message [--cwd D] [--root D] [--project-name N]
   cloud_check.py sign-in [--cwd D] [--root D] [--project-name N]
+  cloud_check.py start --environment E [--cwd D] [--issue N]
   cloud_check.py report [--cwd D] [--root D] [--nonce N]
   cloud_check.py judge --environment E --nonce N (--line TEXT | --line-file F) [--account A]
   cloud_check.py setup-text [--cwd D] [--root D] [--project-name N]
 
-`report` runs inside the cloud session and prints one marked line saying what that session holds.
+`start` launches the check session on the owner's machine, always naming the environment id the
+owner gave. `report` runs inside the cloud session and prints one marked line saying what that session holds.
 `judge` runs on the owner's machine, reads that line out of whatever text carries it, and writes
 the setup record only when every part of the report agrees with this machine. Any other result
 writes no record, and a project whose cloud-builds setting is on has it switched off through the
@@ -22,7 +24,9 @@ import datetime
 import json
 import os
 import re
+import secrets
 import sys
+import tempfile
 
 import cloud_pass
 import cloud_setup
@@ -30,7 +34,9 @@ import cloud_setup_text
 import core_md
 import engine_adapter
 import mode_registry
+import model_registry
 import project_config
+import store_core
 
 PASS_LIFETIME_DAYS = 10
 MARKER = "SUPERHEROES-CLOUD-CHECK"
@@ -125,6 +131,35 @@ _UNREAD = (
     "\n"
     "Cloud builds stay off.{switched} Say \"check again\" and I'll run it once more."
 )
+
+_CHECK_SESSION_PREFIX = "cloud-check-"
+_CHECK_PROMPT = (
+    "This is a short setup check. Edit nothing, commit nothing, push nothing, and invoke no "
+    "skill.\n"
+    "\n"
+    "Run exactly this one command from the repository's root:\n"
+    "\n"
+    "python3 -B {plugin_dir}/lib/cloud_check.py report --nonce {nonce}\n"
+    "\n"
+    "It prints one line that starts with " + MARKER + ". If the command cannot run because that "
+    "file does not exist, use this line instead, exactly as written:\n"
+    "\n"
+    "{fallback}\n"
+    "\n"
+    "Give that one line, alone and unchanged, as your final message."
+)
+_CHECK_POST = (
+    "\n"
+    "\n"
+    "Also post that one line, alone inside a fenced code block, as one comment on issue #{issue} "
+    "of this repository."
+)
+_ENVIRONMENT_NEEDED = ("I need the cloud environment's id before I can run the check. Copy it from "
+                       "the environment's page and paste it here.")
+_NOT_STARTED = "The check session did not start: the cloud launch command could not be run."
+_UNCONFIRMED = ("I could not confirm that the check session started. Look for a session named "
+                "{name} in your session list; say \"check again\" and I'll start a new one.")
+_STARTED = "The check session is running. I'll read its result in about a minute."
 
 
 def _environment_ok(value):
@@ -419,21 +454,109 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
             "message": _PASSED.format(version=obj["pluginVersion"]) + ending}
 
 
+def _refusal(reason, message, **more):
+    return dict({"action": "refused", "reason": reason, "message": message}, **more)
+
+
+def _issue_number(issue):
+    """The issue as a positive integer, or None when it is not one."""
+    if isinstance(issue, bool):
+        return None
+    if isinstance(issue, int):
+        return issue if issue > 0 else None
+    if isinstance(issue, str) and re.fullmatch(r"[0-9]+", issue):
+        return int(issue) or None
+    return None
+
+
+def _fallback_line(nonce):
+    """The line a session that cannot run `report` gives instead: a report that judges as failed."""
+    obj = dict.fromkeys(REPORT_FIELDS)
+    obj["schema"] = REPORT_SCHEMA
+    obj["nonce"] = nonce
+    obj["confirmation"] = {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
+                           "passLapses": None, "reason": "plugin-missing"}
+    return report_line(obj)
+
+
+def _check_prompt(nonce, issue):
+    prompt = _CHECK_PROMPT.format(plugin_dir=cloud_pass.CLOUD_PLUGIN_DIR, nonce=nonce,
+                                  fallback=_fallback_line(nonce))
+    return prompt + (_CHECK_POST.format(issue=issue) if issue is not None else "")
+
+
+def _repo_root(cwd):
+    try:
+        return store_core.repo_root(cwd)
+    except Exception:
+        return os.path.abspath(cwd)
+
+
+def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120, nonce=None):
+    """Start the check session in the environment whose id the owner gave. Never raises for an
+    expected failure; nothing is spawned unless every refusal below has been passed."""
+    # axis: every check session names the environment id the owner gave, and only a well-formed one
+    if not _environment_ok(environment):
+        return _refusal("check-environment-invalid", _ENVIRONMENT_NEEDED)
+    number = None
+    if issue is not None:
+        number = _issue_number(issue)
+        if number is None:
+            return _refusal("check-issue-invalid",
+                            "The issue number must be a positive whole number.")
+    if nonce is None:
+        nonce = secrets.token_hex(8)
+    elif not (isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce)):
+        return _refusal("check-nonce-invalid",
+                        "The check's nonce must be 8 to 64 letters and digits.")
+    name = _CHECK_SESSION_PREFIX + nonce[:8]
+    cell = model_registry.resolve_dispatch("mechanical", "claude", None)
+    if cell.get("ok") is not True:
+        return _refusal("check-model-unresolved",
+                        "I could not choose the model the check session runs at.",
+                        detail=cell.get("detail") or cell.get("reason"))
+    built = engine_adapter.claude_cloud_builder_argv(
+        cell["dispatch_token"], cell["effort"], _check_prompt(nonce, number), environment, name)
+    if built.get("reason") is not None or not built.get("argv"):
+        return _refusal("check-launch-refused", "The check session could not be launched.",
+                        detail=built.get("reason"))
+    import launcher
+    child_env = dict(os.environ if env is None else env)
+    spawn = spawn_fn or launcher._default_cloud_spawn
+    try:
+        log_path = os.path.join(tempfile.mkdtemp(prefix="cloud-check-"), "launch.log")
+        spawned = spawn(built["argv"], _repo_root(cwd), log_path, child_env, timeout)
+    except OSError:
+        return _refusal("check-session-not-started", _NOT_STARTED)
+    output = spawned.get("output") if isinstance(spawned, dict) else None
+    # axis: a session is reported started only on a receipt for this launch's own session name
+    got = launcher._read_cloud_receipt(
+        launcher._strip_terminal_sequences(output if isinstance(output, str) else ""), name)
+    if got is None:
+        return _refusal("check-session-unconfirmed", _UNCONFIRMED.format(name=name),
+                        sessionName=name)
+    session_id, session_url = got
+    return {"action": "started", "reason": None, "environment": environment, "nonce": nonce,
+            "sessionName": name, "sessionId": session_id, "sessionUrl": session_url,
+            "issue": number, "message": _STARTED}
+
+
 def _print(result):
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 1 if result.get("action") in ("refused", "failed", "unread") else 0
 
 
-def main(argv=None):
+def main(argv=None, spawn_fn=None):
     parser = argparse.ArgumentParser(prog="cloud_check.py")
     parser.add_argument("verb", choices=["setup-message", "sign-in", "report", "judge",
-                                         "setup-text"])
+                                         "setup-text", "start"])
     parser.add_argument("--cwd", default=None)
     parser.add_argument("--root", default=None)
     parser.add_argument("--project-name", default=None)
     parser.add_argument("--nonce", default=None)
     parser.add_argument("--environment", default=None)
     parser.add_argument("--account", default=None)
+    parser.add_argument("--issue", default=None)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--line", default=None)
     source.add_argument("--line-file", default=None)
@@ -442,6 +565,8 @@ def main(argv=None):
     if args.verb == "report":
         sys.stdout.write(report_line(report(cwd=cwd, root=args.root, nonce=args.nonce)) + "\n")
         return 0
+    if args.verb == "start":
+        return _print(start(cwd, environment=args.environment, issue=args.issue, spawn_fn=spawn_fn))
     if args.verb == "sign-in":
         return _print(sign_in())
     if args.verb == "setup-message":

@@ -11,7 +11,7 @@ Bite-proof record for `plugins/superheroes/lib/cloud_check.py` (`judge` and its 
 
 ## Declared guarded-element set
 
-B1 the nonce binding; B2 the environment match; B3 the version match; B4 the placed-stamp match (condition a); B5 the stamp-file rule (condition b); B6 the repository-calibration match (condition c); B7 the reviewer answer is exactly true and the pass has not lapsed; B8 a refused record write is never reported as passed; B9 a failed check switches the setting off.
+B1 the nonce binding; B2 the environment match; B3 the version match; B4 the placed-stamp match (condition a); B5 the stamp-file rule (condition b); B6 the repository-calibration match (condition c); B7 the reviewer answer is exactly true and the pass has not lapsed; B8 a refused record write is never reported as passed; B9 a failed check switches the setting off; C1 `start` refuses without a well-formed environment id; C2 `start` never reports started without a receipt for its own session name; C3 the launch names the id the caller gave (WO-C, below).
 
 ## Per-element receipts
 
@@ -490,4 +490,200 @@ FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge9_a_fai
 ```
 .                                                                        [100%]
 1 passed in 2.51s
+```
+
+## WO-C (issue 1745): `start`, the check session's launch
+
+Detectors in `plugins/superheroes/lib/tests/test_cloud_check.py` (`T`), guarded code in `plugins/superheroes/lib/cloud_check.py` (`start`). Same method as above: each neutralization is a targeted Edit in `cloud_check.py`, the red is the single named test run alone (a parametrized test is run whole, by its name), the restore is the inverse Edit, and the green is the same test. Reds and greens are the full pytest output of each run. No fake spawn function starts a cloud session; the pinned condition is the fixture project, the fixture environment id and the fixture nonce `abcd1234efgh`. Nothing is redacted: no fixture holds a secret.
+
+### C1: `start` refuses without a well-formed environment id (edge 1): the grammar check at the top of `start`. Axis: refusal: nothing is spawned unless the id fully matches the grammar
+
+- **Neutralization applied.** `if not _environment_ok(environment):` (in `start`) replaced with `if environment is not None and not _environment_ok(environment):`.
+- **Node.** `T::test_start_refuses_without_an_environment_id`
+- **Where the red landed.** Red landed on the `None` case: `reason` was `check-launch-refused` (the argv builder's own refusal caught it one step later), not `check-environment-invalid`. The other nine cases (empty, malformed, non-string) still passed, because the grammar check was only skipped for `None`; that is the neutralization's scope.
+- **Red:**
+
+```
+F.........                                                               [100%]
+=================================== FAILURES ===================================
+______________ test_start_refuses_without_an_environment_id[None] ______________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1063/test_start_refuses_without_an_0')
+bad = None
+
+    @pytest.mark.parametrize("bad", [None, "", "env_", "env-01ABC", "env_01 ABC", "xenv_01ABC",
+                                     "env_01ABC\n", 42, ["env_01ABC"], b"env_01ABC"])
+    def test_start_refuses_without_an_environment_id(tmp_path, bad):
+        local = _build(tmp_path)
+        spawner = Spawner()
+        result = _start(local, spawner, environment=bad)
+>       assert result["action"] == "refused" and result["reason"] == "check-environment-invalid"
+E       AssertionError: assert ('refused' == 'refused'
+E         
+E           refused and 'check-launch-refused' == 'check-environment-invalid'
+E         
+E         - check-environment-invalid
+E         + check-launch-refused)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:931: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_refuses_without_an_environment_id[None]
+1 failed, 9 passed in 7.70s
+```
+
+- **Restore.** The inverse Edit put the line back; quoted from `cloud_check.py` after the restore (the first match, line 271, is `report`'s own check, untouched):
+
+```
+271:    if not _environment_ok(environment):
+499:    if not _environment_ok(environment):
+```
+
+- **Green.**
+
+```
+..........                                                               [100%]
+10 passed in 9.74s
+```
+
+### C2: `start` never reports started without a receipt (edge 4): the `got is None` branch. Axis: refusal: a session is started only on a receipt for this launch's own session name
+
+- **Neutralization applied.** `if got is None:` (before the `check-session-unconfirmed` refusal) replaced with the two lines `got = got or (None, None)` and `if False:`, so a missing receipt falls through to `started`.
+- **Node.** `T::test_start_never_reports_started_without_a_receipt`
+- **Where the red landed.** All three no-receipt cases went red on `action`: `started`, not `refused` (empty output; a receipt for another session name; a timed-out launch that printed none).
+- **Red:**
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+__________ test_start_never_reports_started_without_a_receipt[-False] __________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1065/test_start_never_reports_start0')
+output = '', timed_out = False
+
+    @pytest.mark.parametrize("output,timed_out", [
+        ("", False),
+        (_receipt("cloud-check-zzzzzzzz"), False),
+        ("Starting...\n", True),
+    ])
+    def test_start_never_reports_started_without_a_receipt(tmp_path, output, timed_out):
+        local = _build(tmp_path)
+        spawner = Spawner(output=output, timed_out=timed_out)
+        result = _start(local, spawner)
+>       assert result["action"] == "refused" and result["reason"] == "check-session-unconfirmed"
+E       AssertionError: assert ('started' == 'refused'
+E         
+E         - refused
+E         + started)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
+_ test_start_never_reports_started_without_a_receipt[Created cloud session: cloud-check-zzzzzzzz\nView: https://claude.ai/code/session_01ABCdef?from=cli\nResume with: claude --teleport session_01ABCdef\n-False] _
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1065/test_start_never_reports_start1')
+output = 'Created cloud session: cloud-check-zzzzzzzz\nView: https://claude.ai/code/session_01ABCdef?from=cli\nResume with: claude --teleport session_01ABCdef\n'
+timed_out = False
+
+    @pytest.mark.parametrize("output,timed_out", [
+        ("", False),
+        (_receipt("cloud-check-zzzzzzzz"), False),
+        ("Starting...\n", True),
+    ])
+    def test_start_never_reports_started_without_a_receipt(tmp_path, output, timed_out):
+        local = _build(tmp_path)
+        spawner = Spawner(output=output, timed_out=timed_out)
+        result = _start(local, spawner)
+>       assert result["action"] == "refused" and result["reason"] == "check-session-unconfirmed"
+E       AssertionError: assert ('started' == 'refused'
+E         
+E         - refused
+E         + started)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
+____ test_start_never_reports_started_without_a_receipt[Starting...\n-True] ____
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1065/test_start_never_reports_start2')
+output = 'Starting...\n', timed_out = True
+
+    @pytest.mark.parametrize("output,timed_out", [
+        ("", False),
+        (_receipt("cloud-check-zzzzzzzz"), False),
+        ("Starting...\n", True),
+    ])
+    def test_start_never_reports_started_without_a_receipt(tmp_path, output, timed_out):
+        local = _build(tmp_path)
+        spawner = Spawner(output=output, timed_out=timed_out)
+        result = _start(local, spawner)
+>       assert result["action"] == "refused" and result["reason"] == "check-session-unconfirmed"
+E       AssertionError: assert ('started' == 'refused'
+E         
+E         - refused
+E         + started)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_never_reports_started_without_a_receipt[-False]
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_never_reports_started_without_a_receipt[Created cloud session: cloud-check-zzzzzzzz\nView: https://claude.ai/code/session_01ABCdef?from=cli\nResume with: claude --teleport session_01ABCdef\n-False]
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_never_reports_started_without_a_receipt[Starting...\n-True]
+3 failed in 2.90s
+```
+
+- **Restore.** The inverse Edit put the lines back; quoted from `cloud_check.py` after the restore:
+
+```
+535-    if got is None:
+536:        return _refusal("check-session-unconfirmed", _UNCONFIRMED.format(name=name),
+```
+
+- **Green.**
+
+```
+...                                                                      [100%]
+3 passed in 3.95s
+```
+
+### C3: the launch names the id the caller gave (the invariant): the `environment` argument of the argv builder call in `start`. Axis: equality: the id spawned is the id given
+
+- **Neutralization applied.** In the `claude_cloud_builder_argv` call in `start`, the argument `environment` replaced with the fixed other id `"env_FixedOther1"`.
+- **Node.** `T::test_start_names_the_environment_in_the_launch`
+- **Where the red landed.** Red landed on the argv equality: the settings argument at index 4 carried `env_FixedOther1`, not `env_01ABCdef`.
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_start_names_the_environment_in_the_launch ________________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1068/test_start_names_the_environme0')
+
+    def test_start_names_the_environment_in_the_launch(tmp_path):
+        local = _build(tmp_path)
+        spawner = Spawner()
+        result = _start(local, spawner)
+        assert result["action"] == "started" and len(spawner.calls) == 1
+        argv = spawner.calls[0]["argv"]
+        cell = model_registry.resolve_dispatch("mechanical", "claude", None)
+>       assert argv == engine_adapter.claude_cloud_builder_argv(
+            cell["dispatch_token"], cell["effort"], _prompt(spawner), ENV_ID,
+            "cloud-check-" + NONCE[:8])["argv"]
+E       assert ['claude', '-...--model', ...] == ['claude', '-...--model', ...]
+E         
+E         At index 4 diff: '{"remote":{"defaultEnvironmentId":"env_FixedOther1"}}' != '{"remote":{"defaultEnvironmentId":"env_01ABCdef"}}'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:917: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_names_the_environment_in_the_launch
+1 failed in 1.08s
+```
+
+- **Restore.** The inverse Edit put the argument back; quoted from `cloud_check.py` after the restore:
+
+```
+519:        cell["dispatch_token"], cell["effort"], _check_prompt(nonce, number), environment, name)
+```
+
+- **Green.**
+
+```
+.                                                                        [100%]
+1 passed in 0.94s
 ```
