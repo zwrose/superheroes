@@ -1316,11 +1316,11 @@ def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
 
 
 class _LauncherTerminated(Exception):
-    """The launcher was sent SIGTERM while a cloud launch command was running."""
+    """The launcher was sent SIGTERM or SIGINT while a cloud launch command was running."""
 
 
 def _make_terminate_handler(state):
-    """A SIGTERM handler that records the signal in `state["pending"]` and never raises.
+    """A SIGTERM/SIGINT handler that records the signal in `state["pending"]` and never raises.
 
     A raise from a handler lands wherever the launcher happens to be: before the child is in hand
     it would lose the only handle on its process group, and inside the cleanup it would cut the
@@ -1347,6 +1347,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     master, slave = pty.openpty()
     term_state = {"pending": False}
     previous_term = None
+    previous_int = None
     try:
         # axis: a launcher cancelled at any point from child creation through cleanup still ends the
         # group it started — the handler is installed before the child exists and only records the
@@ -1358,6 +1359,14 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             )
         except (ValueError, OSError):
             previous_term = None  # not the main thread: no handler can be installed here
+        # axis: Ctrl-C is a cancellation like SIGTERM — recorded, never raised, so the captured
+        # output is still logged and the caller still writes the started record.
+        try:
+            previous_int = signal.signal(
+                signal.SIGINT, _make_terminate_handler(term_state),
+            )
+        except (ValueError, OSError):
+            previous_int = None
         try:
             proc = subprocess.Popen(
                 argv,
@@ -1454,6 +1463,11 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
         if previous_term is not None:
             try:
                 signal.signal(signal.SIGTERM, previous_term)
+            except (ValueError, OSError):
+                pass
+        if previous_int is not None:
+            try:
+                signal.signal(signal.SIGINT, previous_int)
             except (ValueError, OSError):
                 pass
         try:
@@ -2236,7 +2250,7 @@ def _place_refusal(
     ):
         return _fail("launch-cloud-environment-invalid", launchId=launch_id)
     # axis: refused before any write — a cloud lane is looked up by its issue, so it must be a number.
-    if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0:
+    if not ll.valid_lane_issue(issue):
         return _fail("launch-cloud-issue-invalid", launchId=launch_id)
     return None
 

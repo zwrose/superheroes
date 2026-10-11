@@ -949,7 +949,7 @@ def _poll_open_pr_numbers(
 
 
 def _valid_issue_number(value):
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    return ll.valid_lane_issue(value)
 
 
 def _parse_activity_time(value):

@@ -2338,7 +2338,7 @@ def _zero_attempt_outcomes():
     }
 
 
-def _valid_lane_issue(issue):
+def valid_lane_issue(issue):
     return isinstance(issue, int) and not isinstance(issue, bool) and issue > 0
 
 
@@ -2418,7 +2418,7 @@ def count(repo_root, batch_id, env=None):
 
     for lid in batch_launches:
         issue = folded["launches"][lid].get("issue")
-        if not _valid_lane_issue(issue):
+        if not valid_lane_issue(issue):
             return _count_indeterminate(
                 batch_id, "batch-lane-issue-invalid:%s" % lid,
             )
