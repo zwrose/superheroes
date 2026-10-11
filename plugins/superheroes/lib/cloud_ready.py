@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""The readiness reader: whether the cloud can take a build right now.
+
+Stdlib plus plugin imports only. The setting and the setup record come only from
+`cloud_setup.read`; the calibration stamp comes only from the formula the cloud check uses. Six
+conditions are judged in a fixed order; the first one that fails names the reason. Anything that
+cannot be read counts as not ready, never as ready, and `readiness` never raises."""
+import datetime
+import os
+import re
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import cloud_setup  # noqa: E402
+import cloud_setup_text  # noqa: E402
+
+CONDITION_ORDER = ("setup", "passPresent", "passLive", "version", "calibration", "platform")
+REASON_FOR = {"setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
+              "version": "version", "calibration": "calibration", "platform": "unreachable"}
+REPORTED_KEYS = ("pluginVersion", "noPass", "unreachable")
+
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def valid_reported(reported):
+    """True for None or a dict of only the known reported facts, each in its exact shape."""
+    if reported is None:
+        return True
+    if not isinstance(reported, dict):
+        return False
+    for key, value in reported.items():
+        if key not in REPORTED_KEYS:
+            return False
+        if key == "pluginVersion":
+            if not (isinstance(value, str) and _VERSION_RE.fullmatch(value)):
+                return False
+        elif value is not True:
+            return False
+    return True
+
+
+def _placed_stamp(cwd, root):
+    return cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(cwd, root))
+
+
+def _lapses_ok(lapses, today):
+    if not (isinstance(lapses, str) and _DATE_RE.fullmatch(lapses)):
+        return False
+    try:
+        return datetime.date.fromisoformat(lapses) >= today
+    except ValueError:
+        return False
+
+
+def _result(conditions, *, setting=False, account=None, environment=None, cloud_version=None,
+            advisor_version=None, picks_up=None, checked_at=None):
+    # axis: the reason is the first false condition in the fixed order — see bite-proof record wo_a_place_call
+    reason = next((REASON_FOR[name] for name in CONDITION_ORDER if not conditions[name]), None)
+    return {
+        "ready": reason is None,
+        "reason": reason,
+        "conditions": conditions,
+        "setting": setting,
+        "account": account,
+        "environment": environment,
+        "cloudVersion": cloud_version,
+        "advisorVersion": advisor_version,
+        "picksUpVersion": picks_up,
+        "checkedAt": checked_at,
+    }
+
+
+def _all_false():
+    return {name: False for name in CONDITION_ORDER}
+
+
+def _advisor_version(given):
+    if given is not None:
+        return given if isinstance(given, str) and given else None
+    try:
+        version = cloud_setup_text._plugin_version()
+    except Exception:
+        return None
+    return version if isinstance(version, str) and version else None
+
+
+def _today(given):
+    if isinstance(given, datetime.datetime):
+        return given.date()
+    if isinstance(given, datetime.date):
+        return given
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen):
+    if account is None:
+        account = cloud_setup.launching_account(env, cwd)
+    advisor = _advisor_version(advisor_version)
+    got = cloud_setup.read(cwd, account, root)
+    setting = got.get("setting") is True
+    seen["setting"] = setting
+    seen["account"] = account if isinstance(account, str) else None
+    fallback = dict(setting=setting, account=seen["account"], advisor_version=advisor)
+    # axis: a reported fact in an unknown shape never reads as ready — see bite-proof record wo_a_place_call
+    if not valid_reported(reported):
+        return _result(_all_false(), **fallback)
+    reported = reported or {}
+    setup = got.get("ready") is True and isinstance(got.get("record"), dict)
+    conditions = _all_false()
+    # axis: no setup forces every later condition false — see bite-proof record wo_a_place_call
+    if not setup:
+        return _result(conditions, **fallback)
+    record = got["record"] if isinstance(got.get("record"), dict) else {}
+    conditions["setup"] = setup
+    conditions["passPresent"] = reported.get("noPass") is not True
+    # axis: the pass is live only while its recorded lapse date is not before today — see bite-proof record wo_a_place_call
+    conditions["passLive"] = _lapses_ok(record.get("passLapses"), _today(today))
+    # axis: a version the cloud reported stands in place of the record's — see bite-proof record wo_a_place_call
+    if reported.get("pluginVersion") is not None:
+        cloud_version = reported["pluginVersion"]
+        conditions["version"] = advisor is not None and cloud_version == advisor
+    else:
+        cloud_version = record.get("pluginVersion")
+        conditions["version"] = advisor is not None and (
+            cloud_version == advisor or record.get("picksUpVersion") is True)
+    try:
+        # axis: the calibration matches only when the placed stamp equals the recorded one — see bite-proof record wo_a_place_call
+        conditions["calibration"] = (stamp_fn or _placed_stamp)(cwd, root) == record.get(
+            "calibrationStamp")
+    except Exception:
+        conditions["calibration"] = False
+    conditions["platform"] = reported.get("unreachable") is not True
+    return _result(
+        conditions, setting=setting, account=seen["account"], environment=record.get("environment"),
+        cloud_version=cloud_version, advisor_version=advisor,
+        picks_up=record.get("picksUpVersion"), checked_at=record.get("checkedAt"))
+
+
+def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=None,
+              root=None, env=None, stamp_fn=None):
+    """Whether the cloud can take a build now, with every condition and the facts behind them.
+    Never raises; any unexpected failure reads as not ready."""
+    seen = {"setting": False, "account": None}
+    try:
+        return _readiness(
+            cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen)
+    except Exception:
+        return _result(_all_false(), setting=seen["setting"], account=seen["account"])

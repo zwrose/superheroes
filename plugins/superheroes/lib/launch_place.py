@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Where a build runs: the routing decision and the reasons it can give.
+
+Stdlib plus plugin imports only. Every reason any output prints is drawn from the one `REASONS`
+table below. A build pointed at the cloud goes there only when nothing needs the owner's machine
+and the cloud is ready; anything that cannot be read sends the build to the owner's machine.
+`route` always returns a placement and never raises."""
+import json
+import os
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import architect_config  # noqa: E402
+import cloud_ready  # noqa: E402
+import definition_doc  # noqa: E402
+import mode_registry  # noqa: E402
+import store_core  # noqa: E402
+
+LOCAL_WORD = "local"
+CLOUD_WORD = "cloud"
+
+REASON_CODES = ("local-word", "needs", "pass-lapsed", "no-pass", "no-setup", "version",
+                "calibration", "unreachable")
+NOT_READY_CODES = ("pass-lapsed", "no-pass", "no-setup", "version", "calibration", "unreachable")
+
+_SETUP_TEXT_FIX = ('To fix it, paste the new setup text into the environment. '
+                   'Say "setup text" and I\'ll write it.')
+
+REASONS = {
+    "local-word": {
+        "words": 'You said "this one local".',
+        "fix": None, "short": None, "wasnt": None,
+    },
+    "needs": {
+        "words": "It needs {need}, which only your machine has.",
+        "fix": None, "short": None, "wasnt": None,
+    },
+    "pass-lapsed": {
+        "words": "The reviewer pass has lapsed.",
+        "fix": ('To fix it, run the pass command on your machine, paste the new pass into the '
+                'environment and say "check again".'),
+        "short": 'Paste a fresh pass and say "check again" to fix it.',
+        "wasnt": "the reviewer pass has lapsed.",
+    },
+    "no-pass": {
+        "words": "There is no reviewer pass in the cloud environment.",
+        "fix": ('To fix it, run the pass command on your machine, paste the pass into the '
+                'environment and say "check again".'),
+        "short": 'Paste a pass into the environment and say "check again" to fix it.',
+        "wasnt": "there is no reviewer pass in the cloud environment.",
+    },
+    "no-setup": {
+        "words": "This project has no cloud setup on this Claude account.",
+        "fix": 'Say "set up cloud builds" and I\'ll walk you through it.',
+        "short": 'Say "set up cloud builds" to fix it.',
+        "wasnt": "this project has no cloud setup on this Claude account.",
+    },
+    "version": {
+        "words": "The cloud's plugin is {cloud} and mine is {advisor}.",
+        "fix": _SETUP_TEXT_FIX,
+        "short": "Paste the new setup text to fix it.",
+        "wasnt": "its plugin is {cloud} and mine is {advisor}.",
+    },
+    "calibration": {
+        "words": "The cloud's calibration doesn't match this machine's.",
+        "fix": _SETUP_TEXT_FIX,
+        "short": "Paste the new setup text to fix it.",
+        "wasnt": "its calibration doesn't match this machine's.",
+    },
+    "unreachable": {
+        "words": "The cloud platform couldn't be reached.",
+        "fix": "I'll try the cloud again at the next launch.",
+        "short": "I'll try the cloud again at the next launch.",
+        "wasnt": "the cloud platform couldn't be reached.",
+    },
+}
+
+_UNKNOWN = "unknown"
+
+_PHONE_SIMULATOR = "the phone simulator"
+_STACK_INTERFACE = "GitHub's stack interface"
+_CANON_AND_SPECS = "this project's Canon and specs"
+_CANON_ONLY = "this project's Canon"
+_SPECS_ONLY = "this project's specs"
+
+
+# ---------------------------------------------------------------- what only the owner's machine has
+
+
+def _canon_outside(cwd, root):
+    try:
+        top = store_core.repo_root(cwd)
+        got = definition_doc.resolve_canon(root=top, cwd=cwd, store_root=root)
+        return got["home"] != "repo"
+    except Exception:
+        # axis: a Canon location that cannot be read counts as outside the repository — see bite-proof record wo_a_place_call
+        return True
+
+
+def _specs_outside(cwd, root):
+    """True unless the doc policy, the recorded mode and the project store all say the specs are
+    in the repository. Read strictly: a policy that is missing, malformed or too new counts as
+    outside, and nothing is created, written or backfilled."""
+    try:
+        with open(architect_config.policy_path(cwd, root), encoding="utf-8") as fh:
+            policy = json.load(fh)
+        if not isinstance(policy, dict):
+            return True
+        if "schemaVersion" in policy:
+            version = policy["schemaVersion"]
+            if type(version) is not int or version > architect_config.SCHEMA_VERSION:
+                return True
+        # axis: the specs are in the repository only when the policy says committed — see bite-proof record wo_a_place_call
+        if policy.get("visibility") != architect_config.COMMITTED:
+            return True
+        location = policy.get("location")
+        if not isinstance(location, str) or architect_config._safe_location(location) != location:
+            return True
+        # axis: the specs are in the repository only when the recorded mode is in-repo — see bite-proof record wo_a_place_call
+        if mode_registry.resolve(cwd, root, persist_backfill=False)["mode"] != mode_registry.IN_REPO:
+            return True
+        docs = os.path.join(mode_registry.project_store_dir(cwd, root), "docs")
+        # axis: the specs are in the repository only when the project store holds none — see bite-proof record wo_a_place_call
+        if os.path.isdir(docs):
+            for name in os.listdir(docs):
+                if os.path.isfile(os.path.join(docs, name, "spec.md")):
+                    return True
+        return False
+    except Exception:
+        return True
+
+
+def machine_needs(cwd, premise, *, root=None):
+    """What only the owner's machine has, for this build: the advisor's judgment from the order,
+    the phone simulator, GitHub's stack interface, and a Canon or specs kept outside the repository.
+    De-duplicated, in that order. Read-only."""
+    found = []
+
+    def add(need):
+        if need not in found:
+            found.append(need)
+
+    judged = premise.get("needs")
+    for need in judged if isinstance(judged, (list, tuple)) else ():
+        if isinstance(need, str) and need.strip():
+            add(need)
+    if premise.get("iphoneCheck") is True:
+        add(_PHONE_SIMULATOR)
+    if "stack" in premise:
+        add(_STACK_INTERFACE)
+    try:
+        canon = _canon_outside(cwd, root)
+        specs = _specs_outside(cwd, root)
+    except Exception:
+        canon = specs = True
+    if canon and specs:
+        add(_CANON_AND_SPECS)
+    elif canon:
+        add(_CANON_ONLY)
+    elif specs:
+        add(_SPECS_ONLY)
+    return found
+
+
+def _join_needs(needs):
+    if len(needs) <= 1:
+        return "".join(needs)
+    return ", ".join(needs[:-1]) + " and " + needs[-1]
+
+
+# ---------------------------------------------------------------- the routing decision
+
+
+def _placement(place, pointed, by, reason, need, cloud_version, advisor_version, environment,
+               reported):
+    return {"place": place, "pointedAtCloud": pointed, "by": by, "reason": reason, "need": need,
+            "cloudVersion": cloud_version, "advisorVersion": advisor_version,
+            "environment": environment, "reported": reported}
+
+
+def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, root=None,
+          env=None):
+    """Where one build runs: the placement, with the reason it ran on the owner's machine when
+    the setting or the launch word pointed it at the cloud. Always returns; never raises."""
+    if launch_word not in (None, LOCAL_WORD, CLOUD_WORD):
+        raise ValueError("launch word must be None, %r or %r: %r" % (LOCAL_WORD, CLOUD_WORD, launch_word))
+    reported = None
+    pointed = False
+    by = None
+    cloud_version = advisor_version = None
+    try:
+        reported = premise.get("reportedCloud")
+        now = (readiness_fn or cloud_ready.readiness)(
+            cwd, reported=reported, root=root, env=env)
+        setting = now.get("setting") is True
+        cloud_version = now.get("cloudVersion")
+        advisor_version = now.get("advisorVersion")
+        if launch_word == CLOUD_WORD:
+            by = "word"
+        elif launch_word is None and setting:
+            by = "setting"
+        pointed = by is not None
+
+        def local(reason, need=None):
+            return _placement(
+                "local", pointed, by, reason, need, cloud_version, advisor_version, None, reported)
+
+        wants = needs_fn or machine_needs
+        # axis: a launch word of local wins over a need, so the owner's word is the reason given — see bite-proof record wo_a_place_call
+        if launch_word == LOCAL_WORD:
+            by = "setting" if setting else None
+            pointed = by is not None
+            return local("local-word" if setting else None)
+        needs = wants(cwd, premise, root=root)
+        # axis: a need of the owner's machine wins over a cloud word — see bite-proof record wo_a_place_call
+        if needs:
+            if pointed:
+                return local("needs", _join_needs(needs))
+            return local(None)
+        if not pointed:
+            return local(None)
+        if now.get("ready") is True and now.get("reason") is None:
+            return _placement(
+                "cloud", pointed, by, None, None, cloud_version, advisor_version,
+                now.get("environment"), reported)
+        reason = now.get("reason")
+        return local(reason if reason in NOT_READY_CODES else "no-setup")
+    except Exception:
+        return _placement(
+            "local", pointed, by, "no-setup" if pointed else None, None, cloud_version,
+            advisor_version, None, reported)
+
+
+# ---------------------------------------------------------------- the reasons as words
+
+
+def _version_slot(value):
+    return value if isinstance(value, str) and value.strip() else _UNKNOWN
+
+
+def _fill(template, cloud_version, advisor_version, need=None):
+    return (template.replace("{cloud}", _version_slot(cloud_version))
+            .replace("{advisor}", _version_slot(advisor_version))
+            .replace("{need}", need if isinstance(need, str) and need.strip() else "something"))
+
+
+def _words(code, cloud_version, advisor_version, need=None):
+    return _fill(REASONS[code]["words"], cloud_version, advisor_version, need)
+
+
+def reason_text(place_call):
+    """The board's words for the reason on this placement, or None when it has none."""
+    try:
+        code = place_call.get("reason")
+        if code not in REASONS:
+            return None
+        return _words(code, place_call.get("cloudVersion"), place_call.get("advisorVersion"),
+                      place_call.get("need"))
+    except Exception:
+        return None
