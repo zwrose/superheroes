@@ -1,0 +1,112 @@
+{
+  "name": "pr-e",
+  "pr": {
+    "buildRecordNamesRecord": true,
+    "ciOnHead": "green",
+    "head": "cccccccccccccccccccccccccccccccccccccccc",
+    "number": 7,
+    "ownerHalf": {
+      "whatWeAreAccepting": [
+        "code-retry-window: The retry window is too long"
+      ]
+    }
+  },
+  "record": {
+    "checked": [
+      "CI on ccccccc: green",
+      "Reviewers that ran: code-reviewer",
+      "read the diff"
+    ],
+    "ci": {
+      "sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "source": "GitHub checks",
+      "state": "green"
+    },
+    "cost": {
+      "minutes": 2.0,
+      "notCounted": [],
+      "source": "engine records",
+      "tokens": 100,
+      "unit": "reviewer-minutes"
+    },
+    "finalCommit": {
+      "sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "source": "GitHub PR"
+    },
+    "findings": [
+      {
+        "body": "b",
+        "consequence": "c",
+        "file": "a.py",
+        "findingKey": "rr1:1b450b736ba4a053a9a8a6d1a4511d8e",
+        "id": "code-null-guard",
+        "line": 3,
+        "outcome": "fixed",
+        "reason": "fixed in 1a2b3c4",
+        "reviewer": "code-reviewer",
+        "severity": "Minor",
+        "title": "A null guard was missing"
+      },
+      {
+        "body": "b",
+        "consequence": "a customer waits minutes before a failed payment is retried",
+        "file": "a.py",
+        "findingKey": "rr1:3c2e56ec565cd301b53be8156c8b1f5a",
+        "id": "code-retry-window",
+        "line": 3,
+        "outcome": "left-for-owner",
+        "reason": "needs the owner's call on the retry window",
+        "reviewer": "code-reviewer",
+        "severity": "Minor",
+        "title": "The retry window is too long"
+      }
+    ],
+    "lane": {
+      "reason": "a plain reason",
+      "source": "reported by the session",
+      "value": "full"
+    },
+    "leftForOwner": [
+      "code-retry-window"
+    ],
+    "makers": [],
+    "missingReviews": [],
+    "parked": false,
+    "pr": 7,
+    "previousRecord": null,
+    "rawOutputs": [],
+    "reviewers": [
+      {
+        "commit": null,
+        "coversFinalCommit": true,
+        "family": "openai",
+        "findingsCoverage": "reported by the session",
+        "model": "gpt-5.6-sol",
+        "name": "code-reviewer",
+        "observation": {
+          "tokens": 100,
+          "wallSeconds": 120
+        },
+        "planned": true,
+        "ran": "engine-record",
+        "runDir": "/run/code-reviewer",
+        "vendor": "codex"
+      }
+    ],
+    "rounds": {
+      "cap": 3,
+      "count": 1,
+      "source": "reported by the session",
+      "stoppedAtCap": false
+    },
+    "schema": "review-record/1",
+    "sessionDisagreements": [],
+    "sessionId": "s1",
+    "status": "not-reviewed",
+    "unreadFiles": [],
+    "whatIsMissing": [
+      "finding code-retry-window waits for the owner's decision"
+    ],
+    "writtenAt": "2026-01-01T00:00:00Z"
+  }
+}

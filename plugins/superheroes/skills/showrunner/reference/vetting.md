@@ -21,6 +21,7 @@ This page is reference for the advisor at vet time. Duty 4 of the Showrunner cha
 rules; this page holds the mechanism that fires only while you vet. The receipt's shape lives in
 `skills/showrunner/reference/vet-receipt.md`, and the owner-call contract lives in
 `skills/showrunner/reference/owner-decisions.md`.
+The checks the vet reads from the PR's review record are the rows of § The review record checks in `skills/showrunner/reference/vet-receipt.md`.
 
 ## Order-quality accounting
 

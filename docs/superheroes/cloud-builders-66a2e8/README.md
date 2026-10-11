@@ -41,7 +41,7 @@ The breakdown:
 | [C7](children/C7.md) | The advisor's side of a running cloud build | 14 | ~450 | 2 | full | say it |
 | [C8](children/C8.md) | Cleanup and the reviewer pass's upkeep (stack top) | 9 | ~280 | 1, after #1708's #1716 and #1718 | full | say it |
 
-Every child is `kind:machinery` and on the full lane. Five criteria, the spec's Definition of done,
+Every child is `kind:product` (owner ruling 2026-10-11, walk item 30) and on the full lane. Five criteria, the spec's Definition of done,
 belong to the epic's closure validation run.
 
 ## Sequencing
