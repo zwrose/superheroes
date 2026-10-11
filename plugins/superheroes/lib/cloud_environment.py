@@ -28,6 +28,10 @@ SETTINGS_FILENAME = "settings.json"
 
 _ASK_AGAIN = ("I can't see a new pick yet. In Claude Code on this account, run /remote-env, choose "
               "the environment you made for this project by its name, and tell me when it's done.")
+_ALREADY_PICKED = ("Claude Code already had an environment picked, and it's still the same one. If "
+                   "the environment shown as picked in /remote-env is the one you made for this "
+                   "project, say it's that one and I'll use it. Otherwise pick this project's "
+                   "environment and tell me.")
 _PICKED = "Got it: I can see the environment you picked."
 _UNREADABLE = ("I can't read this account's Claude Code settings, so I can't see which environment "
                "you picked. Check that Claude Code's settings file on this machine is readable, "
@@ -118,7 +122,7 @@ def pick(before=None, confirmed=None, env=None, cwd=None):
                     "message": _KEPT}
         if value == before:
             return {"action": "not-picked", "reason": "pick-unchanged", "environment": None,
-                    "message": _ASK_AGAIN}
+                    "message": _ALREADY_PICKED if confirmed is None else _ASK_AGAIN}
         return {"action": "picked", "reason": None, "environment": value, "message": _PICKED}
     except Exception:
         return {"action": "not-picked", "reason": "settings-unreadable", "environment": None,

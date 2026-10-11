@@ -441,8 +441,16 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    ```
 
    On `picked`, say its `message` and keep its `environment`: that is the id every later step names.
-   On `not-picked`, say its `message`, wait for the owner, and run the same command again. On a
-   machine where several Claude accounts share one settings file, read right after the owner says
+   On `not-picked` with reason `pick-unchanged`, say its `message`. When the owner says the
+   environment shown as picked is this project's, read once more with the value step 1 kept as both
+   values, and keep the `environment` it returns:
+
+   ```bash
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>
+   ```
+
+   On any other `not-picked`, say its `message`, wait for the owner, and run the first command again.
+   On a machine where several Claude accounts share one settings file, read right after the owner says
    the pick is done: another account's pick in between would be read as this one.
 4. **Walk the reviewer sign-in, and confirm it is done.** Run `sign-in`. When `signedIn` is false,
    say its `message`, wait for the owner, and run it again until `signedIn` is true; then say its

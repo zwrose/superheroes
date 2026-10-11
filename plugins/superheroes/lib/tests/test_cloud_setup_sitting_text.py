@@ -109,3 +109,16 @@ def test_showrunner_has_one_pointer_to_section_six():
     hits = [line for line in _read(SHOWRUNNER_SKILL).splitlines() if POINTER in line]
     assert len(hits) == 1, "showrunner/SKILL.md has %d lines pointing to set-up.md § 6: %r" % (
         len(hits), hits)
+
+
+def test_first_pick_unchanged_is_confirmed_by_name_in_step_three():
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    needle = ('cloud_environment.py" pick --cwd . --before <the value step 1 kept> '
+              '--confirmed <the value step 1 kept>')
+    confirm = _first(section, needle)
+    assert confirm is not None, "section 6 has no line containing %r" % needle
+    make = _first(section, 'cloud_pass.py" make')
+    assert make is not None, "section 6 has no line containing 'cloud_pass.py\" make'"
+    assert confirm < make, "the confirm-by-name line (%d) does not come before the pass command (%d)" % (
+        confirm, make)

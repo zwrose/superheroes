@@ -40,6 +40,25 @@ def _with_value(value):
     return {"remote": {"defaultEnvironmentId": value}}
 
 
+def test_first_pick_unchanged_asks_to_confirm_by_name(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    result = CE.pick(before=ENV_ID, env=env)
+    assert result["action"] == "not-picked"
+    assert result["reason"] == "pick-unchanged"
+    assert result["environment"] is None
+    assert result["message"] == CE._ALREADY_PICKED
+
+
+def test_first_pick_confirmed_by_name_returns_the_id(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
+    assert result["action"] == "picked"
+    assert result["reason"] == "kept-confirmed"
+    assert result["environment"] == ENV_ID
+
+
 def test_pick_unchanged_setting_asks_again_with_no_id(tmp_path):
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
@@ -185,7 +204,7 @@ def test_reader_follows_the_account_config_dir(tmp_path):
 def test_no_message_asks_to_type_or_paste_an_id():
     messages = [value for name, value in vars(CE).items()
                 if name.startswith("_") and name.isupper() and isinstance(value, str)]
-    assert len(messages) == 6
+    assert len(messages) == 7
     for message in messages:
         assert not re.search(r"\b(type|paste|copy)\b", message, re.IGNORECASE), message
 
@@ -233,6 +252,8 @@ def test_retry_unchanged_value_that_is_not_the_confirmed_id_asks_again(tmp_path)
     result = CE.pick(before=OTHER_ENV_ID, confirmed=ENV_ID, env=env)
     assert result["action"] == "not-picked" and result["reason"] == "pick-unchanged"
     assert result["environment"] is None
+    assert result["message"] == CE._ASK_AGAIN
+    assert result["message"] != CE._ALREADY_PICKED
 
 
 @pytest.mark.parametrize("content", _MISSING)
