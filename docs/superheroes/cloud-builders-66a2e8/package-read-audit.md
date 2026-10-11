@@ -893,3 +893,62 @@ No State line calls any of them open. Result: verified.
  "weight": "light"
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "architecture-001",
+   "lens": "collisions"
+  },
+  {
+   "finding": "architecture-002",
+   "lens": "collisions"
+  },
+  {
+   "finding": "architecture-003",
+   "lens": "dod-adequacy"
+  },
+  {
+   "finding": "architecture-004",
+   "lens": "collisions"
+  }
+ ],
+ "invocation": "inv6",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C5",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
