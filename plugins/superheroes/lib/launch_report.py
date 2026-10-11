@@ -150,6 +150,9 @@ def record_still(cwd, place_calls, *, root=None, today=None):
     to the cloud. Never raises."""
     try:
         path = _still_path(cwd, root)
+        if any(c.get("place") == "cloud" for c in place_calls):
+            # axis: a build that went to the cloud clears the stored reason even beside a local not-ready fallback — see bite-proof record wo_a_launch_report
+            return {"action": _remove(path)["action"], "reason": None}
         stuck = [c for c in place_calls if c.get("place") == "local" and c.get("pointedAtCloud")
                  and c.get("reason") in NOT_READY_CODES]
         if stuck:
@@ -163,8 +166,6 @@ def record_still(cwd, place_calls, *, root=None, today=None):
                 "observedOn": _today(today).isoformat(),
             })
             return {"action": "written", "reason": call["reason"]}
-        if any(c.get("place") == "cloud" for c in place_calls):
-            return {"action": _remove(path)["action"], "reason": None}
         return {"action": "unchanged", "reason": None}
     except Exception:
         return {"action": "refused", "reason": "write-failed"}
@@ -213,7 +214,9 @@ def _fixed(state, now):
         return False
     try:
         # axis: a reported fact is fixed only by a check made on a later day — see bite-proof record wo_a_launch_report
-        return datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(state["observedOn"])
+        later = datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(state["observedOn"])
+        # axis: a reported fact clears only when the reader reads ready now — see bite-proof record wo_a_launch_report
+        return later and now.get("ready") is True
     except ValueError:
         return False
 

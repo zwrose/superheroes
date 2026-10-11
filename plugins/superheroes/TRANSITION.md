@@ -78,6 +78,13 @@ These retirements ship in the same release as the review record, and never apart
 - In a cloud session the session-start hook writes the pass into the reviewer's default sign-in file before anything else runs, and adds a `### Reviewer pass` section to the session's bootstrap saying whether the pass is in place. Outside a cloud session the hook is unchanged.
 - `cloud_pass.py confirm`, run in a cloud session, prints one line saying whether the reviewer answers with the pass in that environment and the date the pass lapses. `cloud_pass.py record-confirmation`, run on the owner's machine with that line, moves the setup record's lapse date; nothing else moves it.
 
+### Showrunner: where builds run
+
+- Once cloud builds are switched on, the launcher decides where each build runs: the setting gives the default, and a launch word overrides it for one build.
+- A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
+- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message.
+- A new state file, `cloud-still.json`, sits in the project store's `state` folder.
+
 ## 0.42.0
 
 ### Before you upgrade
