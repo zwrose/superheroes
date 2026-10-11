@@ -38,7 +38,9 @@ it or dismiss it again for that run. Rendering is read-only — it never confirm
 calibration.
 
 The view also shows the **Spec reviewer seat** block, and lists configuration item 14 right after
-item 10.
+item 10. The Core block shows **Risk and trust**: "What we defend against" (the threat model) and
+"Risk areas", one line per area with its name, why, undo, and covers. It reads "(none set)" when
+there are none, and shows an unreadable line when the stored areas cannot be read.
 
 ## 2 — The tune menu
 
@@ -51,7 +53,33 @@ action that owns it, leaving the rest of the calibration untouched:
   whitespace-only value is refused by name (`verify-command-malformed`) on every read until fixed.
   Set it to the fast iteration check (lint, types, the touched tests), not the full gate; set-up § 3
   says why.
-- **Change the threat model** → `core_md.write_threat_model`, which replaces only that section.
+- **Change Risk and trust** → write only the `riskAndTrust` item, one half per call, with the value
+  as JSON on stdin through a quoted here-document. The threat model (shown as "What we defend
+  against"):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item riskAndTrust --cwd . <<'SUPERHEROES_ANSWER'
+  {"threatModel": "<the threat model as prose>"}
+  SUPERHEROES_ANSWER
+  ```
+
+  The risk areas, as the whole list:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item riskAndTrust --cwd . <<'SUPERHEROES_ANSWER'
+  {"riskAreas": [{"name": "<area name>", "covers": ["<repo-relative path pattern>"], "why": "<why a mistake costs>", "undo": "<how hard a mistake is to undo>"}]}
+  SUPERHEROES_ANSWER
+  ```
+
+  Setting `riskAreas` replaces the whole list. To add or change one area, read the list first
+  (`get --item riskAndTrust` returns `effective.riskAreas`), edit it, and write all of it back. Read
+  the result the same way as the `stackingTool` write below: only `written` or `noop` means it was
+  saved; report anything else to the owner with its `reason` and never work around it.
+- **Set up Risk and trust** → run the sitting in `set-up.md` § 3.5, starting from its who-it's-for
+  step. This is how an already-configured project, including one whose risk areas are not set, takes
+  the sitting.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
   reported to the owner and never worked around.
