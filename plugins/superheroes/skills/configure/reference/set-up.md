@@ -426,6 +426,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    in one fenced block for them to copy.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-message --cwd .
    ```
 
@@ -437,6 +438,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    kept (leave `--before` out when that value was null):
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept>
    ```
 
@@ -446,6 +448,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    values, and keep the `environment` it returns:
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>
    ```
 
@@ -458,14 +461,17 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    and it comes before the pass command, which cannot work without it.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" sign-in
    ```
 5. **Give the pass command, naming the id.** Tell the owner to run it on their own machine. It puts
    the [reviewer pass](../../../rubric/glossary.md#reviewer-pass) block on their clipboard, and they
    paste the block into the environment's variables. Never run it for them, and never ask to see
-   what it copied.
+   what it copied. The owner's terminal does not hold `ROOT_DIR`, so give them the command with
+   the plugin root's absolute path written out in the quoted script path.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_pass.py" make --environment <id>
    ```
 6. **Run the check when the owner says the steps are done.** Start one check session naming the
@@ -474,15 +480,17 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    repository, and the line holds versions, stamps and a date, never the pass.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" start --cwd . --environment <id> [--issue <n>]
    ```
 
    Keep the `nonce` it returns. A refusal starts nothing: say its `message`.
-7. **Read the result line and judge it.** Read the line that starts with `SUPERHEROES-CLOUD-CHECK`
-   from the session's final message, with the host's run-log reader, or from the issue comment. Save
-   the text you read to a file and run:
+7. **Read the result and judge it.** Read the session's final message, with the host's run-log
+   reader, or the issue comment. Save its full text to a file, without picking a line out of it, and
+   run:
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --cwd . --environment <id> --nonce <nonce> --line-file <file>
    ```
 
