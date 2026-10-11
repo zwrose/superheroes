@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import io
 import json
@@ -18,6 +19,22 @@ def _load_hook(module_name="session_start_under_test"):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@pytest.fixture(autouse=True)
+def _isolated_reviewer_home(tmp_path, monkeypatch):
+    """No hook test may read or write the real reviewer sign-in or see ambient cloud variables."""
+    home = tmp_path / "isolated-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("CODEX_HOME", "CLAUDE_CODE_REMOTE", "SUPERHEROES_REVIEWER_PASS"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_every_hook_test_starts_with_the_reviewer_home_isolated(tmp_path):
+    assert os.environ["HOME"] == str(tmp_path / "isolated-home")
+    assert not any(n in os.environ for n in ("CODEX_HOME", "CLAUDE_CODE_REMOTE",
+                                             "SUPERHEROES_REVIEWER_PASS"))
 
 
 def _stdin(monkeypatch, payload):
@@ -301,3 +318,137 @@ def test_host_model_skipped_when_claude_env_file_unset(tmp_path, monkeypatch, ca
     assert _run_startup(monkeypatch, capsys, {"model": "claude-opus-5"}) == 0
     assert not env_file.exists()
     _context_from_stdout(capsys)
+
+
+def _pass_fixture(refresh=""):
+    """A fixture reviewer pass built at run time: (base64 pass, access token, id token)."""
+    def b64u(raw):
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    def jwt(tag):
+        claims = json.dumps({"exp": 4_000_000_000, "sub": tag}).encode()
+        return ".".join([b64u(b"head-" + tag.encode()), b64u(claims), b64u(b"sig-" + tag.encode())])
+
+    access, ident = jwt("access"), jwt("ident")
+    obj = {"auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+           "tokens": {"id_token": ident, "access_token": access, "refresh_token": refresh,
+                      "account_id": "acct-fixture"},
+           "last_refresh": "2026-10-10T12:00:00Z"}
+    return base64.b64encode(json.dumps(obj).encode()).decode("ascii"), access, ident
+
+
+def _cloud_session(monkeypatch, tmp_path, cloud=True, pass_value=None):
+    """Point HOME at tmp_path and set the cloud variables; returns the default sign-in path."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("CODEX_HOME", "CLAUDE_CODE_REMOTE", "SUPERHEROES_REVIEWER_PASS"):
+        monkeypatch.delenv(name, raising=False)
+    if cloud:
+        monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    if pass_value is not None:
+        monkeypatch.setenv("SUPERHEROES_REVIEWER_PASS", pass_value)
+    return home / ".codex" / "auth.json"
+
+
+def _raw_and_context(capsys):
+    raw = capsys.readouterr().out
+    lines = [ln for ln in raw.splitlines() if ln]
+    assert len(lines) == 1
+    return raw, json.loads(lines[0])["hookSpecificOutput"]["additionalContext"]
+
+
+def test_reviewer_pass_section_absent_outside_a_cloud_session(tmp_path, monkeypatch, capsys):
+    # Axis: outside a cloud session the hook neither writes a sign-in nor adds the section.
+    pass_value, _, _ = _pass_fixture()
+    dest = _cloud_session(monkeypatch, tmp_path, cloud=False, pass_value=pass_value)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    assert "### Reviewer pass" not in _context_from_stdout(capsys)
+    assert not dest.exists()
+
+
+def test_reviewer_pass_placed_in_a_cloud_session(tmp_path, monkeypatch, capsys):
+    # Axis: a cloud session with a pass writes the sign-in file and says so without printing the pass.
+    pass_value, access, ident = _pass_fixture()
+    dest = _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    raw, ctx = _raw_and_context(capsys)
+    assert "### Reviewer pass\nThe reviewer pass is in place; it lapses 2096-10-02." in ctx
+    assert json.loads(dest.read_text())["tokens"]["access_token"] == access
+    for secret in (pass_value, access, ident):
+        assert secret not in raw
+
+
+def test_reviewer_pass_section_says_so_when_the_variable_could_not_be_removed(
+        tmp_path, monkeypatch, capsys):
+    # Axis: placed but no env file to record the removal, so the section says the pass is still visible.
+    pass_value, _, _ = _pass_fixture()
+    _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    ctx = _context_from_stdout(capsys)
+    assert "The reviewer pass is in place; it lapses 2096-10-02." in ctx
+    assert "still visible to processes in this session" in ctx
+
+
+def test_reviewer_pass_section_says_none_is_set(tmp_path, monkeypatch, capsys):
+    # Axis: a cloud session with no pass tells the agent review seats cannot run.
+    dest = _cloud_session(monkeypatch, tmp_path)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    ctx = _context_from_stdout(capsys)
+    assert "### Reviewer pass\nNo reviewer pass is set in this cloud environment" in ctx
+    assert not dest.exists()
+
+
+def test_reviewer_pass_section_names_the_refusal_reason_only(tmp_path, monkeypatch, capsys):
+    # Axis: a pass that can renew is refused, and the section names the reason token only.
+    renewal = "renewal-fixture-key"
+    pass_value, _, _ = _pass_fixture(refresh=renewal)
+    dest = _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    raw, ctx = _raw_and_context(capsys)
+    assert "The reviewer pass could not be placed (pass-can-renew)" in ctx
+    assert renewal not in raw and pass_value not in raw
+    assert not dest.exists()
+
+
+def test_reviewer_pass_call_raising_never_fails_the_hook(tmp_path, monkeypatch, capsys):
+    # Axis: an exception from place is swallowed and named by type only, in a cloud session.
+    _cloud_session(monkeypatch, tmp_path)
+    import cloud_pass
+
+    def boom(*_a, **_k):
+        raise RuntimeError("secret message")
+
+    monkeypatch.setattr(cloud_pass, "place", boom)
+    env_file = tmp_path / "env-file"
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    assert "unset SUPERHEROES_REVIEWER_PASS" in env_file.read_text().splitlines()
+    raw, ctx = _raw_and_context(capsys)
+    assert "The reviewer pass could not be placed (RuntimeError)" in ctx
+    assert "secret message" not in raw
+
+
+def test_reviewer_pass_leaves_later_shells_as_a_marker_only(tmp_path, monkeypatch, capsys):
+    # Axis: after placement the env file unsets the pass variable and exports only its SHA-256.
+    import hashlib
+    pass_value, _, _ = _pass_fixture()
+    dest = _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    env_file = tmp_path / "env-file"
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    lines = env_file.read_text().splitlines()
+    marker = hashlib.sha256(dest.read_bytes()).hexdigest()
+    assert "unset SUPERHEROES_REVIEWER_PASS" in lines
+    assert "export SUPERHEROES_REVIEWER_PASS_SHA256=%s" % marker in lines
+    assert pass_value not in env_file.read_text()
+
+
+def test_reviewer_pass_env_file_untouched_when_nothing_was_placed(tmp_path, monkeypatch, capsys):
+    # Axis: a refused placement still unsets the pass in later shells but exports no marker.
+    pass_value, _, _ = _pass_fixture(refresh="renewal-fixture-key")
+    _cloud_session(monkeypatch, tmp_path, pass_value=pass_value)
+    env_file = tmp_path / "env-file"
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    lines = env_file.read_text().splitlines()
+    assert "unset SUPERHEROES_REVIEWER_PASS" in lines
+    assert not any("PASS_SHA256" in line for line in lines)

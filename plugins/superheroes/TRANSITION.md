@@ -40,6 +40,13 @@ belongs to and lists every change with its replacement.
 - `set --item cloudBuilds` refuses `true` with the reason `cloud-setup-missing` while the project has no cloud setup on the launching Claude account. The result's `message` carries the words to say to the owner. Switching off keeps the setup.
 - New `lib/cloud_setup.py`. Its `read` answers the setting and the setup record for an account, and `record-check` and `confirm-pass` are the record's only writers. The record lives in the project's store, outside the repository, and holds no secret.
 
+### Cloud builds: the setup text and the reviewer pass
+
+- New `lib/cloud_setup_text.py`. Its `write` command prints the setup text an owner pastes into a cloud environment's setup-script field: it fetches the plugin at the commit the owner's machine runs, installs the reviewer's command-line tool and the duplication checker, and, for a project whose calibration is outside the repository, writes that calibration and its stamp. It refuses to print text that holds anything secret-shaped. A setup stays at the plugin version its setup text was written for until new setup text is pasted.
+- New `lib/cloud_pass.py`, the pass command. `make`, run on the owner's machine, builds a reviewer pass from a reviewer sign-in kept apart from the main one (by default the directory `.codex-cloud` under the home directory), with its renewal switched off, and puts four environment-variable lines on the clipboard for the cloud environment's variables: `SUPERHEROES_REVIEWER_PASS`, `CLAUDE_CODE_PLUGIN_DIRS` and the reviewer's two renewal endpoints. It writes no file and does not change the setup record. The first run needs a one-time sign-in to that separate sign-in, and the command says so.
+- In a cloud session the session-start hook writes the pass into the reviewer's default sign-in file before anything else runs, and adds a `### Reviewer pass` section to the session's bootstrap saying whether the pass is in place. Outside a cloud session the hook is unchanged.
+- `cloud_pass.py confirm`, run in a cloud session, prints one line saying whether the reviewer answers with the pass in that environment and the date the pass lapses. `cloud_pass.py record-confirmation`, run on the owner's machine with that line, moves the setup record's lapse date; nothing else moves it.
+
 ## 0.42.0
 
 ### Before you upgrade
