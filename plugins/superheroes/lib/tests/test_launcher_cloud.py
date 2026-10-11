@@ -86,8 +86,12 @@ def _cloud_repo(tmp_path):
     return repo
 
 
-def _announced(name="issue-656-x", session_id=SESSION_ID):
-    """The measured output of the platform command, wrapped in terminal control sequences."""
+def _announced(name, session_id=SESSION_ID):
+    """The measured output of the platform command, wrapped in terminal control sequences.
+
+    `name` is the session name the launch requested: the receipt is only the launch's own when it
+    announces that name, so every caller supplies it (a spawn reads it from the argv after `-n`).
+    """
     return (
         "\x1b[?25l\x1b[2K\r"
         "Created cloud session: %s\r\n"
@@ -103,7 +107,12 @@ def _spawned(output="", rc=0, timed_out=False, pid=FAKE_PID):
     return {"pid": pid, "rc": rc, "timedOut": timed_out, "output": output}
 
 
+def _requested_name(argv):
+    return argv[argv.index("-n") + 1]
+
+
 def _fake_spawn(result=None, calls=None, raises=None):
+    """A spawn whose `result` is a spawn result, or a function of the requested session name."""
     def spawn(argv, cwd, log_path, child_env, timeout):
         if calls is not None:
             calls.append({
@@ -112,7 +121,10 @@ def _fake_spawn(result=None, calls=None, raises=None):
             })
         if raises is not None:
             raise raises
-        return result if result is not None else _spawned(_announced())
+        name = _requested_name(argv)
+        if callable(result):
+            return result(name)
+        return result if result is not None else _spawned(_announced(name))
     return spawn
 
 
@@ -662,36 +674,53 @@ def test_outcome1_oserror_means_the_command_never_ran(tmp_path):
     assert [r["stage"] for r in _records(repo, result["launchId"], "refused")] == ["spawn"]
 
 
+def _bare_receipt(name, session_id=SESSION_ID):
+    """The receipt's lines without terminal control sequences."""
+    return (
+        "Created cloud session: %s\nView: https://claude.ai/code/%s?from=cli&m=0\n"
+        "Resume with: claude --teleport %s\n" % (name, session_id, session_id)
+    )
+
+
 @pytest.mark.parametrize("spawned", [
-    _spawned(_announced(), rc=1),
-    _spawned(_announced(), rc=0),
-    _spawned(_announced(), rc=None, timed_out=True),
-    _spawned("Created cloud session: x\nsession_Abc123\n", rc=7),
-], ids=["exit-1-with-id", "exit-0", "timed-out-with-id", "garbled"])
-def test_outcome2_a_session_id_is_a_success_whatever_the_exit_code(tmp_path, spawned):
+    pytest.param(lambda name: _spawned(_announced(name), rc=1), id="exit-1-with-id"),
+    pytest.param(lambda name: _spawned(_announced(name), rc=0), id="exit-0"),
+    pytest.param(
+        lambda name: _spawned(_announced(name), rc=None, timed_out=True), id="timed-out-with-id",
+    ),
+    pytest.param(lambda name: _spawned(_bare_receipt(name), rc=7), id="bare-lines-exit-7"),
+])
+def test_outcome2_a_coherent_receipt_is_a_success_whatever_the_exit_code(tmp_path, spawned):
     repo = _cloud_repo(tmp_path)
     result = _launch(repo, tmp_path, _fake_spawn(spawned))
     assert result["ok"] is True, result
-    assert result["cloudSessionId"].startswith("session_")
+    assert result["cloudSessionId"] == SESSION_ID
     lane = _lanes(repo)[result["launchId"]]
     assert lane["terminal"] is False and lane["started"] is True
     assert lane["cloudSessionId"] == result["cloudSessionId"]
 
 
-def test_outcome2_without_a_url_the_url_is_none(tmp_path):
+def test_outcome2_a_receipt_with_only_the_resume_line_yields_the_id_and_no_url(tmp_path):
     repo = _cloud_repo(tmp_path)
-    result = _launch(repo, tmp_path, _fake_spawn(_spawned("Created cloud session: x\n"
-                                                         "Resume with: claude --teleport %s\n"
-                                                         % SESSION_ID)))
-    assert result["ok"] is True
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Created cloud session: %s\nResume with: claude --teleport %s\n" % (name, SESSION_ID)
+    )))
+    assert result["ok"] is True, result
+    assert result["cloudSessionId"] == SESSION_ID
     assert result["cloudSessionUrl"] is None
-    assert _lanes(repo)[result["launchId"]]["cloudSessionUrl"] is None
+    lane = _lanes(repo)[result["launchId"]]
+    assert lane["cloudSessionId"] == SESSION_ID
+    assert lane["cloudSessionUrl"] is None
 
 
 UNCONFIRMED = [
     pytest.param(_spawned("", rc=None, timed_out=True), id="timeout-no-output"),
     pytest.param(_spawned("", rc=0), id="exit-0-empty-output"),
+    pytest.param(_spawned("", rc=1), id="exit-1-empty-output"),
+    pytest.param(_spawned("some error\r\n", rc=2), id="exit-2-error-text"),
+    pytest.param(_spawned("", rc=None), id="no-exit-code-empty-output"),
     pytest.param(_spawned("Created cloud session: x\r\n", rc=1), id="exit-1-announced-no-id"),
+    pytest.param(_spawned("Created cloud session: x\r\n", rc=0), id="exit-0-announced-no-id"),
     pytest.param(
         _spawned("Do you trust the files in this folder? (y/n)\r\n", rc=None, timed_out=True),
         id="trust-question-then-timeout",
@@ -699,11 +728,7 @@ UNCONFIRMED = [
 ]
 
 
-@pytest.mark.parametrize("spawned", UNCONFIRMED)
-def test_outcome3_an_uncertain_creation_keeps_the_lane_live(tmp_path, spawned):
-    # axis: an uncertain creation keeps the lane live
-    repo = _cloud_repo(tmp_path)
-    result = _launch(repo, tmp_path, _fake_spawn(spawned))
+def _assert_unconfirmed(repo, result):
     assert result["ok"] is False
     assert result["reason"] == "cloud-session-unconfirmed"
     assert result["cloudSessionName"] == "issue-656-%s" % result["launchId"][len("launch-"):]
@@ -715,20 +740,69 @@ def test_outcome3_an_uncertain_creation_keeps_the_lane_live(tmp_path, spawned):
     assert lane["cloudSessionUnconfirmed"] is True
     assert lane["cloudSessionId"] is None and lane["cloudSessionUrl"] is None
     assert lane["cloudSessionName"] == result["cloudSessionName"]
+    assert "cloudSessionId" not in _records(repo, result["launchId"], "started")[0]
     assert _records(repo, result["launchId"], "refused") == []
     assert _records(repo, result["launchId"], "outcome") == []
 
 
-def test_outcome4_a_confirmed_non_creation_is_terminalized(tmp_path):
+@pytest.mark.parametrize("spawned", UNCONFIRMED)
+def test_outcome3_an_uncertain_creation_keeps_the_lane_live(tmp_path, spawned):
+    # axis: an uncertain creation keeps the lane live
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(spawned))
+    _assert_unconfirmed(repo, result)
+
+
+def test_outcome4_a_non_zero_exit_without_a_receipt_leaves_the_lane_live_and_unconfirmed(
+    tmp_path,
+):
+    # axis: the lane is not ended — a non-zero exit with no receipt may still have made a session
     repo = _cloud_repo(tmp_path)
     result = _launch(repo, tmp_path, _fake_spawn(_spawned("some error\r\n", rc=2)))
-    assert result["ok"] is False
-    assert result["reason"] == "cloud-spawn-failed:2"
-    assert result["logPath"].endswith("%s.stdout" % result["launchId"])
-    lane = _lanes(repo)[result["launchId"]]
-    assert lane["terminal"] is True and lane["terminalKind"] == "refused"
-    assert lane["started"] is False
-    assert [r["stage"] for r in _records(repo, result["launchId"], "refused")] == ["spawn"]
+    _assert_unconfirmed(repo, result)
+    assert not result["reason"].startswith("cloud-spawn-failed")
+    started = _records(repo, result["launchId"], "started")
+    assert len(started) == 1 and started[0]["cloudSessionUnconfirmed"] is True
+
+
+def test_outcome5_a_session_token_without_a_creation_line_is_not_a_session_id(tmp_path):
+    # axis: where the id is read from — only a coherent creation receipt names a session
+    repo = _cloud_repo(tmp_path)
+    stray = "Unable to resume prior session_old123: authentication failed\r\n"
+    result = _launch(repo, tmp_path, _fake_spawn(_spawned(stray, rc=2)))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
+    assert "cloudSessionUrl" not in result
+
+
+def test_outcome5_a_stray_token_beside_a_receipt_for_another_name_is_not_an_id(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Reusing session_old123 for context\n"
+        "Created cloud session: %s\n" % name
+    )))
+    _assert_unconfirmed(repo, result)
+
+
+def test_outcome5_a_receipt_announcing_a_different_name_is_unconfirmed(tmp_path):
+    # axis: whose session it is — the announced name must be the name this launch requested
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(
+        _spawned(_announced("issue-656-someone-elses", "session_01OtherLane"))
+    ))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
+
+
+def test_outcome5_a_receipt_whose_two_ids_differ_is_unconfirmed(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Created cloud session: %s\n"
+        "View: https://claude.ai/code/session_01AAA?from=cli&m=0\n"
+        "Resume with: claude --teleport session_01BBB\n" % name
+    )))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
 
 
 def test_a_spawn_result_that_is_not_a_dict_leaves_the_lane_live(tmp_path):
@@ -786,36 +860,137 @@ def _fail_started_appends(monkeypatch, *, spare_repairs):
     monkeypatch.setattr(ll, "append", failing_append)
 
 
-def test_edge6_started_append_failure_after_a_session_id_repairs_with_the_cloud_fields(
+def test_edge6_started_append_failure_after_a_coherent_receipt_leaves_the_lane_live(
     tmp_path, monkeypatch,
 ):
+    # axis: the lane is not ended — a session exists and is working, so nothing is terminalized
     repo = _cloud_repo(tmp_path)
     _fail_started_appends(monkeypatch, spare_repairs=True)
     result = _launch(repo, tmp_path, _fake_spawn())
     assert result["ok"] is False
+    assert result["reason"] == "cloud-started-append-failed"
     assert result["cloudSessionId"] == SESSION_ID
-    assert result["cloudSessionName"].startswith("issue-656-")
+    assert result["cloudSessionName"] == "issue-656-%s" % result["launchId"][len("launch-"):]
+    assert result["cloudSessionUrl"] == SESSION_URL
+    assert result["logPath"].endswith("%s.stdout" % result["launchId"])
+    assert result["startedAppend"] == "ledger-append-failed"
+    assert "cloud session exists" in result["remedy"] and "record-outcome" in result["remedy"]
     lane = _lanes(repo)[result["launchId"]]
-    assert lane["started"] is True
-    assert lane["cloudSessionId"] == SESSION_ID
-    assert lane["cloudSessionUrl"] == SESSION_URL
-    assert lane["cloudSessionName"] == result["cloudSessionName"]
-    assert lane["terminal"] is True and lane["terminalKind"] == "outcome"
-    assert lane["outcome"] == "park"
-    repaired = _records(repo, result["launchId"], "started")[0]
-    assert repaired["repaired"] is True
+    assert lane["terminal"] is False
+    assert lane["started"] is False
+    assert lane["cloudSessionId"] is None
+    assert _records(repo, result["launchId"], "terminal") == []
+    assert _records(repo, result["launchId"], "outcome") == []
+    assert _records(repo, result["launchId"], "refused") == []
+    assert _records(repo, result["launchId"], "started") == []
 
 
-def test_edge6_started_append_failure_without_a_repair_reports_the_terminalization_failure(
+def test_edge6_a_second_launch_is_refused_while_an_append_failed_lane_is_live(
     tmp_path, monkeypatch,
 ):
     repo = _cloud_repo(tmp_path)
-    _fail_started_appends(monkeypatch, spare_repairs=False)
-    result = _launch(repo, tmp_path, _fake_spawn())
+    with monkeypatch.context() as patched:
+        _fail_started_appends(patched, spare_repairs=True)
+        first = _launch(repo, tmp_path, _fake_spawn())
+    assert first["reason"] == "cloud-started-append-failed"
+    calls = []
+    second = _launch(repo, tmp_path, _fake_spawn(calls=calls))
+    assert second["ok"] is False
+    assert second["reason"] == "surface-overlap:%s" % first["launchId"]
+    assert calls == []
+
+
+def test_outcome3_a_second_launch_is_refused_while_a_non_zero_exit_lane_is_live(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    first = _launch(repo, tmp_path, _fake_spawn(_spawned("some error\r\n", rc=2)))
+    assert first["reason"] == "cloud-session-unconfirmed"
+    calls = []
+    second = _launch(repo, tmp_path, _fake_spawn(calls=calls))
+    assert second["ok"] is False
+    assert second["reason"] == "surface-overlap:%s" % first["launchId"]
+    assert calls == []
+
+
+# --- every path past the spawn leaves the lane to the ledger's owner ---------------------
+
+
+def _drive_cloud_spawn(tmp_path, monkeypatch, *, spawned=None, raises=None, append_ok=True,
+                       err_dir_exists=True):
+    """`_run_cloud_spawn` driven directly, with `_terminalize` replaced by a recorder."""
+    terminalized = []
+
+    def recorder(*args, **kwargs):
+        terminalized.append((args, kwargs))
+        return {"ok": True, "reason": None}
+
+    monkeypatch.setattr(L, "_terminalize", recorder)
+    monkeypatch.setattr(
+        L, "_append_under_lock",
+        lambda repo_root, record, env=None: (
+            {"ok": True} if append_ok else {"ok": False, "reason": "ledger-append-failed"}
+        ),
+    )
+
+    def spawn(argv, cwd, log_path, child_env, timeout):
+        if raises is not None:
+            raise raises
+        return spawned(_requested_name(argv)) if callable(spawned) else spawned
+
+    name = "issue-656-census"
+    err_path = str(tmp_path / ("err" if err_dir_exists else "no-such-dir") / "launch.stderr")
+    (tmp_path / "err").mkdir(exist_ok=True)
+    result = L._run_cloud_spawn(
+        str(tmp_path), "launch-census", ["claude", "--cloud", "p", "-n", name], name,
+        str(tmp_path / "launch.stdout"), err_path, {}, 5, spawn, None, {},
+        lambda reason, **extra: dict(extra, ok=False, reason=reason),
+        {"ok": True, "reason": None},
+    )
+    return result, terminalized
+
+
+@pytest.mark.parametrize("drive", [
+    pytest.param(dict(err_dir_exists=False), id="edge1-err-path-unopenable"),
+    pytest.param(dict(raises=FileNotFoundError("claude")), id="edge2-spawn-oserror"),
+])
+def test_census_a_command_that_never_started_is_terminalized(tmp_path, monkeypatch, drive):
+    result, terminalized = _drive_cloud_spawn(
+        tmp_path, monkeypatch, spawned=_spawned(""), **drive,
+    )
     assert result["ok"] is False
-    assert result["reason"] == "terminalization-failed:ledger-append-failed"
-    assert result["cloudSessionId"] == SESSION_ID
-    assert _lanes(repo)[result["launchId"]]["terminal"] is False
+    assert len(terminalized) == 1
+    assert terminalized[0][0][3] in ("log-open-failed", "spawn-oserror")
+
+
+@pytest.mark.parametrize("drive,reason", [
+    pytest.param(dict(spawned=None), "cloud-spawn-result-invalid", id="edge3-not-a-dict"),
+    pytest.param(
+        dict(spawned=lambda name: _spawned(_announced(name))), None, id="edge4-receipt-appended",
+    ),
+    pytest.param(
+        dict(spawned=lambda name: _spawned(_announced(name)), append_ok=False),
+        "cloud-started-append-failed", id="edge5-receipt-append-failed",
+    ),
+    pytest.param(dict(spawned=_spawned("", rc=0)), "cloud-session-unconfirmed", id="edge6-rc0"),
+    pytest.param(
+        dict(spawned=_spawned("some error", rc=2)), "cloud-session-unconfirmed", id="edge6-rc2",
+    ),
+    pytest.param(
+        dict(spawned=_spawned("", rc=None, timed_out=True)), "cloud-session-unconfirmed",
+        id="edge6-timed-out",
+    ),
+    pytest.param(
+        dict(spawned=_spawned("some error", rc=2), append_ok=False), "cloud-session-unconfirmed",
+        id="edge7-unconfirmed-append-failed",
+    ),
+])
+def test_census_once_the_command_has_run_nothing_is_terminalized(
+    tmp_path, monkeypatch, drive, reason,
+):
+    # axis: the lane is not ended — after the spawn returned, `_run_cloud_spawn` never terminalizes
+    result, terminalized = _drive_cloud_spawn(tmp_path, monkeypatch, **drive)
+    assert terminalized == []
+    assert result["reason"] == reason
+    assert result["ok"] is (reason is None)
 
 
 def test_edge6_started_append_failure_when_unconfirmed_terminalizes_nothing(

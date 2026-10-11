@@ -114,9 +114,9 @@ PLACE_LOCAL = ll.PLACE_LOCAL
 PLACE_CLOUD = ll.PLACE_CLOUD
 _CLOUD_SPAWN_TIMEOUT_SECONDS = 120
 _CLOUD_ENVIRONMENT_RE = re.compile(r"env_[A-Za-z0-9]+")
-_CLOUD_SESSION_ID_RE = re.compile(r"session_[A-Za-z0-9]+")
-_CLOUD_SESSION_URL_RE = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
-_CLOUD_ANNOUNCED = "Created cloud session"
+_CLOUD_CREATED_PREFIX = "Created cloud session: "
+_CLOUD_VIEW_RE = re.compile(r"View: (https://claude\.ai/code/(session_[A-Za-z0-9]+))")
+_CLOUD_RESUME_RE = re.compile(r"Resume with: claude --teleport (session_[A-Za-z0-9]+)")
 _TERMINAL_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _TERMINAL_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _TERMINAL_ESC_RE = re.compile(r"\x1b(?:[()][0-9A-Za-z]|[@-Z\\-_=>])")
@@ -125,6 +125,11 @@ _CLOUD_UNCONFIRMED_REMEDY = (
     "identity of. Look for a session with the name in `cloudSessionName` in the host's session "
     "listing. The lane is left live. When there is no such session, record the lane's outcome "
     "as `died`; when there is one, the lane is that session."
+)
+_CLOUD_STARTED_APPEND_REMEDY = (
+    "A cloud session exists and is working: its identity is in `cloudSessionId`. The ledger holds "
+    "this lane without its session, because the `started` record could not be written. The lane "
+    "is left live. End it with `record-outcome` when the session finishes."
 )
 
 # What a reader of a `started` record sees when its lane launched over a recorded surface
@@ -1377,16 +1382,42 @@ def _strip_terminal_sequences(text):
     return text.replace("\r", "")
 
 
+def _read_cloud_receipt(text, session_name):
+    """The `(session_id, session_url)` of a coherent creation receipt in `text`, else None.
+
+    Coherent: a `Created cloud session: <name>` line whose name is `session_name`, then a `View:`
+    line or a `Resume with: claude --teleport` line (or both) that yields a session id, and equal
+    ids when both do. The id is read from those lines only; a `session_` token elsewhere is not one.
+    """
+    lines = [line.strip() for line in text.split("\n")]
+    for index, line in enumerate(lines):
+        if not line.startswith(_CLOUD_CREATED_PREFIX):
+            continue
+        # axis: whose session it is — the announced name must equal the name this launch requested.
+        if line[len(_CLOUD_CREATED_PREFIX):].strip() != session_name:
+            continue
+        view = next((m for m in map(_CLOUD_VIEW_RE.match, lines[index + 1:]) if m), None)
+        resume = next((m for m in map(_CLOUD_RESUME_RE.match, lines[index + 1:]) if m), None)
+        if view is None and resume is None:
+            continue
+        if view is not None and resume is not None and view.group(2) != resume.group(1):
+            continue
+        session_id = view.group(2) if view is not None else resume.group(1)
+        return session_id, (view.group(1) if view is not None else None)
+    return None
+
+
 def _run_cloud_spawn(
     repo_root, launch_id, argv, session_name, log_path, err_path, child_env, timeout,
     spawn_fn, evidence, env, post_reserve_fail, success_base,
 ):
     """Run the cloud launch command once, record the lane's `started`, and shape the result.
 
-    Exactly one outcome applies, in this order: the command never ran (terminalized); a session
-    id was read (started, success); no id was read but a session may exist (started with the
-    unconfirmed marker, lane left live); confirmed non-creation (terminalized). Never raises
-    for a command that ran.
+    Exactly one outcome applies, in this order: the command never ran (terminalized); a coherent
+    creation receipt was read (started, success); no coherent receipt (started with the
+    unconfirmed marker, lane left live). Once the command has run, no path ends the lane: a
+    session may exist, and only its owner's `record-outcome` ends the lane. Never raises for a
+    command that ran.
     """
     spawn = spawn_fn or _default_cloud_spawn
     try:
@@ -1408,13 +1439,10 @@ def _run_cloud_spawn(
         )
 
     pid = spawned.get("pid")
-    rc = spawned.get("rc")
-    timed_out = spawned.get("timedOut") is True
     output = spawned.get("output")
     text = _strip_terminal_sequences(output) if isinstance(output, str) else ""
-    id_match = _CLOUD_SESSION_ID_RE.search(text)
-    url_match = _CLOUD_SESSION_URL_RE.search(text)
-    announced = _CLOUD_ANNOUNCED in text
+    # axis: where the id is read from — only a coherent creation receipt, never a token elsewhere.
+    receipt = _read_cloud_receipt(text, session_name)
 
     started = {
         "event": "started",
@@ -1430,35 +1458,22 @@ def _run_cloud_spawn(
     if isinstance(evidence, str) and evidence.strip():
         started["evidence"] = evidence
 
-    if id_match is not None:
-        session_id = id_match.group(0)
-        session_url = url_match.group(0) if url_match is not None else None
+    if receipt is not None:
+        session_id, session_url = receipt
         started["cloudSessionId"] = session_id
         if session_url is not None:
             started["cloudSessionUrl"] = session_url
         append_result = _append_under_lock(repo_root, started, env=env)
         if not append_result["ok"]:
-            repair = {
-                key: started[key]
-                for key in (
-                    "attempt", "pid", "logPath", "errPath", "cloudSessionName",
-                    "cloudSessionId", "cloudSessionUrl", "evidence",
-                )
-                if key in started
-            }
-            term = _terminalize(
-                repo_root,
-                launch_id,
-                True,
-                append_result["reason"],
-                evidence="started-append-failed",
-                env=env,
-                started_repair=repair,
-            )
+            # axis: a session exists and is working — the lane stays live on its `reserved` record.
             return post_reserve_fail(
-                _terminalization_reason(term, append_result["reason"]),
+                "cloud-started-append-failed",
                 cloudSessionId=session_id,
                 cloudSessionName=session_name,
+                cloudSessionUrl=session_url,
+                logPath=log_path,
+                startedAppend=append_result["reason"],
+                remedy=_CLOUD_STARTED_APPEND_REMEDY,
             )
         success = dict(success_base)
         success.update({
@@ -1472,24 +1487,19 @@ def _run_cloud_spawn(
         })
         return success
 
-    if timed_out or (type(rc) is int and rc == 0) or announced:
-        # axis: an uncertain creation keeps the lane live — a session may exist, so nothing is terminalized.
-        started["cloudSessionUnconfirmed"] = True
-        append_result = _append_under_lock(repo_root, started, env=env)
-        extra = {}
-        if not append_result["ok"]:
-            extra["startedAppend"] = append_result["reason"]
-        return post_reserve_fail(
-            "cloud-session-unconfirmed",
-            cloudSessionName=session_name,
-            logPath=log_path,
-            remedy=_CLOUD_UNCONFIRMED_REMEDY,
-            **extra,
-        )
-
-    reason = "cloud-spawn-failed:%s" % (rc,)
-    term = _terminalize(repo_root, launch_id, False, reason, stage="spawn", env=env)
-    return post_reserve_fail(_terminalization_reason(term, reason), logPath=log_path)
+    # axis: an uncertain creation keeps the lane live — whatever the exit code or timeout, a session may exist, so nothing is terminalized.
+    started["cloudSessionUnconfirmed"] = True
+    append_result = _append_under_lock(repo_root, started, env=env)
+    extra = {}
+    if not append_result["ok"]:
+        extra["startedAppend"] = append_result["reason"]
+    return post_reserve_fail(
+        "cloud-session-unconfirmed",
+        cloudSessionName=session_name,
+        logPath=log_path,
+        remedy=_CLOUD_UNCONFIRMED_REMEDY,
+        **extra,
+    )
 
 
 def _terminalization_reason(term_result, fallback_reason):
