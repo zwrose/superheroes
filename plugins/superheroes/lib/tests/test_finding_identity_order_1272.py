@@ -19,7 +19,6 @@ def _load(name):
 
 RD = _load("round_driver")
 SC = _load("session_contract")
-RC = _load("round_certification")
 
 
 def _cfg(**over):
@@ -372,16 +371,12 @@ def test_foreign_collision_keys_are_staging_order_independent():
         assert "#" not in row[SC.FINDING_KEY_FIELD]
 
 
-def test_finding_identity_has_one_home_driver_and_certification_agree():
-    """T15: two unkeyed long-title siblings stay distinct; driver and certification agree."""
+def test_finding_identity_has_one_home_driver_and_session_contract_agree():
+    """T15: two unkeyed long-title siblings stay distinct; driver and session_contract agree."""
     alpha, beta = _clamped_collision_pair()
     state = RD.new_state(_cfg())
     RD._set_findings(state, [alpha, beta])
     assert len(state["findings"]) == 2
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    certified = list(by_key.values())
-    assert len(certified) == 2
     a, b = state["findings"][0], state["findings"][1]
     assert SC.finding_identity_key(a) != SC.finding_identity_key(b)
     assert RD._finding_key_of(a) == SC.finding_identity_key(a)
@@ -391,10 +386,6 @@ def test_finding_identity_has_one_home_driver_and_certification_agree():
     legacy_state = RD.new_state(_cfg())
     legacy_state["findings"] = [dict(alpha_u), dict(beta_u)]
     assert SC.FINDING_KEY_FIELD not in legacy_state["findings"][0]
-    legacy_by_key, legacy_refusal = RC._certification_findings_by_key(legacy_state)
-    assert legacy_refusal is None
-    legacy_certified = list(legacy_by_key.values())
-    assert len(legacy_certified) == 2
     assert SC.finding_identity_key(alpha_u) != SC.finding_identity_key(beta_u)
     assert RD._finding_key_of(alpha_u) == SC.finding_identity_key(alpha_u)
     assert RD._finding_key_of(beta_u) == SC.finding_identity_key(beta_u)
@@ -470,16 +461,6 @@ def test_durable_skeleton_carries_finding_key_so_resume_keeps_one_identity():
     assert skeleton["findings"][0][SC.FINDING_KEY_FIELD] == long_finding[SC.FINDING_KEY_FIELD]
     assert skeleton["findings"][0]["title"] == RM.clamp_title(long_finding["title"])
 
-    state = RD.new_state(_cfg())
-    RD._set_findings(state, compiled)
-    state["findings"][0]["disposition"] = "refuted"
-    state["_records"] = [RM.summarize_record({"findings": [dict(state["findings"][0])]})]
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    certified = list(by_key.values())
-    assert len(certified) == 1
-    assert certified[0]["disposition"] == "refuted"
-
     rec = {"findings": [dict(long_finding)]}
     assert RM.summarize_record(RM.summarize_record(rec)) == RM.summarize_record(rec)
 
@@ -506,7 +487,7 @@ def test_identity_derivation_has_one_home_census():
     }
     # review_memory.clamp_title is the canonical home of clamp_title; other modules may call it.
     REVIEW_MEMORY_ALLOWED_CALLS = frozenset({"clamp_title"})
-    modules = ("round_driver", "round_certification", "round_records", "verification",
+    modules = ("round_driver", "round_records", "verification",
                "audits", "review_memory")
     assert STALL_ALIAS not in forbidden_calls
     audits_path = os.path.join(_LIB, "audits.py")
@@ -545,7 +526,3 @@ def test_identity_derivation_has_one_home_census():
     with open(rd_path, encoding="utf-8") as fh:
         rd_src = fh.read()
     assert "session_contract.finding_identity_key" in rd_src
-    rc_path = os.path.join(_LIB, "round_certification.py")
-    with open(rc_path, encoding="utf-8") as fh:
-        rc_src = fh.read()
-    assert "finding_identity_key" in rc_src

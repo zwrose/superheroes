@@ -12,6 +12,9 @@ _RECORD_CONSUMER_SOURCES = (
 )
 # Fields the consumer modules read with a defensive isinstance before non-for use only.
 _CENSUS_EXCLUDE = frozenset({"changedSubjects"})
+# Declared fields whose consumers read them in a shape the scanner does not model:
+# review_loop_plan._latest_coverage_ids and review_memory._terminal_fields_from_records.
+_DECLARED_BEYOND_CENSUS = frozenset({"coverageDecisions"})
 _RECORD_FIELD_SHAPE_INVARIANT = (
     "review_memory.load_records_state never returns ok: true for a record whose known "
     "collection- or mapping-shaped fields are structurally wrong"
@@ -223,10 +226,27 @@ def test_record_field_shapes_cover_consumer_census():
     observed = set()
     for path in _RECORD_CONSUMER_SOURCES:
         observed |= census_record_collection_fields(path)
-    assert declared == observed, (
+    assert not (observed & _DECLARED_BEYOND_CENSUS), (
+        "a field the scanner sees must leave the exemption: %s"
+        % sorted(observed & _DECLARED_BEYOND_CENSUS)
+    )
+    assert declared == observed | _DECLARED_BEYOND_CENSUS, (
         "%s — declared %s, consumer census %s"
         % (_RECORD_FIELD_SHAPE_INVARIANT, sorted(declared), sorted(observed))
     )
+
+
+def test_declared_beyond_census_fields_still_have_a_consumer():
+    """Each exempted field is still read, as `.get("<field>")`, by a consumer module."""
+    sources = []
+    for path in _RECORD_CONSUMER_SOURCES:
+        with open(path, encoding="utf-8") as fh:
+            sources.append(fh.read())
+    for field in sorted(_DECLARED_BEYOND_CENSUS):
+        needle = '.get("%s")' % field
+        assert any(needle in source for source in sources), (
+            "%s is exempt from the census but no consumer module reads %s" % (field, needle)
+        )
 
 
 def test_persist_record_bytes_match_records_bytes_chokepoint(tmp_path):

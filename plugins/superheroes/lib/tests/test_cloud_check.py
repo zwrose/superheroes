@@ -253,11 +253,32 @@ def test_sign_in_walk_when_no_separate_sign_in(tmp_path):
     home, env = _home_env(tmp_path)
     result = CC.sign_in(env)
     assert result["action"] == "checked" and result["signedIn"] is False
+    # bites on: any change to the walk text, including the mkdir -p lead on the command line
     assert result["message"] == (
         "The reviewer needs its own sign-in on this machine, kept apart from your main one. Run "
         "this in a terminal and finish the sign-in in your browser:\n\n"
-        "    CODEX_HOME=%s/.codex-cloud codex login\n\n"
-        "Tell me when it's done and I'll check it." % home)
+        "    mkdir -p %(h)s/.codex-cloud && CODEX_HOME=%(h)s/.codex-cloud codex login\n\n"
+        "Tell me when it's done and I'll check it." % {"h": home})
+
+
+def test_sign_in_command_creates_a_missing_home_before_signing_in(tmp_path):
+    import shlex
+    missing = tmp_path / "not-created-yet"
+    home, env = _home_env(tmp_path, **{cloud_pass.SEPARATE_HOME_ENV: str(missing)})
+    command = CC.sign_in(env)["message"].split("\n\n")[1].strip()
+    quoted = shlex.quote(str(missing))
+    # bites on: the command losing its `mkdir -p <home> &&` lead, so codex meets a missing home
+    assert not missing.exists()
+    assert command == "mkdir -p %s && %s=%s codex login" % (quoted, cloud_pass._CODEX_HOME_ENV, quoted)
+
+
+def test_sign_in_message_names_the_quoted_home_twice_and_makes_it_once(tmp_path):
+    import shlex
+    tricky = tmp_path / "rev$UNSET_X home"
+    home, env = _home_env(tmp_path, **{cloud_pass.SEPARATE_HOME_ENV: str(tricky)})
+    message = CC.sign_in(env)["message"]
+    # bites on: the home appearing a different number of times, or mkdir -p repeated or dropped
+    assert message.count(shlex.quote(str(tricky))) == 2 and message.count("mkdir -p") == 1
 
 
 def test_sign_in_in_place(tmp_path):
@@ -294,7 +315,10 @@ def test_sign_in_command_quotes_the_home_literally(tmp_path):
     run = subprocess.run(["/bin/sh", "-c", "codex() { printf '%s' \"$CODEX_HOME\"; }\n" + command],
                          capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
     assert run.stdout == str(tricky)
-    assert shlex.quote(str(tricky)) in command
+    # bites on: either occurrence of the home being quoted differently from the other
+    quoted = shlex.quote(str(tricky))
+    assert command == "mkdir -p %s && CODEX_HOME=%s codex login" % (quoted, quoted)
+    assert tricky.is_dir()
 
 
 def test_setup_message_names_the_sign_ins_real_expiry_when_readable(tmp_path, composing):
@@ -340,7 +364,7 @@ def test_setup_text_passes_a_compose_refusal_through(tmp_path, monkeypatch):
 def test_report_line_round_trips_through_judge(tmp_path):
     local, cloud = _pair(tmp_path)
     obj = _cloud_report(cloud)
-    assert obj["schema"] == "cloud-check-report/1" and obj["nonce"] == NONCE
+    assert obj["schema"] == CC.REPORT_SCHEMA and obj["nonce"] == NONCE
     assert obj["environment"] == ENV_ID and obj["pluginVersion"] == VERSION
     assert obj["placedStamp"] == obj["stampFile"] == local.stamp
     line = CC.report_line(obj)
@@ -378,7 +402,7 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
                     confirm_fn=raising)
     # a session with no store and no calibration directory has nothing placed and nothing carried
     assert obj == {
-        "schema": "cloud-check-report/1", "nonce": None, "environment": None,
+        "schema": CC.REPORT_SCHEMA, "nonce": None, "environment": None,
         "pluginVersion": None, "placedStamp": "none", "stampFile": None, "repoStamp": "none",
         "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                          "passLapses": None, "reason": "confirm-raised"}}
@@ -559,7 +583,7 @@ def test_judge_edge7_an_unreadable_account_fails_on_record(tmp_path):
     result = _judge(local, _ok_report(cloud), account=None,
                     record_fn=lambda *a, **k: calls.append(k) or {"action": "written"})
     _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
-               "could not write the setup record on this machine.")
+               "could not finish saving the result on this machine.")
     assert calls == [] and _record_state(local) == "none"
 
 
@@ -574,7 +598,7 @@ def test_judge_edge8_a_refused_or_raising_record_write_fails_on_record(tmp_path)
         # axis: a record write that did not report written is never reported as a pass
         result = _judge(local, _ok_report(cloud), record_fn=fake)
         _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
-                   "could not write the setup record on this machine.")
+                   "could not finish saving the result on this machine.")
         assert _record_state(local) == "none"
     assert _judge(local, _ok_report(cloud))["action"] == "passed"
 
@@ -773,14 +797,13 @@ def test_judge_accepts_an_absent_stamp_file_only_when_nothing_was_placed(tmp_pat
     assert _record_state(placed_local) == "none"
 
 
-def test_repo_calibration_stamp_covers_every_file_and_ignores_the_setting(tmp_path):
+def test_repo_calibration_stamp_covers_every_layer_file_and_ignores_the_setting(tmp_path):
     w = _build(tmp_path, mode_registry.IN_REPO)
     directory = os.path.join(w.cwd, os.path.dirname(core_md.in_repo_core_rel_path()))
     before = CC.repo_calibration_stamp(w.cwd)
     _turn_on(w)
     assert CC.repo_calibration_stamp(w.cwd) == before
-    os.makedirs(os.path.join(directory, "sub"))
-    with open(os.path.join(directory, "sub", "extra.md"), "w") as fh:
+    with open(os.path.join(directory, "extra.md"), "w") as fh:
         fh.write("extra\n")
     assert CC.repo_calibration_stamp(w.cwd) not in (before, "none")
     bare = tmp_path / "bare"
@@ -795,6 +818,22 @@ def test_repo_calibration_stamp_ignores_a_ds_store(tmp_path):
     before = CC.repo_calibration_stamp(w.cwd)
     with open(os.path.join(directory, ".DS_Store"), "wb") as fh:
         fh.write(b"\x00junk")
+    assert CC.repo_calibration_stamp(w.cwd) == before
+
+
+def test_repo_calibration_stamp_ignores_a_guardian_sweep_output(tmp_path):
+    w = _build(tmp_path, mode_registry.IN_REPO)
+    directory = os.path.join(w.cwd, os.path.dirname(core_md.in_repo_core_rel_path()))
+    before = CC.repo_calibration_stamp(w.cwd)
+    sweep = os.path.join(directory, "guardian")
+    os.makedirs(sweep)
+    for name, body in (("report.md", "# sweep\n"), ("latest.json", "{}"), ("vitals.jsonl", "{}\n"),
+                       ("ledger.md", "ledger\n")):
+        with open(os.path.join(sweep, name), "w") as fh:
+            fh.write(body)
+    with open(os.path.join(directory, "core.md.lock"), "w") as fh:
+        fh.write("1")
+    # detector: a Guardian sweep output (or lock file) that changes the fingerprint goes red here
     assert CC.repo_calibration_stamp(w.cwd) == before
 
 
@@ -910,7 +949,7 @@ def test_judge_unread_message(tmp_path):
 # --- the failed-check marker ---------------------------------------------------------------
 
 FAILED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-DAMAGED = {"schema": "cloud-check-failed/1", "failedAt": None, "failedParts": [],
+DAMAGED = {"schema": CC.FAILED_CHECK_SCHEMA, "failedAt": None, "failedParts": [],
            "environment": None, "damaged": True}
 
 
@@ -947,7 +986,7 @@ def test_a_failed_check_writes_the_marker_and_leaves_the_record_alone(tmp_path):
     assert result["markerWritten"] is True
     marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
     assert set(marker) == {"schema", "account", "environment", "failedAt", "failedParts"}
-    assert marker["schema"] == "cloud-check-failed/1" and marker["account"] == ACCOUNT
+    assert marker["schema"] == CC.FAILED_CHECK_SCHEMA and marker["account"] == ACCOUNT
     assert marker["environment"] == ENV_ID and marker["failedParts"] == ["version"]
     assert FAILED_AT_RE.match(marker["failedAt"]) and marker["failedAt"] == "2026-10-10T12:00:00Z"
     with open(_marker_path(local), encoding="utf-8") as fh:
@@ -979,6 +1018,47 @@ def test_a_marker_lists_the_setting_part_after_a_switch_off_that_failed(tmp_path
         "version", "setting"]
 
 
+def test_the_marker_exists_when_the_switch_off_is_attempted(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    seen = []
+
+    def set_fn(*a, **k):
+        seen.append(CC.read_failed_check(local.cwd, ACCOUNT, local.root))
+        return {"action": "written"}
+
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=set_fn)
+    # detector: a switch-off attempted before the marker is on disk goes red here
+    assert len(seen) == 1 and seen[0]["failedParts"] == ["version"]
+    assert result["markerWritten"] is True and result["failedParts"] == ["version"]
+    seen.clear()
+    unread = _judge(local, "no report here", set_fn=set_fn)
+    assert len(seen) == 1 and seen[0]["failedParts"] == ["unread"]
+    assert unread["markerWritten"] is True
+
+
+def test_a_failed_switch_off_rewrites_the_marker_and_a_failed_rewrite_keeps_the_first(
+        tmp_path, monkeypatch):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    refuse = lambda *a, **k: {"action": "refused", "reason": "profile-absent"}  # noqa: E731
+    real_replace = os.replace
+    writes = []
+
+    def replace(src, dst, *a, **k):
+        if str(dst).endswith(CC.FAILED_CHECK_SUFFIX):
+            writes.append(1)
+            if len(writes) > 1:
+                raise OSError("disk")
+        return real_replace(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "replace", replace)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=refuse)
+    # detector: markerWritten true while the disk marker lacks the final parts goes red here
+    assert result["failedParts"] == ["version", "setting"] and result["markerWritten"] is False
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["version"]
+
+
 def test_a_passing_check_removes_the_marker_and_writes_the_record(tmp_path):
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
@@ -1000,7 +1080,7 @@ def test_every_judge_result_carries_the_marker_key(tmp_path):
 
 
 @pytest.mark.parametrize("how", ["unlink", "lock"])
-def test_a_marker_that_cannot_be_removed_stops_the_record_write(tmp_path, monkeypatch, how):
+def test_a_marker_that_cannot_be_removed_fails_the_check_after_the_record_write(tmp_path, monkeypatch, how):
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
     calls = []
@@ -1023,12 +1103,35 @@ def test_a_marker_that_cannot_be_removed_stops_the_record_write(tmp_path, monkey
         monkeypatch.setattr(mode_registry, "config_lock", held)
     result = _judge(local, _ok_report(cloud),
                     record_fn=lambda *a, **k: calls.append(k) or {"action": "written"})
-    # detector: a pass that writes the record although the marker could not be removed goes red here
+    # detector: a pass reported as passed, or one that loses the marker, when it could not be removed goes red
     assert result["action"] == "failed" and "record" in result["failedParts"]
-    assert calls == [] and result["recordWritten"] is False
+    assert len(calls) == 1 and result["recordWritten"] is True
     assert os.path.exists(_marker_path(local))
-    monkeypatch.undo()
-    assert _record_state(local) == "none"
+
+
+def test_a_record_write_that_fails_leaves_an_existing_marker_in_place(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
+    before = open(_marker_path(local)).read()
+
+    def raising(*a, **k):
+        raise OSError("disk")
+
+    result = _judge(local, _ok_report(cloud), record_fn=raising)
+    # detector: a failed record write that clears the failure marker first goes red here
+    assert result["action"] == "failed" and "record" in result["failedParts"]
+    assert os.path.exists(_marker_path(local)) and before
+
+
+def test_a_record_that_is_written_before_the_marker_is_cleared(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
+    seen = []
+    result = _judge(local, _ok_report(cloud), record_fn=lambda *a, **k: seen.append(
+        os.path.exists(_marker_path(local))) or {"action": "written"})
+    # detector: clearing the marker before the record write goes red here
+    assert seen == [True] and result["action"] == "passed"
+    assert not os.path.exists(_marker_path(local))
 
 
 def test_a_marker_write_that_fails_changes_nothing_else(tmp_path, monkeypatch):
@@ -1073,7 +1176,7 @@ def test_read_failed_check_reads_the_damaged_shape(tmp_path):
     assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) is None
     os.makedirs(os.path.dirname(path), exist_ok=True)
     for body in ("not json", json.dumps({"schema": "cloud-check-failed/2", "failedParts": ["x"]}),
-                 json.dumps(["cloud-check-failed/1"]), ""):
+                 json.dumps([CC.FAILED_CHECK_SCHEMA]), ""):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(body)
         # detector: a marker that exists but does not read as ours must not come back as absent
@@ -1082,7 +1185,7 @@ def test_read_failed_check_reads_the_damaged_shape(tmp_path):
     os.mkdir(path)
     assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) == DAMAGED
     os.rmdir(path)
-    good = {"schema": "cloud-check-failed/1", "account": ACCOUNT, "environment": ENV_ID,
+    good = {"schema": CC.FAILED_CHECK_SCHEMA, "account": ACCOUNT, "environment": ENV_ID,
             "failedAt": "2026-10-10T12:00:00Z", "failedParts": ["version"]}
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(good))
@@ -1212,6 +1315,17 @@ def _prompt(spawner):
     return argv[argv.index("--cloud") + 1]
 
 
+def test_start_scrubs_inherited_git_variables_from_the_child_and_the_root(tmp_path):
+    local, _ = _pair(tmp_path)
+    spawner = Spawner()
+    env = dict(local.env, GIT_WORK_TREE="/tmp", GIT_DIR="/tmp/nope")
+    assert _start(local, spawner, env=env)["action"] == "started"
+    call = spawner.calls[0]
+    # detector: a start that hands inherited GIT_* variables to the child or the root lookup goes red
+    assert "GIT_WORK_TREE" not in call["env"] and "GIT_DIR" not in call["env"]
+    assert os.path.realpath(call["cwd"]) == os.path.realpath(local.cwd)
+
+
 def test_start_names_the_environment_in_the_launch(tmp_path):
     local = _build(tmp_path)
     spawner = Spawner()
@@ -1332,7 +1446,7 @@ def test_start_makes_a_fresh_nonce_when_none_is_given(tmp_path):
 
 def _expected_prompt(issue=None):
     fallback_object = (
-        {"schema": "cloud-check-report/1", "nonce": NONCE, "environment": None,
+        {"schema": CC.REPORT_SCHEMA, "nonce": NONCE, "environment": None,
          "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
          "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                           "passLapses": None, "reason": "plugin-missing"}})

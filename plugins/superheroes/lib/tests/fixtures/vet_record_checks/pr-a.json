@@ -1,0 +1,13 @@
+{
+  "name": "pr-a",
+  "pr": {
+    "buildRecordNamesRecord": false,
+    "ciOnHead": "green",
+    "head": "cccccccccccccccccccccccccccccccccccccccc",
+    "number": 7,
+    "ownerHalf": {
+      "whatWeAreAccepting": []
+    }
+  },
+  "record": null
+}

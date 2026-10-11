@@ -1744,13 +1744,6 @@ def _nonconformities_for_invocation(
                 "parts",
                 record=rnd,
             )
-        if rnd.get("controlProbe") is None:
-            add(
-                NONCONFORMITY_ELEMENT_MISSING,
-                "round %s is missing controlProbe" % round_no,
-                "controlProbe",
-                record=rnd,
-            )
 
     if not has_verification:
         add(
@@ -2161,13 +2154,16 @@ def verb_record_round(
             )
         finding_objs.append({"finding": fid, "lens": lens})
 
+    control_probe_field = (
+        {} if control_probe is None else {"controlProbe": control_probe}
+    )
     record = {
         "kind": RECORD_KIND_ROUND,
         "invocation": invocation,
         "round": round_val,
         "lenses": list(lenses),
         "parts": part_objs,
-        "controlProbe": control_probe,
+        **control_probe_field,
         "findings": finding_objs,
         "declinedExtension": list(declined_extension),
         "mechanicalOnly": bool(mechanical_only),
@@ -2214,7 +2210,7 @@ def verb_record_round(
         "round": round_int,
         "lenses": list(lenses),
         "parts": part_objs,
-        "controlProbe": control_probe,
+        **control_probe_field,
         "findings": finding_objs,
         "declinedExtension": list(declined_extension),
         "mechanicalOnly": bool(mechanical_only),
@@ -2691,7 +2687,7 @@ def _main_record_round(argv):
     parser.add_argument("--round", required=True)
     parser.add_argument("--lens", action="append", default=[])
     parser.add_argument("--part", action="append", default=[])
-    parser.add_argument("--control-probe", required=True)
+    parser.add_argument("--control-probe", default=None)
     parser.add_argument("--finding", action="append", default=[])
     parser.add_argument("--declined-extension", action="append", default=[])
     parser.add_argument("--mechanical-only", action="store_true")

@@ -178,15 +178,15 @@ def test_patched_module_duplicate_old_raises(tmp_path):
 def test_patched_module_two_edits_in_order():
     import handback_gate as hg
 
-    old1 = '    if _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):'
-    old2 = "        if cmd_base != sidecar_base:"
+    old1 = '    if global_repo and parsed.get("repo") is None:'
+    old2 = '    if inherited_repo and parsed.get("repo") is None:'
     with open(hg.__file__, encoding="utf-8") as fh:
         disk_before = fh.read()
     mod = patched_module(
         hg,
         [
-            (old1, "    if False and _LEGACY_BASE_SHA.match(sidecar.get(\"baseRef\") or \"\"):"),
-            (old2, "        if False and cmd_base != sidecar_base:"),
+            (old1, '    if False and global_repo and parsed.get("repo") is None:'),
+            (old2, '    if False and inherited_repo and parsed.get("repo") is None:'),
         ],
     )
     with open(hg.__file__, encoding="utf-8") as fh:
@@ -204,7 +204,7 @@ def test_patched_module_leaves_original_and_sys_modules(tmp_path):
     assert "handback_gate__patched" not in sys.modules
     mod = patched_module(
         hg,
-        ('if not os.path.isfile(sidecar_path):', 'if False and not os.path.isfile(sidecar_path):'),
+        ('if not os.path.isdir(obj["sessionDir"]):', 'if False and not os.path.isdir(obj["sessionDir"]):'),
     )
     assert id(hg) == before_id
     assert hg.__name__ == before_name
