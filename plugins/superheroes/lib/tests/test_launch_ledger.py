@@ -2766,7 +2766,7 @@ def test_count_indeterminate_includes_zero_amendments(tmp_path, monkeypatch):
     assert result["indeterminate"] is True
     assert result["amendments"] == ll._zero_amendments()
     assert result["amendedLaunches"] == 0
-    assert result["lanes"] == {"declared": 0, "resolved": 0}
+    assert result["lanes"] == {"declared": 0, "resolved": 0, "cloud": 0}
     assert result["attempts"] == {
         "total": 0, "extra": 0, "outcomes": ll._zero_attempt_outcomes(),
     }
@@ -2798,6 +2798,7 @@ def test_lane_sequential_retries_same_issue_resolve(tmp_path, monkeypatch):
         "outcome": "handback",
         "terminalKind": "outcome",
         "attemptOutcomes": ["park", "handback"],
+        "place": "local",
     }]
 
 
@@ -3070,6 +3071,7 @@ def test_lane_sequential_reversed_timestamps_still_resolves(tmp_path, monkeypatc
         "outcome": "handback",
         "terminalKind": "outcome",
         "attemptOutcomes": ["park", "handback"],
+        "place": "local",
     }]
 
 
