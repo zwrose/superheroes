@@ -739,3 +739,62 @@ No State line calls any of them open. Result: verified.
  "weight": "light"
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "collisions"
+  },
+  {
+   "finding": "code-002",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "code-003",
+   "lens": "coverage-exactly-once"
+  }
+ ],
+ "invocation": "inv5",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "spec",
+   "status": "reviewed"
+  },
+  {
+   "part": "board",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
