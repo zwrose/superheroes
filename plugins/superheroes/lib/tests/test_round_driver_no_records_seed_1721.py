@@ -28,8 +28,9 @@ RM = RD.review_memory
 # --- the open-recorder ---------------------------------------------------------------------
 # An audit hook cannot be removed, so this one is inert unless the switch is on. It never opens a
 # file and never raises, so it cannot disturb the repository's own source-guard hook.
-_WRITE_MODE_CHARS = "wax+"
-_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR
+# An open is skipped only when it cannot read: a string mode with no `r` and no `+`, or integer
+# flags whose access mode is write-only. Read-only and read-write opens are both recorded.
+_READ_MODE_CHARS = "r+"
 _RECORDER = {"on": False, "reads": []}
 
 
@@ -38,9 +39,9 @@ def _audit(event, args):
         return
     try:
         path, mode, flags = args
-        if isinstance(mode, str) and any(ch in mode for ch in _WRITE_MODE_CHARS):
+        if isinstance(mode, str) and not any(ch in mode for ch in _READ_MODE_CHARS):
             return
-        if isinstance(flags, int) and flags & _WRITE_FLAGS:
+        if isinstance(flags, int) and flags & os.O_ACCMODE == os.O_WRONLY:
             return
         if isinstance(path, int):
             return

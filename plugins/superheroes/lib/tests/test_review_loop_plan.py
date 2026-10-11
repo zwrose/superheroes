@@ -2,7 +2,7 @@
 
 The #211 architecture moves the review loop's decisions off the JS shell's in-memory `records`
 copy and onto Python deciders that read the durable `round-records.json` from disk and answer
-small, meaningful JSON. These pin, for each of the four deciders (`entry-bootstrap`, `plan-round`,
+small, meaningful JSON. These pin, for each of the three deciders (`plan-round`,
 `tally-round`, `compose-fix-context`):
 
   - the answer SHAPE and the #211 SIZE invariant — every decider answer stays < 2 KB even for a
@@ -74,55 +74,6 @@ def _max_list_len(value):
     if isinstance(value, dict):
         return max([0] + [_max_list_len(v) for v in value.values()])
     return 0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# entry-bootstrap
-# ─────────────────────────────────────────────────────────────────────────────
-def test_entry_bootstrap_missing_is_round_one_empty_hash(tmp_path):
-    ans = rlp.entry_bootstrap(str(tmp_path / "nope.json"), DIMS)
-    assert ans["ok"] is True
-    assert ans["state"] == "missing"
-    assert ans["round"] == 1
-    # sha256 of "" — the shell's contentHash('') for a first-persist CAS match.
-    assert ans["contentHash"] == review_memory.content_hash("")
-    assert ans["confirmationPending"] is False
-    assert ans["markedRound"] is None
-    assert "records" not in ans and "findings" not in ans, "entry-bootstrap must NOT ship records/findings"
-
-
-def test_entry_bootstrap_resume_round_and_markers(tmp_path):
-    recs = [
-        _skeleton_round(1, {"code-reviewer": _dim()}, changed_subjects=["Code"]),
-        _skeleton_round(2, {"code-reviewer": _dim()}, kind="confirmation",
-                        confirmation_pending=True),
-    ]
-    path = _write_records(tmp_path, recs)
-    ans = rlp.entry_bootstrap(path, DIMS)
-    assert ans["ok"] is True
-    assert ans["round"] == 3, "resume round = max persisted round + 1"
-    assert ans["confirmationPending"] is True
-    assert ans["markedRound"] == 2
-    assert ans["roundCount"] == 2
-    # contentHash matches the on-disk bytes (first-persist CAS relies on this).
-    assert ans["contentHash"] == review_memory.content_hash(open(path).read())
-
-
-def test_entry_bootstrap_reads_extras(tmp_path):
-    recs = [_skeleton_round(1, {"code-reviewer": _dim()})]
-    path = _write_records(tmp_path, recs)
-    extras_path = tmp_path / "last-extras.json"
-    extras_path.write_text(json.dumps({"changedSubjects": ["Code", "Security"]}))
-    ans = rlp.entry_bootstrap(path, DIMS, str(extras_path))
-    assert ans["extras"] == {"changedSubjects": ["Code", "Security"]}
-
-
-def test_entry_bootstrap_corrupt_fails_closed(tmp_path):
-    path = tmp_path / "round-records.json"
-    path.write_text("{not json")
-    ans = rlp.entry_bootstrap(str(path), DIMS)
-    assert ans["ok"] is False, "a corrupt records file must fail closed (caller cannot-certify)"
-    assert ans["state"] in ("unreadable", "corrupt")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -875,12 +826,6 @@ def _verbose_fixture(tmp_path):
 LIMIT = 2000  # bytes — the issue's < 2 KB decider-answer assertion
 
 
-def test_entry_bootstrap_answer_is_small(tmp_path):
-    path = _verbose_fixture(tmp_path)
-    _ans, size = _run("entry-bootstrap", "--path", path, "--dimensions", json.dumps(DIMS))
-    assert size < LIMIT, f"entry-bootstrap answer {size}B must stay < {LIMIT}B on a big fixture"
-
-
 def test_plan_round_answer_is_small(tmp_path):
     path = _verbose_fixture(tmp_path)
     ans, size = _run("plan-round", "--path", path, "--round", "4",
@@ -1027,13 +972,6 @@ def _qualifying_confirmation(round_no, **over):
 
 
 @pytest.mark.parametrize("junk", _JUNK_CASES)
-def test_resume_round_skips_junk_never_raises(junk):
-    """Site 116 — junk round skipped; inf must not raise OverflowError."""
-    assert rlp._resume_round([{"round": 1}, {"round": junk}]) == 2
-    assert rlp._resume_round([{"round": junk}]) == 1
-
-
-@pytest.mark.parametrize("junk", _JUNK_CASES)
 def test_panel_window_last_round_junk_becomes_zero(junk):
     """Site 197 — junk on the last qualifying panel → last_round 0."""
     recs = [_qualifying_confirmation(junk)]
@@ -1077,21 +1015,6 @@ def test_latest_coverage_ids_junk_becomes_zero(junk):
         {"round": 2, "coverageDecisions": [{"id": "good"}]},
     ]
     assert rlp._latest_coverage_ids(recs) == ["good"]
-
-
-@pytest.mark.parametrize("junk", _JUNK_CASES)
-def test_entry_bootstrap_marked_round_junk_becomes_zero(tmp_path, junk):
-    """Site 392 — junk on confirmationPending record → markedRound 0."""
-    rec = _skeleton_round(junk, {"code-reviewer": _dim()}, confirmation_pending=True)
-    path = _write_records(tmp_path, [rec])
-    ans = rlp.entry_bootstrap(path, DIMS)
-    assert ans["ok"] is True
-    assert ans["markedRound"] == 0
-
-
-@pytest.mark.parametrize("well_formed", _WELL_FORMED_CASES)
-def test_resume_round_well_formed_unchanged(well_formed):
-    assert rlp._resume_round([{"round": well_formed}]) == 2
 
 
 @pytest.mark.parametrize("well_formed", _WELL_FORMED_CASES)

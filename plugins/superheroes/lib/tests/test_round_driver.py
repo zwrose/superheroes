@@ -3191,7 +3191,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
 # #720: the per-round DISCLOSURE channels the records writer persists
 # =============================================================================
 
-# One populated value per channel in RESUMABLE_DISCLOSURE_CHANNELS, shaped exactly as `_fold_panel`
+# One populated value per channel in CARRIED_DISCLOSURE_CHANNELS, shaped exactly as `_fold_panel`
 # records it. Used by the all-channel producer test; NOT a second copy of the channel list — the test
 # asserts this map's keys equal the module constant's, so a new channel fails here too.
 _ALL_CHANNELS = {
@@ -3237,7 +3237,7 @@ def _round_channels(receipt, round_no, loop_receipt=None):
     assert entry is not None, (
         "the receipt has no round %d entry at all — that round's disclosures were dropped "
         "(rounds present: %s)" % (round_no, [r["round"] for r in rounds]))
-    return {k: v for k, v in entry.items() if k in RD.RESUMABLE_DISCLOSURE_CHANNELS}
+    return {k: v for k, v in entry.items() if k in RD.CARRIED_DISCLOSURE_CHANNELS}
 
 
 def _round_disclosures(receipt, round_no, loop_receipt=None):
@@ -3259,7 +3259,7 @@ def test_driver_persists_round_disclosures(tmp_path):
 
 
 def test_producer_emits_the_whole_declared_channel_set(tmp_path):
-    assert set(_ALL_CHANNELS) == set(RD.RESUMABLE_DISCLOSURE_CHANNELS), \
+    assert set(_ALL_CHANNELS) == set(RD.CARRIED_DISCLOSURE_CHANNELS), \
         "this fixture must cover exactly the restorable channel set"
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
@@ -3420,25 +3420,6 @@ def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monk
     receipt = RD.build_receipt(state)
     assert receipt["findings"]
     assert any(f.get("title") == "panel-bug" for f in receipt["findings"])
-
-
-def test_producer_respects_persist_records_false(tmp_path):
-    records = tmp_path / "round-records.json"
-    state = RD.new_state(
-        _cfg(dimensions=["test-reviewer"], recordsPath=str(records), persistRecords=False))
-    state["_records"] = [_seed_record(1)]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
-    RD._persist_round_records(state, state["config"])
-    assert state.get("terminal") is None
-    assert not records.exists()
-
-    records_default = tmp_path / "round-records-default.json"
-    state_default = RD.new_state(
-        _cfg(dimensions=["test-reviewer"], recordsPath=str(records_default)))
-    state_default["_records"] = [_seed_record(1)]
-    state_default["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
-    RD._persist_round_records(state_default, state_default["config"])
-    assert records_default.exists()
 
 
 def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
@@ -3605,7 +3586,7 @@ def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
 def test_order_vendor_gap_missing_occurrence_still_valid():
     """occurrence is optional on gap rows — well-shaped without it."""
     gaps = [{"seat": "architecture-reviewer"}]
-    assert RD.RESUMABLE_DISCLOSURE_CHANNELS["orderVendorProvenanceGaps"](gaps)
+    assert RD.CARRIED_DISCLOSURE_CHANNELS["orderVendorProvenanceGaps"](gaps)
     state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
     state["rounds"] = {"1": {"orderVendorProvenanceGaps": gaps}}
     receipt = RD.build_receipt(state)
@@ -3677,7 +3658,7 @@ def test_panel_round_channels_are_all_accounted_for():
     """CENSUS (#720) — closes the set by construction, not by listing sites.
 
     Every per-round key `_fold_panel` or `_fold_verifiers` records is enumerated FROM THE SOURCE
-    with `ast` and must have exactly one module-level home: `RESUMABLE_DISCLOSURE_CHANNELS` (the
+    with `ast` and must have exactly one module-level home: `CARRIED_DISCLOSURE_CHANNELS` (the
     channels `build_receipt` emits and a `recordsPath` resume restores) or `UNRESTORED_PANEL_ROUND_KEYS`
     (the deliberate not-restored list, each with its reason in the source). A NEW `_record_round`
     channel that ships without a resume path fails HERE — instead of silently under-disclosing every
@@ -3721,7 +3702,7 @@ def test_panel_round_channels_are_all_accounted_for():
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
-    restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
+    restorable = set(RD.CARRIED_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
         "fold provenance channels must be restorable: %s"
@@ -3758,10 +3739,10 @@ def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
     for fn in ("build_receipt",):
         names = {n.id for n in ast_mod.walk(_fn_node(tree, ast_mod, fn))
                  if isinstance(n, ast_mod.Name)}
-        assert "RESUMABLE_DISCLOSURE_CHANNELS" in names, \
+        assert "CARRIED_DISCLOSURE_CHANNELS" in names, \
             "%s must read the channel set from its one home" % fn
     src = _disclosure_channel_consumer_source()
-    for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
+    for chan in RD.CARRIED_DISCLOSURE_CHANNELS:
         assert source_obj_accesses_key(src, "rec|rrec|declared", chan), \
             "%r is named restorable but no round record read consumes it" % chan
 
