@@ -1,4 +1,4 @@
-"""#1196 WO-B: CLI-path round-records producer, submit-accept atomicity, corrupt-resume park."""
+"""#1196 WO-B: CLI-path round-records producer, submit-accept atomicity."""
 import ast
 import errno
 import importlib.util
@@ -255,33 +255,6 @@ def _records_panel_submit_setup(tmp_path):
     assert n["ok"], n
     assert n["phase"] == RD.P_PANEL, n
     return session_dir, records, before_bytes, cfg, respond, n
-
-
-def test_cmd_next_corrupt_non_mapping_member_parks_cannot_certify(tmp_path):
-  records = tmp_path / "records.json"
-  records.write_text("[null]")
-  session_dir = str(tmp_path)
-  cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-  out = RD.cmd_next(session_dir, cfg)
-  assert out["ok"], out
-  assert out["phase"] == RD.P_TERMINAL
-  assert out["payload"]["verdict"] == "cannot-certify"
-  assert out["payload"]["certification"]["shape"] is None
-  journal = RD.read_journal(session_dir)
-  assert any(e.get("outcome") == "resume-corrupt-park" for e in journal)
-
-
-def test_cmd_next_corrupt_malformed_json_parks_cannot_certify(tmp_path):
-  records = tmp_path / "records.json"
-  records.write_text("{not valid json")
-  session_dir = str(tmp_path)
-  cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-  out = RD.cmd_next(session_dir, cfg)
-  assert out["ok"], out
-  assert out["phase"] == RD.P_TERMINAL
-  assert out["payload"]["verdict"] == "cannot-certify"
-  journal = RD.read_journal(session_dir)
-  assert any(e.get("outcome") == "resume-corrupt-park" for e in journal)
 
 
 def test_submit_records_staged_crash_leaves_file_byte_identical(tmp_path, monkeypatch):

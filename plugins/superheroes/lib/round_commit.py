@@ -653,6 +653,36 @@ def begin(session_dir, kind, *, stop_at=None, commit_id=None):
     return Commit(session_dir, kind, cid, parsed_stop, sidecar_resolver=None)
 
 
+def staged_replace_contents(session_dir, relative_target):
+    """Bytes a sealed, not-yet-finished commit would write to `relative_target` (a session-relative
+    path): one per such commit, oldest first. Read-only; it finishes, discards and cleans nothing,
+    and a commit whose intent or staged part cannot be read is skipped."""
+    root = commits_root(session_dir)
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        kind, _cid = _classify_entry(name)
+        path = os.path.join(root, name)
+        if kind != "commit" or not os.path.isfile(os.path.join(path, _SEALED)) \
+                or os.path.exists(os.path.join(path, _DONE)):
+            continue
+        intent, err = _read_intent(os.path.join(path, _INTENT))
+        if err or not isinstance(intent, dict) or not isinstance(intent.get("parts"), list):
+            continue
+        for spec in intent["parts"]:
+            if not isinstance(spec, dict) or spec.get("type") != _PART_REPLACE \
+                    or spec.get("target") != relative_target:
+                continue
+            try:
+                found.append(_load_staged_part(path, spec["n"], spec["sha256"]))
+            except (OSError, KeyError, CommitRefused):
+                continue
+    return found
+
+
 def recover(session_dir, *, sidecar_target=None, sidecar_resolver_for=None):
     """Classify and finish every entry under ``commits/`` before a new commit begins."""
     root = commits_root(session_dir)

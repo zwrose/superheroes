@@ -5,7 +5,6 @@
 - [checkpoint](#checkpoint)
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
-- [Moving a session — relocate and re-emit](#moving-a-session--relocate-and-re-emit)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
@@ -518,7 +517,7 @@ field.
 | `base-mode-unrecognized` | `meta.mode` is not `pr` or `branch` |
 | `diff-path-not-fresh-state` | `--diff-path` passed on non-fresh state (the same discipline as `--vendors` / `--fixer-vendor`) |
 
-**Pending hand-out refusals (`next` / `re-emit`).** After the base guard, `_next_response` may refuse before it returns a non-terminal pending step. `re-emit` passes through the same gate on the replayed pending.
+**Pending hand-out refusals (`next`).** After the base guard, `_next_response` may refuse before it returns a non-terminal pending step.
 
 | `reason` | condition |
 | --- | --- |
@@ -530,9 +529,7 @@ field.
 - **Base / pin / repo / checkout** (`base-meta-unreadable`, `base-not-pinned`, `base-unresolved`,
   `base-pin-moved`, `base-repo-root-mismatch`, `pr-base-repo-unresolved`, `origin-unresolved`):
   re-run Setup's resolve block and check `origin`; confirm `meta.json` has a full commit pin and
-  `repoRoot` matches this checkout. When the session belongs to another checkout of the same
-  repository at the same head and base, `relocate` moves it (see [Moving a session —
-  relocate and re-emit](#moving-a-session--relocate-and-re-emit)) instead of starting over.
+  `repoRoot` matches this checkout. A session whose checkout changed starts a fresh session.
 - **Diff artifact** (`round-diff-required`, `round-diff-unreadable`, `round-diff-empty`,
   `round-diff-malformed`, `round-diff-base-mismatch`, `round-diff-base-unverifiable`,
   `diff-path-not-fresh-state`): fix the diff step and do not proceed with review if the diff
@@ -546,111 +543,6 @@ field.
 Git worktrees share one object store, so a pinned base commit can resolve from the *wrong* worktree
 while `origin` still matches there; `meta.repoRoot` lets the driver refuse `base-repo-root-mismatch`
 when the field is absent or disagrees with `--repo-root`.
-
-## Moving a session — relocate and re-emit
-
-A review session is bound to the checkout that created it — `meta.repoRoot`, which the base guard
-compares (`base-repo-root-mismatch`). Starting a fresh session in a new checkout discards its rounds
-and findings. `relocate` moves the session instead, and `re-emit` re-issues an order the move made stale.
-
-```bash
-python3 -B "$ROOT_DIR/lib/round_driver.py" relocate --session-dir "$SESSION_DIR" --repo-root "$NEW_CHECKOUT" --by "<who>"
-python3 -B "$ROOT_DIR/lib/round_driver.py" re-emit --session-dir "$SESSION_DIR" --by "<who>"
-```
-
-Both commands print their JSON result on stdout and exit **1** on any refusal (the same convention
-as the base guard's refusals), **0** on success.
-
-**relocate** rewrites `meta.json` `repoRoot` and `branch`, and `loop-state.json` `config.repoRoot`
-when present. It does so in one transaction with one `relocated` journal row carrying the old and
-new root, branch, the session directory, the head, the base pin, `by`, `at`, and the list of
-rewritten keys. Nothing else in the session changes. The session directory does not move: a session
-invoked from a directory other than the one it recorded is refused. A target checkout whose scope
-marker names another session is refused: the refusal appends a `refused` journal row and writes nothing else. The target checkout's scope marker
-is claimed atomically before the session commit: the full canonical marker is written to a temp file
-in the marker's directory, fsynced, then published with an exclusive `os.link`; an existing marker
-naming this session is refreshed atomically so `branch`, `repoRoot`, and `startedAt` match the target
-now. A detached-HEAD target is refused because it cannot carry the marker. After the commit, the old
-checkout's marker is retired with compare-and-delete (rename away, verify ownership, then unlink or
-restore) only when it names this session. Outcomes are journalled as `marker-retirement` (`retired`,
-`not-ours`, `absent`, `failed`). A crash after the session commit but before old-marker retirement
-leaves the old checkout's marker naming this session (fail-closed: that checkout stays gated and
-other sessions are refused there); re-run `relocate` to the recorded checkout when the journal's
-most recent `relocated` row names that checkout and the target marker names this session — the
-driver retires only the old marker and returns `repaired: true`. `relocate` is a single-actor step: concurrent relocations into one checkout are not supported.
-
-**The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
-otherwise the session's setup head. A session with a pending `dispatch-fixer` phase — fixer dispatched
-or recorded but not yet folded — must fold the fixer in the old checkout before relocating.
-
-| `reason` | condition |
-| --- | --- |
-| `relocate-session-unreadable` | meta or loop state missing/unparseable, the recorded root or session directory missing or not an absolute path, or the session never ran `next` |
-| `relocate-session-terminal` | the session is terminal |
-| `relocate-target-not-toplevel` | the target is not a git checkout's top directory |
-| `relocate-session-dir-moved` | the session directory is not the one it recorded |
-| `relocate-same-checkout` | the target is the recorded checkout |
-| `relocate-repo-unverifiable` | the session recorded no origin repository |
-| `relocate-repo-mismatch` | the target's `origin` is a different repository |
-| `relocate-base-mismatch` | the base pin differs between meta and loop state or does not resolve to itself in the target |
-| `relocate-head-ambiguous` | the two copies of the fix-fold head disagree, only one exists, or no head is recorded |
-| `relocate-head-mismatch` | the target's HEAD is not the recorded head |
-| `relocate-records-path-bound` | the durable records file lives inside the old checkout |
-| `relocate-target-detached` | the target checkout is on a detached HEAD and cannot carry the scope marker |
-| `relocate-target-marker-foreign` | the target checkout's scope marker names another session or cannot be read |
-| `relocate-target-marker-unwritable` | the target checkout's scope marker could not be claimed |
-| `relocate-inflight-fixer` | the session has a pending `dispatch-fixer` phase that must be folded first |
-| `relocate-locked` | another process holds the session lock |
-
-Malformed or unreadable relocation evidence in the journal refuses
-`relocation-evidence-indeterminate` rather than treating the move as absent or crashing.
-
-**re-emit** acts only on the pending `dispatch-*` order. An order is stale when a `relocated` row
-whose old and new roots differ comes after that attempt's last `orders-emitted` row (an attempt with
-no `orders-emitted` row counts as stale if any such move exists). The driver opens the next attempt
-number, leaves the old attempt's orders, stubs, manifest, and anchor byte-identical, and journals one
-`orders-superseded` row (old attempt, `newAttempt`, the superseded manifest and order hashes, the
-head, the relocation that made it stale — `oldRoot`, `newRoot`, `oldBranch`, `newBranch`,
-`sessionDir`, `at` — `by`, `at`; when journal `recorded` rows exist for the superseded attempt,
-`supersededRecords` (sorted) naming those seat labels) followed by the new attempt's `orders-emitted`
-row. The full roster is re-issued on the new attempt even when only some old-attempt seats were
-recorded. Certification treats a superseded attempt's seat as closed only when neither its landing
-file nor its bare-payload file exists; the new attempt's seats are open. Dispatch the new attempt's
-orders; results recorded against the old attempt are not carried. A retry after a successful re-emit
-(or after crash recovery replays its `orders-emit` transaction) returns the current pending order
-idempotently when the journal already contains the matching `orders-superseded` and `orders-emitted`
-pair for the pending attempt.
-
-| `reason` | condition |
-| --- | --- |
-| `re-emit-session-unreadable` | loop state missing/unparseable |
-| `re-emit-no-pending-order` | no pending order, not a dispatch order, or the session is terminal |
-| `re-emit-no-anchor` | no emission anchor or `orders-emitted` row for the pending attempt |
-| `re-emit-head-unresolved` | the session's checkout does not answer `git rev-parse HEAD`, or no head is anchored or recorded |
-| `re-emit-head-moved` | the checkout's HEAD differs from the head the order was emitted at |
-| `re-emit-not-stale` | no move came after the order was emitted |
-| `re-emit-attempt-has-results` | a landing/bare-payload file for an unrecorded seat exists or cannot be checked |
-| `re-emit-locked` | another process holds the session lock |
-
-Orders emitted before the move are not rewritten, and they may already have run in the old checkout —
-a hand-landed result carries no record of where it ran — so until `re-emit` runs the driver refuses
-`record-attempt-predates-relocation` for results that would be credited to the order's head: a
-single-seat `record-result` without runner evidence, a `record-result --sweep` or an `advance` that
-would ingest a landing, or a hand `submit` of the phase. Not refused: a result recorded with runner
-evidence (it carries the head the runner saw), an `advance` with nothing new to ingest,
-`record-missing`.
-
-Every recorded seat cites the head it saw, and certification refuses a seat whose cited head is not
-the session's recorded head; `re-emit` does not change the session's recorded head, so it refuses
-(`re-emit-head-moved`) when the checkout's HEAD moved after the order was emitted — move the head
-through the loop's own fix fold, or start a new session.
-
-A result that lands for a superseded attempt after `re-emit` keeps that seat open, so certification
-refuses (`unfetched-findings`) rather than certify past it; recovery: read the late landing, and if
-it carries findings compare them with the new attempt's result for the same seat (dispatch the new
-attempt if it has not run), then move the late file aside (never delete) — certification then reads
-the slot as superseded. The same move-aside unblocks `re-emit-attempt-has-results` when a hand-landed
-file for the old attempt was never recorded.
 
 ## Owner and advisor rulings (`rule`)
 
@@ -672,8 +564,8 @@ A guidance ruling that supersedes a live out-of-scope ruling clears that disposi
 the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
 fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
-A ruling while a pending fixer attempt already has emitted orders is refused — let that fixer land
-or `re-emit` before ruling. Refusal tokens (each leaves state bytes unchanged):
+A ruling while a pending fixer attempt already has emitted orders is refused — a ruling waits until
+that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes unchanged):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
@@ -910,9 +802,9 @@ from any earlier round, marked `Ruled in round N`; the routing sites (`_fold_jud
 `_fold_stall`, `_fold_audits`) do not know about it — the materializer does; history rows are keyed
 by `findingKey` (the marker the writers stamp on `judgmentDispositions` entries and audit rows;
 `session_contract.finding_identity_key` is the one derivation), never by a row's `id`. **Limitation,
-stated plainly:** the carry reads the live loop record (`state.rounds`); across a `recordsPath`
-resume the gate ruling is restored (`judgmentDispositions` is a resumable channel) and the prior
-audit is not (`audits` is not), until a disposition ledger owns a finding's history.
+stated plainly:** the carry reads the live loop record (`state.rounds`) of the current session
+only; a records file is an export and is never read back, until a disposition ledger owns a
+finding's history.
 
 ## Transition — plugin versions under a live session
 
@@ -922,6 +814,33 @@ A session's state can carry ids, keys, and fields an older driver does not read 
 owner-judgment ids and the finding keys this driver mints), so resuming on an older plugin can
 apply the wrong disposition. Recorded rows that predate the cited-head derivation are read as they
 were recorded at this version, not refused.
+
+**A session from an earlier plugin version is not continued.** State the driver mints carries
+`sessionGeneration`, set to the integer `2`; the key is written only when state is minted and is
+never added to a loaded state. A saved state is from an earlier version when it is a JSON object
+whose `sessionGeneration` is absent or is anything other than the integer `2`. While such a session
+is unfinished (its `terminal` is empty), every driver command on it — `next`, `submit`,
+`record-result`, `record-missing`, `advance`, `attest`, `checkpoint` and `rule` — answers, before it
+recovers a commit, reads or writes the journal, mints a session id, emits an order, records or folds:
+
+```json
+{"ok": false, "reason": "session-from-earlier-version", "restart": "fresh-session",
+ "alreadyRestarted": false, "detail": "…"}
+```
+
+From the command line the exit status is non-zero. The first refusal writes `restarted-on-upgrade.json`
+into the session directory, once, by an exclusive create; `alreadyRestarted` is `false` on that call
+and `true` on every later one, which leaves the file as it is. If the file cannot be created for any
+reason other than already existing, the command is still refused, with `alreadyRestarted` `false` and
+`markerWritten` `false`; `markerWritten` appears only in that case. The driver reads only
+`loop-state.json` in the old directory and touches nothing else there: no journal row is appended,
+and the certification files and every other file stay as they were. A finished session from an earlier
+version is left alone: `next` on it re-emits its terminal answer as before. A missing, unreadable, non-JSON
+or non-object `loop-state.json` is handled by the refusals that exist for those cases.
+
+The caller starts the review again, once, in a fresh session directory: Setup into a new
+`$SESSION_DIR`, then Bootstrap from round 1 there. It leaves the old directory as it is and never
+edits it to make the session continue.
 
 ## Journal and receipt
 
@@ -980,7 +899,7 @@ The certification receipt is a **superset** of today's `round-receipt.json` fiel
 
 - `terminalState` — `certified`, `cap`, or `cannot-certify`
 - `terminalCause` — for a non-certified terminal, a loop reason from the closed set (`latch`,
-  `resume`, `state hash`, `detector`, `fixer cycle`) or a non-loop reason (`budget`, `open findings`);
+  `state hash`, `detector`, `fixer cycle`) or a non-loop reason (`budget`, `open findings`);
   `null` when `terminalState` is `certified`
 - `seats` — each recorded seat with `provenance` in its own field (`dispatch-observed` or
   `hand-landed`), kept separate from the certification shape
@@ -1104,22 +1023,20 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 **Library `recordsPath` / `round-records.json` seam (#720, #1187).** When config carries
 `recordsPath`, each in-memory ledger record is written through `review_memory.summarize_record` (a
 skeleton — no evidence bodies) and carries the declared per-round disclosure block selected by
-`_declared_disclosures` from `RESUMABLE_DISCLOSURE_CHANNELS`. The producer writes the whole outgoing
-ledger in one atomic `persist_record` call — no intermediate strict-prefix state on disk. A caller
-that already owns `round-records.json` opts out with `persistRecords: False`
-(`eval/review_loop_runner.py` is the one in-repo caller that does). A destination the producer
-cannot read and a persist it cannot complete both park `cannot-certify` rather than certifying off a
-stale file; `_seed_resume` is the read path on the next invocation. The `next --records-path` flag
-seeds `recordsPath` on fresh state only — supplying it on existing state refuses
-`records-path-not-fresh-state`. The guard is session-directory containment: a records file must
-outlive the producing session so a **fresh** session can resume from it, which a path inside that
-session can never do — so any path at or inside `$SESSION_DIR` refuses `records-path-reserved`
-before any work. On the CLI path the write rides
+`_declared_disclosures` from `RESUMABLE_DISCLOSURE_CHANNELS`. The file is an export of the session's
+ledger: the producer writes the whole outgoing ledger as `review_memory.records_bytes` in one atomic
+write, replacing whatever was at that path, and the driver never reads the file — a new session
+takes nothing from it, and a file left by another session, valid or corrupt, is simply replaced on
+the first write. A caller that already owns `round-records.json` opts out with
+`persistRecords: False`. A write the producer cannot complete parks `cannot-certify` rather than
+certifying with the export out of step. The `next --records-path` flag sets `recordsPath` on fresh
+state only — supplying it on existing state refuses `records-path-not-fresh-state`. The export is
+kept outside the session folder, so any path at or inside `$SESSION_DIR` refuses
+`records-path-reserved` before any work. On the CLI path the write rides
 `cmd_submit`'s `submit-accept` commit as a `targetKind: "round-records"` sidecar, so the file
 changes only if that commit sealed and then rolls forward with the state; recovery dispatches
-sidecar replay by `targetKind` and refuses rather than falling back. The corrupt-resume
-`cannot-certify` park fires from `_cmd_next_locked` as well as `run_loop`. The library
-`run_loop` path still calls `_persist_round_records` after every fold.
+sidecar replay by `targetKind` and refuses rather than falling back. The library
+`run_loop` path calls `_persist_round_records` after every fold.
 
 ## Invariants
 
@@ -1134,8 +1051,8 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
   clean round resets the window; criteria 1 (round cap with an open finding) and 3 are unchanged,
   and a separate hard ceiling bounds the round counter — **no session's round counter exceeds the
-  ceiling without a terminal halt**; the counter is written only by `_advance_round` and
-  `_seed_resume`, each of which asks the ceiling before writing, and a loaded persisted state above
+  ceiling without a terminal halt**; the counter is written only by `_advance_round`,
+  which asks the ceiling before writing, and a loaded persisted state above
   the ceiling is guarded at command entry too — so a round above the ceiling can never begin. Callers
   of `advance` must not treat `ok: true` from a nested `cmd_submit` as a landed fold unless
   `foldLanded` is set; the `notFolded` receipt names why. A policy **naming** a

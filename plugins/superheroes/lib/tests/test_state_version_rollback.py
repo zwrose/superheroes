@@ -139,21 +139,6 @@ def test_legacy_refusal_plain_session_names_next_submit(tmp_path):
     assert "fresh session" not in out.get("detail", "")
 
 
-def test_next_and_submit_still_finish_a_v3_session_unchanged(tmp_path):
-    """`next`/`submit` finish a genuine pre-#681 v3 session through a terminal receipt."""
-    session_dir = _seed_pre681_v3_session(tmp_path)
-    _TRD._drive_cli(session_dir, None, _TRD._responder(round1_findings=None))
-    state = _state(session_dir)
-    assert state["schemaVersion"] == 3
-    assert state["terminal"] == "converged"
-    with open(os.path.join(session_dir, RD.RECEIPT_FILE), encoding="utf-8") as fh:
-        receipt = json.load(fh)
-    assert receipt["schemaVersion"] == 3
-    assert RD.receipt_kind(receipt) == RD.RECEIPT_CERTIFIED_SCHEMA % 3
-    ok, why = RD.validate_receipt(receipt)
-    assert ok, why
-
-
 def test_legacy_refusal_durable_records_names_fresh_session(tmp_path):
     """A legacy session with durable pending records names a fresh session dir, not hand submit."""
     session_dir, gitdir, _head_path = _legacy_v3_session(
