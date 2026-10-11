@@ -19,14 +19,16 @@ if _LIB_DIR not in sys.path:
 
 import cloud_ready  # noqa: E402
 import mode_registry  # noqa: E402
-from launch_place import NOT_READY_CODES, REASONS, _fill, _words, reason_text  # noqa: E402
+from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text  # noqa: E402
 
 _STILL_SCHEMA = "cloud-still/1"
 _STILL_HEADER = "Still on your machine"
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
+# The condition behind each reason, read back out of the readiness registry.
+_CONDITION_FOR = {reason: name for name, reason in cloud_ready.REASON_FOR.items()}
 # The still-state clearing legs: a reason fixed by a condition this machine can read again.
-_REREAD_CONDITION = {"no-setup": "setup", "pass-lapsed": "passLive", "calibration": "calibration"}
+_REREAD_REASONS = ("no-setup", "pass-lapsed", "calibration")
 
 
 # ---------------------------------------------------------------- the launch report
@@ -44,7 +46,7 @@ def _count(lanes):
 
 
 def _fix_line(code, call):
-    return _fill(REASONS[code]["fix"], call.get("cloudVersion"), call.get("advisorVersion"))
+    return _fill(fix_text(call), call.get("cloudVersion"), call.get("advisorVersion"))
 
 
 def _summary(lanes):
@@ -158,13 +160,16 @@ def record_still(cwd, place_calls, *, root=None, today=None):
         if stuck:
             rank = [cloud_ready.REASON_FOR[name] for name in cloud_ready.CONDITION_ORDER]
             call = min(stuck, key=lambda c: rank.index(c["reason"]))
-            _write_still(path, {
+            state = {
                 "schema": _STILL_SCHEMA, "reason": call["reason"], "by": call.get("by"),
                 "cloudVersion": call.get("cloudVersion"),
                 "advisorVersion": call.get("advisorVersion"),
                 "reported": call.get("reported"),
                 "observedOn": _today(today).isoformat(),
-            })
+            }
+            if call.get("failedCheck") is not None:
+                state["failedCheck"] = call["failedCheck"]
+            _write_still(path, state)
             return {"action": "written", "reason": call["reason"]}
         return {"action": "unchanged", "reason": None}
     except Exception:
@@ -189,6 +194,10 @@ def _read_still(path):
             return False
     if not cloud_ready.valid_reported(state.get("reported")):
         return False
+    failed = state.get("failedCheck")
+    if failed is not None and not (
+            isinstance(failed, list) and all(isinstance(part, str) for part in failed)):
+        return False
     observed = state.get("observedOn")
     if not (isinstance(observed, str) and _DATE_RE.fullmatch(observed)):
         return False
@@ -205,10 +214,10 @@ def _fixed(state, now):
     if state["by"] == "setting" and now.get("setting") is not True:
         return True
     conditions = now.get("conditions") or {}
-    if reason in _REREAD_CONDITION:
-        return conditions.get(_REREAD_CONDITION[reason]) is True
+    if reason in _REREAD_REASONS:
+        return conditions.get(_CONDITION_FOR[reason]) is True
     if reason == "version" and reported.get("pluginVersion") is None:
-        return conditions.get("version") is True
+        return conditions.get(_CONDITION_FOR[reason]) is True
     checked = now.get("checkedAt")
     if not (isinstance(checked, str) and _DATE_RE.fullmatch(checked)):
         return False
@@ -242,7 +251,11 @@ def still_line(cwd, *, root=None, today=None, readiness_fn=None):
             return None
         code = state["reason"]
         words = _words(code, state.get("cloudVersion"), state.get("advisorVersion"))
-        return "%s\n%s %s" % (_STILL_HEADER, words, REASONS[code]["short"])
+        failed = state.get("failedCheck")
+        # after a failed check the reminder carries the recheck step, as the launch report does
+        fix = REASONS[code]["short"] if failed is None else fix_text(
+            {"reason": code, "failedCheck": failed})
+        return "%s\n%s %s" % (_STILL_HEADER, words, fix)
     except Exception:
         return None
 

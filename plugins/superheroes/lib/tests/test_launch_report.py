@@ -391,6 +391,19 @@ def test_record_still_writes_the_word_as_the_pointing(tmp_path):
     assert _stored(repo, store)["by"] == "word"
 
 
+def test_a_failed_check_keeps_its_recheck_step_in_the_report_and_the_still_line(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    call = dict(_call(reason="calibration"), failedCheck=["calibration"])
+    assert LR.render_report([_lane(1, call)]).endswith(SETUP_TEXT_FIX + ' Then say "check again".')
+    assert LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]).endswith(
+        SETUP_TEXT_FIX + ' Then say "check again".')
+    LR.record_still(repo, [call], root=store, today=TODAY)
+    assert _stored(repo, store)["failedCheck"] == ["calibration"]
+    line = LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="calibration"))
+    assert line.endswith(SETUP_TEXT_FIX + ' Then say "check again".')
+
+
 def test_record_still_clears_when_a_build_went_to_the_cloud(tmp_path):
     repo, store = _gitdir(tmp_path)
     LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
