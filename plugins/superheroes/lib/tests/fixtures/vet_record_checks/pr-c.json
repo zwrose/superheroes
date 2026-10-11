@@ -1,0 +1,93 @@
+{
+  "name": "pr-c",
+  "pr": {
+    "buildRecordNamesRecord": true,
+    "ciOnHead": "green",
+    "head": "cccccccccccccccccccccccccccccccccccccccc",
+    "number": 7,
+    "ownerHalf": {
+      "whatWeAreAccepting": []
+    }
+  },
+  "record": {
+    "checked": [
+      "CI on ccccccc: green",
+      "Reviewers that ran: code-reviewer",
+      "read the diff"
+    ],
+    "ci": {
+      "sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "source": "GitHub checks",
+      "state": "green"
+    },
+    "cost": {
+      "minutes": 2.0,
+      "notCounted": [],
+      "source": "engine records",
+      "tokens": 100,
+      "unit": "reviewer-minutes"
+    },
+    "finalCommit": {
+      "sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "source": "GitHub PR"
+    },
+    "findings": [
+      {
+        "body": "b",
+        "consequence": "a customer can be charged twice when the retry fires",
+        "file": "a.py",
+        "findingKey": "rr1:73fd44afde35d2aec4596b8b2b512815",
+        "id": "code-retry-double-charge",
+        "line": 3,
+        "outcome": "craft",
+        "reason": "style preference",
+        "reviewer": "code-reviewer",
+        "severity": "Minor",
+        "title": "Retry can charge twice"
+      }
+    ],
+    "lane": {
+      "reason": "a plain reason",
+      "source": "reported by the session",
+      "value": "full"
+    },
+    "leftForOwner": [],
+    "makers": [],
+    "missingReviews": [],
+    "parked": false,
+    "pr": 7,
+    "previousRecord": null,
+    "rawOutputs": [],
+    "reviewers": [
+      {
+        "commit": null,
+        "coversFinalCommit": true,
+        "family": "openai",
+        "findingsCoverage": "reported by the session",
+        "model": "gpt-5.6-sol",
+        "name": "code-reviewer",
+        "observation": {
+          "tokens": 100,
+          "wallSeconds": 120
+        },
+        "planned": true,
+        "ran": "engine-record",
+        "runDir": "/run/code-reviewer",
+        "vendor": "codex"
+      }
+    ],
+    "rounds": {
+      "cap": 3,
+      "count": 1,
+      "source": "reported by the session",
+      "stoppedAtCap": false
+    },
+    "schema": "review-record/1",
+    "sessionDisagreements": [],
+    "sessionId": "s1",
+    "status": "reviewed",
+    "unreadFiles": [],
+    "whatIsMissing": [],
+    "writtenAt": "2026-01-01T00:00:00Z"
+  }
+}

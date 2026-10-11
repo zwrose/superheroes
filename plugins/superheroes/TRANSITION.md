@@ -17,6 +17,7 @@ belongs to and lists every change with its replacement.
 
 - Every review on the full, light and micro lanes and review-code's review-only exit now writes one review record, kept as a new marker-tagged comment on the PR for each review session (earlier ones are never edited, and each reviewer's raw output sits in its own linked comment), and read back with the record writer's `read --pr <n>` verb. The full lane builds its account from the review session.
 - The findings contract gains a required, nullable `consequence` member, and the record spells the five outcomes as `fixed`, `shown-wrong`, `craft`, `left-for-owner`, `ruling`. Callers that build findings by hand must now emit `consequence` (null is allowed).
+- The advisor's vet now reads the review record. In place of the certified-loop check and the seat-provenance parity check, it checks that the record exists, that the checks ran on the PR's final commit, and that no leftover skipped the owner's review. After a project adopts this release, a full or light PR with no review record is not returned as ready.
 
 ### Pilot: iPhone typing helper
 
