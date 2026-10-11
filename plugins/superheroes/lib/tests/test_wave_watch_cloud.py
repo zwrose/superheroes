@@ -329,6 +329,8 @@ def test_edge5_a_fresh_branch_push_alone_keeps_the_lane_live(repo):
     )
     result = _run(repo, _Gh(_graphql_body({17: lane})))
     assert result["event"] == "timer"
+    # An unreadable read also reads as a timer; only a clean read proves the push counted.
+    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE not in result["degraded"]
 
 
 def test_edge5_a_branch_with_a_longer_number_is_not_counted(repo):
@@ -355,7 +357,7 @@ def test_one_graphql_request_covers_every_cloud_lane(repo):
     assert result["event"] == "timer"
     [argv] = gh.api_calls()
     assert argv[:9] == [
-        "gh", "api", "graphql", "-F", "owner=owner", "-F", "name=repo", "-f", argv[8],
+        "gh", "api", "graphql", "-f", "owner=owner", "-f", "name=repo", "-f", argv[8],
     ]
     query = argv[8]
     assert query.startswith("query=query($owner: String!, $name: String!) { repository(")
@@ -364,10 +366,32 @@ def test_one_graphql_request_covers_every_cloud_lane(repo):
         assert 'b%d: refs(refPrefix: "refs/heads/", query: "%d", first: 50)' % (
             number, number) in query
     assert "closedByPullRequestsReferences(first: 10, includeClosedPrs: true)" in query
+    for number in (101, 102):
+        issue_part = query.split("i%d: issue" % number)[1].split("b%d: refs" % number)[0]
+        branch_part = query.split("b%d: refs" % number)[1]
+        assert "{ pageInfo { hasNextPage } nodes {" in issue_part
+        assert "{ pageInfo { hasNextPage } nodes {" in branch_part.split("i10")[0]
+        # The timestamps the watch reads: the issue's own, each closing PR's, each branch tip's.
+        assert "updatedAt" in issue_part.split("closedByPullRequestsReferences")[0]
+        assert "updatedAt" in issue_part.split("nodes {")[1]
+        assert "committedDate" in branch_part.split("i10")[0]
     graphql_kwargs = gh.kwargs[gh.calls.index(argv)]
     assert graphql_kwargs["cwd"] == repo
     assert graphql_kwargs["timeout"] <= 30.0
-    assert "GIT_DIR" not in graphql_kwargs["env"]
+
+
+def test_the_graphql_request_environment_carries_no_git_variables(repo, tmp_path):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _fresh_gh(101)
+    env = dict(os.environ)
+    env["GIT_DIR"] = str(tmp_path / "elsewhere.git")
+    env["GIT_WORK_TREE"] = str(tmp_path / "elsewhere-tree")
+    result = _run(repo, gh, env=env)
+    assert result["event"] == "timer"
+    [argv] = gh.api_calls()
+    graphql_env = gh.kwargs[gh.calls.index(argv)]["env"]
+    assert "GIT_DIR" not in graphql_env
+    assert "GIT_WORK_TREE" not in graphql_env
 
 
 # --- edge 6: a read that could not be made ------------------------------------
@@ -436,6 +460,29 @@ def test_edge6_an_unreadable_read_degrades_and_the_lane_is_not_stale(repo, graph
     assert [lane["launchId"] for lane in result["cloudLanes"]] == ["cloud-a"]
 
 
+@pytest.mark.parametrize("truncated", ["prs", "branches"])
+def test_edge6_a_truncated_connection_degrades_instead_of_reading_stale(repo, truncated):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    lane = _lane_activity(issue_age=_QUIET)
+    connection = (
+        lane["branches"] if truncated == "branches"
+        else lane["issue"]["closedByPullRequestsReferences"]
+    )
+    connection["pageInfo"] = {"hasNextPage": True}
+    result = _run(repo, _Gh(_graphql_body({101: lane})))
+    assert result["event"] == "timer"
+    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in result["degraded"]
+
+
+def test_edge6_a_complete_page_is_read_normally(repo):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    lane = _lane_activity(issue_age=_QUIET)
+    lane["branches"]["pageInfo"] = {"hasNextPage": False}
+    lane["issue"]["closedByPullRequestsReferences"]["pageInfo"] = {"hasNextPage": False}
+    result = _run(repo, _Gh(_graphql_body({101: lane})))
+    assert result["event"] == "lane-stale"
+
+
 def test_edge6_an_unresolvable_slug_degrades_and_the_lane_is_not_stale(repo):
     _add_cloud_lane(repo, "cloud-a", 101)
     gh = _Gh(_graphql_body({101: _lane_activity(issue_age=_QUIET)}), slug_rc=1)
@@ -456,6 +503,59 @@ def test_edge6_one_bad_lane_does_not_hide_a_stale_sibling(repo):
     assert result["event"] == "lane-stale"
     assert [entry["launchId"] for entry in result["launches"]] == ["cloud-b"]
     assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in result["degraded"]
+
+
+def _folded_cloud_lane(issue):
+    """A started cloud lane as the fold yields it, with any `issue` value, good or bad.
+
+    The ledger refuses most bad issues when a lane is written, so the mapping is built
+    directly and handed to `_evaluate_cloud_activity`.
+    """
+    return {
+        "place": ll.PLACE_CLOUD, "started": True, "issue": issue,
+        "startedTs": time.time() - _QUIET * 5,
+        "cloudSessionName": "cloud-lane", "cloudSessionId": "session_lane",
+    }
+
+
+def _evaluate_folded(repo_root, lanes, gh):
+    degraded = set()
+    stale = ww._evaluate_cloud_activity(
+        repo_root, lanes, deadline=130.0, env=os.environ, gh_run=gh,
+        monotonic=lambda: 100.0, degraded=degraded, cloud_state=[None],
+        known_slug=_SLUG,
+    )
+    return stale, degraded
+
+
+@pytest.mark.parametrize("issue", [
+    pytest.param([101], id="list"),
+    pytest.param({"number": 101}, id="dict"),
+    pytest.param("101", id="str"),
+    pytest.param(True, id="bool"),
+    pytest.param(None, id="none"),
+    pytest.param(0, id="zero"),
+    pytest.param(-5, id="negative"),
+    pytest.param(101.0, id="float"),
+])
+def test_a_cloud_lane_with_a_bad_issue_reads_as_unavailable(repo, issue):
+    gh = _quiet_gh(101)
+    stale, degraded = _evaluate_folded(repo, {"cloud-a": _folded_cloud_lane(issue)}, gh)
+    assert stale == []
+    assert degraded == {ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE}
+    assert gh.calls == []
+
+
+def test_a_bad_issue_lane_does_not_stop_a_good_lane_being_read(repo):
+    # The bad lane's float equals the good lane's key, so an unguarded lookup would
+    # read it as the good lane's activity and report it stale too.
+    gh = _quiet_gh(102)
+    lanes = {"cloud-a": _folded_cloud_lane(102.0), "cloud-b": _folded_cloud_lane(102)}
+    stale, degraded = _evaluate_folded(repo, lanes, gh)
+    assert [entry["launchId"] for entry in stale] == ["cloud-b"]
+    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in degraded
+    [argv] = gh.api_calls()
+    assert "i102:" in argv[8]
 
 
 # --- edge 7: reserved, not started --------------------------------------------
@@ -563,6 +663,36 @@ def test_edge10_a_cached_failed_read_stays_disclosed_without_a_second_request(re
     assert len(gh.api_calls()) == 1
 
 
+def test_edge10_a_read_skipped_at_the_arm_deadline_is_not_cached(repo):
+    # A tick with no budget to request skips the read; it must not cache that skip, so the
+    # next tick with budget makes its request instead of reusing a read that was never made.
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _fresh_gh(101)
+    _all, live_lanes, _readable = ww._derive_batch_lanes(
+        repo, _BATCH, os.environ, set(), set(),
+    )
+    cloud_state = [None]
+    now = 100.0
+
+    def evaluate(deadline, degraded):
+        return ww._evaluate_cloud_activity(
+            repo, live_lanes, deadline=deadline, env=os.environ, gh_run=gh,
+            monotonic=lambda: now, degraded=degraded, cloud_state=cloud_state,
+            known_slug=_SLUG,
+        )
+
+    skipped = set()
+    assert evaluate(now, skipped) == []
+    assert gh.calls == []
+    assert cloud_state[0] is None
+    assert skipped == {ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE}
+
+    read = set()
+    assert evaluate(now + 30, read) == []
+    assert len(gh.api_calls()) == 1
+    assert read == set()
+
+
 def test_edge10_loop_threads_the_cache_across_arms(repo):
     _add_cloud_lane(repo, "cloud-a", 101)
     gh = _fresh_gh(101)
@@ -573,6 +703,10 @@ def test_edge10_loop_threads_the_cache_across_arms(repo):
     assert result["event"] == "timer"
     assert result["arms"] >= 3
     assert len(gh.api_calls()) == 1
+    assert result["cloudLanes"] == [{
+        "launchId": "cloud-a", "issue": 101,
+        "cloudSessionName": "cloud-101", "cloudSessionId": "session_101",
+    }]
 
 
 # --- the public entry points carry the result key -----------------------------
@@ -603,6 +737,36 @@ def test_cloud_lanes_is_sorted_by_launch_id_and_names_the_session(repo):
     ]
 
 
+def test_a_one_second_arm_still_samples_cloud_activity(repo):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _quiet_gh(101)
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh,
+    )
+    assert len(gh.api_calls()) == 1
+    assert result["event"] == "lane-stale"
+
+
+def test_a_one_second_arm_samples_when_the_clock_advances_between_calls(repo, monkeypatch):
+    # A real clock moves between the budget calculation and the reader's own check; the
+    # grant and the reader's minimum must not be able to disagree by that elapsed time.
+    state = {"now": 0.0}
+
+    def ticking():
+        state["now"] += 0.001
+        return state["now"]
+
+    monkeypatch.setattr(ww.time, "monotonic", ticking)
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _quiet_gh(101)
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh,
+    )
+    assert len(gh.api_calls()) == 1
+    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE not in result["degraded"]
+    assert result["event"] == "lane-stale"
+
+
 def test_deadline_timer_carries_cloud_lanes(repo):
     _add_cloud_lane(repo, "cloud-a", 101)
     result = ww.watch_arm(
@@ -613,5 +777,4 @@ def test_deadline_timer_carries_cloud_lanes(repo):
 
 
 def test_the_degradation_token_is_part_of_the_vocabulary():
-    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE == "cloud-activity-unavailable"
     assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in ww.DEGRADATIONS

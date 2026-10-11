@@ -44,7 +44,7 @@ each names the one owner and the register entry that binds the other child:
 - **FR-10** (a cloud setup belongs to the one Claude account it was made on) is **C5**'s, its only
   bullet being the readiness check that counts a launch from another account as not ready. C2
   writes the account into the setup record the check reads (R3).
-- **FR-17** (a cloud build follows the same order, review, vet and merge rules) is **C1**'s: the
+- **FR-17** (a cloud build follows the same order, review, vet and merge rules) is **C1b**'s (moved from C1 at the 2026-10-10 size split): the
   launch carries the same composed order, and nothing in the vet or the merge rules changes with
   the place (R2). The PR's half of its bullet, the same review record and receipts, is produced by
   C6's builder path and bound by R7.
@@ -108,7 +108,7 @@ once C1, C2 and C3 have handed back; C5 once C1 and C2 have; C6 once C1 and C3 h
 #1708's #1716 and #1718 are on main. Wave 2: C7, once C5 and C6 have handed back. The stack merges with
 one `gh stack merge` when every layer is vetted.
 
-**Per child.** C1 4 rows · C2 4 · C3 2 · C4 7 · C5 15 · C6 13 · C7 14 ·
+**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 7 · C5 15 · C6 13 · C7 14 ·
 C8 9 · closure validation run 5. Total 73 rows: 68 bullet rows (66 bullets, two of them split in
 two) and 5 Definition of done rows.
 
@@ -132,18 +132,18 @@ two) and 5 Definition of done rows.
 | FR-14 | 1 | rule | A launch with any one of the five conditions false is a launch with the cloud not ready. | **C5** |
 | FR-15 | 1 | rule | The launch report names every launched build under one of the two places. | **C5** |
 | FR-16 | 1 | rule | The reason is one of the eight on the board's list of reasons. | **C5** |
-| FR-17 | 1 | GWT | Given a build-ready issue, when it is built in the cloud, then its PR carries the same review record and… | **C1** |
+| FR-17 | 1 | GWT | Given a build-ready issue, when it is built in the cloud, then its PR carries the same review record and… | **C1b** |
 | FR-18 | 1 | GWT | Given the cloud is ready, when a build that needs no owner decision is launched in the cloud, then it reaches… | **C6** |
 | FR-19 | 1 | rule | Wherever the advisor lists lanes, a cloud lane appears with the word "cloud" beside it. | **C1** |
 | FR-20 | 1 | rule | The intake comment carries those three facts. | **C6** |
 | FR-21 | 1 | rule | The comment is headed as a builder note for the advisor and says the builder is waiting. | **C6** |
 | FR-21 | 2 | rule | On a public repository the comment is public, as builder comments already are. | **C6** |
 | FR-22 | 1 | GWT | Given the advisor is watching the wave, when a cloud builder posts a builder note, then the advisor's answer… | **C7** |
-| FR-23 | 1 | GWT | Given a cloud build in progress, when the owner's machine sleeps, then the build carries on to its next point… | **C1** |
+| FR-23 | 1 | GWT | Given a cloud build in progress, when the owner's machine sleeps, then the build carries on to its next point… | **C1b** |
 | FR-24 | 1 | rule | A builder that stops mid-build has pushed work for the advisor to recover the lane from. | **C6** |
 | FR-24 | 2 | rule | At handback, the review record and the receipts are on the PR, and nothing the vet needs exists only on the… | **C6** |
 | FR-25 | 1 | rule | The plugin does not drop the review of a cloud build and does not treat it as second class. | **C6** |
-| FR-26 | 1 | rule | A cloud build's PR merges only on the owner's merge word, as any build's does. | **C1** |
+| FR-26 | 1 | rule | A cloud build's PR merges only on the owner's merge word, as any build's does. | **C1b** |
 | FR-27 | 1 | rule | Nothing a cloud builder does alters the calibration on the owner's machine. | **C6** |
 | FR-28 | 1 | GWT | Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the… | **C8** |
 | FR-29 | 1 | rule | The advisor's message names the merged build and the one tap. | **C8** |
