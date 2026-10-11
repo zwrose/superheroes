@@ -345,6 +345,22 @@ def test_E11_a_cloud_build_beside_a_local_not_ready_fallback_clears_the_still_st
     assert _stored(store) is None
 
 
+def test_an_unconfirmed_cloud_session_is_not_reported_and_leaves_the_still_state(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    _reserve(repo, "b", 22, "cloud", {"placeCall": _call("cloud", reason=None)})
+    rec = _started("b")
+    rec.update(cloudSessionName="lane-b", cloudSessionUnconfirmed=True)
+    assert ll.append_under_lock(repo, rec)["ok"]
+    _folds(repo)
+    got = _report(repo)
+    assert got["lanes"] == 1
+    assert "#22" not in got["report"] and "In the cloud" not in got["report"]
+    assert got["still"] == {"action": "written", "reason": "no-setup"}
+    assert _stored(store)["reason"] == "no-setup"
+
+
 # ---------------------------------------------------------------- the CLI
 
 

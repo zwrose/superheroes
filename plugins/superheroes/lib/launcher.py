@@ -3297,7 +3297,8 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     for launch_id, info in batch:
         issue = info["issue"]
         first_index[issue] = min(first_index.get(issue, info["reservedIndex"]), info["reservedIndex"])
-        if info["started"] and (
+        # an unconfirmed cloud session may not exist, so it is neither reported nor a cloud build
+        if info["started"] and not info.get("cloudSessionUnconfirmed") and (
             issue not in last_started or info["reservedIndex"] > last_started[issue][1]["reservedIndex"]
         ):
             last_started[issue] = (launch_id, info)
