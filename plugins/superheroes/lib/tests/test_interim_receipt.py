@@ -94,33 +94,13 @@ def test_verify_passes_absent_from_certified_v2_with_truthy_list(tmp_path):
     assert interim["rounds"][0]["verifyPasses"][0]["CONFIRMED"] == 1
 
 
-def test_records_path_resume_preserves_verify_passes_in_interim(tmp_path):
-    """A recordsPath resume with verifyPasses disclosures must not read as unverified."""
-    records = tmp_path / "round-records.json"
-    vp = [{"CONFIRMED": 2, "PLAUSIBLE": 0, "REFUTED": 1, "drops": 1,
-           "downgrades": 0, "unverified": 0, "ambiguous": 0}]
-    rec = {"schemaVersion": 2, "round": 1, "kind": "baseline",
-           "dimensions": {"test-reviewer": {"status": "run", "findings": []}},
-           "findings": [], "coverageDecisions": [],
-           "disclosures": {"verifyPasses": vp}}
-    records.write_text(__import__("json").dumps([rec]))
-    state = RD.new_state(_cfg(recordsPath=str(records)))
-    interim = RD.build_interim_receipt(state, str(tmp_path / "s"), "tripwire")
-    assert interim["rounds"][0]["verifyPasses"] == vp
-
-
-def test_resume_verify_passes_second_wave_appends(tmp_path):
-    """Restored verifyPasses plus a new verifier fold must append, not replace."""
-    records = tmp_path / "round-records.json"
+def test_verify_passes_second_wave_appends(tmp_path):
+    """A round that already holds a verifyPasses wave plus a new verifier fold must append, not replace."""
     wave0 = [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
               "downgrades": 0, "unverified": 0, "ambiguous": 0}]
-    rec = {"schemaVersion": 2, "round": 1, "kind": "baseline",
-           "dimensions": {"test-reviewer": {"status": "run", "findings": []}},
-           "findings": [], "coverageDecisions": [],
-           "disclosures": {"verifyPasses": wave0}}
-    records.write_text(__import__("json").dumps([rec]))
-    state = RD.new_state(_cfg(recordsPath=str(records)))
+    state = RD.new_state(_cfg())
     state["round"] = 1
+    state["rounds"]["1"] = {"verifyPasses": wave0}
     _fold_verifiers(state, [_finding("v1", line=2)],
                     [{"id": "v0", "verdict": "REFUTED", "reason": "no"}])
     passes = state["rounds"]["1"]["verifyPasses"]

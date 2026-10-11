@@ -540,6 +540,32 @@ def test_e10_advance_is_refused_at_its_own_entry(break_lock, tmp_path):
     assert _snapshot(session_dir, exclude=(MARKER,)) == before
 
 
+# E11 — axis: each of the other seven `cmd_*` entries, called straight at its own function with its
+# required arguments, answers the refusal at that entry and leaves the folder as it was (`main`'s
+# own gate would otherwise answer first and hide a missing gate call).
+_DIRECT_CALLS = {
+    "next": lambda d, ruling: RD.cmd_next(d),
+    "rule": lambda d, ruling: RD.cmd_rule(d, ruling, "x"),
+    "submit": lambda d, ruling: RD.cmd_submit(d, RD.P_PANEL, 1, "x", {}),
+    "record-result": lambda d, ruling: RD.cmd_record_result(d),
+    "record-missing": lambda d, ruling: RD.cmd_record_missing(d, "x", 1, "x"),
+    "attest": lambda d, ruling: RD.cmd_attest(d, "x", "x"),
+    "checkpoint": lambda d, ruling: RD.cmd_checkpoint(d, "tripwire"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_DIRECT_CALLS))
+def test_e11_each_entry_refuses_an_earlier_version_folder_when_called_directly(name, tmp_path):
+    session_dir = _earlier_version_folder(tmp_path)
+    ruling = str(tmp_path / "ruling.json")
+    with open(ruling, "w", encoding="utf-8") as fh:
+        json.dump({}, fh)
+    before = _snapshot(session_dir)
+    out = _DIRECT_CALLS[name](session_dir, ruling)
+    _assert_refusal(out, already_restarted=False)
+    assert _snapshot(session_dir, exclude=(MARKER,)) == before
+
+
 # --- a session picked back up --------------------------------------------------------------
 
 # P1 — axis: a review interrupted and picked back up with `next` in the same session keeps its
