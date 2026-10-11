@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.43.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.42.0...superheroes-v0.43.0) (2026-10-11)
+
+
+### Features
+
+* **superheroes:** catch a malformed follow-ups marker at handback ([#1737](https://github.com/zwrose/superheroes/issues/1737)) ([8d29556](https://github.com/zwrose/superheroes/commit/8d2955629017ae0e2ffc080da6f1a607aa514614))
+* **superheroes:** the full review lane writes the review record from its session ([#1756](https://github.com/zwrose/superheroes/issues/1756)) ([ab05967](https://github.com/zwrose/superheroes/commit/ab059678eea2f8a22ae78f57373938bddc08c4b4))
+* **superheroes:** the review record writer, its findings contract, and the light, micro and review-only exits ([#1730](https://github.com/zwrose/superheroes/issues/1730)) ([ccfbb71](https://github.com/zwrose/superheroes/commit/ccfbb71e0119076c065719f261a185eeaee3c11a))
+
+
+### Bug Fixes
+
+* **superheroes:** close the iPhone check's seven field gaps from the first real run ([#1739](https://github.com/zwrose/superheroes/issues/1739)) ([ef8e6d3](https://github.com/zwrose/superheroes/commit/ef8e6d3c049222c26513df581d34f13770b31638))
+* **superheroes:** drive restarts the phone's typing helper instead of silently dropping keystrokes ([#1738](https://github.com/zwrose/superheroes/issues/1738)) ([4e505f3](https://github.com/zwrose/superheroes/commit/4e505f3a4865278a8920e93f7ff1fd047f9723a9))
+* **superheroes:** iPhone screenshot labels come from the phone, never from typed text ([#1733](https://github.com/zwrose/superheroes/issues/1733)) ([b19bbf0](https://github.com/zwrose/superheroes/commit/b19bbf0eaaf106957f588a517d47e6e2b3c2c54e))
+* **superheroes:** remove the plugin's dependence on Claude Design ([#1731](https://github.com/zwrose/superheroes/issues/1731)) ([36e5d39](https://github.com/zwrose/superheroes/commit/36e5d398aa7cedc35f0d6a16b6c2b5f741289ca7))
+
 ## [0.42.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.41.0...superheroes-v0.42.0) (2026-10-09)
 
 
