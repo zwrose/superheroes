@@ -56,9 +56,9 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
 
 ### Part A: setting a project up for the cloud
 
-**FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1) The owner copies the new cloud environment's id once, from that environment's page, as a hand step, because no session can read it; the check session and every later launch name the environment by that id, so the account's default never changes and each project keeps its own environment. (source: Canon 2026-10-11-dcc2b5e5-4)
-  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names the hand steps in this order (make a cloud environment and copy its id from the environment's page to the advisor, paste the setup text, sign in once to the independent reviewer with a sign-in kept apart from the owner's main one, paste the reviewer pass) and carries the setup text. The sign-in is done once per account, before the pass command first works, and the advisor walks the owner through it. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-4; Canon 2026-10-11-dcc2b5e5-1)
-  - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. The plugin asks the owner for the environment's id once, in that hand step, and never asks the owner to change the account's default. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-4)
+**FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1) The owner picks the new cloud environment by name with Claude Code's environment picker, on the account the builds run on, and the plugin reads the picked environment's id from Claude Code's settings, because no session and no web page shows the id; the check session and every later launch name the environment by that id, so each project keeps its own environment whatever the account's default is. (source: Canon 2026-10-11-dcc2b5e5-5)
+  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names the hand steps in this order (make a cloud environment and pick it in Claude Code's environment picker, paste the setup text, sign in once to the independent reviewer with a sign-in kept apart from the owner's main one, paste the reviewer pass) and carries the setup text. The sign-in is done once per account, before the pass command first works, and the advisor walks the owner through it. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5; Canon 2026-10-11-dcc2b5e5-1)
+  - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. The plugin never asks the owner to type or paste the environment's id; a pick it cannot confirm is asked for again. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5)
 
 **FR-2.** The setup text shall carry the plugin at the advisor's version, the tools a build needs, and the project's calibration where the project keeps its calibration outside the repository. (source: journeys; Canon 2026-10-10-ca3e7e0d-1)
   - *Acceptance (rule):* The setup text holds no reviewer pass and no other secret. (source: board · 1 Setup)
@@ -346,12 +346,16 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   FR-1's statement and hand-step list say so, and the build board's "1 Setup" artboard matches.
   Sections touched: Part A · Setting a project up for the cloud (FR-1), UI / UX (board · 1 Setup),
   Amendments.
-- **2026-10-11 (owner-stamped, substantive):** no session can read a cloud environment's id, and
-  nothing on the account lists environments (cloud C4's two probe sessions, #1745), so the owner
-  copies the new environment's id once, from its page, as a hand step; the check session and every
-  later launch name the environment by that id, and the step that made the environment the
-  account's default is retired (owner's ruling "35 a", Canon 2026-10-11-dcc2b5e5-4, superseding
-  2026-10-10-dcc2b5e5-12 and 2026-10-11-dcc2b5e5-2). FR-1's statement, its hand-step list and its
+- **2026-10-11 (owner-stamped, substantive):** no session can read a cloud environment's id
+  (cloud C4's probe sessions, #1745) and no web page shows it, but Claude Code's environment picker
+  (`/remote-env`) does, and saves the pick in Claude Code's settings. So the owner picks the new
+  environment by name in that picker, on the account the builds run on; the plugin reads the picked
+  id from the settings, treating an unchanged setting as no pick and asking again; the check session
+  and every later launch name the environment by that id; and the step that made the environment
+  the account's default only so the check could find it is retired (owner's rulings "35 a" and "37
+  b", Canon 2026-10-11-dcc2b5e5-4 and -5; -5 supersedes -4, which had the owner copy the id from a
+  page that does not show it; together they supersede 2026-10-10-dcc2b5e5-12 and
+  2026-10-11-dcc2b5e5-2). FR-1's statement, its hand-step list and its
   rule say so, and the build board's "1 Setup" artboard matches. Sections touched: Part A ·
   Setting a project up for the cloud (FR-1), UI / UX (board · 1 Setup), Amendments.
 - **2026-10-11 (owner-stamped, substantive):** cloud builders may run on a different Claude account
