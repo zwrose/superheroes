@@ -10,7 +10,7 @@ approved: "2026-10-10"
 gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-10"
-updated: "2026-10-10"
+updated: "2026-10-11"
 ---
 # Cloud builders
 
@@ -56,9 +56,9 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
 
 ### Part A: setting a project up for the cloud
 
-**FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1)
-  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names three hand steps (make a cloud environment, paste the setup text, paste the reviewer pass) and carries the setup text. (source: board · 1 Setup)
-  - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. (source: board · 1 Setup)
+**FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1) The owner picks the new cloud environment by name with Claude Code's environment picker, on the account the builds run on, and the plugin reads the picked environment's id from Claude Code's settings, because no session and no web page shows the id; the check session and every later launch name the environment by that id, so each project keeps its own environment whatever the account's default is. (source: Canon 2026-10-11-dcc2b5e5-5)
+  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names the hand steps in this order (make a cloud environment and pick it in Claude Code's environment picker, paste the setup text, sign in once to the independent reviewer with a sign-in kept apart from the owner's main one, paste the reviewer pass) and carries the setup text. The sign-in is done once per account, before the pass command first works, and the advisor walks the owner through it. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5; Canon 2026-10-11-dcc2b5e5-1)
+  - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. The plugin never asks the owner to type or paste the environment's id; a pick it cannot confirm is asked for again. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5)
 
 **FR-2.** The setup text shall carry the plugin at the advisor's version, the tools a build needs, and the project's calibration where the project keeps its calibration outside the repository. (source: journeys; Canon 2026-10-10-ca3e7e0d-1)
   - *Acceptance (rule):* The setup text holds no reviewer pass and no other secret. (source: board · 1 Setup)
@@ -270,9 +270,12 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - The owner has a sign-in for an independent reviewer that can be placed in the cloud as a pass.
   The pass used in the discovery's pilot lasts 10 days. (source: board · 1 Setup; journeys)
 - The platform lets a session archive itself only when a person approves the prompt. (source: journeys; board · 6 Cleanup)
-- The platform delivers a message from the advisor to a running cloud session, and does not deliver
-  one from a cloud session to the advisor. FR-22, FR-28 and UFR-13 rely on the first, and FR-21 uses
-  a comment because of the second. (source: craft, for your veto; journeys)
+- The platform delivers a message to a running cloud session, waking an idle one, only from a
+  session on the same Claude account, and does not deliver one from a cloud session to any session.
+  Cloud builders may run on a different account from the advisor, so the advisor's messages reach
+  them through a standing relay session on the builders' account: a background session on Haiku 5.5
+  that forwards the advisor's text, checked for exact text. FR-22, FR-28 and UFR-13 rely on the
+  first, and FR-21 uses a comment because of the second. (source: spike #1769's findings; Canon 2026-10-11-dcc2b5e5-3)
 - This work builds on the approved review spec's release, which is not built yet. The review record
   that FR-17, FR-24 and UFR-7 name comes from that release
   [cite: docs/superheroes/risk-calibrated-review-that-learns-dec0af/spec.md § FR-3]. (source: craft, for your veto; Canon 2026-10-10-d6064e1d-3)
@@ -321,7 +324,47 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-10 (owner-stamped, substantive):** cloud setup tells the owner to make the new cloud
+  environment the account's default, so the check session lands in it and the plugin reads the
+  environment's id from that session instead of asking the owner for it (owner's ruling "25 c",
+  Canon 2026-10-10-dcc2b5e5-12). FR-1's statement, its hand-step list and its pass-command rule
+  say so, and the build board's "1 Setup" artboard matches. Sections touched: frontmatter, Part A ·
+  Setting a project up for the cloud (FR-1), UI / UX (board · 1 Setup), Amendments.
+- **2026-10-11 (owner-stamped, substantive):** the reviewer pass is made from a reviewer sign-in
+  kept apart from the owner's main one, so the owner signs in to it once, before the pass command
+  first works. Cloud setup shows that sign-in as its own hand step before the pass, once per
+  account, and the advisor walks the owner through it (owner's ruling "27 a", Canon
+  2026-10-11-dcc2b5e5-1). FR-1's hand-step list says so, and the build board's "1 Setup" artboard
+  matches. Sections touched: frontmatter, Part A · Setting a project up for the cloud (FR-1),
+  UI / UX (board · 1 Setup), Amendments.
+
+- **2026-10-11 (owner-stamped, substantive):** the default-environment step holds for the setup
+  only: the check session lands in the default and the plugin reads the environment's id from it,
+  and every later launch names its environment by that id, so the owner may switch the default
+  back afterwards, and an account with several projects keeps one environment per project
+  (owner's word "a" on the advisor's clarification of "25 c", Canon 2026-10-11-dcc2b5e5-2).
+  FR-1's statement and hand-step list say so, and the build board's "1 Setup" artboard matches.
+  Sections touched: Part A · Setting a project up for the cloud (FR-1), UI / UX (board · 1 Setup),
+  Amendments.
+- **2026-10-11 (owner-stamped, substantive):** no session can read a cloud environment's id
+  (cloud C4's probe sessions, #1745) and no web page shows it, but Claude Code's environment picker
+  (`/remote-env`) does, and saves the pick in Claude Code's settings. So the owner picks the new
+  environment by name in that picker, on the account the builds run on; the plugin reads the picked
+  id from the settings, treating an unchanged setting as no pick and asking again; the check session
+  and every later launch name the environment by that id; and the step that made the environment
+  the account's default only so the check could find it is retired (owner's rulings "35 a" and "37
+  b", Canon 2026-10-11-dcc2b5e5-4 and -5; -5 supersedes -4, which had the owner copy the id from a
+  page that does not show it; together they supersede 2026-10-10-dcc2b5e5-12 and
+  2026-10-11-dcc2b5e5-2). FR-1's statement, its hand-step list and its
+  rule say so, and the build board's "1 Setup" artboard matches. Sections touched: Part A ·
+  Setting a project up for the cloud (FR-1), UI / UX (board · 1 Setup), Amendments.
+- **2026-10-11 (owner-stamped, substantive):** cloud builders may run on a different Claude account
+  from the advisor. A cloud session takes messages only from sessions on its own account, so the
+  advisor's messages reach a cloud builder through a standing relay session on the builders'
+  account (a background session on Haiku 5.5), checked for exact text; replies still come back as
+  comments on the builder's issue (owner's ruling "33 a" on spike #1769's findings, Canon
+  2026-10-11-dcc2b5e5-3). The messaging assumption says so. Sections touched: Assumptions &
+  dependencies, Amendments.
 
 ## Coverage
 

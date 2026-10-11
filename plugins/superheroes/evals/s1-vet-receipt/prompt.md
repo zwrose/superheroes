@@ -17,7 +17,7 @@ PR #52 "feat(tool): export --dry-run" closes issue #40 (light lane, presentation
 - Diff: `src/export.py` (+48 -6), `tests/test_export.py` (+61).
 - The PR body carries: the close line; the three owner-half headings; an empty `## Advisor vet`
   slot with its marker and reminder; the build record with a dispositions table (1 Minor, fixed),
-  one codex reviewer (control probe engaged), no degradations (`None`), size tripwire not crossed
+  one codex reviewer (its review record shows it read the change), no degradations (`None`), size tripwire not crossed
   (54 of 90-120), DoD table with both rows done, and
   `## Follow-ups for the advisor` with `- FU1 [craft] the import command lacks --dry-run` and the
   marker `<!-- superheroes:followups FU1 -->`.
