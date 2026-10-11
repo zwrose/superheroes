@@ -371,3 +371,66 @@ No State line calls any of them open. Result: verified.
  "weight": "light"
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "A1-r3-environment-decide-by",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "A2-c4-dod-new-setup-steps",
+   "lens": "dod-adequacy"
+  }
+ ],
+ "invocation": "inv2",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "epic",
+   "status": "reviewed"
+  },
+  {
+   "part": "README",
+   "status": "reviewed"
+  },
+  {
+   "part": "C2",
+   "status": "reviewed"
+  },
+  {
+   "part": "C3",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
