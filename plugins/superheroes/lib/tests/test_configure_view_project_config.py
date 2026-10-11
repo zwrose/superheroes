@@ -134,7 +134,10 @@ def test_no_profile_renders_without_raising(tmp_path):
     assert "profile: no core calibration yet" in block
     rows = _numbered_rows(block)
     assert len(rows) == 14
-    assert all("unset" in row or "plugin default" in row or "derived from dial" in row for row in rows)
+    assert all(
+        "unset" in row or "plugin default" in row or "derived from dial" in row
+        or row == "10. Risk and trust — threat model not set; 0 risk areas"
+        for row in rows)
 
 
 def test_corrupt_profile_says_unreadable_and_no_stamped(tmp_path):

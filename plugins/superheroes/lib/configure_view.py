@@ -241,8 +241,19 @@ def _canon_pointer_display(repo_root, cwd, store_root):
     return "points to the project's Canon standing rulings (%s) — no value of its own" % where
 
 
+def _risk_and_trust_display(effective):
+    """Item 10's one-line value: whether the threat model is set and how many risk areas."""
+    threat = "set" if effective.get("threatModel") else "not set"
+    areas = effective.get("riskAreas")
+    if not isinstance(areas, list):
+        return "threat model %s; risk areas unreadable" % threat
+    return "threat model %s; %d risk area%s" % (threat, len(areas), "" if len(areas) == 1 else "s")
+
+
 def _config_item_display(item_def, entry, canon_args=None):
     """Format one configuration row for the one-screen view. Read-only."""
+    if item_def["slug"] == "riskAndTrust" and isinstance(entry.get("effective"), dict):
+        return _risk_and_trust_display(entry["effective"])
     if entry.get("malformed"):
         return "malformed (stamped value not applied)"
     source = entry.get("source")
@@ -478,6 +489,22 @@ def _size_exclude_view_lines(payload):
     return lines
 
 
+def _risk_area_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    if reason and reason != "core-md-absent":
+        return ["(unreadable — %s; the review treats the risk areas as not set)" % reason]
+    areas = payload.get("areas")
+    if not payload.get("declared") or not isinstance(areas, list) or not areas:
+        return ["(none set)"]
+    lines = []
+    for area in areas:
+        lines.append("- %s: %s Undo: %s Covers: %s" % (
+            " ".join(area["name"].split()), " ".join(area["why"].split()),
+            " ".join(area["undo"].split()), ", ".join(area["covers"])))
+    return lines
+
+
 def collect(cwd, root=None):
     """Gather everything the view renders (read-only): the core facts, each hero layer's text,
     the pinned patterns, the resolved storage mode, the coalesced drift notice, the effective
@@ -579,13 +606,18 @@ def collect(cwd, root=None):
         size_exclude = core_md.read_size_exclude(cwd, root)
     except Exception:
         size_exclude = {"reason": "size-exclude-read-failed", "declared": False, "globs": None}
+    try:
+        risk_areas = core_md.read_risk_areas(cwd, root)
+    except Exception:
+        risk_areas = {"reason": "risk-areas-unreadable", "declared": False, "areas": None}
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
             "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
             "reviewGatePolicy": review_gate, "vetChecks": vet_checks,
-            "sandboxAccess": sandbox_access, "sizeExclude": size_exclude}
+            "sandboxAccess": sandbox_access, "sizeExclude": size_exclude,
+            "riskAreas": risk_areas}
 
 
 def _health_line(counts):
@@ -679,8 +711,12 @@ def render(cwd, *, root=None):
         out.append(f"verify command: {core.get('verifyCommand') or '(none)'}")
         out.append(f"stack: {', '.join(core.get('stackTags') or []) or '(none)'}")
         out.append("")
-        out.append("### Threat model")
+        out.append("### Risk and trust")
+        out.append("What we defend against:")
         out.append((core.get("threatModel") or "(none)").strip())
+        out.append("Risk areas:")
+        for line in _risk_area_view_lines(data.get("riskAreas")):
+            out.append(line)
         out.append("")
         out.append("### Show-it surface")
         show_it = (core.get("showItSurface") or "").strip()
