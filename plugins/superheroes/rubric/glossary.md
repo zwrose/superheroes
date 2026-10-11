@@ -335,8 +335,8 @@ condition](#delete-when-condition) wearing a tag.
 Part structural, part capability-gap. The entry names which part is which so a
 [proposal](#proposal) can split it. Example: the gate-write helper, whose `reset` mode and decisions
 plumbing are structural (how an approval is revoked and recorded is a property of how the gate is
-built) and whose legacy `certify` mode is capability-gap baggage kept only for the plan and tasks
-legs.
+built) and whose legacy `certify` mode is capability-gap baggage left from the retired plan and
+tasks legs.
 
 ## Review sheets
 
