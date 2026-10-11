@@ -67,7 +67,6 @@ __all__ = (
     "resolve_merged_into_entry",
     "legacy_disposition_ledger_rows",
     "legacy_key_collision",
-    "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
     "EXECUTION_ONLY_BINDING",
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
@@ -223,7 +222,6 @@ def copy_follow_up_field(source, target):
 
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
 DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
-DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN = "disposition-ledger-legacy-key-collision"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
 DISPOSITION_LEDGER_OWNER_ABSENT = "absent"
