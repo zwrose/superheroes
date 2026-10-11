@@ -35,4 +35,4 @@ DoD:
 
 **Consequence:** none for a consuming project until it adopts the release that carries the whole stack.
 
-**Register check:** register entries stay quoted on the epic's body, the stack's feature issue (`rubric/native-stacks.md` § Each layer is a sub-issue). This child's check runs on the epic's body with the token `C6b` (`skills/showrunner/reference/register-check.md` § Stack layer inputs). The entries that bind this child: R4, R6, R7, R8, R9 and R11. Until the advisor's docs PR naming C6b merges, run the check with `--register-copy worktree` on that PR's branch.
+**Register check:** register entries stay quoted on the epic's body, the stack's feature issue (`rubric/native-stacks.md` § Each layer is a sub-issue). This child's check runs on the epic's body with the token `C6b` (`skills/showrunner/reference/register-check.md` § Stack layer inputs). The entries that bind this child: R2, R4, R6, R7, R8, R9 and R11. Until the advisor's docs PR naming C6b merges, run the check with `--register-copy worktree` on that PR's branch.
