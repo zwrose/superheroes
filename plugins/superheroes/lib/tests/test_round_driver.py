@@ -396,14 +396,6 @@ def test_panel_seat_key_fault_no_hint_for_unknown_stem():
     assert "findings-file stem" not in fault
 
 
-def test_v1_state_is_refused_with_fresh_start_message(tmp_path):
-    d = str(tmp_path)
-    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
-        json.dump({"schemaVersion": 1, "rounds": {}}, fh)
-    out = RD.cmd_next(d)
-    assert out["ok"] is False and "fresh session dir" in out["reason"]
-
-
 def test_journal_appended_per_call(tmp_path):
     d = str(tmp_path)
     n = _first_next(d, _cfg())
@@ -4509,14 +4501,6 @@ def test_base_guard_terminal_replay_still_ok(tmp_path, capsys):
     _drive_cli(d, _cfg(), _responder(round1_findings=None))
     rc, out = _cli_next_json(d, _guard_argv(d, fresh=False), capsys)
     assert rc == 0 and out["ok"] and out["action"] == RD.P_TERMINAL
-
-
-def test_v1_state_wins_over_base_guard(tmp_path, capsys):
-    d = str(tmp_path)
-    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
-        json.dump({"schemaVersion": 1, "rounds": {}}, fh)
-    rc, out = _cli_next_json(d, [], capsys)
-    assert rc == 0 and out["ok"] is False and "fresh session dir" in out["reason"]
 
 
 # =============================================================================

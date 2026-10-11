@@ -815,6 +815,33 @@ owner-judgment ids and the finding keys this driver mints), so resuming on an ol
 apply the wrong disposition. Recorded rows that predate the cited-head derivation are read as they
 were recorded at this version, not refused.
 
+**A session from an earlier plugin version is not continued.** State the driver mints carries
+`sessionGeneration`, set to the integer `2`; the key is written only when state is minted and is
+never added to a loaded state. A saved state is from an earlier version when it is a JSON object
+whose `sessionGeneration` is absent or is anything other than the integer `2`. While such a session
+is unfinished (its `terminal` is empty), every driver command on it — `next`, `submit`,
+`record-result`, `record-missing`, `advance`, `attest`, `checkpoint` and `rule` — answers, before it
+recovers a commit, reads or writes the journal, mints a session id, emits an order, records or folds:
+
+```json
+{"ok": false, "reason": "session-from-earlier-version", "restart": "fresh-session",
+ "alreadyRestarted": false, "detail": "…"}
+```
+
+From the command line the exit status is non-zero. The first refusal writes `restarted-on-upgrade.json`
+into the session directory, once, by an exclusive create; `alreadyRestarted` is `false` on that call
+and `true` on every later one, which leaves the file as it is. If the file cannot be created for any
+reason other than already existing, the command is still refused, with `alreadyRestarted` `false` and
+`markerWritten` `false`; `markerWritten` appears only in that case. The driver reads only
+`loop-state.json` in the old directory and touches nothing else there: no journal row is appended,
+and the certification files and every other file stay as they were. A finished session from an earlier
+version is left alone: `next` on it re-emits its terminal answer as before. A missing, unreadable, non-JSON
+or non-object `loop-state.json` is handled by the refusals that exist for those cases.
+
+The caller starts the review again, once, in a fresh session directory: Setup into a new
+`$SESSION_DIR`, then Bootstrap from round 1 there. It leaves the old directory as it is and never
+edits it to make the session continue.
+
 ## Journal and receipt
 
 **Journal (`driver-journal.jsonl`).** One JSON object per line: `{cmd, phase, round, attempt, outcome, ts}`.

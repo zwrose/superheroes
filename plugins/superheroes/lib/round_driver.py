@@ -231,6 +231,17 @@ RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
 RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # --- version spelling: pinned declaration block (END) ---
+# The session generation. `new_state` stamps it into state it MINTS and nothing else ever writes it:
+# a loaded state is never given the key (the hash-preservation rule above). A saved state whose
+# `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
+# version; while it is unfinished, `_upgrade_gate` refuses every command on it.
+SESSION_GENERATION = 2
+SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
+RESTART_FRESH_SESSION = "fresh-session"
+UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
+UPGRADE_RESTART_MARKER_SCHEMA = "restarted-on-upgrade/1"
+UPGRADE_REFUSAL_DETAIL = ("this session was started by an earlier plugin version and is not "
+                          "continued; start the review again in a fresh session directory")
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
 RECEIPT_FORM_INTERIM = "interim"
@@ -1173,6 +1184,7 @@ def new_state(config=None):
     seeded_seat_map = cfg.get("seatMap")
     state = {
         "schemaVersion": STATE_SCHEMA_VERSION,
+        "sessionGeneration": SESSION_GENERATION,
         "config": cfg,
         "round": 1,
         "step": P_PANEL,
@@ -5659,6 +5671,9 @@ def cmd_next(session_dir, config_overrides=None):
     record layer refuse `bootstrap-required` per seat later."""
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "next")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(session_dir, "next")
             if refusal is not None:
                 return refusal
@@ -6068,6 +6083,9 @@ def _fix_batch_file_sha256(session_dir, rnd, state):
 def cmd_rule(session_dir, ruling_file, by):
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, RULE_CMD)
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(session_dir, RULE_CMD)
             if refusal is not None:
                 return refusal
@@ -6266,6 +6284,9 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     and forwarded to it; a resolution failure does not refuse the submit."""
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "submit")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(session_dir, "submit")
             if refusal is not None:
                 return refusal
@@ -6956,6 +6977,81 @@ def _refuse_cmd(session_dir, cmd, reason, fault=FAULT_CALLER, phase=None, rnd=No
 def _lock_held_refusal(session_dir, cmd, held):
     return _refuse_cmd(session_dir, cmd, "%s-locked" % cmd,
                        holder={"pid": held.pid, "createdAt": held.created_at})
+
+
+def _generation_is_current(state):
+    """Only the integer `SESSION_GENERATION` is current: `true == 1` and `2.0 == 2` must not pass."""
+    generation = state.get("sessionGeneration")
+    return type(generation) is int and generation == SESSION_GENERATION
+
+
+def _earlier_generation_unfinished(session_dir):
+    """True when `loop-state.json` is a JSON object that is not of the current generation and has no
+    terminal answer yet. It opens that one file and nothing else; a missing, unreadable, non-JSON or
+    non-object file is False, so the handling that exists for those cases stays in charge."""
+    try:
+        with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError, RecursionError):
+        return False
+    if not isinstance(state, dict) or _generation_is_current(state):
+        return False
+    return not state.get("terminal")
+
+
+def _write_upgrade_marker(session_dir, cmd):
+    """(already_restarted, written). The marker is created exclusively, so only the first refusal
+    makes it; a later one finds it and leaves it as it is. Any other failure to create it still
+    leaves the command refused: (False, False)."""
+    path = os.path.join(session_dir, UPGRADE_RESTART_MARKER_FILE)
+    body = {"schema": UPGRADE_RESTART_MARKER_SCHEMA,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "cmd": cmd}
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return True, True
+    except OSError:
+        return False, False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(_canonical(body))
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError:
+        pass
+    return False, True
+
+
+def _upgrade_gate(session_dir, cmd):
+    """None to carry on, or the `session-from-earlier-version` refusal. The caller holds the session
+    lock. An unfinished session from an earlier plugin version is never continued: this answers
+    before any commit recovery, journal row, session id, order, record or fold, and writes only the
+    once-only marker."""
+    if not _earlier_generation_unfinished(session_dir):
+        return None
+    already_restarted, written = _write_upgrade_marker(session_dir, cmd)
+    refusal = {"ok": False, "reason": SESSION_FROM_EARLIER_VERSION,
+               "restart": RESTART_FRESH_SESSION, "alreadyRestarted": already_restarted,
+               "detail": UPGRADE_REFUSAL_DETAIL}
+    if not written:
+        refusal["markerWritten"] = False
+    return refusal
+
+
+def _upgrade_gate_unlocked(session_dir, cmd):
+    """The gate for `main`, which does not hold the session lock: it takes the lock only for a session
+    the gate will refuse, and a held lock answers as it does at every entry."""
+    if not _earlier_generation_unfinished(session_dir):
+        return None
+    try:
+        with round_records.session_lock(session_dir):
+            return _upgrade_gate(session_dir, cmd)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, cmd, held)
+    except OSError:
+        # The folder will not take a lock file (it is read-only): the command is still refused.
+        return _upgrade_gate(session_dir, cmd)
 
 
 def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_resolver_for=None):
@@ -8717,6 +8813,9 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     superseded by it."""
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "record-result")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(session_dir, "record-result")
             if refusal is not None:
                 return refusal
@@ -9234,6 +9333,9 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
     of two audit targets sharing an id can be recorded missing WITHOUT claiming its twin is."""
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "record-missing")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(session_dir, "record-missing")
             if refusal is not None:
                 return refusal
@@ -9361,12 +9463,17 @@ def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=Non
     JOURNALS the broken holder as a `caller-error` (breaking someone else's lock is a caller's
     decision, and it is never attest-eligible)."""
     broke = None
-    if break_lock:
+    # An unfinished session from an earlier plugin version is refused under the lock below; it is
+    # not a session whose lock is broken, and breaking it would journal a row in its folder.
+    if break_lock and not _earlier_generation_unfinished(session_dir):
         holder = round_records.break_lock(session_dir) or {}
         broke = {"pid": holder.get("pid"), "createdAt": holder.get("createdAt")}
         _journal_event(session_dir, "advance", "lock-broken", fault=FAULT_CALLER, holder=broke)
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "advance")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(
                 session_dir, "advance",
                 sidecar_target=_sidecar_target_for_recover(session_dir, git=git))
@@ -10451,10 +10558,14 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
 
     Refuses outright if any terminal receipt already exists — an attestation is what a session
     writes INSTEAD of a terminal receipt, never over one."""
-    if not isinstance(note, str) or not note.strip():
+    if (not isinstance(note, str) or not note.strip()) \
+            and not _earlier_generation_unfinished(session_dir):
         return _refuse_cmd(session_dir, "attest", "attest-note-required")
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "attest")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(
                 session_dir, "attest",
                 sidecar_target=_sidecar_target_for_recover(session_dir, git=git))
@@ -10552,11 +10663,15 @@ def cmd_checkpoint(session_dir, stop_reason):
     Re-invoking checkpoint after an earlier checkpoint is allowed — a run can stop, resume, and stop
     again — and each write supersedes the previous interim. The write-once terminal rule applies only
     to certified/attested receipts, not to interim supersession."""
-    if stop_reason not in CHECKPOINT_STOP_REASONS:
+    if (stop_reason not in CHECKPOINT_STOP_REASONS
+            and not _earlier_generation_unfinished(session_dir)):
         return _refuse_cmd(session_dir, "checkpoint", "checkpoint-stop-reason-unknown",
                            detail=stop_reason)
     try:
         with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, "checkpoint")
+            if upgrade is not None:
+                return upgrade
             refusal = _commit_recover_or_refuse(session_dir, "checkpoint")
             if refusal is not None:
                 return refusal
@@ -10778,6 +10893,12 @@ def main(argv=None):
 
 
 def _dispatch(args):
+    # An unfinished session from an earlier plugin version is refused before any other check here
+    # reads its saved state.
+    upgrade = _upgrade_gate_unlocked(args.session_dir, args.cmd)
+    if upgrade is not None:
+        sys.stdout.write(json.dumps(upgrade) + "\n")
+        return 1
     if args.cmd == "next":
         overrides = {}
         if args.leg:
@@ -10959,7 +11080,7 @@ def _dispatch(args):
     sys.stdout.write(json.dumps(out) + "\n")
     # A terminal receipt integrity fault fails LOUD: nonzero exit, the same fail-loud family as
     # journal-fault-unrecordable (a masked-by-replay receipt fault must never look like a clean exit).
-    return 1 if out.get("reason") == "receipt-fault" else 0
+    return 1 if out.get("reason") in ("receipt-fault", SESSION_FROM_EARLIER_VERSION) else 0
 
 
 if __name__ == "__main__":
