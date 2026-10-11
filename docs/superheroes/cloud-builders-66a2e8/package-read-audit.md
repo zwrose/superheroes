@@ -567,3 +567,60 @@ No State line calls any of them open. Result: verified.
  "weight": "light"
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv3",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C1b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [],
+ "invocation": "inv3",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C4",
+   "result": "pass"
+  }
+ ]
+}
+```
