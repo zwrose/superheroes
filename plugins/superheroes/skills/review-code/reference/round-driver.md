@@ -674,17 +674,17 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   whether or not it carries a disposition.
 - A candidate merged into a representative at synthesis carries `mergedInto`.
 - The state marker `dispositionLedgerOwner: "ledger"` records that the **disposition ledger is the
-  durable owner of record**; seeding sets it (`lib/round_driver.py:1426`). A marker value the driver
+  durable owner of record**; seeding sets it (`_stage_findings`, `lib/round_driver.py`). A marker value the driver
   does not recognize refuses at the fold with `disposition-ledger-owner-unrecognized`
-  (`lib/round_driver.py:2164`).
+  (`_fold`, `lib/round_driver.py`).
 - The three dispositions: `fixed` carries `dispositionReceipt {headSha}` — the fix-fold head the
   config records, and an empty receipt when it records none (`_fixed_disposition_receipt`,
-  `lib/round_driver.py:1610`); `refuted` carries `refutedReason`;
+  `lib/round_driver.py`); `refuted` carries `refutedReason`;
   `out-of-scope` carries `outOfScopeReason` plus a `followUp` object with shape
   `{item, revisitTrigger, classClosure}` — judged by `session_contract.follow_up_shape_fault`
   at submit. A new follow-up must include a nonblank `item`. The fault it returns names
   `missing-follow-up-item`, `missing-revisit-trigger` or `missing-class-closure`
-  (`lib/session_contract.py:194`).
+  (`follow_up_shape_fault`, `lib/session_contract.py`).
 - Where each is recorded: `fixed` at the audits fold for every target the independent auditor
   discharged; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an
@@ -1003,7 +1003,7 @@ Treat `round_driver.py` as the contract of record.
 
 **`run_loop` return contract.** `run_loop` drives the scripted seam path end-to-end and returns the
 driver's terminal receipt, built from the loop state alone (`_driver_receipt`,
-`lib/round_driver.py:5600`).
+`lib/round_driver.py`).
 
 **Leaf modules (`record_paths`, `receipt_disclosures`).** Pure vocabulary and path helpers live in
 two leaf modules the driver does not own:
