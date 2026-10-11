@@ -470,7 +470,7 @@ _SECRET_SUBSTRINGS = ("password", "passwd", "pwd", "passphrase", "secret", "toke
                       "cookie", "apikey", "privatekey", "secretkey", "accesskey")
 _KEY_QUOTES = "\"'`[]{}() \t\\"
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-_KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)[ \t\"'\\\])}]*[:=]")
+_KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)[^\w\n:=]{0,64}[:=]")
 _PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 _JSON_ESCAPE = re.compile(r'\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])')
 _JSON_ESCAPED = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
@@ -543,8 +543,8 @@ def _decoded_views(text):
 
 
 def _detects(text):
-    """The detector over one view: a key-like run that _secret_key accepts and that is followed by ':' or '=',
-    unless it is a count key whose whole value is a number."""
+    """The detector over one view: a key-like run that _secret_key accepts, then up to 64 characters that are not
+    word characters, newlines, ':' or '=', then ':' or '=', unless it is a count key whose value is a number."""
     for m in _KEY_CANDIDATE.finditer(text):
         key = m.group("key")
         if _secret_key(key) and not (_is_count_key(key) and _number_value_follows(text, m.end())):
@@ -554,8 +554,8 @@ def _detects(text):
 
 def _has_secret(text):
     """The one text detector: a key-like run (one word, or two joined by a space) that _secret_key accepts and
-    that is followed by ':' or '=', or a private-key block, anywhere in the text or in a decoded view of it (the
-    JSON strings and keys, and the text with its JSON escapes decoded, so a literal backslash-n before
+    that is followed by ':' or '=' (gap as in _detects), or a private-key block, anywhere in the text or in a decoded
+    view of it (the JSON strings and keys, and the text with its JSON escapes decoded, so a literal backslash-n before
     "password: x" and a backslash-u0077 in "password" both count). A count key followed by a number is not a match
     (_is_count_key). A two-word run is judged by _secret_key on both words, so "the password: x" and "api key = x"
     count. Nothing tracks where a value ends; a text this matches is withheld whole."""

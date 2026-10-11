@@ -673,7 +673,7 @@ the section.
 The build record carries a **dispatch provenance** section that lists each dispatch (the brief-check reviewer, every implementer, every `check-runner`, every `order-linter` seat, the pilot, the review-code seats) with the engine and model it ran on, each validated against the registry allowlist. It also carries the
 keyed **Follow-ups for the advisor** list with its marker, the size tripwire row §4's size step
 filled, and the bite-proof records. The PR body carries a DoD disposition table (the
-`superheroes:dod-table` marker), one row per Definition-of-Done bullet. On the light lane, once this PR exists, write the review record per `skills/review-code/reference/review-record.md` and put its URL in the build record.
+`superheroes:dod-table` marker), one row per Definition-of-Done bullet. On the light lane, once this PR exists, write the review record per `skills/review-code/reference/review-record.md` and put its URL in the build record. A light-lane review that ends in a park while this PR is open writes the record too.
 
 **Never auto-close an issue that must stay open.** GitHub's closing-keyword parser is negation-blind,
 so use a non-closing verb ("addresses", "part of", "relates to") for an issue this PR must not close.
