@@ -18,8 +18,7 @@ RD = _load("round_driver")
 
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude", "codex"], "fixerVendor": "claude",
-            "persistRecords": True}
+    base = {"leg": "code", "vendors": ["claude", "codex"], "fixerVendor": "claude"}
     base.update(over)
     return base
 

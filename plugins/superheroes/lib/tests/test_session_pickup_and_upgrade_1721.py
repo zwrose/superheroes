@@ -478,6 +478,71 @@ def test_e4_the_current_generation_passes_the_gate(tmp_path):
     assert not os.path.exists(_marker_path(session_dir))
 
 
+# The version matrix is derived from the driver's own constants, never restated here.
+EARLIER_VERSIONS = [v for v in RD.SUPPORTED_STATE_VERSIONS if v < RD.STATE_SCHEMA_VERSION]
+FUTURE_VERSION = RD.STATE_SCHEMA_VERSION + 1
+
+
+# E4b — axis: an unfinished state of the current generation but an earlier schema version
+# is refused by `next`, `submit` and `record-result`; none of them reads it. Only the integer
+# `STATE_SCHEMA_VERSION` is current.
+@pytest.mark.parametrize("version", EARLIER_VERSIONS)
+@pytest.mark.parametrize("name", ["next", "submit", "record-result"])
+def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_path):
+    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
+    state = _read_state_file(session_dir)
+    state["schemaVersion"] = version
+    _write_state_file(session_dir, state)
+    before = _snapshot(session_dir, exclude=(MARKER,))
+    out = _DIRECT_CALLS[name](session_dir, None)
+    _assert_refusal(out, already_restarted=False)
+    assert _journal_rows(session_dir) == []
+    assert _snapshot(session_dir, exclude=(MARKER,)) == before
+    assert os.path.exists(_marker_path(session_dir))
+
+
+# E4b — axis: an unfinished state of the current generation whose `schemaVersion` is not a
+# supported earlier integer (1, a later one, null, a string, a float, a boolean) is not an earlier
+# session: no marker is written, and `next` gives the refusal `load_state` gives for it.
+@pytest.mark.parametrize(
+    "version", [1, FUTURE_VERSION, None, str(RD.STATE_SCHEMA_VERSION),
+                float(RD.STATE_SCHEMA_VERSION), True],
+    ids=["one", "future", "null", "string-current", "float-current", "true"])
+def test_e4b_an_unsupported_schema_version_gets_the_loader_refusal_and_no_marker(version, tmp_path):
+    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
+    state = _read_state_file(session_dir)
+    state["schemaVersion"] = version
+    _write_state_file(session_dir, state)
+    out = RD.cmd_next(session_dir)
+    assert out == {"ok": False, "reason": (
+        "loop-state.json is schemaVersion %r, not one of %s — session dirs are "
+        "per-invocation with no migration; start a fresh session dir"
+        % (version, ", ".join(str(v) for v in RD.SUPPORTED_STATE_VERSIONS)))}
+    assert not os.path.exists(_marker_path(session_dir))
+
+
+# E4c — axis: a finished state of an earlier schema version passes the gate, and `next` answers its
+# terminal again.
+@pytest.mark.parametrize("version", EARLIER_VERSIONS)
+def test_e4c_a_finished_earlier_schema_version_replays_its_terminal(version, tmp_path):
+    session_dir = str(tmp_path / "finished")
+    os.makedirs(session_dir)
+    cfg = _cfg()
+    payload = _drive_cli(session_dir, cfg, _responder(round1_findings=None, vendors=cfg["vendors"]))
+    assert payload["verdict"] == "converged"
+    replay_before = RD.cmd_next(session_dir)
+    assert replay_before["ok"] and replay_before["action"] == RD.P_TERMINAL, replay_before
+    state = _read_state_file(session_dir)
+    state["schemaVersion"] = version
+    _write_state_file(session_dir, state)
+    assert RD._upgrade_gate_unlocked(session_dir, "next") is None
+    replay_after = RD.cmd_next(session_dir)
+    assert {k: v for k, v in replay_after.items() if k != "expectedStateHash"} == {
+        k: v for k, v in replay_before.items() if k != "expectedStateHash"}
+    assert not os.path.exists(_marker_path(session_dir))
+    assert _read_state_file(session_dir)["schemaVersion"] == version
+
+
 # E5 — axis: a finished earlier-generation state passes the gate (U7 drives one end to end).
 def test_e5_a_finished_state_without_the_key_passes_the_gate(tmp_path):
     session_dir = _light_folder(tmp_path, terminal={"verdict": "converged"})
@@ -517,15 +582,90 @@ def test_e7_a_marker_that_cannot_be_written_still_refuses(tmp_path, capsys):
     assert out["markerWritten"] is False
 
 
+class _FailingFile:
+    """The marker's file object with one step made to raise `OSError`."""
+
+    def __init__(self, real, step):
+        self._real = real
+        self._step = step
+
+    def __enter__(self):
+        self._real.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def write(self, data):
+        if self._step == "write":
+            raise OSError(5, "injected write failure")
+        return self._real.write(data)
+
+    def flush(self):
+        if self._step == "flush":
+            raise OSError(5, "injected flush failure")
+        return self._real.flush()
+
+    def fileno(self):
+        return self._real.fileno()
+
+
+# E7b — axis: a marker that was created but could not be written (write, flush or fsync fails) is
+# removed again, the refusal says `markerWritten` false and `alreadyRestarted` false, and the next
+# refusal, with the fault gone, writes the marker and answers `alreadyRestarted` false.
+@pytest.mark.parametrize("step", ["write", "flush", "fsync"])
+def test_e7b_a_marker_that_fails_to_write_is_removed_and_reported(step, tmp_path, capsys,
+                                                                  monkeypatch):
+    session_dir = _light_folder(tmp_path)
+    real_fdopen, real_fsync = os.fdopen, os.fsync
+
+    def is_marker(fd):
+        # The session lock file goes through the same calls; only the marker is made to fail.
+        try:
+            return os.fstat(fd).st_ino == os.stat(_marker_path(session_dir)).st_ino
+        except OSError:
+            return False
+
+    def faulty_fdopen(fd, *a, **kw):
+        real = real_fdopen(fd, *a, **kw)
+        return _FailingFile(real, step) if is_marker(fd) else real
+
+    def faulty_fsync(fd):
+        if is_marker(fd):
+            raise OSError(5, "injected fsync failure")
+        return real_fsync(fd)
+
+    with monkeypatch.context() as faulty:
+        faulty.setattr(RD.os, "fsync" if step == "fsync" else "fdopen",
+                       faulty_fsync if step == "fsync" else faulty_fdopen)
+        rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
+    assert out["ok"] is False and out["reason"] == TOKEN, out
+    assert out["alreadyRestarted"] is False, out
+    assert out["markerWritten"] is False, out
+    assert not os.path.exists(_marker_path(session_dir))
+    rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
+    _assert_refusal(out, already_restarted=False)
+    assert os.path.exists(_marker_path(session_dir))
+    with open(_marker_path(session_dir), encoding="utf-8") as fh:
+        assert json.load(fh)["schema"] == RD.UPGRADE_RESTART_MARKER_SCHEMA
+
+
 # E8 — axis: a session lock held by another process answers the lock-held refusal, as it does
 # for every command.
 def test_e8_a_held_lock_answers_the_lock_held_refusal(tmp_path, capsys):
     session_dir = _light_folder(tmp_path)
     with open(os.path.join(session_dir, round_records.LOCK_FILE), "w", encoding="utf-8") as fh:
         json.dump({"pid": 999999, "createdAt": "2026-01-01T00:00:00Z"}, fh)
+    journal = os.path.join(session_dir, RD.JOURNAL_FILE)
+    assert not os.path.exists(journal)
     rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
     assert out["ok"] is False and out["reason"] == "next-locked", out
+    assert out["holder"] == {"pid": 999999, "createdAt": "2026-01-01T00:00:00Z"}, out
     assert not os.path.exists(_marker_path(session_dir))
+    assert not os.path.exists(journal), "the locked refusal journaled into the old folder"
 
 
 # E9 — axis: a current-generation session with a half-done commit in staging is recovered, as

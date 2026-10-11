@@ -321,7 +321,7 @@ _round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
 _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
-RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
+CARRIED_DISCLOSURE_CHANNELS = receipt_disclosures.CARRIED_DISCLOSURE_CHANNELS
 _str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
@@ -372,8 +372,12 @@ CHECKPOINT_STOP_REASONS = ("tripwire", "park", "held")
 CERTIFIED_VERDICTS = ("converged", "halted", "held", "stalled", "cannot-certify",
                       "capped-with-open-critical", "capped-with-open-blocker")
 
-# A v2 session keeps `next`/`submit` and is refused by every #723 subcommand under this reason.
+# A finished session of an earlier schema version is refused by every hand command that loads state
+# through `_load_driver_state` (`record-result`, `advance` and the others) under this reason (an
+# unfinished one never gets that far: the upgrade gate refuses it first).
 LEGACY_SESSION_REFUSAL = "legacy-session-use-next-submit"
+LEGACY_SESSION_REFUSAL_DETAIL = ("this session is from an earlier plugin version and has finished; "
+                                 "start a fresh session")
 
 # The per-attempt orders manifest `advance` emits for a dispatch-* phase. The phase rides the PATH
 # because one round emits several dispatch phases at the same attempt number (`dispatch-panel` a0
@@ -457,28 +461,28 @@ OWNER_GATE_PHASES = (P_JUDGMENT, P_STALL)
 
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
-# must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
+# must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
 # one home.
 SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 
 # Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
-# Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
+# Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt`
 # share the same one home.
 ORDER_EMISSION_DISCLOSURE_CHANNELS = (
     "orderVendorProvenanceGaps", "priorCommentsUnavailable", "gateGuidanceRowCarried",
 )
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
-# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+# also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
-# not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
+# not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
 # and `build_receipt` share the same one home.
 FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 
 # Per-round disclosure channels `_fold_judgment` records (not `_fold_panel`). Each name here must
-# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+# also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
@@ -1121,9 +1125,6 @@ def _default_config(overrides=None):
         # the producer through `cmd_submit`'s `round_commit` submit-accept transaction rather than
         # calling it from `_fold`, because `_fold` runs before that transaction opens.
         "recordsPath": None,
-        # A caller that already owns round-records.json — e.g. a harness with its own producer —
-        # sets this False; the driver then never writes that file.
-        "persistRecords": True,
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
         "priorComments": None,
@@ -1786,13 +1787,11 @@ def _seed_findings_before_record_park(state):
 def _round_records_payload(state, config):
     """The ONE producer of the outgoing round-records list (#1196 WO-B).
 
-    Returns a tagged outcome: ``nothing`` (no path, persist disabled, or an empty ledger) or
+    Returns a tagged outcome: ``nothing`` (no path, or an empty ledger) or
     ``ready`` (path + this session's full records list for ``records_bytes``). The list is built
     from the in-memory ledger alone; the file at ``path`` is never opened."""
     path = config.get("recordsPath")
     if not path:
-        return {"outcome": "nothing"}
-    if not config.get("persistRecords"):
         return {"outcome": "nothing"}
 
     outgoing = []
@@ -4990,7 +4989,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         # (`_declared_disclosures` narrowed by the form gate) — same as the producer.
         # `verifyPasses` emits above (form-gated, always-emit when permitted).
         disclosures = _receipt_round_disclosures(rec, form, state)
-        for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+        for chan in CARRIED_DISCLOSURE_CHANNELS:
             if chan == "verifyPasses":
                 continue
             if chan in disclosures:
@@ -5685,8 +5684,9 @@ def cmd_next(session_dir, config_overrides=None):
 def _cmd_next_locked(session_dir, config_overrides=None):
     ok, loaded = load_state(session_dir)
     if not ok:
+        fault_reason, fault, _detail = _state_load_fault(session_dir)
         _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
-                                      "attempt": None, "outcome": "refused-v1"})
+                                      "attempt": None, "outcome": fault_reason, "fault": fault})
         return {"ok": False, "reason": loaded}
     if loaded is None:
         session_id, mint_reason = round_records.mint_session_id(session_dir)
@@ -6522,8 +6522,9 @@ def stall_follow_up_fault(artifact):
 def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
     ok, loaded = load_state(session_dir)
     if not ok:
+        fault_reason, fault, _detail = _state_load_fault(session_dir)
         _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": None,
-                                      "attempt": attempt, "outcome": "refused-v1"})
+                                      "attempt": attempt, "outcome": fault_reason, "fault": fault})
         return {"ok": False, "reason": loaded}
     if loaded is None:
         _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": None,
@@ -6932,10 +6933,9 @@ def _terminal_receipt_gate(session_dir, state):
 #   - `round_adapters` is imported at CALL time (`_adapters`), never at module import. It is a
 #     sibling module landing in parallel; this module must still import without it, and a test must
 #     be able to substitute one.
-#   - every subcommand here is v3-ONLY. A session already in flight when this shipped carries a v2
-#     state that has none of this bookkeeping, so it keeps `next`/`submit` and is refused here with
-#     `legacy-session-use-next-submit` — writing v3 defaults into a loaded v2 state would change its
-#     `state_hash` and break its next `submit` (see `load_state`).
+#   - every subcommand here takes the current schema version only. A finished session of an earlier
+#     version is refused here with `legacy-session-use-next-submit`; an unfinished one never gets
+#     this far, because the upgrade gate refuses it first (`session-from-earlier-version`).
 
 
 def _adapters():
@@ -6985,20 +6985,37 @@ def _generation_is_current(state):
     return type(generation) is int and generation == SESSION_GENERATION
 
 
+def _schema_version_is_earlier_supported(state):
+    """True only for an integer `schemaVersion` that this driver still supports and that is older
+    than `STATE_SCHEMA_VERSION`: `True == 1` and `4.0 == 4` do not count. A version this driver
+    does not support (1, a future 6, `None`, `"5"`, `5.0`) is not an earlier session; `load_state`
+    refuses it."""
+    version = state.get("schemaVersion")
+    return (type(version) is int and version in SUPPORTED_STATE_VERSIONS
+            and version < STATE_SCHEMA_VERSION)
+
+
 def _state_is_earlier_unfinished(state):
-    """True for a JSON object that is not of the current generation and has no terminal answer."""
-    if not isinstance(state, dict) or _generation_is_current(state):
+    """True for a JSON object that has no terminal answer and is either not of the current
+    generation, or of an earlier supported schema version. This is the one place that keeps an
+    earlier session from being continued: nothing past the gate ever reads an unfinished state of
+    an earlier generation or supported schema version. A current-generation state whose
+    `schemaVersion` is unsupported is not judged here; `load_state` refuses it."""
+    if not isinstance(state, dict):
+        return False
+    if _generation_is_current(state) and not _schema_version_is_earlier_supported(state):
         return False
     return not state.get("terminal")
 
 
 def _earlier_generation_unfinished(session_dir):
-    """True when `loop-state.json` is a JSON object that is not of the current generation and has no
-    terminal answer yet. It opens that one file and nothing else; an unreadable, non-JSON or
-    non-object file is False, so the handling that exists for those cases stays in charge. When the
-    file is ABSENT, the state a sealed, unfinished commit staged for it is judged the same way: an
-    earlier version that stopped after sealing its first emit has no installed state yet, and
-    recovery would otherwise finish that commit and hand out its orders."""
+    """True when `loop-state.json` is a JSON object that has no terminal answer yet and is either
+    not of the current generation or of an earlier supported schema version. It opens that one
+    file and nothing else; an unreadable, non-JSON or non-object file is False, so the handling
+    that exists for those cases stays in charge. When the file is ABSENT, the state a sealed,
+    unfinished commit staged for it is judged the same way: an earlier version that stopped after
+    sealing its first emit has no installed state yet, and recovery would otherwise finish that
+    commit and hand out its orders."""
     try:
         with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
             state = json.load(fh)
@@ -7018,8 +7035,10 @@ def _earlier_generation_unfinished(session_dir):
 
 def _write_upgrade_marker(session_dir, cmd):
     """(already_restarted, written). The marker is created exclusively, so only the first refusal
-    makes it; a later one finds it and leaves it as it is. Any other failure to create it still
-    leaves the command refused: (False, False)."""
+    makes it; a later one finds it and leaves it as it is. Any other failure to create it, or to
+    write it once created, still leaves the command refused: (False, False). A marker this call
+    created but could not write is removed again, so a later call does not mistake it for a
+    complete one."""
     path = os.path.join(session_dir, UPGRADE_RESTART_MARKER_FILE)
     body = {"schema": UPGRADE_RESTART_MARKER_SCHEMA,
             "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -7036,7 +7055,14 @@ def _write_upgrade_marker(session_dir, cmd):
             fh.flush()
             os.fsync(fh.fileno())
     except OSError:
-        pass
+        try:
+            os.unlink(path)
+        except OSError:
+            # Accepted residual: if the partial file cannot be removed either, it stays, and the
+            # next call sees it as already existing and answers `alreadyRestarted: true`. The
+            # folder then refuses both removal and writing, and nothing more can be done there.
+            pass
+        return False, False
     return False, True
 
 
@@ -7065,7 +7091,10 @@ def _upgrade_gate_unlocked(session_dir, cmd):
         with round_records.session_lock(session_dir):
             return _upgrade_gate(session_dir, cmd)
     except round_records.SessionLockHeld as held:
-        return _lock_held_refusal(session_dir, cmd, held)
+        # The body `_lock_held_refusal` answers, without its journal row: the folder is one an
+        # earlier version left, and nothing in it is written but the once-only marker.
+        return {"ok": False, "reason": "%s-locked" % cmd,
+                "holder": {"pid": held.pid, "createdAt": held.created_at}}
     except OSError:
         # The folder will not take a lock file (it is read-only): the command is still refused.
         return _upgrade_gate(session_dir, cmd)
@@ -7193,40 +7222,6 @@ def _state_load_fault(session_dir):
     return "state-schema-unsupported", FAULT_CALLER, None
 
 
-def _legacy_session_has_durable_pending_records(session_dir, state):
-    """True when durable seat records exist at the pending slot and ``_submitUsed`` is not set."""
-    if state.get("_submitUsed"):
-        return False
-    pending = state.get("pending")
-    if not isinstance(pending, dict):
-        return False
-    phase = pending.get("phase")
-    if phase not in _adapters().ADAPTER_PHASES:
-        return False
-    rnd = pending.get("round")
-    attempt = pending.get("attempt")
-    roster, roster_reason = _adapters().roster_for(
-        phase, state, state.get("config") or {})
-    if roster_reason is not None or not isinstance(roster, (list, tuple)):
-        return False
-    roster = [s for s in roster if isinstance(s, str)]
-    return bool(_durable_slot_records(session_dir, rnd, phase, attempt, roster))
-
-
-def _legacy_session_refusal_detail(session_dir, loaded):
-    version = loaded.get("schemaVersion")
-    if loaded.get("_advanceUsed"):
-        return ("loop-state.json is schemaVersion %r with `_advanceUsed` set — hand `submit` "
-                "refuses `advance-submit-interleaved`; start a fresh session dir to continue"
-                % (version,))
-    if _legacy_session_has_durable_pending_records(session_dir, loaded):
-        return ("loop-state.json is schemaVersion %r with durable seat record(s) at the pending "
-                "slot — hand `submit` refuses `record-submit-interleaved`; start a fresh session "
-                "dir to continue" % (version,))
-    return ("loop-state.json is schemaVersion %r; `next`/`submit` "
-            "finish it" % (version,))
-
-
 def _load_driver_state(session_dir, cmd):
     """(state, refusal) — the front door every #723 subcommand shares."""
     ok, loaded = load_state(session_dir)
@@ -7239,8 +7234,10 @@ def _load_driver_state(session_dir, cmd):
     if loaded is None:
         return None, _refuse_cmd(session_dir, cmd, "bootstrap-required")
     if _state_version(loaded) != STATE_SCHEMA_VERSION:
+        # Only a finished session of an earlier version gets here: the upgrade gate refuses an
+        # unfinished one before any command reads it.
         return None, _refuse_cmd(session_dir, cmd, LEGACY_SESSION_REFUSAL,
-                                 detail=_legacy_session_refusal_detail(session_dir, loaded))
+                                 detail=LEGACY_SESSION_REFUSAL_DETAIL)
     return loaded, None
 
 
@@ -11024,7 +11021,8 @@ def _dispatch(args):
             elif args.diff_path:
                 return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
                                           value=args.diff_path)
-        # A v1 state file must surface refused-v1 from cmd_next — do not mask it with a base refusal.
+        # A state file that cannot be loaded must surface its own refusal from cmd_next — do not
+        # mask it with a base refusal.
         if args.prior_comments:
             # Same fresh-state-only discipline as `--vendors`: priorComments is read ONCE at
             # new_state, and materializing to the canonical file on existing state would disagree
