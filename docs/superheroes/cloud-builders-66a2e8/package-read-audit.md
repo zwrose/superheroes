@@ -883,10 +883,10 @@ No State line calls any of them open. Result: verified.
  "invocation": "inv6",
  "kind": "invocation",
  "measurables": {
-  "children": 2,
+  "children": 3,
   "registerEntries": 7
  },
- "override": "seven consumer lines gain C5b but only R8's first paragraph changes; light weight is enough for a mechanical re-allocation",
+ "override": "seven consumer lines gain C5b but only R8's first paragraph changes; light weight is enough for a mechanical re-allocation. Corrected 2026-10-11 by the advisor: children is 3, not 2 (C6 is touched too: it now sits on C5b).",
  "seats": [
   "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
  ],
