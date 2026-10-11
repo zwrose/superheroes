@@ -874,3 +874,167 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C5 size split into C5 and C5b (advisor craft call at the 600 bar): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv6",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 7
+ },
+ "override": "seven consumer lines gain C5b but only R8's first paragraph changes; light weight is enough for a mechanical re-allocation. Corrected 2026-10-11 by the advisor: children is 3, not 2 (C6 is touched too: it now sits on C5b).",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "architecture-001",
+   "lens": "collisions"
+  },
+  {
+   "finding": "architecture-002",
+   "lens": "collisions"
+  },
+  {
+   "finding": "architecture-003",
+   "lens": "dod-adequacy"
+  },
+  {
+   "finding": "architecture-004",
+   "lens": "collisions"
+  }
+ ],
+ "invocation": "inv6",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C5",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv6",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C5",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "C6.md sits on C5b in state, sequencing, DoD base and branching order; round 2 clean",
+   "finding": "architecture-001",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R11 gives C5b the duty-9 place-call pointer, dispatch-preflight.md and the report/still verbs; epic quote equal; round 2 clean",
+   "finding": "architecture-002",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C5 DoD grades routing-result fields; C5b DoD grades rendered wording; round 2 clean",
+   "finding": "architecture-003",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R10 names C5b for the two glossary entries; epic quote equal; round 2 clean",
+   "finding": "architecture-004",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv6",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C5",
+   "result": "pass"
+  },
+  {
+   "child": "C5b",
+   "result": "pass"
+  },
+  {
+   "child": "C6",
+   "result": "pass"
+  }
+ ]
+}
+```
