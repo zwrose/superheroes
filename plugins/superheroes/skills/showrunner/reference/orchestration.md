@@ -90,9 +90,10 @@ lane's `started` record, and returns once the session exists. It does not wait f
 - The session starts from the commit the launching checkout is on. The launch refuses unless that
   commit is the premise's base commit (`launch-cloud-head-not-base`) and a remote-tracking branch
   contains it (`launch-cloud-head-not-on-remote`). The launcher checks both before it reserves the
-  lane and again just before it runs the command. When the second check fails, the launcher ends the
-  lane and starts nothing. The launcher never pushes, so the launching checkout sits at the base
-  commit the premise names.
+  lane and again just before it runs the command. When the second check fails, the launcher starts
+  nothing and ends the lane. A result whose reason begins `terminalization-failed:` means the lane
+  could not be ended and is still live, so reconcile it before the issue is launched again. The
+  launcher never pushes, so the launching checkout sits at the base commit the premise names.
 - The launcher runs the command from its checkout, which must be a folder the platform's command line
   already trusts. In an untrusted folder the command waits on its trust question until the launch's
   time limit, and the launch reads `cloud-session-unconfirmed`.
@@ -116,19 +117,27 @@ lane's `started` record, and returns once the session exists. It does not wait f
   - `cloud-session-unconfirmed`. The launcher could not read a creation receipt for the session it
     asked for, because a time limit was reached, the command exited non-zero, its output names some
     other session, or the launcher was interrupted or told to stop while the command ran. In that
-    last case the launcher ends the command and everything the command started. A session may exist.
-    Ordinarily the lane has a `started` record that carries `cloudSessionUnconfirmed` in place of the
-    id, so `record-outcome` works on it. The lane stays live, so the issue cannot be launched a second
-    time. The steps to take are in **Cloud lanes** below. When that `started` record could not be
-    written either, the result carries `startedAppend` and `pendingStarted`. The lane is then live on
-    its `reserved` record alone, `record-outcome` refuses it (`outcome-without-started`), and the
-    steps in **Cloud lanes** do not apply until the record is restored.
+    last case the launcher ends the launch command and every process that command started on the
+    owner's machine. A cloud session the command had already created keeps running. A session may
+    exist. Ordinarily the lane has a `started` record that carries `cloudSessionUnconfirmed` in place
+    of the id, so `record-outcome` works on it. The lane stays live, so the issue cannot be launched a
+    second time. The steps to take are in **Cloud lanes** below. When that `started` record could not
+    be written either, the result carries `startedAppend` and `pendingStarted`. A reported write
+    failure does not prove the record is absent. Read the ledger before restoring `pendingStarted`.
+    When the lane already has its `started` record, `record-outcome` works and nothing is restored.
+    When the record is really absent, the lane is live on its `reserved` record alone and
+    `record-outcome` refuses it (`outcome-without-started`). The advisor still looks in the host's
+    session listing for a session of the name in `cloudSessionName`, which the result carries.
+    Recording the lane's outcome waits until the `started` record is restored.
   - `cloud-started-append-failed`. A session exists and is working, and its `started` record could
     not be written. The result names the session (`cloudSessionId`, `cloudSessionName`) and why the
     write failed (`startedAppend`). The launcher tried the write three times. The result also carries
-    `pendingStarted`, the complete `started` record, for a later repair. The lane stays live on its
-    `reserved` record alone, and `record-outcome` refuses it (`outcome-without-started`). Keep the
-    session's identity from the result and reach the session by it.
+    `pendingStarted`, the complete `started` record, for a later repair. A reported write failure does
+    not prove the record is absent. Read the ledger before restoring `pendingStarted`. When the lane
+    already has its `started` record, `record-outcome` works and nothing is restored. When the record
+    is really absent, the lane stays live on its `reserved` record alone, and `record-outcome` refuses
+    it (`outcome-without-started`). Keep the session's identity from the result and reach the session
+    by it.
 
 **Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
 `reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
