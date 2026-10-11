@@ -366,7 +366,7 @@ def test_record_still_writes_the_first_reason_in_condition_order(tmp_path):
     repo, store = _gitdir(tmp_path)
     calls = [
         _call(reason="local-word"), _call(reason="needs", need=PHONE),
-        _call("cloud"), _call(pointed=False, by=None, reason="no-pass"),
+        _call(pointed=False, by=None, reason="no-pass"),
         _call(reason="unreachable", by="word"),
         _call(reason="version", cloud="0.41.0", advisor="0.42.0", reported={"pluginVersion": "0.41.0"}),
         _call(reason="calibration"),
@@ -612,3 +612,42 @@ def test_still_line_and_clear_still_never_raise_without_a_repository(tmp_path):
     assert LR.clear_still(plain, root=store)["action"] in ("cleared", "unchanged", "refused")
     assert LR.record_still(plain, [_call(reason="no-setup")], root=store)["action"] in (
         "written", "refused")
+
+
+# ---------------------------------------------------------------- the launcher's report verb feeds these
+
+
+def test_a_report_renders_the_need_a_routing_result_carries():
+    phone = _call(reason="needs", need=PHONE)
+    canon = _call(reason="needs", need="this project's Canon and specs")
+    got = LR.render_report([_lane(415, phone, title="Phone checkout layout"), _lane(416, canon)])
+    lines = got.splitlines()
+    assert "- #415 Phone checkout layout. It needs the phone simulator, which only your machine has." in lines
+    assert ("- #416 Build 416. It needs this project's Canon and specs, "
+            "which only your machine has.") in lines
+
+
+def test_record_still_clears_when_a_cloud_build_sits_beside_a_local_not_ready_fallback(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    mixed = [_call(reason="version", cloud="0.41.0", advisor="0.42.0"), _call("cloud")]
+    LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
+    assert LR.record_still(repo, mixed, root=store, today=TODAY) == {
+        "action": "cleared", "reason": None}
+    assert not os.path.exists(_still_path(repo, store))
+    assert LR.record_still(repo, mixed, root=store, today=TODAY) == {
+        "action": "unchanged", "reason": None}
+    assert not os.path.exists(_still_path(repo, store))
+
+
+def test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check(tmp_path):
+    repo, store = _still_with(tmp_path, _call(reason="version", cloud="0.41.0", advisor="0.42.0",
+                                              reported={"pluginVersion": "0.41.0"}))
+    not_ready = _now(ready=False, reason="version", checked="2026-10-12")
+    assert not_ready["conditions"]["version"] is False
+    assert LR.still_line(repo, root=store, today=TODAY,
+                         readiness_fn=lambda *a, **k: dict(not_ready)) is not None
+    assert os.path.exists(_still_path(repo, store))
+    ready = _now(ready=True, checked="2026-10-12")
+    assert LR.still_line(repo, root=store, today=TODAY,
+                         readiness_fn=lambda *a, **k: dict(ready)) is None
+    assert not os.path.exists(_still_path(repo, store))

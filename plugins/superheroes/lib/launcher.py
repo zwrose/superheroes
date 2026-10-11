@@ -35,6 +35,7 @@ import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
+import launch_report  # noqa: E402
 import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
@@ -3186,6 +3187,89 @@ def canary(repo_root, launch_id, env=None):
     }
 
 
+def _issue_title(repo_root, issue):
+    """The issue's title from `gh`, or None; never raises."""
+    try:
+        done = subprocess.run(
+            ["gh", "api", "repos/{owner}/{repo}/issues/%s" % issue, "--jq", ".title"],
+            cwd=repo_root, capture_output=True, text=True, timeout=15,
+        )
+        title = done.stdout.strip()
+        if done.returncode == 0 and title:
+            return title
+    except Exception:
+        pass
+    return None
+
+
+def _report_place_call(raw_reserved, folded_place):
+    """The lane's place call: the reserved record's own when it agrees with the ledger's folded
+    place, otherwise one synthesized from that place with no reason."""
+    premise = raw_reserved.get("premise") if isinstance(raw_reserved, dict) else None
+    call = premise.get("placeCall") if isinstance(premise, dict) else None
+    if (
+        isinstance(call, dict)
+        and call.get("place") == folded_place
+        and isinstance(call.get("pointedAtCloud"), bool)
+    ):
+        return call
+    return {"place": folded_place, "pointedAtCloud": folded_place == PLACE_CLOUD, "reason": None}
+
+
+def _report_title(title_fn, repo_root, issue):
+    try:
+        title = title_fn(repo_root, issue)
+    except Exception:
+        return None
+    return title if isinstance(title, str) and title else None
+
+
+def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
+    """The launch report for one batch, built from the ledger's started launches, and the
+    "Still on your machine" state updated from the same place calls."""
+    read = ll.read(repo_root, env=env)
+    if read["state"] == "missing":
+        return {"ok": True, "report": None, "still": None, "lanes": 0}
+    if read["state"] != "ok":
+        return _fail("report-ledger-%s" % read["state"])
+    folded = ll.fold(read["records"])
+    if not folded["ok"]:
+        return _fail("report-ledger-fold:%s" % folded["reason"])
+    batch = [
+        (launch_id, info) for launch_id, info in folded["launches"].items()
+        if info.get("batchId") == batch_id
+    ]
+    first_index = {}
+    last_started = {}
+    for launch_id, info in batch:
+        issue = info["issue"]
+        first_index[issue] = min(first_index.get(issue, info["reservedIndex"]), info["reservedIndex"])
+        if info["started"] and (
+            issue not in last_started or info["reservedIndex"] > last_started[issue][1]["reservedIndex"]
+        ):
+            last_started[issue] = (launch_id, info)
+    reserved = {
+        rec["launchId"]: rec for rec in read["records"]
+        if isinstance(rec, dict) and rec.get("event") == "reserved"
+    }
+    lookup = title_fn or _issue_title
+    lanes = []
+    for issue in sorted(last_started, key=lambda i: first_index[i]):
+        launch_id, info = last_started[issue]
+        lanes.append({
+            "issue": issue,
+            "title": _report_title(lookup, repo_root, issue),
+            "placeCall": _report_place_call(reserved.get(launch_id), info["place"]),
+        })
+    return {
+        "ok": True,
+        "report": launch_report.render_report(lanes),
+        "still": launch_report.record_still(
+            repo_root, [lane["placeCall"] for lane in lanes], root=None),
+        "lanes": len(lanes),
+    }
+
+
 def _cli_preflight(args):
     checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
     if dup_reason:
@@ -3299,6 +3383,14 @@ def _cli_canary(args):
     return canary(args.repo_root, args.launch_id)
 
 
+def _cli_report(args):
+    return launch_report_for_batch(args.repo_root, args.batch)
+
+
+def _cli_still(args):
+    return {"ok": True, "line": launch_report.still_line(args.repo_root)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="launcher")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -3368,6 +3460,15 @@ def main(argv=None):
     ct.add_argument("--repo-root", required=True)
     ct.add_argument("--batch", required=True)
     ct.set_defaults(func=_cli_count)
+
+    rp = sub.add_parser("report")
+    rp.add_argument("--repo-root", required=True)
+    rp.add_argument("--batch", required=True)
+    rp.set_defaults(func=_cli_report)
+
+    st = sub.add_parser("still")
+    st.add_argument("--repo-root", required=True)
+    st.set_defaults(func=_cli_still)
 
     db = sub.add_parser("declare-batch")
     db.add_argument("--repo-root", required=True)
