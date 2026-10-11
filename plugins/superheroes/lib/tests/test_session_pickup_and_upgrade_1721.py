@@ -539,6 +539,48 @@ def test_e9_a_current_session_still_recovers_its_half_done_commit(tmp_path, monk
     assert not os.path.exists(_marker_path(session_dir))
 
 
+# E9b — axis: an earlier version that stopped after SEALING its first emit (no installed state file
+# yet) is refused, not recovered: the staged state is judged by the same generation rule.
+def _sealed_first_emit(tmp_path, monkeypatch, generation):
+    session_dir = str(tmp_path / "first-emit")
+    os.makedirs(session_dir)
+    monkeypatch.setattr(RD, "SESSION_GENERATION", generation)
+    _stop_next_commit_at(monkeypatch, "orders-emit", "sealed")
+    with pytest.raises(RD.round_commit.StopPoint):
+        RD.cmd_next(session_dir, _cfg())
+    monkeypatch.undo()
+    assert not os.path.exists(_state_path(session_dir))
+    assert os.listdir(os.path.join(session_dir, "commits"))
+    return session_dir
+
+
+def test_e9b_a_sealed_first_emit_of_an_earlier_version_is_refused_not_recovered(tmp_path, monkeypatch):
+    # bites on: _earlier_generation_unfinished returning False when loop-state.json is absent
+    session_dir = _sealed_first_emit(tmp_path, monkeypatch, generation=1)
+    staged = os.path.join(session_dir, "commits")
+    before = _snapshot(staged)
+    out = RD.cmd_next(session_dir)
+    _assert_refusal(out, already_restarted=False)
+    assert _snapshot(staged) == before
+    assert not os.path.exists(_state_path(session_dir))
+
+
+def test_e9c_a_sealed_first_emit_of_the_current_version_is_still_recovered(tmp_path, monkeypatch):
+    session_dir = _sealed_first_emit(tmp_path, monkeypatch, generation=RD.SESSION_GENERATION)
+    out = RD.cmd_next(session_dir)
+    assert out["ok"] is True, out
+    assert _read_state_file(session_dir)["sessionGeneration"] == RD.SESSION_GENERATION
+    assert not os.path.exists(_marker_path(session_dir))
+
+
+def test_e9d_the_skill_anchors_a_pr_auto_fix_session_to_the_local_head():
+    # bites on: the meta.json block taking headSha from pr.json's remote head in the auto-fix loop
+    with open(os.path.join(os.path.dirname(RD.__file__), "..", "skills", "review-code", "SKILL.md"),
+              encoding="utf-8") as fh:
+        text = fh.read()
+    assert 'if [ "$MODE" = pr ] && [ "$REVIEW_PATH" = loop ]; then HEAD_SHA=$(git rev-parse HEAD); fi' in text
+
+
 # E10 — axis: `advance`, called straight at its own entry (even with `break_lock`), is refused
 # before it reconciles, breaks a lock or journals anything.
 @pytest.mark.parametrize("break_lock", [False, True], ids=["plain", "break-lock"])

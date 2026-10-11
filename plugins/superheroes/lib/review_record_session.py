@@ -93,8 +93,17 @@ def _check_extras(x):
         raise Refusal(BAD_EXTRAS, "runDirs")
 
 
+def _historical_orders_superseded(row):
+    """True for a row an earlier plugin version journaled when a re-emit replaced a round's orders.
+    That version is gone, but its finished sessions are still read here: an attempt it superseded is
+    no reviewer, even when no replacement was ever recorded."""
+    return row.get("cmd") == "re-emit" and row.get("outcome") == "orders-superseded"
+
+
 def _slots(rows):
-    """Active review slots, {(phase, round, seat, occurrence): (attempt, row)}: highest attempt kept."""
+    """Active review slots, {(phase, round, seat, occurrence): (attempt, row)}: attempts an earlier
+    version's re-emit superseded dropped, highest remaining attempt kept."""
+    gone = {(r.get("phase"), r.get("round"), r.get("attempt")) for r in rows if _historical_orders_superseded(r)}
     out = {}
     for r in rows:
         phase, seat, rnd, att = r.get("phase"), r.get("seat"), r.get("round"), r.get("attempt")
@@ -103,7 +112,7 @@ def _slots(rows):
         if sc.run_kind_for_phase(phase) != sc.RUN_KIND_REVIEW or not (_int(rnd) and _int(att)):
             continue
         key = (phase, rnd, seat, r.get("occurrence", 0))
-        if key not in out or att >= out[key][0]:
+        if (phase, rnd, att) not in gone and (key not in out or att >= out[key][0]):
             out[key] = (att, r)
     return out
 

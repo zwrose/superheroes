@@ -6985,18 +6985,35 @@ def _generation_is_current(state):
     return type(generation) is int and generation == SESSION_GENERATION
 
 
-def _earlier_generation_unfinished(session_dir):
-    """True when `loop-state.json` is a JSON object that is not of the current generation and has no
-    terminal answer yet. It opens that one file and nothing else; a missing, unreadable, non-JSON or
-    non-object file is False, so the handling that exists for those cases stays in charge."""
-    try:
-        with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
-            state = json.load(fh)
-    except (OSError, ValueError, RecursionError):
-        return False
+def _state_is_earlier_unfinished(state):
+    """True for a JSON object that is not of the current generation and has no terminal answer."""
     if not isinstance(state, dict) or _generation_is_current(state):
         return False
     return not state.get("terminal")
+
+
+def _earlier_generation_unfinished(session_dir):
+    """True when `loop-state.json` is a JSON object that is not of the current generation and has no
+    terminal answer yet. It opens that one file and nothing else; an unreadable, non-JSON or
+    non-object file is False, so the handling that exists for those cases stays in charge. When the
+    file is ABSENT, the state a sealed, unfinished commit staged for it is judged the same way: an
+    earlier version that stopped after sealing its first emit has no installed state yet, and
+    recovery would otherwise finish that commit and hand out its orders."""
+    try:
+        with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
+            state = json.load(fh)
+    except FileNotFoundError:
+        for raw in round_commit.staged_replace_contents(session_dir, STATE_FILE):
+            try:
+                staged = json.loads(raw.decode("utf-8"))
+            except (ValueError, RecursionError):
+                continue
+            if _state_is_earlier_unfinished(staged):
+                return True
+        return False
+    except (OSError, ValueError, RecursionError):
+        return False
+    return _state_is_earlier_unfinished(state)
 
 
 def _write_upgrade_marker(session_dir, cmd):
