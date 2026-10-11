@@ -48,10 +48,8 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import traceback
 
@@ -204,8 +202,6 @@ RULINGS_LOG_MALFORMED = "rulings-log-malformed"
 RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
-CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
-CERTIFICATION_REFUSAL_FILE = "certification-refusal.json"
 HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
 HEAD_CONTENT_BLOBS_SCHEMA = session_contract.HEAD_CONTENT_BLOBS_SCHEMA
 
@@ -581,9 +577,8 @@ class AuditorUnseatable(ValueError):
 
 
 RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
-RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
 RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
-RECEIPT_FAULT_KINDS = (RECEIPT_FAULT_WRITE, RECEIPT_FAULT_CERTIFICATION, RECEIPT_FAULT_VERIFY)
+RECEIPT_FAULT_KINDS = (RECEIPT_FAULT_WRITE, RECEIPT_FAULT_VERIFY)
 
 
 class ReceiptFault(str):
@@ -2436,10 +2431,6 @@ _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintain
 # these names must be subtracted before judging seat keys; in the explicit `{"seats": {...}}` shape
 # nothing is subtracted, so one of these names appearing INSIDE the seats map is a real mis-key.
 _PANEL_ENVELOPE_KEYS = ("seats", "seatMap", "ranManifest", "canaryResult")
-
-# Derived from dispatch_outcome.py — the single home for not-run reason tokens (#747).
-_DISPATCH_NOT_RUN_REASONS = dispatch_outcome.NOT_RUN_REASONS
-
 
 def _fell_open_rows(seat_map, ran_manifest, seat_status):
     """(rows, provenance_missing) for #563 DoD1 (loud fall-open by machinery).
@@ -6478,181 +6469,14 @@ def _record_fix_content_on_findings(state, session_dir, artifact, head):
         receipt["fixContentBytes"] = row.get("bytes")
 
 
-def _write_certification_artifacts(session_dir):
-    """Write certification-receipt.json or certification-refusal.json beside round-receipt.json.
-
-    A failure inside the writer must not take down a terminal that would otherwise complete: catch
-    it, write a refusal artifact naming what happened, and carry on — but never write a success
-    artifact the writer did not return from ``certify``. Returns a fault detail string when the
-    refusal artifact cannot be written; None when an artifact landed or no write was needed."""
-    import round_certification as rc
-
-    try:
-        receipt, refusal = rc.certify(session_dir)
-    except Exception as exc:
-        refusal = {
-            "class": "unfetched-findings",
-            "artifact": CERTIFICATION_RECEIPT_FILE,
-            "detail": "certify raised %s: %s" % (type(exc).__name__, exc),
-            "bindingFailure": "writer-exception",
-        }
-        receipt = None
-    if receipt is not None:
-        try:
-            path = os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)
-            round_commit.atomic_write_bytes(
-                path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-            return None
-        except Exception as exc:
-            refusal = {
-                "class": "unfetched-findings",
-                "artifact": CERTIFICATION_RECEIPT_FILE,
-                "detail": "certification receipt write failed: %s: %s" % (type(exc).__name__, exc),
-                "bindingFailure": "writer-exception",
-            }
-            receipt = None
-    if refusal is None:
-        refusal = {
-            "class": "unfetched-findings",
-            "artifact": CERTIFICATION_RECEIPT_FILE,
-            "detail": "certify returned neither receipt nor refusal",
-            "bindingFailure": "writer-empty",
-        }
-    try:
-        path = os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE)
-        round_commit.atomic_write_bytes(
-            path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    except OSError as exc:
-        return ReceiptFault(
-            "certification refusal artifact write failed (%s) — cannot certify; treat as park"
-            % exc,
-            RECEIPT_FAULT_CERTIFICATION)
-    return None
-
-
-def _copy_session_tree(source_dir, dest_dir):
-    """Copy journal, envelopes, and other round artifacts from a source session directory."""
-    journal_src = os.path.join(source_dir, JOURNAL_FILE)
-    journal_dst = os.path.join(dest_dir, JOURNAL_FILE)
-    if os.path.isfile(journal_src):
-        shutil.copy2(journal_src, journal_dst)
-    for name in os.listdir(source_dir):
-        if not name.startswith("round-"):
-            continue
-        src_path = os.path.join(source_dir, name)
-        dst_path = os.path.join(dest_dir, name)
-        if os.path.isdir(src_path):
-            shutil.copytree(src_path, dst_path)
-
-
-def _materialize_run_loop_session(state, invocations, source_session_dir=None):
-    """Write loop-state.json, driver-journal.jsonl, meta.json for ``certify``.
-
-    Without ``source_session_dir`` the library ``run_loop`` path has no per-seat recorded
-    envelopes to copy — refuse materialization rather than synthesize step-only journal rows that
-    would let certification pass over zero seats."""
-    session_dir = tempfile.mkdtemp(prefix="run-loop-")
-    state_copy = json.loads(json.dumps(state))
-    cfg = state_copy.setdefault("config", {})
-    head = cfg.get("headSha")
-    if not isinstance(head, str) or not head:
-        head = hashlib.sha256(
-            json.dumps(state_copy.get("headDiff") or "run-loop", sort_keys=True).encode()
-        ).hexdigest()[:40]
-        cfg["headSha"] = head
-    source_guard = (state.get("config") or {}).get("baseGuard")
-    cfg.pop("baseGuard", None)
-    if source_guard == BASE_GUARD_CHECKED:
-        cfg["baseGuard"] = BASE_GUARD_CHECKED
-    meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
-    repo_root = cfg.get("repoRoot")
-    if isinstance(repo_root, str) and repo_root:
-        meta["repoRoot"] = repo_root
-    _apply_grounded_mode(meta, session_mode.resolve(meta, cfg))
-    round_commit.atomic_write_bytes(
-        os.path.join(session_dir, round_records.META_FILE),
-        (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    save_state(session_dir, state_copy)
-    if source_session_dir:
-        _copy_session_tree(source_session_dir, session_dir)
-        _finalize_certification_inputs(session_dir, state_copy, head_sha=head)
-        return session_dir
-    shutil.rmtree(session_dir, ignore_errors=True)
-    return None
-
-
-def _loop_verifier_artifact_faults(state):
-    """Collect per-round verifierArtifactFault disclosures for run_loop observables."""
-    faults = []
-    for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
-        rec = state["rounds"][key]
-        fault = rec.get("verifierArtifactFault")
-        if isinstance(fault, list):
-            faults.extend(fault)
-        elif isinstance(fault, dict):
-            faults.append(fault)
-    return faults
-
-
-def _attach_loop_observables_to_refusal(refusal, state):
-    """Add loop observables — what the loop reached, not certification claims.
-
-    loopTerminal states the driver's terminal verdict. loopCertificationShape and loopRounds
-    mirror build_receipt fields for callers that need loop observability on a refusal; they
-    assert nothing about certification."""
-    if isinstance(refusal, dict):
-        terminal = state.get("terminal")
-        if terminal is not None:
-            refusal["loopTerminal"] = terminal
-        loop_receipt = build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
-        refusal["loopCertificationShape"] = loop_receipt.get("certificationShape")
-        refusal["loopRounds"] = loop_receipt.get("rounds") or []
-        faults = _loop_verifier_artifact_faults(state)
-        if faults:
-            refusal["verifierArtifactFault"] = faults
-    return refusal
-
-
-def _run_loop_certified_receipt(state, invocations):
-    """Materialize a temp session, call the certification writer, return its receipt or refusal."""
-    import round_certification as rc
-
-    session_dir = _materialize_run_loop_session(state, invocations)
-    if session_dir is None:
-        return _attach_loop_observables_to_refusal({
-            "class": "unrun-review",
-            "artifact": JOURNAL_FILE,
-            "detail": ("run-loop session lacks per-seat recorded evidence — cannot materialize "
-                       "for certification"),
-        }, state)
-    try:
-        try:
-            receipt, refusal = rc.certify(session_dir)
-        except Exception as exc:
-            refusal = _attach_loop_observables_to_refusal({
-                "class": "writer-fault",
-                "artifact": CERTIFICATION_RECEIPT_FILE,
-                "detail": "certify raised %s: %s" % (type(exc).__name__, exc),
-                "bindingFailure": "writer-exception",
-            }, state)
-            receipt = None
-        if receipt is not None:
-            return receipt
-        if refusal is None:
-            refusal = _attach_loop_observables_to_refusal({
-                "class": "writer-fault",
-                "artifact": CERTIFICATION_RECEIPT_FILE,
-                "detail": "certify returned neither receipt nor refusal",
-                "bindingFailure": "writer-empty",
-            }, state)
-        return _attach_loop_observables_to_refusal(refusal, state)
-    finally:
-        shutil.rmtree(session_dir, ignore_errors=True)
+def _driver_receipt(state):
+    """The terminal receipt of a run_loop state — the driver's own, built from the state alone."""
+    return build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
 
 
 def run_loop(seams, config=None):
     """Layer 1: drive the whole loop end-to-end with scripted seams. Ports the run-SHAPE of
-    review_panel_shell.reviewPanel. Returns the certification writer's receipt."""
+    review_panel_shell.reviewPanel. Returns the driver's terminal receipt."""
     if not isinstance(seams, dict):
         raise ValueError("run_loop requires a seams dict")
     try:
@@ -6660,11 +6484,11 @@ def run_loop(seams, config=None):
     except (RoundCeilingRefusal, FixBatchCapRefusal) as refusal:
         state = new_state()
         _park_cannot_certify(state, refusal.reason)
-        return _run_loop_certified_receipt(state, 0)
+        return _driver_receipt(state)
     if state.get("_resumeCorrupt"):
         # A corrupt/mangled resume state fails closed — never certify off unreadable memory.
         _park_cannot_certify(state, state["_resumeCorrupt"])
-        return _run_loop_certified_receipt(state, 0)
+        return _driver_receipt(state)
     guard = 0
     try:
         while not state.get("terminal") and guard < _RUN_LOOP_GUARD:
@@ -6686,7 +6510,7 @@ def run_loop(seams, config=None):
                       panel_diff_seam=seams.get("panel_diff"))
             except DispositionLedgerOwnerRefusal as refusal:
                 _park_cannot_certify(state, refusal.reason)
-                return _run_loop_certified_receipt(state, guard)
+                return _driver_receipt(state)
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
             # synthesis fold must re-settle the delta rather than the round-1 path.
@@ -6697,11 +6521,11 @@ def run_loop(seams, config=None):
         # cannot-certify — the library layer NEVER continues (or crashes the caller) as though the
         # ran-evidence were intact. #507 WO-FIX-RECOVERY.
         _park_cannot_certify(state, "journal-fault-unrecordable: %s" % jf)
-        return _run_loop_certified_receipt(state, guard)
+        return _driver_receipt(state)
     if guard >= _RUN_LOOP_GUARD and not state.get("terminal"):
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "run_loop guard tripped — fail closed"}
-    return _run_loop_certified_receipt(state, guard)
+    return _driver_receipt(state)
 
 
 # =============================================================================================
@@ -8596,9 +8420,6 @@ def _finalize_receipt(session_dir, state):
         return ReceiptFault(
             "terminal receipt write failed (%s) — cannot certify; treat as park" % exc,
             exc.kind)
-    cert_fault = _write_certification_artifacts(session_dir)
-    if cert_fault:
-        return cert_fault
     return _verify_terminal_receipt(session_dir)
 
 
@@ -8627,9 +8448,9 @@ def _terminal_receipt_gate(session_dir, state):
         fault = _finalize_receipt(session_dir, state)
         if fault is not None and not isinstance(fault, ReceiptFault):
             raise TypeError("terminal receipt fault without a class: %r" % (fault,))
-        # axis: finalization is decided by the fault's minted class, never by the text of an exception.
-        if fault is None or fault.kind != RECEIPT_FAULT_CERTIFICATION:
-            state["_receiptFinalized"] = True
+        # axis: every outcome of the first finalize — ok or a classed fault — marks the receipt
+        # finalized; later invocations only re-verify from disk and never re-write.
+        state["_receiptFinalized"] = True
     state["_receiptFault"] = fault or None
     state["_receiptFaultClass"] = fault.kind if fault else None
     save_state(session_dir, state)

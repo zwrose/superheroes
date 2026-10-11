@@ -266,9 +266,8 @@ def test_marker_run_loop_parks_on_unrecognized_disposition_ledger_owner():
     finally:
         RD._park_cannot_certify = orig_park
         RD.new_state = orig_new_state
-    assert result["loopTerminal"] == "cannot-certify"
-    assert result["loopCertificationShape"] is None
-    assert "verdict" not in result
+    assert result["verdict"] == "cannot-certify"
+    assert result["certificationShape"] is None
     assert parked_reasons == [RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE]
 
 

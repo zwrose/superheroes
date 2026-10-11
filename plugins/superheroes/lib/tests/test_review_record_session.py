@@ -7,11 +7,13 @@ import sys
 
 import pytest
 
+import decision_kinds
 import model_registry
 import receipt_disclosures
 import record_paths
 import review_record as rr
 import review_record_session as rs
+import round_driver
 
 HEAD = "b" * 40  # the PR's head in the default Fake, and the final commit of the built sessions
 EARLIER = "a" * 40
@@ -609,3 +611,13 @@ def test_no_earlier_record_means_nothing_is_carried(tmp_path):
     out = send(tmp_path, _second_session(tmp_path), fake)
     assert out["ok"], out
     assert _by_key(fake) == []
+
+
+def test_terminal_tables_live_in_decision_kinds():
+    assert decision_kinds.CERTIFIED_VERDICTS == round_driver.CERTIFIED_VERDICTS
+    assert decision_kinds.ATTESTED_VERDICT == round_driver.ATTESTED_VERDICT
+    for verdict in decision_kinds.ALL_VERDICTS:
+        assert decision_kinds.map_verdict_to_terminal_state(verdict) is not None, verdict
+    assert decision_kinds.map_verdict_to_terminal_state("no-such-verdict") is None
+    with open(rs.__file__, encoding="utf-8") as fh:
+        assert "round_certification" not in fh.read()

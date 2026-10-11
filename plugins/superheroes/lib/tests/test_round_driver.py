@@ -148,40 +148,40 @@ def _cfg_cert(**over):
     return _cfg(baseGuard=RD.BASE_GUARD_CHECKED, **over)
 
 
-_RUN_LOOP_REFUSAL_CLASS = "unrun-review"
-_RUN_LOOP_REFUSAL_ARTIFACT = "driver-journal.jsonl"
-_RUN_LOOP_REFUSAL_DETAIL = (
-    "run-loop session lacks per-seat recorded evidence — cannot materialize for certification")
+def _run_loop_capturing_state(seams, config=None):
+    """run_loop plus the state it ran on (captured by wrapping build_receipt for the call)."""
+    box = {}
+    orig = RD.build_receipt
+
+    def _capture(state, *args, **kwargs):
+        box.setdefault("state", state)
+        return orig(state, *args, **kwargs)
+
+    RD.build_receipt = _capture
+    try:
+        result = RD.run_loop(seams, config)
+    finally:
+        RD.build_receipt = orig
+    return result, box.get("state")
 
 
 def _run_loop_with_loop_receipt(seams, config=None):
-    """run_loop plus build_receipt at terminal — for fields not on the refusal envelope."""
-    box = {}
-    orig = RD._run_loop_certified_receipt
+    """run_loop plus a receipt built from the state it ran on."""
+    result, state = _run_loop_capturing_state(seams, config)
+    loop_receipt = RD.build_receipt(state) if state is not None else {}
+    return result, loop_receipt
 
-    def _capture(state, invocations):
-        box["state"] = state
-        return orig(state, invocations)
 
-    RD._run_loop_certified_receipt = _capture
-    try:
-        refusal = RD.run_loop(seams, config)
-    finally:
-        RD._run_loop_certified_receipt = orig
-    loop_receipt = RD.build_receipt(box["state"]) if box.get("state") is not None else {}
-    return refusal, loop_receipt
+def _state_verifier_faults(state):
+    """The verifierArtifactFault records run_loop appended to the state's round records."""
+    faults = []
+    for key in sorted(state["rounds"], key=lambda k: int(k) if str(k).isdigit() else 0):
+        faults.extend(state["rounds"][key].get("verifierArtifactFault") or [])
+    return faults
 
 
 def _loop_rounds(result):
-    return result.get("loopRounds") or result.get("rounds") or []
-
-
-def _assert_run_loop_refusal_only(result):
-    """Receipt-shape guard for the dedicated matrix — not for general run_loop tests."""
-    assert result["class"] == _RUN_LOOP_REFUSAL_CLASS
-    assert result["artifact"] == _RUN_LOOP_REFUSAL_ARTIFACT
-    assert result["detail"] == _RUN_LOOP_REFUSAL_DETAIL
-    assert "verdict" not in result
+    return result.get("rounds") or []
 
 
 # =============================================================================
@@ -1448,43 +1448,24 @@ def test_run_loop_code_leg_end_to_end(tmp_path):
                                                  "file": "f.py", "line": 1}]}
                                   if rnd == 1 and dim == "code-reviewer" else [])),
                           _cfg_cert())
-    assert receipt["loopTerminal"] == "converged"
-    assert receipt["loopCertificationShape"] is not None
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"] is not None
+
+
+def test_run_loop_returns_the_driver_receipt():
+    result = RD.run_loop(_seams(), _cfg_cert())
+    ok, reason = RD.validate_receipt(result)
+    assert ok, reason
+    assert result["verdict"] == "converged"
+    for key in ("class", "loopTerminal", "loopRounds", "loopCertificationShape"):
+        assert key not in result
 
 
 def test_run_loop_panel_leg_shape(tmp_path):
     """The panel leg-shape config also drives run_loop end-to-end (a clean panel certifies)."""
     receipt = RD.run_loop(_seams(), _cfg_cert(leg="panel"))
-    assert receipt["loopTerminal"] == "converged"
-    assert receipt["loopCertificationShape"] is not None
-
-
-def test_run_loop_refusal_only_contract_normal_completion():
-    _assert_run_loop_refusal_only(RD.run_loop(_seams(), _cfg_cert()))
-
-
-def test_run_loop_refusal_only_contract_ceiling_refusal():
-    _assert_run_loop_refusal_only(
-        RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5)))
-
-
-def test_run_loop_refusal_only_contract_corrupt_resume(tmp_path):
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([
-        {"schemaVersion": 2, "round": 1, "kind": "baseline",
-         "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
-                                          "tier": "reviewer-deep", "findings": []}},
-         "findings": [], "coverageDecisions": []},
-        "oops",
-    ]))
-    _assert_run_loop_refusal_only(
-        RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records))))
-
-
-def test_run_loop_refusal_only_contract_journal_fault_unrecordable():
-    def boom(*_a, **_k):
-        raise RD.JournalFaultUnrecordable(OSError("journal"), OSError("marker"))
-    _assert_run_loop_refusal_only(RD.run_loop(_seams(reviewer=boom), _cfg_cert()))
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"] is not None
 
 
 def _panel_finding_reviewer():
@@ -1537,11 +1518,11 @@ def test_two_verifier_faults_in_one_round_are_both_recorded():
             return {"findings": [finding]}
         return []
 
-    refusal, _loop_receipt = _run_loop_with_loop_receipt(
+    _result, state = _run_loop_capturing_state(
         _seams(reviewer=reviewer, verifier=wave_verifier),
         _cfg_cert(diff=_big_diff(25)),
     )
-    faults = refusal.get("verifierArtifactFault") or []
+    faults = _state_verifier_faults(state)
     assert len(faults) == 2
     assert faults[0]["round"] == 1
     assert faults[1]["round"] == 1
@@ -1555,14 +1536,15 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
         return [{"id": i, "verdict": "CONFIRMED"}
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
-    refusal, loop_receipt = _run_loop_with_loop_receipt(
+    result, state = _run_loop_capturing_state(
         _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier),
         _cfg_cert(),
     )
-    assert refusal["loopTerminal"] != "cannot-certify"
-    assert refusal.get("verifierArtifactFault")
-    assert any("reason" in entry["fault"] for entry in refusal["verifierArtifactFault"])
-    r1 = [r for r in refusal["loopRounds"] if r["round"] == 1][0]
+    assert result["verdict"] != "cannot-certify"
+    faults = _state_verifier_faults(state)
+    assert faults
+    assert any("reason" in entry["fault"] for entry in faults)
+    r1 = [r for r in result["rounds"] if r["round"] == 1][0]
     assert r1["verifyPasses"][0]["PLAUSIBLE"] >= 1
     assert r1["verifyPasses"][0]["CONFIRMED"] == 0
 
@@ -1572,12 +1554,12 @@ def test_run_loop_verifier_valid_reason_control():
         return [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
-    refusal, loop_receipt = _run_loop_with_loop_receipt(
+    result, state = _run_loop_capturing_state(
         _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
         _cfg_cert(),
     )
-    assert refusal.get("verifierArtifactFault") is None
-    r1 = [r for r in refusal["loopRounds"] if r["round"] == 1][0]
+    assert not _state_verifier_faults(state)
+    r1 = [r for r in result["rounds"] if r["round"] == 1][0]
     assert r1["verifyPasses"][0]["CONFIRMED"] >= 1
     assert r1["verifyPasses"][0]["PLAUSIBLE"] == 0
 
@@ -1587,17 +1569,16 @@ def test_run_loop_certification_refusal_not_legacy_receipt():
     result = RD.run_loop(_seams(), _cfg(leg="panel"))
     assert isinstance(result, dict)
     assert "terminalState" not in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
+    assert result["verdict"] == "converged"
 
 
 def test_run_loop_certification_success_carries_writer_fields():
     """With a checked base guard the loop converges; loop observables mirror build_receipt."""
     refusal, loop_receipt = _run_loop_with_loop_receipt(
         _seams(), _cfg(leg="panel", baseGuard=RD.BASE_GUARD_CHECKED))
-    assert refusal["loopTerminal"] == "converged"
+    assert refusal["verdict"] == "converged"
     assert loop_receipt["verdict"] == "converged"
-    assert refusal["loopCertificationShape"] == loop_receipt["certificationShape"]
+    assert refusal["certificationShape"] == loop_receipt["certificationShape"]
     assert "terminalState" not in refusal
 
 # =============================================================================
@@ -1634,13 +1615,13 @@ def test_not_discharged_twice_self_recovers_once_then_stall_menu(tmp_path):
 
     seams = _persistent_not_discharged_seams(io={"stall_menu": stall_menu})
     receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
-    recoveries = [r for r in receipt["loopRounds"] if r.get("selfRecovery")]
+    recoveries = [r for r in receipt["rounds"] if r.get("selfRecovery")]
     assert len(recoveries) == 1
     # the stall menu was presented without accept-the-risk (PLAUSIBLE stalled target).
     assert len(menu_shown) == 1
     assert menu_shown[0]["choices"] == ["one-more-round", "hold"]
     assert menu_shown[0]["acceptRiskEligible"] is False
-    assert receipt["loopTerminal"] == "held"
+    assert receipt["verdict"] == "held"
 
 
 def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
@@ -1916,12 +1897,12 @@ def test_audit_stall_clears_on_clean_round_then_certifies_converged():
   folds clean."""
     seams = _stall_then_clean_auditor_seams(clean_after=2)
     receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
-    assert receipt["loopTerminal"] == "converged"
-    assert receipt.get("loopCertificationShape") is not None
-    audit_rounds = [r for r in receipt["loopRounds"] if r.get("audits")]
+    assert receipt["verdict"] == "converged"
+    assert receipt.get("certificationShape") is not None
+    audit_rounds = [r for r in receipt["rounds"] if r.get("audits")]
     assert len(audit_rounds) >= 3
-    assert any(r["round"] == 4 and r.get("audits") for r in receipt["loopRounds"])
-    recoveries = [r for r in receipt["loopRounds"] if r.get("selfRecovery")]
+    assert any(r["round"] == 4 and r.get("audits") for r in receipt["rounds"])
+    recoveries = [r for r in receipt["rounds"] if r.get("selfRecovery")]
     assert len(recoveries) == 1
 
 
@@ -1944,8 +1925,8 @@ def test_one_more_round_reenters_fixer_then_certifies_converged():
 
     base["fix_step"] = fix_step
     receipt = RD.run_loop(base, _cfg_cert(maxRounds=20))
-    assert receipt["loopTerminal"] == "converged"
-    assert receipt.get("loopCertificationShape") is not None
+    assert receipt["verdict"] == "converged"
+    assert receipt.get("certificationShape") is not None
     assert len(stall_menus) == 1
     assert "one-more-round" in stall_menus[0]["choices"]
     assert fix_after_menu["n"] >= 1
@@ -1980,7 +1961,7 @@ def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
     assert "one-more-round" not in stall_menus[1]["choices"]
     assert stall_menus[1]["choices"] == ["accept-the-disclosed-risk", "hold"]
     assert len(stall_menus[1]["choices"]) == 2
-    assert receipt["loopTerminal"] == "held"
+    assert receipt["verdict"] == "held"
 
 
 def test_one_more_round_empty_stall_targets_parks_cannot_certify():
@@ -2175,9 +2156,9 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
 
     receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
                           _cfg_cert(maxRounds=20))
-    assert receipt["loopTerminal"] == "converged"
-    assert receipt["loopCertificationShape"] == "full-panel-confirmed-degraded"
-    assert any(x["kind"] == "confirmation" for x in receipt["loopRounds"])
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
+    assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
 
 
 # =============================================================================
@@ -2215,7 +2196,7 @@ def test_degraded_single_vendor_flows_to_certification_shape(tmp_path):
                                "file": "f.py", "line": 1}]}
                 if rnd == 1 and dim == "code-reviewer" else [])),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
-    assert refusal["loopCertificationShape"] == "audited-chain-degraded"
+    assert refusal["certificationShape"] == "audited-chain-degraded"
     assert loop_receipt["degraded"], "the lost independence must be named in the receipt"
 
 
@@ -2235,13 +2216,13 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude"))
-    assert receipt["loopTerminal"] == "converged"
+    assert receipt["verdict"] == "converged"
     assert captured["targets"], "the auditor must have received the fix's audit targets"
     t = captured["targets"][0]
     assert t["fixerVendor"] == "claude"
     assert t["auditorVendor"] == "codex"
     assert t["independence"] == "independent"
-    assert receipt["loopCertificationShape"] == "audited-chain-degraded"
+    assert receipt["certificationShape"] == "audited-chain-degraded"
 
 
 def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
@@ -2260,10 +2241,8 @@ def test_unknown_fixer_vendor_degraded_end_to_end_two_vendor(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
-    assert result["loopCertificationShape"] == "audited-chain-degraded"
+    assert result["verdict"] == "converged"
+    assert result["certificationShape"] == "audited-chain-degraded"
     t = captured["targets"][0]
     assert t["independence"] == "degraded"
 
@@ -2284,10 +2263,10 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
                 ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
                  if rnd == 1 and dim == "code-reviewer" else []),
             auditor=auditor, fixer_vendor="codex"), cfg)
-    assert receipt["loopTerminal"] == "converged"
+    assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["independence"] == "independent"
-    assert receipt["loopCertificationShape"] == "audited-chain-degraded"
+    assert receipt["certificationShape"] == "audited-chain-degraded"
 
 
 def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
@@ -2368,8 +2347,8 @@ def test_omitted_seat_zero_finding_withholds_certification(tmp_path):
         return None if dim == "premortem-reviewer" else []
 
     receipt = RD.run_loop(_seams(reviewer=reviewer), _cfg_cert())
-    assert receipt["loopTerminal"] == "cannot-certify"
-    assert receipt["loopCertificationShape"] is None
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
 
 
 def test_incomplete_panel_flag_cleared_by_complete_panel():
@@ -2392,9 +2371,7 @@ def test_verify_skip_with_configured_command_halts(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "skipped"), _cfg_cert(verifyCommand="pytest -q"))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "halted"
+    assert result["verdict"] == "halted"
 
 
 def test_verify_skip_with_no_command_still_advances(tmp_path):
@@ -2404,7 +2381,7 @@ def test_verify_skip_with_no_command_still_advances(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "none"), _cfg_cert(verifyCommand="none"))
-    assert receipt["loopTerminal"] == "converged"
+    assert receipt["verdict"] == "converged"
 
 
 def test_new_blocker_does_not_drop_unresolved_target_at_different_line():
@@ -2523,7 +2500,7 @@ def test_run_loop_parks_cannot_certify_on_unrecordable_journal_fault():
     def boom(*a, **k):
         raise RD.JournalFaultUnrecordable(OSError("journal"), OSError("marker"))
     refusal, loop_receipt = _run_loop_with_loop_receipt(_seams(reviewer=boom), _cfg_cert())
-    assert refusal["loopTerminal"] == "cannot-certify"
+    assert refusal["verdict"] == "cannot-certify"
     assert loop_receipt["certification"]["shape"] is None
     assert "journal-fault-unrecordable" in loop_receipt["certification"]["reason"]
 
@@ -2534,6 +2511,36 @@ def test_run_loop_parks_cannot_certify_on_unrecordable_journal_fault():
 # emission (a fault marker, or a round-receipt.json corrupted/invalidated since) would be masked by
 # the replay's ok. Every terminal `next` — first emission AND replays — now re-verifies the on-disk
 # receipt and fails LOUD `receipt-fault` (nonzero) on any fault, never terminal-with-ok.
+
+def test_terminal_finish_writes_no_certification_artifact(tmp_path):
+    """The terminal finish writes round-receipt.json and nothing else beside it for certification."""
+    d = str(tmp_path)
+    payload = _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    assert payload["verdict"] == "converged"
+    names = os.listdir(d)
+    assert RD.RECEIPT_FILE in names
+    assert "certification-receipt.json" not in names
+    assert "certification-refusal.json" not in names
+    replay = RD.cmd_next(d)
+    assert replay["ok"] is True
+    assert replay["action"] == RD.P_TERMINAL
+
+
+def test_old_certification_files_are_left_alone(tmp_path):
+    """A certification file left in the session directory by an older driver is neither read,
+    rewritten nor deleted by the terminal finish."""
+    d = str(tmp_path)
+    old = os.path.join(d, "certification-refusal.json")
+    with open(old, "wb") as fh:
+        fh.write(b'{"class": "old"}')
+    payload = _drive_cli(d, _cfg(), _responder(round1_findings=None))
+    assert payload["verdict"] == "converged"
+    with open(old, "rb") as fh:
+        assert fh.read() == b'{"class": "old"}'
+    replay = RD.cmd_next(d)
+    assert replay["ok"] is True
+    assert replay["action"] == RD.P_TERMINAL
+
 
 def _drive_to_terminating_submit(session_dir, cfg, respond, max_steps=80):
     """Drive next/submit until a submit's fold SETS the terminal, then STOP — WITHOUT calling the
@@ -2873,7 +2880,7 @@ def test_receipt_missing_seat_surfaces_unverified(tmp_path):
                                                             "reason": "checked"}
                                                            for c in (cl or []) for i in c.get("ids", [])]),
                           _cfg_cert())
-    r1 = [x for x in receipt["loopRounds"] if x["round"] == 1][0]
+    r1 = [x for x in receipt["rounds"] if x["round"] == 1][0]
     assert r1["unverified"], "a receipt-missing seat's findings ride the record as unverified"
 
 
@@ -2940,9 +2947,7 @@ def test_verify_fail_halts(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "fail"), _cfg_cert())
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "halted"
+    assert result["verdict"] == "halted"
 
 
 def test_verify_timeout_halts(tmp_path):
@@ -2953,9 +2958,7 @@ def test_verify_timeout_halts(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verify_runner=lambda cmd, rnd: "timeout"), _cfg_cert())
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "halted"
+    assert result["verdict"] == "halted"
 
 
 def test_omitted_panel_seat_cannot_certify_full_panel(tmp_path):
@@ -2967,8 +2970,8 @@ def test_omitted_panel_seat_cannot_certify_full_panel(tmp_path):
         return []
 
     receipt = RD.run_loop(_seams(reviewer=reviewer), _cfg_cert())
-    assert receipt["loopCertificationShape"] != "full-panel-confirmed"
-    r1 = [x for x in receipt["loopRounds"] if x["round"] == 1][0]
+    assert receipt["certificationShape"] != "full-panel-confirmed"
+    r1 = [x for x in receipt["rounds"] if x["round"] == 1][0]
     assert r1["seatStatus"]["premortem-reviewer"] == "missing"
 
 
@@ -3111,10 +3114,8 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
         _seams(reviewer=reviewer, fix_step=fix_step),
         _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records),
              coveragePath=str(coverage), maxRounds=20))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "cannot-certify"
-    assert result["loopCertificationShape"] is None
+    assert result["verdict"] == "cannot-certify"
+    assert result["certificationShape"] is None
 
 
 def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_path):
@@ -3141,7 +3142,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
     receipt = RD.run_loop(
         _seams(reviewer=reviewer, fix_step=fix_step),
         _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records), maxRounds=20))
-    assert receipt["loopTerminal"] != "cannot-certify"
+    assert receipt["verdict"] != "cannot-certify"
     assert fired["scoped"] == 1, "the scoped finder must fire over the real new surface"
 
 
@@ -3151,8 +3152,8 @@ def test_corrupt_resume_records_cannot_certify(tmp_path):
     records = tmp_path / "round-records.json"
     records.write_text("{corrupt not-a-list")
     receipt = RD.run_loop(_seams(), _cfg_cert(recordsPath=str(records)))
-    assert receipt["loopTerminal"] == "cannot-certify"
-    assert receipt["loopCertificationShape"] is None
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
 
 
 def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
@@ -3172,11 +3173,11 @@ def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
     records.write_text(json.dumps(seed))
     receipt = RD.run_loop(_seams(),
                           _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert receipt["loopTerminal"] == "converged"
+    assert receipt["verdict"] == "converged"
     # A fresh full confirmation panel ran at the resume round (3), certifying as a full panel —
     # NOT anchored on the degraded round-2 seed.
-    assert receipt["loopCertificationShape"] == "full-panel-confirmed-degraded"
-    assert any(r["round"] == 3 for r in receipt["loopRounds"])
+    assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
+    assert any(r["round"] == 3 for r in receipt["rounds"])
 
 
 # =============================================================================
@@ -3614,16 +3615,16 @@ def test_resumed_and_unresumed_receipts_disclose_the_same_channels(tmp_path):
     receipt_b, loop_receipt_b = _run_loop_with_loop_receipt(
         seams, _cfg_cert(dimensions=dims, recordsPath=str(records_b), maxRounds=8))
 
-    shared = {r["round"] for r in receipt_a["loopRounds"]} & {
-        r["round"] for r in receipt_b["loopRounds"]}
+    shared = {r["round"] for r in receipt_a["rounds"]} & {
+        r["round"] for r in receipt_b["rounds"]}
     assert shared >= {1, 2}
     for rnd in shared:
         assert _round_channels(receipt_a, rnd) == _round_channels(receipt_b, rnd)
         assert _round_disclosures(receipt_a, rnd, loop_receipt_a) == _round_disclosures(
             receipt_b, rnd, loop_receipt_b)
 
-    b_only = {r["round"] for r in receipt_b["loopRounds"]} - {
-        r["round"] for r in receipt_a["loopRounds"]}
+    b_only = {r["round"] for r in receipt_b["rounds"]} - {
+        r["round"] for r in receipt_a["rounds"]}
     assert any(_round_channels(receipt_b, rnd) for rnd in b_only)
 
 
@@ -3676,8 +3677,8 @@ def test_resume_without_a_disclosure_block_adds_no_round_entry(tmp_path):
     assert state["rounds"] == {}
     assert state["round"] == 2
     receipt = RD.run_loop(_seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert not any(r["round"] == 1 for r in receipt["loopRounds"])
-    assert receipt["loopTerminal"]
+    assert not any(r["round"] == 1 for r in receipt["rounds"])
+    assert receipt["verdict"]
 
 
 def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
@@ -3844,7 +3845,7 @@ def test_resume_does_not_restore_an_empty_list_channel_as_a_disclosure(tmp_path)
     assert state["rounds"] == {}
     refusal, loop_receipt = _run_loop_with_loop_receipt(
         _seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert not any(r["round"] == 1 for r in refusal["loopRounds"])
+    assert not any(r["round"] == 1 for r in refusal["rounds"])
     assert not any(line.startswith("seat-map constraint breach:")
                     for line in loop_receipt["degraded"])
 
@@ -3879,9 +3880,9 @@ def test_corrupt_resume_records_still_park_with_disclosures_present(tmp_path):
     assert state["_resumeCorrupt"]
     assert state["rounds"] == {}
     receipt = RD.run_loop(_seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert receipt["loopTerminal"] == "cannot-certify"
-    assert receipt["loopCertificationShape"] is None
-    assert not any(r["round"] == 1 for r in receipt["loopRounds"])
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
+    assert not any(r["round"] == 1 for r in receipt["rounds"])
 
 
 def test_disclosure_block_survives_the_durable_skeleton(tmp_path):
@@ -4131,7 +4132,7 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
     seams["changed_subjects"] = changed_subjects
     receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
     assert calls  # the seam was invoked (the self-report was never consulted)
-    assert any(r.get("kind") == "confirmation" for r in receipt["loopRounds"])
+    assert any(r.get("kind") == "confirmation" for r in receipt["rounds"])
 
 
 # =============================================================================
@@ -4472,20 +4473,16 @@ def test_same_family_seat_map_degrades_cert_shape():
         "canaryResult": _canary_probes_for(seat_map_clean),
     }
     result_clean = RD.run_loop(_seams(io=io_clean), cfg)
-    assert "class" in result_clean
-    assert "verdict" not in result_clean
-    assert result_clean["loopTerminal"] == "converged"
-    assert result_clean["loopCertificationShape"] == "full-panel-confirmed"
+    assert result_clean["verdict"] == "converged"
+    assert result_clean["certificationShape"] == "full-panel-confirmed"
     seat_map_deg = _panel_seat_map_with_same_family()
     io_deg = {
         "seatMap": seat_map_deg,
         "canaryResult": _canary_probes_for(seat_map_deg),
     }
     result_deg = RD.run_loop(_seams(io=io_deg), cfg)
-    assert "class" in result_deg
-    assert "verdict" not in result_deg
-    assert result_deg["loopTerminal"] == "converged"
-    assert result_deg["loopCertificationShape"].endswith("-degraded")
+    assert result_deg["verdict"] == "converged"
+    assert result_deg["certificationShape"].endswith("-degraded")
 
 
 def test_same_family_disclosed_in_receipt_degraded_list():
@@ -4543,10 +4540,8 @@ def test_seat_map_unexcused_violation_constraint_violated_cert_shape():
     SM = _load("seat_map")
     assert SM.unexcused_violations(seat_map)
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
-    assert "-constraint-violated" in result["loopCertificationShape"]
+    assert result["verdict"] == "converged"
+    assert "-constraint-violated" in result["certificationShape"]
 
 
 def test_seat_map_excused_only_violation_unchanged_cert_shape():
@@ -4735,10 +4730,8 @@ def test_seat_map_violations_round_field_and_degraded_disclosure():
     seat_map = _seat_map_receipt_with_unexcused_maker_family()
     cfg = _cfg_cert(leg="panel", vendors=["codex", "cursor"])
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
-    assert "-constraint-violated" in result["loopCertificationShape"]
+    assert result["verdict"] == "converged"
+    assert "-constraint-violated" in result["certificationShape"]
 
 
 def test_seat_map_violations_e8_sticky_across_round_map_overwrite():
@@ -4761,18 +4754,14 @@ def test_library_receipt_omits_base_not_checked(tmp_path):
     # base-guard binding assertion no longer reachable through run_loop.
     result = RD.run_loop(_seams(), _cfg())
     assert isinstance(result, dict)
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
+    assert result["verdict"] == "converged"
 
 
 def test_library_receipt_mode_without_cli_guard_stays_not_checked(tmp_path):
     """Guard-shaped config keys must not infer baseGuard=checked without the CLI guard."""
     result = RD.run_loop(_seams(), _cfg(mode="pr"))
     assert isinstance(result, dict)
-    assert "verdict" not in result
-    assert "class" in result
-    assert result["loopTerminal"] == "converged"
+    assert result["verdict"] == "converged"
 
 
 def test_certification_base_explicit_not_checked_token(tmp_path):
@@ -4982,7 +4971,7 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude"))
-    assert receipt["loopTerminal"] == "converged"
+    assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["fixerVendor"] == "claude"
     assert t["auditorVendor"] == "codex" and t["auditorVendor"] != t["fixerVendor"]
@@ -5091,7 +5080,7 @@ def test_receipt_always_carries_skipped_blockers_channel():
     """Every terminal receipt carries the `skippedBlockers` list (empty when no skip) and
     validate_receipt REQUIRES it — the channel can never be omitted (exit_skipped invariant)."""
     _refusal, receipt = _run_loop_with_loop_receipt(_seams(), _cfg_cert())
-    assert _refusal["loopTerminal"] == "converged"
+    assert _refusal["verdict"] == "converged"
     assert receipt["skippedBlockers"] == []
     ok, _ = RD.validate_receipt(receipt)
     assert ok
@@ -5128,7 +5117,7 @@ def test_partial_skip_end_to_end_marks_clean_except_skipped(tmp_path):
             ({"findings": [dict(trade_a), dict(trade_b)]}
              if rnd == 1 and dim == "code-reviewer" else []),
         io={"judgment_gate": judgment_gate}), _cfg_cert())
-    assert refusal["loopTerminal"] == "converged"
+    assert refusal["verdict"] == "converged"
     assert [s["title"] for s in receipt["skippedBlockers"]] == ["drop the flag"]
     reason = (receipt["certification"] or {}).get("reason") or ""
     assert reason.startswith("clean-except-skipped: 1 blocker(s) skipped")
@@ -5567,8 +5556,8 @@ def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
             ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
         io={"judgment_gate": judgment_gate}), _cfg_cert())
     assert len(disposed) == 1 and disposed[0]["findings"][0]["id"] == _TRADEOFF_ID
-    assert refusal["loopTerminal"] == "converged"
-    assert refusal["loopCertificationShape"] == "audited-chain-degraded"
+    assert refusal["verdict"] == "converged"
+    assert refusal["certificationShape"] == "audited-chain-degraded"
     assert "judgment-gate" in [d["kind"] for d in loop_receipt["decisions"]]
     ok, _ = RD.validate_receipt(loop_receipt)
     assert ok
@@ -5999,10 +5988,8 @@ def test_unattested_cross_vendor_map_refuses_unrun_review_not_probe_parked():
         "premortem-reviewer": "cursor",
     })
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
-    assert result["class"] == "unrun-review"
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
-    assert result["loopCertificationShape"] == "full-panel-confirmed-constraint-violated"
+    assert result["verdict"] == "converged"
+    assert result["certificationShape"] == "full-panel-confirmed-constraint-violated"
 
 
 def test_unattested_map_still_drives_fell_open_and_effective_seat_map():
@@ -6576,10 +6563,8 @@ def test_fell_open_in_seat_ran_vendor_echo_ignored_at_fold():
 def test_fell_open_clean_claude_panel_no_manifest_degraded_unchanged(tmp_path):
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), _cfg_cert(leg="panel"))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
-    assert result["loopCertificationShape"].endswith("-constraint-violated")
+    assert result["verdict"] == "converged"
+    assert result["certificationShape"].endswith("-constraint-violated")
 
 
 def test_fell_open_multi_seat_deterministic_disclosure_order():
@@ -6878,10 +6863,8 @@ def test_io_seam_forwards_multi_probe_canary_result_list():
     ]
     seams = _seams(io={"seatMap": seat_map, "canaryResult": probes})
     result = RD.run_loop(seams, _cfg_cert(leg="panel", vendors=["codex", "cursor"]))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "converged"
-    assert result["loopCertificationShape"] is not None
+    assert result["verdict"] == "converged"
+    assert result["certificationShape"] is not None
 
 
 def test_canary_list_two_engaged_probes_full_panel():
@@ -7883,9 +7866,7 @@ def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
     seams = _rearm_forever_seams()
     result = RD.run_loop(seams,
                          _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=ceiling))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "halted"
+    assert result["verdict"] == "halted"
     leg_rnds = seams["_legRnds"]
     # axis: the ceiling round runs to completion — fixer and verify both ran at the ceiling before park
     assert ceiling in leg_rnds["fix"]
@@ -7898,9 +7879,7 @@ def test_clean_rearm_forever_halts_at_distinct_ceiling(tmp_path):
     ceiling = 11
     result = RD.run_loop(_rearm_forever_seams(),
                          _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "halted"
+    assert result["verdict"] == "halted"
 
 
 def test_delta_at_ceiling_records_ledger_then_parks_on_advance():
@@ -7978,17 +7957,17 @@ def test_round_nine_below_ceiling_does_not_halt_on_ceiling(tmp_path):
     ceiling = 10
     receipt = RD.run_loop(_rearm_until_converge_seams(9),
                           _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
-    reached = max(r["round"] for r in receipt["loopRounds"])
+    reached = max(r["round"] for r in receipt["rounds"])
     assert reached == 9
-    assert receipt["loopTerminal"] == "converged"
-    assert not any(r.get("stallChoice") for r in receipt["loopRounds"])
+    assert receipt["verdict"] == "converged"
+    assert not any(r.get("stallChoice") for r in receipt["rounds"])
 
 
 def test_clean_below_ceiling_still_certifies_converged(tmp_path):
     """No-regression: a clean run below the ceiling still certifies converged."""
     receipt = RD.run_loop(_seams(), _cfg_cert(maxRoundsAbsolute=10))
-    assert receipt["loopTerminal"] == "converged"
-    assert receipt["loopCertificationShape"] is not None
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"] is not None
 
 
 def test_seed_resume_at_ceiling_runs_round(tmp_path):
@@ -8175,10 +8154,8 @@ def test_max_rounds_absolute_fresh_with_max_rounds_loads(tmp_path, capsys):
 def test_run_loop_parks_on_ceiling_refusal():
     """B2: run_loop with ceiling below maxRounds parks cannot-certify; never raises."""
     result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
-    assert "class" in result
-    assert "verdict" not in result
-    assert result["loopTerminal"] == "cannot-certify"
-    assert result["loopCertificationShape"] is None
+    assert result["verdict"] == "cannot-certify"
+    assert result["certificationShape"] is None
 
 
 def test_persisted_config_without_max_rounds_absolute_resolves_default_ceiling():
@@ -8382,56 +8359,3 @@ def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_p
     assert fault is not None
     assert "certification refusal artifact write failed" in fault
     assert "park" in fault
-
-
-def test_write_certification_artifacts_fault_strings_match_terminal_receipt_gate_coupling(
-        tmp_path, monkeypatch):
-    """_terminal_receipt_gate distinguishes certification-write faults from every other fault by
-    the typed fault class RECEIPT_FAULT_CERTIFICATION (layer 1b), not by substring matching on the
-    message. _receiptFinalized is set only when fault is None or fault.kind is not
-    RECEIPT_FAULT_CERTIFICATION. This test still pins that the certification-write fault path is
-    the only non-None return from _write_certification_artifacts and that the fault carries that
-    class; a reworded message must not silently re-open the replay fall-open over a missing
-    certification artifact."""
-    _COUPLING_SUBSTRING = "certification"
-
-    # Census of every non-None return from _write_certification_artifacts — only one path exists:
-    # OSError when atomic_write_bytes cannot write certification-refusal.json. Use a clean OSError
-    # detail (no path/filename) so the tripwire targets the message template, not the artifact name.
-    session_dir = _certification_refusal_session(tmp_path)
-
-    def _fail_refusal_write(path, data):
-        if RD.CERTIFICATION_REFUSAL_FILE in os.path.basename(path):
-            raise OSError("simulated refusal write failure")
-        raise AssertionError("unexpected write: %s" % path)
-
-    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _fail_refusal_write)
-    refusal_write_fault = RD._write_certification_artifacts(session_dir)
-    assert refusal_write_fault is not None
-
-    faults = [refusal_write_fault]
-    for fault in faults:
-        assert _COUPLING_SUBSTRING in fault, (
-            "fault missing substring %r required by _terminal_receipt_gate: %s"
-            % (_COUPLING_SUBSTRING, fault))
-
-
-def test_terminal_receipt_gate_certification_write_failure_not_laundered_on_replay(tmp_path):
-    """#1271 WO-A12-G finding 1: a certification-artifact write fault must not set
-    `_receiptFinalized` — a replay must re-attempt (or refuse), never return ok over a missing
-    certification artifact."""
-    session_dir = _certification_refusal_session(tmp_path)
-    os.makedirs(os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE))
-    ok, state = RD.load_state(session_dir)
-    assert ok, state
-    RD._journal_append(session_dir, {"cmd": "submit", "phase": RD.P_PANEL, "round": 1,
-                                     "attempt": 0})
-    fault1 = RD._terminal_receipt_gate(session_dir, state)
-    assert fault1 is not None
-    assert "certification refusal artifact write failed" in fault1
-    ok, state_after = RD.load_state(session_dir)
-    assert ok, state_after
-    assert not state_after.get("_receiptFinalized")
-    fault2 = RD._terminal_receipt_gate(session_dir, state_after)
-    assert fault2 is not None
-    assert "certification refusal artifact write failed" in fault2
