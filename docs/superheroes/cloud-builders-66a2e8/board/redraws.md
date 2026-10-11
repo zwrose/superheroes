@@ -15,3 +15,13 @@
   longer says "Never a same-family stand-in". It now says "No same-family stand-in unless you say
   so for that PR". ·
   https://claude.ai/artifact/DZ8VeQQdoFyLYVswRsg5MY (version 3, version id 1791662140-6dcc) · sent: yes (final sheet, 2026-10-10)
+- 2026-10-11 · Canon 2026-10-11-dcc2b5e5-4 · On the build board, "1 Setup" step 1 no longer asks the
+  owner to make the new environment the account's default so the check can find it. It now asks
+  the owner to copy the environment's id from its page and paste it to the advisor, and says every
+  build names the environment by that id, so the default never changes. · the published board
+  artifact is owned by another account and is republished from it (owed) · sent: no
+- 2026-10-11 · Canon 2026-10-11-dcc2b5e5-5 · On the build board, "1 Setup" step 1 no longer asks the
+  owner to copy the environment's id from its page (no page shows it). It now asks the owner to run
+  /remote-env in Claude Code and pick the environment, and says the advisor reads which one was
+  picked. · the published board artifact is owned by another account and is republished from it
+  (owed) · sent: no
