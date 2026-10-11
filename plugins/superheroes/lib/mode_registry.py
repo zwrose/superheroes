@@ -240,7 +240,10 @@ def resolve(cwd, root=None, *, persist_backfill=True):
             return {"mode": verdict, "authoritative": False,
                     "source": "evidence", "evidence": verdict}
         remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
-        wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
+        try:
+            wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
+        except store_core.CalibrationWriteRefused:
+            wrote = None  # a cloud session never writes calibration; the read still answers
         if wrote is None:
             sys.stderr.write(
                 f"mode_registry: backfill of {verdict!r} could not be persisted "

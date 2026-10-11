@@ -434,8 +434,44 @@ def derive_identifiers(cwd):
     return ident
 
 
+class CalibrationWriteRefused(PermissionError):
+    """A calibration file write was attempted in a cloud session (CLAUDE_CODE_REMOTE == "true").
+
+    A PermissionError, so an OSError: the callers that already treat an unwritable store as a
+    deferral keep doing so."""
+
+
+def is_calibration_path(path):
+    """True when `path` is a calibration file: under a project store dir
+    `<store_root>/projects/<key>/` one of registry.json, meta.json, doc-policy.json,
+    config/*.md or permission/rules.json; or a *.md directly in the in-repo calibration
+    directory (`.claude/superheroes/`). Pure; compares fully resolved paths."""
+    real = os.path.realpath(os.path.abspath(path))
+    parent, name = os.path.split(real)
+    import core_md
+    in_repo_dir = os.path.dirname(core_md.in_repo_core_rel_path()).split(os.sep)
+    if name.endswith(".md") and parent.split(os.sep)[-len(in_repo_dir):] == in_repo_dir:
+        return True
+    import control_plane
+    projects = os.path.join(os.path.realpath(control_plane.store_root()), "projects")
+    if not real.startswith(projects + os.sep):
+        return False
+    parts = real[len(projects) + 1:].split(os.sep)[1:]
+    if len(parts) == 1:
+        return parts[0] in ("registry.json", "meta.json", "doc-policy.json")
+    if len(parts) == 2:
+        return ((parts[0] == "config" and parts[1].endswith(".md"))
+                or parts == ["permission", "rules.json"])
+    return False
+
+
 def atomic_write(path, text, tmp_prefix=".store-core."):
-    """Write text atomically via temp file + os.replace in the same directory."""
+    """Write text atomically via temp file + os.replace in the same directory.
+
+    In a cloud session (CLAUDE_CODE_REMOTE == "true") a calibration file is never written:
+    raises CalibrationWriteRefused before anything touches the disk."""
+    if os.environ.get("CLAUDE_CODE_REMOTE") == "true" and is_calibration_path(path):
+        raise CalibrationWriteRefused("calibration-write-in-cloud-session: %s" % path)
     d = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=tmp_prefix, suffix=".tmp")
