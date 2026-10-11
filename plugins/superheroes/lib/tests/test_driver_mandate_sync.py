@@ -8,8 +8,7 @@ Guards two pinned clauses:
 - ``rubric/review-discipline.md`` — the flip conditional's operative clause (single-home
   hard-line pin; presence-only, exactly once in the driver-mandate section)
 
-SKIP_CITATION and PARITY bars live only in the authoritative home; ``vet-receipt.md`` points at
-that home and does not restate those finding sentences — no copy-holder pins remain for them.
+SKIP_CITATION and PARITY bars live only in the authoritative home; no copy-holder pins remain for them.
 
 One single-home fact — the post-handback merge policy — is deliberately out of scope; it lives
 only in ``rubric/review-discipline.md``.

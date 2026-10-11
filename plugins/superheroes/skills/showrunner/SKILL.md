@@ -357,6 +357,7 @@ above).
      approved decision in one hop). **A stale What or DoD fails the spot-check even when the
      anchor link resolves.**
    - **The standing anchor-coverage row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing anchor-coverage vet row defines it.
+   - **The review record checks** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § The review record checks defines them.
    - **The standing NFR row** — at **every** child PR vet in a spec package, grade the three
      package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
      and guidelines never hardened into gates.
