@@ -72,10 +72,9 @@ Everything below that names the light lane is an exception. Otherwise the build 
   panel loop. You typed the change, so you are the maker, and the reviewer sits outside your maker
   family. Only the owner may choose a disclosed same-family reviewer at kickoff, when no
   cross-vendor reviewer is available. A mid-run forfeit follows the rubric's three-case rule.
-- **Every light-lane review's record shows that the one reviewer read the change**, from the
-  engine's own run record, as `review-discipline.md` says. A record that does not show it means
-  that review did not happen, so run the reviewer once more, then resolve upward to the full lane
-  or park. It is never a pass, and exit zero is not evidence of a reading.
+- **Every light-lane review answers to the review record's reading rule** in `review-discipline.md`
+  (§ What never changes in any lane), which owns the criterion, the retry, and what a missing
+  reading means.
 - **The investigation-record floor for empty external seats applies to every external review
   seat**, single-seat lanes included (`review-discipline.md`).
 - **Preflight is kept** (§3). Without a brief post, the first `gh` write may be the PR itself, so a

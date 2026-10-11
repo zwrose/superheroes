@@ -55,9 +55,8 @@ clauses.
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
 - **``rubric/review-discipline.md``** — authoritative home for the cross-lane invariants.
-- **``skills/showrunner/SKILL.md``** — resolve-upward, not-engaged-never-passes, and waiver-bounds
-  invariant rows.
-- **``skills/workhorse/SKILL.md``** — resolve-upward and not-engaged-never-passes; deliberately
+- **``skills/showrunner/SKILL.md``** — resolve-upward and waiver-bounds invariant rows.
+- **``skills/workhorse/SKILL.md``** — resolve-upward; deliberately
   excluded from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
 - **``skills/workhorse/SKILL.md``** and **``skills/detective/SKILL.md``** — the diagnosis/fix
   boundary (§ workhorse preamble and § ``## The boundary — both ways``): each charter's half of the
@@ -109,16 +108,11 @@ _FENCE_GUARDED_FILES = (
 
 _EXPECTED_INVARIANT_NAMES = frozenset({
     "resolve-upward",
-    "not-engaged-never-passes",
     "waiver-bounds",
 })
 
 _EXPECTED_COPY_HOLDERS = {
     "resolve-upward": frozenset({
-        "skills/showrunner/SKILL.md",
-        "skills/workhorse/SKILL.md",
-    }),
-    "not-engaged-never-passes": frozenset({
         "skills/showrunner/SKILL.md",
         "skills/workhorse/SKILL.md",
     }),
@@ -129,7 +123,6 @@ _EXPECTED_COPY_HOLDERS = {
 
 _EXPECTED_SHARED_CLAUSE_COUNTS = {
     "resolve-upward": 5,
-    "not-engaged-never-passes": 5,
     "waiver-bounds": 3,
 }
 
@@ -147,13 +140,6 @@ _EXPECTED_HOME_SECTIONS = {
         "Disclosure alone never authorizes a downgrade": "### The spine",
         "the full lane at any size": "### The spine",
     },
-    "not-engaged-never-passes": {
-        "that review did not happen": "### What never changes in any lane",
-        "run the reviewer once more": "### What never changes in any lane",
-        "never a pass": "### What never changes in any lane",
-        "zero is not evidence of a reading": "### What never changes in any lane",
-        "resolve upward to the full lane or park": "### What never changes in any lane",
-    },
     "waiver-bounds": {
         "owner-only, per change, never a standing grant": "### Micro — owner authorization",
         "quiet-failure question": "### Micro — owner authorization",
@@ -163,10 +149,6 @@ _EXPECTED_HOME_SECTIONS = {
 
 _EXPECTED_HOLDER_SECTIONS = {
     "resolve-upward": {
-        "skills/showrunner/SKILL.md": "## Your duties",
-        "skills/workhorse/SKILL.md": "## Build lanes",
-    },
-    "not-engaged-never-passes": {
         "skills/showrunner/SKILL.md": "## Your duties",
         "skills/workhorse/SKILL.md": "## Build lanes",
     },
@@ -198,35 +180,6 @@ _INVARIANT_TABLE = [
             {
                 "text": "the full lane at any size",
                 "home_section": "### The spine",
-            },
-        ],
-        "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": "## Your duties",
-            "skills/workhorse/SKILL.md": "## Build lanes",
-        },
-    },
-    {
-        "name": "not-engaged-never-passes",
-        "clauses": [
-            {
-                "text": "that review did not happen",
-                "home_section": "### What never changes in any lane",
-            },
-            {
-                "text": "run the reviewer once more",
-                "home_section": "### What never changes in any lane",
-            },
-            {
-                "text": "never a pass",
-                "home_section": "### What never changes in any lane",
-            },
-            {
-                "text": "zero is not evidence of a reading",
-                "home_section": "### What never changes in any lane",
-            },
-            {
-                "text": "resolve upward to the full lane or park",
-                "home_section": "### What never changes in any lane",
             },
         ],
         "copy_holder_sections": {
@@ -695,7 +648,7 @@ def test_negative_roster_duplicate_resolve_upward():
 def test_negative_roster_workhorse_holder_removed():
     with pytest.raises(RuntimeError, match="copy-holder set drift"):
         _validate_invariant_table(
-            _table_with_holder_removed("not-engaged-never-passes", "skills/workhorse/SKILL.md")
+            _table_with_holder_removed("resolve-upward", "skills/workhorse/SKILL.md")
         )
 
 
@@ -983,7 +936,7 @@ def test_negative_home_clause_absent_from_section_but_present_elsewhere():
         return _read_plugin(rel)
 
     table = [{
-        "name": "not-engaged-never-passes",
+        "name": "synthetic-row",
         "clauses": [
             {
                 "text": "means that review did not happen",
@@ -1018,7 +971,7 @@ def test_negative_home_clause_absent_entirely():
         return _read_plugin(rel)
 
     table = [{
-        "name": "not-engaged-never-passes",
+        "name": "synthetic-row",
         "clauses": [
             {
                 "text": "never a pass",

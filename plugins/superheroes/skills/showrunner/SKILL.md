@@ -328,10 +328,9 @@ above).
    bounded in `review-discipline.md`). **Mid-run forfeit** follows the rubric's three-case rule
    (kickoff unavailability, mid-run forfeit with disclosed stand-in on the host model on **light**
    only, **micro** resolving upward to the full lane or parking — silence is not forfeit; a terminal
-   forfeit result is). The review record must show that seat's
-   reading, from the engine's own run record — a record that does not show it means that review did
-   not happen (run the reviewer once more, then resolve upward to the full lane or park; never a
-   pass; exit zero is not evidence of a reading). The investigation-record floor applies automatically to **every
+   forfeit result is). The single reviewer's review record answers to the reading rule in
+   `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
+   and what a missing reading means. The investigation-record floor applies automatically to **every
    external review seat**, single-seat lanes included (see `review-discipline.md`).
 
    **Done when:** every issue you routed records exactly one route and its anchor with your
