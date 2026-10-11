@@ -877,7 +877,7 @@ is the home for the driver-or-park valve.
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted
   channel names that fired for the certification shape (the channel names are the `shape_drivers.append(...)` sites in `lib/round_driver.py`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), plus one field per disclosure channel in `RESUMABLE_DISCLOSURE_CHANNELS` (`lib/receipt_disclosures.py`), `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`. `judgmentDispositions` carries owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed. `gateGuidanceRowCarried` records when a fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance. Each `compileDrops` entry's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel.
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), plus one field per disclosure channel in `CARRIED_DISCLOSURE_CHANNELS` (`lib/receipt_disclosures.py`), `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`. `judgmentDispositions` carries owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed. `gateGuidanceRowCarried` records when a fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance. Each `compileDrops` entry's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel.
 - `findings` — each row carries `id`; `findingKey` is stamped only when the state's
   `schemaVersion` is at least `STATE_SCHEMA_VERSION` — receipt schema versions 2–4 omit it
 - `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
@@ -912,7 +912,7 @@ receipt round `"0"`.
 **This summary is deliberately non-exhaustive, and it is not pinned.** The authoritative field set
 and the complete refusal enumeration live in `lib/round_driver.py` — the `validate_receipt`
 implementation and the round-entry constants it reads (`ROUND_ENTRY_KEY_FORMS`,
-`RESUMABLE_DISCLOSURE_CHANNELS`). Read the code for the full list; do not treat the prose above as
+`CARRIED_DISCLOSURE_CHANNELS`). Read the code for the full list; do not treat the prose above as
 complete, and do not extend it into a second enumeration that would drift.
 
 ### Handback scope markers (Claude host, Bash tool)
@@ -954,7 +954,7 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 **Library `recordsPath` / `round-records.json` seam (#720, #1187).** When config carries
 `recordsPath`, each in-memory ledger record is written through `review_memory.summarize_record` (a
 skeleton — no evidence bodies) and carries the declared per-round disclosure block selected by
-`_declared_disclosures` from `RESUMABLE_DISCLOSURE_CHANNELS`. The file is an export of the session's
+`_declared_disclosures` from `CARRIED_DISCLOSURE_CHANNELS`. The file is an export of the session's
 ledger: the producer writes the whole outgoing ledger as `review_memory.records_bytes` in one atomic
 write, replacing whatever was at that path, and the driver never reads the file — a new session
 takes nothing from it, and a file left by another session, valid or corrupt, is simply replaced on

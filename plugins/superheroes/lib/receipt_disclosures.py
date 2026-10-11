@@ -71,7 +71,7 @@ def normalize_adapter_provenance(prov):
     return {}
 
 
-RESUMABLE_DISCLOSURE_CHANNELS = {
+CARRIED_DISCLOSURE_CHANNELS = {
     "fellOpen": dict_list,
     "fellOpenProvenanceMissing": str_list,
     "seatMapUnavailable": str_list,
@@ -133,7 +133,7 @@ def declared_disclosures(entry):
     if not isinstance(entry, dict):
         entry = {}
     out = {}
-    for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
+    for chan, shape_ok in CARRIED_DISCLOSURE_CHANNELS.items():
         value = entry.get(chan)
         if not value:
             continue
@@ -501,7 +501,7 @@ def build_degraded_prose(state, form, journal=None):
 __all__ = (
     "RECEIPT_FORM_CERTIFIED",
     "ROUND_ENTRY_KEY_FORMS",
-    "RESUMABLE_DISCLOSURE_CHANNELS",
+    "CARRIED_DISCLOSURE_CHANNELS",
     "VENDOR_SOURCE_DEFAULTED",
     "str_list",
     "dict_list",

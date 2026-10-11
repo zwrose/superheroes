@@ -321,7 +321,7 @@ _round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
 _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
-RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
+CARRIED_DISCLOSURE_CHANNELS = receipt_disclosures.CARRIED_DISCLOSURE_CHANNELS
 _str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
@@ -460,28 +460,28 @@ OWNER_GATE_PHASES = (P_JUDGMENT, P_STALL)
 
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
-# must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
+# must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
 # one home.
 SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 
 # Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
-# Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
+# Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt`
 # share the same one home.
 ORDER_EMISSION_DISCLOSURE_CHANNELS = (
     "orderVendorProvenanceGaps", "priorCommentsUnavailable", "gateGuidanceRowCarried",
 )
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
-# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+# also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
-# not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
+# not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
 # and `build_receipt` share the same one home.
 FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 
 # Per-round disclosure channels `_fold_judgment` records (not `_fold_panel`). Each name here must
-# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+# also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
@@ -4988,7 +4988,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         # (`_declared_disclosures` narrowed by the form gate) — same as the producer.
         # `verifyPasses` emits above (form-gated, always-emit when permitted).
         disclosures = _receipt_round_disclosures(rec, form, state)
-        for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+        for chan in CARRIED_DISCLOSURE_CHANNELS:
             if chan == "verifyPasses":
                 continue
             if chan in disclosures:
