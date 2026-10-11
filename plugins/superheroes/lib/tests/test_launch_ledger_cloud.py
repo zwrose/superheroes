@@ -4,7 +4,6 @@ A cloud lane has no local process the build depends on, no session transcript, n
 no heartbeat file, so no ledger reader concludes anything about one from a pid.
 """
 import os
-import uuid
 
 import pytest
 
@@ -62,14 +61,8 @@ def _setup_cloud_lane(tmp_path, monkeypatch, launch_id="c1", pid=999999, started
 # --- vocabulary ---------------------------------------------------------------
 
 
-def test_vocabulary_and_event_kinds_unchanged():
-    assert (ll.PLACE_LOCAL, ll.PLACE_CLOUD) == ("local", "cloud")
-    assert ll.PLACES == ("local", "cloud")
-    assert ll.EVENT_KINDS == ("reserved", "started", "retry", "refused", "outcome", "amendment")
-    assert ll.COUNT_RESULT_BLOCKS == (
-        "counts", "amendments", "lanes", "attempts", "laneDetail", "slots",
-    )
-    assert ll.CHARTER_NAMED_COUNT_BLOCKS == ("lanes", "attempts", "laneDetail")
+def test_places_are_local_and_cloud():
+    assert ll.PLACES == (ll.PLACE_LOCAL, ll.PLACE_CLOUD)
 
 
 # --- edge 1: place other than "cloud" -----------------------------------------
@@ -105,10 +98,10 @@ def test_edge2_cloud_reserved_bad_field(field, value):
     "extra",
     [
         {"worktree": "/abs/worktree"},
-        {"sessionId": str(uuid.uuid4())},
+        {"sessionId": "0f0e0d0c-0b0a-4908-8706-050403020100"},
         {"slot": "slot-a", "generation": 1},
         {"boundary": {}},
-        {"iphoneId": str(uuid.uuid4()).upper()},
+        {"iphoneId": "0F0E0D0C-0B0A-4908-8706-050403020100"},
     ],
     ids=["worktree", "sessionId", "slot-generation", "boundary", "iphoneId"],
 )

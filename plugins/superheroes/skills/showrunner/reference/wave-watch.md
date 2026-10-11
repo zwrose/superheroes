@@ -203,7 +203,8 @@ armed.
 A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no pid to probe and no transcript, so it
 takes none of the checks below. The watcher reads its activity on GitHub instead: the newest of its
 issue's last update, the last update of a PR that closes the issue, and the last commit on a branch
-whose name carries the issue number. It makes one request per tick, at most once a minute, and only
+whose name carries the issue number. It makes one request per tick, no more often than
+`CLOUD_ACTIVITY_POLL_SECONDS` in `lib/wave_watch.py` allows, and only
 while a cloud lane is live. A cloud lane quiet past `LIVENESS_QUIET_WINDOW_SECONDS`, counted from the
 later of its start and its last activity, is `lane-stale`. Its entry carries `place: "cloud"` and
 `activityAgeSeconds` in place of `transcriptAgeSeconds`.
