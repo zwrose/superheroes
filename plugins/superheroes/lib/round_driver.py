@@ -5994,25 +5994,24 @@ def _persist_fix_fold_head_sha(session_dir, state, head):
 
 
 def _verified_head_at_fold(session_dir, state):
-    """The head the next panel's diff is derived from, resolved before the verify fold. Records nothing.
+    """Resolve the head the next panel's diff is derived from and persist it as the session's fix-fold head.
 
     Called at the submit chokepoint and by the in-process leg, never from inside the fold.
-    Returns (head, error). With a session dir this is the fixer fold's resolver, run read-only: it
-    writes nothing into state or ``meta.json``. WITHOUT a session dir (`run_loop`'s in-process leg)
-    there is NO fallback: `config["headSha"]` is the session-SETUP head and could name a head a
-    fixer seam had already moved past, so it returns an error and no head."""
+    Returns (head, error). With a session dir this is the fixer fold's resolver: the resolved head
+    is written into state config and ``meta.json`` as the fix-fold head, the same head orders
+    emission anchors to. WITHOUT a session dir (`run_loop`'s in-process leg) there is NO fallback:
+    `config["headSha"]` is the session-SETUP head and could name a head a fixer seam had already
+    moved past, so it returns an error and no head."""
     if session_dir:
-        return _resolve_fix_fold_head_sha(session_dir, state, persist=False)
+        return _resolve_fix_fold_head_sha(session_dir, state)
     return (None, "verified head: no session dir — the in-process leg resolves no verified head")
 
 
-def _resolve_fix_fold_head_sha(session_dir, state, persist=True):
+def _resolve_fix_fold_head_sha(session_dir, state):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
-    Returns (head_sha, error). With ``persist`` (the default) a resolved head is written into
-    state config and ``meta.json`` so a resumed session reads the same value rather than
-    re-deriving a now-different one; ``persist=False`` follows the same branches and writes
-    nothing."""
+    Returns (head_sha, error). On success the head is persisted so a resumed session reads the
+    same value rather than re-deriving a now-different one."""
     if _fix_batch_paths(state):
         repo_root = _resolve_repo_root(session_dir, state)
         if not repo_root:
@@ -6020,8 +6019,7 @@ def _resolve_fix_fold_head_sha(session_dir, state, persist=True):
         head = store_core.run_git(repo_root, "rev-parse", "HEAD")
         if not head:
             return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
-        if persist:
-            _persist_fix_fold_head_sha(session_dir, state, head)
+        _persist_fix_fold_head_sha(session_dir, state, head)
         return head, None
     cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
     persisted = cfg.get(FIX_FOLD_HEAD_KEY)
@@ -6030,7 +6028,7 @@ def _resolve_fix_fold_head_sha(session_dir, state, persist=True):
     meta = _session_meta(session_dir)
     persisted = meta.get(FIX_FOLD_HEAD_KEY)
     if isinstance(persisted, str) and persisted:
-        if persist and isinstance(cfg, dict):
+        if isinstance(cfg, dict):
             cfg[FIX_FOLD_HEAD_KEY] = persisted
             state["config"] = cfg
         return persisted, None
@@ -6040,8 +6038,7 @@ def _resolve_fix_fold_head_sha(session_dir, state, persist=True):
     head = store_core.run_git(repo_root, "rev-parse", "HEAD")
     if not head:
         return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
-    if persist:
-        _persist_fix_fold_head_sha(session_dir, state, head)
+    _persist_fix_fold_head_sha(session_dir, state, head)
     return head, None
 
 

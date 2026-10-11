@@ -8450,7 +8450,7 @@ def test_verify_fold_legacy_position_unresolved_head_unknown_surface_parks_under
     assert "head unresolved" in state["certification"]["reason"]
 
 
-def test_verify_head_lookup_writes_nothing(tmp_path):
+def test_verify_head_lookup_persists_the_session_head(tmp_path):
     repo, head = _git_repo_with_head(tmp_path)
     persisted = "c" * 40
     cases = (
@@ -8464,14 +8464,27 @@ def test_verify_head_lookup_writes_nothing(tmp_path):
         state = RD.new_state(_cfg())
         if batch:
             state["_fixBatch"] = batch
-        with open(meta_path, "rb") as fh:
-            meta_before = fh.read()
-        config_before = json.dumps(state["config"], sort_keys=True)
         resolved, error = RD._verified_head_at_fold(session_dir, state)
         assert (resolved, error) == (expected, None), label
-        assert json.dumps(state["config"], sort_keys=True) == config_before, label
-        with open(meta_path, "rb") as fh:
-            assert fh.read() == meta_before, label
+        assert RD._session_certified_head(session_dir, state) == expected, label
+        with open(meta_path, encoding="utf-8") as fh:
+            assert json.load(fh)[RD.FIX_FOLD_HEAD_KEY] == expected, label
+
+
+def test_verify_head_lookup_follows_a_moved_repo_head(tmp_path):
+    repo, h1 = _git_repo_with_head(tmp_path)
+    session_dir = _head_lookup_session(tmp_path, repo, **{RD.FIX_FOLD_HEAD_KEY: h1})
+    subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "--allow-empty", "-q", "-m", "moved"], check=True)
+    h2 = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], check=True,
+                        capture_output=True, text=True).stdout.strip()
+    assert h2 != h1
+    state = RD.new_state(_cfg())
+    state["_fixBatch"] = [{"file": "a.py"}]
+    assert RD._verified_head_at_fold(session_dir, state) == (h2, None)
+    assert RD._session_certified_head(session_dir, state) == h2
+    with open(os.path.join(session_dir, RD.round_records.META_FILE), encoding="utf-8") as fh:
+        assert json.load(fh)[RD.FIX_FOLD_HEAD_KEY] == h2
 
 
 def test_verify_head_lookup_without_session_dir_resolves_nothing():
