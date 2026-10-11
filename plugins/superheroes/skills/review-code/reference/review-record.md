@@ -23,7 +23,7 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `pr`: the PR number. `sessionId`: this review session. `lane` and `laneReason`: the lane and why.
 - `finalCommit`: the commit the review ended on. `ci`: CI on it, as you saw it.
 - `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool),
-  `ownerWord` (`{words, where}`). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
+  `ownerWord` (`{words, where}`), `commit` (the commit that reviewer reviewed, when it is not the final commit; a row that names none is judged against the final commit). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
   reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
@@ -73,6 +73,9 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 The record says reviewed only when all five hold: CI is green on the PR's final commit; every
 finding in the account has an outcome and a reason; no planned review is missing and a planned
 reviewer ran; no raw output file is unread; and the final commit was read from the PR.
+At least one planned reviewer's run must cover the final commit. A reviewer listed for an earlier
+commit counts as run only for that commit, and the record shows which commit it covered; a head that
+moves after the last review round still reads not reviewed.
 Any finding short of that is listed in what is left. `makers`, `notIndependent` and `ownerWord` are shown as given, never checked, and never change "reviewed".
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.

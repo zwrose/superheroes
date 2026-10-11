@@ -207,6 +207,7 @@ def _validate(a):
         for k in ("planned", "ran"):
             chk(isinstance(r.get(k), bool), f"reviewers[{i}].{k}")
         chk(sn(r.get("runDir")), f"reviewers[{i}].runDir")
+        chk(sn(r.get("commit")), f"reviewers[{i}].commit")
         chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
     makers = a.get("makers")
@@ -259,18 +260,33 @@ def _ci(rd, repo, sha):
     return {"state": ci_state(*data), "sha": sha, "source": "GitHub checks"}
 
 
-def _lane(a, rd, meta):
-    m = rd["lane_marker"](a.get("repoRoot"))
-    if isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full" \
-            and m.get("branch") == m.get("currentBranch") and meta \
-            and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
-        return {"value": "full", "source": "build lane marker", "reason": None}
+def _lane_call(a, rd, meta):
+    """The first lane-call line in the PR's closing issues' bodies, then the PR body, as (match, source)."""
     if meta:
         texts = [(rd["issue_body"](n, a["repo"]), "issue lane call") for n in meta["issues"]]
         for body, source in texts + [(meta["body"], "PR lane call")]:
             hit = _LANE_RE.search(body or "")
             if hit:
-                return {"value": hit.group(1), "source": source, "reason": hit.group(2).strip() or None}
+                return hit, source
+    return None, None
+
+
+def _lane(a, rd, meta):
+    m = rd["lane_marker"](a.get("repoRoot"))
+    hit, source = _lane_call(a, rd, meta)
+    if isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full" \
+            and m.get("branch") == m.get("currentBranch") and meta \
+            and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
+        # The marker decides the value only; a reason is shown with where it came from, never as a fact code holds.
+        if hit and hit.group(2).strip():
+            reason, reason_source = hit.group(2).strip(), source
+        elif a["laneReason"]:
+            reason, reason_source = a["laneReason"], SESSION
+        else:
+            reason, reason_source = None, None
+        return {"value": "full", "source": "build lane marker", "reason": reason, "reasonSource": reason_source}
+    if hit:
+        return {"value": hit.group(1), "source": source, "reason": hit.group(2).strip() or None}
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
 
 
@@ -301,6 +317,8 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
     out["family"] = _family(r["vendor"], r["model"])
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
     out["findingsCoverage"] = SESSION
+    named = isinstance(r.get("commit"), str) and bool(r["commit"])
+    target = r["commit"] if named else head
     if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
         out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
         if r["ran"]:
@@ -310,23 +328,25 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         seen = rec.get("viewHeadSha") if isinstance(rec, dict) else None
         graded = isinstance(rec, dict) and rec.get("graded") is True
         review = isinstance(rec, dict) and rec.get("runKind") == session_contract.RUN_KIND_REVIEW
-        if isinstance(seen, str) and seen and seen == head and graded and review:
+        # A run is credited against exactly one commit: the one the row names, else the final commit.
+        where = f"the commit this reviewer was listed for {_short(target)}" if named else "the final commit"
+        if isinstance(seen, str) and seen and seen == target and graded and review:
             out.update(ran="engine-record", observation=rec.get("observation"))
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
-            elif isinstance(seen, str) and seen and seen != head:
-                note = f"the run record covers {_short(seen)}, not the final commit {_short(head)}"
+            elif isinstance(seen, str) and seen and seen != target:
+                note = f"the run record covers {_short(seen)}, not " + (where if named else f"{where} {_short(head)}")
             elif isinstance(seen, str) and seen and not review:
-                note = "the run on the final commit was not a completed review run"
+                note = f"the run on {where} was not a completed review run"
             elif isinstance(seen, str) and seen:
-                note = "the run on the final commit did not complete a review (forfeit or failure)"
+                note = f"the run on {where} did not complete a review (forfeit or failure)"
             else:
                 note = "the run record names no commit"
             out.update(ran="not-run", runNote=note)
             if r["ran"]:
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
-    elif r["ran"] and reported_commit and reported_commit == head:
+    elif r["ran"] and (named or (reported_commit and reported_commit == head)):
         out["ran"] = "reported-by-session"
     elif r["ran"]:
         note = (f"the session reported a review of {_short(reported_commit)}, not the final commit {_short(head)}"
@@ -335,6 +355,8 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
         out["ran"] = "not-run"
+    out["commit"] = target if named else None
+    out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
     if isinstance(r.get("notIndependent"), bool):
         out["notIndependent"] = r["notIndependent"]
     if isinstance(r.get("ownerWord"), dict):
@@ -401,8 +423,11 @@ def _status(rec, unread=(), finding_lines=()):
     lines += finding_lines
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
-    if not any(v["planned"] and v["ran"] != "not-run" for v in rec["reviewers"]):
+    ran = [v for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run"]
+    if not ran:
         lines.append("no planned reviewer ran")
+    elif not any(v["coversFinalCommit"] for v in ran):
+        lines.append(f"no planned reviewer's run covers the final commit {s7(fc['sha'])}")
     return ("not-reviewed" if lines else "reviewed"), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
@@ -606,7 +631,9 @@ def render(record):
     for v in r["reviewers"]:
         label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
             v["ran"], "did not run")
-        word = v.get("ownerWord")
+        if v["ran"] != "not-run" and v.get("commit") and v["commit"] != r["finalCommit"]["sha"]:
+            label += f" on {v['commit'][:7]}"
+        word =v.get("ownerWord")
         who.append(f"- {v['name']}: {label}"
                    + ("; not independent of the makers" if v.get("notIndependent") else "")
                    + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
@@ -621,7 +648,8 @@ def render(record):
         f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
         + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
         ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner.",
-        f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "") + ".",
+        f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
+        + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         "Reviewers:", *who])
