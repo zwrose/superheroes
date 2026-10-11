@@ -44,7 +44,6 @@ CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
-_CAPPED = ("capped-with-open-critical", "capped-with-open-blocker")
 
 
 def _int(v):
@@ -282,7 +281,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
         makers.append({"family": fam, "source": "review loop fixer"})
     last = decisions[-1] if decisions else {}
-    capped = state["terminal"] in _CAPPED or (state["terminal"] == "halted" and last.get("kind") == "round-ceiling")
+    cause = round_certification.map_terminal_cause(state["terminal"], last.get("kind")) or {}
+    capped = round_certification.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
