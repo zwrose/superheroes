@@ -1038,3 +1038,165 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C6 size split into C6 and C6b (advisor craft call at the 600 bar): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv7",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 7
+ },
+ "override": "seven consumer lines gain C6b but only R8's and R11's first paragraphs change; light weight is enough for a re-allocation. Children counts C6, C6b and C7 (C7 now sits on C6b); the other child copies change only their layer count.",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "dod-adequacy"
+  },
+  {
+   "finding": "code-002",
+   "lens": "collisions"
+  },
+  {
+   "finding": "code-003",
+   "lens": "collisions"
+  }
+ ],
+ "invocation": "inv7",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "spec",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv7",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "C6b live-run DoD grades FR-21's second acceptance (builder note public on the fixture issue in a public repository); #1777 synced; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R11's TRANSITION clause names the split layers carrying their parent's note (C4b, C5b, C6b); epic quote equal; round 2 clean",
+   "finding": "code-002",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "epic closure evidence cites C6b for the ready-PR run through the pass; round 2 clean",
+   "finding": "code-003",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv7",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C6",
+   "result": "pass"
+  },
+  {
+   "child": "C6b",
+   "result": "pass"
+  },
+  {
+   "child": "C7",
+   "result": "pass"
+  }
+ ]
+}
+```
