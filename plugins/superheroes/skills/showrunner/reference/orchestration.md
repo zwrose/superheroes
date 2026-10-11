@@ -91,9 +91,10 @@ lane's `started` record, and returns once the session exists. It does not wait f
   commit is the premise's base commit (`launch-cloud-head-not-base`) and a remote-tracking branch
   contains it (`launch-cloud-head-not-on-remote`). The launcher checks both before it reserves the
   lane and again just before it runs the command. When the second check fails, the launcher starts
-  nothing and ends the lane. A result whose reason begins `terminalization-failed:` means the lane
-  could not be ended and is still live, so reconcile it before the issue is launched again. The
-  launcher never pushes, so the launching checkout sits at the base commit the premise names.
+  nothing and ends the lane. A result whose reason begins `terminalization-failed:` means the launcher
+  could not confirm it ended the lane. Read the ledger to see whether the lane is ended or still
+  live before you reconcile it or launch the issue again. The launcher never pushes, so the
+  launching checkout sits at the base commit the premise names.
 - The launcher runs the command from its checkout, which must be a folder the platform's command line
   already trusts. In an untrusted folder the command waits on its trust question until the launch's
   time limit, and the launch reads `cloud-session-unconfirmed`.
