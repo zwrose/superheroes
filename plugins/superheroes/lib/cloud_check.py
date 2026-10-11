@@ -257,35 +257,27 @@ def setup_text(cwd, *, project_name=None, root=None, env=None, now=None):
             "setupText": composed["text"], "header": composed["header"]}
 
 
-_IGNORED_ARTIFACTS = frozenset({".DS_Store"})
-
-
 def repo_calibration_stamp(cwd):
-    """The stamp of the calibration the repository itself carries: every regular file under the
-    repository's calibration directory, keyed by path relative to it, with the cloud-builds setting
-    left out of the core file. `none` when the repository has no such directory."""
+    """The stamp of the calibration the repository itself carries: the calibration files directly
+    under the repository's calibration directory (the `.md` layers, as the setup-text writer
+    enumerates them in `cloud_setup_text._store_files`), keyed by name, with the cloud-builds
+    setting left out of the core file. Subdirectories (the Guardian sweep outputs), lock files and
+    editor or OS artifacts are not calibration and never change it. `none` when the repository has
+    no such directory."""
     core_rel = core_md.in_repo_core_rel_path()
     directory = os.path.join(core_md._repo_root(cwd), os.path.dirname(core_rel))
     if not os.path.isdir(directory):
         return "none"
-
-    def fail(error):
-        raise error
-
     files = {}
-    for top, _dirs, names in os.walk(directory, onerror=fail):
-        for name in names:
-            # axis: machine artifacts the repository ignores never reach a cloud checkout
-            if name in _IGNORED_ARTIFACTS:
-                continue
-            path = os.path.join(top, name)
-            if not os.path.isfile(path):
-                continue
-            rel = os.path.relpath(path, directory).replace(os.sep, "/")
-            with open(path, "rb") as fh:
-                data = fh.read()
-            files[rel] = cloud_setup_text._without_setting(data) \
-                if rel == os.path.basename(core_rel) else data
+    # axis: only the calibration layers count; sweep outputs and machine artifacts never reach the stamp
+    for name in sorted(os.listdir(directory)):
+        path = os.path.join(directory, name)
+        if not name.endswith(".md") or not os.path.isfile(path):
+            continue
+        with open(path, "rb") as fh:
+            data = fh.read()
+        files[name] = cloud_setup_text._without_setting(data) \
+            if name == os.path.basename(core_rel) else data
     return cloud_setup.calibration_stamp(files)
 
 
@@ -441,6 +433,20 @@ def _switch_off(cwd, account, root, project_name, set_fn):
     return True, isinstance(got, dict) and got.get("action") in ("written", "noop")
 
 
+def _fail_closed(cwd, who, root, name, set_fn, environment, failed, now):
+    """(switched off, failed parts, marker written). The marker goes down before the setting is
+    touched, carrying the parts known so far; a switch-off that then fails adds `setting` and the
+    marker is rewritten once with the final parts. The marker is reported written only when the one
+    on disk carries the final parts; a failed rewrite leaves the first marker in place."""
+    failed = list(failed)
+    marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+    was_on, off = _switch_off(cwd, who, root, name, set_fn)
+    if was_on and not off:
+        failed.append("setting")
+        marked = marked and _write_failed_check(cwd, who, root, environment, failed, now)
+    return off, failed, marked
+
+
 def _utc_stamp(now):
     moment = now if isinstance(now, datetime.datetime) else datetime.datetime.fromtimestamp(
         time.time() if now is None else now, datetime.timezone.utc)
@@ -554,10 +560,10 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         found = _find_report(line, nonce)
         obj = found if _readable(found, nonce) else None
     if obj is None:
-        was_on, off = _switch_off(cwd, who, root, name, set_fn)
-        failed = ["unread"] + (["setting"] if was_on and not off else [])
+        # axis: the marker is persisted before the setting changes, so an interruption leaves it
         # axis: an unread report leaves a marker a later reader can see, and never touches the record
-        marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+        off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment,
+                                           ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
                     ("versionMatches", "calibrationMatches", "reviewerAnswered",
                      "environmentMatches")),
@@ -596,11 +602,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
 
     if failed:
         # axis: a failed check leaves cloud builds off
-        was_on, off = _switch_off(cwd, who, root, name, set_fn)
-        if was_on and not off:
-            failed.append("setting")
+        # axis: the marker is persisted before the setting changes, so an interruption leaves it
         # axis: a failed check leaves a marker a later reader can see, and never touches the record
-        marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+        off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment, failed, now)
         return {"action": "failed", "results": results, "failedParts": failed,
                 "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
                 "message": _failed_message(failed, off, obj["pluginVersion"],

@@ -340,7 +340,7 @@ def test_setup_text_passes_a_compose_refusal_through(tmp_path, monkeypatch):
 def test_report_line_round_trips_through_judge(tmp_path):
     local, cloud = _pair(tmp_path)
     obj = _cloud_report(cloud)
-    assert obj["schema"] == "cloud-check-report/1" and obj["nonce"] == NONCE
+    assert obj["schema"] == CC.REPORT_SCHEMA and obj["nonce"] == NONCE
     assert obj["environment"] == ENV_ID and obj["pluginVersion"] == VERSION
     assert obj["placedStamp"] == obj["stampFile"] == local.stamp
     line = CC.report_line(obj)
@@ -378,7 +378,7 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
                     confirm_fn=raising)
     # a session with no store and no calibration directory has nothing placed and nothing carried
     assert obj == {
-        "schema": "cloud-check-report/1", "nonce": None, "environment": None,
+        "schema": CC.REPORT_SCHEMA, "nonce": None, "environment": None,
         "pluginVersion": None, "placedStamp": "none", "stampFile": None, "repoStamp": "none",
         "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                          "passLapses": None, "reason": "confirm-raised"}}
@@ -773,14 +773,13 @@ def test_judge_accepts_an_absent_stamp_file_only_when_nothing_was_placed(tmp_pat
     assert _record_state(placed_local) == "none"
 
 
-def test_repo_calibration_stamp_covers_every_file_and_ignores_the_setting(tmp_path):
+def test_repo_calibration_stamp_covers_every_layer_file_and_ignores_the_setting(tmp_path):
     w = _build(tmp_path, mode_registry.IN_REPO)
     directory = os.path.join(w.cwd, os.path.dirname(core_md.in_repo_core_rel_path()))
     before = CC.repo_calibration_stamp(w.cwd)
     _turn_on(w)
     assert CC.repo_calibration_stamp(w.cwd) == before
-    os.makedirs(os.path.join(directory, "sub"))
-    with open(os.path.join(directory, "sub", "extra.md"), "w") as fh:
+    with open(os.path.join(directory, "extra.md"), "w") as fh:
         fh.write("extra\n")
     assert CC.repo_calibration_stamp(w.cwd) not in (before, "none")
     bare = tmp_path / "bare"
@@ -795,6 +794,22 @@ def test_repo_calibration_stamp_ignores_a_ds_store(tmp_path):
     before = CC.repo_calibration_stamp(w.cwd)
     with open(os.path.join(directory, ".DS_Store"), "wb") as fh:
         fh.write(b"\x00junk")
+    assert CC.repo_calibration_stamp(w.cwd) == before
+
+
+def test_repo_calibration_stamp_ignores_a_guardian_sweep_output(tmp_path):
+    w = _build(tmp_path, mode_registry.IN_REPO)
+    directory = os.path.join(w.cwd, os.path.dirname(core_md.in_repo_core_rel_path()))
+    before = CC.repo_calibration_stamp(w.cwd)
+    sweep = os.path.join(directory, "guardian")
+    os.makedirs(sweep)
+    for name, body in (("report.md", "# sweep\n"), ("latest.json", "{}"), ("vitals.jsonl", "{}\n"),
+                       ("ledger.md", "ledger\n")):
+        with open(os.path.join(sweep, name), "w") as fh:
+            fh.write(body)
+    with open(os.path.join(directory, "core.md.lock"), "w") as fh:
+        fh.write("1")
+    # detector: a Guardian sweep output (or lock file) that changes the fingerprint goes red here
     assert CC.repo_calibration_stamp(w.cwd) == before
 
 
@@ -910,7 +925,7 @@ def test_judge_unread_message(tmp_path):
 # --- the failed-check marker ---------------------------------------------------------------
 
 FAILED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-DAMAGED = {"schema": "cloud-check-failed/1", "failedAt": None, "failedParts": [],
+DAMAGED = {"schema": CC.FAILED_CHECK_SCHEMA, "failedAt": None, "failedParts": [],
            "environment": None, "damaged": True}
 
 
@@ -947,7 +962,7 @@ def test_a_failed_check_writes_the_marker_and_leaves_the_record_alone(tmp_path):
     assert result["markerWritten"] is True
     marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
     assert set(marker) == {"schema", "account", "environment", "failedAt", "failedParts"}
-    assert marker["schema"] == "cloud-check-failed/1" and marker["account"] == ACCOUNT
+    assert marker["schema"] == CC.FAILED_CHECK_SCHEMA and marker["account"] == ACCOUNT
     assert marker["environment"] == ENV_ID and marker["failedParts"] == ["version"]
     assert FAILED_AT_RE.match(marker["failedAt"]) and marker["failedAt"] == "2026-10-10T12:00:00Z"
     with open(_marker_path(local), encoding="utf-8") as fh:
@@ -977,6 +992,47 @@ def test_a_marker_lists_the_setting_part_after_a_switch_off_that_failed(tmp_path
     # detector: a marker written before the switch-off settled its parts goes red here
     assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == [
         "version", "setting"]
+
+
+def test_the_marker_exists_when_the_switch_off_is_attempted(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    seen = []
+
+    def set_fn(*a, **k):
+        seen.append(CC.read_failed_check(local.cwd, ACCOUNT, local.root))
+        return {"action": "written"}
+
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=set_fn)
+    # detector: a switch-off attempted before the marker is on disk goes red here
+    assert len(seen) == 1 and seen[0]["failedParts"] == ["version"]
+    assert result["markerWritten"] is True and result["failedParts"] == ["version"]
+    seen.clear()
+    unread = _judge(local, "no report here", set_fn=set_fn)
+    assert len(seen) == 1 and seen[0]["failedParts"] == ["unread"]
+    assert unread["markerWritten"] is True
+
+
+def test_a_failed_switch_off_rewrites_the_marker_and_a_failed_rewrite_keeps_the_first(
+        tmp_path, monkeypatch):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    refuse = lambda *a, **k: {"action": "refused", "reason": "profile-absent"}  # noqa: E731
+    real_replace = os.replace
+    writes = []
+
+    def replace(src, dst, *a, **k):
+        if str(dst).endswith(CC.FAILED_CHECK_SUFFIX):
+            writes.append(1)
+            if len(writes) > 1:
+                raise OSError("disk")
+        return real_replace(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "replace", replace)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"), set_fn=refuse)
+    # detector: markerWritten true while the disk marker lacks the final parts goes red here
+    assert result["failedParts"] == ["version", "setting"] and result["markerWritten"] is False
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == ["version"]
 
 
 def test_a_passing_check_removes_the_marker_and_writes_the_record(tmp_path):
@@ -1096,7 +1152,7 @@ def test_read_failed_check_reads_the_damaged_shape(tmp_path):
     assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) is None
     os.makedirs(os.path.dirname(path), exist_ok=True)
     for body in ("not json", json.dumps({"schema": "cloud-check-failed/2", "failedParts": ["x"]}),
-                 json.dumps(["cloud-check-failed/1"]), ""):
+                 json.dumps([CC.FAILED_CHECK_SCHEMA]), ""):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(body)
         # detector: a marker that exists but does not read as ours must not come back as absent
@@ -1105,7 +1161,7 @@ def test_read_failed_check_reads_the_damaged_shape(tmp_path):
     os.mkdir(path)
     assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) == DAMAGED
     os.rmdir(path)
-    good = {"schema": "cloud-check-failed/1", "account": ACCOUNT, "environment": ENV_ID,
+    good = {"schema": CC.FAILED_CHECK_SCHEMA, "account": ACCOUNT, "environment": ENV_ID,
             "failedAt": "2026-10-10T12:00:00Z", "failedParts": ["version"]}
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(good))
@@ -1366,7 +1422,7 @@ def test_start_makes_a_fresh_nonce_when_none_is_given(tmp_path):
 
 def _expected_prompt(issue=None):
     fallback_object = (
-        {"schema": "cloud-check-report/1", "nonce": NONCE, "environment": None,
+        {"schema": CC.REPORT_SCHEMA, "nonce": NONCE, "environment": None,
          "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
          "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                           "passLapses": None, "reason": "plugin-missing"}})
