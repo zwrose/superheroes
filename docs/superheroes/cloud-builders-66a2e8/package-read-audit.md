@@ -720,3 +720,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "ruling 37 b restates substantive amendment 4 (the owner picks the environment in Claude Code's picker; the plugin reads the id) and the C4/C4b split: touched-parts re-read before injection",
+ "ceiling": 2,
+ "invocation": "inv5",
+ "kind": "invocation",
+ "measurables": {
+  "children": 2,
+  "registerEntries": 2
+ },
+ "override": null,
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
