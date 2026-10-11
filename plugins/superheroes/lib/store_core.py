@@ -434,6 +434,18 @@ def derive_identifiers(cwd):
     return ident
 
 
+# The calibration layout inside a project store dir `<store_root>/projects/<key>/`. The writers
+# (mode_registry, architect_config) take their filenames from here, so the guard below and the
+# writers cannot drift apart.
+REGISTRY_FILENAME = "registry.json"
+META_FILENAME = "meta.json"
+POLICY_FILENAME = "doc-policy.json"
+CONFIG_DIRNAME = "config"
+PERMISSION_DIRNAME = "permission"
+PERMISSION_RULES_FILENAME = "rules.json"
+_STORE_TOP_FILES = (REGISTRY_FILENAME, META_FILENAME, POLICY_FILENAME)
+
+
 class CalibrationWriteRefused(PermissionError):
     """A calibration file write was attempted in a cloud session (CLAUDE_CODE_REMOTE == "true").
 
@@ -442,26 +454,23 @@ class CalibrationWriteRefused(PermissionError):
 
 
 def is_calibration_path(path):
-    """True when `path` is a calibration file: under a project store dir
-    `<store_root>/projects/<key>/` one of registry.json, meta.json, doc-policy.json,
-    config/*.md or permission/rules.json; or a *.md directly in the in-repo calibration
-    directory (`.claude/superheroes/`). Pure; compares fully resolved paths."""
+    """True when `path` is a calibration file: under a project store dir `<root>/projects/<key>/`
+    one of the registry, meta and doc-policy files, config/*.md or permission/rules.json; or a *.md
+    directly in the in-repo calibration directory (`.claude/superheroes/`). The store root is not
+    consulted: writers take an explicit root, so the layout alone decides. Pure; compares fully
+    resolved paths."""
     real = os.path.realpath(os.path.abspath(path))
     parent, name = os.path.split(real)
     import core_md
     in_repo_dir = os.path.dirname(core_md.in_repo_core_rel_path()).split(os.sep)
     if name.endswith(".md") and parent.split(os.sep)[-len(in_repo_dir):] == in_repo_dir:
         return True
-    import control_plane
-    projects = os.path.join(os.path.realpath(control_plane.store_root()), "projects")
-    if not real.startswith(projects + os.sep):
-        return False
-    parts = real[len(projects) + 1:].split(os.sep)[1:]
-    if len(parts) == 1:
-        return parts[0] in ("registry.json", "meta.json", "doc-policy.json")
-    if len(parts) == 2:
-        return ((parts[0] == "config" and parts[1].endswith(".md"))
-                or parts == ["permission", "rules.json"])
+    parts = real.split(os.sep)
+    if len(parts) >= 3 and parts[-3] == "projects" and parts[-1] in _STORE_TOP_FILES:
+        return True
+    if len(parts) >= 4 and parts[-4] == "projects":
+        return ((parts[-2] == CONFIG_DIRNAME and parts[-1].endswith(".md"))
+                or (parts[-2] == PERMISSION_DIRNAME and parts[-1] == PERMISSION_RULES_FILENAME))
     return False
 
 

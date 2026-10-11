@@ -220,3 +220,24 @@ def test_is_calibration_path_store_rules(tmp_path, monkeypatch, rel, expected):
     store.mkdir()
     monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(store))
     assert sc.is_calibration_path(str(store / rel)) is expected
+
+
+def test_explicit_store_root_differing_from_the_ambient_root_is_still_calibration(
+        tmp_path, monkeypatch):
+    ambient = tmp_path / "ambient"
+    ambient.mkdir()
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(ambient))
+    explicit = tmp_path / "explicit"
+    assert sc.is_calibration_path(str(explicit / "projects/k/config/core.md")) is True
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    with pytest.raises(sc.CalibrationWriteRefused):
+        sc.atomic_write(str(explicit / "projects/k/registry.json"), "{}")
+    assert not (explicit / "projects").exists()
+
+
+def test_guard_layout_names_are_the_writers_names():
+    import architect_config as ac
+    assert mr.REGISTRY_FILENAME == sc.REGISTRY_FILENAME
+    assert mr.META_FILENAME == sc.META_FILENAME
+    assert mr.CONFIG_DIRNAME == sc.CONFIG_DIRNAME
+    assert os.path.basename(ac.policy_path("/x", "/r")) == sc.POLICY_FILENAME

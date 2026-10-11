@@ -1239,8 +1239,15 @@ def compose_launch(
         version = plugin_version()
         if version is None:
             return _fail("compose-plugin-version-unreadable")
-        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n\n%s" % (
-            _WORKHORSE_CMD, issue, version, rulings_block,
+        base_commit = premise.get("baseCommit") if isinstance(premise, dict) else None
+        if not isinstance(base_commit, str) or not _HEX40.match(base_commit):
+            return _fail("compose-base-commit-invalid")
+        if not isinstance(cloud_environment, str) or not cloud_environment.strip():
+            return _fail("compose-cloud-environment-missing")
+        # The cloud intake (cloud_builder.parse_launch) reads these two lines back.
+        prompt = ("%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n"
+                  "Cloud environment: %s\nBase commit: %s\n\n%s") % (
+            _WORKHORSE_CMD, issue, version, cloud_environment, base_commit, rulings_block,
         )
     else:
         prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)

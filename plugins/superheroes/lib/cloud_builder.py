@@ -232,9 +232,12 @@ def ensure_history(repo_root, *, main_branch="main", env=None, run=None):
 
 
 def github_channel(gh_probe, tools_write):
-    """The channel the builder can write through: gh when its probe passed, else the session's
-    GitHub tools when the builder's own write through them worked, else none."""
-    if isinstance(gh_probe, dict) and gh_probe.get("ok") is True:
+    """The channel the builder can write through: gh when its probe passed by a sign-in check,
+    else the session's GitHub tools when the builder's own write through them worked, else none.
+    A probe that passed only by a REST read (`channel: "rest"`) proves no write, so it never
+    selects gh."""
+    if (isinstance(gh_probe, dict) and gh_probe.get("ok") is True
+            and gh_probe.get("channel") != "rest"):
         return {"ok": True, "channel": "gh"}
     if tools_write == "ok":
         return {"ok": True, "channel": "tools"}

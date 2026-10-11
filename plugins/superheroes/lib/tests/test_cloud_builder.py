@@ -456,6 +456,23 @@ def test_github_channel_truth_table():
     assert cb.github_channel({"ok": "true"}, "failed") == refused
 
 
+def test_a_rest_read_probe_is_not_proof_of_write():
+    rest = {"tool": "gh auth", "ok": True, "exit": 0, "detail": "", "channel": "rest"}
+    assert cb.github_channel(rest, "ok") == {"ok": True, "channel": "tools"}
+    assert cb.github_channel(rest, "not-tried") == {
+        "ok": False, "channel": None, "reason": "no-github-channel"}
+
+
+def test_the_launchers_cloud_prompt_passes_intake(tmp_path):
+    composed = launcher.compose_launch(
+        ".", 1747, {"baseCommit": SHA}, model="opus", place="cloud",
+        cloud_environment=ENV_ID, session_name="issue-1747-probe")
+    assert composed["ok"] is True, composed
+    parsed = cb.parse_launch(composed["prompt"])
+    assert parsed == {"advisorVersion": composed["pluginVersion"],
+                      "environment": ENV_ID, "baseCommit": SHA}
+
+
 @pytest.mark.parametrize("content", ["{not json", "[1, 2]", "\"ok\"", None])
 def test_e14_malformed_probe_file_reads_as_not_ok(tmp_path, capsys, content):
     path = tmp_path / "probe.json"

@@ -265,14 +265,16 @@ def _compose_cloud(repo, **kwargs):
     return L.compose_launch(repo, 656, _stamped(repo), **kwargs)
 
 
-def test_compose_cloud_prompt_differs_from_local_by_exactly_the_two_place_lines(tmp_path):
+def test_compose_cloud_prompt_differs_from_local_by_exactly_the_place_lines(tmp_path):
     # axis: the prompt differs from the local one by exactly those lines
     repo = _init_repo(tmp_path / "repo")
     local = L.compose_launch(repo, 656, _stamped(repo))
     cloud = _compose_cloud(repo)
     assert local["ok"] is True and cloud["ok"] is True
     version = L.plugin_version()
-    lines = "Place: cloud session\nAdvisor plugin version: %s\n\n" % version
+    lines = ("Place: cloud session\nAdvisor plugin version: %s\n"
+             "Cloud environment: %s\nBase commit: %s\n\n"
+             % (version, ENV_ID, _stamped(repo)["baseCommit"]))
     assert lines in cloud["prompt"]
     assert cloud["prompt"].replace(lines, "", 1) == local["prompt"]
     rulings = local["doctrine"]["rulingsBlock"]

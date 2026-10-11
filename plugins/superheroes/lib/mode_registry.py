@@ -21,9 +21,9 @@ GLOBAL = "global"
 # so the backfill guard below and mode_migrate share one source of truth — a rename can't
 # silently disable the guard, and neither module imports the other for it (no cycle).
 MIGRATION_JOURNAL = "migration-journal.json"
-REGISTRY_FILENAME = "registry.json"
-META_FILENAME = "meta.json"
-CONFIG_DIRNAME = "config"
+REGISTRY_FILENAME = store_core.REGISTRY_FILENAME
+META_FILENAME = store_core.META_FILENAME
+CONFIG_DIRNAME = store_core.CONFIG_DIRNAME
 REBIND_KIND = "rebind"
 
 
