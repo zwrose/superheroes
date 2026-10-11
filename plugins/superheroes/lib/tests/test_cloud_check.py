@@ -96,7 +96,7 @@ def _cloud_report(cloud, **over):
 
 
 def _judge(local, obj, **kw):
-    text = obj if isinstance(obj, str) else CC.report_line(obj)
+    text = CC.report_line(obj) if isinstance(obj, dict) else obj
     args = dict(environment=ENV_ID, nonce=NONCE, account=ACCOUNT, root=local.root, env=local.env,
                 now=NOW, project_name="demo")
     args.update(kw)
@@ -347,7 +347,9 @@ def test_report_line_round_trips_through_judge(tmp_path):
     assert obj["placedStamp"] == obj["stampFile"] == local.stamp
     line = CC.report_line(obj)
     assert line.startswith("SUPERHEROES-CLOUD-CHECK {") and "\n" not in line
-    assert line == "SUPERHEROES-CLOUD-CHECK " + json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    carried = dict(obj, digest=CC.report_digest(obj))
+    assert line == "SUPERHEROES-CLOUD-CHECK " + json.dumps(carried, sort_keys=True,
+                                                         separators=(",", ":"))
     result = _judge(local, line)
     assert result["action"] == "passed" and result["failedParts"] == []
     assert result["results"] == {"versionMatches": True, "calibrationMatches": True,
@@ -384,7 +386,7 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
                          "passLapses": None, "reason": "confirm-raised"}}
     line = CC.report_line(obj)
     assert line.startswith("SUPERHEROES-CLOUD-CHECK ") and "\n" not in line
-    assert json.loads(line.split(" ", 1)[1]) == obj
+    assert json.loads(line.split(" ", 1)[1]) == dict(obj, digest=CC.report_digest(obj))
     real = CC.report(env={}, cwd=nowhere, root=str(tmp_path / "no-store"))
     assert real["confirmation"]["reviewerAnswered"] is False and real["environment"] is None
 
@@ -642,9 +644,52 @@ def test_judge_edge9_a_refused_or_raising_switch_off_adds_the_setting_part(tmp_p
         assert _setting(local) is True
         assert result["message"].split("\n\n")[0].startswith("**The check failed on 2 parts.**")
         assert "I could not switch cloud builds off." in _first(result)
+        # axis: a failed switch-off is never answered with the builds being off
+        assert "Cloud builds are still on." in result["message"]
+        assert "Cloud builds stay off" not in result["message"]
         assert "switched them off" not in result["message"]
         assert result["message"].endswith("paste the new setup text into the environment, then "
                                           "switch them off in configure and say \"check again\".")
+
+
+def test_judge_edge9_an_unread_report_with_a_refused_or_raising_switch_off_says_so(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+
+    def raising(*a, **k):
+        raise OSError("locked")
+
+    for fake in (lambda *a, **k: {"action": "refused", "reason": "profile-absent"},
+                 lambda *a, **k: {"action": "deferred", "reason": "lock-contended"}, raising,
+                 lambda *a, **k: None):
+        result = _judge(local, "no report here", set_fn=fake)
+        assert result["action"] == "unread" and result["failedParts"] == ["unread", "setting"]
+        assert result["settingSwitchedOff"] is False and _setting(local) is True
+        assert result["message"] == (
+            "**The check did not report back.** I could not read a result from the check "
+            "session.\n\nCloud builds are still on: I could not switch them off. Switch them off "
+            "in configure, then say \"check again\" and I'll run it once more.")
+        assert "stay off" not in result["message"]
+
+
+def test_judge_a_report_altered_after_it_was_made_is_unread(tmp_path):
+    local, cloud = _pair(tmp_path)
+    failing = _cloud_report(cloud, confirmation=_confirm(answered=False)(None))
+    line = CC.report_line(failing)
+    altered = line.replace('"reviewerAnswered":false', '"reviewerAnswered":true')
+    assert altered != line
+    # axis: a copy that changed the reviewer's answer is not read, so no setup record is written
+    result = _judge(local, altered)
+    assert result["action"] == "unread" and _record_state(local) == "none"
+    for old, new in ((VERSION, "9.9.9"), (FAR, "2999-01-01")):
+        good = CC.report_line(_ok_report(cloud))
+        assert old in good
+        assert _judge(local, good.replace(old, new))["action"] == "unread"
+    # a line with its digest removed is not read either
+    stripped = json.loads(CC.report_line(_ok_report(cloud)).split(" ", 1)[1])
+    del stripped["digest"]
+    assert _judge(local, "SUPERHEROES-CLOUD-CHECK " + json.dumps(stripped))["action"] == "unread"
+    assert _record_state(local) == "none"
 
 
 def test_judge_edge9_a_failure_with_the_setting_off_does_not_touch_it(tmp_path):
@@ -862,6 +907,7 @@ def test_cli_report_prints_one_marked_line(tmp_path, monkeypatch, capsys):
     assert out.startswith("SUPERHEROES-CLOUD-CHECK {")
     obj = json.loads(out.split(" ", 1)[1])
     assert obj["nonce"] == NONCE and obj["environment"] == ENV_ID and obj["pluginVersion"] == VERSION
+    assert obj["digest"] == CC.report_digest(obj)
     assert out == CC.report_line(obj) + "\n"
     # a session with nothing at all still prints its line and exits 0
     monkeypatch.delenv(cloud_pass.ENVIRONMENT_ENV)
@@ -882,7 +928,9 @@ def test_cli_judge_exit_codes(tmp_path, monkeypatch, capsys):
     assert _record_state(local) == "none"
     missing = CC.main(base + ["--nonce", NONCE, "--line-file", str(tmp_path / "absent.txt")])
     assert missing == 1 and json.loads(capsys.readouterr().out)["action"] == "unread"
-    bad_version = line.replace(VERSION, "0.0.1")
+    shipped = json.loads(line.split(" ", 1)[1])
+    shipped.pop("digest")
+    bad_version = CC.report_line(dict(shipped, pluginVersion="0.0.1"))
     failed = CC.main(base + ["--nonce", NONCE, "--line", bad_version])
     assert failed == 1 and json.loads(capsys.readouterr().out)["action"] == "failed"
     assert _record_state(local) == "none"
@@ -1066,12 +1114,12 @@ def test_start_makes_a_fresh_nonce_when_none_is_given(tmp_path):
 
 
 def _expected_prompt(issue=None):
-    fallback = CC.MARKER + " " + json.dumps(
+    fallback_object = (
         {"schema": "cloud-check-report/1", "nonce": NONCE, "environment": None,
          "pluginVersion": None, "placedStamp": None, "stampFile": None, "repoStamp": None,
          "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
-                          "passLapses": None, "reason": "plugin-missing"}},
-        sort_keys=True, separators=(",", ":"))
+                          "passLapses": None, "reason": "plugin-missing"}})
+    fallback = CC.report_line(fallback_object)
     text = ("This is a short setup check. Edit nothing, commit nothing, push nothing, and invoke "
             "no skill.\n\n"
             "Run exactly this one command from the repository's root:\n\n"

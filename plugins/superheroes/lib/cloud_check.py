@@ -21,6 +21,7 @@ plain sentence. No function here prints, logs or returns a reviewer pass.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -44,6 +45,7 @@ MARKER = "SUPERHEROES-CLOUD-CHECK"
 REPORT_SCHEMA = "cloud-check-report/1"
 REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp", "stampFile",
                  "repoStamp", "confirmation")
+DIGEST_FIELD = "digest"
 
 _NONCE_RE = re.compile(r"[A-Za-z0-9]{8,64}")
 _DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -139,6 +141,12 @@ _UNREAD = (
     "**The check did not report back.** I could not read a result from the check session.\n"
     "\n"
     "Cloud builds stay off.{switched} Say \"check again\" and I'll run it once more."
+)
+_UNREAD_STILL_ON = (
+    "**The check did not report back.** I could not read a result from the check session.\n"
+    "\n"
+    "Cloud builds are still on: I could not switch them off. Switch them off in configure, then "
+    "say \"check again\" and I'll run it once more."
 )
 
 _CHECK_SESSION_PREFIX = "cloud-check-"
@@ -316,10 +324,21 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None):
     }
 
 
+def _canonical(report_object):
+    return json.dumps(report_object, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def report_digest(report_object):
+    """A short digest of the report's canonical JSON, the digest field itself left out."""
+    body = {k: v for k, v in report_object.items() if k != DIGEST_FIELD}
+    return hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()[:32]
+
+
 def report_line(report_object):
-    """The one line `report` prints: the marker, one space, the object as compact sorted JSON."""
-    return MARKER + " " + json.dumps(report_object, sort_keys=True, separators=(",", ":"),
-                                     default=str)
+    """The one line `report` prints: the marker, one space, the object as compact sorted JSON,
+    carrying a digest of everything else in it so a copy that altered any field is detectable."""
+    carried = dict(report_object, **{DIGEST_FIELD: report_digest(report_object)})
+    return MARKER + " " + _canonical(carried)
 
 
 def _nonce_is(obj, nonce):
@@ -350,6 +369,8 @@ def _readable(obj, nonce):
     confirmation = obj.get("confirmation") if isinstance(obj, dict) else None
     return (isinstance(obj, dict) and obj.get("schema") == REPORT_SCHEMA
             and all(field in obj for field in REPORT_FIELDS) and _nonce_is(obj, nonce)
+            # axis: a report altered after it was made (any field) is not read
+            and obj.get(DIGEST_FIELD) == report_digest(obj)
             and isinstance(confirmation, dict)
             and confirmation.get("schema") == cloud_pass.CONFIRMATION_SCHEMA
             and isinstance(confirmation.get("reviewerAnswered"), bool))
@@ -417,9 +438,11 @@ def _failed_message(parts, switched, cloud_version, local_version):
     for name, _sentence, fix in _PARTS:
         if name in parts and fix not in fixes:
             fixes.append(fix)
-    return ("**The check failed on %s.** %s\n\nCloud builds stay off.%s To fix it, %s and say "
-            "\"check again\"." % (count, " ".join(sentences), _SWITCHED_OFF if switched else "",
-                                  ", then ".join(fixes)))
+    # axis: the message never says cloud builds are off when the switch-off failed
+    standing = ("Cloud builds are still on." if "setting" in parts else
+                "Cloud builds stay off.%s" % (_SWITCHED_OFF if switched else ""))
+    return ("**The check failed on %s.** %s\n\n%s To fix it, %s and say \"check again\"."
+            % (count, " ".join(sentences), standing, ", then ".join(fixes)))
 
 
 def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, now=None,
@@ -441,7 +464,8 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                     ("versionMatches", "calibrationMatches", "reviewerAnswered",
                      "environmentMatches")),
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": off,
-                "message": _UNREAD.format(switched=_SWITCHED_OFF if off else "")}
+                "message": (_UNREAD_STILL_ON if "setting" in failed
+                            else _UNREAD.format(switched=_SWITCHED_OFF if off else ""))}
 
     results, local_placed = _judge_parts(obj, environment, cwd, root, today)
     failed = [part for part, key in (("environment", "environmentMatches"),
