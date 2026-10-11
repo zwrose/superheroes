@@ -1050,11 +1050,13 @@ def test_outcome5_a_session_token_without_a_creation_line_is_not_a_session_id(tm
 
 def test_outcome5_a_stray_token_beside_a_receipt_for_another_name_is_not_an_id(tmp_path):
     repo = _cloud_repo(tmp_path)
-    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+    # The foreign receipt is complete, so the only thing wrong with it is the name it announces.
+    result = _launch(repo, tmp_path, _fake_spawn(_spawned(
         "Reusing session_old123 for context\n"
-        "Created cloud session: %s\n" % name
+        + _announced("issue-656-someone-elses", "session_01OtherLane")
     )))
     _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
 
 
 def test_outcome5_a_receipt_announcing_a_different_name_is_unconfirmed(tmp_path):
@@ -1290,29 +1292,70 @@ def test_pending_started_is_returned_when_the_unconfirmed_path_append_fails(
     assert "pendingStarted" in result["remedy"]
 
 
-def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(tmp_path):
+def _signal_once_running(marker, signum):
+    """A watcher that sends this process `signum` once the command has said it is running.
+
+    The command creates `marker` as its first act after it has started, so the signal never
+    depends on how long the command took to start.
+    """
     import os as _os
-    import signal as _signal
     import threading
 
-    log = tmp_path / "term.stdout"
-    before = _signal.getsignal(_signal.SIGTERM)
-    timer = threading.Timer(0.5, lambda: _os.kill(_os.getpid(), _signal.SIGTERM))
-    timer.start()
+    def watch():
+        deadline = time.monotonic() + 20
+        while not _os.path.exists(marker):
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(0.02)
+        _os.kill(_os.getpid(), signum)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    return watcher
+
+
+def _assert_a_launcher_signal_ends_the_group(tmp_path, signum):
+    import os as _os
+    import signal as _signal
+
+    log = tmp_path / "signalled.stdout"
+    marker = tmp_path / "running"
+    before = _signal.getsignal(signum)
+    watcher = _signal_once_running(str(marker), signum)
     try:
         result = L._default_cloud_spawn(
-            ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
+            ["sh", "-c", "echo hello; touch %s; sleep 30" % marker], str(tmp_path), str(log),
+            dict(_os.environ), 20,
         )
     finally:
-        timer.cancel()
+        watcher.join(timeout=25)
     assert result["readError"] == "_LauncherTerminated"
     assert "hello" in result["output"]
     assert "hello" in log.read_text()
     assert result["rc"] is not None
-    assert _signal.getsignal(_signal.SIGTERM) is before
+    assert _signal.getsignal(signum) is before
 
 
-def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(tmp_path, monkeypatch):
+def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(
+    tmp_path, terminal,
+):
+    import signal as _signal
+
+    _assert_a_launcher_signal_ends_the_group(tmp_path, _signal.SIGTERM)
+
+
+def test_a_sigint_to_the_launcher_ends_the_command_group_and_keeps_the_output(
+    tmp_path, terminal,
+):
+    # axis: Ctrl-C is a cancellation like SIGTERM — the same outcome, never a KeyboardInterrupt
+    import signal as _signal
+
+    _assert_a_launcher_signal_ends_the_group(tmp_path, _signal.SIGINT)
+
+
+def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(
+    tmp_path, monkeypatch, terminal,
+):
     # axis: a launcher cancelled between child creation and the read loop still ends the group
     import os as _os
     import signal as _signal
@@ -1339,7 +1382,7 @@ def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(tmp_path, mo
 
 
 def test_a_sigterm_landing_during_the_cleanup_does_not_cut_the_group_kill_short(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, terminal,
 ):
     # axis: a launcher cancelled while the cleanup is under way still ends the group it started
     import os as _os
@@ -1731,3 +1774,99 @@ def test_cli_place_flag_accepts_only_local_and_cloud(verb, capsys):
         L.main([verb, "--repo-root", "r", *common, "--place", "elsewhere"])
     assert exc.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+_VERB_ARGS = {
+    "launch": ["--issue", "1", "--premise", "p", "--checks", "c", "--log-dir", "l"],
+    "compose": ["--issue", "1", "--premise", "p"],
+    "preflight": ["--checks", "c"],
+}
+
+
+@pytest.mark.parametrize("verb", ["compose", "preflight"])
+@pytest.mark.parametrize("word", ["local", "cloud"])
+def test_cli_place_flag_reaches_compose_and_preflight_as_a_mechanical_place(
+    verb, word, monkeypatch,
+):
+    seen = []
+    monkeypatch.setattr(L, "_cli_" + verb, lambda args: seen.append(args.place) or {"ok": True})
+    assert L.main([verb, "--repo-root", "r", *_VERB_ARGS[verb], "--place", word]) == 0
+    assert seen == [word]
+
+
+def test_cli_launch_place_flag_is_the_launch_word_and_takes_only_local_and_cloud(
+    monkeypatch, capsys,
+):
+    seen = []
+    monkeypatch.setattr(L, "_cli_launch", lambda args: seen.append(args.place) or {"ok": True})
+    for word in ("local", "cloud"):
+        assert L.main(["launch", "--repo-root", "r", *_VERB_ARGS["launch"], "--place", word]) == 0
+    assert L.main(["launch", "--repo-root", "r", *_VERB_ARGS["launch"]]) == 0
+    assert seen == ["local", "cloud", None]
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        L.main(["launch", "--repo-root", "r", *_VERB_ARGS["launch"], "--place", "elsewhere"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("verb", ["compose", "preflight"])
+def test_cli_compose_and_preflight_take_no_boundary_file(verb, capsys):
+    # A boundary is a fallback resource of a launch; the previews have nowhere to take one.
+    with pytest.raises(SystemExit) as exc:
+        L.main([
+            verb, "--repo-root", "r", *_VERB_ARGS[verb], "--place", "cloud", "--boundary", "b",
+        ])
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --boundary" in capsys.readouterr().err
+
+
+def test_a_cloud_place_with_slot_generation_and_boundary_answers_cloud_with_slot(tmp_path):
+    # The mechanical cloud launch names the cloud's own refusal, never a slot or boundary token.
+    repo = _cloud_repo(tmp_path)
+    calls = []
+    result = _launch(
+        repo, tmp_path, _fake_spawn(calls=calls),
+        slot="slot-a", generation=1, boundary={"slotRef": "slot-a@1"},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-cloud-with-slot"
+    _assert_nothing_written(repo, calls)
+
+
+_ROUTED_CLOUD = {
+    "place": "cloud", "pointedAtCloud": True, "by": "word", "reason": None, "need": None,
+    "cloudVersion": None, "advisorVersion": None, "environment": ENV_ID, "reported": None,
+}
+
+
+def test_cli_launch_holds_slot_generation_and_boundary_back_from_a_cloud_call(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    checks_path, premise_path = tmp_path / "checks.json", tmp_path / "premise.json"
+    boundary_path = tmp_path / "boundary.json"
+    _write_json(checks_path, _all_checks())
+    _write_json(premise_path, _valid_premise(repo))
+    _write_json(boundary_path, {"slotRef": "slot-a@1"})
+    forwarded = []
+
+    def capture(*args, **kwargs):
+        forwarded.append(kwargs)
+        return {"ok": True, "reason": None}
+
+    monkeypatch.setattr(
+        L.launch_place, "route", lambda cwd, premise, word=None, **kw: _ROUTED_CLOUD,
+    )
+    monkeypatch.setattr(L, "launch_build", capture)
+    result = L._cli_launch(_args(
+        repo_root=repo, premise=str(premise_path), checks=str(checks_path),
+        log_dir=str(tmp_path / "logs"), place="cloud", slot="slot-a", generation=1,
+        boundary=str(boundary_path),
+    ))
+    assert len(forwarded) == 1
+    assert forwarded[0]["place"] == "cloud"
+    assert forwarded[0]["cloud_environment"] == ENV_ID
+    for held_back in ("slot", "generation", "boundary"):
+        assert held_back not in forwarded[0]
+    assert result["fallbackResourcesUnused"] == {"slot": "slot-a", "generation": 1}

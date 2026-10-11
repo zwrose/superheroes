@@ -28,6 +28,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cloud_ready  # noqa: E402
 import config_dir  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
@@ -35,6 +36,7 @@ import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
+import launch_place  # noqa: E402
 import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
@@ -1189,6 +1191,19 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         # mean the check is off
         if not isinstance(premise["iphoneCheck"], bool):
             return _fail("premise-iphone-check-invalid")
+
+    if "needs" in premise:
+        needs_val = premise["needs"]
+        # axis: needs is the advisor's list of what only the owner's machine has — a list of non-empty strings, else the routing step would read it as nothing — see bite-proof record wo_b_place_call
+        if not isinstance(needs_val, list) or not all(
+            isinstance(n, str) and n.strip() for n in needs_val
+        ):
+            return _fail("premise-needs-invalid")
+
+    if "reportedCloud" in premise:
+        # axis: reportedCloud is a fact the cloud reported — only the known keys in their exact shapes — see bite-proof record wo_b_place_call
+        if not cloud_ready.valid_reported(premise["reportedCloud"]):
+            return _fail("premise-reported-cloud-invalid")
 
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
@@ -3224,6 +3239,11 @@ def _cli_compose(args):
     )
 
 
+# The two results of a cloud attempt that mean the launcher ended it before any session could
+# exist: the command never ran and the lane was terminalized. No other result is one.
+_CLOUD_NEVER_STARTED_REASONS = ("spawn-oserror", "log-open-failed")
+
+
 def _cli_launch(args):
     checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
     if dup_reason:
@@ -3249,26 +3269,60 @@ def _cli_launch(args):
             return _fail("launch-boundary-unreadable")
         boundary = boundary_data
 
-    cloud_kwargs = {}
-    if getattr(args, "place", None) is not None:
-        cloud_kwargs = {
-            "place": args.place,
-            "cloud_environment": getattr(args, "cloud_environment", None),
-        }
-    return launch_build(
-        args.repo_root,
-        args.issue,
-        premise,
-        checks,
-        args.log_dir,
-        model=args.model,
-        slot=args.slot,
-        generation=args.generation,
-        boundary=boundary,
-        effort=args.effort,
-        allow_foreign_instance=args.allow_foreign_instance,
-        **cloud_kwargs,
+    # axis: the placeCall is the launcher's own word on where the build runs — a premise file that brings one is refused — see bite-proof record wo_b_place_call
+    if isinstance(premise, dict) and "placeCall" in premise:
+        return _fail("premise-place-call-caller-set")
+    # axis: the cloud environment comes from the setup record the routing step read — see bite-proof record wo_b_place_call
+    if getattr(args, "cloud_environment", None) is not None:
+        return _fail("launch-cloud-environment-routed")
+
+    # axis: every launch is routed once, before it starts — see bite-proof record wo_b_place_call
+    place_call = launch_place.route(
+        args.repo_root, premise if isinstance(premise, dict) else {}, getattr(args, "place", None),
     )
+
+    def launch(stamped_call, **where):
+        stamped = dict(premise, placeCall=stamped_call) if isinstance(premise, dict) else premise
+        return launch_build(
+            args.repo_root,
+            args.issue,
+            stamped,
+            checks,
+            args.log_dir,
+            model=args.model,
+            effort=args.effort,
+            allow_foreign_instance=args.allow_foreign_instance,
+            **where,
+        )
+
+    def launch_local(stamped_call):
+        # The slot, generation and boundary are the fallback resources: only a local launch uses them.
+        return launch(
+            stamped_call, slot=args.slot, generation=args.generation, boundary=boundary,
+        )
+
+    if place_call["place"] != PLACE_CLOUD:
+        result = launch_local(place_call)
+        result["placeCall"] = place_call
+        return result
+
+    # axis: a cloud launch gets no slot, generation or boundary — the cloud has none to give — see bite-proof record wo_b_place_call
+    result = launch(
+        place_call, place=PLACE_CLOUD, cloud_environment=place_call["environment"],
+    )
+    # axis: fall back only on the two results that mean no session could exist; any other result may have a live lane, and a second builder must never start — see bite-proof record wo_b_place_call
+    if not result.get("ok") and result.get("reason") in _CLOUD_NEVER_STARTED_REASONS:
+        # axis: a cloud attempt the launcher ended is the platform being unreachable — see bite-proof record wo_b_place_call
+        fallback_call = dict(place_call, place=PLACE_LOCAL, reason="unreachable", environment=None)
+        local = launch_local(fallback_call)
+        local["placeCall"] = fallback_call
+        local["cloudAttempt"] = result
+        local["fellBack"] = True
+        return local
+    result["placeCall"] = place_call
+    if args.slot is not None or args.generation is not None or boundary is not None:
+        result["fallbackResourcesUnused"] = {"slot": args.slot, "generation": args.generation}
+    return result
 
 
 def _cli_record_outcome(args):
@@ -3334,8 +3388,14 @@ def main(argv=None):
     la.add_argument("--slot", default=None)
     la.add_argument("--generation", type=int, default=None)
     la.add_argument("--boundary", default=None)
-    la.add_argument("--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None)
-    la.add_argument("--cloud-environment", default=None)
+    la.add_argument(
+        "--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None,
+        help="the owner's launch word; the launcher decides where each build runs",
+    )
+    la.add_argument(
+        "--cloud-environment", default=None,
+        help="refused on launch: the environment comes from the cloud setup record",
+    )
     la.add_argument(
         "--allow-foreign-instance",
         action="store_true",
