@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """#1419 — unknown-surface full panel reviews git-derived head diff, never a stale reviewed diff."""
-import hashlib
 import importlib.util
 import json
 import os
@@ -293,10 +292,7 @@ def test_b3_review_diff_producer_byte_identical_across_consumers(tmp_path):
     proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=120)
     assert proc.returncode == 0
     panel_bytes = proc.stdout
-    digest_proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=10)
-    assert digest_proc.returncode == 0
-    handback_digest = hashlib.sha256(digest_proc.stdout).hexdigest()
-    assert handback_digest == hashlib.sha256(panel_bytes).hexdigest()
+    assert panel_bytes.decode("utf-8") == diff_with_renames.stdout
     cfg = _cfg(repoRoot=repo, baseRef=base_sha, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
     state = _unknown_surface_state(cfg)
     assert state.get("terminal") != "cannot-certify"

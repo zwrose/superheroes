@@ -630,7 +630,7 @@ _EXPECTED_TITLE_PLACEHOLDER = "title placeholder [RFS-EXAMPLE-SENTINEL-1145]"
 
 
 def test_example_rendering_back_compat_no_nonce():
-    # axis: round_orders and seat_canary call renderers with no argument — output must not drift
+    # axis: round_orders calls renderers with no argument — output must not drift
     assert RFS._placeholder_string("title") == _EXPECTED_TITLE_PLACEHOLDER
     assert RFS.example_findings_object()["findings"][0]["title"] == _EXPECTED_TITLE_PLACEHOLDER
     expected_payload = json.dumps(RFS.example_findings_object(), indent=2, sort_keys=True)

@@ -22,7 +22,7 @@ ROUND_ENTRY_KEY_FORMS = {
     },
 }
 
-DISCLOSE_ON_PRESENCE = ("canaryVerified",)
+DISCLOSE_ON_PRESENCE = ()
 
 
 def str_list(value):
@@ -35,25 +35,6 @@ def dict_list(value):
 
 def bool_value(value):
     return isinstance(value, bool)
-
-
-def canary_failed_shape(value):
-    return isinstance(value, dict) and str_list(value.get("seats") or [])
-
-
-def canary_verified_shape(value):
-    return isinstance(value, dict) and all(isinstance(k, str) for k in value)
-
-
-def control_probe_shape(value):
-    if not isinstance(value, dict):
-        return False
-    if not isinstance(value.get("submitted"), bool):
-        return False
-    vendors = value.get("vendors")
-    if not isinstance(vendors, dict):
-        return False
-    return all(isinstance(k, str) and isinstance(v, str) for k, v in vendors.items())
 
 
 def adapter_provenance_shape(value):
@@ -101,12 +82,6 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "seatMapViolations": dict_list,
     "vacuousSeats": str_list,
     "engagedArtifactSeats": str_list,
-    "canaryUnverified": str_list,
-    "canaryFailed": canary_failed_shape,
-    "canaryOutcomeFailed": canary_failed_shape,
-    "canaryPlantUndetected": canary_failed_shape,
-    "canaryVerified": canary_verified_shape,
-    "controlProbe": control_probe_shape,
     "adapterProvenance": adapter_provenance_shape,
     "recordOrphansIgnored": str_list,
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
@@ -117,14 +92,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
 }
 
 # Ride the receipt's per-round entries; never read into a verdict or a degraded line.
-RECORD_ONLY_DISCLOSURE_CHANNELS = (
-    "canaryUnverified",
-    "canaryFailed",
-    "canaryOutcomeFailed",
-    "canaryPlantUndetected",
-    "canaryVerified",
-    "controlProbe",
-)
+RECORD_ONLY_DISCLOSURE_CHANNELS = ()
 
 
 def _state_version(state):
@@ -551,9 +519,6 @@ __all__ = (
     "str_list",
     "dict_list",
     "bool_value",
-    "canary_failed_shape",
-    "canary_verified_shape",
-    "control_probe_shape",
     "adapter_provenance_shape",
     "order_vendor_provenance_gaps_shape",
     "normalize_adapter_provenance",

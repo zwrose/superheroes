@@ -27,7 +27,6 @@ LIB = EVAL_DIR.parent / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import canary_outcome  # noqa: E402
 import circuit_breaker as CB  # noqa: E402
 import coverage_decisions as cov  # noqa: E402
 import model_registry  # noqa: E402
@@ -36,32 +35,6 @@ import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
 import seat_map as SM  # noqa: E402
-
-
-def fabricate_canary_probes_for(seat_map):
-    """Fabricate always-engaged canary probes for eval/test fixtures only.
-
-    NOT evidence of cross-vendor liveness — real engagement comes from
-    ``seat_canary.run_canary`` dispatching through the actual seat path.
-    """
-    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
-    if not isinstance(seats, dict):
-        return []
-    vendors = set()
-    for cell in seats.values():
-        if not isinstance(cell, dict):
-            continue
-        vendor = cell.get("vendor")
-        if isinstance(vendor, str) and vendor and vendor != "claude":
-            vendors.add(vendor)
-    return [{
-        "engine": v,
-        "outcome": canary_outcome.OUTCOME_OK,
-        "engaged": True,
-        "detectedPlant": True,
-        "evidence": {},
-        "detail": "",
-    } for v in sorted(vendors)]
 
 
 # Synthetic citation surface so fixture findings (often file/line-less, written for the JS
@@ -286,15 +259,15 @@ def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
 
 
 def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=False,
-                supply_seat_map=True, supply_canary_probes=True):
+                supply_seat_map=True):
     """Drive ``round_driver.run_loop`` for one fixture; return the observational JSON dict.
 
     ``fixture`` may be a path (str/Path) or an already-loaded dict. ``corrupt_records`` writes a
     mangled round-records.json so the driver's fail-closed resume seam parks (cannot-certify).
 
-    ``supply_seat_map`` / ``supply_canary_probes`` default True so every existing caller and golden
-    still receives the verified-clean seat map and fabricated engaged probes. Set either False to
-    exercise the driver's fail-closed disclosures without pre-satisfying that gate.
+    ``supply_seat_map`` defaults True so every existing caller and golden still receives the
+    verified-clean seat map. Set it False to exercise the driver's fail-closed disclosures without
+    pre-satisfying that gate.
     """
     if isinstance(fixture, (str, Path)):
         fixture_path = Path(fixture)
@@ -637,14 +610,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     RD._fold_panel = _fold_panel_persist
     try:
         io = {"stall_menu": lambda payload: "hold"}
-        eval_seat_map = None
         fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
         _validate_fixer_vendor_override(fixer_vendor)
         if supply_seat_map:
-            eval_seat_map = _eval_clean_seat_map(fixer_vendor)
-            io["seatMap"] = eval_seat_map
-        if supply_canary_probes and eval_seat_map is not None:
-            io["canaryResult"] = fabricate_canary_probes_for(eval_seat_map)
+            io["seatMap"] = _eval_clean_seat_map(fixer_vendor)
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,

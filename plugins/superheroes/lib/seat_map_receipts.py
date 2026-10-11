@@ -236,15 +236,6 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     return [{"round": selected_round_label, "basis": basis}]
 
 
-def canary_map(state, round_map):
-    """Canary projection — round map when it carries seats, else latest-with-seats."""
-    if isinstance(round_map, dict):
-        seats = round_map.get("seats")
-        if isinstance(seats, dict) and seats:
-            return round_map
-    return latest_with_seats(state)
-
-
 def emit_receipt_seat_map(state, driver_author_family=None):
     """Derived read-time union for ``build_receipt`` — latest seats, merged evidence, last-wins scalars."""
     receipt_list = receipts(state)

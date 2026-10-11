@@ -13,9 +13,9 @@ dependency runs one way only. Two consequences the reader must know:
 
   - the phase strings (`round_driver.P_*`) are plain arguments here; this module validates them
     structurally (non-empty, path-safe) and never against the driver's phase vocabulary. The one
-    literal it must spell for itself is the panel phase directory name used by `canary_path`
-    (`_PANEL_PHASE_DIRNAME`), whose single source of truth is `round_driver.P_PANEL`; a drift
-    guard for that pair belongs in the layer that can import both.
+    literal it must spell for itself is the panel phase directory name (`_PANEL_PHASE_DIRNAME`),
+    whose single source of truth is `round_driver.P_PANEL`; a drift guard for that pair belongs in
+    the layer that can import both.
   - the canonical-JSON form and the sha256 helper are respelled here with the SAME shape
     round_driver uses (`sort_keys=True, separators=(",", ":"), ensure_ascii=True`), because
     importing them would be the cycle.
@@ -150,7 +150,6 @@ LOCK_FILE = "session.lock"
 # therefore never begin with `_` (`storage_key` refuses one).
 RESERVED_PREFIX = record_paths.RESERVED_PREFIX
 DISPATCH_MANIFEST_STEM = "_dispatch"
-CANARY_DIRNAME = "_canary"
 # The panel phase directory name — imported from the shared phase constants module.
 _PANEL_PHASE_DIRNAME = round_phases.P_PANEL
 
@@ -395,19 +394,6 @@ def dispatch_manifest_path(session_dir, rnd, phase, attempt):
     return record_paths._guard_within(
         session_dir,
         os.path.join(landing_dir(session_dir, rnd, phase), name))
-
-
-def canary_path(session_dir, rnd, vendor, attempt):
-    """The per-vendor control-probe landing slot for the panel phase."""
-    if vendor not in model_registry.VENDORS:
-        raise ValueError("unknown vendor %r (expected one of %s)"
-                         % (vendor, ", ".join(sorted(model_registry.VENDORS))))
-    record_paths._require_index("attempt", attempt)
-    return record_paths._guard_within(
-        session_dir,
-        os.path.join(
-            landing_dir(session_dir, rnd, _PANEL_PHASE_DIRNAME), CANARY_DIRNAME,
-            "%s.a%d.json" % (vendor, attempt)))
 
 
 def session_lock_path(session_dir):
