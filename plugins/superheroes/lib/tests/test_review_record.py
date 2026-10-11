@@ -1133,6 +1133,7 @@ def test_any_non_word_run_before_the_separator_is_detected():
             body, withheld = rr.render_raw("f.md", text)
             assert withheld is True and "LEAKMARK" not in body
             assert rr._scrub_text(text) == "[REDACTED FIELD]"
+    assert rr._has_secret("password" + "*" * 5000 + ": LEAKMARK") is True
 
 
 def test_marked_up_count_keys_and_split_lines_stay_readable():
@@ -1143,6 +1144,15 @@ def test_marked_up_count_keys_and_split_lines_stay_readable():
         assert rr._scrub_text(text) == text
     assert rr.render_raw("f.md", "**input_tokens**: abc")[1] is True
     assert rr._has_secret("the password\n: see the note below") is False
+
+
+def test_a_long_run_with_no_separator_is_kept():
+    # axis: over-withholding; a secret-shaped word followed by a long run of marks and no ':' or '=' withheld
+    text = "the password " + "-" * 70 + " rotated last week"
+    assert rr._has_secret(text) is False
+    body, withheld = rr.render_raw("f.md", text)
+    assert withheld is False and text in body
+    assert rr._scrub_text(text) == text
 
 
 @pytest.mark.parametrize("key", ["dbpassword", "apikeys", "passwordhash", "mytoken", "xsecret", "PRIVATEKEYS"])
