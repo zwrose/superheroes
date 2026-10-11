@@ -3,6 +3,7 @@
 - [The vet receipt — shape](#the-vet-receipt--shape)
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
+- [The review record checks](#the-review-record-checks)
 - [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
 - [The owner-half write — register](#the-owner-half-write--register)
@@ -203,8 +204,7 @@ are never holding the inventory in working memory.
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | the PR carries **iPhone evidence**, or the issue's done-definition names an **iPhone check** | the **iPhone-evidence row** — each piece valid or invalid with its reason. When the issue names the check, add whether the check is complete by the conditions in `skills/showrunner/reference/vetting.md` § iPhone evidence, and if not, the advisor's own iPhone check, recorded before the ruling |
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR), or for a stacked feature the vet `skills/showrunner/reference/closure.md#when-closure-fires` § When closure fires names | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
-| the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). The citation bar is `rubric/review-discipline.md` § The driver mandate — the certified loop, its skips, and the flip; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
-| the build record shows a **full-lane** review **not driven by the certified loop** | the **seat-provenance parity check** — each seat's seat-map assignment, plus a recorded attempt or terminal forfeit on the vendor that seat was assigned; a missing assignment is a finding. The parity bar is `rubric/review-discipline.md` § The driver mandate — the certified loop, its skips, and the flip |
+| the PR carries a **build record** (a full or light build) | the **review record checks** — one line per check, saying what was read from the record and whether it held the PR; the three checks are the rows of [The review record checks](#the-review-record-checks) |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
@@ -219,6 +219,40 @@ is raised by a number the artifacts carry rather than by your memory of having c
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather
 than the only one — but it is not a guarantee.
+
+## The review record checks
+
+Every review ends by writing a review record on the PR. The record's home, its fields and the
+`read` verb are `skills/review-code/reference/review-record.md`; this section says only what the vet
+reads from it. At a full or light vet, read the latest record with
+`python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>` (`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`)
+and grade the three checks below. **A PR that any row holds is not returned as ready**, and the
+receipt names the row that held it.
+
+| Check | What it reads from the record | The PR is held when |
+|---|---|---|
+| **The record exists** | the result of the `read` verb, and the record link in the PR's build record | `read` refuses, with `review-record-missing`, `review-record-unreadable` or any other reason; or the PR's build record names no record |
+| **The checks ran on the final commit** | `finalCommit.sha` and `finalCommit.source`; `ci.state`, `ci.sha` and `ci.source`; `missingReviews` and `parked`; and, from the PR itself, its head now and CI on that head (spine field 1) | `finalCommit.sha` is not the PR's head now, so the record was written on an earlier commit, whatever it says about CI; `finalCommit.source` is not `GitHub PR`; `ci.source` is not `GitHub checks`, `ci.state` is not `green`, or `ci.sha` is not `finalCommit.sha`; CI is not green on the PR's head now; or an entry of `missingReviews` has a null `goAhead` (`parked` is true), so a planned review did not run and the owner gave no go-ahead |
+| **No leftover skipped the owner's review** | every entry of `findings` (its `title`, `body`, `consequence`, `outcome` and `reason`), `leftForOwner`, and the PR's owner half | a finding with a real consequence has outcome `craft`, or has no outcome; or has outcome `ruling` and its `reason` names no ruling the vet can follow to a record; or has outcome `left-for-owner` and is not shown to the owner on the PR's sheet or, where no sheet is built, under the owner half's `## What we're accepting` |
+
+**A real consequence is graded, never read off one field.** A real consequence is a
+[material consequence](../../../rubric/glossary.md#material-consequence). Grade each finding from
+its `consequence` and, where that is null, from its `title` and `body`, against the
+[owner-vs-craft line](../../../rubric/owner-vs-craft-line.md). A null `consequence` never makes a
+finding craft. When you cannot tell, the row holds the PR: doubt resolves upward. A finding with
+outcome `fixed` or `shown-wrong` needs no owner, and the row does not hold on it.
+
+**`status` is not the test.** A record with a leftover that is shown to the owner, or with a
+go-ahead for a review that did not run, reads `not-reviewed` and can still be returned as ready. A
+record whose finding with a real consequence was decided as craft reads `reviewed` and is held. Read
+the fields the rows name. Any line of `whatIsMissing` that the three rows do not account for is a vet
+finding. The line saying no planned reviewer ran is accounted for when every planned review that did
+not run carries a go-ahead.
+
+**When a go-ahead lets the PR through**, the receipt names the review that did not run and the
+go-ahead that covered it.
+
+The vet carries these checks. Nothing automated runs them at handback.
 
 ## Project vet checks
 
