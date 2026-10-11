@@ -1,5 +1,15 @@
 The review record: the plain account of one PR's review. This file is the one home of the rule for how a review writes it. The full lane, the light lane, the micro lane, and `--review-only` each point here.
 
+## Contents
+
+- [What the record is](#what-the-record-is)
+- [Write the account](#write-the-account)
+- [Write it, read it](#write-it-read-it)
+- [The full lane writes it from the session](#the-full-lane-writes-it-from-the-session)
+- [When it refuses](#when-it-refuses)
+- [What "reviewed" means](#what-reviewed-means)
+- [Map each exit's results to outcomes](#map-each-exits-results-to-outcomes)
+
 ## What the record is
 
 Each review session adds one new PR comment whose first line is `<!-- superheroes:review-record -->`.
