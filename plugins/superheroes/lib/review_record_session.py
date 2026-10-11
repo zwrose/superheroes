@@ -24,9 +24,11 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import dispatch_outcome  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
 import review_record  # noqa: E402
+import round_phases  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract as sc  # noqa: E402
 import verification  # noqa: E402
@@ -37,7 +39,8 @@ UNREADABLE = "review-session-unreadable"
 NOT_TERMINAL = "review-session-not-terminal"
 BAD_EXTRAS = "review-session-extras-invalid"
 STILL_OPEN = "still open when the review loop ended"
-_RAW_PHASES = ("dispatch-panel", "dispatch-gap-sweep", "dispatch-scoped-finder")
+_RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
+_INGEST_CMDS = ("record-result", "record-missing", "advance")
 _CAPPED = ("capped-with-open-critical", "capped-with-open-blocker")
 
 
@@ -156,25 +159,48 @@ def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None,
     return dict(out, notIndependent=True) if seat in same else out
 
 
+def _declares_not_run(payload):
+    """Whether a seat payload says its reviewer did not run: the driver's own not-run rules."""
+    if not isinstance(payload, dict):
+        return False
+    reason = payload.get("reason")
+    return bool(payload.get("vacuous") is True or payload.get("receiptMissing") or payload.get("receiptStale")
+                or (isinstance(reason, str) and reason in dispatch_outcome.NOT_RUN_REASONS))
+
+
+def _slot_ran(state, key, row, env):
+    """Whether the slot's reviewer ran: ingestion alone does not say so, the stored result and the round's seat status do."""
+    phase, rnd, seat, _ = key
+    cmd = row.get("cmd")
+    payload = env.get("payload") if isinstance(env, dict) else None
+    if cmd == "record-missing" or _declares_not_run(payload):
+        return False
+    if cmd != "record-result" and payload is None:
+        return False  # a swept or reappended slot with no readable result is a missing envelope
+    rec = (state.get("rounds") or {}).get(str(rnd))
+    status = rec.get("seatStatus") if isinstance(rec, dict) else None
+    return not (phase == sc.PANEL_PHASE and isinstance(status, dict) and status.get(seat) == "missing")
+
+
 def _reviewers(state, session_dir, rows, meta, run_dirs, engine_run, raw_dir=None):
-    slots = _slots(rows)
-    ran = {k: v for k, v in slots.items() if v[1].get("cmd") == "record-result"}
+    slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS}
+    envs = {k: _envelope(_path(session_dir, k, v[0])) for k, v in slots.items()}
+    ran = {k: v for k, v in slots.items() if _slot_ran(state, k, v[1], envs[k])}
     bound = _bind(ran, run_dirs, engine_run)
     same = set(seat_map_receipts.same_family_seats(state, receipt_disclosures.author_family(state)))
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
-        if r.get("cmd") not in ("record-result", "record-missing"):
-            continue
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
-        path = _path(session_dir, key, att)
-        env = _envelope(path)
+        env = envs[key]
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
         out.append(_reviewer(state, rnd, seat, stem, key in ran, same, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                              _text(r.get("citedHead")), bound.get(key)))
-        if key in ran and phase in _RAW_PHASES and raw_dir and env is not None and "payload" in env:
+        if key in ran and phase in _RAW_PHASES and raw_dir:
+            if env is None or "payload" not in env:
+                raise Refusal(UNREADABLE, f"{phase} {seat} round {rnd} findings")  # a ran seat's output must be retrievable
             raw.append(_payload_file(raw_dir, phase, rnd, seat, env["payload"], raw))
     if not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows):
         for rnd, rec in sorted((state.get("rounds") or {}).items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):

@@ -432,7 +432,7 @@ def test_raw_output_is_the_seats_payload_and_is_posted_not_withheld(tmp_path):
 
 
 @pytest.mark.parametrize("envelope", [None, "not json", [], {"vendor": "codex"}])
-def test_an_envelope_without_a_payload_posts_no_raw_file(tmp_path, envelope):
+def test_a_ran_seat_whose_output_cannot_be_read_refuses_the_record(tmp_path, envelope):
     session = Session(tmp_path).seat("code-reviewer").save()
     path = record_paths.store_path(session, 1, "dispatch-panel", record_paths.storage_key("code-reviewer", 0), 0)
     if envelope is None:
@@ -443,10 +443,46 @@ def test_an_envelope_without_a_payload_posts_no_raw_file(tmp_path, envelope):
         put_envelope(session, "code-reviewer", envelope)
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    account = rs.account_from_session(session, extras(), Fake().readers(), str(raw_dir))
-    # bites on: a raw file listed for a seat whose envelope holds no payload to post
-    assert account["rawFindingsFiles"] == [] and os.listdir(raw_dir) == []
-    assert [r["name"] for r in account["reviewers"]] == ["code-reviewer (round 1)"]
+    # bites on: a reviewed record published without the output of a reviewer it credits as run
+    with pytest.raises(rs.Refusal) as err:
+        rs.account_from_session(session, extras(), Fake().readers(), str(raw_dir))
+    assert err.value.args[0] == rs.UNREADABLE and "code-reviewer" in err.value.args[1]
+    assert os.listdir(raw_dir) == []
+
+
+@pytest.mark.parametrize("payload", [{"vacuous": True}, {"reason": "forfeited"}, {"findings": [], "receiptMissing": True},
+                                     {"findings": [], "receiptStale": True}])
+def test_a_recorded_seat_whose_payload_says_it_did_not_run_is_a_missing_review(tmp_path, payload):
+    session = Session(tmp_path).seat("code-reviewer").seat("security-reviewer").save()
+    put_envelope(session, "security-reviewer", {"payload": payload})
+    account = rs.account_from_session(session, extras(), Fake().readers(), str(tmp_path))
+    # bites on: ingestion read as a run, so a vacuous or forfeited seat leaves missingReviews
+    assert {r["name"]: r["ran"] for r in account["reviewers"]} == {
+        "code-reviewer (round 1)": True, "security-reviewer (round 1)": False}
+
+
+def test_a_seat_the_rounds_status_calls_missing_is_a_missing_review(tmp_path):
+    s = Session(tmp_path, rounds={"1": {"seatStatus": {"code-reviewer": "run", "security-reviewer": "missing"}}})
+    account = rs.account_from_session(s.seat("code-reviewer").seat("security-reviewer").save(), extras(),
+                                      Fake().readers(), str(tmp_path))
+    # bites on: the folded seat status ignored when the journal says a result was recorded
+    assert {r["name"]: r["ran"] for r in account["reviewers"]} == {
+        "code-reviewer (round 1)": True, "security-reviewer (round 1)": False}
+
+
+def test_seats_ingested_by_advance_are_reviewers_classified_by_their_stored_result(tmp_path):
+    s = Session(tmp_path).seat("code-reviewer", cmd="advance").seat("security-reviewer", cmd="advance", envelope=False)
+    account = rs.account_from_session(s.save(), extras(), Fake().readers(), str(tmp_path))
+    # bites on: advance-ingested rows dropped, so a swept missing seat never reaches the record
+    assert {r["name"]: r["ran"] for r in account["reviewers"]} == {
+        "code-reviewer (round 1)": True, "security-reviewer (round 1)": False}
+    assert len(account["rawFindingsFiles"]) == 1
+
+
+def test_raw_output_phases_are_the_drivers_phase_constants():
+    import round_phases
+    # bites on: a hand-copied phase list drifting from the driver's phase names
+    assert rs._RAW_PHASES == (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 
 
 def test_two_slots_with_the_same_file_name_do_not_collide(tmp_path):
