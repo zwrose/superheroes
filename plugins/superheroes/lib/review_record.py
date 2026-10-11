@@ -470,7 +470,7 @@ _SECRET_SUBSTRINGS = ("password", "passwd", "pwd", "passphrase", "secret", "toke
                       "cookie", "apikey", "privatekey", "secretkey", "accesskey")
 _KEY_QUOTES = "\"'`[]{}() \t\\"
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-_KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)[^\w\n:=]{0,64}[:=]")
+_KEY_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])(?P<key>[A-Za-z][A-Za-z0-9_.\-]{0,63}(?: [A-Za-z][A-Za-z0-9_.\-]{0,63})?)(?:[^\w\n:=]{0,64}[:=]|(?P<over>[^\w\n:=]{65}))")
 _PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 _JSON_ESCAPE = re.compile(r'\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])')
 _JSON_ESCAPED = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
@@ -544,9 +544,12 @@ def _decoded_views(text):
 
 def _detects(text):
     """The detector over one view: a key-like run that _secret_key accepts, then up to 64 characters that are not
-    word characters, newlines, ':' or '=', then ':' or '=', unless it is a count key whose value is a number."""
+    word characters, newlines, ':' or '=', then ':' or '=', unless it is a count key whose value is a number. A
+    gap of 65 or more such characters after a secret-shaped key is a match too (the bound must not fail open)."""
     for m in _KEY_CANDIDATE.finditer(text):
         key = m.group("key")
+        if m.group("over") and _secret_key(key):
+            return True
         if _secret_key(key) and not (_is_count_key(key) and _number_value_follows(text, m.end())):
             return True
     return False

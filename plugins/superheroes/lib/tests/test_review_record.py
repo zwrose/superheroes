@@ -1126,6 +1126,13 @@ def test_any_non_word_run_before_the_separator_is_detected():
     assert rr._has_secret("“password”: LEAKMARK") is True
     assert rr._has_secret("password" + "*" * 64 + ": LEAKMARK") is True
     assert rr._has_secret("password" + " " * 64 + "= LEAKMARK") is True
+    for gap in (65, 200):
+        for sep in ("= ", ": "):
+            text = "password" + " " * gap + sep + "LEAKMARK"
+            assert rr._has_secret(text) is True, (gap, sep)
+            body, withheld = rr.render_raw("f.md", text)
+            assert withheld is True and "LEAKMARK" not in body
+            assert rr._scrub_text(text) == "[REDACTED FIELD]"
 
 
 def test_marked_up_count_keys_and_split_lines_stay_readable():
