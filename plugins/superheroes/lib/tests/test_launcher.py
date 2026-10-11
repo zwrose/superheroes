@@ -3938,7 +3938,7 @@ def _reserve_live_lane(
     if generation is not None:
         rec["generation"] = generation
     rec.update(extra or {})
-    ll.reserve(repo, rec)
+    return ll.reserve(repo, rec)
 
 
 def test_slot_gate_parallel_unslotted_refuses(tmp_path, monkeypatch):
@@ -3977,14 +3977,22 @@ def test_slot_gate_live_cloud_sibling_needs_no_slot(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     _slot_calibrated(monkeypatch)
     ll.declare_batch(repo, "wave-test", 2)
-    _reserve_live_lane(
+    reserved = _reserve_live_lane(
         repo, "wave-test", "cloud-sibling",
         extra={
             "place": ll.PLACE_CLOUD,
-            "cloudEnvironment": "env-1",
+            "cloudEnvironment": "env_abc123",
             "pluginVersion": "1.2.3",
         },
     )
+    assert reserved["ok"] is True, reserved
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["ok"] is True, folded
+    sibling = folded["launches"]["cloud-sibling"]
+    assert sibling["batchId"] == "wave-test"
+    assert sibling["place"] == ll.PLACE_CLOUD
+    assert sibling["terminal"] is False
+    assert sibling.get("slot") is None
     result = L.walk_preflight(
         _all_checks(), repo, batch_id="wave-test", slot="slot-a", generation=1,
     )
