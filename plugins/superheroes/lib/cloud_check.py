@@ -29,6 +29,7 @@ import secrets
 import shlex
 import sys
 import tempfile
+import time
 
 import cloud_pass
 import cloud_setup
@@ -46,17 +47,18 @@ REPORT_SCHEMA = "cloud-check-report/1"
 REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp", "stampFile",
                  "repoStamp", "confirmation")
 DIGEST_FIELD = "digest"
+FAILED_CHECK_SCHEMA = "cloud-check-failed/1"
+FAILED_CHECK_SUFFIX = ".failed-check.json"
 
 _NONCE_RE = re.compile(r"[A-Za-z0-9]{8,64}")
-_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 _SETUP_MESSAGE = (
     "**Setting up cloud builds for {project}.** You do these by hand, once. It takes about ten "
     "minutes.\n"
     "\n"
-    "1. Make a cloud environment for this project on claude.ai, then copy its id from the "
-    "environment's page and paste it here. My check and every build name this environment by that "
-    "id, so your account's default never changes.\n"
+    "1. Make a cloud environment for this project on claude.ai, then run /remote-env in Claude "
+    "Code on this computer and pick it. I read which one you picked, so there's no id to copy, and "
+    "every build names this environment itself.\n"
     "2. Paste the setup text into it. I've written it below.\n"
     "3. Sign in once to the reviewer on your machine, with a sign-in kept apart from your main one. "
     "The pass is made from it. You only do this the first time on this account, and I'll walk you "
@@ -79,7 +81,7 @@ _SETUP_MESSAGE = (
     "\n"
     "A block to copy and paste. It holds no secret. The pass never goes in here. If this project "
     "needs its own tools in the cloud, such as a language runtime or a browser, add their install "
-    "steps directly under the line that reads \"{marker}\"."
+    "steps directly under the line that reads \"{marker}\""
 )
 
 _SETUP_TEXT_MESSAGE = (
@@ -103,18 +105,17 @@ _SIGN_IN_IS_MAIN = (
     "I'll give you the sign-in command for it."
 )
 _EXPIRY_KNOWN = "it stops working on {date}"
-_EXPIRY_UNKNOWN = ("it stops working after about {days} days; the exact date is unknown until the "
-                   "separate sign-in exists and can be read")
+_EXPIRY_UNKNOWN = "it stops working after {days} days; the exact date isn't known yet"
 _SIGN_IN_IN_PLACE = "The separate reviewer sign-in is in place."
 
 _SAME_FIX = "paste the new setup text into the environment"
 # part -> (sentence, fix), in the order the parts are reported
 _PARTS = (
     ("environment",
-     "The check ran in a different environment from the one whose id you gave me, or that "
+     "The check ran in a different environment from the one you picked with /remote-env, or that "
      "environment has no pass block in it yet.",
-     "check the id on the environment's page, run the pass command with that id and paste the "
-     "block into the environment"),
+     "run /remote-env in Claude Code and pick this project's environment again, then run the pass "
+     "command and paste the block into that environment"),
     ("version", "The cloud's plugin is {cloud} and mine is {mine}.", _SAME_FIX),
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
@@ -171,8 +172,9 @@ _CHECK_POST = (
     "Also post that one line, alone inside a fenced code block, as one comment on issue #{issue} "
     "of this repository."
 )
-_ENVIRONMENT_NEEDED = ("I need the cloud environment's id before I can run the check. Copy it from "
-                       "the environment's page and paste it here.")
+_ENVIRONMENT_NEEDED = ("I need to know which cloud environment to check. Run /remote-env in Claude "
+                       "Code on this computer and pick this project's environment, then tell me, "
+                       "and I'll read which one you picked.")
 _NOT_STARTED = "The check session did not start: the cloud launch command could not be run."
 _UNCONFIRMED = ("I could not confirm that the check session started. Look for a session named "
                 "{name} in your session list; say \"check again\" and I'll start a new one.")
@@ -255,6 +257,9 @@ def setup_text(cwd, *, project_name=None, root=None, env=None, now=None):
             "setupText": composed["text"], "header": composed["header"]}
 
 
+_IGNORED_ARTIFACTS = frozenset({".DS_Store"})
+
+
 def repo_calibration_stamp(cwd):
     """The stamp of the calibration the repository itself carries: every regular file under the
     repository's calibration directory, keyed by path relative to it, with the cloud-builds setting
@@ -270,6 +275,9 @@ def repo_calibration_stamp(cwd):
     files = {}
     for top, _dirs, names in os.walk(directory, onerror=fail):
         for name in names:
+            # axis: machine artifacts the repository ignores never reach a cloud checkout
+            if name in _IGNORED_ARTIFACTS:
+                continue
             path = os.path.join(top, name)
             if not os.path.isfile(path):
                 continue
@@ -359,7 +367,13 @@ def _find_report(text, nonce):
         except Exception:
             continue
         if _nonce_is(obj, nonce):
-            found.append((body, obj))
+            found.append((_canonical(obj), obj))
+    # axis: the launch prompt carries a fallback report; when the session transcript echoes it
+    # beside a real report, the echo is not a competing result
+    # axis: copies are compared as parsed objects, so JSON spacing never makes a faithful copy conflict
+    fallback = _canonical(json.loads(_fallback_line(nonce)[len(MARKER) + 1:]))
+    if any(body != fallback for body, _ in found):
+        found = [(body, obj) for body, obj in found if body != fallback]
     if not found or any(body != found[0][0] for body, _ in found):
         return None
     return found[0][1]
@@ -377,7 +391,8 @@ def _readable(obj, nonce):
 
 
 def _lapses_ok(lapses, today):
-    if not (isinstance(lapses, str) and _DATE_RE.fullmatch(lapses)):
+    # axis: the date's format is the record owner's rule, not a second copy
+    if not cloud_setup._date_ok(lapses):
         return False
     try:
         return datetime.date.fromisoformat(lapses) >= today
@@ -426,6 +441,82 @@ def _switch_off(cwd, account, root, project_name, set_fn):
     return True, isinstance(got, dict) and got.get("action") in ("written", "noop")
 
 
+def _utc_stamp(now):
+    moment = now if isinstance(now, datetime.datetime) else datetime.datetime.fromtimestamp(
+        time.time() if now is None else now, datetime.timezone.utc)
+    return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def failed_check_path(cwd, account, root=None):
+    """Where the failed-check marker for ``account`` lives: the setup record's path, beside it."""
+    return cloud_setup.record_path(cwd, account, root)[:-len(".json")] + FAILED_CHECK_SUFFIX
+
+
+def read_failed_check(cwd, account, root=None):
+    """The failed-check marker for ``account``: None when there is none, the marker when it reads,
+    else the damaged shape. Never raises."""
+    damaged = {"schema": FAILED_CHECK_SCHEMA, "failedAt": None, "failedParts": [],
+               "environment": None, "damaged": True}
+    try:
+        path = failed_check_path(cwd, account, root)
+        if not os.path.lexists(path):
+            return None
+        with open(path, encoding="utf-8") as fh:
+            got = json.load(fh)
+        # axis: a marker that exists but cannot be read is present and damaged, never absent
+        if isinstance(got, dict) and got.get("schema") == FAILED_CHECK_SCHEMA:
+            return got
+    except Exception:
+        pass
+    return damaged
+
+
+def _write_failed_check(cwd, account, root, environment, failed_parts, now):
+    """True only when the marker was written. A lock not acquired or an OSError is False."""
+    try:
+        with mode_registry.config_lock(cwd, root) as got:
+            if not got:
+                return False
+            marker = {"schema": FAILED_CHECK_SCHEMA, "account": account, "environment": environment,
+                      "failedAt": _utc_stamp(now),
+                      "failedParts": list(failed_parts)}
+            path = failed_check_path(cwd, account, root)
+            directory = os.path.dirname(path)
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".cloud-check-failed-", dir=directory, text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps(marker, sort_keys=True, indent=2) + "\n")
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, path)
+                tmp = None
+            finally:
+                if tmp is not None:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+            return True
+    except Exception:
+        return False
+
+
+def _remove_failed_check(cwd, account, root):
+    """True only when no marker remains because of this call: removed, or already missing."""
+    try:
+        with mode_registry.config_lock(cwd, root) as got:
+            if not got:
+                return False
+            try:
+                os.unlink(failed_check_path(cwd, account, root))
+            except FileNotFoundError:
+                pass
+            return True
+    except Exception:
+        return False
+
+
 def _failed_message(parts, switched, cloud_version, local_version):
     sentences = []
     for name, sentence, _fix in _PARTS:
@@ -449,21 +540,27 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
           project_name=None, set_fn=None, record_fn=None):
     """Read the report line out of `line` and decide. The setup record is written only when the
     environment, the plugin version, the calibration and the reviewer's answer all agree with this
-    machine; every other result writes none and switches an on cloud-builds setting off."""
+    machine; every other result writes none, switches an on cloud-builds setting off, and leaves a
+    failed-check marker beside the record (a passing check removes it). The record is never touched
+    by a failed or unread result."""
     name = _project(cwd, project_name)
     today = cloud_setup_text._utc_date(now)
+    who = account if account is not None else cloud_setup.launching_account(env, cwd)
     obj = None
     if (_environment_ok(environment) and isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce)
             and isinstance(line, str)):
         found = _find_report(line, nonce)
         obj = found if _readable(found, nonce) else None
     if obj is None:
-        was_on, off = _switch_off(cwd, account, root, name, set_fn)
+        was_on, off = _switch_off(cwd, who, root, name, set_fn)
         failed = ["unread"] + (["setting"] if was_on and not off else [])
+        # axis: an unread report leaves a marker a later reader can see, and never touches the record
+        marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
         return {"action": "unread", "results": dict.fromkeys(
                     ("versionMatches", "calibrationMatches", "reviewerAnswered",
                      "environmentMatches")),
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": off,
+                "markerWritten": marked,
                 "message": (_UNREAD_STILL_ON if "setting" in failed
                             else _UNREAD.format(switched=_SWITCHED_OFF if off else ""))}
 
@@ -473,11 +570,11 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                                      ("calibration", "calibrationMatches"),
                                      ("reviewer", "reviewerAnswered")) if not results[key]]
     written = False
-    who = None
     if not failed:
-        who = account if account is not None else cloud_setup.launching_account(env, cwd)
         try:
-            if who is not None:
+            # axis: a passing check removes the failed-check marker first; a marker that stays
+            # means no record is written
+            if who is not None and _remove_failed_check(cwd, who, root):
                 # axis: a refused or raising record write is never reported as a pass
                 got = (cloud_setup.record_check if record_fn is None else record_fn)(
                     cwd, account=who, environment=environment, plugin_version=obj["pluginVersion"],
@@ -493,17 +590,19 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
 
     if failed:
         # axis: a failed check leaves cloud builds off
-        was_on, off = _switch_off(cwd, account, root, name, set_fn)
+        was_on, off = _switch_off(cwd, who, root, name, set_fn)
         if was_on and not off:
             failed.append("setting")
+        # axis: a failed check leaves a marker a later reader can see, and never touches the record
+        marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
         return {"action": "failed", "results": results, "failedParts": failed,
-                "recordWritten": written, "settingSwitchedOff": off,
+                "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
                 "message": _failed_message(failed, off, obj["pluginVersion"],
                                            _or_none(cloud_setup_text._plugin_version))}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
     return {"action": "passed", "results": results, "failedParts": [], "recordWritten": True,
-            "settingSwitchedOff": False,
+            "settingSwitchedOff": False, "markerWritten": False,
             "message": _PASSED.format(version=obj["pluginVersion"]) + ending}
 
 

@@ -771,6 +771,8 @@ above).
    refusal is a no-go: clear its cause, never force it.**
    A launch can run in a cloud session and a lane can be a cloud lane. Their mechanics are in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md`.
+   A project is set up for cloud builds in configure's setup sitting,
+   `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/set-up.md` § 6.
    **Headless builder launches run on the `opus` tier** — the launcher pins it explicitly rather than
    letting a dispatch inherit whatever tier the account or session happens to default to. **`fable` is
    never a launch default** — it is a judgment-seat tier (advisor and review seats), never a build tier.
