@@ -952,3 +952,89 @@ No State line calls any of them open. Result: verified.
  "round": 1
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv6",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C5",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "C6.md sits on C5b in state, sequencing, DoD base and branching order; round 2 clean",
+   "finding": "architecture-001",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R11 gives C5b the duty-9 place-call pointer, dispatch-preflight.md and the report/still verbs; epic quote equal; round 2 clean",
+   "finding": "architecture-002",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C5 DoD grades routing-result fields; C5b DoD grades rendered wording; round 2 clean",
+   "finding": "architecture-003",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R10 names C5b for the two glossary entries; epic quote equal; round 2 clean",
+   "finding": "architecture-004",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv6",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C5",
+   "result": "pass"
+  },
+  {
+   "child": "C5b",
+   "result": "pass"
+  },
+  {
+   "child": "C6",
+   "result": "pass"
+  }
+ ]
+}
+```
