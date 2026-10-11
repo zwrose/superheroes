@@ -624,3 +624,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "substantive amendments 4 (35 a: the owner copies the environment's id) and 5 (33 a: relay on the builders' account): touched-parts re-read before injection into C4 and C7",
+ "ceiling": 2,
+ "invocation": "inv4",
+ "kind": "invocation",
+ "measurables": {
+  "children": 2,
+  "registerEntries": 2
+ },
+ "override": null,
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
