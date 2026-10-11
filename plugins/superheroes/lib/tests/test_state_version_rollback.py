@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """#1185 — rollback refusal and hash-preserving load for STATE_SCHEMA_VERSION bump."""
-import copy
 import importlib.util
 import json
 import os
@@ -21,12 +20,6 @@ _SPEC = importlib.util.spec_from_file_location(
 _TDI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TDI)
 
-_SPEC_TRD = importlib.util.spec_from_file_location(
-    "test_round_driver",
-    os.path.join(_HERE, "test_round_driver.py"))
-_TRD = importlib.util.module_from_spec(_SPEC_TRD)
-_SPEC_TRD.loader.exec_module(_TRD)
-
 _bootstrap = _TDI._bootstrap
 _land = _TDI._land
 _write_dispatch_manifest = _TDI._write_dispatch_manifest
@@ -35,41 +28,6 @@ _payload_for = _TDI._payload_for
 _auditor_vendor_for = _TDI._auditor_vendor_for
 _state = _TDI._state
 _fake_git = _TDI._fake_git
-
-# A frozen pre-#681 v3 session: top-level ``seatMap``, no ``seatMapReceipts``. Hash pinned so a
-# drift in the representative fixture fails loudly instead of silently relabelling a v4 bootstrap.
-PRE_681_V3_DIFF = _TRD.DIFF
-PRE_681_V3_SEAT_MAP = {
-    "seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
-              for dim in RD.DIMENSIONS}
-}
-PRE_681_V3_INITIAL = {
-    "schemaVersion": 3,
-    "config": {"leg": "code", "panel": False, "code": True, "vendors": ["claude", "codex"],
-               "fixerVendor": "claude", "verifyCommand": "none", "maxRounds": 7,
-               "maxRoundsAbsolute": 7, "dimensions": list(RD.DIMENSIONS),
-               "recordsPath": None, "coveragePath": None, "priorComments": None,
-               "seatMap": PRE_681_V3_SEAT_MAP, "diff": PRE_681_V3_DIFF},
-    "round": 1, "step": RD.P_PANEL, "pending": None, "lastAccepted": None,
-    "rounds": {}, "findings": [], "decisions": [], "auditRounds": [],
-    "confirmations": 0, "selfRecovered": False, "independenceDegraded": False,
-    "seatMap": dict(PRE_681_V3_SEAT_MAP), "reviewedDiff": PRE_681_V3_DIFF,
-    "headDiff": None, "fixBatch": [], "fullPanelRan": False, "_incompletePanel": False,
-    "_changedSubjectsSincePanel": [], "terminal": None, "certification": None,
-    "_records": [], "_coverage": [], "_resumeCorrupt": None,
-}
-PRE_681_V3_INITIAL_HASH = (
-    "caaadfcf13bfbe182510e3976e760f12d03f752dec1c465954ecc58933c5dac9")
-
-
-def _seed_pre681_v3_session(tmp_path, name="pre681-v3"):
-    session_dir = str(tmp_path / name)
-    os.makedirs(session_dir, exist_ok=True)
-    state = copy.deepcopy(PRE_681_V3_INITIAL)
-    assert RD.state_hash(state) == PRE_681_V3_INITIAL_HASH
-    with open(os.path.join(session_dir, RD.STATE_FILE), "w", encoding="utf-8") as fh:
-        json.dump(state, fh)
-    return session_dir
 
 
 def _legacy_v3_session(tmp_path, name="legacy-v3", *, land_records=False):
@@ -129,77 +87,48 @@ def test_load_state_accepts_supported_versions_unchanged(tmp_path, version):
     assert loaded == payload
 
 
-def test_legacy_refusal_plain_session_names_next_submit(tmp_path):
-    """A legacy session without durable pending records names ``next``/``submit`` recovery."""
-    session_dir, gitdir, _head_path = _legacy_v3_session(tmp_path, name="legacy-plain")
-    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
-    assert out["ok"] is False
-    assert out["reason"] == RD.LEGACY_SESSION_REFUSAL
-    assert "`next`/`submit`" in out.get("detail", "")
-    assert "fresh session" not in out.get("detail", "")
-
-
-def test_next_and_submit_still_finish_a_v3_session_unchanged(tmp_path):
-    """`next`/`submit` finish a genuine pre-#681 v3 session through a terminal receipt."""
-    session_dir = _seed_pre681_v3_session(tmp_path)
-    _TRD._drive_cli(session_dir, None, _TRD._responder(round1_findings=None))
+def _finish(session_dir):
+    """Mark the saved state as finished: it carries a terminal answer."""
     state = _state(session_dir)
-    assert state["schemaVersion"] == 3
-    assert state["terminal"] == "converged"
-    with open(os.path.join(session_dir, RD.RECEIPT_FILE), encoding="utf-8") as fh:
-        receipt = json.load(fh)
-    assert receipt["schemaVersion"] == 3
-    assert RD.receipt_kind(receipt) == RD.RECEIPT_CERTIFIED_SCHEMA % 3
-    ok, why = RD.validate_receipt(receipt)
-    assert ok, why
-
-
-def test_legacy_refusal_durable_records_names_fresh_session(tmp_path):
-    """A legacy session with durable pending records names a fresh session dir, not hand submit."""
-    session_dir, gitdir, _head_path = _legacy_v3_session(
-        tmp_path, name="legacy-durable", land_records=True)
-    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
-    assert out["ok"] is False
-    assert out["reason"] == RD.LEGACY_SESSION_REFUSAL
-    detail = out.get("detail", "")
-    assert "fresh session" in detail
-    assert "record-submit-interleaved" in detail
-    assert "`next`/`submit`" not in detail
-
-
-def test_legacy_refusal_advance_latched_names_fresh_session(tmp_path):
-    """An advance-latched legacy session with no durable records names a fresh session dir."""
-    session_dir, gitdir, _head_path = _legacy_v3_session(tmp_path, name="legacy-advance-latched")
-    state = _state(session_dir)
-    state["_advanceUsed"] = True
+    state["terminal"] = "converged"
     RD.save_state(session_dir, state)
-    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+
+
+def _assert_legacy_refusal(out):
     assert out["ok"] is False
     assert out["reason"] == RD.LEGACY_SESSION_REFUSAL
-    detail = out.get("detail", "")
-    assert "advance-submit-interleaved" in detail
-    assert "fresh session" in detail
-    assert "`next`/`submit`" not in detail
+    assert out.get("detail") == RD.LEGACY_SESSION_REFUSAL_DETAIL
+    assert "earlier plugin version" in out["detail"]
+    assert "finished" in out["detail"]
+    assert "fresh session" in out["detail"]
 
 
-@pytest.mark.parametrize("land_records,next_submit,fresh_session,interleave_tag", [
-    (False, True, False, None),
-    (True, False, True, "record-submit-interleaved"),
-])
-def test_legacy_refusal_existing_branches_still_answer_as_before(
-        tmp_path, land_records, next_submit, fresh_session, interleave_tag):
-    """Plain and durable-record legacy refusal branches keep their recovery wording."""
+def test_unfinished_legacy_session_is_refused_by_the_upgrade_gate(tmp_path):
+    """An unfinished earlier-schema session never reaches the hand command: the upgrade gate
+    refuses it first."""
+    session_dir, gitdir, _head_path = _legacy_v3_session(tmp_path, name="legacy-unfinished")
+    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is False
+    assert out["reason"] == RD.SESSION_FROM_EARLIER_VERSION
+
+
+def test_finished_legacy_session_refusal_names_a_fresh_session(tmp_path):
+    """A finished earlier-schema session answers the hand command with one fixed detail."""
+    session_dir, gitdir, _head_path = _legacy_v3_session(tmp_path, name="legacy-plain")
+    _finish(session_dir)
+    _assert_legacy_refusal(RD.cmd_advance(session_dir, git=_fake_git(gitdir)))
+
+
+@pytest.mark.parametrize("land_records", [False, True], ids=["plain", "durable-records"])
+@pytest.mark.parametrize("advance_latched", [False, True], ids=["unlatched", "advance-latched"])
+def test_finished_legacy_refusal_detail_does_not_depend_on_the_session(
+        tmp_path, land_records, advance_latched):
+    """Durable records at the pending slot and an advance latch change nothing: one detail."""
     session_dir, gitdir, _head_path = _legacy_v3_session(
-        tmp_path, name="legacy-branch-%s" % land_records, land_records=land_records)
-    out = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
-    assert out["ok"] is False
-    assert out["reason"] == RD.LEGACY_SESSION_REFUSAL
-    detail = out.get("detail", "")
-    if next_submit:
-        assert "`next`/`submit`" in detail
-    else:
-        assert "`next`/`submit`" not in detail
-    if fresh_session:
-        assert "fresh session" in detail
-    if interleave_tag:
-        assert interleave_tag in detail
+        tmp_path, name="legacy-%s-%s" % (land_records, advance_latched), land_records=land_records)
+    state = _state(session_dir)
+    state["terminal"] = "converged"
+    if advance_latched:
+        state["_advanceUsed"] = True
+    RD.save_state(session_dir, state)
+    _assert_legacy_refusal(RD.cmd_advance(session_dir, git=_fake_git(gitdir)))

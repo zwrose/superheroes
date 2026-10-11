@@ -61,8 +61,6 @@ def test_review_forfeit_vacuous_token_single_home_no_literal_drift():
             "engine_dispatch_drift", os.path.join(lib, "engine_dispatch.py"))),
         ("round_driver.py", importlib.util.spec_from_file_location(
             "round_driver_drift", os.path.join(lib, "round_driver.py"))),
-        ("seat_canary.py", importlib.util.spec_from_file_location(
-            "seat_canary_drift", os.path.join(lib, "seat_canary.py"))),
     )
     import re
     _vacuous_lit = re.compile(r'''(?<![\w-])(["'])vacuous\1''')

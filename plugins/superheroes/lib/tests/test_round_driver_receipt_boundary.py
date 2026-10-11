@@ -1,4 +1,4 @@
-"""Driver-side receipt boundary tests — writer tests stay driverless in test_round_certification."""
+"""Driver-side receipt boundary tests."""
 import importlib.util
 import inspect
 import json
@@ -13,10 +13,8 @@ import round_adapters
 import round_records
 import session_contract
 
-import round_certification as RC
 import round_driver as RD
-from round_certification_fixtures import (
-    DEFAULT_PANEL_PAYLOAD_SHA,
+from session_fixture_support import (
     HEAD_SHA,
     write_certifiable_session,
 )
@@ -88,7 +86,7 @@ def _driver_panel_recorded_rows(tmp_path, native_seat, runner_seat):
     session_dir, gitdir, head_path = tdi._bootstrap(tmp_path, name="driver-native-boundary")
     tdi._drive_to_phase(
         session_dir, gitdir, [tdi._blocking_finding("missing bounds guard", 2)],
-        head_path, RC.PANEL_PHASE,
+        head_path, session_contract.PANEL_PHASE,
     )
     state = tdi._state(session_dir)
     pend = state["pending"]
@@ -153,18 +151,11 @@ def test_unprobed_native_seat_disclosure_at_receipt_boundary(tmp_path):
         journal_lines=[runner_row, native_row],
         envelopes=envelopes,
     )
-    state = json.load(open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8"))
+    state = json.load(open(os.path.join(session_dir, session_contract.STATE_FILE), encoding="utf-8"))
     disclosure_line = (
         "unprobed native seat(s) %s: seats with no runner execution record — run in-session on "
         "the host model, fallen open to it, or landed by hand — are declared live, never "
         "probed; their engagement rests on the seat's own record"
-    )
-    cert_receipt, refusal = RC.certify(session_dir)
-    assert refusal is None, refusal
-    degraded = cert_receipt.get("degraded") or []
-    assert any(disclosure_line % native_seat in line for line in degraded)
-    assert not any(
-        line.startswith("unprobed native seat(s) %s" % runner_seat) for line in degraded
     )
     driver_receipt = RD.build_receipt(state, session_dir)
     driver_degraded = driver_receipt.get("degraded") or []
@@ -225,7 +216,7 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
     session_dir, gitdir, head_path = tdi._bootstrap(tmp_path, name="runner-model-boundary")
     tdi._drive_to_phase(
         session_dir, gitdir, [tdi._blocking_finding("missing bounds guard", 2)],
-        head_path, RC.PANEL_PHASE,
+        head_path, session_contract.PANEL_PHASE,
     )
     state = tdi._state(session_dir)
     pend = state["pending"]
@@ -271,50 +262,23 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
     pytest.fail("runner seat %r not in roster slots" % runner_seat)
 
 
-# axis: receipt seat model comes from the runner's execution record, not the seat map pin.
-def test_receipt_seat_model_is_the_runner_records_engine_model(tmp_path):
+# axis: the driver stamps the runner transport and the runner's engine model on the recorded row.
+def test_runner_seat_record_carries_runner_transport_and_engine_model(tmp_path):
     runner_seat = "code-reviewer"
-    _session_dir, recorded_row, stored = _record_runner_seat_with_resolved_inputs(
+    _session_dir, recorded_row, _stored = _record_runner_seat_with_resolved_inputs(
         tmp_path, runner_seat,
     )
     assert recorded_row[session_contract.SEAT_TRANSPORT_KEY] == session_contract.SEAT_TRANSPORT_RUNNER
     assert recorded_row["executionEvidence"]["engineModel"] == _CODEX_REVIEWER_DEEP_MODEL
-    runner_row = dict(recorded_row)
-    runner_row.update(_stored_revision(stored, runner_row.get("citedHead")))
-    runner_row["headSha"] = HEAD
-    seat_cfg = {
-        "vendor": "codex",
-        "model": "gpt-6-astra",
-        "tier": "reviewer-deep",
-    }
-    session_dir = write_certifiable_session(
-        tmp_path,
-        name="runner-model-receipt",
-        state={
-            "seatMapReceipts": [{"round": "1", "map": {"seats": {runner_seat: dict(seat_cfg)}}}],
-            "config": {
-                "fixerVendor": "claude",
-                "baseGuard": RC.BASE_GUARD_CHECKED,
-                "seatMap": {"seats": {runner_seat: dict(seat_cfg)}},
-            },
-        },
-        journal_lines=[runner_row],
-        envelopes=[{"seat": runner_seat, "envelope": stored}],
-    )
-    receipt, refusal = RC.certify(session_dir)
-    assert refusal is None, refusal
-    row = next(item for item in receipt["seats"] if item["seat"] == runner_seat)
-    assert row["model"] == _CODEX_REVIEWER_DEEP_MODEL
-    assert all(item.get("model") != "gpt-6-astra" for item in receipt["seats"])
 
 
-# axis: hand-landed transport suppresses receipt model even when journal evidence carries engineModel.
-def test_receipt_seat_model_none_for_hand_landed_record_carrying_a_model(tmp_path):
+# axis: a hand-landed record is stamped hand-landed even when its evidence carries engineModel.
+def test_hand_landed_record_carrying_a_model_is_stamped_hand_landed(tmp_path):
     seat = "code-reviewer"
     session_dir, gitdir, head_path = tdi._bootstrap(tmp_path, name="hand-landed-model-boundary")
     tdi._drive_to_phase(
         session_dir, gitdir, [tdi._blocking_finding("missing bounds guard", 2)],
-        head_path, RC.PANEL_PHASE,
+        head_path, session_contract.PANEL_PHASE,
     )
     state = tdi._state(session_dir)
     pend = state["pending"]
@@ -343,50 +307,3 @@ def test_receipt_seat_model_none_for_hand_landed_record_carrying_a_model(tmp_pat
     )
     assert recorded_row[session_contract.SEAT_TRANSPORT_KEY] == session_contract.SEAT_TRANSPORT_HAND_LANDED
     assert recorded_row["executionEvidence"]["engineModel"] == "gpt-6-astra"
-    durable, err = round_records.read_json(out["storePath"])
-    assert err is None
-    durable = _stored_with_engaged_observation(durable)
-    journal_row = dict(recorded_row)
-    journal_row.update(_stored_revision(durable, journal_row.get("citedHead")))
-    journal_row["headSha"] = HEAD
-    cert_dir = write_certifiable_session(
-        tmp_path,
-        name="hand-landed-model-receipt",
-        journal_lines=[journal_row],
-        envelopes=[{"seat": seat, "envelope": durable}],
-    )
-    receipt, refusal = RC.certify(cert_dir)
-    assert refusal is None, refusal
-    row = next(item for item in receipt["seats"] if item["seat"] == seat)
-    assert row["model"] is None
-
-
-def test_materialized_session_preserves_checked_base_guard(tmp_path):
-    session_dir = write_certifiable_session(
-        tmp_path,
-        name="checked-guard",
-        state={"config": {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED, "headSha": HEAD}},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
-    )
-    with open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8") as fh:
-        state = json.load(fh)
-    materialized = RD._materialize_run_loop_session(state, 1, source_session_dir=session_dir)
-    try:
-        with open(os.path.join(materialized, RC.STATE_FILE), encoding="utf-8") as fh:
-            materialized_state = json.load(fh)
-        assert materialized_state["config"]["baseGuard"] == RC.BASE_GUARD_CHECKED
-        from round_certification_fixtures import _head_content_blobs_for_findings, _write_head_content_blobs
-
-        blobs = _head_content_blobs_for_findings(materialized_state.get("findings") or [])
-        if blobs is None:
-            blobs = _head_content_blobs_for_findings(
-                [{"id": "F1", "file": "a.py", "disposition": "fixed"}]
-            )
-        _write_head_content_blobs(materialized, blobs)
-        receipt, refusal = RC.certify(materialized)
-        assert refusal is None, refusal
-        assert receipt["baseGuard"] == RC.BASE_GUARD_CHECKED
-    finally:
-        import shutil
-
-        shutil.rmtree(materialized, ignore_errors=True)

@@ -1,0 +1,404 @@
+"""Session-directory fixture helpers for kept tests — test tree only.
+
+Copied from the certification fixtures without behaviour change (constants re-homed to the kept
+modules); nothing here imports the certification writer or reads the generated fixture tree.
+"""
+import json
+import os
+
+import record_paths
+import round_driver
+import round_records as RR
+import session_contract
+
+HEAD_SHA = "a" * 40
+ANCHOR_SHA = "feb91032a2cb2106f089a25063b8178527ae4359f5412ccf549e9d2f98f28ce9"
+DEFAULT_PANEL_PAYLOAD = {"findings": []}
+DEFAULT_PANEL_PAYLOAD_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD)
+DEFAULT_FINDINGS_RESULT_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD["findings"])
+
+META_FILE = session_contract.META_FILE
+STATE_FILE = session_contract.STATE_FILE
+JOURNAL_FILE = session_contract.JOURNAL_FILE
+PANEL_PHASE = session_contract.PANEL_PHASE
+
+_LEGACY_TYPED_RESULT_DIGEST = "e" * 64
+
+
+def write_session(
+    tmp_path,
+    *,
+    name="session",
+    state=None,
+    journal_lines=None,
+    meta=None,
+    envelopes=None,
+):
+    """Ad-hoc session writer for driverless tests."""
+    session_dir = str(tmp_path / name)
+    os.makedirs(session_dir, exist_ok=True)
+    meta_obj = {"sessionId": "test-session-001", "headSha": HEAD_SHA}
+    if meta:
+        meta_obj.update(meta)
+    with open(os.path.join(session_dir, META_FILE), "w", encoding="utf-8") as fh:
+        json.dump(meta_obj, fh, sort_keys=True)
+    state_obj = _minimal_terminal_state()
+    if state:
+        state_obj.update(state)
+    _normalize_refuted_findings(state_obj)
+    with open(os.path.join(session_dir, STATE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(state_obj, fh, sort_keys=True)
+    lines = journal_lines if journal_lines is not None else [_default_journal_row()]
+    payload_lookup = _payload_lookup_from_envelope_specs(envelopes)
+    with open(os.path.join(session_dir, JOURNAL_FILE), "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(
+                json.dumps(_normalize_journal_row(row, payload_lookup), sort_keys=True)
+                + "\n"
+            )
+    for spec in envelopes if envelopes is not None else [
+        {"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}
+    ]:
+        _write_envelope(session_dir, spec)
+    return session_dir
+
+
+def _minimal_terminal_state():
+    head = HEAD_SHA
+    return {
+        "schemaVersion": 5,
+        "config": {
+            "fixerVendor": "claude",
+            "baseGuard": round_driver.BASE_GUARD_CHECKED,
+            "headSha": head,
+        },
+        "round": 1,
+        "step": "terminal",
+        "terminal": "converged",
+        "certification": {
+            "shape": "full-panel-confirmed",
+            "fullPanel": True,
+            "independence": "independent",
+            "base": "fetched",
+            "shapeDrivers": [],
+        },
+        "findings": [
+            {
+                "id": "F1",
+                "file": "a.py",
+                "line": 1,
+                "title": "issue",
+                "severity": "Minor",
+                "disposition": "refuted",
+                "refutedReason": "Reviewer confirmed the cited behavior is intentional.",
+                "dispositionReceipt": {"headSha": head, "verifyResult": "pass"},
+            }
+        ],
+        "decisions": [{"round": 1, "kind": "converged", "detail": "certified"}],
+        "rounds": {},
+        "seatMapReceipts": [
+            {
+                "round": "1",
+                "map": {
+                    "seats": {
+                        "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+                    }
+                },
+            }
+        ],
+    }
+
+
+def _binding_fields(nonce="test-nonce", *, result_digest=None):
+    digest = (
+        result_digest
+        if isinstance(result_digest, str) and result_digest
+        else DEFAULT_FINDINGS_RESULT_SHA
+    )
+    return {
+        "source": "runner",
+        "runnerNonce": nonce,
+        "recordDigest": "d" * 64,
+        "resultDigest": digest,
+        "resultKind": "findings",
+    }
+
+
+def _observation_fields(*, read="engaged", tool_calls=1):
+    return {
+        "read": read,
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        "tokens": None,
+        "toolCalls": tool_calls,
+    }
+
+
+def _execution_evidence(binding, *, read="engaged", phase=PANEL_PHASE):
+    return {
+        **binding,
+        "runKind": session_contract.run_kind_for_phase(phase),
+        "observation": _observation_fields(read=read),
+    }
+
+
+def _slot_nonce(seat, phase, attempt, occurrence=0):
+    return "nonce-%s-%s-a%d-o%d" % (seat, phase, attempt, occurrence)
+
+
+def _normalize_legacy_result_digest(evidence, payload):
+    if not isinstance(evidence, dict) or not isinstance(payload, dict):
+        return evidence
+    if evidence.get("resultDigest") != _LEGACY_TYPED_RESULT_DIGEST:
+        return evidence
+    result_kind = evidence.get("resultKind")
+    if not isinstance(result_kind, str) or result_kind not in payload:
+        return evidence
+    normalized = dict(evidence)
+    normalized["resultDigest"] = RR.payload_sha256(payload[result_kind])
+    return normalized
+
+
+def _normalize_refuted_findings(state):
+    if not isinstance(state, dict):
+        return
+    findings = state.get("findings")
+    if not isinstance(findings, list):
+        return
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("disposition") != "refuted":
+            continue
+        reason = finding.get("refutedReason")
+        if isinstance(reason, str) and reason.strip():
+            continue
+        receipt = finding.get("dispositionReceipt")
+        if isinstance(receipt, str) and receipt.strip():
+            continue
+        if isinstance(receipt, dict):
+            if any(
+                isinstance(receipt.get(key), str) and receipt.get(key).strip()
+                for key in ("reason", "refutedReason", "text")
+            ):
+                continue
+            finding["refutedReason"] = (
+                "Reviewer confirmed the cited behavior is intentional."
+            )
+
+
+def _normalize_dispatch_journal_row(row):
+    if not isinstance(row, dict):
+        return row
+    if row.get("provenance") != RR.PROVENANCE_DISPATCH_OBSERVED:
+        return row
+    if row.get("outcome") != "recorded":
+        return row
+    evidence = row.get("executionEvidence")
+    if not isinstance(evidence, dict):
+        return row
+    tool_calls = evidence.get("toolCalls")
+    if isinstance(tool_calls, int) and tool_calls >= 1:
+        return row
+    observation = evidence.get("observation")
+    if isinstance(observation, dict):
+        obs_tool_calls = observation.get("toolCalls")
+        if isinstance(obs_tool_calls, int) and obs_tool_calls >= 1:
+            return row
+    normalized = dict(row)
+    normalized_evidence = dict(evidence)
+    if isinstance(observation, dict):
+        normalized_obs = dict(observation)
+        if "tokens" not in normalized_obs:
+            normalized_obs["tokens"] = None
+        normalized_obs["toolCalls"] = 1
+        normalized_evidence["observation"] = normalized_obs
+    else:
+        normalized_evidence["toolCalls"] = 1
+    normalized["executionEvidence"] = normalized_evidence
+    return normalized
+
+
+def _normalize_journal_row(row, payload_lookup=None):
+    row = _normalize_dispatch_journal_row(row)
+    evidence = row.get("executionEvidence")
+    if not isinstance(evidence, dict):
+        return row
+    payload = None
+    payload_sha = row.get("payloadSha256")
+    if isinstance(payload_sha, str) and payload_lookup:
+        payload = payload_lookup.get(payload_sha)
+    if payload is None and payload_sha == DEFAULT_PANEL_PAYLOAD_SHA:
+        payload = DEFAULT_PANEL_PAYLOAD
+    result_kind = evidence.get("resultKind")
+    if payload is None and result_kind == "findings":
+        payload = {"findings": []}
+    if not isinstance(payload, dict):
+        return row
+    normalized_evidence = _normalize_legacy_result_digest(evidence, payload)
+    if normalized_evidence is evidence:
+        return row
+    normalized = dict(row)
+    normalized["executionEvidence"] = normalized_evidence
+    return normalized
+
+
+def _payload_lookup_from_envelope_specs(envelopes):
+    lookup = {}
+    for spec in envelopes or []:
+        payload = spec.get("payload")
+        payload_sha = spec.get("payloadSha256")
+        if isinstance(payload, dict) and isinstance(payload_sha, str):
+            lookup[payload_sha] = payload
+    return lookup
+
+
+def _ad_hoc_envelope(seat, payload, spec):
+    phase = spec.get("phase", PANEL_PHASE)
+    attempt = spec.get("attempt", 0)
+    occurrence = spec.get("occurrence", 0)
+    provenance = spec.get("provenance", RR.PROVENANCE_DISPATCH_OBSERVED)
+    evidence = spec.get("executionEvidence")
+    payload_sha = spec.get("payloadSha256") or RR.payload_sha256(payload)
+    result_digest = RR.payload_sha256(payload.get("findings", []))
+    if evidence is None:
+        binding = _binding_fields(
+            _slot_nonce(seat, phase, attempt, occurrence),
+            result_digest=result_digest,
+        )
+        evidence = _execution_evidence(binding, phase=phase)
+    envelope = {
+        "schema": RR.SEAT_RESULT_SCHEMA_V2,
+        "session": "test-session-001",
+        "round": spec.get("round", 1),
+        "phase": phase,
+        "seat": seat,
+        "attempt": attempt,
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "payload": payload,
+        "payloadSha256": payload_sha,
+        "provenance": provenance,
+        "executionEvidence": evidence,
+    }
+    if provenance == RR.PROVENANCE_HAND_LANDED:
+        envelope["manifestSha256"] = ANCHOR_SHA
+        envelope["orderSha256"] = ANCHOR_SHA
+    if occurrence:
+        envelope["occurrence"] = occurrence
+    envelope["envelopeSha256"] = RR.envelope_sha256(payload, evidence)
+    return envelope
+
+
+def _write_envelope(session_dir, spec):
+    rnd = spec.get("round", 1)
+    phase = spec.get("phase", PANEL_PHASE)
+    seat = spec["seat"]
+    attempt = spec.get("attempt", 0)
+    occurrence = spec.get("occurrence", 0)
+    path = record_paths.store_path(session_dir, rnd, phase,
+                                   record_paths.storage_key(seat, occurrence), attempt)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if spec.get("envelope") is not None:
+        envelope = spec["envelope"]
+    else:
+        payload = spec.get("payload") or {"findings": []}
+        envelope = _ad_hoc_envelope(seat, payload, spec)
+    payload_obj = envelope.get("payload")
+    if isinstance(payload_obj, dict):
+        evidence = envelope.get("executionEvidence")
+        if isinstance(evidence, dict):
+            envelope = dict(envelope)
+            envelope["executionEvidence"] = _normalize_legacy_result_digest(
+                evidence, payload_obj
+            )
+            envelope["envelopeSha256"] = RR.envelope_sha256(
+                envelope.get("payload"), envelope.get("executionEvidence"))
+    if spec.get("payloadSha256") is not None:
+        envelope["payloadSha256"] = spec["payloadSha256"]
+        envelope["envelopeSha256"] = RR.envelope_sha256(
+            envelope.get("payload"), envelope.get("executionEvidence"))
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+
+
+def _default_journal_row():
+    payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
+    envelope = _ad_hoc_envelope("code-reviewer", DEFAULT_PANEL_PAYLOAD,
+                                {"payloadSha256": payload_sha})
+    evidence = envelope["executionEvidence"]
+    return {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": 0,
+        "seat": "code-reviewer",
+        "occurrence": 0,
+        "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": payload_sha,
+        "headSha": HEAD_SHA,
+        "executionEvidence": evidence,
+        "recordIdentity": {
+            "phase": PANEL_PHASE,
+            "seat": "code-reviewer",
+            "occurrence": 0,
+            "attempt": 0,
+        },
+    }
+
+
+def _dispatch_journal_with_binding(
+    seat="code-reviewer",
+    payload_sha=DEFAULT_PANEL_PAYLOAD_SHA,
+    *,
+    nonce="test-nonce",
+    attempt=0,
+    head_sha=HEAD_SHA,
+    read="engaged",
+):
+    evidence = {
+        "read": read,
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        "toolCalls": 1,
+        "runKind": session_contract.run_kind_for_phase(PANEL_PHASE),
+        **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+    }
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "occurrence": 0,
+        "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": evidence,
+        "recordIdentity": {
+            "phase": PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+    if head_sha is not None:
+        row["headSha"] = head_sha
+    return row
+
+
+def write_certifiable_session(tmp_path, **kwargs):
+    """Session whose journal carries a dispatch row with binding telemetry."""
+    state = kwargs.get("state")
+    if not isinstance(state, dict):
+        state = {}
+    kwargs = dict(kwargs)
+    kwargs["state"] = state
+    if kwargs.get("journal_lines") is None:
+        kwargs["journal_lines"] = [_dispatch_journal_with_binding()]
+    return write_session(tmp_path, **kwargs)

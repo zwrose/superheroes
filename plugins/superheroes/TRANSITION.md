@@ -9,6 +9,31 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Before you upgrade
+
+- After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
+- After upgrading, the owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets.
+- The project keeps working before the sitting. Until then, every change whose risk is unclear goes to the full lane, and every leftover with a real consequence comes to the owner.
+- The earlier plugin version is not kept runnable after this release. Downgrading under these changes is not supported.
+
+### Review record
+
+- Every review on the full, light and micro lanes and review-code's review-only exit now writes one review record, kept as a new marker-tagged comment on the PR for each review session (earlier ones are never edited, and each reviewer's raw output sits in its own linked comment), and read back with the record writer's `read --pr <n>` verb. The full lane builds its account from the review session.
+- The findings contract gains a required, nullable `consequence` member, and the record spells the five outcomes as `fixed`, `shown-wrong`, `craft`, `left-for-owner`, `ruling`. Callers that build findings by hand must now emit `consequence` (null is allowed).
+- The advisor's vet now reads the review record. In place of the certified-loop check and the seat-provenance parity check, it checks that the record exists, that the checks ran on the PR's final commit, and that no leftover skipped the owner's review. After a project adopts this release, a full or light PR with no review record is not returned as ready.
+
+### Review: what retires
+
+These retirements ship in the same release as the review record, and never apart from it.
+
+- **The certificate gate.** No review is refused, parked or reported incomplete for lacking a certificate, and the handback gate no longer refuses. The review record replaces the certificate.
+- **The planted-bug review control.** No review runs a planted-defect probe. The engine wiring and new-model admission checks stay, and the review record shows which reviewers ran.
+- **Moving a review session.** The relocate and re-emit verbs are gone. A session is not moved; a review that needs a new place starts again in a fresh session folder.
+- **Starting a review from an earlier session's saved records.** A new review no longer starts from an earlier session's saved records. It starts from round 1 in a fresh session folder, and the next review record accounts for every finding the latest earlier record listed.
+- **The exact-head evidence chain.** The head-content blobs and their recomputation check are gone. The review record is judged against the PR's final commit instead.
+- A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
+- A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
+
 ### Launcher: cloud launch
 
 - `launch` and `compose` take `--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. A launch without `--place`, or with `--place local`, is a local launch.
@@ -56,7 +81,7 @@ belongs to and lists every change with its replacement.
 ### Cloud builds: the setup sitting
 
 - A project is set up for cloud builds by asking the advisor to set up cloud builds. The advisor lists four hand steps: make a cloud environment and pick it by name with Claude Code's `/remote-env` picker on the account the builds run on, paste the setup text into it, sign in once to the separate reviewer sign-in, and paste the reviewer pass. It then runs one check session in that environment and reports three results: the cloud's plugin version, its calibration, and whether the reviewer answered.
-- New `lib/cloud_environment.py` reads the environment the owner picked from Claude Code's user settings (`remote.defaultEnvironmentId` in `settings.json` under the account's config directory): `snapshot` before the pick, `pick --before <value>` after it. A missing or unchanged value is no pick, and the owner is asked to pick again; the owner is never asked for the id.
+- New `lib/cloud_environment.py` reads the environment the owner picked from Claude Code's user settings (`remote.defaultEnvironmentId` in `settings.json` under the account's config directory): `snapshot` before the pick, `pick --before <value>` after it (a retry adds `--confirmed <id>`, so an unchanged value equal to the confirmed id is kept, not asked again). A missing or unchanged value is no pick, and the owner is asked to pick again; the owner is never asked for the id.
 - New `lib/cloud_check.py` holds the sitting: `setup-message`, `sign-in`, `start`, `report`, `judge` and `setup-text`. `start` and `judge` take `--environment <id>`. A passed check writes the setup record and leaves the cloud-builds setting as it was. A failed check writes nothing and switches cloud builds off when they were on.
 - `cloud_pass.py make` takes `--environment <id>` and then adds a fifth line to its block, `SUPERHEROES_CLOUD_ENVIRONMENT`, naming the environment. The check passes only when the session reports that same id, because a cloud launch naming an id that matches no environment lands in the account's default environment without an error. A pass block made without `--environment` fails the check.
 - The setup text ends with its tool-steps marker line, a log line and `exit 0`. A project's own install steps go directly under the marker line.

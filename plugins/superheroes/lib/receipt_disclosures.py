@@ -22,9 +22,6 @@ ROUND_ENTRY_KEY_FORMS = {
     },
 }
 
-DISCLOSE_ON_PRESENCE = ("canaryVerified",)
-
-
 def str_list(value):
     return isinstance(value, list) and all(isinstance(x, str) for x in value)
 
@@ -35,25 +32,6 @@ def dict_list(value):
 
 def bool_value(value):
     return isinstance(value, bool)
-
-
-def canary_failed_shape(value):
-    return isinstance(value, dict) and str_list(value.get("seats") or [])
-
-
-def canary_verified_shape(value):
-    return isinstance(value, dict) and all(isinstance(k, str) for k in value)
-
-
-def control_probe_shape(value):
-    if not isinstance(value, dict):
-        return False
-    if not isinstance(value.get("submitted"), bool):
-        return False
-    vendors = value.get("vendors")
-    if not isinstance(vendors, dict):
-        return False
-    return all(isinstance(k, str) and isinstance(v, str) for k, v in vendors.items())
 
 
 def adapter_provenance_shape(value):
@@ -93,7 +71,7 @@ def normalize_adapter_provenance(prov):
     return {}
 
 
-RESUMABLE_DISCLOSURE_CHANNELS = {
+CARRIED_DISCLOSURE_CHANNELS = {
     "fellOpen": dict_list,
     "fellOpenProvenanceMissing": str_list,
     "seatMapUnavailable": str_list,
@@ -101,12 +79,6 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "seatMapViolations": dict_list,
     "vacuousSeats": str_list,
     "engagedArtifactSeats": str_list,
-    "canaryUnverified": str_list,
-    "canaryFailed": canary_failed_shape,
-    "canaryOutcomeFailed": canary_failed_shape,
-    "canaryPlantUndetected": canary_failed_shape,
-    "canaryVerified": canary_verified_shape,
-    "controlProbe": control_probe_shape,
     "adapterProvenance": adapter_provenance_shape,
     "recordOrphansIgnored": str_list,
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
@@ -115,16 +87,6 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
 }
-
-# Ride the receipt's per-round entries; never read into a verdict or a degraded line.
-RECORD_ONLY_DISCLOSURE_CHANNELS = (
-    "canaryUnverified",
-    "canaryFailed",
-    "canaryOutcomeFailed",
-    "canaryPlantUndetected",
-    "canaryVerified",
-    "controlProbe",
-)
 
 
 def _state_version(state):
@@ -171,15 +133,10 @@ def declared_disclosures(entry):
     if not isinstance(entry, dict):
         entry = {}
     out = {}
-    for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
-        if chan in DISCLOSE_ON_PRESENCE:
-            if chan not in entry:
-                continue
-            value = entry.get(chan)
-        else:
-            value = entry.get(chan)
-            if not value:
-                continue
+    for chan, shape_ok in CARRIED_DISCLOSURE_CHANNELS.items():
+        value = entry.get(chan)
+        if not value:
+            continue
         if not shape_ok(value):
             continue
         out[chan] = value
@@ -544,16 +501,11 @@ def build_degraded_prose(state, form, journal=None):
 __all__ = (
     "RECEIPT_FORM_CERTIFIED",
     "ROUND_ENTRY_KEY_FORMS",
-    "DISCLOSE_ON_PRESENCE",
-    "RESUMABLE_DISCLOSURE_CHANNELS",
-    "RECORD_ONLY_DISCLOSURE_CHANNELS",
+    "CARRIED_DISCLOSURE_CHANNELS",
     "VENDOR_SOURCE_DEFAULTED",
     "str_list",
     "dict_list",
     "bool_value",
-    "canary_failed_shape",
-    "canary_verified_shape",
-    "control_probe_shape",
     "adapter_provenance_shape",
     "order_vendor_provenance_gaps_shape",
     "normalize_adapter_provenance",

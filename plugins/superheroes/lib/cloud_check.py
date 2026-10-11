@@ -95,7 +95,7 @@ _SIGN_IN_WALK = (
     "The reviewer needs its own sign-in on this machine, kept apart from your main one. Run this in "
     "a terminal and finish the sign-in in your browser:\n"
     "\n"
-    "    {home_env}={home} codex login\n"
+    "    mkdir -p {home} && {home_env}={home} codex login\n"
     "\n"
     "Tell me when it's done and I'll check it."
 )
@@ -120,7 +120,7 @@ _PARTS = (
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
      "paste a fresh pass into the environment"),
-    ("record", "The check passed, but I could not write the setup record on this machine.",
+    ("record", "The check passed, but I could not finish saving the result on this machine.",
      "tell me so I can look at the store"),
     ("setting", "I could not switch cloud builds off.", "switch them off in configure"),
 )
@@ -257,35 +257,27 @@ def setup_text(cwd, *, project_name=None, root=None, env=None, now=None):
             "setupText": composed["text"], "header": composed["header"]}
 
 
-_IGNORED_ARTIFACTS = frozenset({".DS_Store"})
-
-
 def repo_calibration_stamp(cwd):
-    """The stamp of the calibration the repository itself carries: every regular file under the
-    repository's calibration directory, keyed by path relative to it, with the cloud-builds setting
-    left out of the core file. `none` when the repository has no such directory."""
+    """The stamp of the calibration the repository itself carries: the calibration files directly
+    under the repository's calibration directory (the `.md` layers, as the setup-text writer
+    enumerates them in `cloud_setup_text._store_files`), keyed by name, with the cloud-builds
+    setting left out of the core file. Subdirectories (the Guardian sweep outputs), lock files and
+    editor or OS artifacts are not calibration and never change it. `none` when the repository has
+    no such directory."""
     core_rel = core_md.in_repo_core_rel_path()
     directory = os.path.join(core_md._repo_root(cwd), os.path.dirname(core_rel))
     if not os.path.isdir(directory):
         return "none"
-
-    def fail(error):
-        raise error
-
     files = {}
-    for top, _dirs, names in os.walk(directory, onerror=fail):
-        for name in names:
-            # axis: machine artifacts the repository ignores never reach a cloud checkout
-            if name in _IGNORED_ARTIFACTS:
-                continue
-            path = os.path.join(top, name)
-            if not os.path.isfile(path):
-                continue
-            rel = os.path.relpath(path, directory).replace(os.sep, "/")
-            with open(path, "rb") as fh:
-                data = fh.read()
-            files[rel] = cloud_setup_text._without_setting(data) \
-                if rel == os.path.basename(core_rel) else data
+    # axis: only the calibration layers count; sweep outputs and machine artifacts never reach the stamp
+    for name in sorted(os.listdir(directory)):
+        path = os.path.join(directory, name)
+        if not name.endswith(".md") or not os.path.isfile(path):
+            continue
+        with open(path, "rb") as fh:
+            data = fh.read()
+        files[name] = cloud_setup_text._without_setting(data) \
+            if name == os.path.basename(core_rel) else data
     return cloud_setup.calibration_stamp(files)
 
 
@@ -441,6 +433,20 @@ def _switch_off(cwd, account, root, project_name, set_fn):
     return True, isinstance(got, dict) and got.get("action") in ("written", "noop")
 
 
+def _fail_closed(cwd, who, root, name, set_fn, environment, failed, now):
+    """(switched off, failed parts, marker written). The marker goes down before the setting is
+    touched, carrying the parts known so far; a switch-off that then fails adds `setting` and the
+    marker is rewritten once with the final parts. The marker is reported written only when the one
+    on disk carries the final parts; a failed rewrite leaves the first marker in place."""
+    failed = list(failed)
+    marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+    was_on, off = _switch_off(cwd, who, root, name, set_fn)
+    if was_on and not off:
+        failed.append("setting")
+        marked = marked and _write_failed_check(cwd, who, root, environment, failed, now)
+    return off, failed, marked
+
+
 def _utc_stamp(now):
     moment = now if isinstance(now, datetime.datetime) else datetime.datetime.fromtimestamp(
         time.time() if now is None else now, datetime.timezone.utc)
@@ -541,7 +547,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
     """Read the report line out of `line` and decide. The setup record is written only when the
     environment, the plugin version, the calibration and the reviewer's answer all agree with this
     machine; every other result writes none, switches an on cloud-builds setting off, and leaves a
-    failed-check marker beside the record (a passing check removes it). The record is never touched
+    failed-check marker beside the record (a passing check writes the record first, then removes
+    the marker; a marker that cannot be removed fails the check as `record` with `recordWritten`
+    true and stays). The record is never touched
     by a failed or unread result."""
     name = _project(cwd, project_name)
     today = cloud_setup_text._utc_date(now)
@@ -552,10 +560,10 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         found = _find_report(line, nonce)
         obj = found if _readable(found, nonce) else None
     if obj is None:
-        was_on, off = _switch_off(cwd, who, root, name, set_fn)
-        failed = ["unread"] + (["setting"] if was_on and not off else [])
+        # axis: the marker is persisted before the setting changes, so an interruption leaves it
         # axis: an unread report leaves a marker a later reader can see, and never touches the record
-        marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+        off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment,
+                                           ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
                     ("versionMatches", "calibrationMatches", "reviewerAnswered",
                      "environmentMatches")),
@@ -571,10 +579,12 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                                      ("reviewer", "reviewerAnswered")) if not results[key]]
     written = False
     if not failed:
+        done = False
         try:
-            # axis: a passing check removes the failed-check marker first; a marker that stays
-            # means no record is written
-            if who is not None and _remove_failed_check(cwd, who, root):
+            # axis: a passing check writes the record first and clears the failed-check marker only
+            # after the write succeeded, so an interruption between the two leaves a stale marker
+            # (not ready, the fail-closed direction) and never a lost one
+            if who is not None:
                 # axis: a refused or raising record write is never reported as a pass
                 got = (cloud_setup.record_check if record_fn is None else record_fn)(
                     cwd, account=who, environment=environment, plugin_version=obj["pluginVersion"],
@@ -583,18 +593,18 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                     pass_lapses=obj["confirmation"]["passLapses"], checked_at=today.isoformat(),
                     root=root)
                 written = isinstance(got, dict) and got.get("action") in ("written", "noop")
+                # axis: a marker that cannot be removed fails the check and stays in place
+                done = written and _remove_failed_check(cwd, who, root)
         except Exception:
-            written = False
-        if not written:
+            done = False
+        if not done:
             failed.append("record")
 
     if failed:
         # axis: a failed check leaves cloud builds off
-        was_on, off = _switch_off(cwd, who, root, name, set_fn)
-        if was_on and not off:
-            failed.append("setting")
+        # axis: the marker is persisted before the setting changes, so an interruption leaves it
         # axis: a failed check leaves a marker a later reader can see, and never touches the record
-        marked = who is not None and _write_failed_check(cwd, who, root, environment, failed, now)
+        off, failed, marked = _fail_closed(cwd, who, root, name, set_fn, environment, failed, now)
         return {"action": "failed", "results": results, "failedParts": failed,
                 "recordWritten": written, "settingSwitchedOff": off, "markerWritten": marked,
                 "message": _failed_message(failed, off, obj["pluginVersion"],
@@ -637,9 +647,9 @@ def _check_prompt(nonce, issue):
     return prompt + (_CHECK_POST.format(issue=issue) if issue is not None else "")
 
 
-def _repo_root(cwd):
+def _repo_root(cwd, env=None):
     try:
-        return store_core.repo_root(cwd)
+        return store_core.repo_root(cwd, env=env)
     except Exception:
         return os.path.abspath(cwd)
 
@@ -673,11 +683,11 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
         return _refusal("check-launch-refused", "The check session could not be launched.",
                         detail=built.get("reason"))
     import launcher
-    child_env = dict(os.environ if env is None else env)
+    child_env = launcher.ll.scrub_env(env)
     spawn = spawn_fn or launcher._default_cloud_spawn
     try:
         log_path = os.path.join(tempfile.mkdtemp(prefix="cloud-check-"), "launch.log")
-        spawned = spawn(built["argv"], _repo_root(cwd), log_path, child_env, timeout)
+        spawned = spawn(built["argv"], _repo_root(cwd, child_env), log_path, child_env, timeout)
     except OSError:
         return _refusal("check-session-not-started", _NOT_STARTED)
     output = spawned.get("output") if isinstance(spawned, dict) else None

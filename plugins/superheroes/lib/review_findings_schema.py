@@ -29,6 +29,7 @@ _FALLBACK_CANONICAL_MEMBER_KEYS = (
     "evidence",
     "confidence",
     "tradeoff",
+    "consequence",
 )
 _FALLBACK_SEVERITY_ENUM = ("Critical", "Important", "Minor", "Nit")
 _FALLBACK_SEVERITY_TIERS = frozenset(_FALLBACK_SEVERITY_ENUM)
@@ -53,8 +54,21 @@ _FALLBACK_FINDING_PROPERTY_SCHEMAS["dimension"] = {"enum": list(_FALLBACK_DIMENS
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["confidence"] = {"enum": list(_FALLBACK_CONFIDENCE_ENUM)}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["line"] = {"type": ["integer", "null"]}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["tradeoff"] = {"type": ["boolean", "null"]}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["consequence"] = {"type": ["string", "null"]}
 
 SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
+
+# The findings member that states what goes wrong if the finding is left unfixed.
+CONSEQUENCE_KEY = "consequence"
+
+# The five outcomes a finding can reach; the only spelling of them in lib/.
+OUTCOMES = ("fixed", "shown-wrong", "craft", "left-for-owner", "ruling")
+
+# Set form of OUTCOMES for membership checks.
+OUTCOME_SET = frozenset(OUTCOMES)
+
+# The outcome for a finding only the owner can decide.
+LEFT_FOR_OWNER = OUTCOMES[3]
 
 # Synonym key → canonical member key. Structural mappings are listed separately.
 SUBSTANCE_KEY_SYNONYMS = {

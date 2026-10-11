@@ -1,12 +1,14 @@
 """Which cloud environment the owner just picked with Claude Code's `/remote-env` picker.
 
   cloud_environment.py snapshot [--cwd D]
-  cloud_environment.py pick [--before ID] [--cwd D]
+  cloud_environment.py pick [--before ID] [--confirmed ID] [--cwd D]
 
 Claude Code saves the pick as `remote.defaultEnvironmentId` in the user settings file of the
 account it runs on. `snapshot` reads that value before the owner picks; `pick` reads it again and
 returns the id only when it is a well-formed environment id and differs from the `--before` value.
-A value that is missing or unchanged means no pick was made.
+A value that is missing or unchanged means no pick was made. On a retry after a failed check the
+caller passes `--confirmed` (the id the first pick returned): an unchanged value equal to it is the
+same environment kept, not a missing pick.
 
 On a machine where several Claude accounts share one settings file, the second read is made right
 after the pick, because another account's pick in between would be read as this one's. Standard
@@ -26,11 +28,17 @@ SETTINGS_FILENAME = "settings.json"
 
 _ASK_AGAIN = ("I can't see a new pick yet. In Claude Code on this account, run /remote-env, choose "
               "the environment you made for this project by its name, and tell me when it's done.")
+_ALREADY_PICKED = ("Claude Code already had an environment picked, and it's still the same one. If "
+                   "the environment shown as picked in /remote-env is the one you made for this "
+                   "project, say it's that one and I'll use it. Otherwise pick this project's "
+                   "environment and tell me.")
 _PICKED = "Got it: I can see the environment you picked."
 _UNREADABLE = ("I can't read this account's Claude Code settings, so I can't see which environment "
                "you picked. Check that Claude Code's settings file on this machine is readable, "
                "then tell me and I'll look again.")
 _BEFORE_INVALID = "The value read before the pick is not an environment id."
+_CONFIRMED_INVALID = "The environment confirmed earlier is not an environment id."
+_KEPT = "Got it: I can see you kept the same environment."
 
 
 def _is_id(value):
@@ -92,10 +100,13 @@ def snapshot(env=None, cwd=None):
                 "message": _UNREADABLE}
 
 
-def pick(before=None, env=None, cwd=None):
-    """Read again and compare with `before`. Returns an id only for a new, well-formed value. Never
-    raises."""
+def pick(before=None, confirmed=None, env=None, cwd=None):
+    """Read again and compare with `before`. Returns an id only for a new, well-formed value, or for
+    an unchanged one equal to `confirmed` (the retry keeping its environment). Never raises."""
     try:
+        if confirmed is not None and not _is_id(confirmed):
+            return {"action": "refused", "reason": "confirmed-invalid", "environment": None,
+                    "message": _CONFIRMED_INVALID}
         if before is not None and not _is_id(before):
             return {"action": "refused", "reason": "before-invalid", "environment": None,
                     "message": _BEFORE_INVALID}
@@ -106,9 +117,12 @@ def pick(before=None, env=None, cwd=None):
         if value is None:
             return {"action": "not-picked", "reason": "pick-missing", "environment": None,
                     "message": _ASK_AGAIN}
+        if value == before and confirmed is not None and value == confirmed:
+            return {"action": "picked", "reason": "kept-confirmed", "environment": confirmed,
+                    "message": _KEPT}
         if value == before:
             return {"action": "not-picked", "reason": "pick-unchanged", "environment": None,
-                    "message": _ASK_AGAIN}
+                    "message": _ALREADY_PICKED if confirmed is None else _ASK_AGAIN}
         return {"action": "picked", "reason": None, "environment": value, "message": _PICKED}
     except Exception:
         return {"action": "not-picked", "reason": "settings-unreadable", "environment": None,
@@ -120,12 +134,13 @@ def main(argv=None):
     parser.add_argument("verb", choices=["snapshot", "pick"])
     parser.add_argument("--cwd", default=None)
     parser.add_argument("--before", default=None)
+    parser.add_argument("--confirmed", default=None)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    cwd = args.cwd or os.getcwd()
+    cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.verb == "snapshot":
         result = snapshot(cwd=cwd)
     else:
-        result = pick(before=args.before, cwd=cwd)
+        result = pick(before=args.before, confirmed=args.confirmed, cwd=cwd)
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 0 if result["action"] in ("read", "picked") else 1
 

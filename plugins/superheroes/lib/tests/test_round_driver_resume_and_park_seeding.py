@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""#1195-B — resume read path parks on structural corruption; producer park merges fresh candidates."""
+"""#1195-B — the producer park merges fresh candidates into the findings it carries."""
 import importlib.util
-import json
 import os
-import stat
-
-import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -20,31 +16,11 @@ def _load(name):
 
 RD = _load("round_driver")
 
-_RUN_LOOP_REFUSAL_CLASS = "unrun-review"
-_RUN_LOOP_REFUSAL_ARTIFACT = "driver-journal.jsonl"
-_RUN_LOOP_REFUSAL_DETAIL = (
-    "run-loop session lacks per-seat recorded evidence — cannot materialize for certification")
-
-
-def _assert_run_loop_refusal_only(result):
-    assert result["class"] == _RUN_LOOP_REFUSAL_CLASS
-    assert result["artifact"] == _RUN_LOOP_REFUSAL_ARTIFACT
-    assert result["detail"] == _RUN_LOOP_REFUSAL_DETAIL
-    assert "verdict" not in result
-
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude", "codex"], "fixerVendor": "claude",
-            "persistRecords": True}
+    base = {"leg": "code", "vendors": ["claude", "codex"], "fixerVendor": "claude"}
     base.update(over)
     return base
-
-
-def _seams():
-    def default_reviewer(dim, tier, rnd, ctx):
-        return []
-
-    return {"reviewer": default_reviewer}
 
 
 def _seed_record(round_no, **over):
@@ -56,107 +32,20 @@ def _seed_record(round_no, **over):
     return rec
 
 
-def _fresh_state():
-    return {"leg": "code", "vendors": ["claude"], "rounds": {}, "_records": [],
-            "_coverage": [], "_resumeCorrupt": None, "config": {}}
+def _unwritable_records_path(tmp_path):
+    """A records destination the driver cannot write: its parent "directory" is a regular file."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    return str(blocker / "round-records.json")
 
 
-# --- F1: corrupt-records resume parks instead of raising ---
-
-
-def test_f1_corrupt_records_resume_parks_instead_of_raising(tmp_path):
-    """F1 — valid JSON list with a non-object element parks via _resumeCorrupt, never seeds _records."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1), "oops"]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = _fresh_state()
-    RD._seed_resume(state, cfg)
-    assert state.get("_resumeCorrupt")
-    assert isinstance(state["_resumeCorrupt"], str)
-    assert state["_resumeCorrupt"]
-    assert state.get("_records") == []
-    result = RD.run_loop(_seams(), cfg)
-    _assert_run_loop_refusal_only(result)
-    assert result["loopTerminal"] == "cannot-certify"
-    assert "verdict" not in result
-
-
-def test_f1_nested_record_field_corruption_parks_instead_of_raising(tmp_path):
-    """F1 extension — schema-v2 record with non-list coverageDecisions parks, never crashes."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([{"schemaVersion": 2, "round": 1, "coverageDecisions": 7}]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = _fresh_state()
-    RD._seed_resume(state, cfg)
-    assert state.get("_resumeCorrupt")
-    assert isinstance(state["_resumeCorrupt"], str)
-    assert state.get("_records") == []
-    result = RD.run_loop(_seams(), cfg)
-    _assert_run_loop_refusal_only(result)
-    assert result["loopTerminal"] == "cannot-certify"
-    assert "verdict" not in result
-
-
-# --- F2: structured refusals unchanged ---
-
-
-def test_f2_structured_refusals_pin_exact_resume_corrupt_messages(tmp_path):
-    """F2 — unreadable, invalid JSON, and non-list top-level still use not-ok branch with exact text."""
-    dims = ["test-reviewer"]
-
-    rm = _load("review_memory")
-
-    unreadable = tmp_path / "unreadable.json"
-    unreadable.write_text("[]")
-    os.chmod(unreadable, 0o000)
-    try:
-        if os.geteuid() == 0:
-            pytest.skip("unreadable-file probe skipped when running as root")
-        loaded = rm.load_records_state(str(unreadable), dims)
-        state = _fresh_state()
-        RD._seed_resume(state, _cfg(dimensions=dims, recordsPath=str(unreadable)))
-        assert state["_resumeCorrupt"] == (
-            "resume state %s (%s) — cannot certify; a fresh full reviewer-deep round is owed"
-            % (loaded.get("state") or "unreadable", loaded.get("reason") or "unreadable"))
-    finally:
-        os.chmod(unreadable, stat.S_IRUSR | stat.S_IWUSR)
-
-    bad_json = tmp_path / "bad.json"
-    bad_json.write_text("{not json")
-    state = _fresh_state()
-    RD._seed_resume(state, _cfg(dimensions=dims, recordsPath=str(bad_json)))
-    loaded = rm.load_records_state(str(bad_json), dims)
-    assert state["_resumeCorrupt"] == (
-        "resume state corrupt (%s) — cannot certify; a fresh full reviewer-deep round is owed"
-        % (loaded.get("reason") or "unreadable"))
-
-    not_list = tmp_path / "not-list.json"
-    not_list.write_text('{"round": 1}')
-    state = _fresh_state()
-    RD._seed_resume(state, _cfg(dimensions=dims, recordsPath=str(not_list)))
-    loaded = rm.load_records_state(str(not_list), dims)
-    assert state["_resumeCorrupt"] == (
-        "resume state corrupt (not a list) — cannot certify; "
-        "a fresh full reviewer-deep round is owed")
-
-    missing = tmp_path / "missing.json"
-    state = _fresh_state()
-    RD._seed_resume(state, _cfg(dimensions=dims, recordsPath=str(missing)))
-    assert state.get("_resumeCorrupt") is None
-
-
-def test_f2_except_branch_corrupt_vocabulary(tmp_path, monkeypatch):
-    """F2 — defence-in-depth except branch uses corrupt vocabulary, not unreadable."""
-
-    def _raise_type_error(path, dims):
-        raise TypeError("'int' object is not iterable")
-
-    monkeypatch.setattr(RD.review_memory, "load_records_state", _raise_type_error)
-    state = _fresh_state()
-    RD._seed_resume(state, _cfg(dimensions=["test-reviewer"], recordsPath=str(tmp_path / "x.json")))
-    assert state["_resumeCorrupt"] == (
-        "resume state corrupt ('int' object is not iterable) — cannot certify; "
-        "a fresh full reviewer-deep round is owed")
+def _parking_state(tmp_path):
+    """A state holding one ledger record whose records destination cannot be written."""
+    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=_unwritable_records_path(tmp_path))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["config"] = cfg
+    state["_records"] = [_seed_record(1)]
+    return state, cfg
 
 
 # --- F3: delta-fold park carries fresh candidates ---
@@ -164,11 +53,7 @@ def test_f2_except_branch_corrupt_vocabulary(tmp_path, monkeypatch):
 
 def test_f3_delta_fold_park_carries_fresh_candidates(tmp_path):
     """F3 — producer park merges _toVerify into findings; same id different location is kept."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1), "oops"]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
-    state["config"] = cfg
+    state, cfg = _parking_state(tmp_path)
     prior_a = {"id": "v0", "file": "a.py", "line": 1, "title": "prior-a", "severity": "Important"}
     prior_b = {"id": "v1", "file": "b.py", "line": 2, "title": "prior-b", "severity": "Important"}
     state["findings"] = [prior_a, prior_b]
@@ -188,17 +73,13 @@ def test_f3_delta_fold_park_carries_fresh_candidates(tmp_path):
 
 def test_f4_park_findings_merge_dedupe_and_round1(tmp_path):
     """F4 — location dedupe, distinct lines kept, unidentifiable kept, round-1 copies _toVerify."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1), "oops"]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    state, cfg = _parking_state(tmp_path)
 
     prior = {"id": "v0", "file": "same.py", "line": 10, "title": "dup-title", "severity": "Important"}
     dup_fresh = {"id": "v9", "file": "same.py", "line": 10, "title": "dup-title", "severity": "Important"}
     diff_line = {"id": "v1", "file": "same.py", "line": 20, "title": "dup-title", "severity": "Important"}
     not_dict = "not-a-dict"
     no_identity = {"severity": "Important"}
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
-    state["config"] = cfg
     state["findings"] = [prior]
     state["_toVerify"] = [dup_fresh, diff_line, not_dict, no_identity]
     RD._persist_round_records(state, cfg)
@@ -209,12 +90,11 @@ def test_f4_park_findings_merge_dedupe_and_round1(tmp_path):
     assert "not-a-dict" in titles_and_raw
     assert no_identity in titles_and_raw
 
-    state2 = RD.new_state(_cfg(dimensions=["test-reviewer"]))
-    state2["config"] = cfg
+    state2, cfg2 = _parking_state(tmp_path)
     only_fresh = [{"id": "v0", "file": "z.py", "line": 1, "title": "only", "severity": "Important"}]
     state2["findings"] = []
     state2["_toVerify"] = list(only_fresh)
-    RD._persist_round_records(state2, cfg)
+    RD._persist_round_records(state2, cfg2)
     assert state2.get("findings") == only_fresh
 
 
@@ -223,11 +103,7 @@ def test_f4_park_findings_merge_dedupe_and_round1(tmp_path):
 
 def test_f5_prior_vs_fresh_collision_keeps_higher_severity(tmp_path):
     """F5 — prior Important at a location is replaced by fresh Critical on park merge."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1), "oops"]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
-    state["config"] = cfg
+    state, cfg = _parking_state(tmp_path)
     prior = {"id": "v0", "file": "f.py", "line": 4, "title": "same",
              "severity": "Important", "dimension": "Code"}
     fresh = {"id": "v1", "file": "f.py", "line": 4, "title": "same",
@@ -240,46 +116,3 @@ def test_f5_prior_vs_fresh_collision_keeps_higher_severity(tmp_path):
     assert merged[0]["severity"] == "Critical"
     assert merged[0]["dimension"] == "Code + Architecture"
     assert state.get("terminal") == "cannot-certify"
-
-
-# --- #1195c-A: junk-round park on resume path ---
-
-
-def test_junk_infinity_round_parks_resume_corrupt(tmp_path):
-    """Junk round parks _seed_resume — no OverflowError, non-empty corrupt reason."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(float("inf"))]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = _fresh_state()
-    RD._seed_resume(state, cfg)
-    assert isinstance(state.get("_resumeCorrupt"), str)
-    assert state["_resumeCorrupt"]
-    assert "cannot certify" in state["_resumeCorrupt"]
-
-
-def test_legacy_none_round_does_not_park_and_resumes(tmp_path):
-    """None round is legacy/absent — must not park; resume round stays 2 after round 1."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([{"schemaVersion": 2, "round": None, "kind": "baseline",
-                                    "dimensions": {"test-reviewer": {"status": "run",
-                                                                       "confidence": "high",
-                                                                       "tier": "reviewer-deep",
-                                                                       "findings": []}},
-                                    "findings": [], "coverageDecisions": []},
-                                   _seed_record(1)]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = _fresh_state()
-    RD._seed_resume(state, cfg)
-    assert state.get("_resumeCorrupt") is None
-    assert state.get("round") == 2
-
-
-def test_well_formed_round_resume_unchanged(tmp_path):
-    """Well-formed round 1 still resumes at round 2."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1)]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
-    state = _fresh_state()
-    RD._seed_resume(state, cfg)
-    assert state.get("_resumeCorrupt") is None
-    assert state.get("round") == 2

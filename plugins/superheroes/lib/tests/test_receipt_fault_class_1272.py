@@ -47,22 +47,6 @@ def test_receipt_write_fault_with_certification_in_path_is_a_write_fault(tmp_pat
     assert state_after.get("_receiptFaultClass") == RD.RECEIPT_FAULT_WRITE
 
 
-def test_certification_artifact_fault_is_not_finalized(tmp_path):
-    session_dir = _certification_refusal_session(tmp_path)
-    os.makedirs(os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE))
-    ok, state = RD.load_state(session_dir)
-    assert ok, state
-    RD._journal_append(session_dir, {"cmd": "submit", "phase": RD.P_PANEL, "round": 1,
-                                     "attempt": 0})
-    fault = RD._terminal_receipt_gate(session_dir, state)
-    assert isinstance(fault, RD.ReceiptFault)
-    assert fault.kind == RD.RECEIPT_FAULT_CERTIFICATION
-    ok, state_after = RD.load_state(session_dir)
-    assert ok, state_after
-    assert not state_after.get("_receiptFinalized")
-    assert state_after.get("_receiptFaultClass") == RD.RECEIPT_FAULT_CERTIFICATION
-
-
 def test_verify_fault_kind(tmp_path):
     session_dir = _certification_refusal_session(tmp_path)
     fault = RD._verify_terminal_receipt(session_dir)
@@ -88,6 +72,5 @@ def test_gate_refuses_untyped_fault(tmp_path, monkeypatch):
 def test_receipt_fault_kinds_are_the_declared_set():
     assert RD.RECEIPT_FAULT_KINDS == (
         "receipt-write",
-        "certification-artifact",
         "receipt-verify",
     )
