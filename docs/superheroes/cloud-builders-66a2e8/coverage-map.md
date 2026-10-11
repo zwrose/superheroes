@@ -108,7 +108,7 @@ once C1, C2 and C3 have handed back; C5 once C1 and C2 have; C6 once C1 and C3 h
 #1708's #1716 and #1718 are on main. Wave 2: C7, once C5 and C6 have handed back. The stack merges with
 one `gh stack merge` when every layer is vetted.
 
-**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 15 · C6 13 · C7 14 ·
+**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 12 · C5b 3 (FR-15, FR-16 and UFR-6, moved from C5 at the 2026-10-11 size split) · C6 13 · C7 14 ·
 C8 9 · closure validation run 5. Total 73 rows: 68 bullet rows (66 bullets, two of them split in
 two) and 5 Definition of done rows.
 
@@ -130,8 +130,8 @@ two) and 5 Definition of done rows.
 | FR-13 | 1 | rule | The advisor judges a build that needs a phone simulator or the owner's signed-in browser as not able to run… | **C5** |
 | FR-13 | 2 | rule | The advisor judges every build of a project that keeps its Canon or its specs outside the repository as not… | **C5** |
 | FR-14 | 1 | rule | A launch with any one of the five conditions false is a launch with the cloud not ready. | **C5** |
-| FR-15 | 1 | rule | The launch report names every launched build under one of the two places. | **C5** |
-| FR-16 | 1 | rule | The reason is one of the eight on the board's list of reasons. | **C5** |
+| FR-15 | 1 | rule | The launch report names every launched build under one of the two places. | **C5b** |
+| FR-16 | 1 | rule | The reason is one of the eight on the board's list of reasons. | **C5b** |
 | FR-17 | 1 | GWT | Given a build-ready issue, when it is built in the cloud, then its PR carries the same review record and… | **C1b** |
 | FR-18 | 1 | GWT | Given the cloud is ready, when a build that needs no owner decision is launched in the cloud, then it reaches… | **C6** |
 | FR-19 | 1 | rule | Wherever the advisor lists lanes, a cloud lane appears with the word "cloud" beside it. | **C1** |
@@ -166,7 +166,7 @@ two) and 5 Definition of done rows.
 | UFR-4 | 1 | GWT | Given a lapsed reviewer pass, when four builds are launched, then all four run on the owner's machine and the… | **C5** |
 | UFR-4 | 2 | rule | The plugin never holds a build and never drops a build because the cloud is not ready. | **C5** |
 | UFR-5 | 1 | rule | A cloud builder never runs on an older copy of the plugin than the advisor's. | **C5** |
-| UFR-6 | 1 | GWT | Given a version mismatch reported at launch, when the advisor next writes to the owner, then the message… | **C5** |
+| UFR-6 | 1 | GWT | Given a version mismatch reported at launch, when the advisor next writes to the owner, then the message… | **C5b** |
 | UFR-7 | 1 | GWT | Given a cloud build whose pass lapses before its review, when the builder reaches the review, then the… | **C6** |
 | UFR-7 | 2 | rule | A review that finished before the pass lapsed stays as it was recorded. | **C6** |
 | UFR-7 | 3 | rule | A PR parked this way follows the approved review spec's rules for a review that did not run, the owner's own… | **C6** |
@@ -201,3 +201,5 @@ the spec lacks, each Definition of done bullet appears once, and every row names
 **Coverage re-check after the C4 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C4 split into C4 (the setup sitting's library, #1745) and C4b (its skill text, #1771). FR-1's Given-When-Then acceptance (the sitting as the owner meets it: the hand steps, the sign-in walked, the id asked once) moved to C4b, whose recorded setup sitting grades it; C4 keeps FR-1's rule, FR-3 to FR-6 and UFR-1. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C4b in the stack's order; R8, R9 and R11 name it as a consumer.
 
 **Coverage re-check after ruling 37 b (advisor, 2026-10-11).** Amendment 4 now records rulings "35 a" and "37 b" together: the owner picks the environment in Claude Code's picker and the plugin reads its id. FR-1's statement, its Given-When-Then (C4b) and its rule (C4) changed wording; no acceptance criterion was added or removed, and every criterion is still owned exactly once. Register R3 records the new source and names C4b as a consumer (C4b holds the reader).
+
+**Coverage re-check after the C5 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C5 split into C5 (where a build runs: the readiness reader, the routing step, the launcher wiring, #1746) and C5b (the launch report, the still line and the doctrine, #1775). FR-15, FR-16 and UFR-6 moved to C5b; C5 keeps FR-10 to FR-14, FR-37's second acceptance, UFR-3, UFR-4 and UFR-5, its routing result carrying each reason and fix that C5b renders. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C5b in the stack's order; R2, R3, R5, R8, R9, R10 and R11 name it as a consumer.
