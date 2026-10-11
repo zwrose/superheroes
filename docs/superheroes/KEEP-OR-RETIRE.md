@@ -201,6 +201,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — the host PreToolUse chain does not arm this hook;
   review-before-handback is held in charter prose until K1 lands.
+- **Retirement — the refusing behaviour.** Retired the refusal the hook called into: the handback gate
+  now allows every command (see D6). The hook file stays, unwired. Receipt: PR #1761 (issue #1719).
 
 #### A4 — Bash timeout hook
 
@@ -328,13 +330,13 @@ The list's units are the census rows, and each entry is keyed to its census id.
   seat path and scores engagement and plant detection; each run costs a full seat dispatch.
 - **Start date.** 2026-09-15.
 - **Condition.** Catch-based, 45 days: canary runs where engagement or plant-detection axes scored a
-  miss. On firing, a proposal to the owner at a gardening pass.
+  miss. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** Tripwire scored seven correct fires in one wave (the assessment
   record).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1765 (issue #1720) (C2 certificate retirement).
 - **Notes.** capability-gap — measures whether review seats investigate and name planted defects;
-  evidence observed on the real dispatch path (#668).
+  evidence observed on the real dispatch path (#668). Removed: the modules `seat_canary` and `canary_outcome`, their tests, and the driver's canary fold. No review runs a planted-defect probe now; the engine wiring and new-model admission checks stay.
 
 **Could-not-produce note (canary census, 2026-08-30 forward).** The C12 DoD asked for a canary
 census from 2026-08-30 forward as the receipt C13 consumes. It cannot be produced; this note is the
@@ -494,30 +496,41 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   contract maintenance and is the hub where certification drop-off is measured.
 - **Start date.** 2026-09-15.
 - **Condition.** Usage-based:
-  - **Signal.** Post-shrink full lanes reaching certified completion, against full lanes run, read
-    from the loop records the driver already writes. A full lane is a launched build lane routed to
-    the full review lane whose review loop left loop records, selected by the presence of those
-    records for the lane's PR. That is the unit every window and firing here counts.
+  - **Signal.** Post-shrink full lanes that end on the driver's terminal receipt (`round-receipt.json`
+    beside the journal), against full lanes run, read from the loop records the driver already
+    writes. The earlier signal, full lanes reaching certified completion, is moot since the
+    certification receipt retired. A full lane is a launched build lane routed to the full review
+    lane whose review loop left loop records, selected by the presence of those records for the
+    lane's PR. That is the unit every window and firing here counts.
   - **Window.** The first 10 post-shrink full lanes, counting this repository's lanes only.
-  - **The main firing.** Completion at or below the recorded pre-shrink baseline.
+  - **The main firing.** A terminal-receipt rate at or below the recorded pre-shrink baseline
+    (recorded as certified completion, so a comparison the records cannot make takes the fail
+    direction below).
   - **Companion firing, abandonment.** Fewer than 10 full lanes run within 60 calendar days
     post-shrink. It is recorded as the observation it is — lanes expected against lanes run — with
     both readings named beside it: callers routing around the loop, or no build activity in the
     window. This leg exists because a lane-counted window alone can never see a route-around.
-  - **Companion firing, consumer report.** A consuming project's recorded certified-loop drop-off
-    report counts as a firing at the next gardening pass. That population is excluded from the
-    denominator, never from the signal.
+  - **Companion firing, consumer report.** A consuming project's recorded review-loop drop-off
+    report counts as a firing at the next gardening pass (a report framed on certified-loop drop-off
+    is moot since the certification receipt retired, and is read as a drop-off report). That
+    population is excluded from the denominator, never from the signal.
   - **Action.** All three firings drive the same action: a retirement-or-indictment proposal to the
     owner. A companion firing is never triaged below owner visibility.
   - **Fail direction.** If the records cannot produce the number, the comparison fails toward
-    alerting: any post-shrink silent certified-loop drop-off — a full lane whose handback states
-    review completion with no certified receipt present — observed at any vet of a driver-surface PR
-    counts as a firing.
+    alerting: any post-shrink silent review-loop drop-off — a full lane whose handback states
+    review completion with no terminal receipt (`round-receipt.json`) and journal present — observed
+    at any vet of a driver-surface PR counts as a firing.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — the parse and refusal shell is structural; the exact-token certification
   contract is capability-gap until the re-spec lands.
+- **Retirement — the certification receipt.** Retired the certified-receipt signal and the
+  exact-token certification contract its Condition and Notes rested on: the module
+  `round_certification`, the `certification-receipt.json` and `certification-refusal.json` files, and
+  the handback gate's refusals. The driver stays and ends on its terminal receipt
+  (`round-receipt.json`) and journal; the review record replaces the certificate as the account of a
+  review. Receipt: PR #1761 (issue #1719).
 
 #### D2 — Seat map + liveness + tally
 
@@ -542,8 +555,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `review_memory.py`, and siblings) costs contract surface and over-records relative to what the
   driver shell demands.
 - **Start date.** 2026-09-15.
-- **Condition.** Usage-based, 60 days: the signal is full review lanes that reach certified
-  completion against full lanes run. On firing, a shrink proposal to the owner at a gardening pass.
+- **Condition.** Usage-based, 60 days: the signal is full review lanes that end on the driver's
+  terminal receipt (`round-receipt.json`) against full lanes run. The earlier signal, lanes that reach
+  certified completion, is moot since the certification receipt retired. On firing, a shrink proposal
+  to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -597,6 +612,12 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — a Claude-host Bash tripwire with no wired reader; #954 audit recommends
   retire and the driver mandate (#1095) already holds the same line.
+- **Retirement — the refusing half.** Retired all refusal logic in `handback_gate.py`: the module now
+  allows every command and reads no receipt, so nothing refuses a handback for lacking a certificate;
+  the review record replaces it as the account of a review. Receipt: PR #1761 (issue #1719).
+- **This project's arming record for driver-or-park.** The flip arms when the milestone *Review panels
+  can't silently degrade* closes, which is the owner's judgment that its exit condition is met; the
+  release that carries the flip stamps the close.
 
 #### D7 — Verify gate
 
@@ -742,12 +763,12 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing a certification
   refusal class (`unrun-review`, `same-family-seat`, `unfetched-findings`,
   `disposition-without-receipt`) or a missing certification artifact at a terminal that wrote
-  `round-receipt.json`. On firing, a proposal to the owner at a gardening pass.
+  `round-receipt.json`. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown — it ships with this change (#1271 C12 layer 2).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — a single writer for the certified receipt is a load-bearing boundary; no
-  engine family applies.
+  engine family applies. Removed: the module `round_certification` and the `certification-receipt.json` and `certification-refusal.json` files it wrote. The review record, a marker-tagged PR comment written by `lib/review_record.py`, replaces it.
 - **Property.** Hand-landed single-source binding — for a hand-landed seat the binding has one
   source, the landed envelope: `round_records.recorded_row_fields` copies `executionEvidence` from
   that envelope into the `record-result` journal row, so the row the writer reads is derived from the
@@ -785,8 +806,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### D33 — The staging chokepoint and the departure archive
 
 - **Component.** `round_driver._stage_findings` (the only writer of `_toVerify`; seeds the ledger)
-  and `_archive_departures` (every departure lands in the ledger); the refusal surfaces as the
-  writer's "finding has no disposition recorded".
+  and `_archive_departures` (every departure lands in the ledger); the refusal surfaced as the
+  certification writer's (retired) "finding has no disposition recorded".
 - **Start date.** 2026-09-26.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
@@ -799,7 +820,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** `lib/tests/test_evidence_digest_subject_1272.py`, pinning
   `session_contract.evidence_digest_subject` equal to `engine_adapter.review_payload_carried` for
-  every result kind (the writer cannot import the adapter).
+  every result kind (the certification writer, retired, could not import the adapter).
 - **Start date.** 2026-09-26.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
@@ -814,12 +835,12 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   and envelope scan per collected seat at certification time.
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
-  `unrun-review` refusal class. On firing, a proposal to the owner at a gardening pass.
+  `unrun-review` refusal class. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown — it ships with this change.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — engagement telemetry on the certified head is a property of how evidence
-  is bound, not of model strength. No engine family applies.
+  is bound, not of model strength. No engine family applies. Removed: `check_unrun_review` went with the certification writer. The review record's account of what ran and what was checked replaces it.
 
 #### D20 — `check_same_family_seat`
 
@@ -828,12 +849,12 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   certification time.
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
-  `same-family-seat` refusal class. On firing, a proposal to the owner at a gardening pass.
+  `same-family-seat` refusal class. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown — it ships with this change.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — panel independence is a build property guarded regardless of vendor. No
-  engine family applies.
+  engine family applies. Removed: `check_same_family_seat` went with the certification writer. The review record's account of what ran and what was checked replaces it.
 
 #### D21 — `check_unfetched_findings`
 
@@ -842,12 +863,12 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   pass and one envelope read per collected seat at certification time.
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
-  `unfetched-findings` refusal class. On firing, a proposal to the owner at a gardening pass.
+  `unfetched-findings` refusal class. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown — it ships with this change.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — journal/envelope reconciliation is load-bearing regardless of host. No
-  engine family applies.
+  engine family applies. Removed: `check_unfetched_findings` went with the certification writer. The review record's account of what ran and what was checked replaces it.
 
 #### D22 — `check_disposition_without_receipt`
 
@@ -857,15 +878,15 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   at certification time.
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
-  `disposition-without-receipt` refusal class. On firing, a proposal to the owner at a gardening pass.
+  `disposition-without-receipt` refusal class. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown — it ships with this change. Its two disposition-class
   guards carry a recorded bite-proof at
   `plugins/superheroes/lib/tests/bite_proofs/disposition-class-guards.md` (three detectors, each
   red → restore → green at the child's build head).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — disposition receipts on the certified head are receipts-before-claims
-  regardless of model. No engine family applies.
+  regardless of model. No engine family applies. Removed: `check_disposition_without_receipt` went with the certification writer. The review record's account of what ran and what was checked replaces it.
 
 #### D29 — Disposition-class guard pinning tests
 
@@ -879,23 +900,23 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing either test by
   name as the thing that caught a removed or bypassed disposition-class guard. On firing, a proposal
-  to the owner at a gardening pass.
+  to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** Birth bite-proof recorded at
   `plugins/superheroes/lib/tests/bite_proofs/disposition-class-guards.md`. The gap they close was a
   measured one: before this change, neutralizing either guard left the other refusing with the same
   class and artifact, so the seam test passed on a code path it was written to forbid.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — whether a guard is pinned to its own line is a property of the assertion,
   not of model strength. No engine family applies. The C13 flip converts the seam test's refusal
   assertion to a certifying one under R28's first clause; these two unit tests are unaffected by that
-  flip and stay.
+  flip and stay. Removed: the two unit tests went with the deleted `test_round_certification.py`, and the integration test's `detail` assertion went with the refusal it pinned.
 
 #### D23 — `build_interim_receipt`
 
 - **Component.** `round_driver.build_interim_receipt` — the loop's own progress artifact on the CLI
   and advance path (not a certification); it costs a second receipt-shaped builder beside the
-  certification writer until FR-D9 retires it.
+  certification writer (retired) until FR-D9 retires it.
 - **Start date.** 2026-09-18.
 - **Condition.** Usage-based, 60 days: the signal is CLI/advance invocations that write
   `round-receipt-interim.json` against terminal certifications written in the same window — a zero
@@ -910,7 +931,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### D24 — One-home identity tests (`receipt_disclosures` / `record_paths`)
 
 - **Component.** `test_receipt_disclosures_home.py` — by-construction identity assertions over each
-  leaf module's own `__all__`: every name the driver and the certification writer re-export must be
+  leaf module's own `__all__`: every name the driver and the certification writer (retired) re-exported must be
   the same function object as the leaf defines, so a re-introduced mirror copy fails instead of
   drifting quietly; it costs two import walks per suite run.
 - **Start date.** 2026-09-18.
@@ -937,14 +958,14 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
   `test_generated_certification_fixtures_match_producer` as the thing that caught a checked-in
   fixture diverging from the production chokepoint. On firing, a proposal to the owner at a
-  gardening pass.
+  gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** Bite-proof recorded at
   `plugins/superheroes/lib/tests/bite_proofs/fixture-generator-drift.md` (planted extra key in a
   checked-in `meta.json`).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — fixtures that drift from their producer lie about what the writer tests;
-  the generator's `FIXTURE_BUILDERS` list is the by-construction coverage. No engine family applies.
+  the generator's `FIXTURE_BUILDERS` list is the by-construction coverage. No engine family applies. Removed: the fixture generator, the checked-in fixture tree, and the drift test went with the certification writer they exercised.
 
 #### D26 — Head-content producer (`head-content-blobs/2`)
 
@@ -954,15 +975,15 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-18.
 - **Condition.** Usage-based, 60 days: certified review rounds whose fixer fold writes
   `head-content-blobs.json` through this producer. On firing, a proposal to the owner at a
-  gardening pass.
+  gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** Four-case round-trip smoke at
   `plugins/superheroes/lib/tests/test_head_content_producer.py` (text with trailing newline,
   non-UTF-8 round-trip, missing path as failed read, unresolved head as failed read).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — one producer function writes the file and one reader consumes it; the
   producer's chokepoint is the by-construction coverage. No engine family applies: it guards a data
-  shape, not a model behaviour.
+  shape, not a model behaviour. Removed: `_persist_head_content_blobs`, `_head_content_read_row` and `test_head_content_producer.py`; the exact-head evidence chain is gone, and the review record is judged against the PR's final commit instead.
 
 #### D27 — Head-content recomputation check (`_fix_still_present_at_head`)
 
@@ -972,16 +993,15 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
   `fix-content-reverted` or `fix-content-schema-unsupported` as the thing that refused a fixed
-  disposition on head-content grounds. On firing, a proposal to the owner at a gardening pass.
+  disposition on head-content grounds. On firing, a proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** Bite-proof recorded at
   `plugins/superheroes/lib/tests/bite_proofs/wo_a3_1271.md`.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — one reader (`_fix_still_present_at_head`) consumes the producer's file;
-  the nine-step ordered decision table in `certification-surface.md` is the by-construction
-  coverage. **Residual:** the check refuses a blob whose recorded content does not hash to its
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
+- **Notes.** structural — one reader (`_fix_still_present_at_head`) consumed the producer's file.
+  **Residual:** the check refuses a blob whose recorded content does not hash to its
   recorded digest, but a journal-only writer that may not read git **cannot** verify that a read
-  ever happened, so a fully self-consistent forgery passes. No engine family applies.
+  ever happened, so a fully self-consistent forgery passes. No engine family applies. Removed: `_fix_still_present_at_head` went with the certification writer and the exact-head evidence chain.
 
 #### D28 — `check_evidence_head_bound`
 
@@ -991,14 +1011,14 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
   `execution-evidence-head-unbound` or `certified-head-unresolvable`. On firing, a proposal to the
-  owner at a gardening pass.
+  owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** unknown — it ships with this change. Birth bite-proof recorded at
   `plugins/superheroes/lib/tests/bite_proofs/head-binding-check.md` (both legs red → restore →
   green, run at the child's final head).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — binding evidence to a head is a property of how evidence is bound, not of
-  model strength. No engine family applies.
+  model strength. No engine family applies. Removed: `check_evidence_head_bound` went with the certification writer and the exact-head evidence chain.
 
 #### D30 — Orders-manifest seat-entry roster refusal
 
@@ -1009,15 +1029,15 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing the
   `unfetched-findings` refusal class on an orders-manifest seat-entry detail string. On firing, a
-  proposal to the owner at a gardening pass.
+  proposal to the owner at a gardening pass. **Retired — condition moot.**
 - **Last demonstrated benefit.** Birth bite-proof recorded at
   `plugins/superheroes/lib/tests/bite_proofs/orders-roster-entry-refusal.md` (three guarded edges,
   each red → restore → green).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — PR #1761 (issue #1719) (C2 certificate retirement).
 - **Notes.** structural — a producer defect that silently narrows the opened-seat roster would
   shrink certification coverage without disclosure; refusing by construction is load-bearing
-  regardless of host. No engine family applies.
+  regardless of host. No engine family applies. Removed: `_orders_emitted_roster_or_refusal` went with the certification writer.
 
 #### D31 — Fail-closed spawned-argv journal record
 
@@ -1068,8 +1088,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — it exists because a dispatched seat cannot presently be trusted to
   report its own engagement, and a host that recorded tool calls natively and verifiably would
-  remove the need. Whether a dispatched seat with no runner-side telemetry is refused is decided by
-  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8), not here; **C12
+  remove the need. Whether a dispatched seat with no runner-side telemetry is refused was decided by
+  the certification receipt writer's unrun-review check in layer 2 (Spec B FR-D8, retired), not here; **C12
   (#1271)** is the child that gives codex a runner-side record from its own event stream and
   therefore closes the gap. No engine family is named for the binding itself; the reason it exists
   is engine-general.
@@ -1126,7 +1146,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   property of how the dispatch layer is built, and no change of host or model removes the need for
   the stamping function to be unable to receive one. No engine family applies: it guards a call
   shape, not a model behaviour. Name its reader: register R7's invariant, and the certification
-  receipt writer in layer 2, which reads `engagement.read` and must be able to trust that no
+  receipt writer in layer 2 (retired), which read `engagement.read` and had to trust that no
   seat-authored list contributed to it.
 
 ### E. Board & process machinery
@@ -1538,18 +1558,16 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-26.
 - **Condition.** Usage-based: the retirement condition that **reopens** it is *"a consumer needs a
   certified receipt from a library run"*, at which point the path is **rebuilt on real persisted
-  per-seat envelopes as its own child, never patched back.* That rebuild child also routes both
-  hand-built `writer-fault` envelopes in `round_driver._run_loop_certified_receipt`
-  (the two `"class": "writer-fault"` dicts in that function, `round_driver.py` about l.6625 and
-  l.6635 at b343a45e) through
-  `round_certification.writer_fault()` — review finding v19, carried open and inert rather than
-  patched on a surface the third-rework tripwire has closed.
+  per-seat envelopes as its own child, never patched back.* The two functions this text once named,
+  `round_driver._run_loop_certified_receipt` and `round_certification.writer_fault()`, were removed
+  with the certification receipt (PR #1761, issue #1719); so were the two hand-built `writer-fault`
+  envelopes (review finding v19) the rebuild child was to route through the latter.
 - **Last demonstrated benefit.** none — the path certified over synthesized evidence; that is why it
   retired. The receipt for the retirement is this PR.
 - **Consumer evidence.** unmeasured.
-- **Decision.** retired — library `run_loop` always returns class `unrun-review` on artifact
-  `driver-journal.jsonl`, carrying loop observables; never a certified receipt and never a
-  fallback.
+- **Decision.** retired — library `run_loop` returns the driver's terminal receipt, built from the
+  loop state alone (`round_driver._driver_receipt`); never a certified receipt over synthesized
+  journal rows and never a fallback.
 - **Notes.** capability-gap — it compensated for the library path persisting no per-seat evidence by
   minting certification over synthesized journal rows; reopening requires real envelopes, not
   restoring the shortcut.
@@ -2056,8 +2074,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** Not a census row. The outcome reason `forfeit-with-engaged-artifact` that stays
   after the salvage paths retired (see S2), and the "Salvage valve" paragraph in
   `rubric/review-discipline.md`. Its readers: `lib/dispatch_outcome.py`, `lib/engine_dispatch.py`,
-  `lib/round_driver.py`, `lib/seat_canary.py`, `lib/canary_outcome.py` and
-  `lib/payload_contracts.py` (both through `NOT_RUN_REASONS`), `rubric/review-discipline.md`,
+  `lib/round_driver.py` and
+  `lib/payload_contracts.py` (through `NOT_RUN_REASONS`), `rubric/review-discipline.md`,
   `skills/review-code/reference/auto-fix-loop.md`, `skills/review-code/reference/round-driver.md`,
   `skills/workhorse/SKILL.md`, `skills/workhorse/reference/dispatch-mechanics.md`, and
   `TRANSITION.md`. Cost: every outcome consumer keeps a branch for a reason no run mints.
@@ -2075,6 +2093,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — kept for compatibility with run results and panel artifacts persisted
   before the salvage paths retired, not to work around a current host property. S2's
   `harness-limit` tag describes the retired salvage paths themselves.
+- **Retirement — two readers.** The modules `seat_canary` and `canary_outcome` were deleted, so the
+  readers list above no longer includes them and no review mints a `canaryResult`; the driver still
+  tolerates the key on a panel artifact persisted before. Receipt: PR #1765 (issue #1720).
 
 #### S25 — adopt-version skill
 

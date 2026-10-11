@@ -20,35 +20,11 @@ def _load(name):
 
 
 SC = _load("session_contract")
-RC = _load("round_certification")
 RD = _load("round_driver")
 
 
 def _cfg():
     return {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
-
-
-def _ledger_owned_state(**over):
-    base = {
-        "schemaVersion": 5,
-        "dispositionLedgerOwner": "ledger",
-        "dispositionLedger": [],
-        "findings": [],
-        "_records": [],
-    }
-    base.update(over)
-    return base
-
-
-def _legacy_state(**over):
-    base = {
-        "schemaVersion": 5,
-        "dispositionLedger": [],
-        "findings": [],
-        "_records": [],
-    }
-    base.update(over)
-    return base
 
 
 def _long_finding(title_suffix=" alpha"):
@@ -62,78 +38,7 @@ def _bare_minted(long):
     return bare, minted
 
 
-def _assert_legacy_collision_refusal(refusal, bare, minted):
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["bindingFailure"] == SC.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN
-    assert bare in refusal["detail"]
-    assert minted in refusal["detail"]
-
-
 # --- Part 1: legacy key collision edges e1–e8 -----------------------------------------
-
-def test_e1_ledger_bare_live_minted_refuses():
-    """axis: ledger bare key plus live minted twin refuses disposition-ledger-legacy-key-collision."""
-    long = _long_finding()
-    bare, minted = _bare_minted(long)
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(long, **{
-            SC.FINDING_KEY_FIELD: bare,
-            "disposition": "fixed",
-            "dispositionRound": 1,
-        })],
-        findings=[dict(long, **{SC.FINDING_KEY_FIELD: minted})],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    _assert_legacy_collision_refusal(refusal, bare, minted)
-
-
-def test_e2_ledger_minted_live_bare_refuses():
-    """axis: ledger minted key plus live bare twin refuses disposition-ledger-legacy-key-collision."""
-    long = _long_finding()
-    bare, minted = _bare_minted(long)
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(long, **{
-            SC.FINDING_KEY_FIELD: minted,
-            "disposition": "refuted",
-            "dispositionRound": 1,
-            "refutedReason": "stale",
-        })],
-        findings=[dict(long, **{SC.FINDING_KEY_FIELD: bare})],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    _assert_legacy_collision_refusal(refusal, bare, minted)
-
-
-def test_e3_two_ledger_rows_bare_and_minted_refuses():
-    """axis: two ledger rows (bare plus minted) refuse disposition-ledger-legacy-key-collision."""
-    long = _long_finding()
-    bare, minted = _bare_minted(long)
-    state = _ledger_owned_state(
-        dispositionLedger=[
-            dict(long, **{SC.FINDING_KEY_FIELD: bare, "disposition": "fixed", "dispositionRound": 1}),
-            dict(long, **{SC.FINDING_KEY_FIELD: minted}),
-        ],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    _assert_legacy_collision_refusal(refusal, bare, minted)
-
-
-def test_e4_legacy_branch_records_bare_live_minted_refuses():
-    """axis: legacy branch _records bare plus live minted refuses disposition-ledger-legacy-key-collision."""
-    long = _long_finding()
-    bare, minted = _bare_minted(long)
-    state = _legacy_state(
-        _records=[{"findings": [dict(long, **{SC.FINDING_KEY_FIELD: bare})]}],
-        findings=[dict(long, **{SC.FINDING_KEY_FIELD: minted})],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    _assert_legacy_collision_refusal(refusal, bare, minted)
-
 
 def test_e5_short_title_bare_equals_minted_no_collision():
     """axis: short-title finding whose bare key equals minted key is never a collision."""
@@ -142,49 +47,10 @@ def test_e5_short_title_bare_equals_minted_no_collision():
     assert bare == SC.minted_identity_key(short)
     rows = [dict(short, **{SC.FINDING_KEY_FIELD: bare})]
     assert SC.legacy_key_collision(rows) is None
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(short, **{SC.FINDING_KEY_FIELD: bare})],
-        findings=[dict(short, **{SC.FINDING_KEY_FIELD: bare})],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    assert bare in by_key
-
-
-def test_e6_bare_keyed_row_alone_no_refusal():
-    """axis: bare-keyed row alone does not trigger legacy-key-collision refusal."""
-    long = _long_finding()
-    bare, _minted = _bare_minted(long)
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(long, **{
-            SC.FINDING_KEY_FIELD: bare,
-            "disposition": "fixed",
-            "dispositionRound": 1,
-        })],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    assert bare in by_key
-
-
-def test_e7_two_distinct_findings_same_location_no_collision():
-    """axis: two distinct findings at one location with different titles are not a collision."""
-    alpha = _long_finding(" alpha")
-    beta = _long_finding(" beta")
-    compiled, _ = RD.mechanical_compile([alpha, beta], None)
-    keys = [f[SC.FINDING_KEY_FIELD] for f in compiled]
-    assert len(keys) == 2
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(compiled[0], disposition="fixed", dispositionRound=1)],
-        findings=[compiled[1]],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    assert len(by_key) == 2
 
 
 def test_e8_non_dict_rows_skipped_by_helper():
-    """axis: non-dict rows are skipped by legacy_key_collision — malformed refusals unchanged."""
+    """axis: non-dict rows are skipped by legacy_key_collision."""
     long = _long_finding()
     bare, minted = _bare_minted(long)
     rows = [
@@ -193,34 +59,6 @@ def test_e8_non_dict_rows_skipped_by_helper():
         dict(long, **{SC.FINDING_KEY_FIELD: minted}),
     ]
     assert SC.legacy_key_collision(rows) == (bare, minted)
-    state = _ledger_owned_state(dispositionLedger=["not-a-dict"])
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    assert refusal is not None
-    assert refusal["bindingFailure"] == SC.DISPOSITION_LEDGER_MALFORMED_TOKEN
-
-
-def test_e9_clamp_exact_long_short_pair_refuses_certification():
-    """axis: clamp-exact short finding colliding with legacy bare long finding refuses certification."""
-    from finding_identity import clamp_title, finding_label
-
-    long = _long_finding()
-    bare, minted = _bare_minted(long)
-    short_title = clamp_title(finding_label(long))
-    short = dict(long, title=short_title)
-    assert SC.location_key(short) == bare
-    assert SC.minted_identity_key(short) == bare
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(long, **{
-            SC.FINDING_KEY_FIELD: bare,
-            "disposition": "fixed",
-            "dispositionRound": 1,
-        })],
-        findings=[dict(short, **{SC.FINDING_KEY_FIELD: bare})],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    _assert_legacy_collision_refusal(refusal, bare, bare)
 
 
 def test_e10_clamp_exact_long_short_pair_helper_refuses():
@@ -260,35 +98,10 @@ def test_e11_same_bare_and_minted_different_content_not_collision():
     })
     rows = [row_a, row_b]
     assert SC.legacy_key_collision(rows) is None
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(row_a, disposition="fixed", dispositionRound=1)],
-        findings=[row_b],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    assert bare in by_key
-
-
-def test_e11b_cross_location_minted_key_claimant_refuses():
-    """axis: global minted-key collision guard refuses when minted twin is at another location."""
-    long = _long_finding(" alpha")
-    bare, minted = _bare_minted(long)
-    foreign = dict(long, file="g.py", line=2, **{SC.FINDING_KEY_FIELD: minted})
-    state = _ledger_owned_state(
-        dispositionLedger=[dict(long, **{
-            SC.FINDING_KEY_FIELD: bare,
-            "disposition": "fixed",
-            "dispositionRound": 1,
-        })],
-        findings=[foreign],
-    )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert by_key == {}
-    _assert_legacy_collision_refusal(refusal, bare, minted)
 
 
 def test_e12_same_finding_duplicate_no_collision():
-    """axis: legacy bare-keyed row and live same-finding twin still resolve without refusal."""
+    """axis: legacy bare-keyed row and live same-finding twin are not a collision."""
     short = {"file": "a.py", "line": 1, "title": "bug", "severity": "Minor"}
     bare = SC.location_key(short)
     assert bare == SC.minted_identity_key(short)
@@ -298,10 +111,6 @@ def test_e12_same_finding_duplicate_no_collision():
         "dispositionRound": 1,
     })
     live = dict(short, **{SC.FINDING_KEY_FIELD: bare})
-    state = _ledger_owned_state(dispositionLedger=[ledger], findings=[live])
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    assert bare in by_key
     assert SC.legacy_key_collision([ledger, live]) is None
 
 

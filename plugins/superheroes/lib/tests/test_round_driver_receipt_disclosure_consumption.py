@@ -17,7 +17,7 @@ import round_driver  # noqa: E402
 
 _INVARIANT_A = (
     "Building a terminal receipt never raises on a malformed per-round disclosure channel: "
-    "every read of a RESUMABLE_DISCLOSURE_CHANNELS key off a per-round entry in build_receipt "
+    "every read of a CARRIED_DISCLOSURE_CHANNELS key off a per-round entry in build_receipt "
     "must go through the shared selection rule except the verifyPasses carve-out."
 )
 _INVARIANT_B = (
@@ -151,7 +151,7 @@ def _build_receipt_channel_get_reads():
     fn = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "build_receipt")
-    channels = set(round_driver.RESUMABLE_DISCLOSURE_CHANNELS)
+    channels = set(round_driver.CARRIED_DISCLOSURE_CHANNELS)
     reads = []
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
@@ -339,15 +339,3 @@ def test_e7_helper_channel_reads_guarded_by_isinstance_list():
         receipt_disclosures.seat_map_violations, "seatMapViolations"), (
         "%s seat_map_violations must not iterate a bare rec.get(seatMapViolations) or []"
         % _INVARIANT_B)
-
-
-# --- canaryVerified empty-but-present pin ---
-
-
-def test_empty_canary_verified_still_emits_on_certified_receipt():
-    """Empty-but-present canaryVerified ({}) still emits on a certified receipt."""
-    state = _minimal_state({"canaryVerified": {}})
-    receipt = round_driver.build_receipt(state)
-    rd = _round_entry(receipt)
-    assert "canaryVerified" in rd
-    assert rd["canaryVerified"] == {}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Scoped-finder phase token and default panel roster — driverless contract leaf (#1272).
 
-Imported by ``round_phases`` (driver) and ``round_certification`` (writer) so neither
-crosses the register R5 import fence. Stdlib-only."""
+Imported by ``round_phases`` (driver) so it does not cross the register R5 import fence.
+Stdlib-only."""
 from __future__ import annotations
 
 P_SCOPED_FINDER_PHASE = "dispatch-scoped-finder"
