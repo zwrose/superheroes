@@ -72,7 +72,7 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 python3 -B "$ROOT_DIR/lib/review_record_session.py" write --session-dir "$SESSION_DIR" --extras <extras.json> --repo-root <repo root>
 ```
 
-In PR mode, run it on every terminal verdict of a driven session: one that recorded at least one seat result and ended on a certified verdict. Any other session is refused `review-session-unsupported`. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds.
+In PR mode, run it on every terminal verdict of a driven session: one that recorded at least one seat result and ended on a certified verdict. Any other session is refused `review-session-unsupported`. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds. Push any fixes before writing the record, because the record is judged against the PR's final commit.
 
 The extras file holds only what the driver never does: `{"schema": "review-session-extras/1", "pr": <int>, "repo": <"owner/name" or null>, "laneReason": <string or null>, "ci": <string or null>, "runDirs": [<run directory>, ...], "goAheads": [...], "makers": [{family, source}, ...], "checked": [<string>, ...]}`. Only `schema` and `pr` are required. `goAheads`, `makers` and `checked` pass to the account unchanged. A go-ahead's `reviewer` is the reviewer row's name exactly as the adapter builds it: `<seat> (round <n>)` for a panel seat, `<phase without the dispatch- prefix> <seat> (round <n>)` for any other review phase, for example `security-reviewer (round 1)`.
 
@@ -120,7 +120,7 @@ finding in the account has an outcome and a reason; no planned review is missing
 reviewer ran; no raw output file is unread; and the final commit was read from the PR.
 At least one planned reviewer's run must cover the final commit. A reviewer listed for an earlier
 commit counts as run only for that commit, and the record shows which commit it covered; a head that
-moves after the last review round still reads not reviewed.
+moves after the last review round still reads not reviewed. A session whose final commit differs from the PR's final commit also reads not reviewed, because its outcomes belong to the other commit.
 Any finding short of that is listed in what is left. `makers`, `notIndependent` and `ownerWord` are shown as given, never checked, and never change "reviewed".
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.

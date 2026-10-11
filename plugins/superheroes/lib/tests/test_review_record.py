@@ -179,6 +179,15 @@ def test_code_wins_over_the_session_account():
     assert len(rec["sessionDisagreements"]) == 3
 
 
+def test_a_session_that_ended_on_another_commit_than_the_pr_head_is_not_reviewed():
+    # axis: outcome binding; fixes finished on a later commit certifying a PR head they never reached
+    rec = build(account(finalCommit=EARLIER))
+    assert rec["reviewers"][0]["ran"] == "engine-record" and rec["reviewers"][0]["coversFinalCommit"]
+    assert rec["status"] == "not-reviewed"
+    assert f"the session ended on {EARLIER[:7]}, but the PR's final commit is {HEAD[:7]}" in rr.render(rec)
+    assert build(account(finalCommit=HEAD))["status"] == "reviewed"
+
+
 def test_null_outcome_is_not_reviewed():
     # axis: the outcome condition; a finding with no outcome counted as reviewed
     rec = build(account(findings=[finding(outcome=None)]))

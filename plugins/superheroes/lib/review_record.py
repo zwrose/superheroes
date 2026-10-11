@@ -420,6 +420,8 @@ def _status(rec, unread=(), finding_lines=()):
     elif ci["sha"] != fc["sha"]:
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
     lines += finding_lines
+    lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
+              for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
     ran = [v for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run"]

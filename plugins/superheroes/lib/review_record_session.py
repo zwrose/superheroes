@@ -42,6 +42,7 @@ UNSUPPORTED = "review-session-unsupported"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
+_OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 
@@ -185,17 +186,18 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
+        env = envs[key]
+        body = env.get("payload") if isinstance(env, dict) else None
+        if key in ran and phase in _RAW_PHASES and raw_dir and body is None and not (isinstance(env, dict) and "payload" in env):
+            raise Refusal(UNREADABLE, f"{phase} {seat} round {rnd} findings")  # a ran seat's output must be retrievable
+        if phase in _RAW_PHASES and raw_dir and (key in ran or (isinstance(body, dict) and body.get("findings"))):
+            raw.append(_payload_file(raw_dir, phase, rnd, seat, body, raw))  # findings from a missing seat stay retrievable
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
-        env = envs[key]
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
         out.append(_reviewer(state, rnd, seat, stem, key in ran, same, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                              _text(r.get("citedHead")), bound.get(key)))
-        if key in ran and phase in _RAW_PHASES and raw_dir:
-            if env is None or "payload" not in env:
-                raise Refusal(UNREADABLE, f"{phase} {seat} round {rnd} findings")  # a ran seat's output must be retrievable
-            raw.append(_payload_file(raw_dir, phase, rnd, seat, env["payload"], raw))
     return out, raw
 
 
@@ -213,7 +215,7 @@ def _decide(own, by_key, rulings):
         why = _text(rep.get("refutedReason"))
         return ("left-for-owner" if (why or "").startswith("author-justified") else "shown-wrong"), why, rep
     why = _text(rep.get("outOfScopeReason"))
-    ruling = rulings.get(sc.finding_identity_key(rep)) or {}
+    ruling = rulings.get(sc.finding_identity_key(rep)) or rulings.get(rep.get("id")) or {}
     prov = ruling.get("provenance") if ruling.get("ruling") == "out-of-scope" else None
     by, at = (_text(prov.get("ruledBy")), _text(prov.get("ruledAt"))) if isinstance(prov, dict) else (None, None)
     if by and at:  # only an attributed ruling settles an out-of-scope finding
@@ -238,6 +240,14 @@ def _findings(state):
     content = dict(by_key, **{sc.finding_identity_key(f): f for f in live})
     log = state.get("rulingsLog") if isinstance(state.get("rulingsLog"), list) else []
     rulings = {r.get("findingKey"): r for r in log if isinstance(r, dict)}  # the latest ruling per key stands
+    for p in state.get("_policyApplied") if isinstance(state.get("_policyApplied"), list) else []:
+        act = p.get("action") if isinstance(p, dict) and p.get("source") == _OWNER_SUPPLIED \
+            and p.get("phase") == round_phases.P_JUDGMENT else None  # the owner-supplied source string; the driver is not importable here
+        prov = act.get("_provenance") if isinstance(act, dict) else None
+        if isinstance(prov, dict) and _text(prov.get("ruledBy")) and _text(prov.get("ruledAt")):
+            for d in act.get("dispositions") if isinstance(act.get("dispositions"), list) else []:
+                if isinstance(d, dict) and d.get("disposition") == "skip" and isinstance(d.get("id"), str):
+                    rulings.setdefault(d["id"], {"ruling": "out-of-scope", "provenance": prov})
     out = []
     for key, row in content.items():
         if row.get("summaryEntry"):

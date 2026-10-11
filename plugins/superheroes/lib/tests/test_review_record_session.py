@@ -245,6 +245,40 @@ def test_dispositions_map_to_outcomes(tmp_path, ledger, rulings, key, outcome, r
     assert (found["outcome"], found["reason"]) == (outcome, reason)
 
 
+def _applied(source="owner-supplied", prov=True, target=KEY, phase="present-judgment"):
+    action = {"dispositions": [{"id": target, "disposition": "skip", "reason": "later"}]}
+    if prov:
+        action["_provenance"] = {"ruledBy": "the owner", "ruledAt": "2030-01-02"}
+    return [{"phase": phase, "source": source, "layers": [], "matches": [], "action": action}]
+
+
+@pytest.mark.parametrize("applied,outcome", [
+    pytest.param(_applied(), "ruling", id="attributed-judgment-skip"),
+    pytest.param(_applied(prov=False), "left-for-owner", id="no-provenance"),
+    pytest.param(_applied(source="gate-policy"), "left-for-owner", id="gate-policy"),
+    pytest.param(_applied(target="other.py::x@L9"), "left-for-owner", id="another-finding"),
+])
+def test_an_attributed_gate_skip_settles_its_own_finding_only(tmp_path, applied, outcome):
+    s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], _policyApplied=applied)
+    found = rs.account_from_session(s.seat("code-reviewer").save(), extras())["findings"][0]
+    # bites on: an owner-supplied gate decision ignored, or one read as settling a finding it does not name
+    assert found["outcome"] == outcome
+    if outcome == "ruling":
+        assert found["reason"] == "belongs to the follow-up (ruled by the owner, 2030-01-02)"
+
+
+def test_findings_from_a_missing_seat_are_kept_whether_or_not_a_later_round_recovered_it(tmp_path):
+    s = Session(tmp_path).seat("code-reviewer").seat("security-reviewer").seat("security-reviewer", rnd=2)
+    session = s.save()
+    put_envelope(session, "security-reviewer", {"payload": {"findings": [{"title": "lost"}], "receiptMissing": True}})
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    account = rs.account_from_session(session, extras(), Fake().readers(), str(raw_dir))
+    # bites on: a seat classified missing dropping the findings it did hand back
+    assert len(account["rawFindingsFiles"]) == 3
+    assert [r["name"] for r in account["reviewers"]].count("security-reviewer (round 1)") == 0
+
+
 def test_a_run_directory_binds_only_by_the_runner_nonce(tmp_path):
     s = Session(tmp_path).seat("code-reviewer", nonce="nonce-a").seat("security-reviewer", nonce="nonce-b")
     records = {"/run/other": ({"runnerNonce": "nonce-z"}, None), "/run/bad": (None, "engine-unavailable"),
