@@ -8,9 +8,12 @@ exist.
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
+import time
+import types
 
 import pytest
 
@@ -379,6 +382,38 @@ def test_edge1_invalid_environment_writes_nothing(tmp_path, environment):
     _assert_nothing_written(repo, calls)
 
 
+_BAD_ISSUES = [
+    pytest.param("656", id="str"),
+    pytest.param([656], id="list"),
+    pytest.param({"n": 656}, id="dict"),
+    pytest.param(True, id="bool"),
+    pytest.param(None, id="none"),
+    pytest.param(0, id="zero"),
+    pytest.param(-3, id="negative"),
+    pytest.param(656.0, id="float"),
+]
+
+
+@pytest.mark.parametrize("issue", _BAD_ISSUES)
+def test_edge1_a_cloud_launch_with_a_bad_issue_writes_nothing(tmp_path, issue):
+    # axis: refused before any write
+    repo = _cloud_repo(tmp_path)
+    calls = []
+    result = _launch(
+        repo, tmp_path, _fake_spawn(calls=calls), issue=issue, premise=_valid_premise(repo),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-cloud-issue-invalid"
+    assert "launchId" in result
+    _assert_nothing_written(repo, calls)
+
+
+@pytest.mark.parametrize("issue", _BAD_ISSUES)
+@pytest.mark.parametrize("place", [None, "local"])
+def test_a_local_launch_with_an_odd_issue_does_not_get_the_cloud_issue_refusal(issue, place):
+    assert L._place_refusal("launch-x", place, None, None, None, {}, None, issue) is None
+
+
 # --- edge 2: a cloud launch refused at a gate is a cloud lane ----------------------------
 
 
@@ -564,6 +599,31 @@ def test_cloud_launch_with_the_default_spawn_leaves_no_worktree_process_or_push(
     assert lane["place"] == "cloud" and lane["cloudSessionId"] == SESSION_ID
 
 
+def test_cloud_command_environment_carries_the_resolved_effort(tmp_path, monkeypatch):
+    # axis: which effort the command runs with
+    repo = _cloud_repo(tmp_path)
+    monkeypatch.setenv(L.EFFORT_ENV, "low")
+    monkeypatch.setenv(L.EFFORT_REFLECTION_ENV, "low")
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls), effort="high")
+    assert result["ok"] is True, result
+    assert result["effort"] == "high"
+    assert calls[0]["env"][L.EFFORT_ENV] == "high"
+    assert L.EFFORT_REFLECTION_ENV not in calls[0]["env"]
+
+
+def test_cloud_command_environment_is_untouched_when_no_effort_resolved(tmp_path, monkeypatch):
+    repo = _cloud_repo(tmp_path)
+    monkeypatch.setenv(L.EFFORT_ENV, "low")
+    monkeypatch.setenv(L.EFFORT_REFLECTION_ENV, "xhigh")
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls), model="sonnet")
+    assert result["ok"] is True, result
+    assert result["effort"] is None
+    assert calls[0]["env"][L.EFFORT_ENV] == "low"
+    assert calls[0]["env"][L.EFFORT_REFLECTION_ENV] == "xhigh"
+
+
 def test_a_batch_of_three_cloud_launches_counts_three_cloud_lanes(tmp_path):
     repo = _cloud_repo(tmp_path)
     assert ll.declare_batch(repo, "wave-test", 3)["ok"] is True
@@ -624,6 +684,43 @@ def test_default_spawn_captures_the_measured_output_and_the_child_is_gone(
     assert _open_descriptors() == descriptors
 
 
+def _is_gone(pid, grace=5.0):
+    """Whether `pid` is no longer a process, allowing a moment for init to reap an orphan."""
+    end = time.monotonic() + grace
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
+def _kill_quietly(*pids):
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+# The stand-in command starts a long-lived child that shares its terminal and process group, then
+# prints that child's pid; the `%s` is what the command does next.
+_COMMAND_WITH_A_CHILD = (
+    "import subprocess, sys, time\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "print('child %%d' %% child.pid, flush=True)\n"
+    "%s"
+)
+
+
+def _printed_child_pid(output):
+    match = re.search(r"child (\d+)", output)
+    assert match, output
+    return int(match.group(1))
+
+
 def test_default_spawn_kills_its_own_child_on_timeout(tmp_path, terminal):
     # axis: no child process outlives the launch
     script = _script(tmp_path, "import time\nprint('Created cloud session: x', flush=True)\n"
@@ -646,6 +743,80 @@ def test_default_spawn_kills_its_own_child_on_timeout(tmp_path, terminal):
             except ProcessLookupError:
                 pass
     assert _open_descriptors() == descriptors
+
+
+def test_default_spawn_ends_a_child_left_behind_by_an_exited_command(tmp_path, terminal):
+    # axis: no process the launch started outlives it
+    script = _script(tmp_path, _COMMAND_WITH_A_CHILD % "")
+    result = None
+    child_pid = None
+    try:
+        started = time.monotonic()
+        result = L._default_cloud_spawn(
+            [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
+            dict(os.environ), 30,
+        )
+        elapsed = time.monotonic() - started
+        child_pid = _printed_child_pid(result["output"])
+        assert result["timedOut"] is False
+        assert result["rc"] == 0
+        assert elapsed < 15
+        assert _is_gone(result["pid"], grace=0)
+        assert _is_gone(child_pid)
+    finally:
+        _kill_quietly(*[p for p in (child_pid,) if p is not None])
+
+
+def test_default_spawn_ends_the_whole_group_on_timeout(tmp_path, terminal):
+    # axis: no process the launch started outlives it
+    script = _script(tmp_path, _COMMAND_WITH_A_CHILD % "time.sleep(60)\n")
+    result = None
+    child_pid = None
+    try:
+        result = L._default_cloud_spawn(
+            [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
+            dict(os.environ), 2,
+        )
+        child_pid = _printed_child_pid(result["output"])
+        assert result["timedOut"] is True
+        assert _is_gone(result["pid"], grace=0)
+        assert _is_gone(child_pid)
+    finally:
+        _kill_quietly(*[p for p in (result and result["pid"], child_pid) if p])
+
+
+def test_default_spawn_ends_the_group_when_the_read_raises(tmp_path, terminal, monkeypatch):
+    # axis: no process the launch started outlives it
+    pid_file = tmp_path / "pids.txt"
+    script = _script(tmp_path, (
+        "import os, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "with open(%r + '.tmp', 'w') as fh:\n"
+        "    fh.write('%%d %%d' %% (os.getpid(), child.pid))\n"
+        "os.rename(%r + '.tmp', %r)\n"
+        "time.sleep(60)\n" % (str(pid_file), str(pid_file), str(pid_file))
+    ))
+
+    def read_fails(readers, writers, errors, timeout=None):
+        end = time.monotonic() + 20
+        while not pid_file.exists() and time.monotonic() < end:
+            time.sleep(0.02)
+        raise RuntimeError("the read failed")
+
+    monkeypatch.setattr(L, "select", types.SimpleNamespace(select=read_fails))
+    pids = []
+    try:
+        with pytest.raises(RuntimeError, match="the read failed"):
+            L._default_cloud_spawn(
+                [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
+                dict(os.environ), 30,
+            )
+        pids = [int(p) for p in pid_file.read_text().split()]
+        assert len(pids) == 2
+        assert _is_gone(pids[0], grace=0)
+        assert _is_gone(pids[1])
+    finally:
+        _kill_quietly(*pids)
 
 
 def test_default_spawn_raises_oserror_for_a_missing_command_and_closes_descriptors(

@@ -16,6 +16,7 @@ import pty
 import re
 import secrets
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -127,9 +128,10 @@ _CLOUD_UNCONFIRMED_REMEDY = (
     "as `died`; when there is one, the lane is that session."
 )
 _CLOUD_STARTED_APPEND_REMEDY = (
-    "A cloud session exists and is working: its identity is in `cloudSessionId`. The ledger holds "
-    "this lane without its session, because the `started` record could not be written. The lane "
-    "is left live. End it with `record-outcome` when the session finishes."
+    "A cloud session exists and is working: its identity is in `cloudSessionId`. The `started` "
+    "record could not be written, and `startedAppend` holds why. The lane is left live on its "
+    "`reserved` record alone. `record-outcome` refuses a lane with no `started` record, so keep "
+    "the session's identity from this result and reach the session by it."
 )
 
 # What a reader of a `started` record sees when its lane launched over a recorded surface
@@ -1305,9 +1307,11 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
 
     The command refuses to run without a terminal, so its stdin, stdout and stderr are the slave
     end of a pseudo-terminal and the output is read off the master end. The child is its own
-    session leader and is killed, by the Popen object held here, when the timeout passes: no
-    process outlives the call. Both descriptors are always closed. Raises OSError when the
-    command could not be started; once it has run, a log that cannot be written is not an error.
+    session leader, so its process group is its pid: on every path out once it has started
+    (exit, timeout, a failed read, any exception) that whole group is sent SIGKILL and the command
+    is reaped, so no process the launch started outlives the call. Both descriptors are always
+    closed. Raises OSError when the command could not be started; once it has run, a log that
+    cannot be written is not an error.
     """
     master, slave = pty.openpty()
     try:
@@ -1326,31 +1330,36 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             os.close(slave)
         chunks = []
         timed_out = False
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                break
-            ready, _, _ = select.select([master], [], [], min(remaining, 0.25))
-            if ready:
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                ready, _, _ = select.select([master], [], [], min(remaining, 0.25))
+                if ready:
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    chunks.append(data)
+                elif proc.poll() is not None:
+                    break
+            if not timed_out:
                 try:
-                    data = os.read(master, 65536)
-                except OSError:
-                    break
-                if not data:
-                    break
-                chunks.append(data)
-            elif proc.poll() is not None:
-                break
-        if not timed_out:
+                    proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+        finally:
+            # axis: no process the launch started outlives it — the signal goes to the process group
+            # the Popen this function holds leads (its pid), on every path out, never to a caller's.
             try:
-                proc.wait(timeout=max(0.1, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-        if timed_out:
-            # axis: no child process outlives the launch — the kill is of the Popen this function holds.
-            proc.kill()
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -2086,7 +2095,9 @@ def _apply_dependency_gate(
     }
 
 
-def _place_refusal(launch_id, place, slot, generation, boundary, premise, cloud_environment):
+def _place_refusal(
+    launch_id, place, slot, generation, boundary, premise, cloud_environment, issue,
+):
     """The refusal a launch earns for its place before any reservation exists, or None.
 
     Every refusal here is returned before the ledger is touched, so none of them carries an
@@ -2106,6 +2117,9 @@ def _place_refusal(launch_id, place, slot, generation, boundary, premise, cloud_
         cloud_environment
     ):
         return _fail("launch-cloud-environment-invalid", launchId=launch_id)
+    # axis: refused before any write — a cloud lane is looked up by its issue, so it must be a number.
+    if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0:
+        return _fail("launch-cloud-issue-invalid", launchId=launch_id)
     return None
 
 
@@ -2172,7 +2186,7 @@ def launch_build(
 
     # Pre-reservation refusals: nothing is written to the ledger for any of these.
     place_refusal = _place_refusal(
-        launch_id, place, slot, generation, boundary, premise, cloud_environment,
+        launch_id, place, slot, generation, boundary, premise, cloud_environment, issue,
     )
     if place_refusal is not None:
         return place_refusal
@@ -2644,6 +2658,13 @@ def launch_build(
             cloud_env.pop(name, None)
         if config_dir is not None:
             cloud_env[CONFIG_DIR_ENV] = config_dir
+        # The same rule as the local spawn: the variable outranks the `--effort` flag, so a
+        # resolved effort overwrites the ambient value and drops the stale reflection; a None
+        # effort touches neither.
+        resolved_effort = compose_result["effort"]
+        if resolved_effort is not None:
+            cloud_env[EFFORT_ENV] = resolved_effort
+            cloud_env.pop(EFFORT_REFLECTION_ENV, None)
         success_base = {
             "ok": True,
             "reason": None,
