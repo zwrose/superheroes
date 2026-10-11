@@ -2805,19 +2805,15 @@ def _fold_panel(state, config, artifact):
         status = "run"
         if isinstance(seat, dict):
             reason = seat.get("reason")
-            not_run = seat.get("vacuous") is True or (
-                isinstance(reason, str) and reason in _DISPATCH_NOT_RUN_REASONS)
-            if not_run:
+            if dispatch_outcome.payload_did_not_run(seat):
                 status = "missing"
-                if seat.get("vacuous") is True or (
-                        isinstance(reason, str)
-                        and reason == engine_adapter.REVIEW_FORFEIT_VACUOUS):
-                    vacuous_dims.append(dim)
-                elif isinstance(reason, str) and (
-                        reason == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT):
-                    engaged_artifact_dims.append(dim)
-            if seat.get("receiptMissing") or seat.get("receiptStale"):
-                status = "missing"
+            if seat.get("vacuous") is True or (
+                    isinstance(reason, str)
+                    and reason == engine_adapter.REVIEW_FORFEIT_VACUOUS):
+                vacuous_dims.append(dim)
+            elif isinstance(reason, str) and (
+                    reason == dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT):
+                engaged_artifact_dims.append(dim)
         elif not isinstance(seat, list):
             # A configured dimension with NO dict/list seat did not run: an omitted / null / mangled
             # seat is a silent coverage gap. Fail closed — status `missing`, never a clean `run`, so

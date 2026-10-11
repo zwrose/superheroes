@@ -101,7 +101,7 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
          "micro", "issue lane call", "one line"),
         (Fake(), "full", "reported by the session", "big"),
         (Fake(marker=marker, meta={"head": HEAD, "body": "", "issues": [9]}, issue_bodies={9: "no call"}),
-         "full", "build lane marker", None),
+         "full", "build lane marker", "big"),
     ]
     keys = {"schema", "pr", "sessionId", "lane", "finalCommit", "ci", "reviewers", "findings", "unreadFiles",
             "rawOutputs", "leftForOwner", "missingReviews", "rounds", "cost", "sessionDisagreements", "checked",
@@ -113,6 +113,8 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
         rec = rr.read(7, readers=fake.readers())
         assert keys <= set(rec) and not {"owed", "archives", "rawFindings", "ownerWord"} & set(rec)
         assert (rec["lane"]["value"], rec["lane"]["source"], rec["lane"]["reason"]) == (lane, source, reason)
+        if source == "build lane marker":
+            assert rec["lane"]["reasonSource"] == "reported by the session"
         assert rec["finalCommit"]["sha"] == HEAD and rec["ci"]["state"] == "green" and rec["writtenAt"]
 
 
@@ -176,6 +178,15 @@ def test_code_wins_over_the_session_account():
     assert (rec["lane"]["value"], rec["finalCommit"]["sha"], rec["ci"]["state"]) == ("full", HEAD, "pending")
     assert {d["fact"] for d in rec["sessionDisagreements"]} == {"lane", "finalCommit", "ci"}
     assert len(rec["sessionDisagreements"]) == 3
+
+
+def test_a_session_that_ended_on_another_commit_than_the_pr_head_is_not_reviewed():
+    # axis: outcome binding; fixes finished on a later commit certifying a PR head they never reached
+    rec = build(account(finalCommit=EARLIER))
+    assert rec["reviewers"][0]["ran"] == "engine-record" and rec["reviewers"][0]["coversFinalCommit"]
+    assert rec["status"] == "not-reviewed"
+    assert f"the session ended on {EARLIER[:7]}, but the PR's final commit is {HEAD[:7]}" in rr.render(rec)
+    assert build(account(finalCommit=HEAD))["status"] == "reviewed"
 
 
 def test_null_outcome_is_not_reviewed():
@@ -1265,3 +1276,96 @@ def test_one_run_record_claimed_by_two_reviewers_credits_neither(tmp_path):
     assert rec["status"] != "reviewed"
     solo = build(account(reviewers=[a]), fake)
     assert solo["reviewers"][0]["ran"] == "engine-record"
+
+
+THIRD = "c" * 40
+
+
+def _fix_round_account(**over):
+    specialists = [reviewer(n, commit=EARLIER) for n in ("security-reviewer", "design-reviewer")]
+    return account(reviewers=[*specialists, reviewer("auditor")], **over)
+
+
+def _fix_round_runs():
+    return {"/run/security-reviewer": (dict(GOOD_RUN, viewHeadSha=EARLIER), None),
+            "/run/design-reviewer": (dict(GOOD_RUN, viewHeadSha=EARLIER), None),
+            "/run/auditor": (copy.deepcopy(GOOD_RUN), None)}
+
+
+def test_a_fix_round_review_reads_reviewed():
+    # axis: which commit a run is credited for; specialists who reviewed the earlier commit counted as not run
+    rec = build(_fix_round_account(), Fake(runs=_fix_round_runs()))
+    spec = [v for v in rec["reviewers"] if v["name"] != "auditor"]
+    assert [(v["ran"], v["commit"], v["coversFinalCommit"]) for v in spec] == [("engine-record", EARLIER, False)] * 2
+    auditor = rec["reviewers"][2]
+    assert (auditor["ran"], auditor["commit"], auditor["coversFinalCommit"]) == ("engine-record", None, True)
+    assert rec["status"] == "reviewed" and rec["missingReviews"] == [] and rec["sessionDisagreements"] == []
+    text = rr.render(rec)
+    assert f"- security-reviewer: ran (engine record) on {EARLIER[:7]}" in text
+    assert f"- design-reviewer: ran (engine record) on {EARLIER[:7]}" in text
+    assert "- auditor: ran (engine record);" in text
+
+
+def test_a_head_moved_after_the_last_round_reads_not_reviewed():
+    # axis: reviewed status when no credited run covers the final commit; a head that moved after the last round
+    fake = Fake(runs=_fix_round_runs(), meta={"head": THIRD, "body": "", "issues": []})
+    rec = build(_fix_round_account(), fake)
+    assert [v["ran"] for v in rec["reviewers"]] == ["engine-record"] * 2 + ["not-run"]
+    assert not any(v["coversFinalCommit"] for v in rec["reviewers"])
+    assert rec["status"] == "not-reviewed"
+    assert f"no planned reviewer's run covers the final commit {THIRD[:7]}" in rec["whatIsMissing"]
+
+
+def test_a_row_listed_for_one_commit_is_not_credited_for_another():
+    # axis: refusal of a mismatched run; a run record of one commit credited to a row listed for another
+    rec = build(account(reviewers=[reviewer(commit=EARLIER)]), Fake())
+    v = rec["reviewers"][0]
+    assert v["ran"] == "not-run" and v["coversFinalCommit"] is False and "observation" not in v
+    assert v["runNote"] == f"the run record covers {HEAD[:7]}, not the commit this reviewer was listed for {EARLIER[:7]}"
+    assert [m["name"] for m in rec["missingReviews"]] == ["code-reviewer"]
+    assert {"fact": "code-reviewer ran", "session": True, "code": "not-run"} in rec["sessionDisagreements"]
+    assert rec["status"] == "not-reviewed"
+
+
+def test_a_session_only_row_naming_a_commit_is_reported_by_the_session():
+    # axis: session-only commit binding; a session-reported review of a named earlier commit dropped or credited as final
+    rec = build(account(reviewers=[reviewer(runDir=None, commit=EARLIER), reviewer("auditor", runDir=None)]))
+    v = rec["reviewers"][0]
+    assert (v["ran"], v["commit"], v["coversFinalCommit"]) == ("reported-by-session", EARLIER, False)
+    assert rec["sessionDisagreements"] == [] and rec["status"] == "reviewed"
+
+
+@pytest.mark.parametrize("bad", [7, ["x"], True])
+def test_a_non_string_commit_is_refused(bad):
+    # axis: the commit key's type; a non-string commit accepted into the account
+    with pytest.raises(rr.Refusal) as e:
+        build(account(reviewers=[reviewer(commit=bad)]))
+    assert (e.value.reason, e.value.detail) == ("review-account-invalid", "reviewers[0].commit")
+
+
+@pytest.mark.parametrize("empty", ["", None])
+def test_an_empty_commit_is_the_same_as_none(empty):
+    # axis: the empty commit; an empty or null commit read as a named commit
+    same = build(account(reviewers=[reviewer()]))["reviewers"][0]
+    rec = build(account(reviewers=[reviewer(commit=empty)]))
+    assert rec["reviewers"][0] == same and rec["reviewers"][0]["commit"] is None
+    assert rec["status"] == "reviewed" and rec["reviewers"][0]["coversFinalCommit"] is True
+
+
+def test_the_marker_decided_lane_keeps_its_reason():
+    # axis: the lane reason's presence; a marker-decided lane returning no reason or a reason with no source
+    marker = {"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": 9}
+    meta = {"head": HEAD, "body": "", "issues": [9]}
+    fake = Fake(marker=marker, meta=meta, issue_bodies={9: "**Lane call:** full. spans three contracts"})
+    rec = build(account(), fake)
+    assert rec["lane"] == {"value": "full", "source": "build lane marker", "reason": "spans three contracts",
+                           "reasonSource": "issue lane call"}
+    assert "Lane: full (build lane marker), because spans three contracts (issue lane call)." in rr.render(rec)
+    fake = Fake(marker=marker, meta=meta, issue_bodies={9: "no call"})
+    rec = build(account(), fake)
+    assert rec["lane"] == {"value": "full", "source": "build lane marker", "reason": "big",
+                           "reasonSource": "reported by the session"}
+    assert "Lane: full (build lane marker), because big (reported by the session)." in rr.render(rec)
+    rec = build(account(laneReason=None), fake)
+    assert rec["lane"]["reason"] is None and rec["lane"]["reasonSource"] is None
+    assert "Lane: full (build lane marker)." in rr.render(rec)

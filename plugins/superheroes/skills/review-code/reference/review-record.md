@@ -1,4 +1,14 @@
-The review record: the plain account of one PR's review. This file is the one home of the rule for how a review writes it. The light lane, the micro lane, and `--review-only` each point here.
+The review record: the plain account of one PR's review. This file is the one home of the rule for how a review writes it. The full lane, the light lane, the micro lane, and `--review-only` each point here.
+
+## Contents
+
+- [What the record is](#what-the-record-is)
+- [Write the account](#write-the-account)
+- [Write it, read it](#write-it-read-it)
+- [The full lane writes it from the session](#the-full-lane-writes-it-from-the-session)
+- [When it refuses](#when-it-refuses)
+- [What "reviewed" means](#what-reviewed-means)
+- [Map each exit's results to outcomes](#map-each-exits-results-to-outcomes)
 
 ## What the record is
 
@@ -23,7 +33,7 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `pr`: the PR number. `sessionId`: this review session. `lane` and `laneReason`: the lane and why.
 - `finalCommit`: the commit the review ended on. `ci`: CI on it, as you saw it.
 - `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool),
-  `ownerWord` (`{words, where}`). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
+  `ownerWord` (`{words, where}`), `commit` (the commit that reviewer reviewed, when it is not the final commit; a row that names none is judged against the final commit). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
   reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
@@ -56,6 +66,41 @@ python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>
 Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest record and `earlierRecords`
 (the older URLs). `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Put the record's URL in the PR body's build record.
 
+## The full lane writes it from the session
+
+```bash
+python3 -B "$ROOT_DIR/lib/review_record_session.py" write --session-dir "$SESSION_DIR" --extras <extras.json> --repo-root <repo root>
+```
+
+In PR mode, run it on every terminal verdict of a driven session: one that recorded at least one seat result and ended on a certified verdict. Any other session is refused `review-session-unsupported`. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds. Push any fixes before writing the record, because the record is judged against the PR's final commit.
+
+The extras file holds only what the driver never does: `{"schema": "review-session-extras/1", "pr": <int>, "repo": <"owner/name" or null>, "laneReason": <string or null>, "ci": <string or null>, "runDirs": [<run directory>, ...], "goAheads": [...], "makers": [{family, source}, ...], "checked": [<string>, ...]}`. Only `schema` and `pr` are required. `goAheads`, `makers` and `checked` pass to the account unchanged. A go-ahead's `reviewer` is the reviewer row's name exactly as the adapter builds it: `<seat> (round <n>)` for a panel seat, `<phase without the dispatch- prefix> <seat> (round <n>)` for any other review phase, for example `security-reviewer (round 1)`.
+
+What comes from the session:
+
+- `rounds`: the count of rounds, the configured cap, and whether the loop stopped at it.
+- `reviewers`: one row per recorded review seat, with the commit that seat cited as the one it covered. A superseded attempt is left out and the highest attempt of a slot counts. A seat recorded missing is a reviewer that did not run, unless a later round ran the same seat. A seat the seat map marks same-family carries `notIndependent`.
+- `runDir`: a directory in `runDirs` is bound to the one seat whose recorded runner nonce equals the nonce in that directory's engine record. A directory that matches no seat or several, or cannot be read, is not used. A seat with no run directory reads "reported by the session".
+- `makers`: the extras' makers, plus the fixer's family (source `review loop fixer`) when a round ran a fixer.
+- `finalCommit`: the fix-fold head when the session holds one, else the session's head.
+- `findings` and outcomes, from the disposition ledger and the live findings; `rawFindingsFiles`, each panel, gap-sweep and scoped-finder seat's findings payload, posted without the runner's telemetry.
+- A later session's account relists the latest earlier record's findings that this session did not raise, each with the outcome and reason it had.
+
+Outcomes:
+
+- A fixed finding becomes `fixed`, with the round it was audited in.
+- A finding refuted by verification becomes `shown-wrong`, with the refuted reason; a refutation whose reason starts `author-justified` becomes `left-for-owner`.
+- An out-of-scope finding becomes `ruling` only when the session's rulings log holds an out-of-scope ruling for it that names who ruled and when; any other out-of-scope finding becomes `left-for-owner`.
+- A finding merged into another takes the representative's outcome, and its reason names the representative.
+- A finding the loop never disposed of, whose disposition is not newer than the finding, or whose merge cannot be followed stays undecided (`null`, "still open when the review loop ended"), so the record reads not reviewed.
+
+Refusals, before anything is posted:
+
+- `review-session-unreadable`: a session file the account needs is missing or malformed; the detail names it (the loop state, the journal or its fault file, `meta.json`'s `sessionId`, the disposition ledger). Restore the session directory and write again; never edit the files by hand.
+- `review-session-not-terminal`: the loop has not ended. Finish the loop, then write.
+- `review-session-unsupported`: the session recorded no seat result (a hand-driven session), or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account".
+- `review-session-extras-invalid`: the extras file is missing, unparseable or malformed; the detail names the key. Fix it and write again.
+
 ## When it refuses
 
 - `review-record-unreadable`: the latest record could not be parsed; park and report. Never delete or
@@ -73,6 +118,9 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 The record says reviewed only when all five hold: CI is green on the PR's final commit; every
 finding in the account has an outcome and a reason; no planned review is missing and a planned
 reviewer ran; no raw output file is unread; and the final commit was read from the PR.
+At least one planned reviewer's run must cover the final commit. A reviewer listed for an earlier
+commit counts as run only for that commit, and the record shows which commit it covered; a head that
+moves after the last review round still reads not reviewed. A session whose final commit differs from the PR's final commit also reads not reviewed, because its outcomes belong to the other commit.
 Any finding short of that is listed in what is left. `makers`, `notIndependent` and `ownerWord` are shown as given, never checked, and never change "reviewed".
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
