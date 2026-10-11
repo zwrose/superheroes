@@ -426,7 +426,8 @@ def _read_project_config_raw(mapping, slug):
     return mapping[slug]
 
 
-def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
+def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None,
+                        risk_areas_read=None):
     slug = item["slug"]
     malformed = False
     if slug == "budgetN":
@@ -482,14 +483,17 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
         threat = raw.get("threatModel")
         areas = raw.get("riskAreas")
         threat_set = isinstance(threat, str) and bool(threat.strip())
-        areas_malformed = areas is not None and bool(core_md.validate_risk_areas(areas))
-        if areas is None:
-            effective_areas = []
-        elif areas_malformed:
+        # axis: the risk-areas half is derived only from core_md.read_risk_areas — see bite-proof record wo_a_1712_risk-areas
+        areas_read = risk_areas_read or {}
+        areas_malformed = areas_read.get("reason") in (
+            core_md.RISK_AREAS_REASON_MALFORMED, core_md.RISK_AREAS_REASON_UNREADABLE)
+        if areas_malformed:
             effective_areas = None
+        elif areas_read.get("declared"):
+            effective_areas = areas_read.get("areas")
         else:
-            effective_areas = areas
-        stamped = threat_set or (isinstance(areas, list) and bool(areas))
+            effective_areas = []
+        stamped = threat_set or bool(effective_areas)
         return {
             "raw": {"threatModel": threat, "riskAreas": areas},
             "effective": {
@@ -545,6 +549,7 @@ def read(cwd, root=None):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
     facts = core_md.read(cwd, root)
     guardian_cfg = guardian_sweep.read_config(cwd, root)
+    risk_areas_read = core_md.read_risk_areas(cwd, root)
     if facts is None:
         absent_items = []
         dial_entry = _resolve_item_entry(_SLUG_INDEX["dial"], None)
@@ -561,6 +566,7 @@ def read(cwd, root=None):
                 raw,
                 dial_effective=dial_entry["effective"],
                 guardian_cfg=guardian_cfg,
+                risk_areas_read=risk_areas_read,
             )
             absent_items.append({"slug": slug, **entry})
         return {
@@ -590,6 +596,7 @@ def read(cwd, root=None):
             raw,
             dial_effective=dial_entry["effective"],
             guardian_cfg=guardian_cfg,
+            risk_areas_read=risk_areas_read,
         )
         items.append({
             "slug": slug,

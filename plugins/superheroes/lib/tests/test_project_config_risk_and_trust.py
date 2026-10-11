@@ -401,3 +401,72 @@ def test_item_ten_row_flags_unreadable_areas_on_one_line(tmp_path):
     CM.write_project_config_item(repo, CM.RISK_AREAS_KEY, [{"name": "Payments"}], root=store)
     assert _item_ten_row(CV.render(repo, root=store)) == (
         "10. Risk and trust — threat model set; risk areas unreadable")
+
+
+# --- the one canonical read: item 10's areas half agrees with core_md.read_risk_areas -------------
+
+
+def _write_project_configuration(repo, store, value):
+    path = CM.core_path(repo, store)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    match = CM._JSON_BLOCK.search(text)
+    block = json.loads(match.group(1))
+    block["projectConfiguration"] = value
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text[:match.start(1)] + json.dumps(block, indent=2) + text[match.end(1):])
+
+
+def test_stored_null_areas_read_malformed_with_no_effective_list(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _write_project_configuration(repo, store, {"riskAreas": None})
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["malformed"] is True
+    assert got["raw"]["riskAreas"] is None
+    assert got["effective"]["riskAreas"] is None
+    assert "risk areas unreadable" in _item_ten_row(CV.render(repo, root=store))
+
+
+def test_string_areas_read_malformed_with_no_effective_list(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _write_project_configuration(repo, store, {"riskAreas": "payments"})
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["malformed"] is True
+    assert got["raw"]["riskAreas"] == "payments"
+    assert got["effective"]["riskAreas"] is None
+    assert "risk areas unreadable" in _item_ten_row(CV.render(repo, root=store))
+
+
+def test_project_configuration_that_is_a_list_reads_malformed_with_no_effective_list(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    _write_project_configuration(repo, store, ["riskAreas"])
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["malformed"] is True
+    assert got["raw"]["riskAreas"] is None
+    assert got["effective"]["riskAreas"] is None
+    assert "risk areas unreadable" in _item_ten_row(CV.render(repo, root=store))
+
+
+def test_absent_areas_key_reads_an_unset_row(tmp_path):
+    repo, store = _setup_repo(tmp_path, threat="")
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["raw"]["riskAreas"] is None and got["effective"]["riskAreas"] == []
+    assert got["malformed"] is False
+    assert _item_ten_row(CV.render(repo, root=store)) == (
+        "10. Risk and trust — unset — threat model not set; 0 risk areas")
+
+
+def test_absent_core_reads_an_unset_row(tmp_path):
+    repo, store = _setup_repo(tmp_path, core=False)
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["effective"]["riskAreas"] == [] and got["malformed"] is False
+    assert _item_ten_row(CV.render(repo, root=store)) == (
+        "10. Risk and trust — unset — threat model not set; 0 risk areas")
+
+
+def test_valid_empty_list_reads_empty_and_not_malformed(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config_item(repo, CM.RISK_AREAS_KEY, [], root=store)
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["raw"]["riskAreas"] == [] and got["effective"]["riskAreas"] == []
+    assert got["malformed"] is False

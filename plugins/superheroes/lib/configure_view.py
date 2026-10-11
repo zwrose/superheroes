@@ -253,7 +253,11 @@ def _risk_and_trust_display(effective):
 def _config_item_display(item_def, entry, canon_args=None):
     """Format one configuration row for the one-screen view. Read-only."""
     if item_def["slug"] == "riskAndTrust" and isinstance(entry.get("effective"), dict):
-        return _risk_and_trust_display(entry["effective"])
+        shown = _risk_and_trust_display(entry["effective"])
+        # axis: an item with nothing set says unset, like every other item — see bite-proof record wo_a_1712_risk-areas
+        if entry.get("source") == "unset" and not entry.get("malformed"):
+            return "unset — " + shown
+        return shown
     if entry.get("malformed"):
         return "malformed (stamped value not applied)"
     source = entry.get("source")
