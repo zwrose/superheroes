@@ -9,6 +9,31 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Before you upgrade
+
+- After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
+- After upgrading, the owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets.
+- The project keeps working before the sitting. Until then, every change whose risk is unclear goes to the full lane, and every leftover with a real consequence comes to the owner.
+- The earlier plugin version is not kept runnable after this release. Downgrading under these changes is not supported.
+
+### Review record
+
+- Every review on the full, light and micro lanes and review-code's review-only exit now writes one review record, kept as a new marker-tagged comment on the PR for each review session (earlier ones are never edited, and each reviewer's raw output sits in its own linked comment), and read back with the record writer's `read --pr <n>` verb. The full lane builds its account from the review session.
+- The findings contract gains a required, nullable `consequence` member, and the record spells the five outcomes as `fixed`, `shown-wrong`, `craft`, `left-for-owner`, `ruling`. Callers that build findings by hand must now emit `consequence` (null is allowed).
+- The advisor's vet now reads the review record. In place of the certified-loop check and the seat-provenance parity check, it checks that the record exists, that the checks ran on the PR's final commit, and that no leftover skipped the owner's review. After a project adopts this release, a full or light PR with no review record is not returned as ready.
+
+### Review: what retires
+
+These retirements ship in the same release as the review record, and never apart from it.
+
+- **The certificate gate.** No review is refused, parked or reported incomplete for lacking a certificate, and the handback gate no longer refuses. The review record replaces the certificate.
+- **The planted-bug review control.** No review runs a planted-defect probe. The engine wiring and new-model admission checks stay, and the review record shows which reviewers ran.
+- **Moving a review session.** The relocate and re-emit verbs are gone. A session is not moved; a review that needs a new place starts again in a fresh session folder.
+- **Starting a review from an earlier session's saved records.** A new review no longer starts from an earlier session's saved records. It starts from round 1 in a fresh session folder, and the next review record accounts for every finding the latest earlier record listed.
+- **The exact-head evidence chain.** The head-content blobs and their recomputation check are gone. The review record is judged against the PR's final commit instead.
+- A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
+- A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
+
 ### Launch ledger: cloud lanes
 
 - The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.

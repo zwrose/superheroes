@@ -31,7 +31,6 @@ _EXPLICIT_HOMES = (
     "docs/superheroes/KEEP-OR-RETIRE.md",
     "plugins/superheroes/lib/dispatch_entry_doc.py",
     "plugins/superheroes/skills/workhorse/reference/dispatch-entry.md",
-    "plugins/superheroes/lib/tests/test_round_certification_fixture_generator_drift.py",
 )
 _SELF_SCRIPT = ".github/scripts/validate_python_pin.py"
 
