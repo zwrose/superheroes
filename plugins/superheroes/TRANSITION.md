@@ -12,7 +12,7 @@ belongs to and lists every change with its replacement.
 ### Launcher: cloud launch
 
 - `launch` and `compose` take `--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. A launch without `--place`, or with `--place local`, is a local launch.
-- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-head-not-on-remote` when the checkout's remote-tracking branches hold no branch that contains the commit the session would start from. It also refuses with `launch-cloud-head-not-base` when the launching checkout is not on the premise's base commit.
+- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-base-not-on-remote` when the base commit the launch names is not on the remote, read fresh from the remote, and with `launch-cloud-base-remote-unchecked` when the remote could not be asked.
 - `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript to read.
 
 ### Launch ledger: cloud lanes

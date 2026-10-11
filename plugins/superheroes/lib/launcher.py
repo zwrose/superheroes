@@ -16,10 +16,12 @@ import pty
 import re
 import secrets
 import select
+import shutil
 import signal
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1253,8 +1255,15 @@ def compose_launch(
         version = plugin_version()
         if version is None:
             return _fail("compose-plugin-version-unreadable")
-        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n\n%s" % (
-            _WORKHORSE_CMD, issue, version, rulings_block,
+        base = premise.get("baseCommit") if isinstance(premise, dict) else None
+        if not isinstance(base, str) or not base.strip():
+            return _fail("premise-missing-field:baseCommit")
+        # axis: the cloud prompt names the cloud environment on its own line — see bite-proof record wo_c_place_call
+        environment_line = "Cloud environment: %s" % cloud_environment
+        # axis: the cloud prompt names the base commit on its own line — see bite-proof record wo_c_place_call
+        base_line = "Base commit: %s" % base
+        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n%s\n%s\n\n%s" % (
+            _WORKHORSE_CMD, issue, version, environment_line, base_line, rulings_block,
         )
     else:
         prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
@@ -2270,30 +2279,59 @@ def _place_refusal(
     return None
 
 
-def _cloud_base_refusal(repo_root, stamped, env):
-    """The refusal reason when the checkout is not a valid cloud base, else None.
+def _base_on_remote(repo_root, base, env):
+    """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
+    None when the remote could not be asked.
 
-    Run before reservation and again right before the cloud command: reservation can wait on
-    the ledger lock, and the owner may move the checkout in that time.
+    The commit is fetched into an empty repository, because a fetch in the working repository
+    never asks the server for an object it already has, and a local tracking ref can be stale.
     """
-    # axis: no cloud spawn from a commit the remote lacks — HEAD must be contained by a remote branch.
-    on_remote = _git_scrubbed(
-        repo_root, "branch", "-r", "--contains", "HEAD",
-        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    url = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
-    # axis: the session starts from the checkout's HEAD, so HEAD must be the stamped base the
-    # gates ran against and the ledger records — never a different commit.
-    head = _git_scrubbed(
-        repo_root, "rev-parse", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    head_is_base = (
-        head is not None and head.returncode == 0
-        and head.stdout.strip() == stamped["baseCommit"]
-    )
-    if on_remote is None or on_remote.returncode != 0 or not on_remote.stdout.strip():
-        return "launch-cloud-head-not-on-remote"
-    if not head_is_base:
-        return "launch-cloud-head-not-base"
+    if url is None or url.returncode != 0 or not url.stdout.strip():
+        return None
+    try:
+        scratch = tempfile.mkdtemp()
+    except OSError:
+        return None
+    try:
+        made = _git_scrubbed(
+            scratch, "init", "-q", "--bare", scratch, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if made is None or made.returncode != 0:
+            return None
+        fetched = _git_scrubbed(
+            scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+            url.stdout.strip(), base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if fetched is None:
+            return None
+        return fetched.returncode == 0
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+# The round-trip to the remote; tests replace it.
+_base_on_remote_fn = _base_on_remote
+
+
+def _cloud_base_refusal(repo_root, stamped, env):
+    """The refusal reason when the base commit the launch names is not on the remote, else None.
+
+    The cloud session starts from the commit named on the prompt's ``Base commit:`` line, so the
+    checkout's HEAD need not be it. Run before reservation and again right before the cloud
+    command: reservation can wait on the ledger lock. The check fails closed: a remote that could
+    not be asked refuses.
+    """
+    # axis: the named base is on the remote, read fresh from the server and never from local tracking refs — see bite-proof record wo_c_place_call
+    found = _base_on_remote_fn(repo_root, stamped["baseCommit"], env)
+    # axis: a remote that could not be asked refuses — see bite-proof record wo_c_place_call
+    if found is None:
+        return "launch-cloud-base-remote-unchecked"
+    # axis: a base the remote lacks refuses — see bite-proof record wo_c_place_call
+    if found is not True:
+        return "launch-cloud-base-not-on-remote"
     return None
 
 
@@ -2588,8 +2626,8 @@ def launch_build(
     argv = compose_result["argv"]
 
     if cloud:
-        # The cloud session starts from a commit the remote has, so the launching checkout's HEAD
-        # must be on a remote branch. The launcher pushes nothing to make it so.
+        # The cloud session starts from the base commit the prompt names, so the remote must have
+        # it. The launcher pushes nothing to make it so.
         refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
         if refusal_reason is not None:
             reserve_result = _try_reserve_for_refusal(
@@ -2845,8 +2883,8 @@ def launch_build(
             "effortSource": compose_result["effortSource"],
             "warnings": warnings,
         }
-        # axis: reservation may have waited on the ledger lock, so the checkout is re-checked
-        # right before the command; a drifted checkout terminalizes the unstarted lane.
+        # axis: reservation may have waited on the ledger lock, so the base is re-checked
+        # right before the command; a base the remote lost terminalizes the unstarted lane.
         drift = _cloud_base_refusal(repo_root, stamped, env)
         if drift is not None:
             term = _terminalize(repo_root, launch_id, False, drift, stage="cloud-base", env=env)

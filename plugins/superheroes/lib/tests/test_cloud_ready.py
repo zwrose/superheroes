@@ -40,7 +40,7 @@ PAST = "2026-10-10"
 ALL_TRUE = {name: True for name in CR.CONDITION_ORDER}
 ALL_FALSE = {name: False for name in CR.CONDITION_ORDER}
 RESULT_KEYS = {"ready", "reason", "conditions", "setting", "account", "environment",
-               "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt"}
+               "cloudVersion", "advisorVersion", "picksUpVersion", "checkedAt", "failedCheck"}
 
 
 def _stamp_ok(cwd, root):
@@ -126,7 +126,8 @@ def test_ready_when_all_six_hold_and_every_key_is_present(tmp_path):
     assert got == {
         "ready": True, "reason": None, "conditions": ALL_TRUE, "setting": False,
         "account": ACCOUNT, "environment": ENVIRONMENT, "cloudVersion": ADVISOR,
-        "advisorVersion": ADVISOR, "picksUpVersion": False, "checkedAt": "2026-10-09"}
+        "advisorVersion": ADVISOR, "picksUpVersion": False, "checkedAt": "2026-10-09",
+        "failedCheck": None}
 
 
 def test_setting_comes_from_the_one_reader(tmp_path):
@@ -386,3 +387,156 @@ def test_everything_false_but_setup_reports_the_pass(tmp_path):
                 reported={"noPass": True, "unreachable": True})
     assert got["conditions"] == dict(ALL_FALSE, setup=True)
     assert got["reason"] == "no-pass"
+
+
+# ---------------------------------------------------------------- a failed check
+
+
+def _mark(repo, store, parts, account=ACCOUNT, raw=None):
+    """Leave the failed-check marker a failed check leaves beside the setup record."""
+    path = cloud_check.failed_check_path(repo, account, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    marker = {"schema": cloud_check.FAILED_CHECK_SCHEMA, "account": account,
+              "environment": ENVIRONMENT, "failedAt": "2026-10-10T00:00:00Z",
+              "failedParts": parts}
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(raw if raw is not None else json.dumps(marker))
+    return path
+
+
+def _count_marker_reads(monkeypatch):
+    reads = []
+    real = cloud_check.read_failed_check
+    monkeypatch.setattr(
+        cloud_check, "read_failed_check", lambda *a, **k: reads.append(a) or real(*a, **k))
+    return reads
+
+
+def test_failed_check_is_none_on_every_path_without_a_marker(tmp_path):
+    repo, store = _ready(tmp_path)
+    assert _read(repo, store)["failedCheck"] is None
+    assert _read(repo, store, reported={"bogus": True})["failedCheck"] is None
+    assert _read(repo, store, account=OTHER_ACCOUNT)["failedCheck"] is None
+
+
+def test_any_marker_present_means_not_ready(tmp_path):
+    # axis: any failed-check marker present means the latest check failed, so the setup is not ready
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["record"])
+    got = _read(repo, store)
+    assert got["ready"] is False and got["reason"] == "no-setup"
+    assert got["conditions"] == ALL_FALSE
+    assert got["failedCheck"] == ["record"] and set(got) == RESULT_KEYS
+
+
+@pytest.mark.parametrize("part,condition", [
+    ("reviewer", "passPresent"), ("version", "version"), ("calibration", "calibration")])
+def test_a_named_part_forces_its_own_condition_false(tmp_path, part, condition):
+    # axis: the reviewer, version and calibration parts each force their own condition false
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, [part])
+    got = _read(repo, store)
+    _only_false(got, condition)
+    assert got["failedCheck"] == [part]
+
+
+def test_several_named_parts_apply_together_and_the_order_picks_the_reason(tmp_path):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["calibration", "version", "reviewer"])
+    got = _read(repo, store)
+    assert got["conditions"] == dict(ALL_TRUE, passPresent=False, version=False, calibration=False)
+    assert got["reason"] == "no-pass"
+    assert got["failedCheck"] == ["calibration", "version", "reviewer"]
+
+
+@pytest.mark.parametrize("part", ["unread", "environment", "record", "setting", "other"])
+def test_any_other_part_forces_the_setup_condition_false(tmp_path, part):
+    # axis: any other failed part forces the setup condition false, and so every later one
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, [part])
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["reason"] == "no-setup"
+    assert got["failedCheck"] == [part]
+
+
+def test_E3_a_marker_of_unknown_parts_only_is_no_setup(tmp_path):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["unread", "environment"])
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["reason"] == "no-setup"
+    assert got["failedCheck"] == ["unread", "environment"]
+
+
+def test_a_named_part_beside_an_unknown_one_is_no_setup(tmp_path):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["reviewer", "record"])
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["reason"] == "no-setup"
+
+
+@pytest.mark.parametrize("raw", ["not json", "[]", "{}", '{"schema": "other/9"}', ""])
+def test_E1_a_damaged_marker_is_present_with_no_parts_and_no_setup(tmp_path, raw):
+    # axis: a marker that cannot be read is present and damaged, so the setup is not ready
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, [], raw=raw)
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["reason"] == "no-setup"
+    assert got["failedCheck"] == []
+
+
+def test_a_marker_with_no_parts_is_no_setup(tmp_path):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, [])
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["failedCheck"] == []
+
+
+def test_E2_a_marker_read_that_raises_counts_as_damaged(tmp_path, monkeypatch):
+    repo, store = _ready(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("marker reader exploded")
+
+    monkeypatch.setattr(cloud_check, "read_failed_check", boom)
+    got = _read(repo, store)
+    assert got["conditions"] == ALL_FALSE and got["reason"] == "no-setup"
+    assert got["failedCheck"] == []
+
+
+def test_E4_a_marker_beside_an_unreadable_record_is_not_read(tmp_path, monkeypatch):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["reviewer"])
+    os.unlink(CS.record_path(repo, ACCOUNT, store))
+    reads = _count_marker_reads(monkeypatch)
+    got = _read(repo, store)
+    assert reads == []
+    assert got["reason"] == "no-setup" and got["conditions"] == ALL_FALSE
+    assert got["failedCheck"] is None
+
+
+def test_a_marker_for_another_account_does_not_fail_this_one(tmp_path):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["reviewer"], account=OTHER_ACCOUNT)
+    got = _read(repo, store)
+    assert got["ready"] is True and got["failedCheck"] is None
+
+
+def test_the_marker_is_read_once(tmp_path, monkeypatch):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["version"])
+    reads = _count_marker_reads(monkeypatch)
+    _read(repo, store)
+    assert len(reads) == 1 and reads[0][1] == ACCOUNT
+
+
+def test_the_all_false_fallback_carries_failed_check_none(tmp_path, monkeypatch):
+    repo, store = _ready(tmp_path)
+    _mark(repo, store, ["reviewer"])
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("reader exploded")
+
+    monkeypatch.setattr(CR, "_readiness", boom)
+    got = _read(repo, store)
+    assert got["failedCheck"] is None and got["conditions"] == ALL_FALSE
+    assert set(got) == RESULT_KEYS

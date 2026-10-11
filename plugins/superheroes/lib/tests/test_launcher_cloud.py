@@ -265,14 +265,17 @@ def _compose_cloud(repo, **kwargs):
     return L.compose_launch(repo, 656, _stamped(repo), **kwargs)
 
 
-def test_compose_cloud_prompt_differs_from_local_by_exactly_the_two_place_lines(tmp_path):
+def test_compose_cloud_prompt_differs_from_local_by_exactly_the_four_place_lines(tmp_path):
     # axis: the prompt differs from the local one by exactly those lines
     repo = _init_repo(tmp_path / "repo")
     local = L.compose_launch(repo, 656, _stamped(repo))
     cloud = _compose_cloud(repo)
     assert local["ok"] is True and cloud["ok"] is True
     version = L.plugin_version()
-    lines = "Place: cloud session\nAdvisor plugin version: %s\n\n" % version
+    lines = (
+        "Place: cloud session\nAdvisor plugin version: %s\nCloud environment: %s\n"
+        "Base commit: %s\n\n" % (version, ENV_ID, _head_sha(repo))
+    )
     assert lines in cloud["prompt"]
     assert cloud["prompt"].replace(lines, "", 1) == local["prompt"]
     rulings = local["doctrine"]["rulingsBlock"]
@@ -280,6 +283,46 @@ def test_compose_cloud_prompt_differs_from_local_by_exactly_the_two_place_lines(
     assert cloud["doctrine"]["rulingsBlock"] == rulings
     assert local["prompt"].endswith(rulings)
     assert cloud["prompt"].endswith(rulings)
+
+
+def test_compose_cloud_prompt_names_the_environment_on_its_own_line(tmp_path):
+    # axis: the cloud prompt names the cloud environment on its own line
+    repo = _init_repo(tmp_path / "repo")
+    lines = _compose_cloud(repo)["prompt"].split("\n")
+    assert lines.count("Cloud environment: %s" % ENV_ID) == 1
+    at = lines.index("Advisor plugin version: %s" % L.plugin_version())
+    assert lines[at + 1] == "Cloud environment: %s" % ENV_ID
+    named = _compose_cloud(repo, cloud_environment="env_01Other")
+    assert "\nCloud environment: env_01Other\n" in named["prompt"]
+
+
+def test_compose_cloud_prompt_names_the_base_commit_on_its_own_line(tmp_path):
+    # axis: the cloud prompt names the premise's base commit on its own line
+    repo = _init_repo(tmp_path / "repo")
+    base = _head_sha(repo)
+    lines = _compose_cloud(repo)["prompt"].split("\n")
+    assert lines.count("Base commit: %s" % base) == 1
+    at = lines.index("Cloud environment: %s" % ENV_ID)
+    assert lines[at + 1] == "Base commit: %s" % base
+
+
+def test_compose_local_prompt_carries_neither_line(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    for local in (L.compose_launch(repo, 656, _stamped(repo)),
+                  L.compose_launch(repo, 656, _stamped(repo), place="local")):
+        assert local["ok"] is True
+        assert "Cloud environment:" not in local["prompt"]
+        assert "Base commit:" not in local["prompt"]
+
+
+def test_compose_cloud_without_a_base_commit_refuses(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise = dict(_stamped(repo))
+    del premise["baseCommit"]
+    result = L.compose_launch(repo, 656, premise, place="cloud", cloud_environment=ENV_ID,
+                              session_name="issue-656-preview")
+    assert result["ok"] is False
+    assert result["reason"] == "premise-missing-field:baseCommit"
 
 
 def test_compose_cloud_result_keys(tmp_path):
@@ -474,68 +517,291 @@ def test_edge2_compose_refusal_is_a_cloud_lane(tmp_path):
     assert calls == []
 
 
-# --- edge 3: HEAD must be on a remote branch ----------------------------------------------
+# --- edge 3: the named base commit must be on the remote -----------------------------------
+# bite-proof record wo_c_place_call
 
 
-def test_edge3_head_not_on_a_remote_branch_is_an_accounted_refusal(tmp_path):
-    # axis: no cloud spawn from a commit the remote lacks
+def _later_commit(tmp_path, repo):
+    """A commit on the working repo that no remote has; its sha."""
+    count = len(os.listdir(tmp_path / "repo"))
+    (tmp_path / "repo" / ("later-%d.txt" % count)).write_text("later\n")
+    _git(repo, "add", ".")
+    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
+    return _head_sha(repo)
+
+
+def test_edge3_a_checkout_with_no_origin_is_unchecked_and_refuses(tmp_path):
+    # axis: a remote that could not be asked refuses
     repo = _init_repo(tmp_path / "repo")
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
-    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-on-remote", "cloud-base")
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-base-remote-unchecked", "cloud-base")
     assert calls == []
     assert "warnings" in result
 
 
-def test_edge3_a_remote_branch_without_head_still_refuses(tmp_path):
+def test_edge3_a_base_the_remote_lacks_refuses(tmp_path):
+    # axis: a named base absent from the remote refuses
     repo = _cloud_repo(tmp_path)
-    (tmp_path / "repo" / "later.txt").write_text("later\n")
-    _git(repo, "add", ".")
-    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
+    later = _later_commit(tmp_path, repo)
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
-                     premise=_valid_premise(repo, baseCommit=_head_sha(repo)))
-    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-on-remote", "cloud-base")
+                     premise=_valid_premise(repo, baseCommit=later))
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-base-not-on-remote", "cloud-base")
     assert calls == []
 
 
-def test_edge3_head_that_is_not_the_stamped_base_refuses(tmp_path):
-    # axis: the session starts from HEAD, so HEAD must be the base the gates ran against
+def test_edge3_a_head_that_is_not_the_named_base_is_not_refused_when_the_remote_has_the_base(
+    tmp_path,
+):
+    # axis: the checkout's HEAD need not be the named base
     repo = _cloud_repo(tmp_path)
     base = _head_sha(repo)
-    (tmp_path / "repo" / "later.txt").write_text("later\n")
-    _git(repo, "add", ".")
-    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    later = _later_commit(tmp_path, repo)
+    assert later != base
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
                      premise=_valid_premise(repo, baseCommit=base))
-    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-base", "cloud-base")
+    assert result["ok"] is True, result
+    assert len(calls) == 1
+    assert ("Base commit: %s" % base) in calls[0]["argv"][2].split("\n")
+
+
+def test_edge3_a_stale_tracking_ref_does_not_decide_the_result(tmp_path):
+    # axis: the remote is read, not local tracking refs
+    repo = _cloud_repo(tmp_path)
+    later = _later_commit(tmp_path, repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert "origin/main" in _git(repo, "branch", "-r", "--contains", later)
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
+                     premise=_valid_premise(repo, baseCommit=later))
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-base-not-on-remote", "cloud-base")
     assert calls == []
 
 
-def test_edge3_head_moved_while_reserving_terminalizes_the_unstarted_lane(tmp_path, monkeypatch):
-    # axis: the checkout is re-checked right before the command; reservation can wait on the lock
+def test_edge3_the_remote_losing_the_base_while_reserving_terminalizes_the_unstarted_lane(
+    tmp_path, monkeypatch,
+):
+    # axis: the base is re-checked right before the command; reservation can wait on the lock
     repo = _cloud_repo(tmp_path)
     real_reserve = ll.reserve
 
-    def reserve_then_drift(*args, **kwargs):
+    def reserve_then_lose_the_base(*args, **kwargs):
         result = real_reserve(*args, **kwargs)
-        (tmp_path / "repo" / "later.txt").write_text("later\n")
-        _git(repo, "add", ".")
-        _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
-        _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        monkeypatch.setattr(L, "_base_on_remote_fn", lambda *a, **k: False)
         return result
 
-    monkeypatch.setattr(ll, "reserve", reserve_then_drift)
+    monkeypatch.setattr(ll, "reserve", reserve_then_lose_the_base)
     calls = []
     result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
     assert result["ok"] is False
-    assert result["reason"] == "launch-cloud-head-not-base"
+    assert result["reason"] == "launch-cloud-base-not-on-remote"
     assert calls == []
     lane = _lanes(repo)[result["launchId"]]
     assert lane["terminal"] is True
     assert lane["started"] is False
+
+
+@pytest.mark.parametrize("answer,reason", [
+    (False, "launch-cloud-base-not-on-remote"),
+    (None, "launch-cloud-base-remote-unchecked"),
+    (True, None),
+])
+def test_cloud_base_refusal_maps_the_round_trip_to_its_token(monkeypatch, answer, reason):
+    seen = []
+
+    def asked(repo_root, base, env):
+        seen.append((repo_root, base))
+        return answer
+
+    monkeypatch.setattr(L, "_base_on_remote_fn", asked)
+    assert L._cloud_base_refusal("/repo", {"baseCommit": "abc123"}, None) == reason
+    assert seen == [("/repo", "abc123")]
+
+
+@pytest.fixture
+def local_remote(tmp_path):
+    """A working repo whose origin is a local bare repo by file URL: one commit pushed to it, a
+    second left unpushed. No network."""
+    repo = _init_repo(tmp_path / "repo")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    _git(repo, "remote", "add", "origin", remote.as_uri())
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    pushed = _head_sha(repo)
+    unpushed = _later_commit(tmp_path, repo)
+    return types.SimpleNamespace(repo=repo, remote=remote, pushed=pushed, unpushed=unpushed)
+
+
+def test_the_real_round_trip_finds_a_pushed_commit_and_misses_an_unpushed_one(local_remote):
+    # axis: the base is read from the remote afresh, in an empty repository
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.pushed}, None) is None
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.unpushed}, None
+    ) == "launch-cloud-base-not-on-remote"
+
+
+def test_the_real_round_trip_ignores_a_stale_tracking_ref(local_remote):
+    # axis: a local tracking ref that holds the base does not stand in for the remote
+    _git(local_remote.repo, "update-ref", "refs/remotes/origin/main", local_remote.unpushed)
+    assert "origin/main" in _git(
+        local_remote.repo, "branch", "-r", "--contains", local_remote.unpushed)
+    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
+    # a plain fetch in the working repo would say yes, because git never asks for what it has
+    plain = subprocess.run(
+        ["git", "-C", local_remote.repo, "fetch", "-q", "origin", local_remote.unpushed],
+        capture_output=True, text=True)
+    assert plain.returncode == 0
+
+
+def test_the_real_round_trip_changes_nothing_in_the_working_repo(local_remote):
+    before = (_git(local_remote.repo, "for-each-ref"), _git(local_remote.repo, "status", "--short"))
+    L._base_on_remote(local_remote.repo, local_remote.pushed, None)
+    L._base_on_remote(local_remote.repo, local_remote.unpushed, None)
+    assert (_git(local_remote.repo, "for-each-ref"), _git(local_remote.repo, "status", "--short")) == before
+    assert not (local_remote.remote / "FETCH_HEAD").exists()
+
+
+def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
+    local_remote, monkeypatch,
+):
+    calls = []
+    real = L._git_scrubbed
+
+    def spy(repo_root, *args, **kwargs):
+        calls.append((repo_root, args, kwargs))
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", spy)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
+    scratch = calls[1][0]
+    assert calls[1][1] == ("init", "-q", "--bare", scratch)
+    assert calls[2][0] == scratch
+    assert calls[2][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+                           local_remote.remote.as_uri(), local_remote.pushed)
+    assert all(c[2]["timeout"] == L._WORKTREE_GIT_TIMEOUT for c in calls)
+
+
+def test_E5_no_origin_is_unchecked(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    assert L._base_on_remote(repo, _head_sha(repo), None) is None
+    assert L._cloud_base_refusal(
+        repo, {"baseCommit": _head_sha(repo)}, None) == "launch-cloud-base-remote-unchecked"
+
+
+def test_E5_an_origin_url_that_reads_empty_is_unchecked(local_remote, monkeypatch):
+    real = L._git_scrubbed
+
+    def empty_url(repo_root, *args, **kwargs):
+        if args[:2] == ("remote", "get-url"):
+            return subprocess.CompletedProcess(args, 0, stdout="\n", stderr="")
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", empty_url)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+
+
+def test_a_git_that_cannot_run_is_unchecked(local_remote, monkeypatch):
+    monkeypatch.setattr(L, "_git_scrubbed", lambda *a, **k: None)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+
+
+def test_E6_a_fetch_that_times_out_is_unchecked(local_remote, monkeypatch):
+    real = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if "fetch" in argv:
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        return real(argv, *args, **kwargs)
+
+    monkeypatch.setattr(L.subprocess, "run", run)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.pushed}, None
+    ) == "launch-cloud-base-remote-unchecked"
+
+
+def test_a_scratch_repository_that_cannot_be_made_is_unchecked(local_remote, monkeypatch):
+    real = L._git_scrubbed
+
+    def init_fails(repo_root, *args, **kwargs):
+        if args[:1] == ("init",):
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal")
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", init_fails)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+
+
+def test_E7_a_scratch_directory_that_cannot_be_made_is_unchecked(local_remote, monkeypatch):
+    def no_space(*args, **kwargs):
+        raise OSError("no space left")
+
+    monkeypatch.setattr(L.tempfile, "mkdtemp", no_space)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.pushed}, None
+    ) == "launch-cloud-base-remote-unchecked"
+
+
+@pytest.mark.parametrize("which,expected", [("pushed", True), ("unpushed", False)])
+def test_E8_E9_the_scratch_directory_is_removed_whatever_the_fetch_says(
+    local_remote, monkeypatch, which, expected,
+):
+    made = []
+    real = L.tempfile.mkdtemp
+
+    def tracked(*args, **kwargs):
+        made.append(real(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(L.tempfile, "mkdtemp", tracked)
+    assert L._base_on_remote(local_remote.repo, getattr(local_remote, which), None) is expected
+    assert len(made) == 1 and not os.path.exists(made[0])
+
+
+def test_E9_the_scratch_directory_is_removed_when_the_fetch_cannot_run(local_remote, monkeypatch):
+    made = []
+    real_mkdtemp = L.tempfile.mkdtemp
+    real = L._git_scrubbed
+
+    def tracked(*args, **kwargs):
+        made.append(real_mkdtemp(*args, **kwargs))
+        return made[-1]
+
+    def no_fetch(repo_root, *args, **kwargs):
+        if args[:1] == ("fetch",):
+            return None
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L.tempfile, "mkdtemp", tracked)
+    monkeypatch.setattr(L, "_git_scrubbed", no_fetch)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    assert len(made) == 1 and not os.path.exists(made[0])
+
+
+def test_E8_a_fetch_that_fails_for_a_reason_other_than_the_base_still_refuses_as_absent(
+    local_remote, monkeypatch,
+):
+    # axis: any non-zero fetch exit refuses
+    real = L._git_scrubbed
+
+    def refused(repo_root, *args, **kwargs):
+        if args[:1] == ("fetch",):
+            return subprocess.CompletedProcess(
+                args, 128, stdout="", stderr="fatal: remote error: upload-pack: not our ref")
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", refused)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is False
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.pushed}, None
+    ) == "launch-cloud-base-not-on-remote"
 
 
 # --- the launch that works -----------------------------------------------------------------
@@ -1725,9 +1991,7 @@ def test_cli_compose_without_a_place_is_the_local_compose(tmp_path):
     assert result["sessionId"]
 
 
-def test_cli_launch_forwards_place_and_environment_only_when_a_place_is_given(
-    tmp_path, monkeypatch,
-):
+def test_cli_launch_refuses_an_environment_and_compose_forwards_one(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     checks_path, premise_path = tmp_path / "checks.json", tmp_path / "premise.json"
     _write_json(checks_path, _all_checks())
@@ -1739,13 +2003,21 @@ def test_cli_launch_forwards_place_and_environment_only_when_a_place_is_given(
         return {"ok": False, "reason": "injected-stop"}
 
     monkeypatch.setattr(L, "launch_build", capture)
+    composed = []
+
+    def compose(*args, **kwargs):
+        composed.append(kwargs)
+        return {"ok": False, "reason": "injected-stop"}
+
+    monkeypatch.setattr(L, "compose_launch", compose)
     common = dict(repo_root=repo, premise=str(premise_path), checks=str(checks_path),
                   log_dir=str(tmp_path / "logs"))
-    L._cli_launch(_args(**common))
-    L._cli_launch(_args(place="cloud", cloud_environment=ENV_ID, **common))
-    assert "place" not in forwarded[0] and "cloud_environment" not in forwarded[0]
-    assert forwarded[1]["place"] == "cloud"
-    assert forwarded[1]["cloud_environment"] == ENV_ID
+    refused = L._cli_launch(_args(place="cloud", cloud_environment=ENV_ID, **common))
+    assert refused["ok"] is False and refused["reason"] == "launch-cloud-environment-routed"
+    assert forwarded == []
+    L._cli_compose(_args(place="cloud", cloud_environment=ENV_ID, **common))
+    assert composed[0]["place"] == "cloud"
+    assert composed[0]["cloud_environment"] == ENV_ID
 
 
 def test_cli_preflight_forwards_the_place(tmp_path, monkeypatch):

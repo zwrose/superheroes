@@ -35,7 +35,6 @@ from test_launcher_cloud import (  # noqa: E402
     ENV_ID,
     _cloud_repo,
     _fake_spawn,
-    _git,
     _spawned,
 )
 
@@ -434,14 +433,14 @@ def _terminalization_fails(monkeypatch, world):
     monkeypatch.setattr(L, "_terminalize", lambda *a, **kw: {"ok": False, "reason": "fixture"})
 
 
-def _head_off_the_remote(monkeypatch, world):
-    _git(world.repo, "update-ref", "-d", "refs/remotes/origin/main")
+def _base_off_the_remote(monkeypatch, world):
+    monkeypatch.setattr(L, "_base_on_remote_fn", lambda *args, **kwargs: False)
 
 
 @pytest.mark.parametrize("cloud_kwargs,prepare,reason", [
     ({"raises": OSError("no platform")}, _terminalization_fails, "terminalization-failed:fixture"),
     ({"result": "not a spawn result"}, None, "cloud-spawn-result-invalid"),
-    ({}, _head_off_the_remote, "launch-cloud-head-not-on-remote"),
+    ({}, _base_off_the_remote, "launch-cloud-base-not-on-remote"),
 ], ids=["terminalization-failed", "spawn-result-invalid", "other-refusal"])
 def test_no_other_cloud_result_falls_back(
     tmp_path, monkeypatch, capsys, machine, cloud_kwargs, prepare, reason,
