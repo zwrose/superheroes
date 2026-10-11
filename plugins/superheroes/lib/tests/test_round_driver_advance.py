@@ -119,10 +119,10 @@ class FakeAdapters(object):
             return RD.verify_result_fault(payload)
         return "orchestrator-payload-unknown-phase:%s" % phase
 
-    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
                  session_dir=None):
         self.assembled.append({"phase": phase, "envelopes": envelopes,
-                               "dispatch_manifest": dispatch_manifest, "canary": canary,
+                               "dispatch_manifest": dispatch_manifest,
                                "session_dir": session_dir})
         if self.assemble_reason is not None:
             return None, self.assemble_reason
@@ -781,7 +781,7 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 canary=None, session_dir=None):
+                                 session_dir=None):
         seats = {}
         for env in (envelopes or []):
             seat = env.get("seat")
@@ -815,7 +815,7 @@ def test_adapter_provenance_accumulates_per_phase_in_one_round(tmp_path, adapter
     verifier_omitted = [{"seat": "src/f.py:3", "occurrence": 0, "reason": "timeout"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 canary=None, session_dir=None):
+                                 session_dir=None):
         if phase == RD.P_PANEL:
             seats = {}
             for env in (envelopes or []):
@@ -2420,7 +2420,7 @@ def test_advance_refuses_a_fold_the_submit_chokepoint_rejects(tmp_path, adapters
     d = _session(tmp_path)
     _record_all_panel_seats(d)
 
-    def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+    def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None,
                      session_dir=None):
         return {"seats": {"architecture": {"findings": []}}}, None
 
@@ -2438,7 +2438,7 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     d = _session(tmp_path)
     _record_all_panel_seats(d)
 
-    def boom(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+    def boom(phase, envelopes, state, config, dispatch_manifest=None,
              session_dir=None):
         raise RuntimeError("adapter exploded")
 

@@ -339,15 +339,3 @@ def test_e7_helper_channel_reads_guarded_by_isinstance_list():
         receipt_disclosures.seat_map_violations, "seatMapViolations"), (
         "%s seat_map_violations must not iterate a bare rec.get(seatMapViolations) or []"
         % _INVARIANT_B)
-
-
-# --- canaryVerified empty-but-present pin ---
-
-
-def test_empty_canary_verified_still_emits_on_certified_receipt():
-    """Empty-but-present canaryVerified ({}) still emits on a certified receipt."""
-    state = _minimal_state({"canaryVerified": {}})
-    receipt = round_driver.build_receipt(state)
-    rd = _round_entry(receipt)
-    assert "canaryVerified" in rd
-    assert rd["canaryVerified"] == {}

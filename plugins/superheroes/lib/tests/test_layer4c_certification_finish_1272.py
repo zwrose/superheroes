@@ -1,35 +1,10 @@
-"""Layer 4c certification finish — run-kind and control-probe shape (#1272 WO-A)."""
-import pytest
-import receipt_disclosures
+"""Layer 4c certification finish — run-kind (#1272 WO-A)."""
 import round_records as RR
 import session_contract
 
 from session_fixture_support import DEFAULT_PANEL_PAYLOAD
 
 _UNKNOWN_DISPATCH_PHASE = "dispatch-future-write"
-
-
-@pytest.mark.parametrize(
-    "malformed",
-    [
-        None,
-        [],
-        {"submitted": "yes", "vendors": {}},
-        {"submitted": True, "vendors": "claude"},
-        {"submitted": True, "vendors": {"claude": 1}},
-    ],
-)
-def test_control_probe_shape_rejects_malformed(malformed):
-    assert receipt_disclosures.control_probe_shape(malformed) is False
-
-
-def test_control_probe_shape_accepts_empty_vendors():
-    assert receipt_disclosures.control_probe_shape({"submitted": False, "vendors": {}}) is True
-
-
-def test_declared_disclosures_omits_malformed_control_probe():
-    out = receipt_disclosures.declared_disclosures({"controlProbe": {"submitted": "no"}})
-    assert "controlProbe" not in out
 
 
 def test_execution_evidence_fields_projects_run_kind():
