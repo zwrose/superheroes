@@ -803,10 +803,13 @@ were recorded at this version, not refused.
 `sessionGeneration`, set to the integer `2`; the key is written only when state is minted and is
 never added to a loaded state. A saved state is from an earlier version when it is a JSON object
 whose `sessionGeneration` is absent or is anything other than the integer `2`, or whose
-`schemaVersion` is anything other than the integer `5` (the current state version). While such a
-session is unfinished (its `terminal` is empty), every driver command on it — `next`, `submit`,
-`record-result`, `record-missing`, `advance`, `attest`, `checkpoint` and `rule` — answers, before it
-recovers a commit, reads or writes the journal, mints a session id, emits an order, records or folds:
+`schemaVersion` is an integer the driver still supports (`2`, `3` or `4`) that is older than the
+current state version, `5`. Any other `schemaVersion` (`1`, a later one, a non-integer, `true`, or
+`null`) is not an earlier session: the state loader refuses it as unsupported and no restart marker
+is written. While such a session is unfinished (its `terminal` is empty), every driver command on
+it — `next`, `submit`, `record-result`, `record-missing`, `advance`, `attest`, `checkpoint` and
+`rule` — answers, before it recovers a commit, reads or writes the journal, mints a session id,
+emits an order, records or folds:
 
 ```json
 {"ok": false, "reason": "session-from-earlier-version", "restart": "fresh-session",

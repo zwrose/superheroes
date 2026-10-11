@@ -496,13 +496,21 @@ def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_
     assert os.path.exists(_marker_path(session_dir))
 
 
-@pytest.mark.parametrize("version", [True, 5.0, "5", None])
-def test_e4b_a_schema_version_that_is_not_the_integer_is_refused(version, tmp_path):
+# E4b — axis: an unfinished state of the current generation whose `schemaVersion` is not a
+# supported earlier integer (1, a later 6, null, a string, a float, a boolean) is not an earlier
+# session: no marker is written, and `next` gives the refusal `load_state` gives for it.
+@pytest.mark.parametrize("version", [1, 6, None, "5", 5.0, True],
+                         ids=["one", "six", "null", "string-five", "float-five", "true"])
+def test_e4b_an_unsupported_schema_version_gets_the_loader_refusal_and_no_marker(version, tmp_path):
     session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
     state = _read_state_file(session_dir)
     state["schemaVersion"] = version
     _write_state_file(session_dir, state)
-    _assert_refusal(RD.cmd_next(session_dir), already_restarted=False)
+    out = RD.cmd_next(session_dir)
+    assert out == {"ok": False, "reason": (
+        "loop-state.json is schemaVersion %r, not one of 2, 3, 4, 5 — session dirs are "
+        "per-invocation with no migration; start a fresh session dir" % (version,))}
+    assert not os.path.exists(_marker_path(session_dir))
 
 
 # E4c — axis: a finished state of an earlier schema version passes the gate, and `next` answers its

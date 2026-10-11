@@ -6984,31 +6984,37 @@ def _generation_is_current(state):
     return type(generation) is int and generation == SESSION_GENERATION
 
 
-def _schema_version_is_current(state):
-    """Only the integer `STATE_SCHEMA_VERSION` is current: `True == 1` and `5.0 == 5` must not pass."""
+def _schema_version_is_earlier_supported(state):
+    """True only for an integer `schemaVersion` that this driver still supports and that is older
+    than `STATE_SCHEMA_VERSION`: `True == 1` and `4.0 == 4` do not count. A version this driver
+    does not support (1, a future 6, `None`, `"5"`, `5.0`) is not an earlier session; `load_state`
+    refuses it."""
     version = state.get("schemaVersion")
-    return type(version) is int and version == STATE_SCHEMA_VERSION
+    return (type(version) is int and version in SUPPORTED_STATE_VERSIONS
+            and version < STATE_SCHEMA_VERSION)
 
 
 def _state_is_earlier_unfinished(state):
-    """True for a JSON object that is not of the current generation, or not of the current schema
-    version, and has no terminal answer. This is the one place that keeps an earlier session from
-    being continued: nothing past the gate ever reads an unfinished state of an earlier generation
-    or schema version."""
+    """True for a JSON object that has no terminal answer and is either not of the current
+    generation, or of an earlier supported schema version. This is the one place that keeps an
+    earlier session from being continued: nothing past the gate ever reads an unfinished state of
+    an earlier generation or supported schema version. A current-generation state whose
+    `schemaVersion` is unsupported is not judged here; `load_state` refuses it."""
     if not isinstance(state, dict):
         return False
-    if _generation_is_current(state) and _schema_version_is_current(state):
+    if _generation_is_current(state) and not _schema_version_is_earlier_supported(state):
         return False
     return not state.get("terminal")
 
 
 def _earlier_generation_unfinished(session_dir):
-    """True when `loop-state.json` is a JSON object that is not of the current generation or schema
-    version and has no terminal answer yet. It opens that one file and nothing else; an unreadable, non-JSON or
-    non-object file is False, so the handling that exists for those cases stays in charge. When the
-    file is ABSENT, the state a sealed, unfinished commit staged for it is judged the same way: an
-    earlier version that stopped after sealing its first emit has no installed state yet, and
-    recovery would otherwise finish that commit and hand out its orders."""
+    """True when `loop-state.json` is a JSON object that has no terminal answer yet and is either
+    not of the current generation or of an earlier supported schema version. It opens that one
+    file and nothing else; an unreadable, non-JSON or non-object file is False, so the handling
+    that exists for those cases stays in charge. When the file is ABSENT, the state a sealed,
+    unfinished commit staged for it is judged the same way: an earlier version that stopped after
+    sealing its first emit has no installed state yet, and recovery would otherwise finish that
+    commit and hand out its orders."""
     try:
         with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
             state = json.load(fh)
