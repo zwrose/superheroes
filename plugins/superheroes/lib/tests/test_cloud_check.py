@@ -559,7 +559,7 @@ def test_judge_edge7_an_unreadable_account_fails_on_record(tmp_path):
     result = _judge(local, _ok_report(cloud), account=None,
                     record_fn=lambda *a, **k: calls.append(k) or {"action": "written"})
     _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
-               "could not write the setup record on this machine.")
+               "could not finish saving the result on this machine.")
     assert calls == [] and _record_state(local) == "none"
 
 
@@ -574,7 +574,7 @@ def test_judge_edge8_a_refused_or_raising_record_write_fails_on_record(tmp_path)
         # axis: a record write that did not report written is never reported as a pass
         result = _judge(local, _ok_report(cloud), record_fn=fake)
         _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
-                   "could not write the setup record on this machine.")
+                   "could not finish saving the result on this machine.")
         assert _record_state(local) == "none"
     assert _judge(local, _ok_report(cloud))["action"] == "passed"
 
@@ -1000,7 +1000,7 @@ def test_every_judge_result_carries_the_marker_key(tmp_path):
 
 
 @pytest.mark.parametrize("how", ["unlink", "lock"])
-def test_a_marker_that_cannot_be_removed_stops_the_record_write(tmp_path, monkeypatch, how):
+def test_a_marker_that_cannot_be_removed_fails_the_check_after_the_record_write(tmp_path, monkeypatch, how):
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
     calls = []
@@ -1023,12 +1023,35 @@ def test_a_marker_that_cannot_be_removed_stops_the_record_write(tmp_path, monkey
         monkeypatch.setattr(mode_registry, "config_lock", held)
     result = _judge(local, _ok_report(cloud),
                     record_fn=lambda *a, **k: calls.append(k) or {"action": "written"})
-    # detector: a pass that writes the record although the marker could not be removed goes red here
+    # detector: a pass reported as passed, or one that loses the marker, when it could not be removed goes red
     assert result["action"] == "failed" and "record" in result["failedParts"]
-    assert calls == [] and result["recordWritten"] is False
+    assert len(calls) == 1 and result["recordWritten"] is True
     assert os.path.exists(_marker_path(local))
-    monkeypatch.undo()
-    assert _record_state(local) == "none"
+
+
+def test_a_record_write_that_fails_leaves_an_existing_marker_in_place(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
+    before = open(_marker_path(local)).read()
+
+    def raising(*a, **k):
+        raise OSError("disk")
+
+    result = _judge(local, _ok_report(cloud), record_fn=raising)
+    # detector: a failed record write that clears the failure marker first goes red here
+    assert result["action"] == "failed" and "record" in result["failedParts"]
+    assert os.path.exists(_marker_path(local)) and before
+
+
+def test_a_record_that_is_written_before_the_marker_is_cleared(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
+    seen = []
+    result = _judge(local, _ok_report(cloud), record_fn=lambda *a, **k: seen.append(
+        os.path.exists(_marker_path(local))) or {"action": "written"})
+    # detector: clearing the marker before the record write goes red here
+    assert seen == [True] and result["action"] == "passed"
+    assert not os.path.exists(_marker_path(local))
 
 
 def test_a_marker_write_that_fails_changes_nothing_else(tmp_path, monkeypatch):
@@ -1210,6 +1233,17 @@ def _start(local, spawner, **kw):
 def _prompt(spawner):
     argv = spawner.calls[0]["argv"]
     return argv[argv.index("--cloud") + 1]
+
+
+def test_start_scrubs_inherited_git_variables_from_the_child_and_the_root(tmp_path):
+    local, _ = _pair(tmp_path)
+    spawner = Spawner()
+    env = dict(local.env, GIT_WORK_TREE="/tmp", GIT_DIR="/tmp/nope")
+    assert _start(local, spawner, env=env)["action"] == "started"
+    call = spawner.calls[0]
+    # detector: a start that hands inherited GIT_* variables to the child or the root lookup goes red
+    assert "GIT_WORK_TREE" not in call["env"] and "GIT_DIR" not in call["env"]
+    assert os.path.realpath(call["cwd"]) == os.path.realpath(local.cwd)
 
 
 def test_start_names_the_environment_in_the_launch(tmp_path):

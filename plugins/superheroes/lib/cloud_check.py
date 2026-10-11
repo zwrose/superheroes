@@ -120,7 +120,7 @@ _PARTS = (
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
      "paste a fresh pass into the environment"),
-    ("record", "The check passed, but I could not write the setup record on this machine.",
+    ("record", "The check passed, but I could not finish saving the result on this machine.",
      "tell me so I can look at the store"),
     ("setting", "I could not switch cloud builds off.", "switch them off in configure"),
 )
@@ -541,7 +541,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
     """Read the report line out of `line` and decide. The setup record is written only when the
     environment, the plugin version, the calibration and the reviewer's answer all agree with this
     machine; every other result writes none, switches an on cloud-builds setting off, and leaves a
-    failed-check marker beside the record (a passing check removes it). The record is never touched
+    failed-check marker beside the record (a passing check writes the record first, then removes
+    the marker; a marker that cannot be removed fails the check as `record` with `recordWritten`
+    true and stays). The record is never touched
     by a failed or unread result."""
     name = _project(cwd, project_name)
     today = cloud_setup_text._utc_date(now)
@@ -571,10 +573,12 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                                      ("reviewer", "reviewerAnswered")) if not results[key]]
     written = False
     if not failed:
+        done = False
         try:
-            # axis: a passing check removes the failed-check marker first; a marker that stays
-            # means no record is written
-            if who is not None and _remove_failed_check(cwd, who, root):
+            # axis: a passing check writes the record first and clears the failed-check marker only
+            # after the write succeeded, so an interruption between the two leaves a stale marker
+            # (not ready, the fail-closed direction) and never a lost one
+            if who is not None:
                 # axis: a refused or raising record write is never reported as a pass
                 got = (cloud_setup.record_check if record_fn is None else record_fn)(
                     cwd, account=who, environment=environment, plugin_version=obj["pluginVersion"],
@@ -583,9 +587,11 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                     pass_lapses=obj["confirmation"]["passLapses"], checked_at=today.isoformat(),
                     root=root)
                 written = isinstance(got, dict) and got.get("action") in ("written", "noop")
+                # axis: a marker that cannot be removed fails the check and stays in place
+                done = written and _remove_failed_check(cwd, who, root)
         except Exception:
-            written = False
-        if not written:
+            done = False
+        if not done:
             failed.append("record")
 
     if failed:
@@ -637,9 +643,9 @@ def _check_prompt(nonce, issue):
     return prompt + (_CHECK_POST.format(issue=issue) if issue is not None else "")
 
 
-def _repo_root(cwd):
+def _repo_root(cwd, env=None):
     try:
-        return store_core.repo_root(cwd)
+        return store_core.repo_root(cwd, env=env)
     except Exception:
         return os.path.abspath(cwd)
 
@@ -673,11 +679,11 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
         return _refusal("check-launch-refused", "The check session could not be launched.",
                         detail=built.get("reason"))
     import launcher
-    child_env = dict(os.environ if env is None else env)
+    child_env = launcher.ll.scrub_env(env)
     spawn = spawn_fn or launcher._default_cloud_spawn
     try:
         log_path = os.path.join(tempfile.mkdtemp(prefix="cloud-check-"), "launch.log")
-        spawned = spawn(built["argv"], _repo_root(cwd), log_path, child_env, timeout)
+        spawned = spawn(built["argv"], _repo_root(cwd, child_env), log_path, child_env, timeout)
     except OSError:
         return _refusal("check-session-not-started", _NOT_STARTED)
     output = spawned.get("output") if isinstance(spawned, dict) else None
