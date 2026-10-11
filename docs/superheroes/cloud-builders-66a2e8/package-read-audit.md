@@ -548,3 +548,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "substantive amendment 3 (owner's word a on the clarification of 25 c): touched-parts re-read before injection into C4",
+ "ceiling": 2,
+ "invocation": "inv3",
+ "kind": "invocation",
+ "measurables": {
+  "children": 1,
+  "registerEntries": 0
+ },
+ "override": null,
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
