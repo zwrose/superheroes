@@ -457,3 +457,114 @@ Green:
 .                                                                        [100%]
 1 passed in 1.72s
 ```
+
+## WO-C
+
+Item 10 reads its risk-areas half only through `core_md.read_risk_areas` (issue #1712, C4). Same command and shape as above; each element neutralized by one targeted edit, its single node run alone red, the inverse edit applied, the restored line quoted back, the same node run green. No test file was edited between a red and its green.
+
+Declared guarded-element set: C1–C3, as dispatched. `P` = `plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py`, `V` = `plugins/superheroes/lib/tests/test_configure_view_project_config.py`.
+
+| ID | Guarded element | Axis | Neutralization | Node | Red |
+|---|---|---|---|---|---|
+| C1 | item 10 malformed for a stored `null` | `riskAreas: null` reads malformed, never a healthy empty list | in `_resolve_item_entry`'s `riskAndTrust` branch, after `areas_read = risk_areas_read or {}`, insert `if areas is None: areas_read = {"declared": False, "reason": None}` | `P::test_stored_null_areas_read_malformed_with_no_effective_list` | `assert False is True` on `got["malformed"]` |
+| C2 | item 10 malformed for a non-object `projectConfiguration` | a `risk-areas-unreadable` reason makes item 10 malformed | `project_config.py` line 489 tuple `(MALFORMED, UNREADABLE)` → `(MALFORMED,)` | `P::test_project_configuration_that_is_a_list_reads_malformed_with_no_effective_list` | `assert False is True` on `got["malformed"]` |
+| C3 | the `unset` row prefix | item 10 with nothing set says `unset` like every other item | `configure_view.py` `return "unset — " + shown` → `return shown` | `V::test_no_profile_renders_without_raising` | `assert False` on the `all("unset" in row or ...)` line |
+
+### C1 red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_stored_null_areas_read_malformed_with_no_effective_list _________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1268/test_stored_null_areas_read_ma0')
+
+    def test_stored_null_areas_read_malformed_with_no_effective_list(tmp_path):
+        repo, store = _setup_repo(tmp_path)
+        _write_project_configuration(repo, store, {"riskAreas": None})
+        got = PC.get_item(repo, "riskAndTrust", root=store)
+>       assert got["malformed"] is True
+E       assert False is True
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:424: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py::test_stored_null_areas_read_malformed_with_no_effective_list
+1 failed in 14.73s
+```
+
+Restore: the inverse edit (the two inserted lines removed). Restored lines quoted back: `487:        areas_read = risk_areas_read or {}` followed by `488:        areas_malformed = areas_read.get("reason") in (`.
+
+C1 green:
+
+```
+.                                                                        [100%]
+1 passed in 15.61s
+```
+
+### C2 red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_project_configuration_that_is_a_list_reads_malformed_with_no_effective_list _
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1270/test_project_configuration_tha0')
+
+    def test_project_configuration_that_is_a_list_reads_malformed_with_no_effective_list(tmp_path):
+        repo, store = _setup_repo(tmp_path)
+        _write_project_configuration(repo, store, ["riskAreas"])
+        got = PC.get_item(repo, "riskAndTrust", root=store)
+>       assert got["malformed"] is True
+E       assert False is True
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:444: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py::test_project_configuration_that_is_a_list_reads_malformed_with_no_effective_list
+1 failed in 8.49s
+```
+
+Restore: the inverse edit. Restored line quoted back: `489:            core_md.RISK_AREAS_REASON_MALFORMED, core_md.RISK_AREAS_REASON_UNREADABLE)`
+
+C2 green:
+
+```
+.                                                                        [100%]
+1 passed in 15.77s
+```
+
+### C3 red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________ test_no_profile_renders_without_raising ____________________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1272/test_no_profile_renders_withou0')
+
+    def test_no_profile_renders_without_raising(tmp_path):
+        repo = str(tmp_path)
+        store = str(tmp_path / "store")
+        _init_repo(tmp_path)
+        screen = CV.render(repo, root=store)
+        block = _project_config_section(screen)
+        assert "profile: no core calibration yet" in block
+        rows = _numbered_rows(block)
+        assert len(rows) == 14
+>       assert all("unset" in row or "plugin default" in row or "derived from dial" in row for row in rows)
+E       assert False
+E        +  where False = all(<generator object test_no_profile_renders_without_raising.<locals>.<genexpr> at 0x10b342f60>)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_configure_view_project_config.py:137: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_configure_view_project_config.py::test_no_profile_renders_without_raising
+1 failed in 23.04s
+```
+
+Restore: the inverse edit. Restored line quoted back: `257:            return "unset — " + shown`
+
+C3 green:
+
+```
+.                                                                        [100%]
+1 passed in 14.39s
+```

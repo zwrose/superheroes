@@ -386,7 +386,7 @@ def _item_ten_row(screen):
 def test_item_ten_row_reads_risk_and_trust_with_the_threat_model_and_area_count(tmp_path):
     repo, store = _setup_repo(tmp_path, threat="")
     assert _item_ten_row(CV.render(repo, root=store)) == (
-        "10. Risk and trust — threat model not set; 0 risk areas")
+        "10. Risk and trust — unset — threat model not set; 0 risk areas")
     PC.set_item(repo, "riskAndTrust", {"threatModel": "Outsiders only."}, root=store)
     PC.set_item(repo, "riskAndTrust", {"riskAreas": [PAYMENTS]}, root=store)
     assert _item_ten_row(CV.render(repo, root=store)) == (
