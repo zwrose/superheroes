@@ -679,12 +679,14 @@ def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
     monkeypatch.setattr(L, "_git_scrubbed", spy)
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
     assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
-    assert calls[1][1][:3] == ("config", "--local", "-z")
+    assert calls[1][1] == ("rev-parse", "--git-common-dir")
     scratch = calls[2][0]
     assert calls[2][1] == ("init", "-q", "--bare", scratch)
     assert calls[3][0] == scratch
-    assert calls[3][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-                           local_remote.remote.as_uri(), local_remote.pushed)
+    assert calls[3][1][:2] == ("config", "include.path")
+    assert calls[4][0] == scratch
+    assert calls[4][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+                           "origin", local_remote.pushed)
     assert all(c[2]["timeout"] == L._WORKTREE_GIT_TIMEOUT for c in calls)
 
 
@@ -710,22 +712,34 @@ def test_a_fetch_that_fails_for_any_reason_but_an_absent_commit_is_unchecked(
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is False
 
 
-def test_the_probe_carries_the_repositorys_transport_configuration(local_remote, monkeypatch):
-    # axis: a key chosen only by repo-local config reaches the fetch in the empty repository
-    _git(local_remote.repo, "config", "core.sshCommand", "ssh -i /keys/account")
-    _git(local_remote.repo, "config", "user.name", "not-transport")
-    calls = []
-    real = L._git_scrubbed
-
-    def spy(repo_root, *args, **kwargs):
-        calls.append(args)
-        return real(repo_root, *args, **kwargs)
-
-    monkeypatch.setattr(L, "_git_scrubbed", spy)
+def test_the_probe_finds_a_base_through_a_setting_only_the_launching_repo_holds(
+    local_remote, tmp_path,
+):
+    # axis: origin is an alias that only a repo-local insteadOf rewrite makes reachable
+    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
+         "alias://private/origin")
+    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
-    fetch = next(a for a in calls if "fetch" in a)
-    assert fetch[:2] == ("-c", "core.sshcommand=ssh -i /keys/account")
-    assert not any("user.name" in part for part in fetch)
+    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
+
+
+def test_the_probe_finds_a_base_from_a_linked_worktree(local_remote, tmp_path):
+    # axis: the config included is the common dir's, not the linked worktree's private gitdir
+    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
+         "alias://private/origin")
+    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
+    linked = tmp_path / "linked"
+    _git(local_remote.repo, "worktree", "add", "-q", "--detach", str(linked), local_remote.pushed)
+    assert L._base_on_remote(str(linked), local_remote.pushed, None) is True
+
+
+def test_a_transport_failure_is_unchecked_not_absent(local_remote, tmp_path):
+    # axis: a remote that cannot be reached says nothing about the commit
+    _git(local_remote.repo, "remote", "set-url", "origin", str(tmp_path / "no-such-remote.git"))
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.pushed}, None
+    ) == "launch-cloud-base-remote-unchecked"
 
 
 def test_E5_no_origin_is_unchecked(tmp_path):

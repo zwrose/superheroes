@@ -2281,33 +2281,7 @@ def _place_refusal(
 
 # What a failed fetch prints when the server answered and does not have the commit. Any other
 # failure (an unresolved host, a refused login, a dropped connection) leaves the question open.
-_BASE_ABSENT_MARKERS = (
-    "not our ref", "couldn't find remote ref", "no such remote ref",
-    "unadvertised object", "did not match any",
-)
-
-# The keys of the launching repository's own settings that decide how a fetch reaches the server.
-_TRANSPORT_CONFIG_PATTERN = (
-    r"^(core\.sshcommand|core\.gitproxy|ssh\.variant|http\..+|credential\..+|protocol\..+)$"
-)
-
-
-def _transport_config_args(repo_root, env):
-    """The ``-c key=value`` arguments that carry the repository's own transport settings into the
-    empty repository the remote is asked from, so the question is asked the way the repository
-    itself reaches the server."""
-    cfg = _git_scrubbed(
-        repo_root, "config", "--local", "-z", "--get-regexp", _TRANSPORT_CONFIG_PATTERN,
-        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    if cfg is None or cfg.returncode != 0:
-        return []
-    args = []
-    for entry in cfg.stdout.split("\0"):
-        key, sep, value = entry.partition("\n")
-        if key and sep:
-            args.extend(["-c", f"{key}={value}"])
-    return args
+_BASE_ABSENT_MARKERS = ("not our ref", "couldn't find remote ref", "no such remote ref")
 
 
 def _base_on_remote(repo_root, base, env):
@@ -2316,13 +2290,23 @@ def _base_on_remote(repo_root, base, env):
 
     The commit is fetched into an empty repository, because a fetch in the working repository
     never asks the server for an object it already has, and a local tracking ref can be stale.
+    The empty repository includes the launching repository's own config file and fetches from
+    the remote name ``origin``, so the remote's settings, ``core.sshCommand``, ``credential.*``
+    and ``http.*`` apply as they do for the launching repository. A conditional include keyed on
+    the launching repository's gitdir does not apply inside the empty repository.
     """
     url = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
     if url is None or url.returncode != 0 or not url.stdout.strip():
         return None
-    transport = _transport_config_args(repo_root, env)
+    common = _git_scrubbed(
+        repo_root, "rev-parse", "--git-common-dir", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if common is None or common.returncode != 0 or not common.stdout.strip():
+        return None
+    config_path = os.path.join(
+        os.path.abspath(repo_root), common.stdout.strip(), "config")
     try:
         scratch = tempfile.mkdtemp()
     except OSError:
@@ -2333,9 +2317,15 @@ def _base_on_remote(repo_root, base, env):
         )
         if made is None or made.returncode != 0:
             return None
+        included = _git_scrubbed(
+            scratch, "config", "include.path", config_path,
+            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if included is None or included.returncode != 0:
+            return None
         fetched = _git_scrubbed(
-            scratch, *transport, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-            url.stdout.strip(), base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+            scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+            "origin", base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
         )
         if fetched is None:
             return None
