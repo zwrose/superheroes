@@ -100,7 +100,7 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
          "micro", "issue lane call", "one line"),
         (Fake(), "full", "reported by the session", "big"),
         (Fake(marker=marker, meta={"head": HEAD, "body": "", "issues": [9]}, issue_bodies={9: "no call"}),
-         "full", "build lane marker", None),
+         "full", "build lane marker", "big"),
     ]
     keys = {"schema", "pr", "sessionId", "lane", "finalCommit", "ci", "reviewers", "findings", "unreadFiles",
             "rawOutputs", "leftForOwner", "missingReviews", "rounds", "cost", "sessionDisagreements", "checked",
@@ -112,6 +112,8 @@ def test_each_lane_writes_one_record_with_every_key(tmp_path):
         rec = rr.read(7, readers=fake.readers())
         assert keys <= set(rec) and not {"owed", "archives", "rawFindings", "ownerWord"} & set(rec)
         assert (rec["lane"]["value"], rec["lane"]["source"], rec["lane"]["reason"]) == (lane, source, reason)
+        if source == "build lane marker":
+            assert rec["lane"]["reasonSource"] == "reported by the session"
         assert rec["finalCommit"]["sha"] == HEAD and rec["ci"]["state"] == "green" and rec["writtenAt"]
 
 

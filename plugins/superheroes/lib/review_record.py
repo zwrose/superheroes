@@ -633,7 +633,7 @@ def render(record):
             v["ran"], "did not run")
         if v["ran"] != "not-run" and v.get("commit") and v["commit"] != r["finalCommit"]["sha"]:
             label += f" on {v['commit'][:7]}"
-        word =v.get("ownerWord")
+        word = v.get("ownerWord")
         who.append(f"- {v['name']}: {label}"
                    + ("; not independent of the makers" if v.get("notIndependent") else "")
                    + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
