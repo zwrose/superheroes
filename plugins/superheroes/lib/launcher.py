@@ -2279,6 +2279,37 @@ def _place_refusal(
     return None
 
 
+# What a failed fetch prints when the server answered and does not have the commit. Any other
+# failure (an unresolved host, a refused login, a dropped connection) leaves the question open.
+_BASE_ABSENT_MARKERS = (
+    "not our ref", "couldn't find remote ref", "no such remote ref",
+    "unadvertised object", "did not match any",
+)
+
+# The keys of the launching repository's own settings that decide how a fetch reaches the server.
+_TRANSPORT_CONFIG_PATTERN = (
+    r"^(core\.sshcommand|core\.gitproxy|ssh\.variant|http\..+|credential\..+|protocol\..+)$"
+)
+
+
+def _transport_config_args(repo_root, env):
+    """The ``-c key=value`` arguments that carry the repository's own transport settings into the
+    empty repository the remote is asked from, so the question is asked the way the repository
+    itself reaches the server."""
+    cfg = _git_scrubbed(
+        repo_root, "config", "--local", "-z", "--get-regexp", _TRANSPORT_CONFIG_PATTERN,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if cfg is None or cfg.returncode != 0:
+        return []
+    args = []
+    for entry in cfg.stdout.split("\0"):
+        key, sep, value = entry.partition("\n")
+        if key and sep:
+            args.extend(["-c", f"{key}={value}"])
+    return args
+
+
 def _base_on_remote(repo_root, base, env):
     """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
     None when the remote could not be asked.
@@ -2291,6 +2322,7 @@ def _base_on_remote(repo_root, base, env):
     )
     if url is None or url.returncode != 0 or not url.stdout.strip():
         return None
+    transport = _transport_config_args(repo_root, env)
     try:
         scratch = tempfile.mkdtemp()
     except OSError:
@@ -2302,12 +2334,19 @@ def _base_on_remote(repo_root, base, env):
         if made is None or made.returncode != 0:
             return None
         fetched = _git_scrubbed(
-            scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+            scratch, *transport, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
             url.stdout.strip(), base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
         )
         if fetched is None:
             return None
-        return fetched.returncode == 0
+        if fetched.returncode == 0:
+            return True
+        # Only the server saying it lacks the commit is an answer; a failure to reach it or to
+        # sign in is not, and says nothing about the commit.
+        said = (fetched.stderr or "").lower()
+        if any(marker in said for marker in _BASE_ABSENT_MARKERS):
+            return False
+        return None
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -3418,7 +3457,12 @@ def main(argv=None):
     la = sub.add_parser("launch")
     la.add_argument("--repo-root", required=True)
     la.add_argument("--issue", type=int, required=True)
-    la.add_argument("--premise", required=True)
+    la.add_argument(
+        "--premise", required=True,
+        help=("the build premise as JSON; its `needs` list names everything only the owner's "
+              "machine has (a locally seeded browser context, a slot, a local-only file), and a "
+              "build with no `needs` is free to be placed in the cloud"),
+    )
     la.add_argument("--checks", required=True)
     la.add_argument("--log-dir", required=True)
     la.add_argument("--model", default=None)

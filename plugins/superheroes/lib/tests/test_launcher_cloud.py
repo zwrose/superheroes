@@ -679,12 +679,53 @@ def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
     monkeypatch.setattr(L, "_git_scrubbed", spy)
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
     assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
-    scratch = calls[1][0]
-    assert calls[1][1] == ("init", "-q", "--bare", scratch)
-    assert calls[2][0] == scratch
-    assert calls[2][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+    assert calls[1][1][:3] == ("config", "--local", "-z")
+    scratch = calls[2][0]
+    assert calls[2][1] == ("init", "-q", "--bare", scratch)
+    assert calls[3][0] == scratch
+    assert calls[3][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
                            local_remote.remote.as_uri(), local_remote.pushed)
     assert all(c[2]["timeout"] == L._WORKTREE_GIT_TIMEOUT for c in calls)
+
+
+def test_a_fetch_that_fails_for_any_reason_but_an_absent_commit_is_unchecked(
+    local_remote, monkeypatch,
+):
+    # axis: only the server saying it lacks the commit is "not on the remote"; an unreachable or
+    # refusing remote leaves the question open
+    real = L._git_scrubbed
+
+    def fails(said):
+        def run(repo_root, *args, **kwargs):
+            if "fetch" in args:
+                return subprocess.CompletedProcess(args, 128, stdout="", stderr=said)
+            return real(repo_root, *args, **kwargs)
+        return run
+
+    for said in ("fatal: Could not resolve host: github.com",
+                 "fatal: Authentication failed for 'https://github.com/x/y.git/'"):
+        monkeypatch.setattr(L, "_git_scrubbed", fails(said))
+        assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    monkeypatch.setattr(L, "_git_scrubbed", fails("fatal: remote error: upload-pack: not our ref abc"))
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is False
+
+
+def test_the_probe_carries_the_repositorys_transport_configuration(local_remote, monkeypatch):
+    # axis: a key chosen only by repo-local config reaches the fetch in the empty repository
+    _git(local_remote.repo, "config", "core.sshCommand", "ssh -i /keys/account")
+    _git(local_remote.repo, "config", "user.name", "not-transport")
+    calls = []
+    real = L._git_scrubbed
+
+    def spy(repo_root, *args, **kwargs):
+        calls.append(args)
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", spy)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    fetch = next(a for a in calls if "fetch" in a)
+    assert fetch[:2] == ("-c", "core.sshcommand=ssh -i /keys/account")
+    assert not any("user.name" in part for part in fetch)
 
 
 def test_E5_no_origin_is_unchecked(tmp_path):

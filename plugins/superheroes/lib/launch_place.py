@@ -23,9 +23,8 @@ import store_core  # noqa: E402
 LOCAL_WORD = "local"
 CLOUD_WORD = "cloud"
 
-REASON_CODES = ("local-word", "needs", "pass-lapsed", "no-pass", "no-setup", "version",
-                "calibration", "unreachable")
-NOT_READY_CODES = ("pass-lapsed", "no-pass", "no-setup", "version", "calibration", "unreachable")
+# The readiness check is the one home of the reasons it can give; route keeps only those.
+NOT_READY_CODES = tuple(cloud_ready.REASON_FOR[name] for name in cloud_ready.CONDITION_ORDER)
 
 _SETUP_TEXT_FIX = ('To fix it, paste the new setup text into the environment. '
                    'Say "setup text" and I\'ll write it.')
@@ -78,6 +77,9 @@ REASONS = {
         "wasnt": "the cloud platform couldn't be reached.",
     },
 }
+
+# The reasons any output can print are the keys of the one table above.
+REASON_CODES = tuple(REASONS)
 
 _UNKNOWN = "unknown"
 
