@@ -33,7 +33,6 @@ _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
                "outcome": "findings", "reason": "findings"}
-_OUTCOMES_IN_SECTION = ("craft", "ruling", "left-for-owner", "fixed", "shown-wrong")
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
 
 _FIXTURE_NAMES = ("pr-a", "pr-b", "pr-c", "pr-d", "pr-e", "pr-f")
@@ -197,9 +196,8 @@ def test_record_checks_section_names_real_record_fields():
 def test_record_checks_section_outcomes_are_the_schema_spellings():
     # axis: an outcome spelled in the section that the findings schema does not have
     section = _section()
-    for outcome in _OUTCOMES_IN_SECTION:
+    for outcome in review_findings_schema.OUTCOMES:
         assert f"`{outcome}`" in section, f"the section does not name `{outcome}`"
-        assert outcome in review_findings_schema.OUTCOMES, outcome
 
 
 def test_retired_vet_checks_absent_from_showrunner_skill():
