@@ -91,6 +91,31 @@ def test_no_shipped_module_reads_a_probe_result():
         text = _read(path).lower()
         assert "controlprobe" not in text and "control_probe" not in text, path
         if os.path.basename(path) == "round_driver.py":
-            text = text.replace("canaryresult", "")
+            # Only the tolerated envelope-key declaration (and its comment) may name the key.
+            text = "\n".join(
+                line for line in text.splitlines()
+                if not (line.lstrip().startswith("#")
+                        or line.startswith("_panel_envelope_keys")))
         assert "canary" not in text, path
     assert "canaryResult" in round_driver._PANEL_ENVELOPE_KEYS
+
+
+def _complete_round_two_panel(**extra):
+    cfg = {"leg": "panel", "vendors": ["claude", "codex"], "fixerVendor": "claude"}
+    state = round_driver.new_state(cfg)
+    state["round"] = 2
+    seats = {d: {"findings": []} for d in round_driver.DIMENSIONS}
+    artifact = {"seats": seats}
+    artifact.update(extra)
+    round_driver._fold_panel(state, state["config"], artifact)
+    return state
+
+
+def test_complete_panel_certifies_with_or_without_legacy_canary_result():
+    """A complete panel is unaffected by a legacy canaryResult: ignored, not read."""
+    for extra in ({}, {"canaryResult": [{"engine": "codex", "outcome": "ok"}]}):
+        state = _complete_round_two_panel(**extra)
+        assert state["fullPanelRan"] is True, extra
+        assert state["_incompletePanel"] is False, extra
+        assert state["confirmations"] == 1, extra
+        assert state["rounds"]["2"]["lensCoverage"]["floor"] is False, extra
