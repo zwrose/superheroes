@@ -1291,9 +1291,13 @@ def test_cli_judge_exit_codes(tmp_path, monkeypatch, capsys):
     shipped = json.loads(line.split(" ", 1)[1])
     shipped.pop("digest")
     bad_version = CC.report_line(dict(shipped, pluginVersion="0.0.1"))
+    clock = [NOW]
+    # pins the CLI's wall clock: same-second stamps would keep the failed marker and fail the pass
+    monkeypatch.setattr(CC.time, "time", lambda: clock[0])
     failed = CC.main(base + ["--nonce", NONCE, "--line", bad_version])
     assert failed == 1 and json.loads(capsys.readouterr().out)["action"] == "failed"
     assert _record_state(local) == "none"
+    clock[0] = LATER
     path = tmp_path / "comment.txt"
     path.write_text("Result:\n```\n%s```\n" % line)
     passed = CC.main(base + ["--nonce", NONCE, "--line-file", str(path)])
