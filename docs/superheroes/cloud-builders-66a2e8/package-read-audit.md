@@ -798,3 +798,79 @@ No State line calls any of them open. Result: verified.
  "round": 1
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv5",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "R11 now assigns the set-up path section and the showrunner pointer to C4b; epic quote regenerated; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C4 live-run DoD names the picked id passed to the start function (issue #1745 and C4.md); round 2 clean",
+   "finding": "code-002",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C4 dry-run DoD claims FR-1's rule and names C4b as owner of the Given-When-Then; round 2 clean",
+   "finding": "code-003",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv5",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C4",
+   "result": "pass"
+  },
+  {
+   "child": "C4b",
+   "result": "pass"
+  }
+ ]
+}
+```
