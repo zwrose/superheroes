@@ -9,6 +9,15 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Before you upgrade
+
+- After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
+
+### Review record
+
+- Every review on the light and micro lanes and review-code's review-only exit now writes one review record, kept as a new marker-tagged comment on the PR for each review session (earlier ones are never edited, and each reviewer's raw output sits in its own linked comment), and read back with the record writer's `read --pr <n>` verb.
+- The findings contract gains a required, nullable `consequence` member, and the record spells the five outcomes as `fixed`, `shown-wrong`, `craft`, `left-for-owner`, `ruling`. Callers that build findings by hand must now emit `consequence` (null is allowed).
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).

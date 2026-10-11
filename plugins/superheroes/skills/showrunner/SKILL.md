@@ -40,7 +40,7 @@ why you believe it will not, before the owner decides** — most of all when ask
 
 **Re-review to convergence** (as bounded in `review-discipline.md`): after you resolve reviewer
 findings, the **reviewer outside the maker's family re-reviews the final head**, carrying the mandatory control
-probe on each re-review, until no blocking findings remain — or the change **parks**.
+probe on each re-review, until no blocking findings remain — or the change **parks**. When the micro review ends, whether it converges or parks, end it by writing the review record on the micro PR per `skills/review-code/reference/review-record.md`.
 
 **Resolving upward** stops the in-session micro change — **file the issue, disclose the
 already-typed work and its maker family**, then:

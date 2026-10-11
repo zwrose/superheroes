@@ -265,6 +265,8 @@ def test_schema_read_failure_uses_literal_fallback(tmp_path):
     assert mod.SCHEMA_READ_USED_FALLBACK is True
     assert mod.CANONICAL_MEMBER_KEYS == mod._FALLBACK_CANONICAL_MEMBER_KEYS
     assert mod.SEVERITY_TIERS == mod._FALLBACK_SEVERITY_TIERS
+    assert mod._FALLBACK_CANONICAL_MEMBER_KEYS == RFS.CANONICAL_MEMBER_KEYS
+    assert mod.CONSEQUENCE_KEY in mod.CANONICAL_MEMBER_KEYS
 
 
 def test_example_findings_object_works_in_fallback_regime(tmp_path):
@@ -677,3 +679,71 @@ def test_member_carries_sentinel_invalid_nonce_treated_as_base_only():
     assert RFS.member_carries_sentinel(nonce_example, nonce="") is False
     assert RFS.member_carries_sentinel(nonce_example, nonce=None) is False
     assert RFS.member_carries_sentinel(nonce_example, nonce=0) is False
+
+
+def test_consequence_is_a_required_nullable_string_member():
+    # axis: consequence is declared once in the schema and derived into the canonical keys
+    props = _schema_finding_properties()
+    required = _load_shipped_schema()["properties"]["findings"]["items"]["required"]
+    assert RFS.CONSEQUENCE_KEY == "consequence"
+    assert "consequence" in RFS.CANONICAL_MEMBER_KEYS
+    assert "consequence" in required
+    assert set(props["consequence"]["type"]) == {"string", "null"}
+
+
+def test_outcomes_are_the_five_spellings_once():
+    # axis: the five outcome spellings are pinned, ordered and duplicate-free
+    assert RFS.OUTCOMES == ("fixed", "shown-wrong", "craft", "left-for-owner", "ruling")
+    assert len(set(RFS.OUTCOMES)) == len(RFS.OUTCOMES)
+    assert RFS.OUTCOME_SET == frozenset(RFS.OUTCOMES)
+    assert RFS.LEFT_FOR_OWNER == "left-for-owner"
+
+
+@pytest.mark.parametrize("engine", ["codex", "cursor", "claude"])
+@pytest.mark.parametrize("kind", [None, "findings", "ruling"])
+def test_strict_mode_accepts_every_declared_review_schema(engine, kind):
+    # axis: strict-mode acceptance of every declared review schema, with consequence present
+    import engine_result_channel
+
+    schema = engine_result_channel.declared_schema(engine, "review", kind)
+    if isinstance(schema, str):
+        schema = json.loads(schema)
+    engine_result_channel.assert_strict_mode_valid(schema)
+    assert '"consequence"' in json.dumps(schema)
+
+
+_OUTCOME_SPELLINGS = ("shown-wrong", "left-for-owner")
+
+
+def _source_spells_an_outcome(source):
+    return any(isinstance(n, ast.Constant) and n.value in _OUTCOME_SPELLINGS
+               for n in ast.walk(ast.parse(source)))
+
+
+def _modules_spelling_outcomes_outside_home():
+    home = os.path.join(_LIB, "review_findings_schema.py")
+    offenders = []
+    for root, dirs, files in os.walk(_LIB):
+        dirs[:] = [d for d in dirs if d != "tests" and d != "__pycache__"]
+        for name in files:
+            path = os.path.join(root, name)
+            if not name.endswith(".py") or name.startswith("test_"):
+                continue
+            if os.path.samefile(path, home):
+                continue
+            with open(path, encoding="utf-8") as fh:
+                if _source_spells_an_outcome(fh.read()):
+                    offenders.append(os.path.relpath(path, _LIB))
+    return offenders
+
+
+def test_outcome_census_flags_either_quote_style():
+    # axis: outcome census scan — a module quoting an outcome with single quotes slipping past it
+    assert _source_spells_an_outcome('x = "shown-wrong"\n')
+    assert _source_spells_an_outcome("x = 'left-for-owner'\n")
+    assert not _source_spells_an_outcome("x = 'fixed'\n")
+
+
+def test_outcome_spellings_live_only_in_review_findings_schema():
+    # axis: outcome census — no lib module other than the schema home re-spells an outcome
+    assert _modules_spelling_outcomes_outside_home() == []
