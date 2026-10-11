@@ -150,9 +150,9 @@ def _setup_message_literal(header):
     return (
         "**Setting up cloud builds for demo.** You do these by hand, once. It takes about ten "
         "minutes.\n\n"
-        "1. Make a cloud environment for this project on claude.ai, then copy its id from the "
-        "environment's page and paste it here. My check and every build name this environment by "
-        "that id, so your account's default never changes.\n"
+        "1. Make a cloud environment for this project on claude.ai, then run /remote-env in Claude "
+        "Code on this computer and pick it. I read which one you picked, so there's no id to copy, "
+        "and every build names this environment itself.\n"
         "2. Paste the setup text into it. I've written it below.\n"
         "3. Sign in once to the reviewer on your machine, with a sign-in kept apart from your main "
         "one. The pass is made from it. You only do this the first time on this account, and I'll "
@@ -162,8 +162,7 @@ def _setup_message_literal(header):
         "**Two things to know before you start.**\n\n"
         "The reviewer pass will sit in that environment's settings, and any session started in "
         "that environment can read it. It is a separate sign-in from your main one, it cannot "
-        "renew itself, and it stops working after about 10 days; the exact date is unknown until "
-        "the separate sign-in exists and can be read.\n\n"
+        "renew itself, and it stops working after 10 days; the exact date isn't known yet.\n\n"
         "Cloud builders do not get your personal instructions or permission rules. They follow "
         "this project's rules and the plugin's rules, and nothing else.\n\n"
         "Tell me when they're done and I'll run a short check.\n\n"
@@ -171,7 +170,7 @@ def _setup_message_literal(header):
         "A block to copy and paste. It holds no secret. The pass never goes in here. If this "
         "project needs its own tools in the cloud, such as a language runtime or a browser, add "
         "their install steps directly under the line that reads \"# The project's own tool steps, "
-        "if any, go below this line.\"."
+        "if any, go below this line.\""
     )
 
 
@@ -198,9 +197,8 @@ def test_setup_message_lists_four_hand_steps_in_order(tmp_path, composing):
 
 def test_setup_message_never_asks_to_change_the_default_environment(tmp_path, composing):
     _w, result = _message(tmp_path)
-    stripped = result["message"].replace("so your account's default never changes", "")
-    assert "default" not in stripped.lower()
-    assert result["message"].count("default") == 1
+    # the owner picks the environment with /remote-env; the message never speaks of a default
+    assert "default" not in result["message"].lower()
 
 
 def test_setup_message_carries_the_five_pass_facts_and_the_personal_rules_line(tmp_path, composing):
@@ -210,8 +208,8 @@ def test_setup_message_carries_the_five_pass_facts_and_the_personal_rules_line(t
                  "any session started in that environment can read it",
                  "It is a separate sign-in from your main one",
                  "it cannot renew itself",
-                 "it stops working after about %d days" % CC.PASS_LIFETIME_DAYS,
-                 "the exact date is unknown"):
+                 "it stops working after %d days; the exact date isn't known yet"
+                 % CC.PASS_LIFETIME_DAYS):
         assert fact in message
     assert CC.PASS_LIFETIME_DAYS == 10
     assert ("Cloud builders do not get your personal instructions or permission rules. They "
@@ -440,8 +438,8 @@ def test_judge_edge3_a_wrong_or_missing_environment_fails_on_environment(tmp_pat
         # axis: the check must have run in the environment whose id the owner gave
         result = _judge(local, _cloud_report(cloud, environment=bad))
         _failed_on(result, ["environment"], "**The check failed on one part.** The check ran in a "
-                   "different environment from the one whose id you gave me, or that environment "
-                   "has no pass block in it yet.")
+                   "different environment from the one you picked with /remote-env, or that "
+                   "environment has no pass block in it yet.")
         assert result["results"]["environmentMatches"] is False
         assert _record_state(local) == "none"
 
@@ -894,9 +892,9 @@ def test_judge_two_failed_parts_joins_fixes_once(tmp_path):
         cloud, environment=None, confirmation=_confirm(answered=False)(None)))
     assert different["failedParts"] == ["environment", "reviewer"]
     assert different["message"].endswith(
-        "To fix it, check the id on the environment's page, run the pass command with that id and "
-        "paste the block into the environment, then paste a fresh pass into the environment and "
-        "say \"check again\".")
+        "To fix it, run /remote-env in Claude Code and pick this project's environment again, then "
+        "run the pass command and paste the block into that environment, then paste a fresh pass "
+        "into the environment and say \"check again\".")
     assert _record_state(local) == "none"
 
 
@@ -907,6 +905,202 @@ def test_judge_unread_message(tmp_path):
     assert result["message"] == (
         "**The check did not report back.** I could not read a result from the check session.\n\n"
         "Cloud builds stay off. Say \"check again\" and I'll run it once more.")
+
+
+# --- the failed-check marker ---------------------------------------------------------------
+
+FAILED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+DAMAGED = {"schema": "cloud-check-failed/1", "failedAt": None, "failedParts": [],
+           "environment": None, "damaged": True}
+
+
+def _marker_path(w):
+    return CC.failed_check_path(w.cwd, ACCOUNT, w.root)
+
+
+def _record_bytes(w):
+    with open(cloud_setup.record_path(w.cwd, ACCOUNT, w.root), "rb") as fh:
+        return fh.read()
+
+
+def _marker_files(w):
+    return [os.path.join(top, name) for top, _dirs, names in os.walk(w.root) for name in names
+            if name.endswith(CC.FAILED_CHECK_SUFFIX)]
+
+
+def test_failed_check_path_sits_beside_the_record(tmp_path):
+    w = _build(tmp_path)
+    record = cloud_setup.record_path(w.cwd, ACCOUNT, w.root)
+    assert CC.failed_check_path(w.cwd, ACCOUNT, w.root) == record[:-len(".json")] + \
+        ".failed-check.json"
+    assert record.endswith(".json") and not record.endswith(".failed-check.json")
+
+
+def test_a_failed_check_writes_the_marker_and_leaves_the_record_alone(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _ok_report(cloud))["action"] == "passed"
+    before = _record_bytes(local)
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root) is None
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+    assert result["action"] == "failed" and result["failedParts"] == ["version"]
+    # detector: a failed check that left no marker, or whose marker lacks a field, goes red here
+    assert result["markerWritten"] is True
+    marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
+    assert set(marker) == {"schema", "account", "environment", "failedAt", "failedParts"}
+    assert marker["schema"] == "cloud-check-failed/1" and marker["account"] == ACCOUNT
+    assert marker["environment"] == ENV_ID and marker["failedParts"] == ["version"]
+    assert FAILED_AT_RE.match(marker["failedAt"]) and marker["failedAt"] == "2026-10-10T12:00:00Z"
+    with open(_marker_path(local), encoding="utf-8") as fh:
+        assert fh.read() == json.dumps(marker, sort_keys=True, indent=2) + "\n"
+    # detector: a failed judgment that wrote, changed or removed the setup record goes red here
+    assert _record_bytes(local) == before
+
+
+def test_an_unread_report_writes_the_marker(tmp_path):
+    local, _cloud = _pair(tmp_path)
+    result = _judge(local, "no report here")
+    assert result["action"] == "unread" and result["failedParts"] == ["unread"]
+    # detector: an unread judgment that left no marker goes red here
+    assert result["markerWritten"] is True
+    marker = CC.read_failed_check(local.cwd, ACCOUNT, local.root)
+    assert marker["failedParts"][:1] == ["unread"] and marker["environment"] == ENV_ID
+    assert FAILED_AT_RE.match(marker["failedAt"])
+    assert _record_state(local) == "none"
+
+
+def test_a_marker_lists_the_setting_part_after_a_switch_off_that_failed(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    result = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"),
+                    set_fn=lambda *a, **k: {"action": "refused", "reason": "profile-absent"})
+    assert result["failedParts"] == ["version", "setting"]
+    # detector: a marker written before the switch-off settled its parts goes red here
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root)["failedParts"] == [
+        "version", "setting"]
+
+
+def test_a_passing_check_removes_the_marker_and_writes_the_record(tmp_path):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
+    assert os.path.exists(_marker_path(local))
+    result = _judge(local, _ok_report(cloud))
+    assert result["action"] == "passed" and result["markerWritten"] is False
+    # detector: a pass that leaves the earlier failure's marker behind goes red here
+    assert not os.path.exists(_marker_path(local))
+    assert CC.read_failed_check(local.cwd, ACCOUNT, local.root) is None
+    assert _record_state(local) == "ready"
+
+
+def test_every_judge_result_carries_the_marker_key(tmp_path):
+    local, cloud = _pair(tmp_path)
+    for result in (_judge(local, "no report here"),
+                   _judge(local, _cloud_report(cloud, pluginVersion="0.0.1")),
+                   _judge(local, _ok_report(cloud))):
+        assert isinstance(result["markerWritten"], bool), result
+
+
+@pytest.mark.parametrize("how", ["unlink", "lock"])
+def test_a_marker_that_cannot_be_removed_stops_the_record_write(tmp_path, monkeypatch, how):
+    local, cloud = _pair(tmp_path)
+    assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
+    calls = []
+    if how == "unlink":
+        real_unlink = os.unlink
+
+        def unlink(path, *a, **k):
+            if str(path).endswith(CC.FAILED_CHECK_SUFFIX):
+                raise OSError("busy")
+            return real_unlink(path, *a, **k)
+
+        monkeypatch.setattr(os, "unlink", unlink)
+    else:
+        import contextlib
+
+        @contextlib.contextmanager
+        def held(cwd, root=None):
+            yield False
+
+        monkeypatch.setattr(mode_registry, "config_lock", held)
+    result = _judge(local, _ok_report(cloud),
+                    record_fn=lambda *a, **k: calls.append(k) or {"action": "written"})
+    # detector: a pass that writes the record although the marker could not be removed goes red here
+    assert result["action"] == "failed" and "record" in result["failedParts"]
+    assert calls == [] and result["recordWritten"] is False
+    assert os.path.exists(_marker_path(local))
+    monkeypatch.undo()
+    assert _record_state(local) == "none"
+
+
+def test_a_marker_write_that_fails_changes_nothing_else(tmp_path, monkeypatch):
+    results = {}
+    for label, break_write in (("base", False), ("fault", True)):
+        local, cloud = _pair(tmp_path / label)
+        _turn_on(local)
+        if break_write:
+            real_replace = os.replace
+
+            def replace(src, dst, *a, **k):
+                if str(dst).endswith(CC.FAILED_CHECK_SUFFIX):
+                    raise OSError("disk")
+                return real_replace(src, dst, *a, **k)
+
+            monkeypatch.setattr(os, "replace", replace)
+        results[label] = _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))
+        results[label + "-setting"] = _setting(local)
+        monkeypatch.undo()
+        results[label + "-marker"] = os.path.exists(_marker_path(local))
+    base, fault = results["base"], results["fault"]
+    assert base["markerWritten"] is True and results["base-marker"] is True
+    # detector: a marker write that fails but is reported written goes red here
+    assert fault["markerWritten"] is False and results["fault-marker"] is False
+    assert dict(fault, markerWritten=True) == base
+    assert fault["settingSwitchedOff"] is True
+    assert results["fault-setting"] is False and results["base-setting"] is False
+
+
+def test_an_unresolved_account_writes_no_marker(tmp_path):
+    local, cloud = _pair(tmp_path)
+    for text in (_cloud_report(cloud, pluginVersion="0.0.1"), "no report here"):
+        result = _judge(local, text, account=None)
+        # detector: a marker written for an account that could not be resolved goes red here
+        assert result["action"] in ("failed", "unread") and result["markerWritten"] is False
+    assert _marker_files(local) == []
+
+
+def test_read_failed_check_reads_the_damaged_shape(tmp_path):
+    w = _build(tmp_path)
+    path = _marker_path(w)
+    assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) is None
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    for body in ("not json", json.dumps({"schema": "cloud-check-failed/2", "failedParts": ["x"]}),
+                 json.dumps(["cloud-check-failed/1"]), ""):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        # detector: a marker that exists but does not read as ours must not come back as absent
+        assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) == DAMAGED, body
+    os.unlink(path)
+    os.mkdir(path)
+    assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) == DAMAGED
+    os.rmdir(path)
+    good = {"schema": "cloud-check-failed/1", "account": ACCOUNT, "environment": ENV_ID,
+            "failedAt": "2026-10-10T12:00:00Z", "failedParts": ["version"]}
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(good))
+    assert CC.read_failed_check(w.cwd, ACCOUNT, w.root) == good
+
+
+def test_no_owner_facing_string_sends_the_owner_to_an_environment_page_for_an_id():
+    strings = [value for value in vars(CC).values() if isinstance(value, str)]
+    for _name, sentence, fix in CC._PARTS:
+        strings += [sentence, fix]
+    assert CC._SETUP_MESSAGE in strings and CC._ENVIRONMENT_NEEDED in strings
+    for text in strings:
+        # detector: any owner-facing string that tells the owner to copy or check an id goes red here
+        for phrase in ("environment" + "'s page", "copy its" + " id", "whose id" + " you gave"):
+            assert phrase not in text, (phrase, text)
+    for text in (CC._SETUP_MESSAGE, CC._ENVIRONMENT_NEEDED, dict((n, s) for n, s, _ in CC._PARTS)[
+            "environment"]):
+        assert "/remote-env" in text
 
 
 # --- the command line ----------------------------------------------------------------------
@@ -1040,8 +1234,10 @@ def test_start_refuses_without_an_environment_id(tmp_path, bad):
     spawner = Spawner()
     result = _start(local, spawner, environment=bad)
     assert result["action"] == "refused" and result["reason"] == "check-environment-invalid"
-    assert result["message"] == ("I need the cloud environment's id before I can run the check. "
-                                 "Copy it from the environment's page and paste it here.")
+    assert result["message"] == (
+        "I need to know which cloud environment to check. Run /remote-env in Claude Code on this "
+        "computer and pick this project's environment, then tell me, and I'll read which one you "
+        "picked.")
     assert spawner.calls == []
 
 
@@ -1199,11 +1395,13 @@ def test_start_posts_to_an_issue_only_when_one_is_named(tmp_path):
 
 def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
     local, cloud = _pair(tmp_path)
-    # 1. the instructions ask for the id and never for a change to the account's default
+    # 1. the instructions send the owner to /remote-env and never ask for an id or a default change
     message = CC.setup_message(local.cwd, project_name="demo", root=local.root, env=local.env,
                                now=NOW)["message"]
-    assert "copy its id from the environment's page and paste it here" in message
-    assert message.count("default") == 1 and "so your account's default never changes" in message
+    assert ("1. Make a cloud environment for this project on claude.ai, then run /remote-env in "
+            "Claude Code on this computer and pick it. I read which one you picked, so there's no "
+            "id to copy, and every build names this environment itself.") in message
+    assert "default" not in message.lower()
     # 2. a machine with no separate sign-in is walked through one, then finds it in place
     (tmp_path / "owner").mkdir()
     home, env = _home_env(tmp_path / "owner")
