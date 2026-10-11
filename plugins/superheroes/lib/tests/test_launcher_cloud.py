@@ -514,6 +514,30 @@ def test_edge3_head_that_is_not_the_stamped_base_refuses(tmp_path):
     assert calls == []
 
 
+def test_edge3_head_moved_while_reserving_terminalizes_the_unstarted_lane(tmp_path, monkeypatch):
+    # axis: the checkout is re-checked right before the command; reservation can wait on the lock
+    repo = _cloud_repo(tmp_path)
+    real_reserve = ll.reserve
+
+    def reserve_then_drift(*args, **kwargs):
+        result = real_reserve(*args, **kwargs)
+        (tmp_path / "repo" / "later.txt").write_text("later\n")
+        _git(repo, "add", ".")
+        _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
+        _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        return result
+
+    monkeypatch.setattr(ll, "reserve", reserve_then_drift)
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls))
+    assert result["ok"] is False
+    assert result["reason"] == "launch-cloud-head-not-base"
+    assert calls == []
+    lane = _lanes(repo)[result["launchId"]]
+    assert lane["terminal"] is True
+    assert lane["started"] is False
+
+
 # --- the launch that works -----------------------------------------------------------------
 
 

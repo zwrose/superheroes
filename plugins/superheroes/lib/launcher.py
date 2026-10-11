@@ -2255,6 +2255,33 @@ def _place_refusal(
     return None
 
 
+def _cloud_base_refusal(repo_root, stamped, env):
+    """The refusal reason when the checkout is not a valid cloud base, else None.
+
+    Run before reservation and again right before the cloud command: reservation can wait on
+    the ledger lock, and the owner may move the checkout in that time.
+    """
+    # axis: no cloud spawn from a commit the remote lacks — HEAD must be contained by a remote branch.
+    on_remote = _git_scrubbed(
+        repo_root, "branch", "-r", "--contains", "HEAD",
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    # axis: the session starts from the checkout's HEAD, so HEAD must be the stamped base the
+    # gates ran against and the ledger records — never a different commit.
+    head = _git_scrubbed(
+        repo_root, "rev-parse", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    head_is_base = (
+        head is not None and head.returncode == 0
+        and head.stdout.strip() == stamped["baseCommit"]
+    )
+    if on_remote is None or on_remote.returncode != 0 or not on_remote.stdout.strip():
+        return "launch-cloud-head-not-on-remote"
+    if not head_is_base:
+        return "launch-cloud-head-not-base"
+    return None
+
+
 def launch_build(
     repo_root,
     issue,
@@ -2548,25 +2575,7 @@ def launch_build(
     if cloud:
         # The cloud session starts from a commit the remote has, so the launching checkout's HEAD
         # must be on a remote branch. The launcher pushes nothing to make it so.
-        # axis: no cloud spawn from a commit the remote lacks — HEAD must be contained by a remote branch.
-        on_remote = _git_scrubbed(
-            repo_root, "branch", "-r", "--contains", "HEAD",
-            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        # axis: the session starts from the checkout's HEAD, so HEAD must be the stamped base the
-        # gates ran against and the ledger records — never a different commit.
-        head = _git_scrubbed(
-            repo_root, "rev-parse", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        head_is_base = (
-            head is not None and head.returncode == 0
-            and head.stdout.strip() == stamped["baseCommit"]
-        )
-        refusal_reason = None
-        if on_remote is None or on_remote.returncode != 0 or not on_remote.stdout.strip():
-            refusal_reason = "launch-cloud-head-not-on-remote"
-        elif not head_is_base:
-            refusal_reason = "launch-cloud-head-not-base"
+        refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
         if refusal_reason is not None:
             reserve_result = _try_reserve_for_refusal(
                 repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
@@ -2821,6 +2830,12 @@ def launch_build(
             "effortSource": compose_result["effortSource"],
             "warnings": warnings,
         }
+        # axis: reservation may have waited on the ledger lock, so the checkout is re-checked
+        # right before the command; a drifted checkout terminalizes the unstarted lane.
+        drift = _cloud_base_refusal(repo_root, stamped, env)
+        if drift is not None:
+            term = _terminalize(repo_root, launch_id, False, drift, stage="cloud-base", env=env)
+            return _post_reserve_fail(_terminalization_reason(term, drift))
         cloud_result = _run_cloud_spawn(
             repo_root,
             launch_id,
