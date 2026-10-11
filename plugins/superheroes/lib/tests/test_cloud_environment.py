@@ -204,7 +204,7 @@ def test_reader_follows_the_account_config_dir(tmp_path):
 def test_no_message_asks_to_type_or_paste_an_id():
     messages = [value for name, value in vars(CE).items()
                 if name.startswith("_") and name.isupper() and isinstance(value, str)]
-    assert len(messages) == 7
+    assert len(messages) == 9
     for message in messages:
         assert not re.search(r"\b(type|paste|copy)\b", message, re.IGNORECASE), message
 
@@ -302,3 +302,71 @@ def test_cli_relative_config_dir_with_relative_cwd_reads(tmp_path, monkeypatch, 
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "acct")
     code, out = _run(capsys, ["snapshot", "--cwd", "."])
     assert code == 0 and out == {"action": "read", "reason": None, "environment": ENV_ID}
+
+
+def _record_for(monkeypatch, record):
+    monkeypatch.setattr(CE.cloud_setup, "read", lambda cwd, account, root=None: {"record": record})
+
+
+def test_compare_matched_when_the_record_names_the_picked_environment(tmp_path, monkeypatch):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    _record_for(monkeypatch, {"environment": ENV_ID})
+    result = CE.compare(env=env, cwd=str(tmp_path), account="acct-1")
+    assert result["action"] == "matched" and result["environment"] == ENV_ID
+
+
+def test_compare_mismatched_returns_the_current_picked_environment(tmp_path, monkeypatch):
+    env = _env(tmp_path)
+    _write(env, _with_value(OTHER_ENV_ID))
+    _record_for(monkeypatch, {"environment": ENV_ID})
+    result = CE.compare(env=env, cwd=str(tmp_path), account="acct-1")
+    assert result["action"] == "mismatched"
+    assert result["environment"] == OTHER_ENV_ID
+    assert result["message"] == CE._MISMATCHED
+    assert "run again" in result["message"]
+
+
+@pytest.mark.parametrize("record", [None, {}, {"environment": "bad id"}, {"environment": 5}])
+def test_compare_unchecked_without_a_usable_record(tmp_path, monkeypatch, record):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    _record_for(monkeypatch, record)
+    result = CE.compare(env=env, cwd=str(tmp_path), account="acct-1")
+    assert result["action"] == "unchecked" and result["environment"] is None
+    assert result["message"] == CE._UNCHECKED
+
+
+@pytest.mark.parametrize("content", [None, "not json", {}, _with_value("bad id")])
+def test_compare_unchecked_without_a_valid_current_pick(tmp_path, monkeypatch, content):
+    env = _env(tmp_path)
+    if content is not None:
+        _write(env, content)
+    _record_for(monkeypatch, {"environment": ENV_ID})
+    result = CE.compare(env=env, cwd=str(tmp_path), account="acct-1")
+    assert result["action"] == "unchecked" and result["environment"] is None
+
+
+def test_compare_never_raises(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(CE.cloud_setup, "read", boom)
+    result = CE.compare(env=_env(tmp_path), cwd=str(tmp_path), account="acct-1")
+    assert result["action"] == "unchecked"
+
+
+def test_compare_cli_exit_codes(tmp_path, monkeypatch, capsys):
+    env = _env(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
+    monkeypatch.setenv("HOME", env["HOME"])
+    monkeypatch.setattr(CE.cloud_setup, "launching_account", lambda *a, **k: "acct-1")
+    _write(env, _with_value(ENV_ID))
+    _record_for(monkeypatch, {"environment": ENV_ID})
+    code, out = _run(capsys, ["compare"])
+    assert code == 0 and out["action"] == "matched"
+    _record_for(monkeypatch, {"environment": OTHER_ENV_ID})
+    code, out = _run(capsys, ["compare"])
+    assert code == 1 and out["action"] == "mismatched" and out["environment"] == ENV_ID
+    _record_for(monkeypatch, None)
+    code, out = _run(capsys, ["compare"])
+    assert code == 1 and out["action"] == "unchecked"

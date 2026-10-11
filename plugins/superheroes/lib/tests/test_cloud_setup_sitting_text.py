@@ -138,3 +138,14 @@ def test_first_pick_unchanged_is_confirmed_by_name_in_step_three():
     assert make is not None, "section 6 has no line containing 'cloud_pass.py\" make'"
     assert confirm < make, "the confirm-by-name line (%d) does not come before the pass command (%d)" % (
         confirm, make)
+
+
+def test_the_recorded_environment_is_compared_after_the_first_judge_line():
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    judge = _first(section, 'cloud_check.py" judge')
+    assert judge is not None, "section 6 has no line containing 'cloud_check.py\" judge'"
+    compare = _first(section, 'cloud_environment.py" compare')
+    assert compare is not None, "section 6 has no line containing 'cloud_environment.py\" compare'"
+    assert judge < compare, "the compare line (%d) does not come after the judge line (%d)" % (
+        compare, judge)

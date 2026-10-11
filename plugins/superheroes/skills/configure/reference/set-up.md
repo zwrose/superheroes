@@ -494,8 +494,17 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --cwd . --environment <id> --nonce <nonce> --line-file <file>
    ```
 
-   Say its `message`. A passed check has written the setup record for this account and changed no
-   setting. A failed check, or a result that could not be read, has written nothing; when cloud
+   After a `passed` result, and before saying its message, compare the record with the pick:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --cwd .
+   ```
+
+   On `matched`, say judge's `message`. On `mismatched`, do not say the check is ready: say compare's
+   `message`, and repeat steps 6 and 7 naming compare's `environment`. On `unchecked`, say its
+   `message` and stop. For any result other than `passed`, say judge's `message`. A passed check
+   has written the setup record for this account and changed no setting. A failed check, or a result that could not be read, has written nothing; when cloud
    builds were on, it has switched them off and the message says so. Never write the setup record
    any other way, and never tell the owner a check passed without a `passed` result.
 8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the environment now in use (the id step 3
