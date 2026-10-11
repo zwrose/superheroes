@@ -536,8 +536,7 @@ demonstrably acted (a finding or `engagement.toolCalls >= 1`); a seat's `investi
 `engagement` key is **present with the value `null`** (there was no graded stdout to measure), so
 `engagement.read` is unavailable — `result.get("engagement", {})` is **unsafe** because the key may
 carry `null`, not merely be missing; consumers must handle a `null` value. The runner **never**
-asserts `"inert"` — absence of positive evidence is not proof of inaction, and only `seat_canary
-probe` can justify calling a seat inert. Token spend does not measure engagement: a small dispatch
+asserts `"inert"` — absence of positive evidence is not proof of inaction. Token spend does not measure engagement: a small dispatch
 can be engaged and clean while a dispatch several times its size produces a Critical finding.
 
 **`reason: "forfeit-with-engaged-artifact"`** — a marker-channel outcome. No run mints it: it names a

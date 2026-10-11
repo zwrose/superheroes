@@ -76,10 +76,10 @@ class FakeAdapters(object):
       return RD.verify_result_fault(payload)
     return "orchestrator-payload-unknown-phase:%s" % phase
 
-  def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+  def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
                session_dir=None):
     self.assembled.append({"phase": phase, "envelopes": envelopes,
-                           "dispatch_manifest": dispatch_manifest, "canary": canary,
+                           "dispatch_manifest": dispatch_manifest,
                            "session_dir": session_dir})
     if self.assemble_reason is not None:
       return None, self.assemble_reason
