@@ -338,6 +338,9 @@ REFUSALS = [
     pytest.param(_extras_are({"schema": rs.EXTRAS_SCHEMA, "pr": "7"}), rs.BAD_EXTRAS, id="extras-pr-text"),
     pytest.param(_extras_are({"schema": rs.EXTRAS_SCHEMA, "pr": True}), rs.BAD_EXTRAS, id="extras-pr-bool"),
     pytest.param(_without("meta.json"), rs.UNREADABLE, id="no-meta"),
+    pytest.param(_without("driver-journal.jsonl"), rs.UNSUPPORTED, id="hand-driven-session"),
+    pytest.param(_state_change(terminal="uncertified-manual"), rs.UNSUPPORTED, id="attested-terminal"),
+    pytest.param(_state_change(terminal="mystery"), rs.UNSUPPORTED, id="unknown-terminal"),
     pytest.param(_no_session_id, rs.UNREADABLE, id="meta-without-session-id"),
 ]
 
@@ -356,25 +359,6 @@ def test_refusals(tmp_path, make, reason):
     # bites on: a session that cannot be read, has not ended, or has no valid extras being written as a record anyway
     assert out["ok"] is False and out["reason"] == reason, out
     assert fake.writes == [] and fake.comments == []
-
-
-def test_a_hand_driven_session_reports_its_reviewers_by_the_session(tmp_path):
-    rounds = {"1": {"seatStatus": {"code-reviewer": "run", "test-reviewer": "missing"}},
-              "2": {"seatStatus": {"code-reviewer": "run"}}}
-    s = Session(tmp_path, rounds=rounds)
-    s.meta.pop("fixFoldHeadSha")
-    session = s.save()
-    assert not os.path.exists(os.path.join(session, "driver-journal.jsonl"))
-    account = rs.account_from_session(session, extras())
-    # bites on: a session with no journal being refused or read as having no reviewers
-    assert [(v["name"], v["ran"], v["commit"], v["runDir"]) for v in account["reviewers"]] == [
-        ("code-reviewer (round 1)", True, EARLIER, None), ("test-reviewer (round 1)", False, EARLIER, None),
-        ("code-reviewer (round 2)", True, None, None)]
-    fake = Fake(head=EARLIER)
-    out = send(tmp_path, session, fake)
-    assert out["ok"], out
-    rec = rr.read(7, readers=fake.readers())
-    assert [v["ran"] for v in rec["reviewers"]] == ["reported-by-session", "not-run", "reported-by-session"]
 
 
 @pytest.mark.parametrize("terminal,decision,max_rounds,cap,stopped", [
@@ -476,6 +460,16 @@ def test_a_seat_the_rounds_status_calls_missing_is_a_missing_review(tmp_path):
     account = rs.account_from_session(s.seat("code-reviewer").seat("security-reviewer").save(), extras(),
                                       Fake().readers(), str(tmp_path))
     # bites on: the folded seat status ignored when the journal says a result was recorded
+    assert {r["name"]: r["ran"] for r in account["reviewers"]} == {
+        "code-reviewer (round 1)": True, "security-reviewer (round 1)": False}
+
+
+def test_a_missing_seat_envelope_is_a_missing_review_whatever_command_ingested_it(tmp_path):
+    s = Session(tmp_path).seat("code-reviewer").seat("security-reviewer")
+    session = s.save()
+    put_envelope(session, "security-reviewer", {"schema": rs.sc.SEAT_MISSING_SCHEMA, "reason": "timeout"})
+    account = rs.account_from_session(session, extras(), Fake().readers(), str(tmp_path))
+    # bites on: a swept seat-missing envelope credited as a run because its journal command was record-result
     assert {r["name"]: r["ran"] for r in account["reviewers"]} == {
         "code-reviewer (round 1)": True, "security-reviewer (round 1)": False}
 

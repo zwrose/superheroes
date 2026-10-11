@@ -28,6 +28,7 @@ import dispatch_outcome  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
 import review_record  # noqa: E402
+import round_certification  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract as sc  # noqa: E402
@@ -37,6 +38,7 @@ Refusal = review_record.Refusal
 EXTRAS_SCHEMA = "review-session-extras/1"
 UNREADABLE = "review-session-unreadable"
 NOT_TERMINAL = "review-session-not-terminal"
+UNSUPPORTED = "review-session-unsupported"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
@@ -66,7 +68,7 @@ def _journal(session_dir):
         raise Refusal(UNREADABLE, sc.JOURNAL_FAULT_FILE)
     path = os.path.join(session_dir, sc.JOURNAL_FILE)
     if not os.path.exists(path):
-        return []  # a hand-driven session keeps no journal
+        return []  # a session with no journal holds no recorded seat
     try:
         with open(path, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh if line.strip()]
@@ -160,21 +162,13 @@ def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None,
     return dict(out, notIndependent=True) if seat in same else out
 
 
-def _declares_not_run(payload):
-    """Whether a seat payload says its reviewer did not run: the driver's own not-run rules."""
-    if not isinstance(payload, dict):
-        return False
-    reason = payload.get("reason")
-    return bool(payload.get("vacuous") is True or payload.get("receiptMissing") or payload.get("receiptStale")
-                or (isinstance(reason, str) and reason in dispatch_outcome.NOT_RUN_REASONS))
-
-
 def _slot_ran(state, key, row, env):
     """Whether the slot's reviewer ran: ingestion alone does not say so, the stored result and the round's seat status do."""
     phase, rnd, seat, _ = key
     cmd = row.get("cmd")
     payload = env.get("payload") if isinstance(env, dict) else None
-    if cmd == "record-missing" or _declares_not_run(payload):
+    if cmd == "record-missing" or dispatch_outcome.payload_did_not_run(payload) \
+            or (isinstance(env, dict) and env.get("schema") == sc.SEAT_MISSING_SCHEMA):
         return False
     if cmd != "record-result" and payload is None:
         return False  # a swept or reappended slot with no readable result is a missing envelope
@@ -183,7 +177,7 @@ def _slot_ran(state, key, row, env):
     return not (phase == sc.PANEL_PHASE and isinstance(status, dict) and status.get(seat) == "missing")
 
 
-def _reviewers(state, session_dir, rows, meta, run_dirs, engine_run, raw_dir=None):
+def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS}
     envs = {k: _envelope(_path(session_dir, k, v[0])) for k, v in slots.items()}
     ran = {k: v for k, v in slots.items() if _slot_ran(state, k, v[1], envs[k])}
@@ -203,12 +197,6 @@ def _reviewers(state, session_dir, rows, meta, run_dirs, engine_run, raw_dir=Non
             if env is None or "payload" not in env:
                 raise Refusal(UNREADABLE, f"{phase} {seat} round {rnd} findings")  # a ran seat's output must be retrievable
             raw.append(_payload_file(raw_dir, phase, rnd, seat, env["payload"], raw))
-    if not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows):
-        for rnd, rec in sorted((state.get("rounds") or {}).items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
-            status = rec.get("seatStatus") if isinstance(rec, dict) else None
-            for seat, st in (status.items() if isinstance(status, dict) else ()):  # hand-driven: the round's own bookkeeping
-                out.append(_reviewer(state, rnd, seat, "", st == "run", same,
-                                     commit=_text(meta.get("headSha")) if str(rnd) == "1" else None))
     return out, raw
 
 
@@ -279,11 +267,15 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     if not (isinstance(meta, dict) and _text(meta.get("sessionId"))):
         raise Refusal(UNREADABLE, "meta.json sessionId")
     rows = _journal(session_dir)
+    if state["terminal"] not in round_certification.CERTIFIED_VERDICTS:
+        raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not a certified verdict")
+    if not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows):
+        raise Refusal(UNSUPPORTED, "the session recorded no seat result")
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings = _findings(state)
-    reviewers, raw = _reviewers(state, session_dir, rows, meta, extras.get("runDirs", []),
+    reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                 review_record._readers(readers)["engine_run"], raw_dir)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \

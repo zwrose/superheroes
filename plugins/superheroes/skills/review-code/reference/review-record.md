@@ -72,7 +72,7 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 python3 -B "$ROOT_DIR/lib/review_record_session.py" write --session-dir "$SESSION_DIR" --extras <extras.json> --repo-root <repo root>
 ```
 
-In PR mode, run it on every terminal verdict. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds.
+In PR mode, run it on every terminal verdict of a driven session: one that recorded at least one seat result and ended on a certified verdict. Any other session is refused `review-session-unsupported`. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds.
 
 The extras file holds only what the driver never does: `{"schema": "review-session-extras/1", "pr": <int>, "repo": <"owner/name" or null>, "laneReason": <string or null>, "ci": <string or null>, "runDirs": [<run directory>, ...], "goAheads": [...], "makers": [{family, source}, ...], "checked": [<string>, ...]}`. Only `schema` and `pr` are required. `goAheads`, `makers` and `checked` pass to the account unchanged. A go-ahead's `reviewer` is the reviewer row's name exactly as the adapter builds it: `<seat> (round <n>)` for a panel seat, `<phase without the dispatch- prefix> <seat> (round <n>)` for any other review phase, for example `security-reviewer (round 1)`.
 
@@ -98,6 +98,7 @@ Refusals, before anything is posted:
 
 - `review-session-unreadable`: a session file the account needs is missing or malformed; the detail names it (the loop state, the journal or its fault file, `meta.json`'s `sessionId`, the disposition ledger). Restore the session directory and write again; never edit the files by hand.
 - `review-session-not-terminal`: the loop has not ended. Finish the loop, then write.
+- `review-session-unsupported`: the session recorded no seat result (a hand-driven session), or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account".
 - `review-session-extras-invalid`: the extras file is missing, unparseable or malformed; the detail names the key. Fix it and write again.
 
 ## When it refuses

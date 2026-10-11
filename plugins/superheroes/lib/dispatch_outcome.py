@@ -91,3 +91,12 @@ def counts_as_run(reason):
 def is_terminal(reason):
     """True when reason is a terminal dispatch outcome (not running)."""
     return reason in TERMINAL_REASONS
+
+
+def payload_did_not_run(payload):
+    """True when a seat payload says its reviewer did not run: vacuous, a missing or stale receipt, or a not-run reason."""
+    if not isinstance(payload, dict):
+        return False
+    reason = payload.get("reason")
+    return bool(payload.get("vacuous") is True or payload.get("receiptMissing") or payload.get("receiptStale")
+                or (isinstance(reason, str) and reason in NOT_RUN_REASONS))
