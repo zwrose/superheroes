@@ -470,3 +470,72 @@ def test_valid_empty_list_reads_empty_and_not_malformed(tmp_path):
     got = PC.get_item(repo, "riskAndTrust", root=store)
     assert got["raw"]["riskAreas"] == [] and got["effective"]["riskAreas"] == []
     assert got["malformed"] is False
+
+
+# --- the setup sitting, driven end to end --------------------------------------------------
+
+
+def _sitting_commands():
+    """The fenced bash blocks under set-up.md's `## 3.5` heading, up to the next `## ` heading."""
+    path = os.path.join(_REPO_ROOT, "plugins/superheroes/skills/configure/reference/set-up.md")
+    lines = open(path, encoding="utf-8").read().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("## 3.5"))
+    blocks, cur = [], None
+    for ln in lines[start + 1:]:
+        if cur is None and ln.startswith("## "):
+            break
+        if ln.startswith("```bash"):
+            cur = []
+        elif ln.startswith("```") and cur is not None:
+            blocks.append("\n".join(cur))
+            cur = None
+        elif cur is not None:
+            cur.append(ln)
+    return blocks
+
+
+@pytest.mark.parametrize("who_set", [True, False])
+def test_setup_sitting_commands_end_to_end(tmp_path, who_set):
+    repo, store = _setup_repo(tmp_path, threat="Outsiders only.")
+    plugin = os.path.join(_REPO_ROOT, "plugins/superheroes")
+    blocks = _sitting_commands()
+    assert blocks and not any("migrate-material-line" in b for b in blocks)
+    who_text = "Clinics, to book visits."
+    if who_set:
+        assert PC.set_item(repo, "whoItsFor", who_text, root=store)["action"] == "written"
+    areas = json.dumps({"riskAreas": [PAYMENTS]})
+    answers = {"whoItsFor": json.dumps("Owners of small shops, to take payments."),
+               "riskAndTrust": areas}
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=plugin)
+    head_before = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD"],
+                                 capture_output=True).returncode
+    ran = []
+    for block in blocks:
+        if "project_config.py" not in block:
+            continue
+        item = "riskAndTrust" if "riskAndTrust" in block else "whoItsFor"
+        if " set " in block:
+            if item == "whoItsFor" and who_set:
+                continue  # item 14 already set: the sitting does not ask it again
+            if item == "riskAndTrust" and '"threatModel"' in block:
+                continue  # the threat-model half is offered only on the owner's yes
+            body = answers[item]
+            cmd = block.split("<<'SUPERHEROES_ANSWER'")[0].replace("--cwd .", "--cwd . --root " + store)
+            res = subprocess.run(["bash", "-c", cmd], input=body + "\n", env=env, cwd=repo,
+                                 capture_output=True, text=True)
+        else:
+            cmd = block.replace("--cwd .", "--cwd . --root " + store)
+            res = subprocess.run(["bash", "-c", cmd], env=env, cwd=repo,
+                                 capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        ran.append((item, " set " in block, json.loads(res.stdout)))
+    assert any(is_set and out["action"] == "written" and item == "riskAndTrust"
+               for item, is_set, out in ran)
+    assert any(item == "whoItsFor" and not is_set for item, is_set, out in ran)
+    who = PC.get_item(repo, "whoItsFor", root=store)
+    assert who["raw"] == (who_text if who_set else "Owners of small shops, to take payments.")
+    got = PC.get_item(repo, "riskAndTrust", root=store)
+    assert got["raw"] == {"threatModel": "Outsiders only.", "riskAreas": [PAYMENTS]}
+    assert not os.path.exists(os.path.join(repo, ".canon"))
+    assert subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD"],
+                          capture_output=True).returncode == head_before
