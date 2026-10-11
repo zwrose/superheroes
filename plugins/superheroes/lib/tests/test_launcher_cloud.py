@@ -499,6 +499,21 @@ def test_edge3_a_remote_branch_without_head_still_refuses(tmp_path):
     assert calls == []
 
 
+def test_edge3_head_that_is_not_the_stamped_base_refuses(tmp_path):
+    # axis: the session starts from HEAD, so HEAD must be the base the gates ran against
+    repo = _cloud_repo(tmp_path)
+    base = _head_sha(repo)
+    (tmp_path / "repo" / "later.txt").write_text("later\n")
+    _git(repo, "add", ".")
+    _git(repo, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-q", "-m", "later")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    calls = []
+    result = _launch(repo, tmp_path, _fake_spawn(calls=calls),
+                     premise=_valid_premise(repo, baseCommit=base))
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-head-not-base", "cloud-base")
+    assert calls == []
+
+
 # --- the launch that works -----------------------------------------------------------------
 
 
@@ -1257,6 +1272,7 @@ def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(t
     import threading
 
     log = tmp_path / "term.stdout"
+    before = _signal.getsignal(_signal.SIGTERM)
     timer = threading.Timer(0.5, lambda: _os.kill(_os.getpid(), _signal.SIGTERM))
     timer.start()
     try:
@@ -1269,7 +1285,33 @@ def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(t
     assert "hello" in result["output"]
     assert "hello" in log.read_text()
     assert result["rc"] is not None
-    assert _signal.getsignal(_signal.SIGTERM) is not L._raise_launcher_terminated
+    assert _signal.getsignal(_signal.SIGTERM) is before
+
+
+def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(tmp_path, monkeypatch):
+    # axis: a launcher cancelled between child creation and the read loop still ends the group
+    import os as _os
+    import signal as _signal
+
+    real_popen = L.subprocess.Popen
+    started = []
+
+    def popen_then_sigterm(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        started.append(proc)
+        _os.kill(_os.getpid(), _signal.SIGTERM)
+        return proc
+
+    monkeypatch.setattr(L.subprocess, "Popen", popen_then_sigterm)
+    before = _signal.getsignal(_signal.SIGTERM)
+    result = L._default_cloud_spawn(
+        ["sh", "-c", "sleep 30"], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 20,
+    )
+    assert result["readError"] == "_LauncherTerminated"
+    assert result["rc"] is not None
+    with pytest.raises(ProcessLookupError):
+        _os.killpg(started[0].pid, 0)
+    assert _signal.getsignal(_signal.SIGTERM) is before
 
 
 def _flaky_started_appends(monkeypatch, failures):

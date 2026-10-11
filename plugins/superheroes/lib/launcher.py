@@ -1319,8 +1319,17 @@ class _LauncherTerminated(Exception):
     """The launcher was sent SIGTERM while a cloud launch command was running."""
 
 
-def _raise_launcher_terminated(signum, frame):
-    raise _LauncherTerminated()
+def _make_terminate_handler(state):
+    """A SIGTERM handler that holds the signal until the child exists, then raises.
+
+    Before the child is started and held, a raise would lose the only handle on its process group;
+    so until `state["armed"]` is set the handler only records `state["pending"]`.
+    """
+    def handler(signum, frame):
+        if state["armed"]:
+            raise _LauncherTerminated()
+        state["pending"] = True
+    return handler
 
 
 def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
@@ -1337,7 +1346,18 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     exception's class name) beside the output captured so far.
     """
     master, slave = pty.openpty()
+    term_state = {"armed": False, "pending": False}
+    previous_term = None
     try:
+        # axis: a launcher cancelled at any point from child creation through cleanup still ends the
+        # group it started — the handler is installed before the child exists, holds a SIGTERM that
+        # lands before the child is in hand, and raises it the moment the cleanup below can run.
+        try:
+            previous_term = signal.signal(
+                signal.SIGTERM, _make_terminate_handler(term_state),
+            )
+        except (ValueError, OSError):
+            previous_term = None  # not the main thread: no handler can be installed here
         try:
             proc = subprocess.Popen(
                 argv,
@@ -1360,16 +1380,11 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
         chunks = []
         timed_out = False
         read_error = None
-        # axis: a launcher cancelled mid-launch still ends the group it started — SIGTERM is turned
-        # into an exception the read loop's handler catches, so the finally below runs, the output
-        # captured so far is logged, and the caller still records the lane.
-        previous_term = None
-        try:
-            previous_term = signal.signal(signal.SIGTERM, _raise_launcher_terminated)
-        except (ValueError, OSError):
-            previous_term = None  # not the main thread: no handler can be installed here
         try:
             try:
+                term_state["armed"] = True
+                if term_state["pending"]:
+                    raise _LauncherTerminated()
                 deadline = time.monotonic() + timeout
                 while True:
                     remaining = deadline - time.monotonic()
@@ -1395,11 +1410,6 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             except Exception as exc:
                 read_error = type(exc).__name__
         finally:
-            if previous_term is not None:
-                try:
-                    signal.signal(signal.SIGTERM, previous_term)
-                except (ValueError, OSError):
-                    pass
             # axis: no process the launch started outlives it — the signal goes to the process group
             # the Popen this function holds leads (its pid), on every path out, never to a caller's.
             try:
@@ -1430,6 +1440,11 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             result["readError"] = read_error
         return result
     finally:
+        if previous_term is not None:
+            try:
+                signal.signal(signal.SIGTERM, previous_term)
+            except (ValueError, OSError):
+                pass
         try:
             os.close(master)
         except OSError:
@@ -2513,8 +2528,21 @@ def launch_build(
             repo_root, "branch", "-r", "--contains", "HEAD",
             env=env, timeout=_WORKTREE_GIT_TIMEOUT,
         )
+        # axis: the session starts from the checkout's HEAD, so HEAD must be the stamped base the
+        # gates ran against and the ledger records — never a different commit.
+        head = _git_scrubbed(
+            repo_root, "rev-parse", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        head_is_base = (
+            head is not None and head.returncode == 0
+            and head.stdout.strip() == stamped["baseCommit"]
+        )
+        refusal_reason = None
         if on_remote is None or on_remote.returncode != 0 or not on_remote.stdout.strip():
             refusal_reason = "launch-cloud-head-not-on-remote"
+        elif not head_is_base:
+            refusal_reason = "launch-cloud-head-not-base"
+        if refusal_reason is not None:
             reserve_result = _try_reserve_for_refusal(
                 repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
                 slot=slot, generation=generation, boundary=boundary,
