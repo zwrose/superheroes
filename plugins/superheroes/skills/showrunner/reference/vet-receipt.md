@@ -232,7 +232,7 @@ receipt names the row that held it.
 | Check | What it reads from the record | The PR is held when |
 |---|---|---|
 | **The record exists** | the result of the `read` verb, and the record link in the PR's build record | `read` refuses, with `review-record-missing`, `review-record-unreadable` or any other reason; or the PR's build record names no record |
-| **The checks ran on the final commit** | `finalCommit.sha` and `finalCommit.source`; `ci.state`, `ci.sha` and `ci.source`; `missingReviews` and `parked`; and, from the PR itself, its head now and CI on that head (spine field 1) | `finalCommit.sha` is not the PR's head now, so the record was written on an earlier commit, whatever it says about CI; `finalCommit.source` is not `GitHub PR`; `ci.source` is not `GitHub checks`, `ci.state` is not `green`, or `ci.sha` is not `finalCommit.sha`; CI is not green on the PR's head now; or an entry of `missingReviews` has a null `goAhead` (`parked` is true), so a planned review did not run and the owner gave no go-ahead |
+| **The checks ran on the final commit** | `finalCommit.sha` and `finalCommit.source`; `ci.state`, `ci.sha` and `ci.source`; `missingReviews` and `parked`; and, from the PR itself, its head now and CI on that head (spine field 1) | `finalCommit.sha` is not the PR's head now, so the record was written on an earlier commit, whatever it says about CI (one exception: when the head moved by a bring-current and spine field 1's re-pin form finds the diff digest **equal**, a record written on the head before the bring-current still counts, CI must still be green on the new head, and the receipt names both commits; on an unequal digest or `digest-unavailable` the row holds as written); `finalCommit.source` is not `GitHub PR`; `ci.source` is not `GitHub checks`, `ci.state` is not `green`, or `ci.sha` is not `finalCommit.sha`; CI is not green on the PR's head now; or an entry of `missingReviews` has a null `goAhead` (`parked` is true), so a planned review did not run and the owner gave no go-ahead; or its go-ahead cannot be followed to an owner-attributed record (a standing ruling's canon entry, or the place the owner's words were said) that authorizes skipping that review |
 | **No leftover skipped the owner's review** | every entry of `findings` (its `title`, `body`, `consequence`, `outcome` and `reason`), `leftForOwner`, and the PR's owner half | a finding with a real consequence has outcome `craft`, or has no outcome; or has outcome `ruling` and its `reason` names no ruling the vet can follow to a record; or has outcome `left-for-owner` and is not shown to the owner on the PR's sheet or, where no sheet is built, under the owner half's `## What we're accepting` |
 
 **A real consequence is graded, never read off one field.** A real consequence is a
@@ -249,8 +249,13 @@ the fields the rows name. Any line of `whatIsMissing` that the three rows do not
 finding. The line saying no planned reviewer ran is accounted for when every planned review that did
 not run carries a go-ahead.
 
-**When a go-ahead lets the PR through**, the receipt names the review that did not run and the
-go-ahead that covered it.
+**A go-ahead is followed, not trusted.** The record proves only that the go-ahead's citation is a
+non-blank string. Resolve it yourself: open the standing ruling's canon entry, or the place the owner's
+words were said, and confirm it is the owner's and covers the skipped review. When it is missing,
+unreadable or about something else, the row holds the PR.
+
+**When a go-ahead lets the PR through**, the receipt names the review that did not run, the
+go-ahead that covered it, and the record you verified it against.
 
 The vet carries these checks. Nothing automated runs them at handback.
 
