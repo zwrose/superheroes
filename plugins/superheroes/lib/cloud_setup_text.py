@@ -35,14 +35,13 @@ REVIEWER_CLI_PACKAGE = "@openai/codex"
 DUPLICATION_CHECKER_PACKAGE = "jscpd@5.0.12"
 SOURCE_DIR = "/opt/superheroes/plugin-src"
 STAMP_FILE = "cloud-setup-stamp"
-_CORE_MD = "config/core.md"
+TOOL_STEPS_MARKER = "# The project's own tool steps, if any, go below this line."
 # The cloud platform runs nothing before a session starts except this cached script, so a setup
 # made at one plugin version stays at that version until new setup text is pasted.
 PICKS_UP_VERSION_BY_ITSELF = False
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 _LOG = "$HOME/superheroes-cloud-setup.log"
-_TOP_FILES = ("registry.json", "meta.json", "doc-policy.json")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 _SOURCE_RE = re.compile(r"https://[A-Za-z0-9][A-Za-z0-9._~:/-]*")
 _PATH_RE = re.compile(r"[A-Za-z0-9._/-]+")
@@ -168,16 +167,27 @@ def _discover(cwd, env):
     return url, commit, subdir[2:] if subdir.startswith("./") else subdir
 
 
-def _store_files(store, top=_TOP_FILES):
-    """The calibration files that exist under `store`: relative path -> raw bytes."""
+def _core_rel():
+    """The core file's path under a store, from the modules that own its names."""
+    return mode_registry.CONFIG_DIRNAME + "/" + core_md.CORE_FILENAME
+
+
+def _policy_name(cwd, root):
+    return os.path.basename(architect_config.policy_path(cwd, root))
+
+
+def _store_files(store, top):
+    """The calibration files that exist under `store`: relative path -> raw bytes. `top` names the
+    files directly under the store, read by the caller from their owners."""
     wanted = list(top)
+    config_dir_name = mode_registry.CONFIG_DIRNAME
     try:
-        names = sorted(os.listdir(os.path.join(store, "config")))
+        names = sorted(os.listdir(os.path.join(store, config_dir_name)))
     except FileNotFoundError:
         names = []
     except OSError:
         raise _Refused("calibration-unreadable", "The calibration's config directory cannot be read.")
-    wanted += ["config/" + n for n in names if n.endswith(".md")]
+    wanted += [config_dir_name + "/" + n for n in names if n.endswith(".md")]
     wanted.append("permission/rules.json")
     out = {}
     for rel in wanted:
@@ -209,7 +219,8 @@ def _calibration(cwd, root):
         return False, {k: v for k, v in found.items() if k == os.path.basename(policy)}
     if mode != mode_registry.GLOBAL:
         raise unknown
-    return True, _store_files(mode_registry.project_store_dir(cwd, root))
+    top = (mode_registry.REGISTRY_FILENAME, mode_registry.META_FILENAME, _policy_name(cwd, root))
+    return True, _store_files(mode_registry.project_store_dir(cwd, root), top)
 
 
 def calibration_files(cwd, root=None):
@@ -237,8 +248,9 @@ def _without_setting(data):
 
 def _stamp_view(files):
     view = dict(files)
-    if _CORE_MD in view:
-        view[_CORE_MD] = _without_setting(view[_CORE_MD])
+    core = _core_rel()
+    if core in view:
+        view[core] = _without_setting(view[core])
     return view
 
 
@@ -332,7 +344,7 @@ def _script(head, source, commit, subdir, source_dir, plugin_dir, files, dest, s
                 'else echo "calibration FAILED: only $wrote of %d files written" >> "$LOG"; fi'
                 % len(files),
                 'echo "calibration: $wrote of %d files written" >> "$LOG"' % len(files)]
-    out += ["", "# The project's own tool steps, if any, go below this line.",
+    out += ["", TOOL_STEPS_MARKER,
             'echo "setup end" >> "$LOG"', "exit 0", ""]
     return "\n".join(out)
 

@@ -21,8 +21,10 @@ _LIB = os.path.join(_HERE, "..")
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import architect_config  # noqa: E402
 import cloud_pass  # noqa: E402
 import cloud_setup  # noqa: E402
+import core_md  # noqa: E402
 import mode_registry  # noqa: E402
 import project_config  # noqa: E402
 import store_core  # noqa: E402
@@ -808,3 +810,66 @@ def test_inside_policy_is_selected_by_the_owning_modules_filename(tmp_path, monk
     monkeypatch.setattr(architect_config, "policy_path",
                         lambda cwd, root=None: os.path.join(w.store, "moved-policy.json"))
     assert list(CS.calibration_files(w.cwd, w.root)) == ["moved-policy.json"]
+
+
+# --- the file names come from the modules that own them ------------------------------------
+
+def test_writer_follows_a_renamed_registry_file(tmp_path, monkeypatch):
+    w = _outside(tmp_path)
+    monkeypatch.setattr(mode_registry, "REGISTRY_FILENAME", "renamed-registry.json")
+    _put(w, "renamed-registry.json", b"{}\n")
+    files = CS.calibration_files(w.cwd, w.root)
+    assert "renamed-registry.json" in files and "registry.json" not in files
+
+
+def test_writer_follows_a_renamed_meta_file(tmp_path, monkeypatch):
+    w = _outside(tmp_path)
+    monkeypatch.setattr(mode_registry, "META_FILENAME", "renamed-meta.json")
+    _put(w, "renamed-meta.json", b"{}\n")
+    files = CS.calibration_files(w.cwd, w.root)
+    assert "renamed-meta.json" in files and "meta.json" not in files
+
+
+def test_writer_follows_a_renamed_core_file_and_config_directory(tmp_path, monkeypatch):
+    w = _outside(tmp_path)
+    monkeypatch.setattr(core_md, "CORE_FILENAME", "renamed-core.md")
+    monkeypatch.setattr(mode_registry, "CONFIG_DIRNAME", "renamed-config")
+    _put(w, "renamed-config/renamed-core.md", _core(True))
+    files = CS.calibration_files(w.cwd, w.root)
+    assert list(files) == ["doc-policy.json", "meta.json", "permission/rules.json",
+                           "registry.json", "renamed-config/renamed-core.md"]
+    stamped = CS.stamped_files(w.cwd, w.root)
+    assert stamped["renamed-config/renamed-core.md"] == CS._without_setting(_core("absent"))
+    assert project_config.CLOUD_BUILDS_SLUG.encode() not in stamped["renamed-config/renamed-core.md"]
+    assert project_config.CLOUD_BUILDS_SLUG.encode() in files["renamed-config/renamed-core.md"]
+
+
+def test_writer_follows_a_renamed_policy_file_outside_the_repository(tmp_path, monkeypatch):
+    w = _outside(tmp_path)
+    _put(w, "moved-policy.json", b"{}\n")
+    monkeypatch.setattr(architect_config, "policy_path",
+                        lambda cwd, root=None: os.path.join(w.store, "moved-policy.json"))
+    files = CS.calibration_files(w.cwd, w.root)
+    assert "moved-policy.json" in files and "doc-policy.json" not in files
+
+
+def test_writer_spells_no_calibration_name_itself():
+    with open(os.path.join(_LIB, "cloud_setup_text.py"), encoding="utf-8") as fh:
+        source = fh.read()
+    for owned in ("registry.json", "meta.json", "doc-policy.json", "core.md", "config"):
+        assert '"%s"' % owned not in source, owned
+    assert re.search(r'"[^"\n]*/core\.md"', source) is None
+
+
+def test_a_command_under_the_tool_steps_marker_runs(tmp_path):
+    w = _inside(tmp_path)
+    text = _compose(w)["text"]
+    lines = text.split("\n")
+    assert lines.count(CS.TOOL_STEPS_MARKER) == 1 and text.count(CS.TOOL_STEPS_MARKER) == 1
+    assert CS.TOOL_STEPS_MARKER == "# The project's own tool steps, if any, go below this line."
+    out = tmp_path / "tool-step-output.txt"
+    at = lines.index(CS.TOOL_STEPS_MARKER)
+    lines.insert(at + 1, 'echo toolstepword >> "%s"' % out)
+    proc, _ = _run_script(w, "\n".join(lines))
+    assert proc.returncode == 0, proc.stderr
+    assert out.read_text() == "toolstepword\n"

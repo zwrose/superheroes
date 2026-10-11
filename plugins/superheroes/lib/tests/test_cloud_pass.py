@@ -331,6 +331,38 @@ def test_make_puts_four_line_block_on_clipboard(tmp_path):
     assert "paste" in result["message"] and "replacing" in result["message"]
 
 
+def test_make_with_an_environment_adds_one_line_naming_it(tmp_path):
+    _, plain = _make_with(tmp_path, _signin())
+    named = []
+    result = CP.make(env=_env(tmp_path), clipboard=named.append, now=NOW, environment="env_01ABCdef")
+    assert result["action"] == "copied" and len(named) == 1
+    lines = named[0].splitlines()
+    assert len(lines) == 5
+    assert lines[-1] == "SUPERHEROES_CLOUD_ENVIRONMENT=env_01ABCdef"
+    assert lines[:4] == plain[0].splitlines()
+    assert named[0].endswith("\n") and result["characters"] == len(named[0])
+    assert "four" not in result["message"]
+
+
+@pytest.mark.parametrize("bad", ["", "env", "env_", "env_ab cd", "env_ab\ncd", "env_ab\n",
+                                 "env_a=b", "ENV_abc", " env_abc", "env_abc ", 7, b"env_abc",
+                                 ["env_abc"]])
+def test_make_refuses_a_malformed_environment(tmp_path, bad):
+    _write(_separate(tmp_path), _signin())
+    calls = []
+    result = CP.make(env=_env(tmp_path), clipboard=calls.append, now=NOW, environment=bad)
+    assert result["action"] == "refused" and result["reason"] == "environment-invalid"
+    assert isinstance(result["message"], str) and result["message"].endswith(".")
+    assert calls == []
+    assert PASS not in json.dumps(result)
+
+
+def test_make_refuses_a_malformed_environment_before_reading_the_sign_in(tmp_path):
+    calls = []
+    result = CP.make(env=_env(tmp_path), clipboard=calls.append, now=NOW, environment="nope")
+    assert result["reason"] == "environment-invalid" and calls == []
+
+
 def test_make_writes_no_file_and_leaves_setup_record_alone(tmp_path):
     _write(_separate(tmp_path), _signin())
     record = _write(tmp_path / "setup-record.json", {"passLapses": "2027-01-25"})
@@ -847,6 +879,29 @@ def test_cli_make_refused_exits_one(tmp_path, monkeypatch, capsys):
 def test_cli_unknown_verb_refuses(capsys, argv):
     assert CP.main(argv) == 1
     assert _one_json_line(capsys)["action"] == "refused"
+
+
+def test_cli_make_takes_an_environment_and_refuses_other_shapes(tmp_path, monkeypatch, capsys):
+    _cli_env(monkeypatch, tmp_path, cloud=False, pass_value=None)
+    _write(_separate(tmp_path), _signin())
+    sent = []
+    monkeypatch.setattr(CP, "copy_to_clipboard", lambda text, env=None: sent.append(text))
+    monkeypatch.setattr(CP.time, "time", lambda: NOW)
+    assert CP.main(["make", "--environment", "env_01ABCdef"]) == 0
+    assert _one_json_line(capsys)["action"] == "copied"
+    assert sent[0].splitlines()[-1] == "SUPERHEROES_CLOUD_ENVIRONMENT=env_01ABCdef"
+    assert CP.main(["make"]) == 0
+    assert _one_json_line(capsys)["action"] == "copied"
+    assert len(sent[1].splitlines()) == 4
+    sent.clear()
+    assert CP.main(["make", "--environment", "nope"]) == 1
+    assert _one_json_line(capsys)["reason"] == "environment-invalid"
+    for argv in (["make", "--environment"], ["make", "--environment", "env_a", "stray"],
+                 ["make", "env_a"], ["make", "--other", "env_a"],
+                 ["place", "--environment", "env_a"], ["confirm", "--environment", "env_a"]):
+        assert CP.main(argv) == 1
+        assert _one_json_line(capsys)["reason"] == "unknown-verb"
+    assert sent == []
 
 
 # ---------------------------------------------------------------- external literals

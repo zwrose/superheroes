@@ -6,7 +6,9 @@ the reviewer's sign-in file on the cloud machine. No function here prints it, lo
 in a result, or writes it to any other path. `make` hands it to the clipboard command and nowhere
 else; `place` opens exactly one path for writing.
 
-  cloud_pass.py make      owner's machine: put the pass block on the clipboard
+  cloud_pass.py make [--environment ID]
+                          owner's machine: put the pass block on the clipboard, with a line
+                          naming the cloud environment when one is given
   cloud_pass.py place     cloud machine, session start: write the pass to the reviewer's sign-in
   cloud_pass.py confirm   cloud session: does the reviewer answer with the pass in this environment
   cloud_pass.py record-confirmation --confirmation JSON [--cwd D] [--account A] [--environment E]
@@ -28,6 +30,7 @@ import time
 from datetime import datetime, timezone
 
 PASS_ENV = "SUPERHEROES_REVIEWER_PASS"
+ENVIRONMENT_ENV = "SUPERHEROES_CLOUD_ENVIRONMENT"
 PASS_MARKER_ENV = "SUPERHEROES_REVIEWER_PASS_SHA256"  # SHA-256 of the placed sign-in bytes
 CLOUD_ENV = "CLAUDE_CODE_REMOTE"
 PLUGIN_DIRS_ENV = "CLAUDE_CODE_PLUGIN_DIRS"
@@ -173,10 +176,22 @@ def copy_to_clipboard(text, env=None):
     _run_clipboard(argv, text)
 
 
-def make(env=None, clipboard=None, now=None):
-    """Owner's machine: build the pass from the separate sign-in and put the four-line block on
-    the clipboard. Reads no setup record and writes no file."""
+def make(env=None, clipboard=None, now=None, environment=None):
+    """Owner's machine: build the pass from the separate sign-in and put the block on the
+    clipboard: four lines, and a fifth naming the cloud environment when `environment` is given.
+    A malformed environment id is refused before anything is read or copied. Reads no setup record
+    and writes no file."""
     env = _env(env)
+    if environment is not None:
+        lib_dir = os.path.dirname(os.path.abspath(__file__))
+        if lib_dir not in sys.path:
+            sys.path.insert(0, lib_dir)
+        import engine_adapter
+        if not (isinstance(environment, str)
+                and engine_adapter.CLOUD_ENVIRONMENT_ID_RE.fullmatch(environment)):
+            return _refusal("environment-invalid",
+                            "The cloud environment id is not in the form env_ followed by letters "
+                            "and digits, so nothing was made.")
     now = time.time() if now is None else now
     path = _separate_signin_path(env)
     if not os.path.isfile(path):
@@ -222,6 +237,8 @@ def make(env=None, clipboard=None, now=None):
     lines = ["%s=%s" % (PASS_ENV, encoded),
              "%s=%s" % (PLUGIN_DIRS_ENV, CLOUD_PLUGIN_DIR)]
     lines += ["%s=%s" % (name, DEAD_ENDPOINT) for name in RENEWAL_ENDPOINT_ENVS]
+    if environment is not None:
+        lines.append("%s=%s" % (ENVIRONMENT_ENV, environment))
     block = "\n".join(lines) + "\n"
     use_default = clipboard is None
     try:
@@ -243,7 +260,7 @@ def make(env=None, clipboard=None, now=None):
         "action": "copied", "reason": None, "passLapses": _date(exp),
         "daysLeft": round((exp - now) / 86400.0, 1), "characters": len(block),
         "message": "The pass block is on the clipboard: paste it into the cloud environment's "
-                   "variables, replacing these four lines if they are already there.",
+                   "variables, replacing these lines if they are already there.",
     }
 
 
@@ -442,9 +459,12 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["record-confirmation"]:
         result = _record_main(argv[1:])
+    elif argv[:1] == ["make"] and len(argv) == 3 and argv[1] == "--environment":
+        result = make(environment=argv[2])
     elif len(argv) != 1 or argv[0] not in _VERBS:
         result = _refusal("unknown-verb",
-                          "Usage: cloud_pass.py make|place|confirm|record-confirmation")
+                          "Usage: cloud_pass.py make [--environment ID]|place|confirm|"
+                          "record-confirmation")
     else:
         result = _VERBS[argv[0]]()
     sys.stdout.write(json.dumps(result) + "\n")
