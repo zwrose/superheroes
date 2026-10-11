@@ -5,18 +5,19 @@ Guards two pinned clauses:
 - ``skills/review-code/reference/round-driver.md`` and ``skills/workhorse/SKILL.md`` —
   BACKGROUNDABLE_VERIFY (symmetric two-surface pin: whole-file count == 1 on each copy-holder;
   neither surface is authoritative)
-- ``rubric/review-discipline.md`` — the flip conditional's operative clause (single-home
-  hard-line pin; presence-only, exactly once in the driver-mandate section)
+- ``rubric/review-discipline.md`` — the record rule, "a full-lane PR handed back without a review
+  record is parked" (single-home hard-line pin; presence-only, exactly once in the driver-mandate
+  section)
 
-SKIP_CITATION and PARITY bars live only in the authoritative home; ``vet-receipt.md`` points at
-that home and does not restate those finding sentences — no copy-holder pins remain for them.
+The skip rule lives only in the authoritative home; ``vet-receipt.md`` points at that home and
+does not restate it — no copy-holder pins exist for it.
 
 One single-home fact — the post-handback merge policy — is deliberately out of scope; it lives
 only in ``rubric/review-discipline.md``.
 
 What is guaranteed is **presence** of each pinned literal verbatim modulo ``*``-stripping and
 whitespace collapse. BACKGROUNDABLE_VERIFY is pinned **whole-file** because its surfaces carry
-`` ``` `` fences inside section-scoped regions. The flip clause is pinned inside the driver-mandate
+`` ``` `` fences inside section-scoped regions. The record rule is pinned inside the driver-mandate
 section. Section extraction reuses ``_file_section`` and ``_normalized`` from
 ``test_charter_boundary_sync``; that reader is deliberately **fence-blind** (fence-awareness was
 tried and reverted in PR #727).
@@ -36,7 +37,7 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _HOME = "rubric/review-discipline.md"
 
 _DRIVER_MANDATE_SECTION = (
-    "## The driver mandate — the certified loop, its skips, and the flip"
+    "## The driver mandate — the review record"
 )
 
 _BACKGROUNDABLE_VERIFY = (
@@ -46,10 +47,7 @@ _BACKGROUNDABLE_VERIFY = (
     "the turn to wait."
 )
 
-_FLIP_HOME = (
-    "a full-lane review that is not the certified loop stops being a disclosable degradation and "
-    "becomes a vet finding, and the only valve is driver-or-park — never driver-or-improvise"
-)
+_RECORD_RULE_HOME = "A full-lane PR handed back without a review record is parked"
 
 _BACKGROUNDABLE_VERIFY_SURFACES = [
     "skills/review-code/reference/round-driver.md",
@@ -84,9 +82,8 @@ def test_backgroundable_verify_present(rel):
     )
 
 
-def test_flip_operative_clause_present_in_home():
-    # axis: presence of the flip's operative clause in its single home, exactly once
-    # (owner-authorized pin, 2026-08-23: the release's most load-bearing sentence was
-    # softenable with no red test — vet-156 probe)
+def test_record_rule_present_in_home():
+    # axis: presence of the record rule in its single home, exactly once — the sentence that
+    # parks a full-lane PR handed back without a review record
     home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
-    assert home_section_text.count(_normalized(_FLIP_HOME)) == 1
+    assert home_section_text.count(_normalized(_RECORD_RULE_HOME)) == 1

@@ -148,10 +148,10 @@ _EXPECTED_HOME_SECTIONS = {
         "the full lane at any size": "### The spine",
     },
     "not-engaged-never-passes": {
-        "means that review did not happen": "### What never changes in any lane",
-        "re-dispatch once": "### What never changes in any lane",
+        "that review did not happen": "### What never changes in any lane",
+        "run the reviewer once more": "### What never changes in any lane",
         "never a pass": "### What never changes in any lane",
-        "zero is not evidence of engagement": "### What never changes in any lane",
+        "zero is not evidence of a reading": "### What never changes in any lane",
         "resolve upward to the full lane or park": "### What never changes in any lane",
     },
     "waiver-bounds": {
@@ -209,11 +209,11 @@ _INVARIANT_TABLE = [
         "name": "not-engaged-never-passes",
         "clauses": [
             {
-                "text": "means that review did not happen",
+                "text": "that review did not happen",
                 "home_section": "### What never changes in any lane",
             },
             {
-                "text": "re-dispatch once",
+                "text": "run the reviewer once more",
                 "home_section": "### What never changes in any lane",
             },
             {
@@ -221,7 +221,7 @@ _INVARIANT_TABLE = [
                 "home_section": "### What never changes in any lane",
             },
             {
-                "text": "zero is not evidence of engagement",
+                "text": "zero is not evidence of a reading",
                 "home_section": "### What never changes in any lane",
             },
             {
