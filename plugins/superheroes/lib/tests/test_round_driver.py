@@ -2104,6 +2104,26 @@ def test_accept_risk_never_dispositions_critical_targets(tmp_path):
     important_key = RD._finding_key_of(targets[1])
     assert ledger[critical_key].get("disposition") is None
     assert ledger[important_key]["disposition"] == "out-of-scope"
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["shape"] is None
+
+
+def test_accepted_risk_leaving_a_critical_open_parks_and_never_converges(tmp_path):
+    state, ident, _ = _stall_target_state()
+    state["fixBatch"][0]["severity"] = "Critical"
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    tgt = state["_auditTargets"][0]
+    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
+                                              "stalledIdentities": [tgt["identity"]]})
+    assert state["_acceptRiskEligible"] is True
+    RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
+    assert state["terminal"] == "cannot-certify"
+    assert state["step"] == RD.P_TERMINAL
+    assert state["certification"]["shape"] is None
+    assert "bug" in state["certification"]["reason"]
+    entry = _ledger_by_key(state).get(RD._finding_key_of(tgt)) or {}
+    assert entry.get("disposition") is None
 
 
 # =============================================================================

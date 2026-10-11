@@ -5336,7 +5336,7 @@ def _stall_targets_accept_risk_eligible(state):
 
 def _fold_stall(state, config, artifact):
     """Fold the owner's stall choice; journal it. hold → park; accept-the-disclosed-risk → certify
-    when eligible; one-more-round → re-enter the fix leg from the persisted stall-target snapshot."""
+    when eligible and the acceptance leaves no Critical open (otherwise park); one-more-round → re-enter the fix leg from the persisted stall-target snapshot."""
     choice = artifact.get("choice")
     _record_round(state, "stallChoice", choice)
     _decision(state, "stall-choice", choice)
@@ -5345,12 +5345,14 @@ def _fold_stall(state, config, artifact):
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
     elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
         follow_up = artifact.get("followUp") if isinstance(artifact.get("followUp"), dict) else None
+        open_criticals = []
         for target in state.get("_stallTargets") or []:
             if not isinstance(target, dict):
                 continue
             if not _stall_target_accept_risk_eligible(target):
                 continue
             if circuit_breaker.is_critical(target.get("severity")):
+                open_criticals.append(target.get("title") or _finding_key_of(target) or "unnamed")
                 continue
             key = _finding_key_of(target)
             if not key:
@@ -5359,6 +5361,12 @@ def _fold_stall(state, config, artifact):
             if follow_up is not None:
                 disp_kwargs = dict(disp_kwargs, followUp=follow_up)
             _record_disposition(state, key, "out-of-scope", state["round"], **disp_kwargs)
+        if open_criticals:
+            _park_cannot_certify(
+                state, "accepted risk leaves a Critical finding open: %s"
+                % "; ".join(str(c) for c in open_criticals))
+            state["step"] = P_TERMINAL
+            return
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
         return
