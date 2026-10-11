@@ -493,6 +493,78 @@ def test_review_session_gone_stale(tmp_path):
     assert len(state["stale"]) == 1
 
 
+# --- kept parser and marker behaviour, asserted directly --------------------------------------
+
+def test_attached_short_repo_flag_parsed():
+    inv = hg.parse_gh_invocations("gh pr ready -Rother/repo")[0]
+    assert inv["pr"]["repo"] == "other/repo"
+    subj = hg.command_subject(inv)
+    assert subj["repo"] == "github.com/other/repo"
+    assert subj["repoSource"] == "flag"
+
+
+def test_quoted_gh_repo_env_parsed():
+    inv = hg.parse_gh_invocations("GH_REPO='other/repo' gh pr ready")[0]
+    assert inv["env"]["GH_REPO"] == "other/repo"
+    subj = hg.command_subject(inv, {})
+    assert subj["repo"] == "github.com/other/repo"
+    assert subj["repoSource"] == "env-inline"
+
+
+def test_body_pr_url_is_not_the_subject_repo():
+    url = "https://github.com/other/repo/pull/1"
+    inv = hg.parse_gh_invocations("gh pr create --body %s --base main" % url)[0]
+    subj = hg.command_subject(inv, {})
+    assert subj["repo"] is None
+    assert subj["repoSource"] is None
+    assert subj["selector"] is None
+    operand_inv = hg.parse_gh_invocations("gh pr ready %s" % url)[0]
+    operand_subj = hg.command_subject(operand_inv, {})
+    assert operand_subj["repo"] == "github.com/other/repo"
+    assert operand_subj["repoSource"] == "url"
+
+
+def test_unexpanded_repo_var_is_unrecognized():
+    inv = hg.parse_gh_invocations('gh pr ready --repo="$TARGET"')[0]
+    assert inv["action"] == "unrecognized"
+    assert inv["unrecognized"] == "--repo"
+    assert "unresolvable value" in inv["unrecognized_detail"]
+
+
+@pytest.mark.parametrize("command", [
+    "gh pr create --unknown-flag --base main",
+    "gh pr create --foo=bar --base main",
+])
+def test_unknown_option_is_unrecognized(command):
+    inv = hg.parse_gh_invocations(command)[0]
+    assert inv["action"] == "unrecognized"
+    assert inv["unrecognized"] in ("--unknown-flag", "--foo")
+
+
+def test_cd_before_gh_is_not_cwd_establishable():
+    inv = hg.parse_gh_invocations("cd /other && gh pr ready")[0]
+    assert inv["action"] == "pr-ready"
+    assert inv["cwd_establishable"] is False
+    assert hg.parse_gh_invocations("gh pr ready")[0]["cwd_establishable"] is True
+
+
+def test_help_and_dry_run_are_non_mutating():
+    assert hg.parse_gh_invocations("gh pr ready --help")[0]["non_mutating"] is True
+    assert hg.parse_gh_invocations("gh pr create --dry-run --base main")[0]["non_mutating"] is True
+    assert "non_mutating" not in hg.parse_gh_invocations("gh pr ready")[0]
+
+
+def test_marker_branch_differing_from_worktree_branch_is_stale(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_build_lane(repo, branch="other-branch")
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is False
+    assert state["markers"] == []
+    assert len(state["stale"]) == 1
+    assert "differs from worktree branch" in state["stale"][0][1]
+
+
 # --- bite-proof -------------------------------------------------------------------------------
 
 def test_bite_explicit_false_boolean():
