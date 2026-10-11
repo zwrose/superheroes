@@ -16,10 +16,12 @@ import pty
 import re
 import secrets
 import select
+import shutil
 import signal
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -28,6 +30,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cloud_ready  # noqa: E402
 import config_dir  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
@@ -35,6 +38,7 @@ import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
+import launch_place  # noqa: E402
 import launch_report  # noqa: E402
 import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
@@ -1191,6 +1195,19 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not isinstance(premise["iphoneCheck"], bool):
             return _fail("premise-iphone-check-invalid")
 
+    if "needs" in premise:
+        needs_val = premise["needs"]
+        # axis: needs is the advisor's list of what only the owner's machine has — a list of non-empty strings, else the routing step would read it as nothing — see bite-proof record wo_b_place_call
+        if not isinstance(needs_val, list) or not all(
+            isinstance(n, str) and n.strip() for n in needs_val
+        ):
+            return _fail("premise-needs-invalid")
+
+    if "reportedCloud" in premise:
+        # axis: reportedCloud is a fact the cloud reported — only the known keys in their exact shapes — see bite-proof record wo_b_place_call
+        if not cloud_ready.valid_reported(premise["reportedCloud"]):
+            return _fail("premise-reported-cloud-invalid")
+
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
@@ -1239,8 +1256,15 @@ def compose_launch(
         version = plugin_version()
         if version is None:
             return _fail("compose-plugin-version-unreadable")
-        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n\n%s" % (
-            _WORKHORSE_CMD, issue, version, rulings_block,
+        base = premise.get("baseCommit") if isinstance(premise, dict) else None
+        if not isinstance(base, str) or not base.strip():
+            return _fail("premise-missing-field:baseCommit")
+        # axis: the cloud prompt names the cloud environment on its own line — see bite-proof record wo_c_place_call
+        environment_line = "Cloud environment: %s" % cloud_environment
+        # axis: the cloud prompt names the base commit on its own line — see bite-proof record wo_c_place_call
+        base_line = "Base commit: %s" % base
+        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n%s\n%s\n\n%s" % (
+            _WORKHORSE_CMD, issue, version, environment_line, base_line, rulings_block,
         )
     else:
         prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
@@ -2256,30 +2280,59 @@ def _place_refusal(
     return None
 
 
-def _cloud_base_refusal(repo_root, stamped, env):
-    """The refusal reason when the checkout is not a valid cloud base, else None.
+def _base_on_remote(repo_root, base, env):
+    """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
+    None when the remote could not be asked.
 
-    Run before reservation and again right before the cloud command: reservation can wait on
-    the ledger lock, and the owner may move the checkout in that time.
+    The commit is fetched into an empty repository, because a fetch in the working repository
+    never asks the server for an object it already has, and a local tracking ref can be stale.
     """
-    # axis: no cloud spawn from a commit the remote lacks — HEAD must be contained by a remote branch.
-    on_remote = _git_scrubbed(
-        repo_root, "branch", "-r", "--contains", "HEAD",
-        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    url = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
-    # axis: the session starts from the checkout's HEAD, so HEAD must be the stamped base the
-    # gates ran against and the ledger records — never a different commit.
-    head = _git_scrubbed(
-        repo_root, "rev-parse", "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    head_is_base = (
-        head is not None and head.returncode == 0
-        and head.stdout.strip() == stamped["baseCommit"]
-    )
-    if on_remote is None or on_remote.returncode != 0 or not on_remote.stdout.strip():
-        return "launch-cloud-head-not-on-remote"
-    if not head_is_base:
-        return "launch-cloud-head-not-base"
+    if url is None or url.returncode != 0 or not url.stdout.strip():
+        return None
+    try:
+        scratch = tempfile.mkdtemp()
+    except OSError:
+        return None
+    try:
+        made = _git_scrubbed(
+            scratch, "init", "-q", "--bare", scratch, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if made is None or made.returncode != 0:
+            return None
+        fetched = _git_scrubbed(
+            scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+            url.stdout.strip(), base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if fetched is None:
+            return None
+        return fetched.returncode == 0
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+# The round-trip to the remote; tests replace it.
+_base_on_remote_fn = _base_on_remote
+
+
+def _cloud_base_refusal(repo_root, stamped, env):
+    """The refusal reason when the base commit the launch names is not on the remote, else None.
+
+    The cloud session starts from the commit named on the prompt's ``Base commit:`` line, so the
+    checkout's HEAD need not be it. Run before reservation and again right before the cloud
+    command: reservation can wait on the ledger lock. The check fails closed: a remote that could
+    not be asked refuses.
+    """
+    # axis: the named base is on the remote, read fresh from the server and never from local tracking refs — see bite-proof record wo_c_place_call
+    found = _base_on_remote_fn(repo_root, stamped["baseCommit"], env)
+    # axis: a remote that could not be asked refuses — see bite-proof record wo_c_place_call
+    if found is None:
+        return "launch-cloud-base-remote-unchecked"
+    # axis: a base the remote lacks refuses — see bite-proof record wo_c_place_call
+    if found is not True:
+        return "launch-cloud-base-not-on-remote"
     return None
 
 
@@ -2574,8 +2627,8 @@ def launch_build(
     argv = compose_result["argv"]
 
     if cloud:
-        # The cloud session starts from a commit the remote has, so the launching checkout's HEAD
-        # must be on a remote branch. The launcher pushes nothing to make it so.
+        # The cloud session starts from the base commit the prompt names, so the remote must have
+        # it. The launcher pushes nothing to make it so.
         refusal_reason = _cloud_base_refusal(repo_root, stamped, env)
         if refusal_reason is not None:
             reserve_result = _try_reserve_for_refusal(
@@ -2831,8 +2884,8 @@ def launch_build(
             "effortSource": compose_result["effortSource"],
             "warnings": warnings,
         }
-        # axis: reservation may have waited on the ledger lock, so the checkout is re-checked
-        # right before the command; a drifted checkout terminalizes the unstarted lane.
+        # axis: reservation may have waited on the ledger lock, so the base is re-checked
+        # right before the command; a base the remote lost terminalizes the unstarted lane.
         drift = _cloud_base_refusal(repo_root, stamped, env)
         if drift is not None:
             term = _terminalize(repo_root, launch_id, False, drift, stage="cloud-base", env=env)
@@ -3308,6 +3361,11 @@ def _cli_compose(args):
     )
 
 
+# The two results of a cloud attempt that mean the launcher ended it before any session could
+# exist: the command never ran and the lane was terminalized. No other result is one.
+_CLOUD_NEVER_STARTED_REASONS = ("spawn-oserror", "log-open-failed")
+
+
 def _cli_launch(args):
     checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
     if dup_reason:
@@ -3333,26 +3391,60 @@ def _cli_launch(args):
             return _fail("launch-boundary-unreadable")
         boundary = boundary_data
 
-    cloud_kwargs = {}
-    if getattr(args, "place", None) is not None:
-        cloud_kwargs = {
-            "place": args.place,
-            "cloud_environment": getattr(args, "cloud_environment", None),
-        }
-    return launch_build(
-        args.repo_root,
-        args.issue,
-        premise,
-        checks,
-        args.log_dir,
-        model=args.model,
-        slot=args.slot,
-        generation=args.generation,
-        boundary=boundary,
-        effort=args.effort,
-        allow_foreign_instance=args.allow_foreign_instance,
-        **cloud_kwargs,
+    # axis: the placeCall is the launcher's own word on where the build runs — a premise file that brings one is refused — see bite-proof record wo_b_place_call
+    if isinstance(premise, dict) and "placeCall" in premise:
+        return _fail("premise-place-call-caller-set")
+    # axis: the cloud environment comes from the setup record the routing step read — see bite-proof record wo_b_place_call
+    if getattr(args, "cloud_environment", None) is not None:
+        return _fail("launch-cloud-environment-routed")
+
+    # axis: every launch is routed once, before it starts — see bite-proof record wo_b_place_call
+    place_call = launch_place.route(
+        args.repo_root, premise if isinstance(premise, dict) else {}, getattr(args, "place", None),
     )
+
+    def launch(stamped_call, **where):
+        stamped = dict(premise, placeCall=stamped_call) if isinstance(premise, dict) else premise
+        return launch_build(
+            args.repo_root,
+            args.issue,
+            stamped,
+            checks,
+            args.log_dir,
+            model=args.model,
+            effort=args.effort,
+            allow_foreign_instance=args.allow_foreign_instance,
+            **where,
+        )
+
+    def launch_local(stamped_call):
+        # The slot, generation and boundary are the fallback resources: only a local launch uses them.
+        return launch(
+            stamped_call, slot=args.slot, generation=args.generation, boundary=boundary,
+        )
+
+    if place_call["place"] != PLACE_CLOUD:
+        result = launch_local(place_call)
+        result["placeCall"] = place_call
+        return result
+
+    # axis: a cloud launch gets no slot, generation or boundary — the cloud has none to give — see bite-proof record wo_b_place_call
+    result = launch(
+        place_call, place=PLACE_CLOUD, cloud_environment=place_call["environment"],
+    )
+    # axis: fall back only on the two results that mean no session could exist; any other result may have a live lane, and a second builder must never start — see bite-proof record wo_b_place_call
+    if not result.get("ok") and result.get("reason") in _CLOUD_NEVER_STARTED_REASONS:
+        # axis: a cloud attempt the launcher ended is the platform being unreachable — see bite-proof record wo_b_place_call
+        fallback_call = dict(place_call, place=PLACE_LOCAL, reason="unreachable", environment=None)
+        local = launch_local(fallback_call)
+        local["placeCall"] = fallback_call
+        local["cloudAttempt"] = result
+        local["fellBack"] = True
+        return local
+    result["placeCall"] = place_call
+    if args.slot is not None or args.generation is not None or boundary is not None:
+        result["fallbackResourcesUnused"] = {"slot": args.slot, "generation": args.generation}
+    return result
 
 
 def _cli_record_outcome(args):
@@ -3426,8 +3518,14 @@ def main(argv=None):
     la.add_argument("--slot", default=None)
     la.add_argument("--generation", type=int, default=None)
     la.add_argument("--boundary", default=None)
-    la.add_argument("--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None)
-    la.add_argument("--cloud-environment", default=None)
+    la.add_argument(
+        "--place", choices=[PLACE_LOCAL, PLACE_CLOUD], default=None,
+        help="the owner's launch word; the launcher decides where each build runs",
+    )
+    la.add_argument(
+        "--cloud-environment", default=None,
+        help="refused on launch: the environment comes from the cloud setup record",
+    )
     la.add_argument(
         "--allow-foreign-instance",
         action="store_true",

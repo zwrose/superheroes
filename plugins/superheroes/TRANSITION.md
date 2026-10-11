@@ -12,7 +12,7 @@ belongs to and lists every change with its replacement.
 ### Launcher: cloud launch
 
 - `launch` and `compose` take `--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. A launch without `--place`, or with `--place local`, is a local launch.
-- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-head-not-on-remote` when the checkout's remote-tracking branches hold no branch that contains the commit the session would start from. It also refuses with `launch-cloud-head-not-base` when the launching checkout is not on the premise's base commit.
+- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-base-not-on-remote` when the base commit the launch names is not on the remote, read fresh from the remote, and with `launch-cloud-base-remote-unchecked` when the remote could not be asked.
 - `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript to read.
 
 ### Launch ledger: cloud lanes
@@ -52,6 +52,14 @@ belongs to and lists every change with its replacement.
 - New `lib/cloud_pass.py`, the pass command. `make`, run on the owner's machine, builds a reviewer pass from a reviewer sign-in kept apart from the main one (by default the directory `.codex-cloud` under the home directory), with its renewal switched off, and puts four environment-variable lines on the clipboard for the cloud environment's variables: `SUPERHEROES_REVIEWER_PASS`, `CLAUDE_CODE_PLUGIN_DIRS` and the reviewer's two renewal endpoints. It writes no file and does not change the setup record. The first run needs a one-time sign-in to that separate sign-in, and the command says so.
 - In a cloud session the session-start hook writes the pass into the reviewer's default sign-in file before anything else runs, and adds a `### Reviewer pass` section to the session's bootstrap saying whether the pass is in place. Outside a cloud session the hook is unchanged.
 - `cloud_pass.py confirm`, run in a cloud session, prints one line saying whether the reviewer answers with the pass in that environment and the date the pass lapses. `cloud_pass.py record-confirmation`, run on the owner's machine with that line, moves the setup record's lapse date; nothing else moves it.
+
+### Cloud builds: the setup sitting
+
+- A project is set up for cloud builds by asking the advisor to set up cloud builds. The advisor lists four hand steps: make a cloud environment and pick it by name with Claude Code's `/remote-env` picker on the account the builds run on, paste the setup text into it, sign in once to the separate reviewer sign-in, and paste the reviewer pass. It then runs one check session in that environment and reports three results: the cloud's plugin version, its calibration, and whether the reviewer answered.
+- New `lib/cloud_environment.py` reads the environment the owner picked from Claude Code's user settings (`remote.defaultEnvironmentId` in `settings.json` under the account's config directory): `snapshot` before the pick, `pick --before <value>` after it. A missing or unchanged value is no pick, and the owner is asked to pick again; the owner is never asked for the id.
+- New `lib/cloud_check.py` holds the sitting: `setup-message`, `sign-in`, `start`, `report`, `judge` and `setup-text`. `start` and `judge` take `--environment <id>`. A passed check writes the setup record and leaves the cloud-builds setting as it was. A failed check writes nothing and switches cloud builds off when they were on.
+- `cloud_pass.py make` takes `--environment <id>` and then adds a fifth line to its block, `SUPERHEROES_CLOUD_ENVIRONMENT`, naming the environment. The check passes only when the session reports that same id, because a cloud launch naming an id that matches no environment lands in the account's default environment without an error. A pass block made without `--environment` fails the check.
+- The setup text ends with its tool-steps marker line, a log line and `exit 0`. A project's own install steps go directly under the marker line.
 
 ### Showrunner: where builds run
 

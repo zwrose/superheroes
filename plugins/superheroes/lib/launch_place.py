@@ -4,7 +4,8 @@
 Stdlib plus plugin imports only. Every reason any output prints is drawn from the one `REASONS`
 table below. A build pointed at the cloud goes there only when nothing needs the owner's machine
 and the cloud is ready; anything that cannot be read sends the build to the owner's machine.
-`route` always returns a placement and never raises."""
+`route` always returns a placement and never raises. `fix_text` gives the words that fix a
+reason, and after a failed check it asks for the check to be run again."""
 import json
 import os
 import sys
@@ -79,6 +80,10 @@ REASONS = {
 }
 
 _UNKNOWN = "unknown"
+
+_CHECK_AGAIN = "check again"
+_CHECK_AGAIN_ONLY = 'Say "check again" and I\'ll run the check again.'
+_CHECK_AGAIN_SUFFIX = ' Then say "check again".'
 
 _PHONE_SIMULATOR = "the phone simulator"
 _STACK_INTERFACE = "GitHub's stack interface"
@@ -175,10 +180,10 @@ def _join_needs(needs):
 
 
 def _placement(place, pointed, by, reason, need, cloud_version, advisor_version, environment,
-               reported):
+               reported, failed_check=None):
     return {"place": place, "pointedAtCloud": pointed, "by": by, "reason": reason, "need": need,
             "cloudVersion": cloud_version, "advisorVersion": advisor_version,
-            "environment": environment, "reported": reported}
+            "environment": environment, "reported": reported, "failedCheck": failed_check}
 
 
 def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, root=None,
@@ -190,7 +195,7 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
     reported = None
     pointed = False
     by = None
-    cloud_version = advisor_version = None
+    cloud_version = advisor_version = failed_check = None
     try:
         reported = premise.get("reportedCloud")
         now = (readiness_fn or cloud_ready.readiness)(
@@ -198,6 +203,7 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
         setting = now.get("setting") is True
         cloud_version = now.get("cloudVersion")
         advisor_version = now.get("advisorVersion")
+        failed_check = now.get("failedCheck")
         if launch_word == CLOUD_WORD:
             by = "word"
         elif launch_word is None and setting:
@@ -206,7 +212,8 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
 
         def local(reason, need=None):
             return _placement(
-                "local", pointed, by, reason, need, cloud_version, advisor_version, None, reported)
+                "local", pointed, by, reason, need, cloud_version, advisor_version, None, reported,
+                failed_check)
 
         wants = needs_fn or machine_needs
         # axis: a launch word of local wins over a need, so the owner's word is the reason given — see bite-proof record wo_a_place_call
@@ -225,13 +232,13 @@ def route(cwd, premise, launch_word=None, *, readiness_fn=None, needs_fn=None, r
         if now.get("ready") is True and now.get("reason") is None:
             return _placement(
                 "cloud", pointed, by, None, None, cloud_version, advisor_version,
-                now.get("environment"), reported)
+                now.get("environment"), reported, failed_check)
         reason = now.get("reason")
         return local(reason if reason in NOT_READY_CODES else "no-setup")
     except Exception:
         return _placement(
             "local", pointed, by, "no-setup" if pointed else None, None, cloud_version,
-            advisor_version, None, reported)
+            advisor_version, None, reported, failed_check)
 
 
 # ---------------------------------------------------------------- the reasons as words
@@ -259,5 +266,25 @@ def reason_text(place_call):
             return None
         return _words(code, place_call.get("cloudVersion"), place_call.get("advisorVersion"),
                       place_call.get("need"))
+    except Exception:
+        return None
+
+
+def fix_text(place_call):
+    """The words that fix this placement's reason, or None when it has none. After a failed
+    check they ask for the check to be run again."""
+    try:
+        code = place_call.get("reason")
+        if code not in REASONS:
+            return None
+        fix = REASONS[code]["fix"]
+        if fix is None or place_call.get("failedCheck") is None:
+            return fix
+        # axis: after a failed check the fix ends by asking for the check to be run again — see bite-proof record wo_c_place_call
+        if code == "no-setup":
+            return _CHECK_AGAIN_ONLY
+        if code in ("version", "calibration", "no-pass"):
+            return fix if _CHECK_AGAIN in fix else fix + _CHECK_AGAIN_SUFFIX
+        return fix
     except Exception:
         return None

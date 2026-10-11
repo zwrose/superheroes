@@ -77,9 +77,11 @@ already exists, or that git still registers, **refuses the launch** (`launch-wor
 reap the stale checkout, then relaunch. Never force it.
 
 **Cloud launch.** A launch can start the builder in a
-[cloud session](../../../rubric/glossary.md#cloud-builder). `launch` and `compose` take
-`--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. Without `--place`, or with
-`--place local`, the launch is a local launch. A cloud launch runs every gate a local launch runs:
+[cloud session](../../../rubric/glossary.md#cloud-builder). On `launch`, `--place` is the owner's
+launch word (`local` or `cloud`), and the launcher's routing step decides every launch's place; a
+launch routed to the cloud takes its environment from the project's setup record, so `launch`
+refuses `--cloud-environment` (`launch-cloud-environment-routed`). `compose` takes
+`--place cloud --cloud-environment <id>` and `preflight` takes `--place`, as given. A cloud launch runs every gate a local launch runs:
 preflight, premise, the stack and dependency gates, compose, and reservation. It then runs the
 platform's command once, reads the session's identity from what the command prints, writes the
 lane's `started` record, and returns once the session exists. It does not wait for the build.
@@ -87,24 +89,25 @@ lane's `started` record, and returns once the session exists. It does not wait f
 - It provisions no worktree, leaves no process on the owner's machine, and pushes no branch.
 - The session starts under the launching account's config dir, at the builder tier and effort the
   launch resolved.
-- The session starts from the commit the launching checkout is on. The launch refuses unless that
-  commit is the premise's base commit (`launch-cloud-head-not-base`) and a remote-tracking branch
-  contains it (`launch-cloud-head-not-on-remote`). The launcher checks both before it reserves the
-  lane and again just before it runs the command. When the second check fails, the launcher starts
+- The launch prompt names the base commit, and the launch refuses unless that commit is on the
+  remote, read fresh from the remote rather than from local tracking refs
+  (`launch-cloud-base-not-on-remote`; `launch-cloud-base-remote-unchecked` when the remote could not
+  be asked). The launcher checks it before it reserves the lane and again just before it runs the
+  command. When the second check fails, the launcher starts
   nothing and ends the lane. A result whose reason begins `terminalization-failed:` means the launcher
   could not confirm it ended the lane. Read the ledger to see whether the lane is ended or still
-  live before you reconcile it or launch the issue again. The launcher never pushes, so the
-  launching checkout sits at the base commit the premise names.
+  live before you reconcile it or launch the issue again. The launcher never pushes.
 - The launcher runs the command from its checkout, which must be a folder the platform's command line
   already trusts. In an untrusted folder the command waits on its trust question until the launch's
   time limit, and the launch reads `cloud-session-unconfirmed`.
 - The launch prompt is the composed order of a local launch, with the standing rulings verbatim, plus
-  two lines between the issue pointer and the rulings: `Place: cloud session` and
-  `Advisor plugin version: <version>`.
+  four lines between the issue pointer and the rulings: `Place: cloud session`,
+  `Advisor plugin version: <version>`, `Cloud environment: <id>` and `Base commit: <sha>`.
 - The session is named `issue-<issue number>-<the launch id without its launch- prefix>`. The host
   lists it under that name.
 - These refuse before anything is written to the ledger, each with its own reason: a slot, a
-  generation, or a boundary given with `--place cloud` (`launch-cloud-with-slot`); a premise asking
+  generation, or a boundary on a cloud launch (`launch-cloud-with-slot`; on `launch` they are held
+  back as the local fallback's resources and never reach the cloud call); a premise asking
   for the iPhone check (`launch-cloud-with-iphone-check`); an environment id that is not `env_`
   followed by letters and digits (`launch-cloud-environment-invalid`); an issue that is not a whole
   number above zero (`launch-cloud-issue-invalid`); a plugin version the launcher cannot read from
