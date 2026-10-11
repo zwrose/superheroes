@@ -58,10 +58,12 @@ def test_section_never_asks_for_a_typed_or_pasted_id():
     assert section, "section 6 of set-up.md was not found"
     ask = re.compile(r"\b(type|typed|paste|pasted|copy|copied)\b", re.IGNORECASE)
     ident = re.compile(r"\bids?\b", re.IGNORECASE)
+    split = re.compile(r",\s*(?:and|but|or)\s+|;\s*|\s+—\s+")
     for sentence in _sentences(section):
-        if ask.search(sentence) and ident.search(sentence) and "never" not in sentence.lower():
-            raise AssertionError("sentence asks for a typed, copied or pasted id without "
-                                 "'never': %r" % sentence.strip())
+        for clause in split.split(sentence):
+            if ask.search(clause) and ident.search(clause) and "never" not in clause.lower():
+                raise AssertionError("clause asks for a typed, copied or pasted id without "
+                                     "'never': %r" % clause.strip())
 
 
 def test_every_check_command_names_the_picked_id():
@@ -90,9 +92,14 @@ def test_the_pick_is_read_before_and_after_and_before_the_check():
         assert index is not None, "section 6 has no line containing %r" % needle
     for (earlier, i), (later, j) in zip(found, found[1:]):
         assert i < j, "line %r (%d) does not come before line %r (%d)" % (earlier, i, later, j)
-    retry = [line for line in section
-             if 'cloud_environment.py" pick' in line and "--before" in line and "--confirmed" in line]
-    assert retry, "section 6 has no retry pick line carrying --before and --confirmed"
+    recovery_needle = ('cloud_environment.py" pick --cwd . --before <the snapshot value> '
+                       '--confirmed <the environment now in use>')
+    recovery = _first(section, recovery_needle)
+    assert recovery is not None, "section 6 has no line containing %r" % recovery_needle
+    judge = _first(section, 'cloud_check.py" judge')
+    assert judge is not None, "section 6 has no line containing 'cloud_check.py\" judge'"
+    assert judge < recovery, "the recovery pick line (%d) does not come after the judge line (%d)" % (
+        recovery, judge)
     sign_in = _first(section, 'cloud_check.py" sign-in')
     assert sign_in is not None, "section 6 has no line containing 'cloud_check.py\" sign-in'"
     make = _first(section, 'cloud_pass.py" make')
