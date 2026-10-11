@@ -25,7 +25,7 @@ DoD:
 
 **Size-consideration slot:** about 553 non-test lines are already written (the launcher order), plus the moved doctrine lines and the bite-proofs. One pull request, one surface (the launcher's cloud spawn).
 
-**Kind:** `kind:machinery`.
+**Kind:** `kind:product` (owner ruling 2026-10-11, walk item 30).
 
 **Consequence:** none for a consuming project until it adopts the release that carries the whole stack.
 

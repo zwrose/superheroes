@@ -10,7 +10,7 @@ approved: "2026-10-10"
 gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-10"
-updated: "2026-10-10"
+updated: "2026-10-11"
 ---
 # Cloud builders
 
@@ -56,9 +56,9 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
 
 ### Part A: setting a project up for the cloud
 
-**FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1)
-  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names three hand steps (make a cloud environment, paste the setup text, paste the reviewer pass) and carries the setup text. (source: board · 1 Setup)
-  - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. (source: board · 1 Setup)
+**FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1) The owner makes the new cloud environment the account's default, so the check session lands in it and the plugin reads the environment's id from that session. (source: Canon 2026-10-10-dcc2b5e5-12)
+  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names the hand steps in this order (make a cloud environment and set it as the account's default, paste the setup text, sign in once to the independent reviewer with a sign-in kept apart from the owner's main one, paste the reviewer pass) and carries the setup text. The sign-in is done once per account, before the pass command first works, and the advisor walks the owner through it. (source: board · 1 Setup; Canon 2026-10-10-dcc2b5e5-12; Canon 2026-10-11-dcc2b5e5-1)
+  - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. The plugin never asks the owner for the environment's id. (source: board · 1 Setup; Canon 2026-10-10-dcc2b5e5-12)
 
 **FR-2.** The setup text shall carry the plugin at the advisor's version, the tools a build needs, and the project's calibration where the project keeps its calibration outside the repository. (source: journeys; Canon 2026-10-10-ca3e7e0d-1)
   - *Acceptance (rule):* The setup text holds no reviewer pass and no other secret. (source: board · 1 Setup)
@@ -321,7 +321,19 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-10 (owner-stamped, substantive):** cloud setup tells the owner to make the new cloud
+  environment the account's default, so the check session lands in it and the plugin reads the
+  environment's id from that session instead of asking the owner for it (owner's ruling "25 c",
+  Canon 2026-10-10-dcc2b5e5-12). FR-1's statement, its hand-step list and its pass-command rule
+  say so, and the build board's "1 Setup" artboard matches. Sections touched: frontmatter, Part A ·
+  Setting a project up for the cloud (FR-1), UI / UX (board · 1 Setup), Amendments.
+- **2026-10-11 (owner-stamped, substantive):** the reviewer pass is made from a reviewer sign-in
+  kept apart from the owner's main one, so the owner signs in to it once, before the pass command
+  first works. Cloud setup shows that sign-in as its own hand step before the pass, once per
+  account, and the advisor walks the owner through it (owner's ruling "27 a", Canon
+  2026-10-11-dcc2b5e5-1). FR-1's hand-step list says so, and the build board's "1 Setup" artboard
+  matches. Sections touched: frontmatter, Part A · Setting a project up for the cloud (FR-1),
+  UI / UX (board · 1 Setup), Amendments.
 
 ## Coverage
 
