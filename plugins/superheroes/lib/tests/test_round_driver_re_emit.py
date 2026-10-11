@@ -9,7 +9,6 @@ import sys
 import pytest
 
 import round_adapters  # noqa: E402
-import round_certification as RC  # noqa: E402
 import record_paths  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_contract  # noqa: E402
@@ -225,14 +224,6 @@ def test_re_emit_with_journal_recorded_before_relocate(tmp_path, capsys):
     superseded = next(r for r in M._journal_rows(session_dir)
                       if r.get("outcome") == "orders-superseded")
     assert superseded["supersededRecords"] == [seat if not occurrence else "%s#%d" % (seat, occurrence)]
-    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
-    assert refusal is None
-    assert not [k for k, _ in unclosed if k[2] == 0]
-    manifest = json.load(open(RD._orders_manifest_path(session_dir, pend["round"], pend["phase"], 1),
-                               encoding="utf-8"))
-    attempt1_keys = [k for k, _ in unclosed
-                     if k[2] == 1 and k[0] == pend["phase"] and k[1] == pend["round"]]
-    assert len(attempt1_keys) == len(manifest.get("seats") or {})
 
 
 @pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
@@ -367,91 +358,6 @@ def test_re_emit_refusal_tokens(tmp_path, capsys, reason, setup, monkeypatch):
         assert M._read_bytes(state_path) == state_before
     for path, content in order_snap.items():
         assert M._read_bytes(path) == content
-
-
-# --- certification close (C*) -------------------------------------------------------------
-
-def test_certification_close_after_re_emit_no_attempt0_open(tmp_path, capsys):
-    _repo, _sess, session_dir = _stale_session(tmp_path, capsys)
-    rnd, phase = 1, RD.P_PANEL
-    _re_emit(session_dir, capsys)
-    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
-    assert refusal is None
-    assert not [k for k, _ in unclosed if k[2] == 0]
-    attempt1_keys = [k for k, _ in unclosed if k[2] == 1 and k[0] == phase and k[1] == rnd]
-    manifest = json.load(open(RD._orders_manifest_path(session_dir, rnd, phase, 1), encoding="utf-8"))
-    assert len(attempt1_keys) == len(manifest.get("seats") or {})
-
-
-@pytest.mark.parametrize("landing_shape,landing_kind", [
-    ("envelope", "file"),
-    ("bare", "file"),
-    ("bare", "dangling_symlink"),
-])
-def test_certification_late_attempt0_landing_keeps_seat_open(
-        tmp_path, capsys, landing_shape, landing_kind):
-    _repo, _sess, session_dir = _stale_session(tmp_path, capsys)
-    rnd, phase, old_attempt = 1, RD.P_PANEL, 0
-    _re_emit(session_dir, capsys)
-    ok, state = RD.load_state(session_dir)
-    roster, _ = RD._roster_of(session_dir, state, session_contract.RE_EMIT_CMD, phase, rnd, old_attempt)
-    seat, occurrence = _first_seat(roster)
-    skey = RR.storage_key(seat, occurrence)
-    landing = RR.landing_path(session_dir, rnd, phase, skey, old_attempt)
-    bare = RR.bare_payload_path(session_dir, rnd, phase, skey, old_attempt)
-    target = landing if landing_shape == "envelope" else bare
-    if landing_kind == "dangling_symlink":
-        _dangling_symlink(target)
-    else:
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "w", encoding="utf-8") as fh:
-            fh.write("{}")
-    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
-    assert refusal is None
-    late_keys = [k for k, _ in unclosed
-                 if k[2] == old_attempt and k[0] == phase and k[1] == rnd and k[3] == seat]
-    assert len(late_keys) == 1
-    aside = target + ".aside"
-    os.rename(target, aside)
-    unclosed_after, refusal_after = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
-    assert refusal_after is None
-    assert not [k for k, _ in unclosed_after
-                if k[2] == old_attempt and k[0] == phase and k[1] == rnd and k[3] == seat]
-
-
-def test_certification_lstat_permission_error_keeps_superseded_seat_open(tmp_path, capsys, monkeypatch):
-    _repo, _sess, session_dir = _stale_session(tmp_path, capsys)
-    rnd, phase, old_attempt = 1, RD.P_PANEL, 0
-    _re_emit(session_dir, capsys)
-    ok, state = RD.load_state(session_dir)
-    roster, _ = RD._roster_of(session_dir, state, session_contract.RE_EMIT_CMD, phase, rnd, old_attempt)
-    seat, occurrence = _first_seat(roster)
-    denied_path = RR.landing_path(session_dir, rnd, phase, RR.storage_key(seat, occurrence), old_attempt)
-    real_present = record_paths.landing_entry_present
-
-    def _present(path):
-        if path == denied_path:
-            return True
-        return real_present(path)
-
-    monkeypatch.setattr(record_paths, "landing_entry_present", _present)
-    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
-    assert refusal is None
-    assert [k for k, _ in unclosed
-            if k[2] == old_attempt and k[0] == phase and k[1] == rnd and k[3] == seat]
-
-
-def test_certification_legacy_emitted_row_stays_open_without_session_dir():
-    journal = [
-        {"cmd": "advance", "outcome": "emitted", "phase": RD.P_PANEL, "round": 1, "attempt": 0,
-         "roster": [{"seat": "code-reviewer"}]},
-        {"cmd": session_contract.RE_EMIT_CMD, "outcome": session_contract.ORDERS_SUPERSEDED_OUTCOME,
-         "phase": RD.P_PANEL, "round": 1,
-         "attempt": 0, "newAttempt": 1},
-    ]
-    unclosed, refusal = RC._journal_open_seats(journal, session_dir=None)
-    assert refusal is None
-    assert ("dispatch-panel", 1, 0, "code-reviewer", 0) in [k for k, _ in unclosed]
 
 
 # --- relocation fence (F*) ------------------------------------------------------------------

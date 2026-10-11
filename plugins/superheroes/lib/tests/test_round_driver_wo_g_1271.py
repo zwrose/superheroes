@@ -21,7 +21,7 @@ def _load(name):
 
 
 RD = _load("round_driver")
-RC = _load("round_certification")
+SC = _load("session_contract")
 round_records = _load("round_records")
 
 _ROUND_DRIVER_PY = os.path.join(_LIB, "round_driver.py")
@@ -174,9 +174,9 @@ def test_cleared_disposition_findings_remain_in_certification_view():
         isinstance(entry, dict) and entry.get("id") == "F-fixed"
         for entry in (state.get("dispositionLedger") or [])
     )
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    certified = list(by_key.values())
+    ledger_rows, ledger_fault = SC.read_disposition_ledger(state)
+    assert ledger_fault is None
+    certified = ledger_rows + list(state.get("findings") or [])
     ids = {f.get("id") for f in certified if isinstance(f, dict)}
     assert "F-fixed" in ids
 

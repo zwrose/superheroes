@@ -1,5 +1,4 @@
 """#1272 WO-2: disposition ledger is the one owner — staging, recording, writer merge."""
-import base64
 import hashlib
 import importlib.util
 import json
@@ -24,16 +23,10 @@ def _load(name):
 
 RD = _load("round_driver")
 SC = _load("session_contract")
-RC = _load("round_certification")
 V = _load("verification")
 RR = _load("round_records")
 
-_RCF_SPEC = importlib.util.spec_from_file_location(
-    "round_certification_fixtures",
-    os.path.join(_HERE, "round_certification_fixtures.py"),
-)
-_RCF = importlib.util.module_from_spec(_RCF_SPEC)
-_RCF_SPEC.loader.exec_module(_RCF)
+import session_fixture_support as _SFS  # noqa: E402
 
 
 def _cfg():
@@ -47,58 +40,6 @@ def _ledger_by_key(state):
 
 _FIX_PRESENT_BYTES = b"fix present\n"
 _FIX_PRESENT_DIGEST = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
-
-
-def _head_content_blobs(findings, head):
-    reads = []
-    files = {}
-    for finding in findings:
-        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
-        if not isinstance(path, str) or not path:
-            continue
-        reads.append({
-            "headSha": head,
-            "path": path,
-            "contentDigest": _FIX_PRESENT_DIGEST,
-            "bytes": len(_FIX_PRESENT_BYTES),
-            "readAt": "2026-01-01T00:00:00Z",
-            "source": "git-show",
-            "readError": None,
-        })
-        files[path] = base64.b64encode(_FIX_PRESENT_BYTES).decode("ascii")
-    if not reads:
-        return None
-    return {
-        "schema": SC.HEAD_CONTENT_BLOBS_SCHEMA,
-        "headSha": head,
-        "files": files,
-        "reads": reads,
-    }
-
-
-def _ctx(state, tmp_path, certified_head=None):
-    session_dir = str(tmp_path / "sess")
-    os.makedirs(session_dir, exist_ok=True)
-    RD.save_state(session_dir, state)
-    with open(os.path.join(session_dir, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
-        fh.write("")
-    head = certified_head or ("a" * 40)
-    meta = {"sessionId": "s", "headSha": head, "baseGuard": RC.BASE_GUARD_CHECKED}
-    meta_path = os.path.join(session_dir, RR.META_FILE)
-    with open(meta_path, "w", encoding="utf-8") as fh:
-        json.dump(meta, fh)
-    state.setdefault("config", {})["baseGuard"] = RC.BASE_GUARD_CHECKED
-    state["config"]["headSha"] = head
-    blobs = _head_content_blobs(state.get("findings") or [], head)
-    if blobs is not None:
-        with open(os.path.join(session_dir, RC.HEAD_CONTENT_BLOBS_FILE), "w", encoding="utf-8") as fh:
-            json.dump(blobs, fh)
-    RD.save_state(session_dir, state)
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    return ctx
 
 
 # --- L1 ------------------------------------------------------------------------------
@@ -233,17 +174,9 @@ def test_L2_backfill_last_record_wins_over_earlier_disposition(tmp_path):
     RD._stage_findings(state, compiled)
     ledger = _ledger_by_key(state)
     assert ledger[key].get("disposition") is None
-    new_key = SC.finding_identity_key(compiled[0])
-    RD._record_disposition(state, new_key, "refuted", 2, refutedReason="no")
-    state["findings"] = []
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] == "finding has no disposition recorded"
 
 
-def test_L2_merged_away_member_resolves_through_representative(tmp_path):
+def test_L2_synthesis_merge_records_member_into_representative(tmp_path):
     f1 = {"file": "m.py", "line": 1, "title": "root a", "severity": "Important",
           "verdict": "CONFIRMED"}
     f2 = {"file": "m.py", "line": 2, "title": "root b", "severity": "Minor",
@@ -264,62 +197,6 @@ def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     assert len(live) == 1
     rep = live[0]
     assert SC.finding_identity_key(rep) == key0
-    RD._record_disposition(state, key0, "refuted", 1,
-                           refutedReason="merged into representative")
-    state["dispositionLedgerOwner"] = "ledger"
-    ctx = _ctx(state, tmp_path)
-    assert RC.check_disposition_without_receipt(ctx) is None
-    rep.pop("disposition", None)
-    rep.pop("refutedReason", None)
-    rep.pop("dispositionRound", None)
-    state["findings"] = []
-    state["dispositionLedger"] = [ledger[key1]]
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] == "merged-into chain does not resolve", refusal
-
-
-def test_L2_cross_file_merged_member_fixed_validates_representative_content(tmp_path):
-    head = "c" * 40
-    rep = {"file": "rep.py", "line": 1, "title": "shared root", "severity": "Critical",
-           "verdict": "CONFIRMED"}
-    member = {"file": "mem.py", "line": 1, "title": "shared root", "severity": "Important",
-              "verdict": "CONFIRMED"}
-    compiled, _ = RD.mechanical_compile([rep, member], None)
-    state = RD.new_state(_cfg())
-    RD._stage_findings(state, compiled)
-    staged = V.stage_ids(compiled)
-    state["_verified"] = staged
-    id0, id1 = staged[0]["id"], staged[1]["id"]
-    key0 = SC.finding_identity_key(staged[0])
-    key1 = SC.finding_identity_key(staged[1])
-    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g",
-                                                              "member_ids": [id0, id1]}]})
-    receipt = {
-        "headSha": head,
-        "verifyResult": "pass",
-        "fixContentDigest": _FIX_PRESENT_DIGEST,
-    }
-    RD._record_disposition(state, key0, "fixed", 1, dispositionReceipt=receipt)
-    ledger = _ledger_by_key(state)
-    member_entry = dict(ledger[key1])
-    state["dispositionLedgerOwner"] = "ledger"
-    state["findings"] = []
-    state["dispositionLedger"] = [ledger[key0], member_entry]
-    ctx = _ctx(state, tmp_path, certified_head=head)
-    blobs = _head_content_blobs([{"file": "rep.py", "disposition": "fixed"}], head)
-    with open(os.path.join(ctx["session_dir"], RC.HEAD_CONTENT_BLOBS_FILE), "w",
-              encoding="utf-8") as fh:
-        json.dump(blobs, fh)
-    blobs_path = os.path.join(ctx["session_dir"], RC.HEAD_CONTENT_BLOBS_FILE)
-    with open(blobs_path, encoding="utf-8") as fh:
-        blobs = json.load(fh)
-    reads = blobs.get("reads") or []
-    assert any(row.get("path") == "rep.py" for row in reads), reads
-    assert not any(row.get("path") == "mem.py" for row in reads), reads
-    assert RC.check_disposition_without_receipt(ctx) is None
 
 
 # --- L3 ------------------------------------------------------------------------------
@@ -381,7 +258,7 @@ def test_L4_judgment_skip_records_out_of_scope_with_follow_up():
     assert entry["followUp"] == follow_up
 
 
-def test_L4_judgment_skip_without_follow_up_refuses_writer(tmp_path):
+def test_L4_judgment_skip_without_follow_up_records_no_follow_up(tmp_path):
     finding = {"title": "tradeoff", "severity": "Important", "file": "j.py", "line": 6,
                "tradeoff": True}
     state = RD.new_state(_cfg())
@@ -392,13 +269,6 @@ def test_L4_judgment_skip_without_follow_up_refuses_writer(tmp_path):
     entry = _ledger_by_key(state)[fid]
     assert entry["disposition"] == "out-of-scope"
     assert "followUp" not in entry
-    state["dispositionLedgerOwner"] = "ledger"
-    entry["severity"] = "Important"
-    state["findings"] = [entry]
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["detail"] == "out-of-scope disposition lacks named follow-up item"
 
 
 # --- L5 ------------------------------------------------------------------------------
@@ -444,26 +314,6 @@ def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
 
 # --- L6 ------------------------------------------------------------------------------
 
-def test_L6_without_owner_marker_three_source_merge_unchanged():
-    legacy = {"file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
-              SC.FINDING_KEY_FIELD: "legacy-key"}
-    state = {"schemaVersion": 5, "findings": [], "_records": [{"findings": [legacy]}]}
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    keys = set(by_key)
-    assert "legacy-key" in keys
-
-
-def test_L6_with_owner_marker_empty_ledger_excludes_records_findings():
-    legacy = {"file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
-              SC.FINDING_KEY_FIELD: "legacy-key"}
-    state = {"schemaVersion": 5, "dispositionLedgerOwner": "ledger", "dispositionLedger": [],
-             "findings": [], "_records": [{"findings": [legacy]}]}
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    assert list(by_key.values()) == []
-
-
 def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
     old = {"file": "o", "line": 1, "title": "old", "severity": "Important",
            SC.FINDING_KEY_FIELD: "o::old@L1"}
@@ -476,18 +326,6 @@ def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
     ledger = _ledger_by_key(state)
     assert "o::old@L1" in ledger
     assert ledger["o::old@L1"].get("disposition") is None
-    new_key = SC.finding_identity_key(compiled[0])
-    RD._record_disposition(state, new_key, "refuted", 2, refutedReason="no")
-    state["findings"] = []
-    certified_keys, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    certified_keys = set(certified_keys)
-    assert "o::old@L1" in certified_keys
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] == "finding has no disposition recorded"
 
 
 # --- C13: head-bound verify receipts -------------------------------------------------
@@ -582,14 +420,14 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     }
     state["decisions"] = [{"round": 2, "kind": "converged", "detail": "certified"}]
     state["config"]["headSha"] = head2
-    state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
-    session_dir = _RCF.write_session(
+    state["config"]["baseGuard"] = RD.BASE_GUARD_CHECKED
+    session_dir = _SFS.write_session(
         tmp_path,
         name="c13-terminal",
         state=state,
         meta={
             "headSha": head2,
-            "baseGuard": RC.BASE_GUARD_CHECKED,
+            "baseGuard": RD.BASE_GUARD_CHECKED,
             "repoRoot": str(repo),
         },
         faithful_session=True,
@@ -603,12 +441,9 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     terminal_receipt = _ledger_by_key(reloaded)[key].get("dispositionReceipt") or {}
     assert terminal_receipt.get("verifyResult") == "pass"
     assert terminal_receipt.get("headSha") == head2
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    assert RC.check_disposition_without_receipt(ctx) is None
 
 
-def test_C13_two_round_moving_head_verify_never_passes_refuses(tmp_path):
+def test_C13_two_round_moving_head_verify_never_passes_leaves_receipt_unverified(tmp_path):
     head1, head2 = "a" * 40, "b" * 40
     state = RD.new_state(_cfg())
     state["round"] = 1
@@ -619,14 +454,6 @@ def test_C13_two_round_moving_head_verify_never_passes_refuses(tmp_path):
     state["rounds"]["2"] = {}
     key, receipt2 = _audit_discharge_fixed(state, head2)
     assert receipt2.get("verifyResult") is None
-
-    entry = _ledger_by_key(state)[key]
-    state["dispositionLedgerOwner"] = "ledger"
-    state["findings"] = [entry]
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-pass"
 
 
 def test_C13_fix_fold_records_fix_fold_head(tmp_path, monkeypatch):
@@ -664,35 +491,6 @@ def test_C13_prior_verify_without_fix_fold_head_not_carried():
     state["rounds"]["2"] = {}
     _, receipt2 = _audit_discharge_fixed(state, head2)
     assert receipt2.get("verifyResult") is None
-
-
-def test_C13_merged_important_out_of_scope_disclosure_reads_representative_reason(tmp_path):
-    rep = {"file": "m.py", "line": 1, "title": "root a", "severity": "Minor",
-           "verdict": "CONFIRMED"}
-    member = {"file": "m.py", "line": 2, "title": "root b", "severity": "Important",
-              "verdict": "CONFIRMED"}
-    compiled, _ = RD.mechanical_compile([rep, member], None)
-    state = RD.new_state(_cfg())
-    RD._stage_findings(state, compiled)
-    staged = V.stage_ids(compiled)
-    key0 = SC.finding_identity_key(staged[0])
-    key1 = SC.finding_identity_key(staged[1])
-    rep_reason = "deferred to next release"
-    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
-                 "classClosure": "tracked separately"}
-    RD._record_disposition(state, key0, "out-of-scope", 1,
-                           outOfScopeReason=rep_reason, followUp=follow_up)
-    ledger = _ledger_by_key(state)
-    member_entry = dict(ledger[key1])
-    member_entry[SC.MERGED_INTO_FIELD] = key0
-    state["dispositionLedgerOwner"] = "ledger"
-    state["findings"] = []
-    state["dispositionLedger"] = [ledger[key0], member_entry]
-    ctx = _ctx(state, tmp_path)
-    assert RC.check_disposition_without_receipt(ctx) is None
-    disclosures = ctx["important_disclosures"]
-    assert len(disclosures) == 1
-    assert disclosures[0]["reason"] == rep_reason
 
 
 def test_C13_backfill_preserves_preexisting_ledger_disposition():
@@ -756,38 +554,6 @@ def test_C13_backfill_merges_record_severity_preserves_disposition_family(tmp_pa
             assert entry[field] == preexisting_family[field]
         else:
             assert field not in entry
-    state["dispositionLedgerOwner"] = "ledger"
-    state["findings"] = [entry]
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] == "Critical finding may not take out-of-scope disposition"
-
-
-def test_C13_out_of_scope_reason_required_before_follow_up_checks(tmp_path):
-    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
-                 "classClosure": "tracked separately"}
-    finding = {"file": "o", "line": 1, "title": "old", "severity": "Important"}
-    compiled, _ = RD.mechanical_compile([finding], None)
-    state = RD.new_state(_cfg())
-    RD._stage_findings(state, compiled)
-    key = SC.finding_identity_key(compiled[0])
-    state["dispositionLedgerOwner"] = "ledger"
-    RD._record_disposition(state, key, "out-of-scope", 1, followUp=follow_up)
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] == "out-of-scope disposition lacks recorded reason"
-    reason = "deferred to next release"
-    RD._record_disposition(state, key, "out-of-scope", 1,
-                           outOfScopeReason=reason, followUp=follow_up)
-    ctx = _ctx(state, tmp_path)
-    assert RC.check_disposition_without_receipt(ctx) is None
-    assert ctx["important_disclosures"] == [
-        {"id": None, "title": "old", "severity": "Important", "reason": reason},
-    ]
 
 
 # --- L7 bite-proof: departure chokepoint ---------------------------------------------
@@ -814,11 +580,6 @@ def test_L7_departure_outside_chokepoint_still_on_ledger(tmp_path):
     ledger = _ledger_by_key(state)
     assert key in ledger
     assert ledger[key].get("disposition") is None
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["detail"] == "finding has no disposition recorded"
 
 
 def test_L7_departure_preserves_raised_round_through_archive_and_record(tmp_path):

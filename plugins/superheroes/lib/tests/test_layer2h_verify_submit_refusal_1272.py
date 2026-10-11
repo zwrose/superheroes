@@ -13,7 +13,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import round_records as RR
-from round_certification_fixtures import write_session
+from session_fixture_support import write_session
 
 FIX_PATH = "src/guard.py"
 _FIX_BYTES = b"fix still present\n"
@@ -27,7 +27,6 @@ def _load(name):
 
 
 RD = _load("round_driver")
-RC = _load("round_certification")
 
 
 def _init_git_repo(tmp_path):
@@ -85,7 +84,7 @@ def _journal_line_count(session_dir):
 
 def _session_at_pending_verify(tmp_path, repo_root, *, advance_used=False, name="verify",
                                post_audits_verify=False):
-    state = RD.new_state({"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED})
+    state = RD.new_state({"fixerVendor": "claude", "baseGuard": RD.BASE_GUARD_CHECKED})
     state["round"] = 1
     state["step"] = RD.P_VERIFY
     state["pending"] = {

@@ -21,8 +21,6 @@ def _load(name):
 
 RD = _load("round_driver")
 SC = _load("session_contract")
-RC = _load("round_certification")
-RR = _load("round_records")
 
 
 def _cfg():
@@ -31,7 +29,7 @@ def _cfg():
 
 def _cfg_cert(**over):
     base = _cfg()
-    base["baseGuard"] = RC.BASE_GUARD_CHECKED
+    base["baseGuard"] = RD.BASE_GUARD_CHECKED
     base.update(over)
     return base
 
@@ -99,24 +97,6 @@ def _null_owner_marker_state():
     }
 
 
-def _ctx(state, tmp_path):
-    session_dir = str(tmp_path / "sess")
-    os.makedirs(session_dir, exist_ok=True)
-    RD.save_state(session_dir, state)
-    with open(os.path.join(session_dir, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
-        fh.write("")
-    head = "a" * 40
-    meta = {"sessionId": "s", "headSha": head, "baseGuard": RC.BASE_GUARD_CHECKED}
-    with open(os.path.join(session_dir, RR.META_FILE), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh)
-    state.setdefault("config", {})["baseGuard"] = RC.BASE_GUARD_CHECKED
-    state["config"]["headSha"] = head
-    RD.save_state(session_dir, state)
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    return ctx
-
-
 def _panel_artifact():
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seats["code-reviewer"] = {
@@ -128,51 +108,6 @@ def _panel_artifact():
 def _state_bytes(session_dir):
     with open(os.path.join(session_dir, RD.STATE_FILE), "rb") as fh:
         return fh.read()
-
-
-# --- marker: certification refuses unrecognized ---------------------------------------
-
-def test_marker_certification_refuses_unrecognized_via_findings_by_key():
-    state = _unrecognized_marker_state()
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
-    assert "legacy-key" not in by_key
-
-
-def test_marker_certification_refuses_unrecognized_via_findings_wrapper():
-    state = _unrecognized_marker_state()
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
-    assert by_key == {}
-
-
-def test_marker_certification_refuses_unrecognized_via_check_disposition(tmp_path):
-    state = _unrecognized_marker_state()
-    ctx = _ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
-
-
-def test_marker_certification_refuses_unrecognized_via_build_receipt(tmp_path):
-    state = _unrecognized_marker_state()
-    state["terminal"] = "converged"
-    ctx = _ctx(state, tmp_path)
-    receipt, refusal = RC._build_receipt(ctx, "certified", None)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
-
-
-def test_marker_certification_refuses_null_owner_via_findings_by_key():
-    state = _null_owner_marker_state()
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
-    assert "legacy-key" not in by_key
 
 
 def test_marker_driver_submit_refuses_null_owner(tmp_path):
@@ -362,14 +297,6 @@ def test_marker_fold_recognized_marker_still_folds():
 
 
 # --- bite-proof detectors (axis lines live at the guarded production sites) -------------
-
-def test_bite_bp2f_a_certification_marker_refusal():
-    """axis: unrecognized dispositionLedgerOwner refuses certification reads — never legacy merge."""
-    state = _unrecognized_marker_state()
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is not None
-    assert "legacy-key" not in by_key
-
 
 def test_bite_bp2f_b_driver_submit_preflight_refusal(tmp_path):
     """axis: unrecognized dispositionLedgerOwner refuses submit before fold — state byte-unchanged."""

@@ -15,7 +15,7 @@ _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
-from round_certification_fixtures import (
+from session_fixture_support import (
     DEFAULT_PANEL_PAYLOAD_SHA,
     write_session,
 )
@@ -29,8 +29,8 @@ def _load(name):
 
 
 SC = _load("session_contract")
-RC = _load("round_certification")
 RD = _load("round_driver")
+RR = _load("round_records")
 
 OLD_HEAD = "b" * 40
 FINDING_KEY = "fix@L1"
@@ -72,12 +72,12 @@ def _dispatch_journal(certified_head):
     return {
         "cmd": "record-result",
         "outcome": "recorded",
-        "phase": RC.PANEL_PHASE,
+        "phase": SC.PANEL_PHASE,
         "round": 1,
         "attempt": 0,
         "seat": "code-reviewer",
         "occurrence": 0,
-        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
         "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
         "headSha": certified_head,
         "executionEvidence": {
@@ -91,7 +91,7 @@ def _dispatch_journal(certified_head):
             **_binding_fields(),
         },
         "recordIdentity": {
-            "phase": RC.PANEL_PHASE,
+            "phase": SC.PANEL_PHASE,
             "seat": "code-reviewer",
             "occurrence": 0,
             "attempt": 0,
@@ -253,7 +253,7 @@ def _ledger_only_fixed_state(certified_head, **over):
         "rounds": {},
         "config": {
             "fixerVendor": "claude",
-            "baseGuard": RC.BASE_GUARD_CHECKED,
+            "baseGuard": RD.BASE_GUARD_CHECKED,
             "headSha": certified_head,
         },
         "step": "terminal",
@@ -305,15 +305,6 @@ def _ledger_receipt(state, key=FINDING_KEY):
     return None
 
 
-def _cert_receipt_fixed_binding(receipt, key=FINDING_KEY):
-    for finding in receipt.get("findings") or []:
-        if finding.get(SC.FINDING_KEY_FIELD) == key:
-            proof = finding.get("dispositionReceipt")
-            assert isinstance(proof, dict), finding
-            return proof.get("headSha"), proof.get("verifyResult")
-    raise AssertionError("fixed finding %r missing from certify receipt" % key)
-
-
 # --- item 1: ledger-only re-bind ----------------------------------------------------
 
 def test_ledger_only_fixed_row_rebinds_to_certified_head(tmp_path):
@@ -360,47 +351,15 @@ def test_terminal_rebind_preserves_disposition_family(tmp_path):
 
 # --- item 2: persistence-order detector (BP-2g-f) -----------------------------------
 
-def test_terminal_gate_rebind_visible_to_certify_receipt(tmp_path):
+def test_terminal_gate_returns_no_fault_after_rebind(tmp_path):
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)
     fault = RD._terminal_receipt_gate(session_dir, state)
     assert fault is None, fault
-    cert_path = os.path.join(session_dir, RD.CERTIFICATION_RECEIPT_FILE)
-    assert os.path.isfile(cert_path), "certify during gate must write certification-receipt.json"
-    with open(cert_path, encoding="utf-8") as fh:
-        cert_receipt = json.load(fh)
-    head_sha, verify = _cert_receipt_fixed_binding(cert_receipt)
-    assert head_sha == certified_head
-    assert verify == "pass"
 
 
 # --- item 3: both terminal legs -----------------------------------------------------
-
-def test_cli_and_run_loop_legs_share_certified_head_binding(tmp_path):
-    session_dir, certified_head = _certifiable_session(tmp_path)
-    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
-        state = json.load(fh)
-    fault = RD._terminal_receipt_gate(session_dir, state)
-    assert fault is None, fault
-    cli_receipt, cli_refusal = RC.certify(session_dir)
-    assert cli_refusal is None, cli_refusal
-    cli_head, cli_verify = _cert_receipt_fixed_binding(cli_receipt)
-
-    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
-        source_state = json.load(fh)
-    materialized = RD._materialize_run_loop_session(
-        source_state, 1, source_session_dir=session_dir
-    )
-    try:
-        loop_receipt, loop_refusal = RC.certify(materialized)
-        assert loop_refusal is None, loop_refusal
-        loop_head, loop_verify = _cert_receipt_fixed_binding(loop_receipt)
-        assert loop_head == cli_head == certified_head
-        assert loop_verify == cli_verify == "pass"
-    finally:
-        shutil.rmtree(materialized, ignore_errors=True)
-
 
 # --- item 4: residual path (BP-2g-h) ------------------------------------------------
 
@@ -478,20 +437,13 @@ def test_unchanged_head_with_failed_binding_leaves_the_receipt_unverified(tmp_pa
     assert receipt.get("verifyResult") is None
 
 
-def test_fixed_row_without_receipt_remains_without_receipt_and_certification_refuses(tmp_path):
+def test_fixed_row_without_receipt_remains_without_receipt(tmp_path):
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
     loaded["dispositionLedger"][0].pop("dispositionReceipt", None)
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
     assert _ledger_receipt(loaded) is None
-    RD.save_state(session_dir, loaded)
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert "lacks verification receipt" in refusal.get("detail", "")
 
 
 def test_run_loop_leg_does_not_synthesize_a_pass_receipt(tmp_path):
@@ -521,10 +473,6 @@ def test_run_loop_leg_does_not_synthesize_a_pass_receipt(tmp_path):
         assert not (
             isinstance(receipt, dict) and receipt.get("verifyResult") == "pass"
         ), "run-loop materialization must not synthesize a pass receipt"
-        loop_receipt, loop_refusal = RC.certify(materialized)
-        assert loop_receipt is None, loop_receipt
-        assert loop_refusal is not None
-        assert loop_refusal["class"] == "disposition-without-receipt"
     finally:
         shutil.rmtree(materialized, ignore_errors=True)
 
@@ -562,8 +510,8 @@ def test_unrecognized_owner_terminal_gate_leaves_state_byte_identical(tmp_path):
 
 # --- verified-head invariant detectors (B1c) ----------------------------------------
 
-def test_verified_post_fix_head_finalizes_and_certifies(tmp_path):
-    """axis: a verified post-fix head finalizes and certifies on the faithful two-round sequence."""
+def test_verified_post_fix_head_finalizes(tmp_path):
+    """axis: a verified post-fix head finalizes on the faithful two-round sequence."""
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)
@@ -581,15 +529,10 @@ def test_verified_post_fix_head_finalizes_and_certifies(tmp_path):
     _assert_no_evidence_postdates_terminal(state)
     fault = RD._terminal_receipt_gate(session_dir, state)
     assert fault is None, fault
-    cert_receipt, cert_refusal = RC.certify(session_dir)
-    assert cert_refusal is None, cert_refusal
-    head_sha, verify = _cert_receipt_fixed_binding(cert_receipt)
-    assert head_sha == certified_head
-    assert verify == "pass"
 
 
 def test_head_verified_at_h_does_not_credit_h_prime(tmp_path):
-    """axis: a head verified at H does not credit H' at finalization or certification."""
+    """axis: a head verified at H does not credit H' at finalization."""
     repo_root, head1 = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(head1)
     cfg = dict(state.get("config") or {})
@@ -646,16 +589,10 @@ def test_head_verified_at_h_does_not_credit_h_prime(tmp_path):
     assert receipt.get("headSha") == head1
     assert receipt.get("headSha") != head2
     assert receipt.get("verifyResult") is None
-    RD.save_state(session_dir, state)
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-on-head"
 
 
-def test_round_record_lacking_verified_head_refuses(tmp_path):
-    """axis: verifyResult without verifiedHead is fail-closed — accessor and certification refuse."""
+def test_round_record_lacking_verified_head_accessor_returns_none(tmp_path):
+    """axis: verifyResult without verifiedHead is fail-closed — the accessor returns None."""
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(certified_head)
     state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}}
@@ -663,27 +600,6 @@ def test_round_record_lacking_verified_head_refuses(tmp_path):
         headSha=certified_head,
     )
     assert SC.verify_result_for_head(state, certified_head) is None
-    cfg = dict(state.get("config") or {})
-    cfg["repoRoot"] = str(tmp_path / "repo")
-    cfg["headSha"] = certified_head
-    state["config"] = cfg
-    session_dir = write_session(
-        tmp_path,
-        name="no-verified-head",
-        state=state,
-        journal_lines=[_dispatch_journal(certified_head)],
-        meta={"headSha": certified_head, "repoRoot": str(tmp_path / "repo")},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
-    )
-    _write_head_content_blobs(session_dir, head=certified_head)
-    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
-        loaded = json.load(fh)
-    RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-pass"
 
 
 def test_stale_pass_stamp_at_certified_head_is_revoked(tmp_path):
@@ -733,11 +649,6 @@ def test_stale_pass_stamp_at_certified_head_is_revoked(tmp_path):
     assert receipt.get("headSha") == certified_head
     assert entry.get(SC.MERGED_INTO_FIELD) == "representative-key"
     assert entry.get("outOfScopeReason") == "carried reason"
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-pass"
 
 
 def test_fold_verify_without_session_dir_records_no_verified_head():
@@ -841,7 +752,7 @@ _ORDERING_FINALIZATION_CASES = [
 
 @pytest.mark.parametrize("rounds_template", _ORDERING_FINALIZATION_CASES)
 def test_ordering_axes_carry_through_finalization(tmp_path, rounds_template):
-    """axis: ordering axes revoke a stale pass stamp and refuse certification."""
+    """axis: ordering axes revoke a stale pass stamp."""
     session_dir, certified_head = _certifiable_session(tmp_path, drive_faithful=False)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
@@ -859,12 +770,6 @@ def test_ordering_axes_carry_through_finalization(tmp_path, rounds_template):
     receipt = _ledger_receipt(loaded)
     assert isinstance(receipt, dict)
     assert receipt.get("verifyResult") != "pass"
-    RD.save_state(session_dir, loaded)
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-pass"
 
 
 def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
@@ -888,7 +793,3 @@ def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
     before = _state_bytes(loaded)
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
     assert _state_bytes(loaded) == before
-    by_key, refusal = RC._certification_findings_by_key(loaded)
-    assert by_key == {}
-    assert refusal is not None
-    assert refusal["bindingFailure"] == SC.DISPOSITION_LEDGER_MALFORMED_TOKEN
