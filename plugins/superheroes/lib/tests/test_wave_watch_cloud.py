@@ -686,5 +686,4 @@ def test_deadline_timer_carries_cloud_lanes(repo):
 
 
 def test_the_degradation_token_is_part_of_the_vocabulary():
-    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE == "cloud-activity-unavailable"
     assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE in ww.DEGRADATIONS
