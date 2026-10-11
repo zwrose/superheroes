@@ -507,6 +507,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    retry. A repair that kept the same environment returns that same id.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the snapshot value> --confirmed <the environment now in use>
    ```
 
@@ -514,6 +515,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    `setup-text`, and give its `message` and its `setupText` in one fenced block.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text --cwd .
    ```
 
