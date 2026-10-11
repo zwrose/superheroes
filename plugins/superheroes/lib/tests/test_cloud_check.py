@@ -1247,3 +1247,14 @@ def test_cli_start_exit_codes(tmp_path, capsys):
     code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID],
                    spawn_fn=Spawner(output=""))
     assert code == 1 and json.loads(capsys.readouterr().out)["reason"] == "check-session-unconfirmed"
+
+
+def test_find_report_accepts_a_respaced_copy_of_the_same_report():
+    obj = dict.fromkeys(CC.REPORT_FIELDS)
+    obj.update(schema=CC.REPORT_SCHEMA, nonce="abcdefgh", pluginVersion="0.42.0",
+               confirmation={"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": True,
+                             "passLapses": "2099-12-31"})
+    line = CC.report_line(obj)
+    respaced = CC.MARKER + " " + json.dumps(json.loads(line.split(" ", 1)[1]))
+    # bites on: raw-body comparison treating a respaced copy as a conflicting report (None)
+    assert CC._find_report(line + "\n" + respaced, "abcdefgh") is not None

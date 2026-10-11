@@ -48,7 +48,6 @@ REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp
 DIGEST_FIELD = "digest"
 
 _NONCE_RE = re.compile(r"[A-Za-z0-9]{8,64}")
-_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 _SETUP_MESSAGE = (
     "**Setting up cloud builds for {project}.** You do these by hand, once. It takes about ten "
@@ -365,10 +364,11 @@ def _find_report(text, nonce):
         except Exception:
             continue
         if _nonce_is(obj, nonce):
-            found.append((body, obj))
+            found.append((_canonical(obj), obj))
     # axis: the launch prompt carries a fallback report; when the session transcript echoes it
     # beside a real report, the echo is not a competing result
-    fallback = _fallback_line(nonce)[len(MARKER) + 1:]
+    # axis: copies are compared as parsed objects, so JSON spacing never makes a faithful copy conflict
+    fallback = _canonical(json.loads(_fallback_line(nonce)[len(MARKER) + 1:]))
     if any(body != fallback for body, _ in found):
         found = [(body, obj) for body, obj in found if body != fallback]
     if not found or any(body != found[0][0] for body, _ in found):
@@ -388,7 +388,8 @@ def _readable(obj, nonce):
 
 
 def _lapses_ok(lapses, today):
-    if not (isinstance(lapses, str) and _DATE_RE.fullmatch(lapses)):
+    # axis: the date's format is the record owner's rule, not a second copy
+    if not cloud_setup._date_ok(lapses):
         return False
     try:
         return datetime.date.fromisoformat(lapses) >= today
