@@ -478,10 +478,15 @@ def test_e4_the_current_generation_passes_the_gate(tmp_path):
     assert not os.path.exists(_marker_path(session_dir))
 
 
-# E4b — axis: an unfinished state of the current generation but an earlier schema version (2, 3, 4)
+# The version matrix is derived from the driver's own constants, never restated here.
+EARLIER_VERSIONS = [v for v in RD.SUPPORTED_STATE_VERSIONS if v < RD.STATE_SCHEMA_VERSION]
+FUTURE_VERSION = RD.STATE_SCHEMA_VERSION + 1
+
+
+# E4b — axis: an unfinished state of the current generation but an earlier schema version
 # is refused by `next`, `submit` and `record-result`; none of them reads it. Only the integer
 # `STATE_SCHEMA_VERSION` is current.
-@pytest.mark.parametrize("version", [2, 3, 4])
+@pytest.mark.parametrize("version", EARLIER_VERSIONS)
 @pytest.mark.parametrize("name", ["next", "submit", "record-result"])
 def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_path):
     session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
@@ -497,10 +502,12 @@ def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_
 
 
 # E4b — axis: an unfinished state of the current generation whose `schemaVersion` is not a
-# supported earlier integer (1, a later 6, null, a string, a float, a boolean) is not an earlier
+# supported earlier integer (1, a later one, null, a string, a float, a boolean) is not an earlier
 # session: no marker is written, and `next` gives the refusal `load_state` gives for it.
-@pytest.mark.parametrize("version", [1, 6, None, "5", 5.0, True],
-                         ids=["one", "six", "null", "string-five", "float-five", "true"])
+@pytest.mark.parametrize(
+    "version", [1, FUTURE_VERSION, None, str(RD.STATE_SCHEMA_VERSION),
+                float(RD.STATE_SCHEMA_VERSION), True],
+    ids=["one", "future", "null", "string-current", "float-current", "true"])
 def test_e4b_an_unsupported_schema_version_gets_the_loader_refusal_and_no_marker(version, tmp_path):
     session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
     state = _read_state_file(session_dir)
@@ -508,14 +515,15 @@ def test_e4b_an_unsupported_schema_version_gets_the_loader_refusal_and_no_marker
     _write_state_file(session_dir, state)
     out = RD.cmd_next(session_dir)
     assert out == {"ok": False, "reason": (
-        "loop-state.json is schemaVersion %r, not one of 2, 3, 4, 5 — session dirs are "
-        "per-invocation with no migration; start a fresh session dir" % (version,))}
+        "loop-state.json is schemaVersion %r, not one of %s — session dirs are "
+        "per-invocation with no migration; start a fresh session dir"
+        % (version, ", ".join(str(v) for v in RD.SUPPORTED_STATE_VERSIONS)))}
     assert not os.path.exists(_marker_path(session_dir))
 
 
 # E4c — axis: a finished state of an earlier schema version passes the gate, and `next` answers its
 # terminal again.
-@pytest.mark.parametrize("version", [2, 3, 4])
+@pytest.mark.parametrize("version", EARLIER_VERSIONS)
 def test_e4c_a_finished_earlier_schema_version_replays_its_terminal(version, tmp_path):
     session_dir = str(tmp_path / "finished")
     os.makedirs(session_dir)
