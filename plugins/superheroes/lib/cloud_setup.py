@@ -102,7 +102,7 @@ def _id_ok(value):
     return (
         isinstance(value, str)
         and 1 <= len(value) <= 128
-        and _ID_PATTERN.match(value) is not None
+        and _ID_PATTERN.fullmatch(value) is not None
     )
 
 
@@ -154,7 +154,7 @@ def _secret_shaped(value):
 
 
 def _date_ok(value):
-    if not isinstance(value, str) or _DATE_PATTERN.match(value) is None:
+    if not isinstance(value, str) or _DATE_PATTERN.fullmatch(value) is None:
         return False
     try:
         datetime.date.fromisoformat(value)
@@ -169,12 +169,12 @@ def _field_ok(field, value):
     if field in ("account", "environment"):
         return _id_ok(value)
     if field == "pluginVersion":
-        return isinstance(value, str) and _VERSION_PATTERN.match(value) is not None
+        return isinstance(value, str) and _VERSION_PATTERN.fullmatch(value) is not None
     if field == "picksUpVersion":
         return type(value) is bool
     if field == "calibrationStamp":
         return isinstance(value, str) and (
-            value == "none" or _STAMP_PATTERN.match(value) is not None)
+            value == "none" or _STAMP_PATTERN.fullmatch(value) is not None)
     return _date_ok(value)
 
 
@@ -230,7 +230,7 @@ def read(cwd, account, root=None):
     try:
         import project_config
 
-        got = project_config.get_item(cwd, "cloudBuilds", root=root)
+        got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
         setting = got.get("effective") is True
     except Exception:
         setting = False

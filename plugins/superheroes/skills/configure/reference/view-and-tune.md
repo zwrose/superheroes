@@ -86,11 +86,13 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf '%s\n' 'true' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudBuilds --cwd . --project-name "<the project's name>"
+  printf '%s\n' 'true' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item cloudBuilds --cwd .
   ```
 
   Read the result the same way as the `stackingTool` write above. On `written` or `noop`, say the
-  result's `message` to the owner word for word. A refusal with the reason `cloud-setup-missing`
+  result's `message` to the owner word for word. The message names the project by its folder name;
+  when the project goes by another name, say that name in its place when repeating the message. A
+  refusal with the reason `cloud-setup-missing`
   carries the `message` to say instead: cloud builds can't be switched on yet, and the owner starts
   the setup by saying "set up cloud builds". Never switch the item on any other way. Switching off
   keeps the cloud setup, so switching back on needs no new setup. To see what the setup record

@@ -35,7 +35,6 @@ REASON_PROFILE_ABSENT = "profile-absent"
 REASON_PROFILE_UNPARSEABLE = "profile-unparseable"
 REASON_SET_MISMATCH = "set-read-mismatch"
 REASON_MATERIAL_LINE_IN_CANON = "material-line-in-canon"
-REASON_CLOUD_SETUP_MISSING = "cloud-setup-missing"
 
 MATERIAL_LINE_SLUG = "materialConsequenceLine"
 CLOUD_BUILDS_SLUG = "cloudBuilds"
@@ -685,7 +684,7 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
             if cloud_setup.read(cwd, account, root=root).get("ready") is not True:
                 return {
                     "action": "refused",
-                    "reason": REASON_CLOUD_SETUP_MISSING,
+                    "reason": cloud_setup.REASON_MISSING,
                     "message": cloud_setup.switch_message("refused", project_name),
                 }
 

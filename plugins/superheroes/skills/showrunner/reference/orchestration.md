@@ -27,6 +27,10 @@ and `lane-terminal` fires a minute or two before that exit. Pass **`--await-exit
 verb waits the child out rather than needing a second watcher; at the ceiling it returns the same
 refusal.
 
+A [cloud lane](../../../rubric/glossary.md#cloud-lane) belongs to its batch like any lane and takes
+the same four terminal outcomes. It has no child process to wait out, so `record-outcome` on a cloud
+lane never refuses `terminal-child-live`, and `--await-exit` adds nothing.
+
 ## Reading `count`
 
 **After a batch, run `count`** and read it honestly.
@@ -38,6 +42,8 @@ refusal.
 - **`count` reads lanes** — a build intent keyed by issue number, so retried attempts belong to one
   lane — with **`attempts`** beside the terminal tallies and **`laneDetail`** per lane. Overlapping
   same-lane launches still refuse.
+- **`laneDetail` marks each lane's `place`**, `cloud` or `local`, and `lanes.cloud` is the number of
+  cloud lanes.
 - **Read the `amendments` block beside the terminal tallies.** `rehandback` is a lane that was
   handed back, ruled not ready, and handed back again. Zero parks with a non-zero `rehandback` is a
   frictionful wave, not a clean one.
@@ -69,6 +75,15 @@ A record kind an older plugin build does not understand bricks every ledger door
 commit. It records the path on the `reserved` record and starts the session inside it. A path that
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
+
+**Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
+`reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
+the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`) and its URL
+(`cloudSessionUrl`). To reach a running cloud builder, message the session the lane record names. A
+message wakes an idle session. A `started` record that carries `cloudSessionUnconfirmed` in place of
+the id means a session may exist that was never confirmed. The lane stays live. Look in the host's
+session listing for a session of the recorded name; when there is none, record the lane's outcome as
+`died`.
 
 ## iPhone lanes: launching and reaping their phones
 
@@ -113,16 +128,37 @@ one-off rescue when something feels wrong.
 - **Liveness:** run
   `python3 -B <plugin root>/lib/wave_watch.py run --repo-root <repo-root> --batch <id>` per live
   batch. `lane-stale` means the pid is live and the session transcript is quiet past
-  `LIVENESS_QUIET_WINDOW_SECONDS`, or could not be resolved: investigate or resume.
+  `LIVENESS_QUIET_WINDOW_SECONDS`, or could not be resolved: investigate or resume. That is a local
+  lane. A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no pid and no transcript, so the
+  watch reads its activity on GitHub instead (below).
 - **Endings:** run `python3 -B <plugin root>/lib/heartbeat.py sweep --repo-root <repo-root>` and read
   the classes.
   - `terminal` on a launch the ledger still reports live is **actionable pending `record-outcome`**,
     never a resolved lane.
   - `unknown` means the signal could not be read. It is **actionable, not clean**.
-  - `nonterminal` says nothing about liveness.
+  - `nonterminal` says nothing about liveness. A cloud lane reads `nonterminal` with reason
+    `cloud-lane-no-heartbeat`, because it has no heartbeat.
 
 The sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it
 never resumes anything on its own. You act on what it reports.
+
+**A cloud lane's liveness is its activity on GitHub:** the newest of its issue's last update, the last
+update of a PR that closes the issue, and the last commit on a branch whose name carries the issue
+number. The watch reads this with one request per tick, at most once a minute, and only while a cloud
+lane is live. A cloud lane quiet past `LIVENESS_QUIET_WINDOW_SECONDS`, counted from the later of its
+start and its last activity, is `lane-stale`, with `place: "cloud"` and `activityAgeSeconds`.
+
+- A cloud lane has no pid, transcript, or heartbeat to read, and none of those absences means
+  anything. The watch never reports `builder-exited` or `lane-never-stamped` for it and never reads a
+  transcript for it.
+- The watch never reports `lane-terminal` or `lane-blocked` for a cloud lane. Its ending reaches you
+  through its PR and its issue.
+- Before you treat its `lane-stale` as a wedge, read the session's state in the host's session
+  listing. A session the platform shows working is not wedged. A branch whose name omits the issue
+  number is not read until its PR opens, so a builder on such a branch can read quiet while it works.
+- `cloud-activity-unavailable` means the activity read could not be made. The lane is neither stale
+  nor clean, and the reading is partial.
+- While a batch has a live cloud lane, every watch result carries `cloudLanes`, which lists them.
 
 **Wave watch.** Arm one harness **background task per batch** — a `loop` invocation that re-arms
 internally — instead of hand-rolling a per-session watch loop. There is no daemon to orphan. The

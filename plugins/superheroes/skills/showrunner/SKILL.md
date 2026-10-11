@@ -769,6 +769,8 @@ above).
    is what collides builds in a shared checkout. Supply the checks as data; the launcher records
    each and the go/no-go, and it establishes `standing-rulings` itself. **A launcher or ledger
    refusal is a no-go: clear its cause, never force it.**
+   A lane can be a cloud lane. Its mechanics are in
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md`.
    **Headless builder launches run on the `opus` tier** — the launcher pins it explicitly rather than
    letting a dispatch inherit whatever tier the account or session happens to default to. **`fable` is
    never a launch default** — it is a judgment-seat tier (advisor and review seats), never a build tier.
