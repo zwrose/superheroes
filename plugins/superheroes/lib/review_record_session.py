@@ -234,11 +234,13 @@ def _decide(own, by_key, rulings):
 
 
 def _id(row, key):
-    return key if verification.is_staged_id(row.get("id")) else row.get("id")
+    rid = row.get("id")
+    return rid if isinstance(rid, str) and rid and not verification.is_staged_id(rid) else key
 
 
 def _findings(state):
-    ledger, fault = sc.read_disposition_ledger(state)
+    owned = state.get(sc.DISPOSITION_LEDGER_OWNER_FIELD) == sc.DISPOSITION_LEDGER_OWNER_VALUE
+    ledger, fault = sc.read_disposition_ledger(state, required=owned)  # an owned session's ledger is never optional
     if fault:
         raise Refusal(UNREADABLE, fault.token)
     live = state.get("findings") or []

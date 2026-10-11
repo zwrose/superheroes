@@ -277,6 +277,14 @@ def test_superseded_attempts_are_not_reviewers(tmp_path):
         ("code-reviewer (round 1)", HEAD), ("test-reviewer (round 1)", HEAD)]
 
 
+@pytest.mark.parametrize("missing", [None, "", 5])
+def test_an_archived_candidate_without_a_usable_id_is_listed_by_its_key(tmp_path, missing):
+    s = Session(tmp_path, dispositionLedger=[ledger_row(id=missing)]).seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras())
+    # bites on: a null or unusable stored id reaching the account, which the writer refuses as a whole
+    assert [f["id"] for f in account["findings"]] == [KEY]
+
+
 def _unreadable_dir(s, t):
     shutil.rmtree(s.save())
     return s.dir, extras()
@@ -321,6 +329,8 @@ REFUSALS = [
     pytest.param(_overwrite("driver-journal.jsonl", "{not json\n"), rs.UNREADABLE, id="journal-line-unparseable"),
     pytest.param(_overwrite("driver-journal-fault.jsonl", "{}\n"), rs.UNREADABLE, id="journal-fault"),
     pytest.param(_state_change(dispositionLedger="x"), rs.UNREADABLE, id="ledger-malformed"),
+    pytest.param(lambda s, t: (s.state.pop("dispositionLedger"), s.state.update(dispositionLedgerOwner="ledger"),
+                               (s.save(), extras()))[2], rs.UNREADABLE, id="owned-ledger-absent"),
     pytest.param(_extras_are(None), rs.BAD_EXTRAS, id="no-extras"),
     pytest.param(_extras_are(b"{not json"), rs.BAD_EXTRAS, id="extras-unparseable"),
     pytest.param(_extras_are({"schema": "nope", "pr": 7}), rs.BAD_EXTRAS, id="extras-schema"),
