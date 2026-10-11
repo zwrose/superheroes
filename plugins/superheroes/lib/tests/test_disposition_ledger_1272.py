@@ -1,9 +1,6 @@
 """#1272 WO-2: disposition ledger is the one owner — staging, recording, writer merge."""
-import hashlib
 import importlib.util
-import json
 import os
-import subprocess
 import sys
 
 import pytest
@@ -24,9 +21,6 @@ def _load(name):
 RD = _load("round_driver")
 SC = _load("session_contract")
 V = _load("verification")
-RR = _load("round_records")
-
-import session_fixture_support as _SFS  # noqa: E402
 
 
 def _cfg():
@@ -36,10 +30,6 @@ def _cfg():
 def _ledger_by_key(state):
     return {SC.finding_identity_key(e): e
             for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
-
-
-_FIX_PRESENT_BYTES = b"fix present\n"
-_FIX_PRESENT_DIGEST = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
 
 
 # --- L1 ------------------------------------------------------------------------------
@@ -199,47 +189,6 @@ def test_L2_synthesis_merge_records_member_into_representative(tmp_path):
     assert SC.finding_identity_key(rep) == key0
 
 
-# --- L3 ------------------------------------------------------------------------------
-
-def test_L3_fold_audits_stamps_fixed_on_discharged_only():
-    state = RD.new_state(_cfg())
-    state["round"] = 2
-    head = "b" * 40
-    state["config"][RD.FIX_FOLD_HEAD_KEY] = head
-    state["rounds"] = {"2": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head}}
-    discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
-    open_f = {"title": "open bug", "severity": "Important", "file": "g.py", "line": 2}
-    state["fixBatch"] = [discharged_f, open_f]
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    discharged_id = RD._finding_key_of(discharged_f)
-    open_id = RD._finding_key_of(open_f)
-    RD._set_findings(state, [discharged_f, open_f])
-    state["_newSurface"] = True
-    auditor = state["_auditTargets"][0]["auditorVendor"]
-    manifest = {discharged_id: auditor, open_id: auditor}
-    RD._fold_audits(state, state["config"], {
-        "results": [
-            {"id": discharged_id, "ruling": "discharged", "reason": "gone"},
-            {"id": open_id, "ruling": "not-discharged", "reason": "still there"},
-        ],
-        "collectionManifest": manifest,
-    })
-    ledger = _ledger_by_key(state)
-    assert ledger[discharged_id]["disposition"] == "fixed"
-    assert ledger[discharged_id]["dispositionRound"] == 2
-    receipt = ledger[discharged_id]["dispositionReceipt"]
-    assert receipt["headSha"] == head
-    assert receipt["verifyResult"] == "pass"
-    live_discharged = next(f for f in state["findings"]
-                           if SC.finding_identity_key(f) == discharged_id)
-    assert live_discharged.get("disposition") == "fixed"
-    open_live = next((f for f in state["findings"] if SC.finding_identity_key(f) == open_id), None)
-    if open_live is not None:
-        assert open_live.get("disposition") is None
-    elif open_id in ledger:
-        assert ledger[open_id].get("disposition") is None
-
-
 # --- L4 ------------------------------------------------------------------------------
 
 def test_L4_judgment_skip_records_out_of_scope_with_follow_up():
@@ -328,133 +277,7 @@ def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
     assert ledger["o::old@L1"].get("disposition") is None
 
 
-# --- C13: head-bound verify receipts -------------------------------------------------
-
-def _init_two_head_repo(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True, capture_output=True)
-    path = repo / "f.py"
-    path.write_bytes(_FIX_PRESENT_BYTES)
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-q", "-m", "one"], cwd=repo, check=True, capture_output=True)
-    head1 = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    subprocess.run(
-        ["git", "commit", "-q", "--allow-empty", "-m", "two"], cwd=repo, check=True, capture_output=True,
-    )
-    head2 = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    return repo, head1, head2
-
-
-def _audit_discharge_fixed(state, head_sha):
-    """Fold audits discharging the sole fix-batch target; return ledger key and receipt."""
-    discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
-    state["config"][RD.FIX_FOLD_HEAD_KEY] = head_sha
-    state["fixBatch"] = [discharged_f]
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    discharged_id = RD._finding_key_of(discharged_f)
-    RD._set_findings(state, [discharged_f])
-    state["_newSurface"] = True
-    auditor = state["_auditTargets"][0]["auditorVendor"]
-    manifest = {discharged_id: auditor}
-    RD._fold_audits(state, state["config"], {
-        "results": [{"id": discharged_id, "ruling": "discharged", "reason": "gone"}],
-        "collectionManifest": manifest,
-    })
-    entry = _ledger_by_key(state)[discharged_id]
-    return discharged_id, entry.get("dispositionReceipt") or {}
-
-
-def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
-    repo, head1, head2 = _init_two_head_repo(tmp_path)
-    state = RD.new_state(_cfg())
-    state["config"]["repoRoot"] = str(repo)
-    state["round"] = 1
-    state["rounds"] = {"1": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head1}}
-    key, receipt1 = _audit_discharge_fixed(state, head1)
-    assert receipt1.get("verifyResult") == "pass"
-    assert receipt1.get("headSha") == head1
-
-    state["round"] = 2
-    state["rounds"]["2"] = {}
-    key, receipt2 = _audit_discharge_fixed(state, head2)
-    assert receipt2.get("headSha") == head2
-    assert receipt2.get("verifyResult") is None
-
-    fold_session = str(tmp_path / "c13-fold")
-    os.makedirs(fold_session, exist_ok=True)
-    RD.save_state(fold_session, state)
-    meta = {"headSha": head2, "repoRoot": str(repo)}
-    with open(os.path.join(fold_session, RR.META_FILE), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh)
-    RD._fold_verify(state, state["config"], {"result": "pass"},
-                    resolution=RD._verified_head_at_fold(fold_session, state))
-    entry = _ledger_by_key(state)[key]
-    receipt_after = entry.get("dispositionReceipt") or {}
-    assert receipt_after.get("verifyResult") == "pass"
-    assert receipt_after.get("headSha") == head2
-
-    state["dispositionLedgerOwner"] = "ledger"
-    receipt_after = dict(entry.get("dispositionReceipt") or {})
-    receipt_after["fixContentDigest"] = _FIX_PRESENT_DIGEST
-    RD._record_disposition(
-        state, key, entry["disposition"], entry["dispositionRound"],
-        dispositionReceipt=receipt_after,
-    )
-    entry = _ledger_by_key(state)[key]
-    state["findings"] = [entry]
-    state["terminal"] = "converged"
-    state["step"] = RD.P_TERMINAL
-    state["certification"] = {
-        "shape": "audited-chain",
-        "fullPanel": False,
-        "independence": "independent",
-        "base": "fetched",
-        "shapeDrivers": [],
-    }
-    state["decisions"] = [{"round": 2, "kind": "converged", "detail": "certified"}]
-    state["config"]["headSha"] = head2
-    state["config"]["baseGuard"] = RD.BASE_GUARD_CHECKED
-    session_dir = _SFS.write_session(
-        tmp_path,
-        name="c13-terminal",
-        state=state,
-        meta={
-            "headSha": head2,
-            "baseGuard": RD.BASE_GUARD_CHECKED,
-            "repoRoot": str(repo),
-        },
-        faithful_session=True,
-    )
-    ok, live = RD.load_state(session_dir)
-    assert ok and live is not None
-    fault = RD._terminal_receipt_gate(session_dir, live)
-    assert fault is None, fault
-    ok, reloaded = RD.load_state(session_dir)
-    assert ok
-    terminal_receipt = _ledger_by_key(reloaded)[key].get("dispositionReceipt") or {}
-    assert terminal_receipt.get("verifyResult") == "pass"
-    assert terminal_receipt.get("headSha") == head2
-
-
-def test_C13_two_round_moving_head_verify_never_passes_leaves_receipt_unverified(tmp_path):
-    head1, head2 = "a" * 40, "b" * 40
-    state = RD.new_state(_cfg())
-    state["round"] = 1
-    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head1}}
-    _audit_discharge_fixed(state, head1)
-
-    state["round"] = 2
-    state["rounds"]["2"] = {}
-    key, receipt2 = _audit_discharge_fixed(state, head2)
-    assert receipt2.get("verifyResult") is None
-
+# --- C13: fix-fold head and record backfill ------------------------------------------
 
 def test_C13_fix_fold_records_fix_fold_head(tmp_path, monkeypatch):
     state = RD.new_state(_cfg())
@@ -464,33 +287,6 @@ def test_C13_fix_fold_records_fix_fold_head(tmp_path, monkeypatch):
     state["_fixBatch"] = []
     RD._fold_fixer(state, state["config"], {"fixes": []}, session_dir=str(tmp_path))
     assert state["rounds"]["2"]["fixFoldHead"] == head
-
-
-def test_C13_delta_same_head_carries_prior_pass():
-    head = "c" * 40
-    state = RD.new_state(_cfg())
-    state["round"] = 2
-    state["rounds"] = {"2": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head}}
-    _audit_discharge_fixed(state, head)
-
-    state["round"] = 3
-    state["rounds"]["3"] = {}
-    _, receipt3 = _audit_discharge_fixed(state, head)
-    assert receipt3.get("verifyResult") == "pass"
-    assert receipt3.get("headSha") == head
-
-
-def test_C13_prior_verify_without_fix_fold_head_not_carried():
-    head1, head2 = "d" * 40, "e" * 40
-    state = RD.new_state(_cfg())
-    state["round"] = 1
-    state["rounds"] = {"1": {"verifyResult": "pass"}}
-    _audit_discharge_fixed(state, head1)
-
-    state["round"] = 2
-    state["rounds"]["2"] = {}
-    _, receipt2 = _audit_discharge_fixed(state, head2)
-    assert receipt2.get("verifyResult") is None
 
 
 def test_C13_backfill_preserves_preexisting_ledger_disposition():
@@ -596,84 +392,3 @@ def test_L7_departure_preserves_raised_round_through_archive_and_record(tmp_path
     RD._record_disposition(state, key, "refuted", 1, refutedReason="gone")
     assert _ledger_by_key(state)[key].get("raisedRound") == 1
 
-
-# --- L8 uses L2 open-representative case (bite-proof run separately) -----------------
-
-
-def test_bite_verify_backfill_preserves_disposition_family():
-    """axis: the same-round verify stamp adds verifyResult and erases no family member.
-
-    A fixed row retained with `mergedInto` (or a refuted/out-of-scope reason) must keep it.
-    Losing `mergedInto` here turns a row that certification REFUSES on an unresolved merge
-    chain into an independently graded fixed disposition — a fail-direction inversion.
-    """
-    head = "c" * 40
-    key = "fixed-key"
-    state = RD.new_state(_cfg())
-    state["round"] = 2
-    state["rounds"] = {"2": {SC.VERIFIED_HEAD_FIELD: head, "verifyResult": "pass"}}
-    state[SC.DISPOSITION_LEDGER_KEY] = [{
-        SC.FINDING_KEY_FIELD: key,
-        "file": "a.py",
-        "line": 1,
-        "title": "t",
-        "severity": "Minor",
-        "disposition": "fixed",
-        "dispositionRound": 2,
-        "dispositionReceipt": {"headSha": head},
-        SC.MERGED_INTO_FIELD: "representative-key",
-        "outOfScopeReason": "carried reason",
-    }]
-    state["findings"] = []
-
-    RD._backfill_fixed_disposition_verify_receipts(state, 2)
-
-    entry = _ledger_by_key(state)[key]
-    assert entry["dispositionReceipt"]["verifyResult"] == "pass"
-    assert entry["dispositionReceipt"]["headSha"] == head
-    assert entry[SC.MERGED_INTO_FIELD] == "representative-key"
-    assert entry["outOfScopeReason"] == "carried reason"
-    assert entry["disposition"] == "fixed"
-    assert entry["dispositionRound"] == 2
-
-
-def test_backfill_stamps_only_receipts_bound_to_verified_head():
-    """axis: backfill keys verifyResult on each receipt's own headSha, not one round-wide stamp."""
-    verified_head = "a" * 40
-    other_head = "b" * 40
-    key_verified = "verified-key"
-    key_other = "other-key"
-    state = RD.new_state(_cfg())
-    state["round"] = 2
-    state["rounds"] = {
-        "2": {SC.VERIFIED_HEAD_FIELD: verified_head, "verifyResult": "pass"},
-    }
-    state[SC.DISPOSITION_LEDGER_KEY] = [
-        {
-            SC.FINDING_KEY_FIELD: key_verified,
-            "file": "a.py",
-            "line": 1,
-            "title": "verified",
-            "severity": "Minor",
-            "disposition": "fixed",
-            "dispositionRound": 2,
-            "dispositionReceipt": {"headSha": verified_head},
-        },
-        {
-            SC.FINDING_KEY_FIELD: key_other,
-            "file": "b.py",
-            "line": 2,
-            "title": "other",
-            "severity": "Minor",
-            "disposition": "fixed",
-            "dispositionRound": 2,
-            "dispositionReceipt": {"headSha": other_head},
-        },
-    ]
-    state["findings"] = []
-
-    RD._backfill_fixed_disposition_verify_receipts(state, 2)
-
-    ledger = _ledger_by_key(state)
-    assert ledger[key_verified]["dispositionReceipt"].get("verifyResult") == "pass"
-    assert "verifyResult" not in ledger[key_other]["dispositionReceipt"]

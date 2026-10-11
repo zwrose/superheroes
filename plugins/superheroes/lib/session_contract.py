@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Session-contract path and phase constants — leaf module with no round_* imports."""
-import base64
-import binascii
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Optional
 
 import model_registry
 
@@ -21,8 +18,6 @@ __all__ = (
     "AUDITS_PHASE",
     "CHANNEL_FILE",
     "CHANNEL_STDOUT",
-    "HEAD_CONTENT_BLOBS_FILE",
-    "HEAD_CONTENT_BLOBS_SCHEMA",
     "SEAT_MISSING_SCHEMA",
     "FIX_FOLD_HEAD_KEY",
     "WRITE_RESULT_KIND",
@@ -30,7 +25,6 @@ __all__ = (
     "REVIEW_LIST_RESULT_KINDS",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
-    "VERIFIED_HEAD_FIELD",
     "DISPOSITIONS",
     "FOLLOW_UP_FIELDS",
     "follow_up_shape_fault",
@@ -70,11 +64,7 @@ __all__ = (
     "finding_content_canonical",
     "content_hash_suffix",
     "coerce_line",
-    "HeadContentRead",
-    "classify_head_content_read",
     "resolve_merged_into_entry",
-    "fix_proof_path",
-    "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
     "legacy_key_collision",
     "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
@@ -90,7 +80,6 @@ __all__ = (
     "RUN_KIND_BY_PHASE",
     "EXECUTION_EVIDENCE_RUN_KIND_FIELD",
     "EXECUTION_EVIDENCE_BINDING_FIELDS",
-    "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
     "RULE_CMD",
@@ -213,11 +202,8 @@ def journal_is_re_emit_orders_superseded(event):
     return journal_is_orders_superseded(event)
 CHANNEL_FILE = "file"
 CHANNEL_STDOUT = "stdout"
-HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
-HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
-VERIFIED_HEAD_FIELD = "verifiedHead"
 FINDING_KEY_FIELD = "findingKey"
 
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
@@ -529,24 +515,6 @@ def finding_identity_key(finding):
     return minted_identity_key(finding)
 
 
-@dataclass(frozen=True)
-class HeadContentRead:
-    """Normalized outcome of a head-content-blobs read — no I/O in this module."""
-    kind: str
-    blobs: Optional[dict] = None
-
-
-def classify_head_content_read(*, absent=False, blobs=None, error=None):
-    """Classify a caller's raw head-content read attempt into ``HeadContentRead``."""
-    if absent:
-        return HeadContentRead(kind="missing")
-    if error is not None:
-        return HeadContentRead(kind="unreadable")
-    if not isinstance(blobs, dict):
-        return HeadContentRead(kind="unreadable")
-    return HeadContentRead(kind="ok", blobs=blobs)
-
-
 def resolve_merged_into_entry(finding, by_key):
     """Follow mergedInto through by_key; None when the chain does not resolve."""
     if not isinstance(finding, dict):
@@ -572,104 +540,6 @@ def resolve_merged_into_entry(finding, by_key):
     return None
 
 
-def fix_proof_path(finding, by_key=None):
-    """File path whose head-content proof binds a fixed disposition — representative for merged members."""
-    path = finding.get("file")
-    if by_key is not None and finding.get(MERGED_INTO_FIELD):
-        resolved = resolve_merged_into_entry(finding, by_key)
-        if isinstance(resolved, dict):
-            rep_path = resolved.get("file")
-            if isinstance(rep_path, str) and rep_path:
-                path = rep_path
-    return path
-
-
-def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None):
-    """Return ``(binding_failure_token, detail)`` when the fix no longer stands, else ``None``.
-
-    ``head`` and ``read_outcome`` are supplied by the caller; this leaf never reaches for a session."""
-    path = fix_proof_path(finding, by_key)
-    if not isinstance(path, str) or not path:
-        return (
-            "fix-content-missing",
-            "fixed disposition lacks file path for head-content verification",
-        )
-    if not isinstance(head, str) or not head:
-        return (
-            "fix-content-missing",
-            "fixed disposition lacks certified head for content verification",
-        )
-    if read_outcome.kind == "unreadable":
-        return (
-            "fix-content-unreadable",
-            "fixed disposition fix-content read failed on certified head",
-        )
-    if read_outcome.kind == "missing":
-        return (
-            "fix-content-missing",
-            "fixed disposition lacks head-content evidence on certified head",
-        )
-    blobs = read_outcome.blobs
-    if blobs.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
-        return (
-            "fix-content-schema-unsupported",
-            "fixed disposition head-content schema is not supported",
-        )
-    reads = blobs.get("reads")
-    if not isinstance(reads, list):
-        reads = []
-    matching = [
-        row
-        for row in reads
-        if isinstance(row, dict)
-        and row.get("headSha") == head
-        and row.get("path") == path
-    ]
-    if not matching:
-        return (
-            "fix-content-missing",
-            "fixed disposition fix is not present in content at the certified head",
-        )
-    row = matching[-1]
-    if row.get("readError") is not None or not row.get("contentDigest"):
-        return (
-            "fix-content-unreadable",
-            "fixed disposition fix-content read failed on certified head",
-        )
-    content_digest = row["contentDigest"]
-    files = blobs.get("files")
-    file_b64 = files.get(path) if isinstance(files, dict) else None
-    if file_b64 is None:
-        return (
-            "fix-content-unreadable",
-            "fixed disposition fix-content read failed on certified head",
-        )
-    try:
-        raw = base64.b64decode(file_b64, validate=True)
-    except (binascii.Error, ValueError):
-        return (
-            "fix-content-unreadable",
-            "fixed disposition fix-content read failed on certified head",
-        )
-    if hashlib.sha256(raw).hexdigest() != content_digest:
-        return (
-            "fix-content-reverted",
-            "fixed disposition fix is not present in content at the certified head",
-        )
-    fix_content_digest = receipt.get("fixContentDigest")
-    if not isinstance(fix_content_digest, str) or not fix_content_digest:
-        return (
-            "fix-content-reverted",
-            "fixed disposition fix is not present in content at the certified head",
-        )
-    if content_digest != fix_content_digest:
-        return (
-            "fix-content-reverted",
-            "fixed disposition fix is not present in content at the certified head",
-        )
-    return None
-
-
 def runner_channel_vendor(vendor):
     """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
 
@@ -680,34 +550,3 @@ def runner_channel_vendor(vendor):
     if v == "claude":
         return False
     return v in model_registry.vendors()
-
-
-def verify_result_for_head(state, head):
-    """The verify result recorded FOR `head`, or None. The ONE reader of the verified-head fact.
-
-    `_fold_verify` records `verifiedHead` beside `verifyResult` in the round record it writes;
-    this answers "was this head verified, and how" from that record alone. A round record with a
-    `verifyResult` but NO `verifiedHead` reads as NOT VERIFIED (fail-closed) — the verified-head
-    fact is never reconstructed from `verifyResult` plus `fixFoldHead`, which is the class this
-    retires (three passes over that reconstruction each broke a neighbour, #1272 layer 2g)."""
-    if not isinstance(head, str) or not head:
-        return None
-    if not isinstance(state, dict):
-        return None
-    rounds = state.get("rounds")
-    if not isinstance(rounds, dict):
-        return None
-    round_nums = []
-    for key in rounds:
-        try:
-            round_nums.append(int(key))
-        except (TypeError, ValueError):
-            continue
-    for rnd in sorted(round_nums, reverse=True):
-        rec = rounds.get(str(rnd))
-        if not isinstance(rec, dict):
-            continue
-        verified = rec.get(VERIFIED_HEAD_FIELD)
-        if isinstance(verified, str) and verified and verified == head:
-            return rec.get("verifyResult")
-    return None

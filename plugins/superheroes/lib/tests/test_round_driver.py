@@ -8353,3 +8353,205 @@ def _certification_refusal_session(tmp_path):
         },
         envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
+
+
+# --- the verify head is an input to the next panel's diff, never a stored fact --------------
+
+def _verify_fold_state(**cfg_over):
+    state = RD.new_state(_cfg(**cfg_over))
+    state["round"] = 1
+    state["rounds"] = {"1": {}}
+    return state
+
+
+def _git_repo_with_head(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(
+        ["git", "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    return str(repo), head
+
+
+def _head_lookup_session(base, repo, **meta_over):
+    session_dir = base / "session"
+    session_dir.mkdir(parents=True)
+    meta = {"headSha": "0" * 40, "repoRoot": repo}
+    meta.update(meta_over)
+    (session_dir / RD.round_records.META_FILE).write_text(
+        json.dumps(meta, sort_keys=True) + "\n", encoding="utf-8")
+    return str(session_dir)
+
+
+def test_verify_fold_records_no_head():
+    head_key = "verified" + "Head"
+    for resolution in (("a" * 40, None), (None, "head unresolved")):
+        state = _verify_fold_state()
+        state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
+        state["_newSurface"] = {"f.py": [1]}
+        RD._fold_verify(state, state["config"], {"result": "pass"}, resolution=resolution)
+        rec = state["rounds"]["1"]
+        assert rec["verifyResult"] == "pass"
+        assert head_key not in rec
+        assert head_key + "Refused" not in rec
+
+
+def test_verify_fold_without_a_resolution_raises():
+    state = _verify_fold_state()
+    with pytest.raises(ValueError):
+        RD._fold_verify(state, state["config"], {"result": "pass"}, resolution=None)
+    assert "verifyResult" not in state["rounds"]["1"]
+
+
+def test_verify_fold_unresolved_head_post_audits_advances():
+    state = _verify_fold_state()
+    state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
+    state["_newSurface"] = {"f.py": [1]}
+    RD._fold_verify(state, state["config"], {"result": "pass"},
+                    resolution=(None, "fix-fold head: repo root unresolvable"))
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_SCOPED
+    assert "_verifyThen" not in state
+
+
+def test_verify_fold_unresolved_head_panel_parks_underivable():
+    state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
+    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
+    RD._fold_verify(state, state["config"], {"result": "pass"},
+                    resolution=(None, "fix-fold head: repo root unresolvable"))
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
+    assert "head unresolved" in state["certification"]["reason"]
+
+
+def test_verify_fold_at_ceiling_parks_round_ceiling():
+    for resolution in (("a" * 40, None), (None, "fix-fold head: repo root unresolvable")):
+        state = _verify_fold_state(maxRounds=2, maxRoundsAbsolute=2)
+        state["round"] = 2
+        state["rounds"] = {"2": {}}
+        state["_verifyThen"] = RD.VERIFY_THEN_CEILING
+        RD._fold_verify(state, state["config"], {"result": "pass"}, resolution=resolution)
+        assert state["terminal"] == "halted"
+        assert state["step"] == RD.P_TERMINAL
+        assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+
+
+def test_verify_fold_legacy_position_unresolved_head_unknown_surface_parks_underivable():
+    """No continuation flag and no head: the delta round has no baseline, so it needs a full panel
+    over the head diff; with no head the derivation refuses and the session parks."""
+    state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
+    assert "_verifyThen" not in state
+    RD._fold_verify(state, state["config"], {"result": "pass"},
+                    resolution=(None, "fix-fold head: repo root unresolvable"))
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
+    assert "head unresolved" in state["certification"]["reason"]
+
+
+def test_verify_head_lookup_writes_nothing(tmp_path):
+    repo, head = _git_repo_with_head(tmp_path)
+    persisted = "c" * 40
+    cases = (
+        ("plain", {}, [], head),
+        ("fix-batch", {}, [{"file": "a.py"}], head),
+        ("meta-persisted", {RD.FIX_FOLD_HEAD_KEY: persisted}, [], persisted),
+    )
+    for label, meta_over, batch, expected in cases:
+        session_dir = _head_lookup_session(tmp_path / label, repo, **meta_over)
+        meta_path = os.path.join(session_dir, RD.round_records.META_FILE)
+        state = RD.new_state(_cfg())
+        if batch:
+            state["_fixBatch"] = batch
+        with open(meta_path, "rb") as fh:
+            meta_before = fh.read()
+        config_before = json.dumps(state["config"], sort_keys=True)
+        resolved, error = RD._verified_head_at_fold(session_dir, state)
+        assert (resolved, error) == (expected, None), label
+        assert json.dumps(state["config"], sort_keys=True) == config_before, label
+        with open(meta_path, "rb") as fh:
+            assert fh.read() == meta_before, label
+
+
+def test_verify_head_lookup_without_session_dir_resolves_nothing():
+    state = RD.new_state(_cfg(headSha="a" * 40))
+    config_before = json.dumps(state["config"], sort_keys=True)
+    head, error = RD._verified_head_at_fold(None, state)
+    assert head is None
+    assert error
+    assert json.dumps(state["config"], sort_keys=True) == config_before
+
+
+def test_fixer_fold_still_persists_fix_fold_head(tmp_path):
+    repo, head = _git_repo_with_head(tmp_path)
+    session_dir = _head_lookup_session(tmp_path, repo)
+    state = RD.new_state(_cfg())
+    assert RD._resolve_fix_fold_head_sha(session_dir, state) == (head, None)
+    assert state["config"][RD.FIX_FOLD_HEAD_KEY] == head
+    with open(os.path.join(session_dir, RD.round_records.META_FILE), encoding="utf-8") as fh:
+        assert json.load(fh)[RD.FIX_FOLD_HEAD_KEY] == head
+
+
+def test_fixer_fold_records_refusal_when_head_unresolvable(tmp_path, monkeypatch):
+    repo, _head = _git_repo_with_head(tmp_path)
+    session_dir = _head_lookup_session(tmp_path, repo)
+    state = RD.new_state(_cfg(repoRoot=repo))
+    state["round"] = 1
+    state["_fixBatch"] = [{"id": "F1", "file": "a.py", "line": 1, "severity": "Important"}]
+    monkeypatch.setattr(RD.store_core, "run_git", lambda _repo_root, *_args, **_kwargs: None)
+    RD._fold_fixer(state, state["config"], {"fixes": [{"file": "a.py"}], "headDiff": "diff"},
+                   session_dir=session_dir)
+    assert "git rev-parse HEAD failed" in state["rounds"]["1"]["fixFoldHeadRefused"]
+    assert "fixFoldHead" not in state["rounds"]["1"]
+
+
+def test_ceiling_always_runs_the_verify_gate():
+    state = RD.new_state(_cfg(maxRounds=2, maxRoundsAbsolute=2))
+    state["round"] = 2
+    state["rounds"] = {"2": {"verifyResult": "pass"}}
+    RD._enter_post_fix(state, state["config"], session_dir=None)
+    assert state["step"] == RD.P_VERIFY
+    assert state["_verifyThen"] == RD.VERIFY_THEN_CEILING
+    assert not state.get("terminal")
+    assert "ceilingGateReused" not in state["rounds"]["2"]
+
+
+def test_verify_submit_with_unresolvable_head_is_not_refused(tmp_path):
+    fixtures_dir = _HERE
+    if fixtures_dir not in sys.path:
+        sys.path.insert(0, fixtures_dir)
+    from session_fixture_support import write_session
+
+    not_a_repo = tmp_path / "not-git"
+    not_a_repo.mkdir()
+    state = RD.new_state({"fixerVendor": "claude", "baseGuard": RD.BASE_GUARD_CHECKED})
+    state["round"] = 1
+    state["step"] = RD.P_VERIFY
+    state["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
+                        "payload": {"command": "none"}}
+    session_dir = write_session(
+        tmp_path, name="verify", state=state, journal_lines=[],
+        meta={"repoRoot": str(not_a_repo)})
+    echo = RD.cmd_next(session_dir)
+    assert echo["ok"], echo
+    answer = RD.cmd_submit(session_dir, echo["phase"], echo["attempt"],
+                           echo["expectedStateHash"], {"result": "pass"})
+    assert answer["ok"] is True, answer
+    assert answer.get("foldLanded") is True
+    assert answer.get("reason") != "verified-head-unresolved"
+    assert all(row.get("outcome") != "verified-head-unresolved"
+               for row in RD.read_journal(session_dir))
+    ok, loaded = RD.load_state(session_dir)
+    assert ok and loaded["rounds"]["1"]["verifyResult"] == "pass"
+
+
+def test_fixed_disposition_receipt_carries_only_the_fix_fold_head():
+    head = "d" * 40
+    state = RD.new_state(_cfg())
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head}}
+    assert RD._fixed_disposition_receipt(state, None, "k@L1") == {}
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = head
+    assert RD._fixed_disposition_receipt(state, None, "k@L1") == {"headSha": head}
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = ""
+    assert RD._fixed_disposition_receipt(state, None, "k@L1") == {}

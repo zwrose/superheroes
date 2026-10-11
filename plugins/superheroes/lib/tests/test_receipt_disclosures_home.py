@@ -231,7 +231,6 @@ def test_session_contract_exports_match_driver_and_records():
         "STATE_FILE",
         "JOURNAL_FILE",
         "JOURNAL_FAULT_FILE",
-        "HEAD_CONTENT_BLOBS_FILE",
         "FIX_FOLD_HEAD_KEY",
     }
     records_names = {"META_FILE", "SEAT_MISSING_SCHEMA", "canonical", "payload_sha256"}

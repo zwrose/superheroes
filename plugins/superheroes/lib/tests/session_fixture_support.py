@@ -3,8 +3,6 @@
 Copied from the certification fixtures without behaviour change (constants re-homed to the kept
 modules); nothing here imports the certification writer or reads the generated fixture tree.
 """
-import base64
-import hashlib
 import json
 import os
 
@@ -22,11 +20,9 @@ DEFAULT_FINDINGS_RESULT_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD["findings"
 META_FILE = session_contract.META_FILE
 STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
-HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
 PANEL_PHASE = session_contract.PANEL_PHASE
 
 _LEGACY_TYPED_RESULT_DIGEST = "e" * 64
-_FIX_PRESENT_BYTES = b"fix present\n"
 
 
 def write_session(
@@ -37,10 +33,8 @@ def write_session(
     journal_lines=None,
     meta=None,
     envelopes=None,
-    faithful_session=None,
 ):
     """Ad-hoc session writer for driverless tests."""
-    faithful = bool(faithful_session)
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
     meta_obj = {"sessionId": "test-session-001", "headSha": HEAD_SHA}
@@ -66,13 +60,6 @@ def write_session(
         {"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}
     ]:
         _write_envelope(session_dir, spec)
-    if faithful:
-        head = meta_obj.get("headSha") or (state_obj.get("config") or {}).get("headSha") or HEAD_SHA
-        blobs_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-        if not os.path.exists(blobs_path):
-            blobs = _head_content_blobs_for_findings(state_obj.get("findings") or [], head)
-            if blobs is not None:
-                _write_head_content_blobs(session_dir, blobs)
     return session_dir
 
 
@@ -368,49 +355,6 @@ def _default_journal_row():
     }
 
 
-def _head_content_read_row(path, content_bytes, head=HEAD_SHA):
-    digest = hashlib.sha256(content_bytes).hexdigest()
-    return {
-        "headSha": head,
-        "path": path,
-        "contentDigest": digest,
-        "bytes": len(content_bytes),
-        "readAt": "2026-01-01T00:00:00Z",
-        "source": "git-show",
-        "readError": None,
-    }, digest
-
-
-def _head_content_blobs_for_findings(findings, head=HEAD_SHA):
-    reads = []
-    files = {}
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        if finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
-        if not isinstance(path, str) or not path:
-            continue
-        row, _digest = _head_content_read_row(path, _FIX_PRESENT_BYTES, head)
-        reads.append(row)
-        files[path] = base64.b64encode(_FIX_PRESENT_BYTES).decode("ascii")
-    if not reads:
-        return None
-    return {
-        "schema": session_contract.HEAD_CONTENT_BLOBS_SCHEMA,
-        "headSha": head,
-        "files": files,
-        "reads": reads,
-    }
-
-
-def _write_head_content_blobs(session_dir, blobs):
-    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(blobs, fh, sort_keys=True)
-
-
 def _dispatch_journal_with_binding(
     seat="code-reviewer",
     payload_sha=DEFAULT_PANEL_PAYLOAD_SHA,
@@ -454,29 +398,12 @@ def _dispatch_journal_with_binding(
 
 
 def write_certifiable_session(tmp_path, **kwargs):
-    """Session with binding telemetry and head-content evidence for fixed findings."""
+    """Session whose journal carries a dispatch row with binding telemetry."""
     state = kwargs.get("state")
-    if state is None:
-        state = {}
-    elif not isinstance(state, dict):
+    if not isinstance(state, dict):
         state = {}
     kwargs = dict(kwargs)
     kwargs["state"] = state
-    kwargs.setdefault("faithful_session", True)
     if kwargs.get("journal_lines") is None:
         kwargs["journal_lines"] = [_dispatch_journal_with_binding()]
-    session_dir = write_session(tmp_path, **kwargs)
-    findings = (state.get("findings") if state else None) or []
-    blobs = _head_content_blobs_for_findings(findings)
-    if blobs is None:
-        blobs = _head_content_blobs_for_findings(
-            [
-                {
-                    "id": "F1",
-                    "file": "a.py",
-                    "disposition": "fixed",
-                }
-            ]
-        )
-    _write_head_content_blobs(session_dir, blobs)
-    return session_dir
+    return write_session(tmp_path, **kwargs)

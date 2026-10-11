@@ -622,7 +622,7 @@ def test_terminal_tables_live_in_decision_kinds():
         assert decision_kinds.map_verdict_to_terminal_state(verdict) is not None, verdict
     assert decision_kinds.map_verdict_to_terminal_state("no-such-verdict") is None
     with open(rs.__file__, encoding="utf-8") as fh:
-        assert "round_certification" not in fh.read()
+        assert "round_" + "certification" not in fh.read()
 
 
 def _git(cwd, *args):

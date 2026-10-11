@@ -39,7 +39,6 @@ its shape). The confirmation economics (`review_round_policy.confirmation_follow
 not re-implemented.
 """
 import argparse
-import base64
 import binascii
 import copy
 import errno
@@ -202,8 +201,6 @@ RULINGS_LOG_MALFORMED = "rulings-log-malformed"
 RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
-HEAD_CONTENT_BLOBS_FILE = session_contract.HEAD_CONTENT_BLOBS_FILE
-HEAD_CONTENT_BLOBS_SCHEMA = session_contract.HEAD_CONTENT_BLOBS_SCHEMA
 
 # --- the #723 schema matrix -------------------------------------------------------------------
 # `SCHEMA_VERSION` stays the version a v2 RECEIPT keys off (and the version an in-flight v2 state
@@ -435,7 +432,6 @@ STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
 
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
-VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
 RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
 RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
 RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
@@ -1740,48 +1736,12 @@ def _record_merged_into(state, key, into_key):
         _apply_disposition_family(live, family)
 
 
-def _fix_receipt_content_fields(session_dir, head_sha, file_path):
-    if not session_dir or not isinstance(head_sha, str) or not head_sha:
-        return {}
-    if not isinstance(file_path, str) or not file_path:
-        return {}
-    data = _read_head_content_blobs_file(session_dir)
-    if not isinstance(data, dict):
-        return {}
-    for row in data.get("reads") or []:
-        if not isinstance(row, dict):
-            continue
-        if row.get("headSha") == head_sha and row.get("path") == file_path:
-            fields = {"fixContentHeadSha": head_sha}
-            digest = row.get("contentDigest")
-            if isinstance(digest, str) and digest:
-                fields["fixContentDigest"] = digest
-            nbytes = row.get("bytes")
-            if isinstance(nbytes, int):
-                fields["fixContentBytes"] = nbytes
-            return fields
-    return {}
-
-
 def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     cfg = state.get("config") or {}
     head = cfg.get(FIX_FOLD_HEAD_KEY) if isinstance(cfg, dict) else None
-    verify_result = session_contract.verify_result_for_head(state, head)
-    receipt = {}
     if isinstance(head, str) and head:
-        receipt["headSha"] = head
-    if verify_result is not None:
-        receipt["verifyResult"] = verify_result
-    file_path = None
-    if isinstance(target, dict):
-        file_path = target.get("file")
-    if not file_path:
-        live = _live_finding_by_key(state, finding_key)
-        if isinstance(live, dict):
-            file_path = live.get("file")
-    if session_dir and isinstance(head, str) and head and isinstance(file_path, str):
-        receipt.update(_fix_receipt_content_fields(session_dir, head, file_path))
-    return receipt
+        return {"headSha": head}
+    return {}
 
 
 def _fixed_ledger_rows(state):
@@ -1816,37 +1776,6 @@ def _fixed_ledger_rows(state):
             continue
         rows.append((key, entry))
     return rows, by_key, None
-
-
-def _fixed_disposition_family_with_receipt(entry, receipt):
-    """Carry the row's whole family forward with an updated receipt.
-
-    The writer applies a WHOLE family and pops every member the family omits. Passing the
-    receipt alone would delete `mergedInto` (and the refuted/out-of-scope reasons) from a
-    retained row and turn a refusing unresolved-merge chain into a certifiable independent
-    disposition — a fail-direction inversion, not a cosmetic loss."""
-    family = session_contract.disposition_family_snapshot(entry)
-    family.pop("disposition", None)
-    family.pop("dispositionRound", None)
-    return dict(family, dispositionReceipt=receipt)
-
-
-def _backfill_fixed_disposition_verify_receipts(state, round_no):
-    """Stamp verify on fixed receipts keyed on each receipt's own head when audits folded before verify."""
-    rows, _by_key, _fault = _fixed_ledger_rows(state)
-    for key, entry in rows:
-        if entry.get("dispositionRound") != round_no:
-            continue
-        receipt = entry.get("dispositionReceipt")
-        if not isinstance(receipt, dict) or receipt.get("verifyResult") is not None:
-            continue
-        verify_result = session_contract.verify_result_for_head(state, receipt.get("headSha"))
-        if verify_result is None:
-            continue
-        updated_receipt = dict(receipt)
-        updated_receipt["verifyResult"] = verify_result
-        family = _fixed_disposition_family_with_receipt(entry, updated_receipt)
-        _record_disposition(state, key, "fixed", round_no, **family)
 
 
 def _archive_departures(state, departing):
@@ -4165,9 +4094,6 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
             _record_round(state, "fixFoldHeadRefused", head_err)
         else:
             _record_round(state, "fixFoldHead", head)
-            _record_fix_content_on_findings(state, session_dir, artifact, head)
-            _merge_head_content_blobs(
-                session_dir, state, head, _fixed_ledger_content_paths(state, artifact))
     queue = state.get("_fixQueue") or []
     if queue:
         cap = _fix_batch_cap(config)
@@ -4464,19 +4390,16 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     verify command IS configured (the command did not actually run) HALTS with an honest reason that
     names the class — never advances into a delta round that could later certify.
 
-    The verified-head resolution is decided at the submit chokepoint (or passed explicitly by the
-    in-process leg) and forwarded; a missing resolution raises before anything is recorded."""
+    The head the next panel's diff is derived from is resolved at the submit chokepoint (or passed
+    explicitly by the in-process leg) and forwarded as ``(head, error)``; a missing resolution
+    raises before anything is recorded. An error resolution passes no head on."""
     if not (isinstance(resolution, tuple) and len(resolution) == 2):
         raise ValueError("verify fold: no verified-head resolution was forwarded")
     verified_head, verified_head_err = resolution
     if verified_head_err:
-        _record_round(state, "verifiedHeadRefused", verified_head_err)
-    else:
-        _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
+        verified_head = None
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
-    if result == "pass":
-        _backfill_fixed_disposition_verify_receipts(state, state["round"])
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
@@ -4529,43 +4452,13 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         state, config, panel_diff_seam=panel_diff_seam, panel_head=verified_head)
 
 
-def _try_reuse_ceiling_verify_gate(state, config, session_dir):
-    """Reuse the round's passing gate at the ceiling when the post-fix head matches.
-
-    A reuse is allowed only when ``verify_result_for_head`` returns ``"pass"`` for the post-fix
-    head resolved by ``_resolve_fix_fold_head_sha`` — the canonical verified-head reader. Every
-    other case — an unresolvable head, a non-pass result, or no prior verification for that head
-    — returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
-    ``ceilingGateReused`` and parks ``round-ceiling``."""
-    if session_dir is None:
-        cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
-        post_fix_head = cfg.get(FIX_FOLD_HEAD_KEY)
-        if not (isinstance(post_fix_head, str) and post_fix_head):
-            return False
-    else:
-        post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
-        if head_err or not post_fix_head:
-            return False
-    if session_contract.verify_result_for_head(state, post_fix_head) != "pass":
-        return False
-    _record_round(state, "ceilingGateReused", post_fix_head)
-    next_round = state["round"] + 1
-    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
-    detail = brk.get("detail") or "round ceiling reached"
-    detail = "%s (ceiling gate reused for post-fix head %s)" % (detail, post_fix_head)
-    _park_round_ceiling(state, detail)
-    return True
-
-
 def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
     """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
     next_round = state["round"] + 1
     if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
         # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
-        # round. Reuse the gate when it already passed on this post-fix head; otherwise run it on
-        # the post-fix head (including when the round's earlier gate ran on a different head).
-        if _try_reuse_ceiling_verify_gate(state, config, session_dir):
-            return
+        # round. The gate always runs on the post-fix head, including when the round's earlier gate
+        # already passed.
         state["_verifyThen"] = VERIFY_THEN_CEILING
         state["step"] = P_VERIFY
         return
@@ -5569,7 +5462,6 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "seatStatus": rec.get("seatStatus"),
               "blockingCount": rec.get("blockingCount"),
               "verifyResult": rec.get("verifyResult"),
-              "verifiedHead": rec.get("verifiedHead"),
               "audits": rec.get("audits"),
               # The manifest-keyed audit-provenance boundary (LEDGERS §3): a round that ran
               # fix audits records `collection-manifest` here so the boundary — attestation,
@@ -6102,25 +5994,25 @@ def _persist_fix_fold_head_sha(session_dir, state, head):
 
 
 def _verified_head_at_fold(session_dir, state):
-    """The head the verify gate ran against, resolved before the verify fold. Fail-closed.
+    """The head the next panel's diff is derived from, resolved before the verify fold. Records nothing.
 
     Called at the submit chokepoint and by the in-process leg, never from inside the fold.
-    Returns (head, error). With a session dir this is the same resolver the fixer fold uses, so
-    the recorded head is the head the fixer landed at and the gate ran against. WITHOUT one
-    (`run_loop`'s in-process leg passes no session_dir) there is NO fallback: `config["headSha"]`
-    is the session-SETUP head and stamping it could credit a head a fixer seam had already moved
-    past, so this refuses instead. Refusing matches today's behaviour on that leg — `_fold_fixer`
-    also gets no session_dir there, so no head was ever recorded."""
+    Returns (head, error). With a session dir this is the fixer fold's resolver, run read-only: it
+    writes nothing into state or ``meta.json``. WITHOUT a session dir (`run_loop`'s in-process leg)
+    there is NO fallback: `config["headSha"]` is the session-SETUP head and could name a head a
+    fixer seam had already moved past, so it returns an error and no head."""
     if session_dir:
-        return _resolve_fix_fold_head_sha(session_dir, state)
-    return (None, "verified head: no session dir — the in-process leg records no verified head")
+        return _resolve_fix_fold_head_sha(session_dir, state, persist=False)
+    return (None, "verified head: no session dir — the in-process leg resolves no verified head")
 
 
-def _resolve_fix_fold_head_sha(session_dir, state):
+def _resolve_fix_fold_head_sha(session_dir, state, persist=True):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
-    Returns (head_sha, error). On success the head is persisted so a resumed session reads the
-    same value rather than re-deriving a now-different one."""
+    Returns (head_sha, error). With ``persist`` (the default) a resolved head is written into
+    state config and ``meta.json`` so a resumed session reads the same value rather than
+    re-deriving a now-different one; ``persist=False`` follows the same branches and writes
+    nothing."""
     if _fix_batch_paths(state):
         repo_root = _resolve_repo_root(session_dir, state)
         if not repo_root:
@@ -6128,7 +6020,8 @@ def _resolve_fix_fold_head_sha(session_dir, state):
         head = store_core.run_git(repo_root, "rev-parse", "HEAD")
         if not head:
             return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
-        _persist_fix_fold_head_sha(session_dir, state, head)
+        if persist:
+            _persist_fix_fold_head_sha(session_dir, state, head)
         return head, None
     cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
     persisted = cfg.get(FIX_FOLD_HEAD_KEY)
@@ -6137,7 +6030,7 @@ def _resolve_fix_fold_head_sha(session_dir, state):
     meta = _session_meta(session_dir)
     persisted = meta.get(FIX_FOLD_HEAD_KEY)
     if isinstance(persisted, str) and persisted:
-        if isinstance(cfg, dict):
+        if persist and isinstance(cfg, dict):
             cfg[FIX_FOLD_HEAD_KEY] = persisted
             state["config"] = cfg
         return persisted, None
@@ -6147,12 +6040,13 @@ def _resolve_fix_fold_head_sha(session_dir, state):
     head = store_core.run_git(repo_root, "rev-parse", "HEAD")
     if not head:
         return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
-    _persist_fix_fold_head_sha(session_dir, state, head)
+    if persist:
+        _persist_fix_fold_head_sha(session_dir, state, head)
     return head, None
 
 
 def _session_certified_head(session_dir, state):
-    """Head SHA the certification writer binds fixed-disposition evidence to."""
+    """The session's head SHA: fix-fold head, then session-setup head, from meta.json then config."""
     meta_path = os.path.join(session_dir, round_records.META_FILE)
     if os.path.isfile(meta_path):
         try:
@@ -6186,164 +6080,6 @@ def _resolve_repo_root(session_dir, state):
     return os.path.realpath(root) if root else None
 
 
-def _fixed_ledger_content_paths(state, artifact=None):
-    """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
-    rows, by_key, _fault = _fixed_ledger_rows(state)
-    paths = []
-    seen = set()
-    for key, entry in rows:
-        _ = key
-        path = session_contract.fix_proof_path(entry, by_key)
-        if isinstance(path, str) and path and path not in seen:
-            seen.add(path)
-            paths.append(path)
-    for path in _fix_batch_paths(state, artifact):
-        if path not in seen:
-            seen.add(path)
-            paths.append(path)
-    return paths
-
-
-def _merge_head_content_blobs(session_dir, state, head_sha, paths):
-    """Write or merge head-content reads bound to a named head (#1271 layer 2).
-
-    Every row records a read that actually happened; presence is never written here."""
-    if not session_dir:
-        return
-    try:
-        head = head_sha
-        if not isinstance(head, str) or not head:
-            return
-        if not paths:
-            return
-        repo_root = _resolve_repo_root(session_dir, state)
-        existing = _read_head_content_blobs_file(session_dir) or {}
-        files = dict(existing.get("files") or {})
-        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
-        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
-        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        for path in paths:
-            row, raw = _head_content_read_row(repo_root, head, path, read_at)
-            key = (head, path)
-            if key in indexed:
-                reads[indexed[key]] = row
-            else:
-                indexed[key] = len(reads)
-                reads.append(row)
-            if row.get("readError") is None and raw is not None:
-                files[path] = base64.b64encode(raw).decode("ascii")
-            else:
-                files.pop(path, None)
-        blobs = {
-            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
-            "headSha": head,
-            "files": files,
-            "reads": reads,
-        }
-        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-        round_commit.atomic_write_bytes(
-            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
-    except Exception:
-        pass
-
-
-def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
-    """Write or merge head-content reads bound to a named head (#1271 layer 2).
-
-    Every row records a read that actually happened; presence is never written here."""
-    if not session_dir:
-        return
-    head = head_sha or _session_certified_head(session_dir, state)
-    if not isinstance(head, str) or not head:
-        return
-    try:
-        if paths is None:
-            paths = _fixed_ledger_content_paths(state, artifact)
-        _merge_head_content_blobs(session_dir, state, head, paths)
-    except Exception:
-        pass
-
-
-def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
-    """Re-bind fixed ledger receipts to the certified head when provable; record residuals otherwise.
-
-    Returns True when ``state`` was mutated (re-bind, residual, or verify stamp)."""
-    rows, by_key, fault = _fixed_ledger_rows(state)
-    if fault is not None:
-        return False
-    pending = []
-    for key, entry in rows:
-        receipt = entry.get("dispositionReceipt")
-        if not isinstance(receipt, dict):
-            pending.append((key, None, None))
-            continue
-        pending.append((key, entry, dict(receipt)))
-    if not pending:
-        return False
-    if not isinstance(certified_head, str) or not certified_head:
-        return False
-    read_outcome = _read_head_content_blobs_file(session_dir, normalized=True)
-    changed = False
-    for key, entry, original_receipt in pending:
-        if entry is None:
-            continue
-        existing_head = original_receipt.get("headSha")
-        head_unchanged = (
-            isinstance(existing_head, str) and existing_head and existing_head == certified_head
-        )
-        probe_receipt = dict(original_receipt)
-        if not head_unchanged:
-            probe_receipt["headSha"] = certified_head
-        binding_failure = session_contract.fix_still_present_at_head(
-            entry, probe_receipt, certified_head, read_outcome, by_key=by_key
-        )
-        if binding_failure:
-            continue
-        updated_receipt = dict(original_receipt)
-        if not head_unchanged:
-            updated_receipt["headSha"] = certified_head
-        verify_result = session_contract.verify_result_for_head(state, certified_head)
-        if verify_result != "pass":
-            if original_receipt.get("verifyResult") is not None:
-                revoked = dict(original_receipt)
-                revoked.pop("verifyResult", None)
-                _record_disposition(
-                    state,
-                    key,
-                    "fixed",
-                    entry.get("dispositionRound"),
-                    **_fixed_disposition_family_with_receipt(entry, revoked),
-                )
-                changed = True
-            continue
-        updated_receipt["verifyResult"] = verify_result
-        _record_disposition(
-            state,
-            key,
-            "fixed",
-            entry.get("dispositionRound"),
-            **_fixed_disposition_family_with_receipt(entry, updated_receipt),
-        )
-        changed = True
-    return changed
-
-
-def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
-    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
-    if not session_dir:
-        return
-    if session_contract.disposition_ledger_owner_classification(state) == (
-        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
-    ):
-        return
-    head = head_sha or _session_certified_head(session_dir, state)
-    if not isinstance(head, str) or not head:
-        return
-    _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
-    if _finalize_fixed_disposition_receipts(state, session_dir, head):
-        save_state(session_dir, state)
-
-
 def _fix_batch_paths(state, artifact=None):
     paths = []
     seen = set()
@@ -6366,107 +6102,6 @@ def _fix_batch_paths(state, artifact=None):
                 seen.add(path)
                 paths.append(path)
     return paths
-
-
-def _git_show_bytes(repo_root, head_sha, path):
-    """Return (raw_bytes, read_error) from ``git show head:path`` — never decoded or stripped."""
-    if not repo_root:
-        return None, "repo-root-unresolvable"
-    try:
-        proc = subprocess.run(
-            ["git", "show", "%s:%s" % (head_sha, path)],
-            cwd=repo_root,
-            capture_output=True,
-            text=False,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return None, "git-show failed: %s" % exc
-    if proc.returncode != 0:
-        err = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
-        msg = "git-show failed: exit %d" % proc.returncode
-        if err:
-            msg += ": %s" % err
-        return None, msg
-    return proc.stdout, None
-
-
-def _head_content_read_row(repo_root, head_sha, path, read_at=None):
-    """One ``reads[]`` row for head-content-blobs/2 — evidence of a read, never asserted presence.
-
-    Returns (row, raw_bytes) where raw_bytes is None on a failed read."""
-    read_at = read_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    raw, read_error = _git_show_bytes(repo_root, head_sha, path)
-    if read_error is not None:
-        return {
-            "headSha": head_sha,
-            "path": path,
-            "contentDigest": None,
-            "bytes": None,
-            "readAt": read_at,
-            "source": "git-show",
-            "readError": read_error,
-        }, None
-    return {
-        "headSha": head_sha,
-        "path": path,
-        "contentDigest": hashlib.sha256(raw).hexdigest(),
-        "bytes": len(raw),
-        "readAt": read_at,
-        "source": "git-show",
-        "readError": None,
-    }, raw
-
-
-def _read_head_content_blobs_file(session_dir, *, normalized=False):
-    path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-    if not os.path.isfile(path):
-        if normalized:
-            return session_contract.classify_head_content_read(absent=True)
-        return None
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError) as exc:
-        if normalized:
-            return session_contract.classify_head_content_read(error=exc)
-        return None
-    if normalized:
-        return session_contract.classify_head_content_read(blobs=data)
-    return data if isinstance(data, dict) else None
-
-
-def _record_fix_content_on_findings(state, session_dir, artifact, head):
-    """Overwrite fix-time content observation on each finding touched by this fix batch."""
-    if not isinstance(head, str) or not head:
-        return
-    paths = _fix_batch_paths(state, artifact)
-    if not paths:
-        return
-    repo_root = _resolve_repo_root(session_dir, state)
-    read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    by_path = {}
-    for path in paths:
-        row, _raw = _head_content_read_row(repo_root, head, path, read_at)
-        by_path[path] = row
-    path_set = set(paths)
-    for finding in state.get("findings") or []:
-        if not isinstance(finding, dict):
-            continue
-        if finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
-        if not isinstance(path, str) or path not in path_set:
-            continue
-        row = by_path.get(path)
-        if row is None:
-            continue
-        receipt = finding.get("dispositionReceipt")
-        if not isinstance(receipt, dict):
-            continue
-        receipt["fixContentHeadSha"] = head
-        receipt["fixContentDigest"] = row.get("contentDigest")
-        receipt["fixContentBytes"] = row.get("bytes")
 
 
 def _driver_receipt(state):
@@ -7805,9 +7440,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     `foldLanded: True`. Callers must not read its absence on other `ok: false` answers as not-landed
     evidence.
 
-    On the verify phase the head is resolved before the fold; a resolution failure refuses
-    ``verified-head-unresolved`` with nothing written but the journal row, so the same artifact can
-    be resubmitted."""
+    On the verify phase the head the next panel's diff is derived from is resolved before the fold
+    and forwarded to it; a resolution failure does not refuse the submit."""
     try:
         with round_records.session_lock(session_dir):
             refusal = _commit_recover_or_refuse(session_dir, "submit")
@@ -7827,13 +7461,6 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = (None, "verified head: %s" % exc)
             else:
                 resolution = None
-            if phase == P_VERIFY and resolution[1]:
-                _journal_append(session_dir, {"cmd": "submit", "phase": phase,
-                                              "round": round_no, "attempt": attempt,
-                                              "outcome": VERIFIED_HEAD_UNRESOLVED_CAUSE,
-                                              "detail": resolution[1]})
-                return {"ok": False, "reason": VERIFIED_HEAD_UNRESOLVED_CAUSE,
-                        "detail": resolution[1]}
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)
@@ -8412,8 +8039,6 @@ def _finalize_receipt(session_dir, state):
     evidence — did not persist) is a RECEIPT DEFECT: return a reason so the CLI fails closed (the
     orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
     Returns None on success."""
-    certified_head = _session_certified_head(session_dir, state)
-    _finalize_certification_inputs(session_dir, state, head_sha=certified_head)
     try:
         _write_receipt(session_dir, state)
     except ReceiptWriteError as exc:
