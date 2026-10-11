@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import sys
 import tempfile
 
@@ -116,6 +118,18 @@ def _envelope(path):
     return env if isinstance(env, dict) else None
 
 
+def _payload_file(raw_dir, phase, rnd, seat, payload, taken):
+    """The seat's findings payload as its own file in raw_dir: what the reviewer returned, without the runner's telemetry."""
+    stem = f"{phase.removeprefix('dispatch-')}-{re.sub(r'[^A-Za-z0-9._-]', '-', seat)}-round-{rnd}"
+    path, n = os.path.join(raw_dir, f"{stem}.json"), 1
+    while path in taken:
+        n += 1
+        path = os.path.join(raw_dir, f"{stem}-{n}.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+    return path
+
+
 def _bind(ran, run_dirs, engine_run):
     """{slot: run dir}: a directory binds to the one slot whose journaled runner nonce equals its engine record's."""
     hits = {}
@@ -142,7 +156,7 @@ def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None,
     return dict(out, notIndependent=True) if seat in same else out
 
 
-def _reviewers(state, session_dir, rows, meta, run_dirs, engine_run):
+def _reviewers(state, session_dir, rows, meta, run_dirs, engine_run, raw_dir=None):
     slots = _slots(rows)
     ran = {k: v for k, v in slots.items() if v[1].get("cmd") == "record-result"}
     bound = _bind(ran, run_dirs, engine_run)
@@ -160,8 +174,8 @@ def _reviewers(state, session_dir, rows, meta, run_dirs, engine_run):
         out.append(_reviewer(state, rnd, seat, stem, key in ran, same, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                              _text(r.get("citedHead")), bound.get(key)))
-        if key in ran and phase in _RAW_PHASES and path and os.path.isfile(path):
-            raw.append(path)
+        if key in ran and phase in _RAW_PHASES and raw_dir and env is not None and "payload" in env:
+            raw.append(_payload_file(raw_dir, phase, rnd, seat, env["payload"], raw))
     if not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows):
         for rnd, rec in sorted((state.get("rounds") or {}).items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
             status = rec.get("seatStatus") if isinstance(rec, dict) else None
@@ -223,7 +237,7 @@ def _findings(state):
     return out
 
 
-def account_from_session(session_dir, extras, readers=None):
+def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     _check_extras(extras)
     if not os.path.isdir(session_dir):
         raise Refusal(UNREADABLE, "session dir")
@@ -241,7 +255,7 @@ def account_from_session(session_dir, extras, readers=None):
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings = _findings(state)
     reviewers, raw = _reviewers(state, session_dir, rows, meta, extras.get("runDirs", []),
-                                review_record._readers(readers)["engine_run"])
+                                review_record._readers(readers)["engine_run"], raw_dir)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
@@ -262,25 +276,22 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None):
     tmp = []
 
     def go():
+        tmp.append(tempfile.mkdtemp(prefix="review-record-"))
         try:
             with open(extras_path, encoding="utf-8") as fh:
                 extras = json.load(fh)
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
-        account = account_from_session(session_dir, extras, readers)
-        fd, path = tempfile.mkstemp(prefix="review-account-", suffix=".json")
-        tmp.append(path)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        account = account_from_session(session_dir, extras, readers, tmp[0])
+        path = os.path.join(tmp[0], "review-account.json")
+        with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)
         return review_record.write(path, repo_root, readers)
     try:
         return review_record._guarded(go)
     finally:
         for path in tmp:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def main(argv=None):

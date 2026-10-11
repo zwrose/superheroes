@@ -395,6 +395,76 @@ def test_write_from_session_never_raises_and_removes_its_temp_file(tmp_path, mon
     # bites on: an exception escaping the adapter, or the temporary account file outliving the call
     assert out["ok"] is False and out["reason"] == "review-record-internal-error"
     assert len(seen) == 1 and not os.path.exists(seen[0])
+    assert not os.path.exists(os.path.dirname(seen[0]))
+    # bites on: the temporary directory outliving a success or a refusal
+    made, real = [], rs.tempfile.mkdtemp
+    monkeypatch.setattr(rs.tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+    monkeypatch.setattr(rr, "write", lambda path, repo_root, readers=None: {"ok": True, "action": "created"})
+    assert send(tmp_path, s.save(), Fake())["ok"] is True
+    assert send(tmp_path, Session(tmp_path / "r", terminal=None).save(), Fake())["ok"] is False
+    assert len(made) == 2 and not any(os.path.exists(d) for d in made)
+
+
+def put_envelope(session, seat, body, phase="dispatch-panel", rnd=1, attempt=0, occurrence=0):
+    path = record_paths.store_path(session, rnd, phase, record_paths.storage_key(seat, occurrence), attempt)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+
+
+def raw_comments(fake):
+    return [c["body"] for c in fake.comments if c["body"].startswith(rr.RAW_MARKER)]
+
+
+def test_raw_output_is_the_seats_payload_and_is_posted_not_withheld(tmp_path):
+    s = Session(tmp_path).seat("code-reviewer", nonce="nonce-a")
+    session = s.save()
+    put_envelope(session, "code-reviewer", {
+        "vendor": "codex", "model": CODEX, "runnerNonce": "nonce-a",
+        "executionEvidence": {"runnerNonce": "nonce-a", "observation": {"tokens": None, "wallSeconds": 1.0}},
+        "payload": {"findings": [{"title": "Unchecked index in parse", "severity": "Important"}]}})
+    fake = Fake()
+    out = send(tmp_path, session, fake)
+    posted = raw_comments(fake)
+    # bites on: what text is posted as a reviewer's raw output (the whole stored envelope reads as a secret and is withheld)
+    assert out["ok"] is True and len(posted) == 1
+    assert "withheld" not in posted[0] and "Unchecked index in parse" in posted[0]
+    assert "executionEvidence" not in posted[0] and "runnerNonce" not in posted[0]
+
+
+@pytest.mark.parametrize("envelope", [None, "not json", [], {"vendor": "codex"}])
+def test_an_envelope_without_a_payload_posts_no_raw_file(tmp_path, envelope):
+    session = Session(tmp_path).seat("code-reviewer").save()
+    path = record_paths.store_path(session, 1, "dispatch-panel", record_paths.storage_key("code-reviewer", 0), 0)
+    if envelope is None:
+        os.unlink(path)
+    elif isinstance(envelope, str):
+        open(path, "w", encoding="utf-8").write(envelope)
+    else:
+        put_envelope(session, "code-reviewer", envelope)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    account = rs.account_from_session(session, extras(), Fake().readers(), str(raw_dir))
+    # bites on: a raw file listed for a seat whose envelope holds no payload to post
+    assert account["rawFindingsFiles"] == [] and os.listdir(raw_dir) == []
+    assert [r["name"] for r in account["reviewers"]] == ["code-reviewer (round 1)"]
+
+
+def test_two_slots_with_the_same_file_name_do_not_collide(tmp_path):
+    session = Session(tmp_path).seat("a b").seat("a-b").save()
+    put_envelope(session, "a b", {"payload": {"findings": [{"title": "first"}]}})
+    put_envelope(session, "a-b", {"payload": {"findings": [{"title": "second"}]}})
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    files = rs.account_from_session(session, extras(), Fake().readers(), str(raw_dir))["rawFindingsFiles"]
+    # bites on: a second seat's payload overwriting the first under one file name
+    assert sorted(os.path.basename(f) for f in files) == ["panel-a-b-round-1-2.json", "panel-a-b-round-1.json"]
+    assert sorted(json.load(open(f))["findings"][0]["title"] for f in files) == ["first", "second"]
+
+
+def test_no_raw_dir_means_no_raw_files(tmp_path):
+    session = Session(tmp_path).seat("code-reviewer").save()
+    # bites on: a payload file written, or an envelope path listed, when the caller gave no directory
+    assert rs.account_from_session(session, extras(), Fake().readers())["rawFindingsFiles"] == []
 
 
 def test_the_cli_prints_the_result_and_exits_nonzero_on_refusal(tmp_path, monkeypatch, capsys):

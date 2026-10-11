@@ -73,7 +73,7 @@ What comes from the session:
 - `runDir`: a directory in `runDirs` is bound to the one seat whose recorded runner nonce equals the nonce in that directory's engine record. A directory that matches no seat or several, or cannot be read, is not used. A seat with no run directory reads "reported by the session".
 - `makers`: the extras' makers, plus the fixer's family (source `review loop fixer`) when a round ran a fixer.
 - `finalCommit`: the fix-fold head when the session holds one, else the session's head.
-- `findings` and outcomes, from the disposition ledger and the live findings; `rawFindingsFiles`, the stored output of the panel, gap-sweep and scoped-finder seats.
+- `findings` and outcomes, from the disposition ledger and the live findings; `rawFindingsFiles`, each panel, gap-sweep and scoped-finder seat's findings payload, posted without the runner's telemetry.
 
 Outcomes:
 
