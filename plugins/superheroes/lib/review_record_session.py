@@ -27,6 +27,7 @@ if _LIB_DIR not in sys.path:
 import dispatch_outcome  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
+import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
 import round_certification  # noqa: E402
 import round_phases  # noqa: E402
@@ -45,6 +46,7 @@ STILL_OPEN = "still open when the review loop ended"
 _OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
+_FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
 
 
 def _int(v):
@@ -210,17 +212,17 @@ def _decide(own, by_key, rulings):
     if disp not in sc.DISPOSITIONS or not (_int(seq) and _int(raised) and seq > raised):  # a stale disposition decides nothing
         return None, STILL_OPEN, rep
     if disp == "fixed":
-        return "fixed", f"fixed and audited in round {rep.get('dispositionRound')}", rep
+        return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))
-        return ("left-for-owner" if (why or "").startswith("author-justified") else "shown-wrong"), why, rep
+        return (_LEFT_FOR_OWNER if (why or "").startswith("author-justified") else _SHOWN_WRONG), why, rep
     why = _text(rep.get("outOfScopeReason"))
     ruling = rulings.get(sc.finding_identity_key(rep)) or rulings.get(rep.get("id")) or {}
     prov = ruling.get("provenance") if ruling.get("ruling") == "out-of-scope" else None
     by, at = (_text(prov.get("ruledBy")), _text(prov.get("ruledAt"))) if isinstance(prov, dict) else (None, None)
     if by and at:  # only an attributed ruling settles an out-of-scope finding
-        return "ruling", f"{why} (ruled by {by}, {at})", rep
-    return "left-for-owner", why, rep
+        return _RULING, f"{why} (ruled by {by}, {at})", rep
+    return _LEFT_FOR_OWNER, why, rep
 
 
 def _id(row, key):
