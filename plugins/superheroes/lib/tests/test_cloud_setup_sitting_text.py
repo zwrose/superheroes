@@ -90,6 +90,9 @@ def test_the_pick_is_read_before_and_after_and_before_the_check():
         assert index is not None, "section 6 has no line containing %r" % needle
     for (earlier, i), (later, j) in zip(found, found[1:]):
         assert i < j, "line %r (%d) does not come before line %r (%d)" % (earlier, i, later, j)
+    retry = [line for line in section
+             if 'cloud_environment.py" pick' in line and "--before" in line and "--confirmed" in line]
+    assert retry, "section 6 has no retry pick line carrying --before and --confirmed"
     sign_in = _first(section, 'cloud_check.py" sign-in')
     assert sign_in is not None, "section 6 has no line containing 'cloud_check.py\" sign-in'"
     make = _first(section, 'cloud_pass.py" make')

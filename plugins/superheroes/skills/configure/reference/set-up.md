@@ -483,8 +483,17 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    builds were on, it has switched them off and the message says so. Never write the setup record
    any other way, and never tell the owner a check passed without a `passed` result.
 8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the id step 3 returned.
-   When the failed part was the environment, run steps 1 and 3 again first; the new check then names
-   the id that new pick returned. **"Setup text"** at any time writes new setup text: run
+   When the failed part was the environment, run `snapshot` (step 1's command) before relaying the
+   failure message, so the baseline is the value as the owner leaves it. When the owner says the
+   repair is done, read the pick with both the new baseline and the id step 3 returned, and use the
+   `environment` it returns for steps 5 to 7; a repair that kept the same environment returns that
+   same id.
+
+   ```bash
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the snapshot value> --confirmed <the id step 3 returned>
+   ```
+
+   **"Setup text"** at any time writes new setup text: run
    `setup-text`, and give its `message` and its `setupText` in one fenced block.
 
    ```bash

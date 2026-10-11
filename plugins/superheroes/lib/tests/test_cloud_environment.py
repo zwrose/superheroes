@@ -185,7 +185,7 @@ def test_reader_follows_the_account_config_dir(tmp_path):
 def test_no_message_asks_to_type_or_paste_an_id():
     messages = [value for name, value in vars(CE).items()
                 if name.startswith("_") and name.isupper() and isinstance(value, str)]
-    assert len(messages) == 4
+    assert len(messages) == 6
     for message in messages:
         assert not re.search(r"\b(type|paste|copy)\b", message, re.IGNORECASE), message
 
@@ -209,3 +209,65 @@ def test_cli_exit_codes(tmp_path, monkeypatch, capsys):
     assert code == 1 and out["reason"] == "pick-unchanged" and out["environment"] is None
     code, out = _run(capsys, ["pick", "--before", "abc"])
     assert code == 1 and out["reason"] == "before-invalid"
+
+
+def test_retry_with_the_same_environment_keeps_the_confirmed_id(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
+    assert result == {"action": "picked", "reason": "kept-confirmed", "environment": ENV_ID,
+                      "message": CE._KEPT}
+
+
+def test_retry_with_a_different_environment_returns_the_new_id(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(OTHER_ENV_ID))
+    result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
+    assert result == {"action": "picked", "reason": None, "environment": OTHER_ENV_ID,
+                      "message": CE._PICKED}
+
+
+def test_retry_unchanged_value_that_is_not_the_confirmed_id_asks_again(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(OTHER_ENV_ID))
+    result = CE.pick(before=OTHER_ENV_ID, confirmed=ENV_ID, env=env)
+    assert result["action"] == "not-picked" and result["reason"] == "pick-unchanged"
+    assert result["environment"] is None
+
+
+@pytest.mark.parametrize("content", _MISSING)
+def test_retry_with_a_missing_value_asks_again(tmp_path, content):
+    env = _env(tmp_path)
+    if content is not None:
+        _write(env, content)
+    result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
+    assert result["action"] == "not-picked" and result["reason"] == "pick-missing"
+    assert result["environment"] is None and result["message"] == CE._ASK_AGAIN
+
+
+def test_retry_with_an_unreadable_file_asks_again(tmp_path):
+    env = _env(tmp_path)
+    _make_invalid_json(env)
+    result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
+    assert result["action"] == "not-picked" and result["reason"] == "settings-unreadable"
+    assert result["environment"] is None
+
+
+@pytest.mark.parametrize("confirmed", ["abc", "", "env_", 123])
+def test_pick_refuses_a_malformed_confirmed(tmp_path, confirmed):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    result = CE.pick(before=ENV_ID, confirmed=confirmed, env=env)
+    assert result["action"] == "refused" and result["reason"] == "confirmed-invalid"
+    assert result["environment"] is None
+
+
+def test_cli_confirmed_retry(tmp_path, monkeypatch, capsys):
+    env = _env(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
+    monkeypatch.setenv("HOME", env["HOME"])
+    _write(env, _with_value(ENV_ID))
+    code, out = _run(capsys, ["pick", "--before", ENV_ID, "--confirmed", ENV_ID])
+    assert code == 0 and out["reason"] == "kept-confirmed" and out["environment"] == ENV_ID
+    code, out = _run(capsys, ["pick", "--before", ENV_ID, "--confirmed", "abc"])
+    assert code == 1 and out["reason"] == "confirmed-invalid"
