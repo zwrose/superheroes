@@ -793,12 +793,20 @@ def _parse_pr_numbers(stdout):
     return numbers
 
 
-def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
-    """Return (slug, refusal). Returns (None, None) when budget is below the poll minimum; otherwise exactly one is non-None. Never raises."""
+def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env, granted=False):
+    """Return (slug, refusal). Returns (None, None) when budget is below the poll minimum; otherwise exactly one is non-None. Never raises.
+
+    granted=True means the caller already decided a request is worth starting and
+    handed over this budget: only a spent budget is refused, and the read keeps at
+    least the poll minimum, so elapsed bookkeeping cannot flip the caller's decision.
+    """
     remaining = deadline - monotonic()
-    if remaining < _MIN_PR_POLL_SECONDS:
+    if remaining < (0.0 if granted else _MIN_PR_POLL_SECONDS) or remaining <= 0:
         return None, None
     timeout = min(30.0, remaining)
+    if granted:
+        timeout = max(_MIN_PR_POLL_SECONDS, timeout)
+        remaining = max(_MIN_PR_POLL_SECONDS, remaining)
     try:
         slug, refusal = sc.resolve_repo_slug(
             repo_root,
@@ -1021,21 +1029,23 @@ def _fetch_cloud_activity(
     so the caller does not cache a read that was never made.
     """
     unreadable = {number: None for number in issues}
-    if deadline - monotonic() < _MIN_PR_POLL_SECONDS:
+    # The caller decided whether a request is worth starting and granted the budget; this
+    # reader only refuses a budget that is already spent. It never re-compares the grant
+    # against the one-request minimum, so elapsed bookkeeping cannot flip that decision.
+    if deadline - monotonic() <= 0:
         return None
     slug = known_slug
     if slug is None:
         slug, _refusal_result = _resolve_repo_slug(
-            repo_root, deadline, monotonic, gh_run, env,
+            repo_root, deadline, monotonic, gh_run, env, granted=True,
         )
     if slug is None:
         return unreadable
     remaining = deadline - monotonic()
     if remaining <= 0:
         return None
-    timeout = min(30.0, remaining)
-    if timeout < _MIN_PR_POLL_SECONDS:
-        return None
+    # A granted request always gets at least one request's minimum (the documented overrun).
+    timeout = max(_MIN_PR_POLL_SECONDS, min(30.0, remaining))
     owner, _sep, name = slug.partition("/")
     argv = [
         "gh", "api", "graphql",
@@ -1876,9 +1886,16 @@ def _evaluate_tick(
         # share never falls below one request's minimum: a supported one-second arm
         # would otherwise halve to less than the minimum and never sample the cloud
         # (an overrun of that minimum is the loop's documented overrun).
-        cloud_deadline = monotonic() + max(
-            (deadline - monotonic()) / 2, _MIN_PR_POLL_SECONDS,
-        )
+        # The skip-or-start decision (any arm time left) is made here, once; the
+        # grant handed to the reader is then a budget the reader cannot disagree with.
+        cloud_now = monotonic()
+        arm_remaining = deadline - monotonic()
+        if arm_remaining <= 0:
+            cloud_deadline = cloud_now
+        else:
+            cloud_deadline = cloud_now + max(
+                arm_remaining / 2, _MIN_PR_POLL_SECONDS,
+            )
         stale_cloud_launches = _evaluate_cloud_activity(
             repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,

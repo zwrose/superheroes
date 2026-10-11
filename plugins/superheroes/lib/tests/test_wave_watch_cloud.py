@@ -656,6 +656,26 @@ def test_a_one_second_arm_still_samples_cloud_activity(repo):
     assert result["event"] == "lane-stale"
 
 
+def test_a_one_second_arm_samples_when_the_clock_advances_between_calls(repo, monkeypatch):
+    # A real clock moves between the budget calculation and the reader's own check; the
+    # grant and the reader's minimum must not be able to disagree by that elapsed time.
+    state = {"now": 0.0}
+
+    def ticking():
+        state["now"] += 0.001
+        return state["now"]
+
+    monkeypatch.setattr(ww.time, "monotonic", ticking)
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _quiet_gh(101)
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh,
+    )
+    assert len(gh.api_calls()) == 1
+    assert ww.DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE not in result["degraded"]
+    assert result["event"] == "lane-stale"
+
+
 def test_deadline_timer_carries_cloud_lanes(repo):
     _add_cloud_lane(repo, "cloud-a", 101)
     result = ww.watch_arm(
