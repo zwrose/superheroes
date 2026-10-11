@@ -361,10 +361,10 @@ No State line calls any of them open. Result: verified.
  "invocation": "inv2",
  "kind": "invocation",
  "measurables": {
-  "children": 1,
-  "registerEntries": 0
+  "children": 9,
+  "registerEntries": 1
  },
- "override": null,
+ "override": "light despite nine children: one register entry (R3) and two child bodies (C2, C4) changed in substance; the other seven children are re-checked mechanically by the register check against the amended register",
  "seats": [
   "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
  ],
@@ -432,5 +432,119 @@ No State line calls any of them open. Result: verified.
   }
  ],
  "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv2",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "epic",
+   "status": "reviewed"
+  },
+  {
+   "part": "README",
+   "status": "reviewed"
+  },
+  {
+   "part": "C2",
+   "status": "reviewed"
+  },
+  {
+   "part": "C3",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4",
+   "status": "reviewed"
+  },
+  {
+   "part": "C5",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "register R3 and its epic quote: how the setup learns the environment is the owner's ruling 25 c (default environment, id read from the check session); C2 decides only how the id is stored; C2.md DoD wording matches",
+   "finding": "A1-r3-environment-decide-by",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "C4 DoD: a recorded setup sitting for a not-yet-signed-in fixture account shows the default-environment step, the one-time sign-in walked before the pass command, and no ask for the id, plus a test that fails on such an ask; the live run uses a default environment",
+   "finding": "A2-c4-dod-new-setup-steps",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv2",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C1",
+   "result": "pass"
+  },
+  {
+   "child": "C1b",
+   "result": "pass"
+  },
+  {
+   "child": "C2",
+   "result": "pass"
+  },
+  {
+   "child": "C3",
+   "result": "pass"
+  },
+  {
+   "child": "C4",
+   "result": "pass"
+  },
+  {
+   "child": "C5",
+   "result": "pass"
+  },
+  {
+   "child": "C6",
+   "result": "pass"
+  },
+  {
+   "child": "C7",
+   "result": "pass"
+  },
+  {
+   "child": "C8",
+   "result": "pass"
+  }
+ ]
 }
 ```
