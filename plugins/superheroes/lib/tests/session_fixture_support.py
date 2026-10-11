@@ -180,11 +180,6 @@ def _normalize_refuted_findings(state):
             continue
         if isinstance(receipt, dict):
             if any(
-                isinstance(key, str) and key.startswith("fixContent")
-                for key in receipt
-            ):
-                continue
-            if any(
                 isinstance(receipt.get(key), str) and receipt.get(key).strip()
                 for key in ("reason", "refutedReason", "text")
             ):

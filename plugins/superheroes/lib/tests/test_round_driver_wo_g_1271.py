@@ -1,7 +1,9 @@
 """#1271 WO-G — disposition ledger and findings-chokepoint guards."""
 import ast
 import importlib.util
+import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -19,6 +21,7 @@ def _load(name):
 
 RD = _load("round_driver")
 SC = _load("session_contract")
+round_records = _load("round_records")
 
 _ROUND_DRIVER_PY = os.path.join(_LIB, "round_driver.py")
 
@@ -116,3 +119,100 @@ def test_cleared_disposition_findings_remain_in_certification_view():
     certified = ledger_rows + list(state.get("findings") or [])
     ids = {f.get("id") for f in certified if isinstance(f, dict)}
     assert "F-fixed" in ids
+
+
+def _git_head(repo):
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
+def _init_repo(tmp_path, files):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(repo)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    for rel, content in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    return repo, _git_head(repo)
+
+
+def _session_dir(tmp_path, repo, setup_head):
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    meta = {
+        "sessionId": "wo-g-head",
+        "headSha": setup_head,
+        "repoRoot": str(repo),
+    }
+    with open(session_dir / round_records.META_FILE, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+        fh.write("\n")
+    return session_dir
+
+
+def test_fix_fold_records_post_fix_head_sha(tmp_path):
+    repo, setup_head = _init_repo(tmp_path, {"src/a.py": b"before\n"})
+    session_dir = _session_dir(tmp_path, repo, setup_head)
+    path = repo / "src" / "a.py"
+    path.write_bytes(b"after fix\n")
+    subprocess.run(["git", "add", "src/a.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "fix"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    post_fix_head = _git_head(repo)
+    assert post_fix_head != setup_head
+
+    state = _new_state(repoRoot=str(repo), headSha=setup_head)
+    state["round"] = 1
+    state["_fixBatch"] = [{"id": "F1", "file": "src/a.py", "line": 1, "severity": "Important"}]
+    state["findings"] = [
+        {
+            "id": "F1",
+            "file": "src/a.py",
+            "line": 1,
+            "severity": "Important",
+            "title": "issue",
+            "disposition": "fixed",
+            "dispositionReceipt": {"headSha": setup_head},
+        }
+    ]
+    artifact = {"fixes": [{"file": "src/a.py"}], "headDiff": "diff"}
+    RD._fold_fixer(state, state["config"], artifact, session_dir=str(session_dir))
+
+    assert state["config"]["fixFoldHeadSha"] == post_fix_head
+    with open(session_dir / round_records.META_FILE, encoding="utf-8") as fh:
+        assert json.load(fh)["fixFoldHeadSha"] == post_fix_head
+    assert state["rounds"]["1"]["fixFoldHead"] == post_fix_head

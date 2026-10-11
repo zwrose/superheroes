@@ -1111,7 +1111,7 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert entry["dispositionRound"] == 2
     receipt = entry["dispositionReceipt"]
     assert isinstance(receipt.get("headSha"), str) and receipt["headSha"]
-    assert receipt["verifyResult"] == "pass"
+    assert set(receipt) == {"headSha"}
 
 
 def _git(cwd, *args, check=True):

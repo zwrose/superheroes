@@ -189,6 +189,45 @@ def test_L2_synthesis_merge_records_member_into_representative(tmp_path):
     assert SC.finding_identity_key(rep) == key0
 
 
+def test_L3_fold_audits_stamps_fixed_on_discharged_only():
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    head = "b" * 40
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = head
+    state["rounds"] = {"2": {"verifyResult": "pass"}}
+    discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
+    open_f = {"title": "open bug", "severity": "Important", "file": "g.py", "line": 2}
+    state["fixBatch"] = [discharged_f, open_f]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    discharged_id = RD._finding_key_of(discharged_f)
+    open_id = RD._finding_key_of(open_f)
+    RD._set_findings(state, [discharged_f, open_f])
+    state["_newSurface"] = True
+    auditor = state["_auditTargets"][0]["auditorVendor"]
+    manifest = {discharged_id: auditor, open_id: auditor}
+    RD._fold_audits(state, state["config"], {
+        "results": [
+            {"id": discharged_id, "ruling": "discharged", "reason": "gone"},
+            {"id": open_id, "ruling": "not-discharged", "reason": "still there"},
+        ],
+        "collectionManifest": manifest,
+    })
+    ledger = _ledger_by_key(state)
+    assert ledger[discharged_id]["disposition"] == "fixed"
+    assert ledger[discharged_id]["dispositionRound"] == 2
+    receipt = ledger[discharged_id]["dispositionReceipt"]
+    assert receipt["headSha"] == head
+    assert set(receipt) <= {"headSha"}
+    live_discharged = next(f for f in state["findings"]
+                           if SC.finding_identity_key(f) == discharged_id)
+    assert live_discharged.get("disposition") == "fixed"
+    open_live = next((f for f in state["findings"] if SC.finding_identity_key(f) == open_id), None)
+    if open_live is not None:
+        assert open_live.get("disposition") is None
+    elif open_id in ledger:
+        assert ledger[open_id].get("disposition") is None
+
+
 # --- L4 ------------------------------------------------------------------------------
 
 def test_L4_judgment_skip_records_out_of_scope_with_follow_up():
