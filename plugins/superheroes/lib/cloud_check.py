@@ -95,7 +95,7 @@ _SIGN_IN_WALK = (
     "The reviewer needs its own sign-in on this machine, kept apart from your main one. Run this in "
     "a terminal and finish the sign-in in your browser:\n"
     "\n"
-    "    {home_env}={home} codex login\n"
+    "    mkdir -p {home} && {home_env}={home} codex login\n"
     "\n"
     "Tell me when it's done and I'll check it."
 )

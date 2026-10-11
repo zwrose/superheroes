@@ -253,11 +253,32 @@ def test_sign_in_walk_when_no_separate_sign_in(tmp_path):
     home, env = _home_env(tmp_path)
     result = CC.sign_in(env)
     assert result["action"] == "checked" and result["signedIn"] is False
+    # bites on: any change to the walk text, including the mkdir -p lead on the command line
     assert result["message"] == (
         "The reviewer needs its own sign-in on this machine, kept apart from your main one. Run "
         "this in a terminal and finish the sign-in in your browser:\n\n"
-        "    CODEX_HOME=%s/.codex-cloud codex login\n\n"
-        "Tell me when it's done and I'll check it." % home)
+        "    mkdir -p %(h)s/.codex-cloud && CODEX_HOME=%(h)s/.codex-cloud codex login\n\n"
+        "Tell me when it's done and I'll check it." % {"h": home})
+
+
+def test_sign_in_command_creates_a_missing_home_before_signing_in(tmp_path):
+    import shlex
+    missing = tmp_path / "not-created-yet"
+    home, env = _home_env(tmp_path, **{cloud_pass.SEPARATE_HOME_ENV: str(missing)})
+    command = CC.sign_in(env)["message"].split("\n\n")[1].strip()
+    quoted = shlex.quote(str(missing))
+    # bites on: the command losing its `mkdir -p <home> &&` lead, so codex meets a missing home
+    assert not missing.exists()
+    assert command == "mkdir -p %s && %s=%s codex login" % (quoted, cloud_pass._CODEX_HOME_ENV, quoted)
+
+
+def test_sign_in_message_names_the_quoted_home_twice_and_makes_it_once(tmp_path):
+    import shlex
+    tricky = tmp_path / "rev$UNSET_X home"
+    home, env = _home_env(tmp_path, **{cloud_pass.SEPARATE_HOME_ENV: str(tricky)})
+    message = CC.sign_in(env)["message"]
+    # bites on: the home appearing a different number of times, or mkdir -p repeated or dropped
+    assert message.count(shlex.quote(str(tricky))) == 2 and message.count("mkdir -p") == 1
 
 
 def test_sign_in_in_place(tmp_path):
@@ -294,7 +315,10 @@ def test_sign_in_command_quotes_the_home_literally(tmp_path):
     run = subprocess.run(["/bin/sh", "-c", "codex() { printf '%s' \"$CODEX_HOME\"; }\n" + command],
                          capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
     assert run.stdout == str(tricky)
-    assert shlex.quote(str(tricky)) in command
+    # bites on: either occurrence of the home being quoted differently from the other
+    quoted = shlex.quote(str(tricky))
+    assert command == "mkdir -p %s && CODEX_HOME=%s codex login" % (quoted, quoted)
+    assert tricky.is_dir()
 
 
 def test_setup_message_names_the_sign_ins_real_expiry_when_readable(tmp_path, composing):
