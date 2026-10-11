@@ -7018,8 +7018,10 @@ def _earlier_generation_unfinished(session_dir):
 
 def _write_upgrade_marker(session_dir, cmd):
     """(already_restarted, written). The marker is created exclusively, so only the first refusal
-    makes it; a later one finds it and leaves it as it is. Any other failure to create it still
-    leaves the command refused: (False, False)."""
+    makes it; a later one finds it and leaves it as it is. Any other failure to create it, or to
+    write it once created, still leaves the command refused: (False, False). A marker this call
+    created but could not write is removed again, so a later call does not mistake it for a
+    complete one."""
     path = os.path.join(session_dir, UPGRADE_RESTART_MARKER_FILE)
     body = {"schema": UPGRADE_RESTART_MARKER_SCHEMA,
             "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -7036,7 +7038,14 @@ def _write_upgrade_marker(session_dir, cmd):
             fh.flush()
             os.fsync(fh.fileno())
     except OSError:
-        pass
+        try:
+            os.unlink(path)
+        except OSError:
+            # Accepted residual: if the partial file cannot be removed either, it stays, and the
+            # next call sees it as already existing and answers `alreadyRestarted: true`. The
+            # folder then refuses both removal and writing, and nothing more can be done there.
+            pass
+        return False, False
     return False, True
 
 

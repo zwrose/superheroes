@@ -517,6 +517,76 @@ def test_e7_a_marker_that_cannot_be_written_still_refuses(tmp_path, capsys):
     assert out["markerWritten"] is False
 
 
+class _FailingFile:
+    """The marker's file object with one step made to raise `OSError`."""
+
+    def __init__(self, real, step):
+        self._real = real
+        self._step = step
+
+    def __enter__(self):
+        self._real.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def write(self, data):
+        if self._step == "write":
+            raise OSError(5, "injected write failure")
+        return self._real.write(data)
+
+    def flush(self):
+        if self._step == "flush":
+            raise OSError(5, "injected flush failure")
+        return self._real.flush()
+
+    def fileno(self):
+        return self._real.fileno()
+
+
+# E7b — axis: a marker that was created but could not be written (write, flush or fsync fails) is
+# removed again, the refusal says `markerWritten` false and `alreadyRestarted` false, and the next
+# refusal, with the fault gone, writes the marker and answers `alreadyRestarted` false.
+@pytest.mark.parametrize("step", ["write", "flush", "fsync"])
+def test_e7b_a_marker_that_fails_to_write_is_removed_and_reported(step, tmp_path, capsys,
+                                                                  monkeypatch):
+    session_dir = _light_folder(tmp_path)
+    real_fdopen, real_fsync = os.fdopen, os.fsync
+
+    def is_marker(fd):
+        # The session lock file goes through the same calls; only the marker is made to fail.
+        try:
+            return os.fstat(fd).st_ino == os.stat(_marker_path(session_dir)).st_ino
+        except OSError:
+            return False
+
+    def faulty_fdopen(fd, *a, **kw):
+        real = real_fdopen(fd, *a, **kw)
+        return _FailingFile(real, step) if is_marker(fd) else real
+
+    def faulty_fsync(fd):
+        if is_marker(fd):
+            raise OSError(5, "injected fsync failure")
+        return real_fsync(fd)
+
+    with monkeypatch.context() as faulty:
+        faulty.setattr(RD.os, "fsync" if step == "fsync" else "fdopen",
+                       faulty_fsync if step == "fsync" else faulty_fdopen)
+        rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
+    assert out["ok"] is False and out["reason"] == TOKEN, out
+    assert out["alreadyRestarted"] is False, out
+    assert out["markerWritten"] is False, out
+    assert not os.path.exists(_marker_path(session_dir))
+    rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
+    _assert_refusal(out, already_restarted=False)
+    assert os.path.exists(_marker_path(session_dir))
+    with open(_marker_path(session_dir), encoding="utf-8") as fh:
+        assert json.load(fh)["schema"] == RD.UPGRADE_RESTART_MARKER_SCHEMA
+
+
 # E8 — axis: a session lock held by another process answers the lock-held refusal, as it does
 # for every command.
 def test_e8_a_held_lock_answers_the_lock_held_refusal(tmp_path, capsys):

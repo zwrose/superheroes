@@ -815,8 +815,9 @@ recovers a commit, reads or writes the journal, mints a session id, emits an ord
 From the command line the exit status is non-zero. The first refusal writes `restarted-on-upgrade.json`
 into the session directory, once, by an exclusive create; `alreadyRestarted` is `false` on that call
 and `true` on every later one, which leaves the file as it is. If the file cannot be created for any
-reason other than already existing, the command is still refused, with `alreadyRestarted` `false` and
-`markerWritten` `false`; `markerWritten` appears only in that case. The driver reads only
+reason other than already existing, or is created but cannot be written, the command is still
+refused, with `alreadyRestarted` `false` and `markerWritten` `false` (a file this call created and
+could not write is removed again); `markerWritten` appears only in those two cases. The driver reads only
 `loop-state.json` in the old directory and touches nothing else there: no journal row is appended,
 and every other file stays as it was. A finished session from an earlier
 version is left alone: `next` on it returns its terminal answer again. A missing, unreadable, non-JSON
