@@ -409,3 +409,74 @@ def _write_head_content_blobs(session_dir, blobs):
     path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(blobs, fh, sort_keys=True)
+
+
+def _dispatch_journal_with_binding(
+    seat="code-reviewer",
+    payload_sha=DEFAULT_PANEL_PAYLOAD_SHA,
+    *,
+    nonce="test-nonce",
+    attempt=0,
+    head_sha=HEAD_SHA,
+    read="engaged",
+):
+    evidence = {
+        "read": read,
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        "toolCalls": 1,
+        "runKind": session_contract.run_kind_for_phase(PANEL_PHASE),
+        **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+    }
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "occurrence": 0,
+        "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": evidence,
+        "recordIdentity": {
+            "phase": PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+    if head_sha is not None:
+        row["headSha"] = head_sha
+    return row
+
+
+def write_certifiable_session(tmp_path, **kwargs):
+    """Session with binding telemetry and head-content evidence for fixed findings."""
+    state = kwargs.get("state")
+    if state is None:
+        state = {}
+    elif not isinstance(state, dict):
+        state = {}
+    kwargs = dict(kwargs)
+    kwargs["state"] = state
+    kwargs.setdefault("faithful_session", True)
+    if kwargs.get("journal_lines") is None:
+        kwargs["journal_lines"] = [_dispatch_journal_with_binding()]
+    session_dir = write_session(tmp_path, **kwargs)
+    findings = (state.get("findings") if state else None) or []
+    blobs = _head_content_blobs_for_findings(findings)
+    if blobs is None:
+        blobs = _head_content_blobs_for_findings(
+            [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "disposition": "fixed",
+                }
+            ]
+        )
+    _write_head_content_blobs(session_dir, blobs)
+    return session_dir

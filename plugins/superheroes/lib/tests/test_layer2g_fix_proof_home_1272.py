@@ -20,7 +20,6 @@ def _load(name):
 
 
 SC = _load("session_contract")
-RC = _load("round_certification")
 RD = _load("round_driver")
 
 HEAD = "a" * 40
@@ -45,10 +44,9 @@ def _finding(**over):
 
 
 def _binding_from_session(session_dir, finding, receipt=None):
-    ctx, _ = RC._load_context(session_dir)
     receipt = receipt or finding.get("dispositionReceipt")
-    head = receipt.get("headSha") or RC._certified_head_sha(ctx)
-    read_outcome = RC._read_head_content_blobs(session_dir)
+    head = receipt.get("headSha")
+    read_outcome = RD._read_head_content_blobs_file(session_dir, normalized=True)
     return SC.fix_still_present_at_head(finding, receipt, head, read_outcome)
 
 
@@ -57,7 +55,7 @@ def _binding_from_session(session_dir, finding, receipt=None):
 def test_absent_head_content_blobs_refuses_fix_content_missing(tmp_path):
     session_dir = str(tmp_path)
     os.makedirs(session_dir, exist_ok=True)
-    with open(os.path.join(session_dir, RC.STATE_FILE), "w", encoding="utf-8") as fh:
+    with open(os.path.join(session_dir, SC.STATE_FILE), "w", encoding="utf-8") as fh:
         json.dump({"findings": [_finding()]}, fh)
     binding = _binding_from_session(session_dir, _finding())
     assert binding is not None
@@ -68,7 +66,7 @@ def test_absent_head_content_blobs_refuses_fix_content_missing(tmp_path):
 def test_unreadable_head_content_blobs_refuses_fix_content_unreadable(tmp_path):
     session_dir = str(tmp_path)
     os.makedirs(session_dir, exist_ok=True)
-    with open(os.path.join(session_dir, RC.STATE_FILE), "w", encoding="utf-8") as fh:
+    with open(os.path.join(session_dir, SC.STATE_FILE), "w", encoding="utf-8") as fh:
         json.dump({"findings": [_finding()]}, fh)
     with open(os.path.join(session_dir, SC.HEAD_CONTENT_BLOBS_FILE), "w", encoding="utf-8") as fh:
         fh.write("{not json")
