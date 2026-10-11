@@ -38,6 +38,7 @@ EXTRAS_SCHEMA = "review-session-extras/1"
 UNREADABLE = "review-session-unreadable"
 NOT_TERMINAL = "review-session-not-terminal"
 BAD_EXTRAS = "review-session-extras-invalid"
+CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
@@ -300,6 +301,27 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "goAheads": extras.get("goAheads", []), "checked": extras.get("checked", [])}
 
 
+def _carried(account, extras, repo_root, readers):
+    """The latest earlier record's findings this session did not raise, as that record stored them.
+
+    Any refusal other than "no earlier record", and any malformed findings list, carries nothing: the
+    writer makes its own refusal, so there is one place that refuses.
+    """
+    repo = extras.get("repo") or review_record._readers(readers)["repo_name"](repo_root)
+    prior = review_record.read(account["pr"], repo, readers)
+    earlier = prior.get("findings") if prior.get("ok") else None
+    if not isinstance(earlier, list) or not all(isinstance(f, dict) for f in earlier):
+        return []
+    present = {review_record._key(f) for f in account["findings"]}
+    out = []
+    for f in earlier:
+        if review_record._key(f) in present:
+            continue
+        reason = f.get("reason")
+        out.append(dict(f, reason=reason + CARRIED if isinstance(reason, str) and reason else reason))
+    return out
+
+
 def write_from_session(session_dir, extras_path, repo_root, readers=None):
     tmp = []
 
@@ -311,6 +333,7 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None):
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0])
+        account["findings"] += _carried(account, extras, repo_root, readers)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)

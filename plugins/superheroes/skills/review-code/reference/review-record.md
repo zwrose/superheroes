@@ -84,6 +84,7 @@ What comes from the session:
 - `makers`: the extras' makers, plus the fixer's family (source `review loop fixer`) when a round ran a fixer.
 - `finalCommit`: the fix-fold head when the session holds one, else the session's head.
 - `findings` and outcomes, from the disposition ledger and the live findings; `rawFindingsFiles`, each panel, gap-sweep and scoped-finder seat's findings payload, posted without the runner's telemetry.
+- A later session's account relists the latest earlier record's findings that this session did not raise, each with the outcome and reason it had.
 
 Outcomes:
 

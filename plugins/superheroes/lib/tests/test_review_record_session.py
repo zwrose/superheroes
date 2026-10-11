@@ -525,3 +525,59 @@ def test_the_cli_prints_the_result_and_exits_nonzero_on_refusal(tmp_path, monkey
     argv = ["write", "--session-dir", "d", "--extras", "e", "--repo-root", "r"]
     assert rs.main(argv) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "action": "created"}
+
+
+def _second_session(tmp_path, ledger=()):
+    root = tmp_path / "later"
+    root.mkdir()
+    s = Session(root, dispositionLedger=list(ledger))
+    s.seat("code-reviewer")
+    return s.save()
+
+
+def _first_record(tmp_path, fake, **ledger_over):
+    s = Session(tmp_path, dispositionLedger=[ledger_row(**ledger_over)]).seat("code-reviewer")
+    assert send(tmp_path, s.save(), fake)["ok"]
+
+
+def _by_key(fake):
+    return [f for f in rr.read(7, readers=fake.readers())["findings"]]
+
+
+def test_a_later_session_relists_the_earlier_records_findings_it_did_not_raise(tmp_path):
+    fake = Fake()
+    _first_record(tmp_path, fake)
+    out = send(tmp_path, _second_session(tmp_path), fake)
+    # bites on: the adapter not relisting, which the writer refuses as review-record-unaccounted
+    assert out["ok"], out
+    (carried,) = _by_key(fake)
+    assert carried["outcome"] == "fixed" and carried["reason"].endswith(" (carried from the earlier review record)")
+    assert len(fake.marked()) == 2
+
+
+def test_a_finding_the_later_session_raises_again_appears_once_with_its_outcome(tmp_path):
+    fake = Fake()
+    _first_record(tmp_path, fake)
+    out = send(tmp_path, _second_session(tmp_path, [ledger_row(disposition="out-of-scope")]), fake)
+    assert out["ok"], out
+    (only,) = _by_key(fake)
+    assert only["outcome"] == "left-for-owner" and "carried" not in (only["reason"] or "")
+
+
+def test_a_carried_finding_with_no_outcome_stays_undecided_and_the_record_reads_not_reviewed(tmp_path):
+    fake = Fake()
+    s = Session(tmp_path, findings=[{"findingKey": KEY, "id": "f-1", "title": "t", "severity": "Important",
+                                     "file": "a.py", "line": 3, "detail": "d", "dimension": "code-reviewer"}])
+    assert send(tmp_path, s.seat("code-reviewer").save(), fake)["ok"]
+    out = send(tmp_path, _second_session(tmp_path), fake)
+    assert out["ok"], out
+    (carried,) = _by_key(fake)
+    assert carried["outcome"] is None
+    assert out["status"] != "reviewed"
+
+
+def test_no_earlier_record_means_nothing_is_carried(tmp_path):
+    fake = Fake()
+    out = send(tmp_path, _second_session(tmp_path), fake)
+    assert out["ok"], out
+    assert _by_key(fake) == []
