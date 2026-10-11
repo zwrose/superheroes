@@ -1872,8 +1872,13 @@ def _evaluate_tick(
             repo_slug = None
 
         # The cloud read gets half of what is left; the stack and vet reads that
-        # follow keep the other half, so a slow cloud endpoint cannot starve them.
-        cloud_deadline = monotonic() + max(0.0, (deadline - monotonic()) / 2)
+        # follow keep the other half, so a slow cloud endpoint cannot starve them. The
+        # share never falls below one request's minimum: a supported one-second arm
+        # would otherwise halve to less than the minimum and never sample the cloud
+        # (an overrun of that minimum is the loop's documented overrun).
+        cloud_deadline = monotonic() + max(
+            (deadline - monotonic()) / 2, _MIN_PR_POLL_SECONDS,
+        )
         stale_cloud_launches = _evaluate_cloud_activity(
             repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,

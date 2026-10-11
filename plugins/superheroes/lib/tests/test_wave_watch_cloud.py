@@ -364,6 +364,11 @@ def test_one_graphql_request_covers_every_cloud_lane(repo):
         assert 'b%d: refs(refPrefix: "refs/heads/", query: "%d", first: 50)' % (
             number, number) in query
     assert "closedByPullRequestsReferences(first: 10, includeClosedPrs: true)" in query
+    for number in (101, 102):
+        issue_part = query.split("i%d: issue" % number)[1].split("b%d: refs" % number)[0]
+        branch_part = query.split("b%d: refs" % number)[1]
+        assert "{ pageInfo { hasNextPage } nodes {" in issue_part
+        assert "{ pageInfo { hasNextPage } nodes {" in branch_part.split("i10")[0]
     graphql_kwargs = gh.kwargs[gh.calls.index(argv)]
     assert graphql_kwargs["cwd"] == repo
     assert graphql_kwargs["timeout"] <= 30.0
@@ -639,6 +644,16 @@ def test_cloud_lanes_is_sorted_by_launch_id_and_names_the_session(repo):
         {"launchId": "cloud-b", "issue": 102,
          "cloudSessionName": "cloud-102", "cloudSessionId": None},
     ]
+
+
+def test_a_one_second_arm_still_samples_cloud_activity(repo):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    gh = _quiet_gh(101)
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh,
+    )
+    assert len(gh.api_calls()) == 1
+    assert result["event"] == "lane-stale"
 
 
 def test_deadline_timer_carries_cloud_lanes(repo):
