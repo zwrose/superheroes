@@ -214,18 +214,17 @@ def test_panel_assembles_to_the_hand_written_artifact(tmp_path):
     def build(n, state):
         hand = {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}}
         hand["seats"]["code-reviewer"] = {"findings": list(_A_FINDING)}
-        # Same provenance the assembled path records when no dispatch manifest or canary is supplied.
-        hand["provenance"] = {"dispatchManifestUnavailable": True, "canaryUnavailable": True}
+        # Same provenance the assembled path records when no dispatch manifest is supplied.
+        hand["provenance"] = {"dispatchManifestUnavailable": True}
         envelopes = [_result_env(d, dict(hand["seats"][d])) for d in RD.DIMENSIONS]
         return hand, envelopes, {}
 
     artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_PANEL, build)
     assert artifact["seats"] == hand["seats"]
-    # No dispatch manifest and no canary were supplied, so neither key is invented — the driver's
-    # own provenance-unavailable / canaryUnverified disclosures stay the ones that fire.
-    assert "ranManifest" not in artifact and "canaryResult" not in artifact
-    expected_prov = {"byPhase": {RD.P_PANEL: {"dispatchManifestUnavailable": True,
-                                               "canaryUnavailable": True}}}
+    # No dispatch manifest was supplied, so the key is not invented — the driver's own
+    # provenance-unavailable disclosure stays the one that fires.
+    assert "ranManifest" not in artifact
+    expected_prov = {"byPhase": {RD.P_PANEL: {"dispatchManifestUnavailable": True}}}
     # `_fold_panel` pops `provenance` from the submitted artifact; both paths record it durably.
     ok_h, st_h = RD.load_state(str(tmp_path / "hand"))
     ok_a, st_a = RD.load_state(str(tmp_path / "assembled"))
@@ -251,29 +250,26 @@ def test_panel_confidence_and_tier_ride_into_the_review_record(tmp_path):
         assert record["dimensions"][dim]["tier"] == RD.CHEAP, record
 
 
-def test_panel_with_manifest_and_canary_matches_the_hand_written_envelope(tmp_path):
-    """The richer panel artifact: a trusted ranManifest + a per-vendor canary list. Equivalence is
-    against the hand-written four-key envelope `_fold_panel` already consumes."""
+def test_panel_with_manifest_matches_the_hand_written_envelope(tmp_path):
+    """The richer panel artifact: a trusted ranManifest. Equivalence is against the hand-written
+    envelope `_fold_panel` already consumes."""
     seat_map = {"seats": {d: {"vendor": "codex"} for d in RD.DIMENSIONS}}
-    probes = [{"engine": "codex", "engaged": True, "evidence": {"probe": "seat_canary"}}]
 
     def build(n, state):
         seats = {d: {"findings": []} for d in RD.DIMENSIONS}
         seats["code-reviewer"] = {"findings": list(_A_FINDING)}
         hand = {"seats": seats, "seatMap": seat_map,
-                "ranManifest": {d: "codex" for d in RD.DIMENSIONS},
-                "canaryResult": probes}
+                "ranManifest": {d: "codex" for d in RD.DIMENSIONS}}
         envelopes = [_result_env(d, dict(seats[d]), vendor="codex") for d in RD.DIMENSIONS]
         manifest = {d: {"vendor": "codex", "model": "gpt-5", "engine": "codex"}
                     for d in RD.DIMENSIONS}
         state["seatMapReceipts"] = [{"round": "1", "map": dict(seat_map)}]
-        return hand, envelopes, {"dispatch_manifest": manifest, "canary": probes}
+        return hand, envelopes, {"dispatch_manifest": manifest}
 
     # Both sessions must carry the same seat map, so it is seeded into state before assembly and
     # rides the hand-written artifact too (the fold appends `artifact["seatMap"]` to receipts).
     artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_PANEL, build)
     assert artifact["ranManifest"] == hand["ranManifest"]
-    assert artifact["canaryResult"] == probes
     assert artifact["seatMap"] == seat_map
 
 
@@ -638,17 +634,6 @@ def test_edge_dispatch_manifest_present_but_not_a_dict(tmp_path):
     assert artifact is None and reason == "dispatch-manifest-not-a-dict:list"
 
 
-def test_edge_canary_entry_with_no_engine(tmp_path):
-    """Malformed probes pass through assembly; fold records them as malformed in controlProbe."""
-    _d, _n, state = _at(tmp_path, RD.P_PANEL)
-    envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
-    artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
-                                   canary=[{"engine": "codex", "engaged": True},
-                                           {"engaged": True}])
-    assert reason is None and artifact is not None
-    assert artifact["canaryResult"][1] == {"engaged": True}
-
-
 def test_edge_envelope_with_no_seat():
     artifact, reason = RA.assemble(RD.P_SCOPED, [{"schema": RR.SEAT_RESULT_SCHEMA,
                                                   "payload": {"findings": []}}], {}, {})
@@ -892,27 +877,6 @@ def test_seat_map_comes_from_state_and_is_omitted_when_empty(tmp_path):
     state["seatMapReceipts"] = [{"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "codex"}}}}]
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"])
     assert reason is None and artifact["seatMap"] == {"seats": {"code-reviewer": {"vendor": "codex"}}}
-
-
-def test_canary_absent_omits_the_key_and_a_single_dict_is_tolerated(tmp_path):
-    _d, _n, state = _at(tmp_path, RD.P_PANEL)
-    envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
-    artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"])
-    assert reason is None and "canaryResult" not in artifact
-    probe = {"engine": "codex", "engaged": True}
-    artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"], canary=probe)
-    assert reason is None and artifact["canaryResult"] == [probe]
-
-
-def test_canary_is_a_list_one_probe_per_vendor(tmp_path):
-    """`canary_liveness` judges each cross-vendor vendor independently and needs a probe whose
-    `engine` matches; `seat_canary probe` emits ONE object per invocation, so the adapter carries
-    the aggregated LIST."""
-    _d, _n, state = _at(tmp_path, RD.P_PANEL)
-    envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
-    probes = [{"engine": "codex", "engaged": True}, {"engine": "cursor", "engaged": True}]
-    artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"], canary=probes)
-    assert reason is None and artifact["canaryResult"] == probes
 
 
 # =============================================================================

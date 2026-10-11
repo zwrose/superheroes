@@ -1,79 +1,48 @@
 #!/usr/bin/env python3
-"""Handback gate — parser, subject resolver, semantic validator, scope markers (#624 §4).
+"""Handback gate — command parser, command-subject resolver and scope-marker reader.
 
-**Shipped dark; nothing invokes this; the class does not arm; arming is owned by #954**
-(retrospective would-refuse audit → shadow mode → preconditions → owner decision). The
-parser-exactness question (the A-vs-B fork) is moot while dark and recorded on #954 — do not
-resolve it here.
+This module parses bash command text for ``gh pr ready`` / ``gh pr create`` / GraphQL ready
+invocations (``parse_gh_invocations``), resolves the repository, selector, head and base a parsed
+invocation names (``command_subject``), and reads the scope markers (``build-lane.json``,
+``review-session.json``) under the worktree's git directory (``marker_state``).
 
-Refuses ``gh pr ready`` / non-draft ``gh pr create`` in a mechanically-marked full-lane worktree
-that lacks an allowlisted review receipt. This class is a **Claude-host, Bash-tool, honest-agent
-tripwire**. It does not cover aliases, wrapper scripts, non-Bash tools, or other hosts. **It is
-not a security boundary and is not claimed as one.**
+Its decision function, ``validate_handback``, allows every command in every worktree state. It
+reads no review sidecar and no receipt, and it is not wired into any hook chain.
 
-Parser invariants (re-grounded #624 WO-8):
+Parser invariants:
 
 **(a) An unknown flag must never shift the interpretation of any other token.** Cursor advancement
 is decided in exactly one place per token; an unrecognized flag advances by exactly one.
 
-**(b) The gate allows only what §4.3's binding can actually verify against the sidecar, and refuses
-nothing a genuinely-valid production case produces.** Where the honest resolution is *cannot verify
-deterministically*, that is a stated residual covered by the advisor vet — exactly as ratified §4.3
-already does for ``gh pr ready``'s remote base. State the residual; never invent verification.
+**(b) The parser recognizes only invocation shapes it understands completely.** A token-matching
+invocation it cannot parse in full is reported as ``unrecognized`` — it is never partially
+understood.
 
-**(c) The gate recognizes only invocation shapes it understands completely. A token-matching
-invocation it cannot parse in full refuses in-family — it is never partially understood and never
-allowed on the strength of a partial parse.**
-
-**``gh pr ready`` residual:** for a bare ``gh pr ready`` with no selector, binding is branch +
-HEAD — the PR's remote base cannot be resolved without a network call inside a deterministic hook.
-That residual is covered by the advisor vet's existing remote-head duty. An explicit selector is a
-different case and refuses ``handback-subject-unresolvable``.
-
-**``gh pr create`` without ``--base`` residual:** when neither ``branch.<current>.gh-merge-base``
-nor ``refs/remotes/origin/HEAD`` resolves locally, implicit base cannot be bound and the command
-refuses ``handback-subject-unresolvable`` — the same class as an explicit selector on ``pr ready``.
-
-**Segment cwd residual:** guarded ``gh`` in a segment whose working directory cannot be established
-(any preceding ``cd``/``pushd``, or a subshell wrapper) refuses ``handback-inspection-failed``.
+**(c) A segment whose working directory cannot be established** (any preceding ``cd``/``pushd``, or
+a subshell wrapper) is flagged ``cwd_establishable: False`` on its invocations.
 """
-import hashlib
 import json
 import os
 import re
-import subprocess
 
-import review_diff_bytes
 import round_driver as RD
-import round_records as RR
 import store_core
 from worktree_guard import _split_segments, _tokenize_segment, _strip_shell_prefixes
 
 SCHEMA = "handback-decision/1"
 BUILD_LANE_FILE = "build-lane.json"
 REVIEW_SESSION_FILE = "review-session.json"
-HANDBACK_VERDICT_ALLOWLIST = ("converged", RD.ATTESTED_VERDICT)
 
 BUILD_LANE_SCHEMA = "build-lane/1"
 REVIEW_SESSION_SCHEMA = "review-session/1"
 
 _SIDECAR_DIR = RD.SIDECAR_DIRNAME
-_SIDECAR_FILE = RD.SIDECAR_FILE
-
-_REFUSAL_DETAIL = (
-    "superheroes review-receipt gate: no valid full-lane review receipt for HEAD %s — "
-    "finish the review to a certified terminal, or attest (`round_driver.py attest`); "
-    "if genuinely stuck, park to the advisor."
-)
-
-_INSPECTION_DOC = "plugins/superheroes/skills/review-code/SKILL.md"
 
 _PR_URL = re.compile(
     r"^(?P<base>[a-zA-Z][a-zA-Z0-9+.\-]*://[^/]+/[^/]+/[^/]+)/pull/(?P<num>\d+)(?:[/?#].*)?$"
 )
 _GH_REPO_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _GH_HOST_REPO_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_LEGACY_BASE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _HEREDOC_OPENER = re.compile(r"<<-?\s*(['\"]?)(\w+)\1\s*$")
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -746,10 +715,6 @@ def marker_state(gitdir, repo_root):
     return {"inScope": bool(markers), "markers": markers, "stale": stale}
 
 
-def _sidecar_path(gitdir):
-    return os.path.join(gitdir, _SIDECAR_DIR, _SIDECAR_FILE)
-
-
 def _allow(subject=None, detail=""):
     return {
         "schema": SCHEMA,
@@ -765,245 +730,9 @@ def _empty_subject():
     return {"repo": None, "selector": None, "head": None, "base": None, "repoSource": None}
 
 
-def _refuse(reason, detail, *, subject=None, sidecar_path=None, head_sha=None):
-    if head_sha:
-        base = _REFUSAL_DETAIL % head_sha
-        detail = (base + (" " + detail if detail else "")).strip()
-    return {
-        "schema": SCHEMA,
-        "decision": "refuse",
-        "reason": reason,
-        "detail": detail.strip(),
-        "subject": subject or _empty_subject(),
-        "sidecarPath": sidecar_path,
-    }
-
-
-def _recompute_diff_sha256(base_sha, repo_root, head_sha):
-    """Pinned diff recompute — plain ``git diff`` matching production review-code."""
-    try:
-        r = review_diff_bytes.run_git_diff_three_dot(
-            repo_root, base_sha, head_sha, timeout=10)
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
-    if r.returncode != 0:
-        return None
-    return hashlib.sha256(r.stdout).hexdigest()
-
-
-def _origin_owner(cwd, run_git):
-    """Return the owner segment of ``origin`` (e.g. ``org`` from ``github.com/org/repo``)."""
-    origin = store_core.normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
-    if not origin:
-        return None
-    parts = origin.split("/")
-    if len(parts) >= 2:
-        return parts[1]
-    return None
-
-
-def _read_receipt(path):
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError:
-        return None, None
-    try:
-        obj = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return raw, None
-    return raw, obj
-
-
-def _receipt_bindings_ok(sidecar, receipt):
-    """Delegate receipt shape to ``round_driver.validate_receipt``; layer verdict allowlist on top."""
-    if not isinstance(receipt, dict):
-        return False, "receipt-invalid:receipt is not an object"
-    if RD.receipt_kind(receipt) == RD.RECEIPT_INTERIM_SCHEMA:
-        return False, "receipt-interim-not-handback-evidence"
-    ok, why = RD.validate_receipt(receipt)
-    if not ok:
-        return False, "receipt-invalid:%s" % why
-    if receipt.get("verdict") != sidecar.get("verdict"):
-        return False, "verdict-mismatch"
-    verdict = sidecar.get("verdict")
-    if verdict not in HANDBACK_VERDICT_ALLOWLIST:
-        return False, "verdict-not-allowlisted"
-    if verdict == "converged":
-        if not isinstance(receipt.get("certification"), dict):
-            return False, "no-certification"
-    elif verdict == RD.ATTESTED_VERDICT:
-        if not isinstance(receipt.get("attestation"), dict):
-            return False, "no-attestation"
-    return True, None
-
-
-def _validate_binding(invocation, cwd, environ, run_git, gitdir):
-    subject = command_subject(invocation, environ)
-    sidecar_path = _sidecar_path(gitdir)
-    head_sha = run_git(cwd, "rev-parse", "HEAD")
-    if not head_sha:
-        return _refuse("handback-inspection-failed",
-                        "git could not resolve HEAD",
-                        subject=subject, sidecar_path=sidecar_path)
-
-    if not invocation.get("cwd_establishable", True):
-        return _refuse("handback-inspection-failed",
-                        "working directory for this gh invocation cannot be established "
-                        "(preceding cd/pushd or subshell)",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if not os.path.isfile(sidecar_path):
-        return _refuse("handback-no-receipt", "",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    sidecar, err = _read_json(sidecar_path)
-    if sidecar is None:
-        return _refuse("handback-receipt-unreadable",
-                        "sidecar unreadable: %s" % err,
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    ok, why = RR.validate_sidecar(sidecar)
-    if not ok:
-        return _refuse("handback-receipt-unreadable",
-                        "sidecar invalid: %s" % why,
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if _LEGACY_BASE_SHA.match(sidecar.get("baseRef") or ""):
-        return _refuse("handback-receipt-unreadable",
-                        "sidecar baseRef carries a commit id (legacy writer); "
-                        "republish sidecar with base branch name",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    receipt_path = sidecar.get("receiptPath")
-    receipt_bytes, receipt = _read_receipt(receipt_path)
-    if receipt_bytes is None:
-        return _refuse("handback-receipt-unreadable",
-                        "receipt at %r is unreadable" % receipt_path,
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-    if hashlib.sha256(receipt_bytes).hexdigest() != sidecar.get("receiptSha256"):
-        return _refuse("handback-receipt-unreadable",
-                        "receipt bytes do not match receiptSha256",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-    if receipt is None:
-        return _refuse("handback-receipt-unreadable",
-                        "receipt at %r is not valid JSON" % receipt_path,
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    bindings_ok, bind_why = _receipt_bindings_ok(sidecar, receipt)
-    if not bindings_ok:
-        if bind_why and bind_why.startswith("receipt-invalid:"):
-            return _refuse("handback-receipt-unreadable",
-                            "receipt invalid: %s" % bind_why[len("receipt-invalid:"):],
-                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        if bind_why == "receipt-interim-not-handback-evidence":
-            return _refuse("receipt-interim-not-handback-evidence", "",
-                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        return _refuse("handback-verdict-not-allowlisted", "",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if head_sha != sidecar.get("headSha"):
-        return _refuse("handback-head-mismatch", "",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    branch = run_git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch and branch != sidecar.get("branch"):
-        return _refuse("handback-branch-mismatch",
-                        "worktree branch %r does not match sidecar branch %r"
-                        % (branch, sidecar.get("branch")),
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    origin = store_core.normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
-    if origin is None or origin != sidecar.get("repoId"):
-        return _refuse("handback-repo-mismatch",
-                        "origin %r does not match sidecar repoId %r"
-                        % (origin, sidecar.get("repoId")),
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if subject.get("repo") and subject["repo"] != sidecar.get("repoId"):
-        return _refuse("handback-repo-mismatch",
-                        "command repo %r does not match sidecar repoId %r"
-                        % (subject["repo"], sidecar.get("repoId")),
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    action = invocation.get("action")
-    pr = invocation.get("pr") or {}
-
-    if action == "pr-ready" and pr.get("selector"):
-        return _refuse("handback-subject-unresolvable",
-                        "explicit PR selector on pr ready cannot be proven locally",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if pr.get("head"):
-        head_val = pr["head"]
-        owner = None
-        branch_part = head_val
-        if ":" in head_val:
-            owner, branch_part = head_val.split(":", 1)
-        if owner:
-            origin_owner = _origin_owner(cwd, run_git)
-            if origin_owner is None or owner != origin_owner:
-                return _refuse("handback-subject-unresolvable",
-                                "cross-repo --head %r cannot be verified locally"
-                                % head_val,
-                                subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        if branch and branch_part != branch:
-            return _refuse("handback-subject-unresolvable",
-                            "--head %r does not match worktree branch %r"
-                            % (head_val, branch),
-                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if action == "pr-create":
-        cmd_base = pr.get("base")
-        if cmd_base is None:
-            cmd_base = store_core.resolve_implicit_pr_base(cwd, run_git)
-            if cmd_base is None:
-                return _refuse("handback-subject-unresolvable",
-                                "pr create without --base cannot be bound to sidecar "
-                                "baseRef locally",
-                                subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        sidecar_base = sidecar.get("baseRef")
-        if sidecar_base == "unpinned":
-            return _refuse("handback-base-mismatch",
-                            "sidecar baseRef is unpinned",
-                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-        if cmd_base != sidecar_base:
-            return _refuse("handback-base-mismatch",
-                            "--base %r does not match sidecar baseRef %r"
-                            % (cmd_base, sidecar_base),
-                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    pinned_base = sidecar.get("baseSha")
-    if not pinned_base or pinned_base == "unresolved":
-        return _refuse("handback-inspection-failed",
-                        "sidecar baseSha is not pinned",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    verified_base = run_git(cwd, "rev-parse", "--verify", "--quiet",
-                            "%s^{commit}" % pinned_base)
-    if not verified_base:
-        return _refuse("handback-inspection-failed",
-                        "git rev-parse for sidecar baseSha %r failed" % pinned_base,
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    recomputed_diff = _recompute_diff_sha256(verified_base, cwd, head_sha)
-    if recomputed_diff is None:
-        return _refuse("handback-inspection-failed",
-                        "diff recompute for %s...%s failed" % (pinned_base, head_sha),
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if recomputed_diff != sidecar.get("diffSha256"):
-        return _refuse("handback-diff-mismatch",
-                        "recomputed diffSha256 does not match sidecar",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    return _allow(subject=subject, detail="valid receipt bound")
-
-
 def validate_handback(command, cwd, *, environ=None, run_git=None):
-    """Decide whether a bash command may hand back (ready/create a non-draft PR)."""
+    """Allow every command; ``subject`` names the last guarded invocation, when there is one."""
     environ = environ if environ is not None else os.environ
-    run_git = run_git or store_core.run_git
     invocations = parse_gh_invocations(command)
     guarded = []
     for inv in invocations:
@@ -1018,39 +747,4 @@ def validate_handback(command, cwd, *, environ=None, run_git=None):
 
     if not guarded:
         return _allow()
-
-    try:
-        gitdir = store_core.get_worktree_gitdir(cwd)
-    except store_core.RepoRootUnavailable as exc:
-        return _refuse("handback-inspection-failed",
-                        "gitdir unresolvable: %s" % exc)
-
-    scope = marker_state(gitdir, cwd)
-    if not scope["inScope"]:
-        # §4.2: neither valid marker → silent allow; stale alone is out of scope too.
-        return _allow()
-
-    for inv in guarded:
-        if inv.get("unrecognized") or inv["action"] == "unrecognized":
-            token = inv.get("unrecognized", "?")
-            detail = ("unrecognized gh option %r — see %s"
-                      % (token, _INSPECTION_DOC))
-            if inv.get("unrecognized_detail"):
-                detail = "%s (%s)" % (detail, inv["unrecognized_detail"])
-            subject = command_subject(inv, environ)
-            head_sha = run_git(cwd, "rev-parse", "HEAD")
-            return _refuse("handback-inspection-failed", detail,
-                            subject=subject, sidecar_path=_sidecar_path(gitdir),
-                            head_sha=head_sha)
-        if inv["action"] == "graphql-ready":
-            subject = command_subject(inv, environ)
-            head_sha = run_git(cwd, "rev-parse", "HEAD")
-            return _refuse("handback-inspection-failed",
-                            "graphql markPullRequestReadyForReview is refused conservatively",
-                            subject=subject, sidecar_path=_sidecar_path(gitdir),
-                            head_sha=head_sha)
-        result = _validate_binding(inv, cwd, environ, run_git, gitdir)
-        if result["decision"] == "refuse":
-            return result
-
     return _allow(subject=command_subject(guarded[-1], environ))

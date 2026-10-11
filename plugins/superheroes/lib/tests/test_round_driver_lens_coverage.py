@@ -80,7 +80,7 @@ def test_missing_lens_floor_cannot_ground_converged():
     assert "floor-marked" in reason
 
 
-def test_canary_unverified_all_run_still_floor():
+def test_cross_vendor_empty_seat_all_run_still_floor():
     seats = _all_seats_empty()
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
     seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}

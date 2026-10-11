@@ -32,7 +32,7 @@ import seat_bundle  # noqa: E402  (single dispatch seat entry; #1269 WO-A1)
 TASK_ID_TRAILER = "Task-Id"
 
 # Re-export vacuous forfeit reason from dispatch_outcome (CONVENTIONS §11 Pattern 1). The
-# dispatch runner produces it; round_driver and seat_canary compare against it — consumers
+# dispatch runner produces it; round_driver compares against it — consumers
 # import this name, never restate the literal.
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
@@ -2373,7 +2373,7 @@ def engagement_read(result):
 
     NEVER returns "inert". Absence of positive evidence is NOT proof of inaction — a correct
     payload the transport could not read (the #687 verdict-shape specimen) looks identical to a
-    seat that never ran. Only `seat_canary probe` can justify asserting inertness.
+    seat that never ran. Nothing in this module can justify asserting inertness.
     Does not look at `ok` — a forfeited seat that nevertheless returned findings is still
     "engaged". Never raises."""
     try:

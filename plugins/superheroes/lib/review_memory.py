@@ -119,7 +119,7 @@ def recurrent_classes(records, coverage_decisions=None):
 # it, a `recordsPath` resume restored findings/coverage but nothing a pre-resume round DISCLOSED, so
 # the resumed run's terminal receipt silently claimed less than the run knew. This module only
 # TRANSPORTS the block: the channel vocabulary and the per-channel shape rules belong to the reader
-# (round_driver.RESUMABLE_DISCLOSURE_CHANNELS), so a new channel needs no schema edit here. Anything
+# (round_driver.CARRIED_DISCLOSURE_CHANNELS), so a new channel needs no schema edit here. Anything
 # that is not a string-keyed object is DROPPED — a record with no block loads with no block, and an
 # absent block must never materialize as fabricated empty channels ("checked and clean").
 DISCLOSURES_FIELD = "disclosures"

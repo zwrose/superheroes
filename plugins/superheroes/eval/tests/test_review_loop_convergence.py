@@ -41,9 +41,8 @@ RM = mod("review_memory")
 PT = mod("panel_tally")
 
 
-def run_fixture(name, fail_telemetry=False, corrupt_records=False):
-    return harness.run_fixture(FIXTURES / name, fail_telemetry=fail_telemetry,
-                               corrupt_records=corrupt_records)
+def run_fixture(name, fail_telemetry=False):
+    return harness.run_fixture(FIXTURES / name, fail_telemetry=fail_telemetry)
 
 
 def confirmation_rounds(observed):
@@ -106,15 +105,6 @@ def test_code_review_benchmark_has_own_target_and_decision():
     assert_full_confirmation(observed, fixture)
 
 
-def test_resume_memory_corrupt_state_cannot_certify():
-    # A corrupt/mangled durable round-records state fails closed in the driver's resume seam —
-    # never certify off unreadable memory. Drives the driver directly (not just the twins).
-    observed = run_fixture("resume_memory.json", corrupt_records=True)
-    assert observed["terminal"] != "clean"
-    assert observed["terminal"] == "halted"
-    assert observed["_driverReceipt"]["certificationShape"] is None
-
-
 def test_confirmation_surfaced_important_certifies_after_scope_verify():
     # #174 / #507: an Important surfaced after round 1 is scope-verified and certified via
     # audited-chain — it does NOT ratchet a confirmation panel.
@@ -147,30 +137,6 @@ def test_postconfirmation_scoped_critical_rearms():
     assert len(confirmation_rounds(observed)) == 1, confirmation_rounds(observed)
     assert any(c["reviewer"] == "security-reviewer" and c["roundKind"] == "confirmation"
                for c in observed["seen"])
-
-
-def test_degraded_confirmation_does_not_anchor_certification():
-    # #174 finding 3: a seeded degraded (low-confidence) confirmation panel does NOT satisfy the
-    # every-dim-fresh-deep-high-confidence bar, so it cannot anchor certification — the resumed loop
-    # owes and runs a fresh proper full confirmation panel (round ≥ 3) that certifies as a full
-    # panel, not on the degraded seed.
-    observed = run_fixture("confirmation_degraded_panel_not_counted.json")
-    assert observed["terminal"] == "clean"
-    confirmations = confirmation_rounds(observed)
-    assert any(r >= 3 for r in confirmations), confirmations
-    assert observed["_driverReceipt"]["certificationShape"] == "full-panel-confirmed"
-
-
-def test_resume_memory_restores_fix_context():
-    observed = run_fixture("resume_memory.json")
-    assert observed["fixContexts"], "seeded resume must reach a fix with a worklist"
-    ctx = observed["fixContexts"][0]["context"]
-    # #211: the fix worklist holds `findings` (prior + current), not the old in-memory `priorFindings`.
-    assert ctx["findings"]
-    assert any("Test::coverage" in key for key in ctx["classKeys"])
-    assert "generalizeRequired" in ctx
-    assert "Test" in ctx["changedSubjects"]
-    assert any(d["id"] == "RCD-resume" for d in ctx["coverageDecisions"])
 
 
 def test_telemetry_failure_keeps_terminal_but_not_benchmark_valid_in_shell():

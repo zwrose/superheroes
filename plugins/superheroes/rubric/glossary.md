@@ -350,9 +350,10 @@ condition](#delete-when-condition) wearing a tag.
 ### Tag: mixed
 
 Part structural, part capability-gap. The entry names which part is which so a
-[proposal](#proposal) can split it. Example: the seat canary, whose engagement axis is structural
-(a silent transport, read from telemetry) and whose plant-detection axis is a competence test
-sampled by a probe.
+[proposal](#proposal) can split it. Example: the gate-write helper, whose `reset` mode and decisions
+plumbing are structural (how an approval is revoked and recorded is a property of how the gate is
+built) and whose legacy `certify` mode is capability-gap baggage left from the retired plan and
+tasks legs.
 
 ## Review sheets
 
@@ -375,3 +376,7 @@ contests.
 
 The owner's word that the spec may go to the advisor's vet. It is not approval, and a
 [sheet](#sheet)'s answers or silence never stand in for it.
+
+### Review record
+
+The plain account of one PR's review, written when the review ends on any lane. It holds what was checked, which reviewers ran, every finding and what happened to it, CI on the final commit, and what is left. Each review session adds its own record comment to the PR and never edits an earlier one; each reviewer's raw output is kept in its own comment that the record links. The rule for writing it is in [the review record reference](../skills/review-code/reference/review-record.md).

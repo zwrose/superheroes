@@ -1,4 +1,4 @@
-"""#1272 layer 2e: followUp shape — one home, owner submit gates, certification reads it."""
+"""#1272 layer 2e: followUp shape — one home, owner submit gates."""
 import importlib.util
 import json
 import os
@@ -12,8 +12,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import session_contract as SC
-from round_certification_fixtures import write_session
-from test_round_driver import _cfg, _cfg_cert
+from test_round_driver import _cfg_cert
 
 _SPEC = importlib.util.spec_from_file_location(
     "test_round_driver_integration",
@@ -31,7 +30,6 @@ def _load(name):
 
 
 RD = _load("round_driver")
-RC = _load("round_certification")
 
 _TRADEOFF = {"title": "widen the API", "severity": "Important",
              "file": "f.py", "line": 1, "tradeoff": True}
@@ -118,20 +116,6 @@ def _pending_submit(session_dir, artifact):
 def _ledger_by_key(state):
     return {SC.finding_identity_key(e): e
             for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
-
-
-def _cert_ctx(state, tmp_path):
-    head = (state.get("config") or {}).get("headSha") or ("a" * 40)
-    session_dir = write_session(
-        tmp_path,
-        state=state,
-        journal_lines=[],
-        meta={"baseGuard": RC.BASE_GUARD_CHECKED, "headSha": head},
-        faithful_session=False,
-    )
-    ctx, err = RC._load_context(session_dir)
-    assert err is None
-    return ctx
 
 
 def _write_owner_artifact(tmp_path, artifact, name="owner-artifact.json"):
@@ -336,35 +320,6 @@ def test_e2c_duplicate_skip_conflicting_follow_up_refused_at_submit(tmp_path):
     assert out["ok"] is False, out
     assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in out["reason"]
     assert _state_bytes(session_dir) == before
-
-
-def test_e9_item_less_persisted_follow_up_certifies(tmp_path):
-    # axis: e9 — resumed ledger without item certifies when trigger and closure present
-    finding = {"file": "o.py", "line": 1, "title": "old", "severity": "Important",
-               "disposition": "out-of-scope", "outOfScopeReason": "deferred",
-               "followUp": {"revisitTrigger": "later", "classClosure": "none"}}
-    state = RD.new_state(_cfg(baseGuard=RC.BASE_GUARD_CHECKED))
-    state["findings"] = [finding]
-    state["dispositionLedgerOwner"] = "ledger"
-    state["dispositionLedger"] = [dict(finding, dispositionRound=1)]
-    ctx = _cert_ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is None
-
-
-def test_e9b_present_empty_item_refused_at_certification(tmp_path):
-    # axis: e9b — present-but-empty item refused at certification
-    finding = {"file": "o.py", "line": 1, "title": "old", "severity": "Important",
-               "disposition": "out-of-scope", "outOfScopeReason": "deferred",
-               "followUp": {"item": "", "revisitTrigger": "later", "classClosure": "none"}}
-    state = RD.new_state(_cfg(baseGuard=RC.BASE_GUARD_CHECKED))
-    state["findings"] = [finding]
-    state["dispositionLedgerOwner"] = "ledger"
-    state["dispositionLedger"] = [dict(finding, dispositionRound=1)]
-    ctx = _cert_ctx(state, tmp_path)
-    refusal = RC.check_disposition_without_receipt(ctx)
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "missing-follow-up-item"
 
 
 def test_e10_advance_owner_artifact_malformed_follow_up_refused(tmp_path):

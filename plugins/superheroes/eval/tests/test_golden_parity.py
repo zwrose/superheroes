@@ -69,13 +69,6 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "telemetry": _TELEM,
         "fixContexts": _FIXCTX,
     },
-    "resume_memory.golden.json": {
-        "roundCount": "the driver resumes at round N+1 into a full panel then delta rounds — a different round count than the JS resume schedule",
-        "seen": _SEEN,
-        "tokenTotal": _TOK,
-        "telemetry": _TELEM,
-        "fixContexts": _FIXCTX,
-    },
     "wrong_principle.golden.json": {
         "roundCount": "the challenged-coverage breaker parks at the delta round the class recurs (round 2), earlier than the JS confirmation-cap park at round 3",
         "seen": _SEEN,
@@ -124,9 +117,6 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "fixContexts": _FIXCTX,
         "fixResults": _FIXRES,
     },
-    "confirmation_degraded_panel_not_counted.golden.json": {
-        "telemetry": "the resumed fresh confirmation panel's expectedLeaves / dimensionCounts follow the driver's round-3 panel seats, not the JS resume schedule",
-    },
 }
 
 CASES = [
@@ -134,14 +124,12 @@ CASES = [
     ("telemetry_failure.fail-telemetry.golden.json", "telemetry_failure.json", True),
     ("plan_120_replay.golden.json", "plan_120_replay.json", False),
     ("code_review_recurring_class.golden.json", "code_review_recurring_class.json", False),
-    ("resume_memory.golden.json", "resume_memory.json", False),
     ("wrong_principle.golden.json", "wrong_principle.json", False),
     ("skipped_dimension_regression.golden.json", "skipped_dimension_regression.json", False),
     ("confirmation_important_certifies.golden.json", "confirmation_important_certifies.json", False),
     ("confirmation_postscoped_rework_rearms.golden.json", "confirmation_postscoped_rework_rearms.json", False),
     ("confirmation_postscoped_narrow_certifies.golden.json", "confirmation_postscoped_narrow_certifies.json", False),
     ("confirmation_postscoped_critical_rearms.golden.json", "confirmation_postscoped_critical_rearms.json", False),
-    ("confirmation_degraded_panel_not_counted.golden.json", "confirmation_degraded_panel_not_counted.json", False),
 ]
 
 

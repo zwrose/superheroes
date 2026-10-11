@@ -124,20 +124,6 @@ def _round_number(value):
     return i
 
 
-def _resume_round(records):
-    """The next round to run = max persisted round + 1."""
-    best = 0
-    for rec in records or []:
-        if not isinstance(rec, dict):
-            continue
-        n = _round_number(rec.get("round"))
-        if n is None:
-            continue
-        if n > best:
-            best = n
-    return best + 1
-
-
 def _previous_dimension_state(records):
     """Fold every round's dimensions, later
     rounds overwriting earlier, into the `previous` map plan_round consumes."""
@@ -370,44 +356,6 @@ def _load_coverage_state(coverage_path, coverage_mode):
         return cov.load_decisions(coverage_path, coverage_mode or "code")
     except Exception as exc:  # noqa: BLE001 — an unreadable coverage read fails closed like the helper
         return {"ok": False, "state": "unreadable", "reason": "coverage-load-failed: " + str(exc)}
-
-
-# ── decider: entry-bootstrap (evolve #199) — the resume DECISION only ──
-def entry_bootstrap(path, dimensions, extras_path=None):
-    """The resume seam: read the durable records and answer only the resume DECISION — the round
-    to run next, the CAS content hash, the last-round extras, and the confirmation-marker state —
-    never stub records or findings (the #193 stub shape is retired). A load failure fails closed
-    (ok:false) exactly as the shell's loadRoundRecords does; the caller cannot-certify."""
-    state = _load_records(path, dimensions)
-    if not state.get("ok"):
-        return {"ok": False, "state": state.get("state", "unreadable"),
-                "reason": state.get("reason") or "round-memory-unreadable",
-                "contentHash": state.get("contentHash")}
-    records = state.get("records") or []
-    extras = None
-    if extras_path:
-        try:
-            with open(extras_path, encoding="utf-8") as fh:
-                loaded = json.load(fh)
-            extras = loaded if isinstance(loaded, dict) else None
-        except (OSError, ValueError):
-            extras = None
-    marked = [r for r in records if isinstance(r, dict) and r.get("confirmationPending")]
-
-    def _round_no(rec):
-        rn = _round_number(rec.get("round"))
-        return rn if rn is not None else 0
-    marked_round = max((_round_no(r) for r in marked), default=None)
-    return {
-        "ok": True,
-        "state": state.get("state", "loaded"),
-        "round": _resume_round(records),
-        "contentHash": state.get("contentHash"),
-        "extras": extras,
-        "confirmationPending": bool(marked),
-        "markedRound": marked_round,
-        "roundCount": len(records),
-    }
 
 
 # ── decider: plan-round — the per-dimension schedule for the round about to run ──
@@ -751,11 +699,6 @@ def _build_parser():
     p = argparse.ArgumentParser(description="Showrunner review-panel deciders (#211).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    eb = sub.add_parser("entry-bootstrap")
-    eb.add_argument("--path", required=True)
-    eb.add_argument("--dimensions", default="[]")
-    eb.add_argument("--extras-path", default=None)
-
     pr = sub.add_parser("plan-round")
     pr.add_argument("--path", required=True)
     pr.add_argument("--round", required=True, type=int)
@@ -806,9 +749,7 @@ def _build_parser():
 
 def main(argv):
     args = _build_parser().parse_args(argv[1:])
-    if args.cmd == "entry-bootstrap":
-        result = entry_bootstrap(args.path, _json_arg(args.dimensions, []), args.extras_path)
-    elif args.cmd == "plan-round":
+    if args.cmd == "plan-round":
         result = plan_round_decider(
             args.path, args.round, _json_arg(args.dimensions, []),
             _json_arg(args.changed_subjects, None) if args.changed_subjects is not None else None,
