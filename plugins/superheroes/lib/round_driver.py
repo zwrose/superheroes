@@ -1124,9 +1124,6 @@ def _default_config(overrides=None):
         # the producer through `cmd_submit`'s `round_commit` submit-accept transaction rather than
         # calling it from `_fold`, because `_fold` runs before that transaction opens.
         "recordsPath": None,
-        # A caller that already owns round-records.json — e.g. a harness with its own producer —
-        # sets this False; the driver then never writes that file.
-        "persistRecords": True,
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
         "priorComments": None,
@@ -1789,13 +1786,11 @@ def _seed_findings_before_record_park(state):
 def _round_records_payload(state, config):
     """The ONE producer of the outgoing round-records list (#1196 WO-B).
 
-    Returns a tagged outcome: ``nothing`` (no path, persist disabled, or an empty ledger) or
+    Returns a tagged outcome: ``nothing`` (no path, or an empty ledger) or
     ``ready`` (path + this session's full records list for ``records_bytes``). The list is built
     from the in-memory ledger alone; the file at ``path`` is never opened."""
     path = config.get("recordsPath")
     if not path:
-        return {"outcome": "nothing"}
-    if not config.get("persistRecords"):
         return {"outcome": "nothing"}
 
     outgoing = []

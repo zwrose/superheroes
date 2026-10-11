@@ -958,8 +958,7 @@ skeleton — no evidence bodies) and carries the declared per-round disclosure b
 ledger: the producer writes the whole outgoing ledger as `review_memory.records_bytes` in one atomic
 write, replacing whatever was at that path, and the driver never reads the file — a new session
 takes nothing from it, and a file left by another session, valid or corrupt, is simply replaced on
-the first write. A caller that already owns `round-records.json` opts out with
-`persistRecords: False`. A write the producer cannot complete parks `cannot-certify` rather than
+the first write. A write the producer cannot complete parks `cannot-certify` rather than
 certifying with the export out of step. The `next --records-path` flag sets `recordsPath` on fresh
 state only — supplying it on existing state refuses `records-path-not-fresh-state`. The export is
 kept outside the session folder, so any path at or inside `$SESSION_DIR` refuses

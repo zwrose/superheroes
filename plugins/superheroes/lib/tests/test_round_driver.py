@@ -3422,25 +3422,6 @@ def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monk
     assert any(f.get("title") == "panel-bug" for f in receipt["findings"])
 
 
-def test_producer_respects_persist_records_false(tmp_path):
-    records = tmp_path / "round-records.json"
-    state = RD.new_state(
-        _cfg(dimensions=["test-reviewer"], recordsPath=str(records), persistRecords=False))
-    state["_records"] = [_seed_record(1)]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
-    RD._persist_round_records(state, state["config"])
-    assert state.get("terminal") is None
-    assert not records.exists()
-
-    records_default = tmp_path / "round-records-default.json"
-    state_default = RD.new_state(
-        _cfg(dimensions=["test-reviewer"], recordsPath=str(records_default)))
-    state_default["_records"] = [_seed_record(1)]
-    state_default["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
-    RD._persist_round_records(state_default, state_default["config"])
-    assert records_default.exists()
-
-
 def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
     records = tmp_path / "round-records.json"
     initial_text = RD.review_memory.records_bytes([_seed_record(1)]).decode("utf-8")
