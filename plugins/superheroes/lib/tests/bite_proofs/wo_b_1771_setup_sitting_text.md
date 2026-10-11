@@ -228,3 +228,95 @@ FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_
 ## Final search (WO-D)
 
 A search of `set-up.md` for `paste the environment's id` found no match, and found `set-up.md:471` and `set-up.md:511` in their restored form.
+
+## WO-E: the plain after-read in step 3 is guarded on its own
+
+Guarded elements, declared up front: D3b and D3c. Both are proofs of `T::test_the_pick_is_read_before_and_after_and_before_the_check`. Each neutralization is a targeted Edit to `set-up.md`, anchored on the plain line with the line after it (the closing fence), because the same `pick --cwd . --before <the value step 1 kept>` text also begins the confirm-by-name line. Each is reverted by the inverse Edit; the committed `set-up.md` is unchanged.
+
+### D3b: the plain after-read is guarded by itself. Axis: command content
+
+- **Neutralization applied.** Step 3's plain after-read verb changed from `pick` to `snapshot`: `cloud_environment.py" snapshot --cwd . --before <the value step 1 kept>`. The confirm-by-name line was untouched. Before this order, the old needle `cloud_environment.py" pick --cwd . --before` still matched the confirm-by-name line, so the test stayed green on this change (`1 passed`, seen by the orchestrator on head `e4db0e4d`).
+- **Node.** `T::test_the_pick_is_read_before_and_after_and_before_the_check`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_the_pick_is_read_before_and_after_and_before_the_check __________
+
+    def test_the_pick_is_read_before_and_after_and_before_the_check():
+        section = _section_six()
+        assert section, "section 6 of set-up.md was not found"
+        plain_end = 'pick --cwd . --before <the value step 1 kept>'
+        plain_label = 'a plain after-read line ending %r' % plain_end
+        plain = next((i for i, line in enumerate(section) if line.strip().endswith(plain_end)), None)
+        found = [('cloud_environment.py" snapshot', _first(section, 'cloud_environment.py" snapshot')),
+                 ('cloud_check.py" setup-message', _first(section, 'cloud_check.py" setup-message')),
+                 (plain_label, plain),
+                 ('cloud_pass.py" make', _first(section, 'cloud_pass.py" make')),
+                 ('cloud_check.py" start', _first(section, 'cloud_check.py" start'))]
+        for needle, index in found:
+>           assert index is not None, "section 6 has no line containing %r" % needle
+E           AssertionError: section 6 has no line containing "a plain after-read line ending 'pick --cwd . --before <the value step 1 kept>'"
+E           assert None is not None
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
+1 failed in 0.21s
+```
+
+- **Restore.** The inverse Edit; quoted from `set-up.md:442`: `   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept>`.
+- **Green.**
+
+```
+.                                                                        [100%]
+1 passed in 3.67s
+```
+
+### D3c: the plain after-read comes before the confirm-by-name read. Axis: command content
+
+- **Neutralization applied.** ` --confirmed <the value step 1 kept>` appended to step 3's plain after-read line. That leaves two confirm-by-name lines and no plain read.
+- **Node.** `T::test_the_pick_is_read_before_and_after_and_before_the_check`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_the_pick_is_read_before_and_after_and_before_the_check __________
+
+    def test_the_pick_is_read_before_and_after_and_before_the_check():
+        section = _section_six()
+        assert section, "section 6 of set-up.md was not found"
+        plain_end = 'pick --cwd . --before <the value step 1 kept>'
+        plain_label = 'a plain after-read line ending %r' % plain_end
+        plain = next((i for i, line in enumerate(section) if line.strip().endswith(plain_end)), None)
+        found = [('cloud_environment.py" snapshot', _first(section, 'cloud_environment.py" snapshot')),
+                 ('cloud_check.py" setup-message', _first(section, 'cloud_check.py" setup-message')),
+                 (plain_label, plain),
+                 ('cloud_pass.py" make', _first(section, 'cloud_pass.py" make')),
+                 ('cloud_check.py" start', _first(section, 'cloud_check.py" start'))]
+        for needle, index in found:
+>           assert index is not None, "section 6 has no line containing %r" % needle
+E           AssertionError: section 6 has no line containing "a plain after-read line ending 'pick --cwd . --before <the value step 1 kept>'"
+E           assert None is not None
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
+1 failed in 3.32s
+```
+
+- **Restore.** The inverse Edit; quoted from `set-up.md:442`: `   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept>`, with `set-up.md:452` still `   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>`.
+- **Green.**
+
+```
+.                                                                        [100%]
+1 passed in 0.09s
+```
+
+## Fail-closed edges (WO-E)
+
+1. The plain after-read is missing (renamed, deleted, or given `--confirmed`): the plain index is `None`, and the "has no line containing" assertion fails. D3b and D3c are the proofs of this edge.
+2. The plain after-read comes after the pass command: the pairwise order assertion fails (`plain < make`). Reasoned from the code, not run.
+3. The confirm-by-name line comes before the plain after-read: `plain < confirm` fails. Reasoned from the code, not run.

@@ -84,14 +84,23 @@ def test_every_check_command_names_the_picked_id():
 def test_the_pick_is_read_before_and_after_and_before_the_check():
     section = _section_six()
     assert section, "section 6 of set-up.md was not found"
-    order = ['cloud_environment.py" snapshot', 'cloud_check.py" setup-message',
-             'cloud_environment.py" pick --cwd . --before', 'cloud_pass.py" make',
-             'cloud_check.py" start']
-    found = [(needle, _first(section, needle)) for needle in order]
+    plain_end = 'pick --cwd . --before <the value step 1 kept>'
+    plain_label = 'a plain after-read line ending %r' % plain_end
+    plain = next((i for i, line in enumerate(section) if line.strip().endswith(plain_end)), None)
+    found = [('cloud_environment.py" snapshot', _first(section, 'cloud_environment.py" snapshot')),
+             ('cloud_check.py" setup-message', _first(section, 'cloud_check.py" setup-message')),
+             (plain_label, plain),
+             ('cloud_pass.py" make', _first(section, 'cloud_pass.py" make')),
+             ('cloud_check.py" start', _first(section, 'cloud_check.py" start'))]
     for needle, index in found:
         assert index is not None, "section 6 has no line containing %r" % needle
     for (earlier, i), (later, j) in zip(found, found[1:]):
         assert i < j, "line %r (%d) does not come before line %r (%d)" % (earlier, i, later, j)
+    confirm_needle = '--before <the value step 1 kept> --confirmed <the value step 1 kept>'
+    confirm = _first(section, confirm_needle)
+    assert confirm is not None, "section 6 has no line containing %r" % confirm_needle
+    assert plain < confirm, "the plain after-read (%d) does not come before the confirm-by-name line (%d)" % (
+        plain, confirm)
     recovery_needle = ('cloud_environment.py" pick --cwd . --before <the snapshot value> '
                        '--confirmed <the environment now in use>')
     recovery = _first(section, recovery_needle)
