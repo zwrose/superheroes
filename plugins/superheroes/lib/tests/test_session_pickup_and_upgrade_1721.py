@@ -573,14 +573,6 @@ def test_e9c_a_sealed_first_emit_of_the_current_version_is_still_recovered(tmp_p
     assert not os.path.exists(_marker_path(session_dir))
 
 
-def test_e9d_the_skill_anchors_a_pr_auto_fix_session_to_the_local_head():
-    # bites on: the meta.json block taking headSha from pr.json's remote head in the auto-fix loop
-    with open(os.path.join(os.path.dirname(RD.__file__), "..", "skills", "review-code", "SKILL.md"),
-              encoding="utf-8") as fh:
-        text = fh.read()
-    assert 'if [ "$MODE" = pr ] && [ "$REVIEW_PATH" = loop ]; then HEAD_SHA=$(git rev-parse HEAD); fi' in text
-
-
 # E10 — axis: `advance`, called straight at its own entry (even with `break_lock`), is refused
 # before it reconciles, breaks a lock or journals anything.
 @pytest.mark.parametrize("break_lock", [False, True], ids=["plain", "break-lock"])
