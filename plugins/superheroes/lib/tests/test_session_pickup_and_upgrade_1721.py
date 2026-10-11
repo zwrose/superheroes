@@ -478,6 +478,55 @@ def test_e4_the_current_generation_passes_the_gate(tmp_path):
     assert not os.path.exists(_marker_path(session_dir))
 
 
+# E4b — axis: an unfinished state of the current generation but an earlier schema version (2, 3, 4)
+# is refused by `next`, `submit` and `record-result`; none of them reads it. Only the integer
+# `STATE_SCHEMA_VERSION` is current.
+@pytest.mark.parametrize("version", [2, 3, 4])
+@pytest.mark.parametrize("name", ["next", "submit", "record-result"])
+def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_path):
+    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
+    state = _read_state_file(session_dir)
+    state["schemaVersion"] = version
+    _write_state_file(session_dir, state)
+    before = _snapshot(session_dir, exclude=(MARKER,))
+    out = _DIRECT_CALLS[name](session_dir, None)
+    _assert_refusal(out, already_restarted=False)
+    assert _journal_rows(session_dir) == []
+    assert _snapshot(session_dir, exclude=(MARKER,)) == before
+    assert os.path.exists(_marker_path(session_dir))
+
+
+@pytest.mark.parametrize("version", [True, 5.0, "5", None])
+def test_e4b_a_schema_version_that_is_not_the_integer_is_refused(version, tmp_path):
+    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
+    state = _read_state_file(session_dir)
+    state["schemaVersion"] = version
+    _write_state_file(session_dir, state)
+    _assert_refusal(RD.cmd_next(session_dir), already_restarted=False)
+
+
+# E4c — axis: a finished state of an earlier schema version passes the gate, and `next` answers its
+# terminal again.
+@pytest.mark.parametrize("version", [2, 3, 4])
+def test_e4c_a_finished_earlier_schema_version_replays_its_terminal(version, tmp_path):
+    session_dir = str(tmp_path / "finished")
+    os.makedirs(session_dir)
+    cfg = _cfg()
+    payload = _drive_cli(session_dir, cfg, _responder(round1_findings=None, vendors=cfg["vendors"]))
+    assert payload["verdict"] == "converged"
+    replay_before = RD.cmd_next(session_dir)
+    assert replay_before["ok"] and replay_before["action"] == RD.P_TERMINAL, replay_before
+    state = _read_state_file(session_dir)
+    state["schemaVersion"] = version
+    _write_state_file(session_dir, state)
+    assert RD._upgrade_gate_unlocked(session_dir, "next") is None
+    replay_after = RD.cmd_next(session_dir)
+    assert {k: v for k, v in replay_after.items() if k != "expectedStateHash"} == {
+        k: v for k, v in replay_before.items() if k != "expectedStateHash"}
+    assert not os.path.exists(_marker_path(session_dir))
+    assert _read_state_file(session_dir)["schemaVersion"] == version
+
+
 # E5 — axis: a finished earlier-generation state passes the gate (U7 drives one end to end).
 def test_e5_a_finished_state_without_the_key_passes_the_gate(tmp_path):
     session_dir = _light_folder(tmp_path, terminal={"verdict": "converged"})
