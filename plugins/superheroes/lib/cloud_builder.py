@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -99,8 +100,8 @@ def _call(run, argv, env, timeout):
     return (code if isinstance(code, int) else None), (out if isinstance(out, str) else "")
 
 
-def _git(run, repo_root, args, env):
-    return _call(run, ["git", "-C", repo_root] + list(args), env, _GIT_TIMEOUT)
+def _git(run, repo_root, args, env, timeout=_GIT_TIMEOUT):
+    return _call(run, ["git", "-C", repo_root] + list(args), env, timeout)
 
 
 def _gh(run, args, env):
@@ -196,37 +197,47 @@ def intake(repo_root, launch_text, *, env=None, run=None, running_version=None):
             "comment": INTAKE_TEXT.format(v=running, sha=sha), "pluginVersion": running}
 
 
-def _shallow_answer(run, repo_root, genv):
-    code, out = _git(run, repo_root, ["rev-parse", "--is-shallow-repository"], genv)
+def _shallow_answer(git):
+    code, out = git(["rev-parse", "--is-shallow-repository"])
     answer = out.strip() if code == 0 else None
     return answer if answer in ("true", "false") else None
 
 
-def ensure_history(repo_root, *, main_branch="main", env=None, run=None):
+def ensure_history(repo_root, *, main_branch="main", env=None, run=None, budget=None):
     """Make the clone's history complete and fetch origin/<main_branch>. Idempotent: on a full
-    clone it still fetches the branch, which changes nothing."""
+    clone it still fetches the branch, which changes nothing. `budget` (seconds, None = each
+    command keeps its own limit) bounds the whole preparation: every git command gets the time
+    left, capped at the per-command limit, and a spent budget ends it as "budget-exhausted"."""
     genv = _git_env(_env(env))
     fetched = []
+    deadline = None if budget is None else time.monotonic() + budget
+
+    def git(args):
+        if deadline is None:
+            return _git(run, repo_root, args, genv)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return None, ""
+        return _git(run, repo_root, args, genv, min(_GIT_TIMEOUT, left))
 
     def result(reason):
         return {"ok": reason is None, "reason": reason, "fetched": fetched}
 
-    shallow = _shallow_answer(run, repo_root, genv)
+    shallow = _shallow_answer(git)
     if shallow is None:
         return result("shallow-state-unreadable")
     if shallow == "true":
-        code, _ = _git(run, repo_root, ["fetch", "--unshallow", "origin"], genv)
+        code, _ = git(["fetch", "--unshallow", "origin"])
         if code != 0:
             return result("unshallow-failed")
         fetched.append("unshallow")
     ref = "refs/remotes/origin/%s" % main_branch
-    code, _ = _git(run, repo_root,
-                   ["fetch", "origin", "+refs/heads/%s:%s" % (main_branch, ref)], genv)
+    code, _ = git(["fetch", "origin", "+refs/heads/%s:%s" % (main_branch, ref)])
     if code != 0:
         return result("main-fetch-failed")
     fetched.append("origin/%s" % main_branch)
-    code, _ = _git(run, repo_root, ["rev-parse", "--verify", "--quiet", ref], genv)
-    if code != 0 or _shallow_answer(run, repo_root, genv) != "false":
+    code, _ = git(["rev-parse", "--verify", "--quiet", ref])
+    if code != 0 or _shallow_answer(git) != "false":
         return result("history-still-incomplete")
     return result(None)
 

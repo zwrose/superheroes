@@ -87,6 +87,7 @@ WRITE_DISPATCH_PROCESS_RULE = (
 
 DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
+CLOUD_HISTORY_MIN_BUDGET = 60       # floor for cloud history preparation under a short --max-wait
 MIN_SYNC_WAIT = 0                # a zero slice is legal (open the run, return now); negative is not
 MAX_WAIT_REFUSAL_RANGE = "max-wait-out-of-range"
 MAX_WAIT_REFUSAL_TYPE = "max-wait-not-an-integer"
@@ -6094,7 +6095,14 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 # is built. Never blocks: if it is not ok, build_view still refuses as it does today.
                 try:
                     import cloud_builder  # lazy: only a cloud session needs it
-                    history = cloud_builder.ensure_history(repo_detail)
+                    # Bounded by the dispatch's wait budget (the 540 s cap, or the caller's
+                    # smaller --max-wait but never under a minute: a fetch needs some time), so a
+                    # stalled origin cannot hold the launch past it before the run is opened.
+                    history = cloud_builder.ensure_history(
+                        repo_detail,
+                        budget=(MAX_SYNC_WAIT if max_wait is None
+                                else max(int(max_wait), CLOUD_HISTORY_MIN_BUDGET)),
+                    )
                 except Exception:
                     history = {"ok": False, "reason": "raised"}
                 if cloud_history is not None:

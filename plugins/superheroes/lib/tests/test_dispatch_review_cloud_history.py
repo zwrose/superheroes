@@ -145,3 +145,20 @@ def test_ensure_history_is_given_the_validated_repo_root_before_build_view(
     assert [name for name, _ in order] == ["history", "view"]
     assert order[0][1] == order[1][1]
     assert res["detail"] == "stop-here"
+
+
+def test_ensure_history_is_bounded_by_the_dispatch_wait_budget(tmp_path, monkeypatch):
+    # Axis: a stalled origin cannot hold a launch past the dispatch wait budget.
+    import cloud_builder
+    import engine_dispatch
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    seen = []
+
+    def spy(repo_root, **kw):
+        seen.append(kw.get("budget"))
+        return {"ok": False, "reason": "spied", "fetched": []}
+
+    monkeypatch.setattr(cloud_builder, "ensure_history", spy)
+    clone, shas = make_shallow_clone(tmp_path)
+    review(tmp_path, clone, shas[2], clean_review_runner())
+    assert seen == [engine_dispatch.MAX_SYNC_WAIT]

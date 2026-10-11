@@ -296,6 +296,15 @@ def test_ensure_history_strips_only_git_variables_from_the_env():
         assert kwargs["env"] == {"KEEP": "1", "gitlike": "2"}
 
 
+def test_ensure_history_budget_caps_every_git_timeout_and_a_spent_budget_runs_nothing():
+    run = FakeRun(shallow=("true", "false"))
+    assert _history(run, budget=30)["ok"] is True
+    assert all(kwargs["timeout"] <= 30 for _, kwargs in run.calls)
+    spent = FakeRun()
+    result = _history(spent, budget=0)
+    assert result["ok"] is False and spent.calls == []
+
+
 # ---------------------------------------------------------------- intake: step 4 onward
 
 
