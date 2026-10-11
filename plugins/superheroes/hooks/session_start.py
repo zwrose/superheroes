@@ -94,6 +94,35 @@ def _append_host_model_section(boot, value):
     return boot + "\n\n### Host model\n" + line
 
 
+def _placed_by_parent(result):
+    """True when this session holds only the marker and the file at the sign-in path hashes to it:
+    a parent session placed the pass and scrubbed the variable. Never raises."""
+    if result.get("reason") != "no-pass-in-environment":
+        return False
+    try:
+        import cloud_pass
+        return cloud_pass.placed_matches_marker(os.environ)
+    except Exception:
+        return False
+
+
+def _parent_placed_line():
+    """The section line for a pass a parent session placed, from the placed file's own expiry."""
+    import cloud_pass
+    try:
+        placed = cloud_pass.placed_pass_state(os.environ)
+    except Exception:
+        placed = {}
+    state, lapses = placed.get("state"), placed.get("passLapses")
+    if state == "valid":
+        return "The reviewer pass is in place; it lapses %s." % lapses
+    if state == "lapsed":
+        return ("The reviewer pass in place has lapsed (%s), so review seats cannot run here "
+                "until a fresh pass is pasted into the environment's variables." % lapses)
+    return ("The reviewer pass could not be placed (pass-expiry-unreadable), so review seats "
+            "cannot run here until a fresh pass is pasted into the environment's variables.")
+
+
 def _append_reviewer_pass_section(boot, result, raised, scrubbed=True):
     """Name the reviewer pass's state in the bootstrap — only in a cloud session. Never carries
     the pass itself, only the reason token (or the exception's type name) and the lapse date."""
@@ -113,6 +142,8 @@ def _append_reviewer_pass_section(boot, result, raised, scrubbed=True):
         if not scrubbed:
             line += " The pass is still visible to processes in this session (its variable stayed set)."
         return boot + "\n\n### Reviewer pass\n" + line
+    elif result.get("action") == "skipped" and _placed_by_parent(result):
+        return boot + "\n\n### Reviewer pass\n" + _parent_placed_line()
     elif result.get("action") == "skipped":
         line = ("No reviewer pass is set in this cloud environment, so review seats cannot run "
                 "here until one is pasted into the environment's variables.")

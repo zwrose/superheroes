@@ -220,6 +220,86 @@ def test_gh_auth_probe_ok_false():
     assert result["tool"] == "gh auth"
 
 
+_CLOUD = {"CLAUDE_CODE_REMOTE": "true"}
+_PLACEHOLDER_TOKEN_STDOUT = "github.com\n  X Failed to log in: the token in GH_TOKEN is invalid\n"
+
+
+def _gh_fake(auth_status, rest):
+    """A fake `run` for gh: `auth_status` and `rest` are (returncode, stdout) pairs; records argvs."""
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(list(argv))
+        code, out = auth_status if list(argv) == list(pp.DEFAULT_GH_ARGV) else rest
+        return SimpleNamespace(returncode=code, stdout=out, stderr="")
+    _run.calls = calls
+    return _run
+
+
+def test_gh_rest_argv_is_the_measured_command():
+    # Axis: the REST read is five separate argv elements ending in the .full_name jq filter.
+    assert pp.CLOUD_GH_REST_ARGV == ("gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name")
+
+
+def test_gh_auth_probe_cloud_placeholder_token_reads_pass_when_rest_succeeds():
+    # Axis: cloud + failed `gh auth status` + a working REST read is ok, on the rest channel.
+    run = _gh_fake((1, _PLACEHOLDER_TOKEN_STDOUT), (0, "zwrose/superheroes\n"))
+    result = pp.gh_auth_probe(run=run, env=_CLOUD)
+    assert result == {"tool": "gh auth", "ok": True, "exit": 0, "channel": "rest",
+                      "detail": "gh auth status failed; REST read succeeded: zwrose/superheroes"}
+    assert run.calls == [list(pp.DEFAULT_GH_ARGV), list(pp.CLOUD_GH_REST_ARGV)]
+
+
+def test_gh_auth_probe_cloud_both_failing_is_not_ok():
+    # Axis: cloud + failed `gh auth status` + a failing REST read stays failed.
+    run = _gh_fake((1, _PLACEHOLDER_TOKEN_STDOUT), (1, "HTTP 401"))
+    result = pp.gh_auth_probe(run=run, env=_CLOUD)
+    assert result["ok"] is False
+    assert result["exit"] == 1
+    assert result["channel"] == "rest"
+    assert result["detail"] == "gh auth status failed; REST read failed: HTTP 401"
+    assert len(run.calls) == 2
+
+
+def test_gh_auth_probe_cloud_rest_timeout_is_not_ok():
+    # Axis: a REST read that times out (raises) is not ok, never a pass.
+    def _run(argv, **kwargs):
+        if list(argv) == list(pp.DEFAULT_GH_ARGV):
+            return SimpleNamespace(returncode=1, stdout="invalid token", stderr="")
+        raise subprocess.TimeoutExpired(argv, 120)
+    result = pp.gh_auth_probe(run=_run, env=_CLOUD)
+    assert result["ok"] is False and result["exit"] is None and result["channel"] == "rest"
+
+
+def test_gh_auth_probe_not_cloud_failure_makes_no_second_call():
+    # Axis: outside a cloud session a failed `gh auth status` is final: one call, today's dict.
+    run = _gh_fake((1, _PLACEHOLDER_TOKEN_STDOUT), (0, "zwrose/superheroes\n"))
+    result = pp.gh_auth_probe(run=run, env={})
+    assert run.calls == [list(pp.DEFAULT_GH_ARGV)]
+    assert result == {"tool": "gh auth", "ok": False, "exit": 1,
+                      "detail": _PLACEHOLDER_TOKEN_STDOUT.strip()}
+    assert "channel" not in result
+
+
+def test_gh_auth_probe_cloud_with_auth_status_ok_makes_one_call_and_no_channel():
+    # Axis: cloud + `gh auth status` ok returns today's dict after exactly one call.
+    run = _gh_fake((0, "Logged in"), (1, "never read"))
+    result = pp.gh_auth_probe(run=run, env=_CLOUD)
+    assert run.calls == [list(pp.DEFAULT_GH_ARGV)]
+    assert result == {"tool": "gh auth", "ok": True, "exit": 0, "detail": "Logged in"}
+
+
+def test_gh_auth_probe_env_defaults_to_the_process_environment(monkeypatch):
+    # Axis: with no env passed, the process's CLAUDE_CODE_REMOTE decides.
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    run = _gh_fake((1, "invalid token"), (0, "zwrose/superheroes"))
+    assert pp.gh_auth_probe(run=run)["channel"] == "rest"
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE")
+    run = _gh_fake((1, "invalid token"), (0, "zwrose/superheroes"))
+    assert "channel" not in pp.gh_auth_probe(run=run)
+    assert len(run.calls) == 1
+
+
 # --- codex_cli_floor_probe (#1435 WO-2b) ----------------------------------------------------
 
 

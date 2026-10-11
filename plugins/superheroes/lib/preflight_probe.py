@@ -26,6 +26,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cloud_pass              # noqa: E402
 import core_md                 # noqa: E402
 import engine_adapter          # noqa: E402
 import engine_detect           # noqa: E402
@@ -37,6 +38,9 @@ import model_tier_overrides    # noqa: E402
 import seat_bundle             # noqa: E402
 
 DEFAULT_GH_ARGV = ("gh", "auth", "status")
+# The cloud's working GitHub access is REST; gh fills the owner/repo placeholders from the current
+# directory's git remote (measured 2026-10-11: prints `zwrose/superheroes`).
+CLOUD_GH_REST_ARGV = ("gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name")
 
 PROBE_ASK = "Reply with the single word READY and nothing else.\n"
 
@@ -125,9 +129,18 @@ def _engine_probe_in_scratch_repo(tool, argv, run, stdin_text):
             pass
 
 
-def gh_auth_probe(run=None):
-    """The `gh` sign-in check — one probe, no side effects."""
-    return probe_command("gh auth", list(DEFAULT_GH_ARGV), run)
+def gh_auth_probe(run=None, env=None):
+    """The `gh` sign-in check — no side effects. In a cloud session where `gh auth status` fails
+    (a placeholder token), one REST read decides instead and the result carries `channel: "rest"`."""
+    result = probe_command("gh auth", list(DEFAULT_GH_ARGV), run)
+    env = os.environ if env is None else env
+    if result["ok"] or not cloud_pass._is_cloud(env):
+        return result
+    rest = probe_command("gh auth", list(CLOUD_GH_REST_ARGV), run)
+    return {"tool": "gh auth", "ok": rest["ok"], "exit": rest["exit"],
+            "detail": "gh auth status failed; REST read %s: %s"
+                      % ("succeeded" if rest["ok"] else "failed", rest["detail"]),
+            "channel": "rest"}
 
 
 _CODEX_CLI_TOOL = "cross-vendor-cli:codex"

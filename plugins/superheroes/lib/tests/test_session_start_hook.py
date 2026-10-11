@@ -320,13 +320,13 @@ def test_host_model_skipped_when_claude_env_file_unset(tmp_path, monkeypatch, ca
     _context_from_stdout(capsys)
 
 
-def _pass_fixture(refresh=""):
+def _pass_fixture(refresh="", exp=4_000_000_000):
     """A fixture reviewer pass built at run time: (base64 pass, access token, id token)."""
     def b64u(raw):
         return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
     def jwt(tag):
-        claims = json.dumps({"exp": 4_000_000_000, "sub": tag}).encode()
+        claims = json.dumps({"exp": exp, "sub": tag}).encode()
         return ".".join([b64u(b"head-" + tag.encode()), b64u(claims), b64u(b"sig-" + tag.encode())])
 
     access, ident = jwt("access"), jwt("ident")
@@ -452,3 +452,87 @@ def test_reviewer_pass_env_file_untouched_when_nothing_was_placed(tmp_path, monk
     lines = env_file.read_text().splitlines()
     assert "unset SUPERHEROES_REVIEWER_PASS" in lines
     assert not any("PASS_SHA256" in line for line in lines)
+
+
+def _parent_placed(monkeypatch, tmp_path, exp=4_000_000_000, marker=None, write=True):
+    """A child session: the parent placed the sign-in and scrubbed the pass variable, leaving only
+    the marker. Returns the sign-in path."""
+    import hashlib
+    pass_value, _, _ = _pass_fixture(exp=exp)
+    dest = _cloud_session(monkeypatch, tmp_path)
+    raw = base64.b64decode(pass_value)
+    if write:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(raw)
+    monkeypatch.setenv("SUPERHEROES_REVIEWER_PASS_SHA256",
+                       hashlib.sha256(raw).hexdigest() if marker is None else marker)
+    return dest
+
+
+def test_reviewer_pass_marker_only_valid_file_says_in_place(tmp_path, monkeypatch, capsys):
+    # Axis: a child session holding only the marker reports the parent's placed pass, with its date.
+    _parent_placed(monkeypatch, tmp_path)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    ctx = _context_from_stdout(capsys)
+    assert "### Reviewer pass\nThe reviewer pass is in place; it lapses 2096-10-02." in ctx
+    assert "No reviewer pass is set" not in ctx
+
+
+def test_reviewer_pass_marker_only_lapsed_file_says_lapsed(tmp_path, monkeypatch, capsys):
+    # Axis: a child session whose parent-placed pass has lapsed says so and names the date.
+    _parent_placed(monkeypatch, tmp_path, exp=1_000_000_000)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    ctx = _context_from_stdout(capsys)
+    assert ("### Reviewer pass\nThe reviewer pass in place has lapsed (2001-09-09), so review "
+            "seats cannot run here until a fresh pass is pasted into the environment's "
+            "variables.") in ctx
+    assert "No reviewer pass is set" not in ctx
+
+
+def test_reviewer_pass_marker_only_unreadable_expiry_says_could_not_be_placed(
+        tmp_path, monkeypatch, capsys):
+    # Axis: a marker-matching file with no readable expiry gets the could-not-be-placed line.
+    import hashlib
+    dest = _cloud_session(monkeypatch, tmp_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    raw = json.dumps({"tokens": {"access_token": "not-a-jwt"}}).encode()
+    dest.write_bytes(raw)
+    monkeypatch.setenv("SUPERHEROES_REVIEWER_PASS_SHA256", hashlib.sha256(raw).hexdigest())
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    assert ("The reviewer pass could not be placed (pass-expiry-unreadable)"
+            in _context_from_stdout(capsys))
+
+
+def test_reviewer_pass_marker_with_a_different_file_is_unchanged(tmp_path, monkeypatch, capsys):
+    # Axis: a marker that does not match the file leaves the "none is set" line.
+    _parent_placed(monkeypatch, tmp_path, marker="0" * 64)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    assert ("### Reviewer pass\nNo reviewer pass is set in this cloud environment"
+            in _context_from_stdout(capsys))
+
+
+def test_reviewer_pass_marker_with_no_file_is_unchanged(tmp_path, monkeypatch, capsys):
+    # Axis: an unreadable sign-in file counts as no match (fail closed).
+    _parent_placed(monkeypatch, tmp_path, write=False)
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    assert ("### Reviewer pass\nNo reviewer pass is set in this cloud environment"
+            in _context_from_stdout(capsys))
+
+
+def test_reviewer_pass_no_marker_is_unchanged(tmp_path, monkeypatch, capsys):
+    # Axis: without a marker, a placed file alone does not change the "none is set" line.
+    dest = _parent_placed(monkeypatch, tmp_path)
+    monkeypatch.delenv("SUPERHEROES_REVIEWER_PASS_SHA256")
+    assert dest.exists()
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    assert ("### Reviewer pass\nNo reviewer pass is set in this cloud environment"
+            in _context_from_stdout(capsys))
+
+
+def test_reviewer_pass_marker_only_outside_a_cloud_session_has_no_section(
+        tmp_path, monkeypatch, capsys):
+    # Axis: a marker and a matching file do not add the section outside a cloud session.
+    _parent_placed(monkeypatch, tmp_path)
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE")
+    assert _run_startup(monkeypatch, capsys, {}) == 0
+    assert "### Reviewer pass" not in _context_from_stdout(capsys)
