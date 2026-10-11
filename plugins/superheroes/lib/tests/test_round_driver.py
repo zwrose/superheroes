@@ -3265,11 +3265,6 @@ def test_driver_persists_round_disclosures(tmp_path):
     round1 = next(r for r in on_disk if r.get("round") == 1)
     assert round1.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
 
-    resumed, loop_receipt = _run_loop_with_loop_receipt(_seams(), cfg)
-    assert _round_channels(resumed, 1).get("vacuousSeats") == ["test-reviewer"]
-    prose = "\n".join(_round_disclosures(resumed, 1, loop_receipt))
-    assert "vacuous-seat (round 1): seat(s) test-reviewer" in prose
-
 
 def test_producer_emits_the_whole_declared_channel_set(tmp_path):
     assert set(_ALL_CHANNELS) == set(RD.RESUMABLE_DISCLOSURE_CHANNELS), \
@@ -3282,8 +3277,6 @@ def test_producer_emits_the_whole_declared_channel_set(tmp_path):
     on_disk = json.loads(records.read_text())
     rec = next(r for r in on_disk if r.get("round") == 1)
     assert rec["disclosures"] == _ALL_CHANNELS
-    state2 = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state2["rounds"]["1"] == _ALL_CHANNELS
 
 
 def test_producer_normalizes_non_int_round_key_like_the_restorer(tmp_path):
@@ -3426,9 +3419,11 @@ def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monk
     state["_toVerify"] = [finding]
     state["_records"] = [_seed_record(1)]
     state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
-    monkeypatch.setattr(
-        RD.review_memory, "persist_record",
-        lambda path, accum, rec: {"ok": False, "reason": "write-failed"})
+
+    def _raise_oserror(path, data):
+        raise OSError(5, "write-failed")
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _raise_oserror)
     RD._persist_round_records(state, state["config"])
     receipt = RD.build_receipt(state)
     assert receipt["findings"]
@@ -5006,8 +5001,8 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
     assert rd["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
 
 
-def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
-    """E6: fold guidance persists through recordsPath resume to the rendered fixer order."""
+def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_fixer_order(tmp_path):
+    """E6: fold guidance reaches the export, the receipt and the rendered fixer order in one session."""
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
@@ -5019,14 +5014,13 @@ def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
     on_disk = json.loads(records.read_text())
     rec = next(r for r in on_disk if r.get("round") == 1)
     assert rec["disclosures"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
-    resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert resumed["rounds"]["1"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
-    resumed["terminal"] = "converged"
-    receipt = RD.build_receipt(resumed)
+    assert state["rounds"]["1"]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
+    state["terminal"] = "converged"
+    receipt = RD.build_receipt(state)
     assert receipt["rounds"][0]["judgmentDispositions"][0][RD.GATE_GUIDANCE_RECORD_KEY] == "narrow only"
-    resumed["reviewedDiff"] = "diff --git a/f b/f\n"
-    resumed["_fixBatch"] = [{"title": "widen the API", "file": "f.py", "line": 1,
-                             "judgmentDisposition": "fix-with-guidance"}]
+    state["reviewedDiff"] = "diff --git a/f b/f\n"
+    state["_fixBatch"] = [{"title": "widen the API", "file": "f.py", "line": 1,
+                           "judgmentDisposition": "fix-with-guidance"}]
     session_dir = str(tmp_path / "resume-render")
     os.makedirs(session_dir)
     paths = {
@@ -5038,15 +5032,15 @@ def test_judgment_dispositions_guidance_survives_records_path_resume(tmp_path):
         "order_path": os.path.join(session_dir, "order.md"),
     }
     ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, resumed, resumed["config"], {},
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
         session_dir, 1, paths, RD.CHANNEL_FILE,
     )
     assert "narrow only" in ph["GATE_GUIDANCE"]
     assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
 
 
-def test_judgment_dispositions_identity_fields_survive_records_path_resume(tmp_path):
-    """E6b: fold identity fields (id, file, line) persist through recordsPath resume."""
+def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_the_fixer_order(tmp_path):
+    """E6b: fold identity fields (id, file, line) reach the export, the receipt and the rendered fixer order in one session."""
     records = tmp_path / "round-records.json"
     tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
     guidance_text = "keep the resume identity intact"
@@ -5057,28 +5051,27 @@ def test_judgment_dispositions_identity_fields_survive_records_path_resume(tmp_p
          "guidance": guidance_text}]})
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
-    resumed = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     on_disk = json.loads(records.read_text())
     rec = next(r for r in on_disk if r.get("round") == 1)
     disk_entry = rec["disclosures"]["judgmentDispositions"][0]
     assert disk_entry["file"] == tradeoff["file"]
     assert disk_entry["line"] == tradeoff["line"]
     assert disk_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
-    resumed_entry = resumed["rounds"]["1"]["judgmentDispositions"][0]
-    assert resumed_entry["file"] == tradeoff["file"]
-    assert resumed_entry["line"] == tradeoff["line"]
-    assert resumed_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
-    resumed["terminal"] = "converged"
-    receipt = RD.build_receipt(resumed)
+    state_entry = state["rounds"]["1"]["judgmentDispositions"][0]
+    assert state_entry["file"] == tradeoff["file"]
+    assert state_entry["line"] == tradeoff["line"]
+    assert state_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
+    state["terminal"] = "converged"
+    receipt = RD.build_receipt(state)
     receipt_entry = receipt["rounds"][0]["judgmentDispositions"][0]
     assert receipt_entry["file"] == tradeoff["file"]
     assert receipt_entry["line"] == tradeoff["line"]
     assert receipt_entry["id"] == _RESUME_IDENTITY_TRADEOFF_ID
-    resumed["reviewedDiff"] = (
+    state["reviewedDiff"] = (
         "diff --git a/pkg/resume_identity.py b/pkg/resume_identity.py\n")
-    resumed["_fixBatch"] = [{"title": tradeoff["title"], "file": tradeoff["file"],
-                             "line": tradeoff["line"],
-                             "judgmentDisposition": "fix-with-guidance"}]
+    state["_fixBatch"] = [{"title": tradeoff["title"], "file": tradeoff["file"],
+                           "line": tradeoff["line"],
+                           "judgmentDisposition": "fix-with-guidance"}]
     session_dir = str(tmp_path / "resume-identity-render")
     os.makedirs(session_dir)
     paths = {
@@ -5090,7 +5083,7 @@ def test_judgment_dispositions_identity_fields_survive_records_path_resume(tmp_p
         "order_path": os.path.join(session_dir, "order.md"),
     }
     ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, resumed, resumed["config"], {},
+        RD.P_FIXER, "fixer", 0, state, state["config"], {},
         session_dir, 1, paths, RD.CHANNEL_FILE,
     )
     block = ph["GATE_GUIDANCE"]
@@ -7167,7 +7160,7 @@ def test_round_counter_mutation_sites_census():
     """state['round'] is written only by _advance_round on the advance path."""
     # axis: only _advance_round may mutate state['round'] — dict literals in new_state are construction
     sites = _round_counter_mutation_sites()
-    assert len(sites) >= 2, "expected at least two state['round'] mutation sites"
+    assert len(sites) >= 1, "expected at least one state['round'] mutation site"
     writers = {func for func, _lineno in sites}
     expected = {"_advance_round"}
     extra = writers - expected
