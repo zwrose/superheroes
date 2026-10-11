@@ -25,6 +25,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sys
 import tempfile
 
@@ -65,7 +66,7 @@ _SETUP_MESSAGE = (
     "\n"
     "The reviewer pass will sit in that environment's settings, and any session started in that "
     "environment can read it. It is a separate sign-in from your main one, it cannot renew itself, "
-    "and it stops working after {days} days.\n"
+    "and {expiry}.\n"
     "\n"
     "Cloud builders do not get your personal instructions or permission rules. They follow this "
     "project's rules and the plugin's rules, and nothing else.\n"
@@ -90,10 +91,18 @@ _SIGN_IN_WALK = (
     "The reviewer needs its own sign-in on this machine, kept apart from your main one. Run this in "
     "a terminal and finish the sign-in in your browser:\n"
     "\n"
-    "    {home_env}=\"{home}\" codex login\n"
+    "    {home_env}={home} codex login\n"
     "\n"
     "Tell me when it's done and I'll check it."
 )
+_SIGN_IN_IS_MAIN = (
+    "The reviewer home you set points at your main sign-in, so I can't use it. A pass has to come "
+    "from a sign-in kept apart from your main one. Set {home_env} to a different folder, then "
+    "I'll give you the sign-in command for it."
+)
+_EXPIRY_KNOWN = "it stops working on {date}"
+_EXPIRY_UNKNOWN = ("it stops working after about {days} days; the exact date is unknown until the "
+                   "separate sign-in exists and can be read")
 _SIGN_IN_IN_PLACE = "The separate reviewer sign-in is in place."
 
 _SAME_FIX = "paste the new setup text into the environment"
@@ -186,9 +195,24 @@ def setup_message(cwd, *, project_name=None, root=None, env=None, now=None):
         return _compose_refusal(composed)
     message = _SETUP_MESSAGE.format(
         project=_project(cwd, project_name), header=composed["header"],
-        marker=cloud_setup_text.TOOL_STEPS_MARKER, days=PASS_LIFETIME_DAYS)
+        marker=cloud_setup_text.TOOL_STEPS_MARKER, expiry=_expiry_phrase(env))
     return {"action": "written", "message": message, "setupText": composed["text"],
             "header": composed["header"], "signedIn": sign_in(env)["signedIn"]}
+
+
+def _expiry_phrase(env):
+    """When the pass will stop working: the separate sign-in's own expiry date when it can be read
+    (the pass carries that same access token), else the ten-day figure with the unknown said."""
+    env = os.environ if env is None else env
+    try:
+        separate = cloud_pass._separate_signin_path(env)
+        if os.path.realpath(separate) != os.path.realpath(cloud_pass._default_signin_path(env)):
+            date = cloud_pass._lapse_date(cloud_pass._read_object(separate))
+            if date is not None:
+                return _EXPIRY_KNOWN.format(date=date)
+    except Exception:
+        pass
+    return _EXPIRY_UNKNOWN.format(days=PASS_LIFETIME_DAYS)
 
 
 def sign_in(env=None):
@@ -198,14 +222,19 @@ def sign_in(env=None):
     separate = cloud_pass._separate_signin_path(env)
     try:
         # axis: the main sign-in never counts as the separate one
-        present = os.path.isfile(separate) and \
-            os.path.realpath(separate) != os.path.realpath(cloud_pass._default_signin_path(env))
+        is_main = os.path.realpath(separate) == \
+            os.path.realpath(cloud_pass._default_signin_path(env))
+        present = os.path.isfile(separate) and not is_main
     except Exception:
-        present = False
+        is_main, present = False, False
+    if is_main:
+        # axis: no login command ever targets the main sign-in's home
+        return {"action": "checked", "signedIn": False,
+                "message": _SIGN_IN_IS_MAIN.format(home_env=cloud_pass.SEPARATE_HOME_ENV)}
     if present:
         return {"action": "checked", "signedIn": True, "message": _SIGN_IN_IN_PLACE}
     message = _SIGN_IN_WALK.format(home_env=cloud_pass._CODEX_HOME_ENV,
-                                   home=os.path.dirname(separate))
+                                   home=shlex.quote(os.path.dirname(separate)))
     return {"action": "checked", "signedIn": False, "message": message}
 
 
@@ -432,7 +461,7 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                     calibration_stamp=local_placed, calibration_date=today.isoformat(),
                     pass_lapses=obj["confirmation"]["passLapses"], checked_at=today.isoformat(),
                     root=root)
-                written = isinstance(got, dict) and got.get("action") == "written"
+                written = isinstance(got, dict) and got.get("action") in ("written", "noop")
         except Exception:
             written = False
         if not written:

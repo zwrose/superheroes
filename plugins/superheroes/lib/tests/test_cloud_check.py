@@ -162,7 +162,8 @@ def _setup_message_literal(header):
         "**Two things to know before you start.**\n\n"
         "The reviewer pass will sit in that environment's settings, and any session started in "
         "that environment can read it. It is a separate sign-in from your main one, it cannot "
-        "renew itself, and it stops working after 10 days.\n\n"
+        "renew itself, and it stops working after about 10 days; the exact date is unknown until "
+        "the separate sign-in exists and can be read.\n\n"
         "Cloud builders do not get your personal instructions or permission rules. They follow "
         "this project's rules and the plugin's rules, and nothing else.\n\n"
         "Tell me when they're done and I'll run a short check.\n\n"
@@ -209,7 +210,8 @@ def test_setup_message_carries_the_five_pass_facts_and_the_personal_rules_line(t
                  "any session started in that environment can read it",
                  "It is a separate sign-in from your main one",
                  "it cannot renew itself",
-                 "it stops working after %d days" % CC.PASS_LIFETIME_DAYS):
+                 "it stops working after about %d days" % CC.PASS_LIFETIME_DAYS,
+                 "the exact date is unknown"):
         assert fact in message
     assert CC.PASS_LIFETIME_DAYS == 10
     assert ("Cloud builders do not get your personal instructions or permission rules. They "
@@ -256,7 +258,7 @@ def test_sign_in_walk_when_no_separate_sign_in(tmp_path):
     assert result["message"] == (
         "The reviewer needs its own sign-in on this machine, kept apart from your main one. Run "
         "this in a terminal and finish the sign-in in your browser:\n\n"
-        "    CODEX_HOME=\"%s/.codex-cloud\" codex login\n\n"
+        "    CODEX_HOME=%s/.codex-cloud codex login\n\n"
         "Tell me when it's done and I'll check it." % home)
 
 
@@ -273,6 +275,9 @@ def test_sign_in_refuses_the_main_sign_in_as_the_separate_one(tmp_path):
     # axis: the main sign-in file never counts as the separate one
     same = dict(env, **{cloud_pass.SEPARATE_HOME_ENV: str(home / ".codex")})
     assert CC.sign_in(same)["signedIn"] is False
+    # axis: no login command ever targets the main sign-in's home
+    refusal = CC.sign_in(same)["message"]
+    assert "codex login" not in refusal and cloud_pass.SEPARATE_HOME_ENV in refusal
     linked = home / "linked"
     linked.mkdir()
     os.symlink(main, linked / "auth.json")
@@ -280,6 +285,33 @@ def test_sign_in_refuses_the_main_sign_in_as_the_separate_one(tmp_path):
     assert CC.sign_in(through_link)["signedIn"] is False
     assert CC.sign_in(dict(env, **{cloud_pass.SEPARATE_HOME_ENV: str(home / "elsewhere")})
                       )["signedIn"] is False
+
+
+def test_sign_in_command_quotes_the_home_literally(tmp_path):
+    import shlex
+    import subprocess
+    tricky = tmp_path / "rev$UNSET_X home"
+    home, env = _home_env(tmp_path, **{cloud_pass.SEPARATE_HOME_ENV: str(tricky)})
+    command = CC.sign_in(env)["message"].split("\n\n")[1].strip()
+    run = subprocess.run(["/bin/sh", "-c", "codex() { printf '%s' \"$CODEX_HOME\"; }\n" + command],
+                         capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    assert run.stdout == str(tricky)
+    assert shlex.quote(str(tricky)) in command
+
+
+def test_setup_message_names_the_sign_ins_real_expiry_when_readable(tmp_path, composing):
+    import base64
+    w = _build(tmp_path)
+    exp = int(datetime(2026, 10, 12, tzinfo=timezone.utc).timestamp())
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).decode().rstrip("=")
+    signin = tmp_path / "sep"
+    signin.mkdir()
+    (signin / "auth.json").write_text(json.dumps({"tokens": {
+        "access_token": "h.%s.s" % payload, "id_token": "i"}}))
+    env = dict(w.env, **{cloud_pass.SEPARATE_HOME_ENV: str(signin)})
+    message = CC.setup_message(w.cwd, project_name="demo", root=w.root, env=env, now=NOW)["message"]
+    assert "it stops working on 2026-10-12." in message
+    assert "10 days" not in message and "unknown" not in message
 
 
 # --- setup_text ----------------------------------------------------------------------------
@@ -538,13 +570,23 @@ def test_judge_edge8_a_refused_or_raising_record_write_fails_on_record(tmp_path)
         raise OSError("disk")
 
     for fake in (lambda *a, **k: {"action": "refused", "reason": "store-locked"},
-                 lambda *a, **k: {"action": "noop"}, lambda *a, **k: None, raising):
+                 lambda *a, **k: None, raising):
         # axis: a record write that did not report written is never reported as a pass
         result = _judge(local, _ok_report(cloud), record_fn=fake)
         _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
                    "could not write the setup record on this machine.")
         assert _record_state(local) == "none"
     assert _judge(local, _ok_report(cloud))["action"] == "passed"
+
+
+def test_judge_a_repeat_passing_check_is_a_pass_and_keeps_an_on_setting(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _turn_on(local)
+    assert _judge(local, _ok_report(cloud))["action"] == "passed"
+    # the same day, the same report: the real writer answers noop, which is still a pass
+    again = _judge(local, _ok_report(cloud))
+    assert again["action"] == "passed" and again["recordWritten"] is True
+    assert _setting(local) is True and _record_state(local) == "ready"
 
 
 def test_judge_edge8_the_record_write_gets_the_fields_of_the_report(tmp_path):
