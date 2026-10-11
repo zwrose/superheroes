@@ -791,6 +791,27 @@ def test_repo_calibration_stamp_covers_every_file_and_ignores_the_setting(tmp_pa
     assert CC.repo_calibration_stamp(bare_world.cwd) == "none"
 
 
+def test_repo_calibration_stamp_ignores_a_ds_store(tmp_path):
+    w = _build(tmp_path, mode_registry.IN_REPO)
+    directory = os.path.join(w.cwd, os.path.dirname(core_md.in_repo_core_rel_path()))
+    before = CC.repo_calibration_stamp(w.cwd)
+    with open(os.path.join(directory, ".DS_Store"), "wb") as fh:
+        fh.write(b"\x00junk")
+    assert CC.repo_calibration_stamp(w.cwd) == before
+
+
+def test_judge_ignores_the_echoed_launch_prompt_beside_the_real_report(tmp_path):
+    local, cloud = _pair(tmp_path)
+    prompt = CC._check_prompt(NONCE, None)
+    real = CC.report_line(_ok_report(cloud))
+    assert _judge(local, prompt + "\n" + real + "\n")["action"] == "passed"
+    # a lone fallback line (the session could not run report) still reads, and fails
+    assert _judge(local, prompt)["action"] != "passed"
+    # genuinely conflicting results beside the echoed prompt stay unread
+    other = CC.report_line(_cloud_report(cloud, pluginVersion="9.9.9"))
+    assert _judge(local, "%s\n%s\n%s\n" % (prompt, real, other))["action"] == "unread"
+
+
 # --- judge: finding the line, and the approved words ---------------------------------------
 
 def test_judge_finds_the_line_inside_a_comment_body(tmp_path):

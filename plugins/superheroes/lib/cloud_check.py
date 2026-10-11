@@ -255,6 +255,9 @@ def setup_text(cwd, *, project_name=None, root=None, env=None, now=None):
             "setupText": composed["text"], "header": composed["header"]}
 
 
+_IGNORED_ARTIFACTS = frozenset({".DS_Store"})
+
+
 def repo_calibration_stamp(cwd):
     """The stamp of the calibration the repository itself carries: every regular file under the
     repository's calibration directory, keyed by path relative to it, with the cloud-builds setting
@@ -270,6 +273,9 @@ def repo_calibration_stamp(cwd):
     files = {}
     for top, _dirs, names in os.walk(directory, onerror=fail):
         for name in names:
+            # axis: machine artifacts the repository ignores never reach a cloud checkout
+            if name in _IGNORED_ARTIFACTS:
+                continue
             path = os.path.join(top, name)
             if not os.path.isfile(path):
                 continue
@@ -360,6 +366,11 @@ def _find_report(text, nonce):
             continue
         if _nonce_is(obj, nonce):
             found.append((body, obj))
+    # axis: the launch prompt carries a fallback report; when the session transcript echoes it
+    # beside a real report, the echo is not a competing result
+    fallback = _fallback_line(nonce)[len(MARKER) + 1:]
+    if any(body != fallback for body, _ in found):
+        found = [(body, obj) for body, obj in found if body != fallback]
     if not found or any(body != found[0][0] for body, _ in found):
         return None
     return found[0][1]
