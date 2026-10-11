@@ -44,6 +44,8 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger-root"))
     # The instance-pin gate applies only on a Claude-hosted seat; these tests are not one.
     monkeypatch.delenv("CLAUDE_PID", raising=False)
+    # The `started` append pauses between its tries; no test waits for it.
+    monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
 
 
 def _pty_available():
@@ -104,6 +106,20 @@ def _announced(name, session_id=SESSION_ID):
         "own commit, which origin/main has (fab8a63ea7f4).\r\n"
         "\x1b]0;claude\x07\x1b[?25h"
     ) % (name, session_id, session_id)
+
+
+# What a real launch of the platform command printed, captured under a pseudo-terminal. The first
+# line, the session name and the session id are stand-ins; every control byte is as captured.
+REAL_CAPTURE = (
+    "A warning line the command prints before anything else.\r\n"
+    "\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1004h\x1b]11;?\x07\x1b[c\x1b[>0q"
+    "\x1b[?u\x1b[c\x1b[>4m\x1b[<u\x1b[?1004l\x1b[?2031l\x1b[?2004l"
+    "Created cloud session: %(name)s\r\n"
+    "View: https://claude.ai/code/%(id)s?from=cli&m=0\r\n"
+    "Resume with: claude --teleport %(id)s\r\n"
+    "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b(B\x0f\x1b[?1016l\x1b[?1006l\x1b[?1003l"
+    "\x1b[?1002l\x1b[?1000l\x1b[>4m\x1b[?1004l\x1b[?2031l\x1b[?2004l\x1b[<u\x1b[?25h\x1b7\x1b[r\x1b8"
+)
 
 
 def _spawned(output="", rc=0, timed_out=False, pid=FAKE_PID):
@@ -806,17 +822,64 @@ def test_default_spawn_ends_the_group_when_the_read_raises(tmp_path, terminal, m
     monkeypatch.setattr(L, "select", types.SimpleNamespace(select=read_fails))
     pids = []
     try:
-        with pytest.raises(RuntimeError, match="the read failed"):
-            L._default_cloud_spawn(
-                [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
-                dict(os.environ), 30,
-            )
+        result = L._default_cloud_spawn(
+            [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
+            dict(os.environ), 30,
+        )
+        assert result["readError"] == "RuntimeError"
         pids = [int(p) for p in pid_file.read_text().split()]
         assert len(pids) == 2
         assert _is_gone(pids[0], grace=0)
         assert _is_gone(pids[1])
     finally:
         _kill_quietly(*pids)
+
+
+def test_default_spawn_reports_a_failed_group_signal_instead_of_raising(
+    tmp_path, terminal, monkeypatch,
+):
+    # axis: the lane is not ended — a failure in the cleanup itself comes back, it does not raise
+    script = _script(tmp_path, "print('printed before the cleanup failed')\n")
+
+    def signal_fails(pid, sig):
+        raise OSError(5, "the group signal failed")
+
+    monkeypatch.setattr(os, "killpg", signal_fails)
+    result = L._default_cloud_spawn(
+        [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"), dict(os.environ), 30,
+    )
+    assert result["readError"] == "OSError"
+    assert "printed before the cleanup failed" in result["output"]
+    assert result["rc"] == 0
+
+
+def test_an_error_after_the_command_started_leaves_the_lane_live(
+    tmp_path, terminal, monkeypatch,
+):
+    # axis: the lane is not ended — an error after the command started is not "it never started"
+    repo = _cloud_repo(tmp_path)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "claude"
+    fake.write_text("#!%s\nimport time\ntime.sleep(30)\n" % sys.executable)
+    fake.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = "%s%s%s" % (bindir, os.pathsep, env.get("PATH", ""))
+
+    def read_fails(readers, writers, errors, timeout=None):
+        raise OSError(5, "the read failed")
+
+    monkeypatch.setattr(L, "select", types.SimpleNamespace(select=read_fails))
+    result = L.launch_build(
+        repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"),
+        env=env, place="cloud", cloud_environment=ENV_ID,
+    )
+    _assert_unconfirmed(repo, result)
+    started = _records(repo, result["launchId"], "started")
+    assert len(started) == 1 and started[0]["cloudSessionUnconfirmed"] is True
+    assert _records(repo, result["launchId"], "refused") == []
+    assert _records(repo, result["launchId"], "outcome") == []
+    assert _lanes(repo)[result["launchId"]]["terminal"] is False
 
 
 def test_default_spawn_raises_oserror_for_a_missing_command_and_closes_descriptors(
@@ -976,6 +1039,114 @@ def test_outcome5_a_receipt_whose_two_ids_differ_is_unconfirmed(tmp_path):
     assert "cloudSessionId" not in result
 
 
+def test_a_real_captured_receipt_is_read(tmp_path):
+    # axis: the output the command really printed is read, escape sequences and all
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        REAL_CAPTURE % {"name": name, "id": SESSION_ID}
+    )))
+    assert result["ok"] is True, result
+    assert result["cloudSessionId"] == SESSION_ID
+    assert result["cloudSessionUrl"] == SESSION_URL
+    lane = _lanes(repo)[result["launchId"]]
+    assert lane["cloudSessionId"] == SESSION_ID and lane["cloudSessionUrl"] == SESSION_URL
+
+
+def test_the_stripper_removes_every_sequence_in_the_real_capture():
+    # axis: no escape byte survives stripping
+    stripped = L._strip_terminal_sequences(
+        REAL_CAPTURE % {"name": "issue-656-abc", "id": SESSION_ID}
+    )
+    assert "\x1b" not in stripped
+    assert all(char == "\n" or ord(char) >= 0x20 for char in stripped)
+    # Nothing else is left behind either: the two-byte sequences leave no digit in the text.
+    assert stripped == (
+        "A warning line the command prints before anything else.\n"
+        "Created cloud session: issue-656-abc\n"
+        "View: https://claude.ai/code/%s?from=cli&m=0\n"
+        "Resume with: claude --teleport %s\n" % (SESSION_ID, SESSION_ID)
+    )
+
+
+def test_the_creation_text_is_found_anywhere_in_its_line(tmp_path):
+    # axis: text before the creation text does not hide it
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Some printable text before it. Created cloud session: %s\n"
+        "View: https://claude.ai/code/%s?from=cli&m=0\n"
+        "Resume with: claude --teleport %s\n" % (name, SESSION_ID, SESSION_ID)
+    )))
+    assert result["ok"] is True, result
+    assert result["cloudSessionId"] == SESSION_ID
+
+
+def test_a_view_line_cut_off_by_the_time_limit_is_unconfirmed(tmp_path):
+    # axis: a cut-off line is not an id
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Created cloud session: %s\r\nView: https://claude.ai/code/session_01X" % name,
+        rc=None, timed_out=True,
+    )))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
+
+
+@pytest.mark.parametrize("tail", [
+    pytest.param("View: https://claude.ai/code/session_01X\r", id="view-cut-between-cr-and-lf"),
+    pytest.param("Resume with: claude --teleport session_01X", id="resume-cut-no-view-before"),
+    pytest.param("", id="ends-right-after-the-creation-line"),
+])
+def test_a_receipt_cut_off_by_the_time_limit_is_unconfirmed(tmp_path, tail):
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Created cloud session: %s\r\n%s" % (name, tail), rc=None, timed_out=True,
+    )))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
+
+
+def test_a_complete_view_line_then_a_cut_off_resume_line_is_a_success(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Created cloud session: %s\r\nView: https://claude.ai/code/%s?from=cli&m=0\r\n"
+        "Resume with: claude --teleport session_01X" % (name, SESSION_ID),
+        rc=None, timed_out=True,
+    )))
+    assert result["ok"] is True, result
+    assert result["cloudSessionId"] == SESSION_ID
+    assert result["cloudSessionUrl"] == SESSION_URL
+
+
+def test_another_sessions_receipt_after_a_bare_creation_line_is_unconfirmed(tmp_path):
+    # axis: whose receipt it is — identity lines belong to the nearest creation line before them
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        "Created cloud session: %s\n" % name + _bare_receipt("issue-656-someone-elses", "session_01Other")
+    )))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
+
+
+def test_another_sessions_whole_receipt_before_the_requested_one_is_not_taken(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        _bare_receipt("issue-656-someone-elses", "session_01Other") + _bare_receipt(name)
+    )))
+    assert result["ok"] is True, result
+    assert result["cloudSessionId"] == SESSION_ID
+    assert _lanes(repo)[result["launchId"]]["cloudSessionId"] == SESSION_ID
+
+
+def test_a_receipt_id_the_ledger_would_refuse_is_unconfirmed(tmp_path):
+    # axis: one grammar — the ledger's pattern alone decides what a session id is
+    repo = _cloud_repo(tmp_path)
+    result = _launch(repo, tmp_path, _fake_spawn(lambda name: _spawned(
+        _bare_receipt(name, "session_01-bad")
+    )))
+    _assert_unconfirmed(repo, result)
+    assert "cloudSessionId" not in result
+
+
 def test_a_spawn_result_that_is_not_a_dict_leaves_the_lane_live(tmp_path):
     repo = _cloud_repo(tmp_path)
 
@@ -1054,6 +1225,78 @@ def test_edge6_started_append_failure_after_a_coherent_receipt_leaves_the_lane_l
     assert _records(repo, result["launchId"], "outcome") == []
     assert _records(repo, result["launchId"], "refused") == []
     assert _records(repo, result["launchId"], "started") == []
+
+
+def _flaky_started_appends(monkeypatch, failures):
+    """The first `failures` tries of a `started` append fail; the count of tries made."""
+    real_append = ll.append
+    tries = []
+
+    def flaky_append(repo_root, record, env=None):
+        if record.get("event") == "started":
+            tries.append(record)
+            if len(tries) <= failures:
+                return False
+        return real_append(repo_root, record, env=env)
+
+    monkeypatch.setattr(ll, "append", flaky_append)
+    return tries
+
+
+def test_a_started_append_that_fails_twice_then_succeeds_is_a_success(tmp_path, monkeypatch):
+    # axis: one failure does not strand the lane
+    repo = _cloud_repo(tmp_path)
+    tries = _flaky_started_appends(monkeypatch, failures=2)
+    result = _launch(repo, tmp_path, _fake_spawn())
+    assert result["ok"] is True, result
+    assert result["cloudSessionId"] == SESSION_ID
+    assert len(tries) == 3
+    assert len(_records(repo, result["launchId"], "started")) == 1
+    lane = _lanes(repo)[result["launchId"]]
+    assert lane["started"] is True and lane["cloudSessionId"] == SESSION_ID
+
+
+def test_a_started_append_that_fails_three_times_is_tried_exactly_three_times(
+    tmp_path, monkeypatch,
+):
+    repo = _cloud_repo(tmp_path)
+    tries = _flaky_started_appends(monkeypatch, failures=99)
+    result = _launch(repo, tmp_path, _fake_spawn())
+    assert result["ok"] is False
+    assert result["reason"] == "cloud-started-append-failed"
+    assert result["startedAppend"] == "ledger-append-failed"
+    assert result["remedy"] == L._CLOUD_STARTED_APPEND_REMEDY
+    assert len(tries) == 3
+    assert _records(repo, result["launchId"], "started") == []
+
+
+def test_the_unconfirmed_path_with_a_failed_append_does_not_say_to_record_died(
+    tmp_path, monkeypatch,
+):
+    repo = _cloud_repo(tmp_path)
+    tries = _flaky_started_appends(monkeypatch, failures=99)
+    result = _launch(repo, tmp_path, _fake_spawn(_spawned("", rc=None, timed_out=True)))
+    assert result["reason"] == "cloud-session-unconfirmed"
+    assert result["startedAppend"] == "ledger-append-failed"
+    assert len(tries) == 3
+    remedy = result["remedy"]
+    assert remedy == L._CLOUD_UNCONFIRMED_APPEND_REMEDY
+    assert "died" not in remedy
+    assert "`reserved` record alone" in remedy
+    assert "`cloudSessionName`" in remedy
+    assert "`record-outcome` refuses" in remedy
+    assert result["remedy"] != L._CLOUD_UNCONFIRMED_REMEDY
+
+
+def test_the_started_append_pauses_between_its_tries(tmp_path, monkeypatch):
+    repo = _cloud_repo(tmp_path)
+    _flaky_started_appends(monkeypatch, failures=99)
+    pauses = []
+    monkeypatch.setattr(L, "_pause_between_appends", lambda: pauses.append(True))
+    result = _launch(repo, tmp_path, _fake_spawn())
+    assert result["reason"] == "cloud-started-append-failed"
+    assert len(pauses) == 2
+    assert 0 < L._CLOUD_APPEND_PAUSE_SECONDS < 1
 
 
 def test_edge6_a_second_launch_is_refused_while_an_append_failed_lane_is_live(

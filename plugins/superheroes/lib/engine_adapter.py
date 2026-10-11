@@ -747,7 +747,7 @@ def claude_builder_argv(token, session_id, prompt):
 # renders, and a cloud builder is not dispatched through it.
 REFUSAL_CLOUD_ENVIRONMENT_INVALID = "cloud-environment-invalid"
 REFUSAL_CLOUD_SESSION_NAME_INVALID = "cloud-session-name-invalid"
-_CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
+CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
 _CLOUD_SESSION_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
@@ -764,7 +764,7 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
             REFUSAL_BUILDER_PROMPT_MISSING,
             detail="builder prompt must be a non-empty string",
         )
-    if not isinstance(environment_id, str) or not _CLOUD_ENVIRONMENT_ID_RE.fullmatch(environment_id):
+    if not isinstance(environment_id, str) or not CLOUD_ENVIRONMENT_ID_RE.fullmatch(environment_id):
         return {
             "argv": [],
             "reason": REFUSAL_CLOUD_ENVIRONMENT_INVALID,

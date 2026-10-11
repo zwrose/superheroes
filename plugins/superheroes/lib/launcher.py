@@ -114,18 +114,29 @@ _WORKHORSE_CMD = "/superheroes:workhorse"
 PLACE_LOCAL = ll.PLACE_LOCAL
 PLACE_CLOUD = ll.PLACE_CLOUD
 _CLOUD_SPAWN_TIMEOUT_SECONDS = 120
-_CLOUD_ENVIRONMENT_RE = re.compile(r"env_[A-Za-z0-9]+")
+_CLOUD_APPEND_TRIES = 3
+_CLOUD_APPEND_PAUSE_SECONDS = 0.2
 _CLOUD_CREATED_PREFIX = "Created cloud session: "
-_CLOUD_VIEW_RE = re.compile(r"View: (https://claude\.ai/code/(session_[A-Za-z0-9]+))")
-_CLOUD_RESUME_RE = re.compile(r"Resume with: claude --teleport (session_[A-Za-z0-9]+)")
+# The two line patterns capture the whole token where the id sits; the id's grammar is decided
+# once, by the ledger's own pattern (`ll._CLOUD_SESSION_ID_RE`), when the receipt is read.
+_CLOUD_VIEW_RE = re.compile(r"View: (https://claude\.ai/code/([^?\s]*))")
+_CLOUD_RESUME_RE = re.compile(r"Resume with: claude --teleport (\S+)")
 _TERMINAL_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _TERMINAL_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_TERMINAL_ESC_RE = re.compile(r"\x1b(?:[()][0-9A-Za-z]|[@-Z\\-_=>])")
+_TERMINAL_ESC_RE = re.compile(r"\x1b(?:[()][0-9A-Za-z]|[78]|[@-Z\\-_=>])")
+_TERMINAL_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f]")
 _CLOUD_UNCONFIRMED_REMEDY = (
     "The launch command may have created a cloud session that this launcher could not read the "
     "identity of. Look for a session with the name in `cloudSessionName` in the host's session "
     "listing. The lane is left live. When there is no such session, record the lane's outcome "
     "as `died`; when there is one, the lane is that session."
+)
+_CLOUD_UNCONFIRMED_APPEND_REMEDY = (
+    "The launch command may have created a cloud session that this launcher could not read the "
+    "identity of, and the `started` record could not be written (`startedAppend` holds why). The "
+    "lane is live on its `reserved` record alone. Look for a session with the name in "
+    "`cloudSessionName` in the host's session listing. `record-outcome` refuses a lane with no "
+    "`started` record, so it cannot end this lane."
 )
 _CLOUD_STARTED_APPEND_REMEDY = (
     "A cloud session exists and is working: its identity is in `cloudSessionId`. The `started` "
@@ -1310,8 +1321,10 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     session leader, so its process group is its pid: on every path out once it has started
     (exit, timeout, a failed read, any exception) that whole group is sent SIGKILL and the command
     is reaped, so no process the launch started outlives the call. Both descriptors are always
-    closed. Raises OSError when the command could not be started; once it has run, a log that
-    cannot be written is not an error.
+    closed. Raises OSError when the command could not be started (the terminal could not be
+    opened, or the command could not be launched). Once it has run, nothing raises: a log that
+    cannot be written is not an error, and any other failure is returned as `readError` (the
+    exception's class name) beside the output captured so far.
     """
     master, slave = pty.openpty()
     try:
@@ -1327,32 +1340,42 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                 env=child_env,
             )
         finally:
-            os.close(slave)
+            try:
+                os.close(slave)
+            except OSError:
+                pass
+        # axis: the lane is not ended — once Popen has returned nothing below raises, because the
+        # caller reads a raise as "the command never started" and would end a lane whose session
+        # may exist; a failure comes back as `readError` beside the output captured so far.
         chunks = []
         timed_out = False
+        read_error = None
         try:
-            deadline = time.monotonic() + timeout
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    timed_out = True
-                    break
-                ready, _, _ = select.select([master], [], [], min(remaining, 0.25))
-                if ready:
+            try:
+                deadline = time.monotonic() + timeout
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    ready, _, _ = select.select([master], [], [], min(remaining, 0.25))
+                    if ready:
+                        try:
+                            data = os.read(master, 65536)
+                        except OSError:
+                            break
+                        if not data:
+                            break
+                        chunks.append(data)
+                    elif proc.poll() is not None:
+                        break
+                if not timed_out:
                     try:
-                        data = os.read(master, 65536)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    chunks.append(data)
-                elif proc.poll() is not None:
-                    break
-            if not timed_out:
-                try:
-                    proc.wait(timeout=max(0.1, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    timed_out = True
+                        proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+            except Exception as exc:
+                read_error = type(exc).__name__
         finally:
             # axis: no process the launch started outlives it — the signal goes to the process group
             # the Popen this function holds leads (its pid), on every path out, never to a caller's.
@@ -1360,22 +1383,29 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                 os.killpg(proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+            except Exception as exc:
+                read_error = read_error or type(exc).__name__
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
+            except Exception as exc:
+                read_error = read_error or type(exc).__name__
         raw = b"".join(chunks)
         try:
             with open(log_path, "wb") as fh:
                 fh.write(raw)
         except OSError:
             pass
-        return {
+        result = {
             "pid": proc.pid,
             "rc": proc.returncode,
             "timedOut": timed_out,
             "output": raw.decode("utf-8", errors="replace"),
         }
+        if read_error is not None:
+            result["readError"] = read_error
+        return result
     finally:
         try:
             os.close(master)
@@ -1384,36 +1414,71 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
 
 
 def _strip_terminal_sequences(text):
-    """The text with terminal control sequences and carriage returns removed."""
+    """The text with terminal control sequences and control bytes other than the newline removed."""
     text = _TERMINAL_OSC_RE.sub("", text)
     text = _TERMINAL_CSI_RE.sub("", text)
     text = _TERMINAL_ESC_RE.sub("", text)
-    return text.replace("\r", "")
+    return _TERMINAL_CONTROL_RE.sub("", text)
 
 
 def _read_cloud_receipt(text, session_name):
     """The `(session_id, session_url)` of a coherent creation receipt in `text`, else None.
 
     Coherent: a `Created cloud session: <name>` line whose name is `session_name`, then a `View:`
-    line or a `Resume with: claude --teleport` line (or both) that yields a session id, and equal
-    ids when both do. The id is read from those lines only; a `session_` token elsewhere is not one.
+    line or a `Resume with: claude --teleport` line (or both) that yields a session id the ledger
+    accepts, and equal ids when both do. The creation text may follow other text on its line. The
+    identity lines of a creation line are the complete lines between it and the next creation
+    line (or the end of the output); a trailing piece with no newline after it is not complete
+    and yields nothing. The id is read from those lines only; a `session_` token elsewhere is not
+    one.
     """
-    lines = [line.strip() for line in text.split("\n")]
-    for index, line in enumerate(lines):
-        if not line.startswith(_CLOUD_CREATED_PREFIX):
-            continue
+    # The last element is the piece after the final newline: a line the output was cut inside.
+    lines = [line.strip() for line in text.split("\n")[:-1]]
+    created = [i for i, line in enumerate(lines) if _CLOUD_CREATED_PREFIX in line]
+    for position, index in enumerate(created):
+        line = lines[index]
+        announced = line[line.find(_CLOUD_CREATED_PREFIX) + len(_CLOUD_CREATED_PREFIX):]
         # axis: whose session it is — the announced name must equal the name this launch requested.
-        if line[len(_CLOUD_CREATED_PREFIX):].strip() != session_name:
+        if announced.strip() != session_name:
             continue
-        view = next((m for m in map(_CLOUD_VIEW_RE.match, lines[index + 1:]) if m), None)
-        resume = next((m for m in map(_CLOUD_RESUME_RE.match, lines[index + 1:]) if m), None)
+        # axis: whose receipt it is — identity lines belong to the nearest creation line before them.
+        end = created[position + 1] if position + 1 < len(created) else len(lines)
+        block = lines[index + 1:end]
+        view = next((m for m in map(_CLOUD_VIEW_RE.match, block) if m), None)
+        resume = next((m for m in map(_CLOUD_RESUME_RE.match, block) if m), None)
         if view is None and resume is None:
             continue
-        if view is not None and resume is not None and view.group(2) != resume.group(1):
+        view_id = view.group(2) if view is not None else None
+        resume_id = resume.group(1) if resume is not None else None
+        # axis: one grammar — the ledger's pattern alone decides what a session id is.
+        if any(
+            token is not None and not ll._CLOUD_SESSION_ID_RE.fullmatch(token)
+            for token in (view_id, resume_id)
+        ):
             continue
-        session_id = view.group(2) if view is not None else resume.group(1)
-        return session_id, (view.group(1) if view is not None else None)
+        if view_id is not None and resume_id is not None and view_id != resume_id:
+            continue
+        return (view_id or resume_id), (view.group(1) if view is not None else None)
     return None
+
+
+def _pause_between_appends():
+    time.sleep(_CLOUD_APPEND_PAUSE_SECONDS)
+
+
+def _append_started(repo_root, record, env):
+    """Append a cloud lane's `started` record, trying up to three times; the last result.
+
+    The append takes a lock, and a brief contention for it is the ordinary cause of a failure, so
+    one failure must not strand a lane whose command has already run.
+    """
+    for attempt in range(_CLOUD_APPEND_TRIES):
+        result = _append_under_lock(repo_root, record, env=env)
+        if result["ok"]:
+            return result
+        if attempt + 1 < _CLOUD_APPEND_TRIES:
+            _pause_between_appends()
+    return result
 
 
 def _run_cloud_spawn(
@@ -1472,7 +1537,7 @@ def _run_cloud_spawn(
         started["cloudSessionId"] = session_id
         if session_url is not None:
             started["cloudSessionUrl"] = session_url
-        append_result = _append_under_lock(repo_root, started, env=env)
+        append_result = _append_started(repo_root, started, env)
         if not append_result["ok"]:
             # axis: a session exists and is working — the lane stays live on its `reserved` record.
             return post_reserve_fail(
@@ -1498,15 +1563,17 @@ def _run_cloud_spawn(
 
     # axis: an uncertain creation keeps the lane live — whatever the exit code or timeout, a session may exist, so nothing is terminalized.
     started["cloudSessionUnconfirmed"] = True
-    append_result = _append_under_lock(repo_root, started, env=env)
+    append_result = _append_started(repo_root, started, env)
     extra = {}
+    remedy = _CLOUD_UNCONFIRMED_REMEDY
     if not append_result["ok"]:
         extra["startedAppend"] = append_result["reason"]
+        remedy = _CLOUD_UNCONFIRMED_APPEND_REMEDY
     return post_reserve_fail(
         "cloud-session-unconfirmed",
         cloudSessionName=session_name,
         logPath=log_path,
-        remedy=_CLOUD_UNCONFIRMED_REMEDY,
+        remedy=remedy,
         **extra,
     )
 
@@ -2113,8 +2180,8 @@ def _place_refusal(
         return _fail("launch-cloud-with-iphone-check", launchId=launch_id)
     if plugin_version() is None:
         return _fail("launch-cloud-plugin-version-unreadable", launchId=launch_id)
-    if not isinstance(cloud_environment, str) or not _CLOUD_ENVIRONMENT_RE.fullmatch(
-        cloud_environment
+    if not isinstance(cloud_environment, str) or not (
+        engine_adapter.CLOUD_ENVIRONMENT_ID_RE.fullmatch(cloud_environment)
     ):
         return _fail("launch-cloud-environment-invalid", launchId=launch_id)
     # axis: refused before any write — a cloud lane is looked up by its issue, so it must be a number.
