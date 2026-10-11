@@ -87,10 +87,12 @@ lane's `started` record, and returns once the session exists. It does not wait f
 - It provisions no worktree, leaves no process on the owner's machine, and pushes no branch.
 - The session starts under the launching account's config dir, at the builder tier and effort the
   launch resolved.
-- The session starts from the commit of the checkout the launcher ran in. When the checkout's
-  remote-tracking branches hold no branch that contains that commit, the launch refuses with
-  `launch-cloud-head-not-on-remote`. The launcher never pushes to make it so. The builder branches
-  from the base its order names.
+- The session starts from the commit the launching checkout is on. The launch refuses unless that
+  commit is the premise's base commit (`launch-cloud-head-not-base`) and a remote-tracking branch
+  contains it (`launch-cloud-head-not-on-remote`). The launcher checks both before it reserves the
+  lane and again just before it runs the command. When the second check fails, the launcher ends the
+  lane and starts nothing. The launcher never pushes, so the launching checkout sits at the base
+  commit the premise names.
 - The launcher runs the command from its checkout, which must be a folder the platform's command line
   already trusts. In an untrusted folder the command waits on its trust question until the launch's
   time limit, and the launch reads `cloud-session-unconfirmed`.
@@ -112,16 +114,21 @@ lane's `started` record, and returns once the session exists. It does not wait f
   - Success. The result and the lane's `started` record carry `cloudSessionName`, `cloudSessionId`,
     and, when the command printed one, `cloudSessionUrl`.
   - `cloud-session-unconfirmed`. The launcher could not read a creation receipt for the session it
-    asked for, because a time limit was reached, the command exited non-zero, or its output names
-    some other session. A session may exist. The lane has a `started` record that carries
-    `cloudSessionUnconfirmed` in place of the id, so `record-outcome` works on it. The lane stays
-    live, so the issue cannot be launched a second time. The steps to take are in **Cloud lanes**
-    below.
+    asked for, because a time limit was reached, the command exited non-zero, its output names some
+    other session, or the launcher was interrupted or told to stop while the command ran. In that
+    last case the launcher ends the command and everything the command started. A session may exist.
+    Ordinarily the lane has a `started` record that carries `cloudSessionUnconfirmed` in place of the
+    id, so `record-outcome` works on it. The lane stays live, so the issue cannot be launched a second
+    time. The steps to take are in **Cloud lanes** below. When that `started` record could not be
+    written either, the result carries `startedAppend` and `pendingStarted`. The lane is then live on
+    its `reserved` record alone, `record-outcome` refuses it (`outcome-without-started`), and the
+    steps in **Cloud lanes** do not apply until the record is restored.
   - `cloud-started-append-failed`. A session exists and is working, and its `started` record could
     not be written. The result names the session (`cloudSessionId`, `cloudSessionName`) and why the
-    write failed (`startedAppend`). The lane stays live on its `reserved` record alone, and
-    `record-outcome` refuses it (`outcome-without-started`). Keep the session's identity from the
-    result and reach the session by it.
+    write failed (`startedAppend`). The launcher tried the write three times. The result also carries
+    `pendingStarted`, the complete `started` record, for a later repair. The lane stays live on its
+    `reserved` record alone, and `record-outcome` refuses it (`outcome-without-started`). Keep the
+    session's identity from the result and reach the session by it.
 
 **Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
 `reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
