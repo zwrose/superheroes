@@ -271,3 +271,13 @@ def test_cli_confirmed_retry(tmp_path, monkeypatch, capsys):
     assert code == 0 and out["reason"] == "kept-confirmed" and out["environment"] == ENV_ID
     code, out = _run(capsys, ["pick", "--before", ENV_ID, "--confirmed", "abc"])
     assert code == 1 and out["reason"] == "confirmed-invalid"
+
+
+def test_cli_relative_config_dir_with_relative_cwd_reads(tmp_path, monkeypatch, capsys):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", env["HOME"])
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "acct")
+    code, out = _run(capsys, ["snapshot", "--cwd", "."])
+    assert code == 0 and out == {"action": "read", "reason": None, "environment": ENV_ID}

@@ -132,7 +132,7 @@ def main(argv=None):
     parser.add_argument("--before", default=None)
     parser.add_argument("--confirmed", default=None)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    cwd = args.cwd or os.getcwd()
+    cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.verb == "snapshot":
         result = snapshot(cwd=cwd)
     else:
