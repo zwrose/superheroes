@@ -642,9 +642,14 @@ def test_e8_a_held_lock_answers_the_lock_held_refusal(tmp_path, capsys):
     session_dir = _light_folder(tmp_path)
     with open(os.path.join(session_dir, round_records.LOCK_FILE), "w", encoding="utf-8") as fh:
         json.dump({"pid": 999999, "createdAt": "2026-01-01T00:00:00Z"}, fh)
+    journal = os.path.join(session_dir, RD.JOURNAL_FILE)
+    assert not os.path.exists(journal)
     rc, out = _main(capsys, ["next", "--session-dir", session_dir])
+    assert rc != 0
     assert out["ok"] is False and out["reason"] == "next-locked", out
+    assert out["holder"] == {"pid": 999999, "createdAt": "2026-01-01T00:00:00Z"}, out
     assert not os.path.exists(_marker_path(session_dir))
+    assert not os.path.exists(journal), "the locked refusal journaled into the old folder"
 
 
 # E9 — axis: a current-generation session with a half-done commit in staging is recovered, as

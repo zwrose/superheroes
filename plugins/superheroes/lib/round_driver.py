@@ -7084,7 +7084,10 @@ def _upgrade_gate_unlocked(session_dir, cmd):
         with round_records.session_lock(session_dir):
             return _upgrade_gate(session_dir, cmd)
     except round_records.SessionLockHeld as held:
-        return _lock_held_refusal(session_dir, cmd, held)
+        # The body `_lock_held_refusal` answers, without its journal row: the folder is one an
+        # earlier version left, and nothing in it is written but the once-only marker.
+        return {"ok": False, "reason": "%s-locked" % cmd,
+                "holder": {"pid": held.pid, "createdAt": held.created_at}}
     except OSError:
         # The folder will not take a lock file (it is read-only): the command is still refused.
         return _upgrade_gate(session_dir, cmd)

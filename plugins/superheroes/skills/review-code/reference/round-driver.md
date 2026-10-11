@@ -820,7 +820,8 @@ reason other than already existing, or is created but cannot be written, the com
 refused, with `alreadyRestarted` `false` and `markerWritten` `false` (a file this call created and
 could not write is removed again); `markerWritten` appears only in those two cases. The driver reads only
 `loop-state.json` in the old directory and touches nothing else there: no journal row is appended,
-and every other file stays as it was. A finished session from an earlier
+and every other file stays as it was; a session lock held by another process answers the usual
+`<cmd>-locked` refusal with its `holder`, likewise without a journal row. A finished session from an earlier
 version is left alone: `next` on it returns its terminal answer again. A missing, unreadable, non-JSON
 or non-object `loop-state.json` is handled by the refusals that exist for those cases.
 
