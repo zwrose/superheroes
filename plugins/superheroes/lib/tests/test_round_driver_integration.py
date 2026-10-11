@@ -41,7 +41,6 @@ import model_registry  # noqa: E402
 import payload_contracts  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_adapters  # noqa: E402
-import round_certification  # noqa: E402
 import round_driver  # noqa: E402
 import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
@@ -978,10 +977,7 @@ def test_real_loop_dispatch_observed_row_cites_the_runner_observed_head(tmp_path
     The telemetry half is unchanged: execution evidence shows read engaged, at least one tool
     call, and source codex-events. The head half is now produced by layer 1c — the recorded row
     cites the runner-observed view head with citedHeadSource runner-view, and the stored envelope
-    carries the same headSha. Certification may still refuse for other reasons (the shared harness
-    hand-lands seats with evidence_read unknown); the residual execution-evidence-not-engaged
-    refusal belongs to layer 4, not this layer. This test pins only that head binding no longer
-    refuses BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND.
+    carries the same headSha.
 
     A review that raised findings is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
     """
@@ -996,7 +992,7 @@ def test_real_loop_dispatch_observed_row_cites_the_runner_observed_head(tmp_path
         name="writer-e2e",
         seatMap=seat_map,
         vendors=["codex"],
-        baseGuard=round_certification.BASE_GUARD_CHECKED,
+        baseGuard=round_driver.BASE_GUARD_CHECKED,
     )
     folded = _drive_to_terminal_with_panel_dispatch_evidence(
         session_dir, tmp_path, gitdir, [], head_path)
@@ -1019,36 +1015,21 @@ def test_real_loop_dispatch_observed_row_cites_the_runner_observed_head(tmp_path
     assert isinstance(observation["toolCalls"], int)
     assert observation["toolCalls"] >= 1
     assert observation["source"] == "codex-events"
-    ctx, load_refusal = round_certification._load_context(session_dir)
-    assert load_refusal is None, load_refusal
-    certified_head = round_certification._certified_head_sha(ctx)
-    assert isinstance(certified_head, str) and certified_head
     assert row["citedHeadSource"] == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
     assert isinstance(row["citedHead"], str) and row["citedHead"]
-    assert row["citedHead"] == certified_head
     store_path = round_records.store_path(
         session_dir, row["round"], row["phase"],
         round_records.storage_key(FINDING_SEAT), row["attempt"])
     stored, read_err = round_records.read_json(store_path)
     assert read_err is None, read_err
     assert stored["headSha"] == row["citedHead"]
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert (
-        refusal.get("bindingFailure")
-        != round_certification.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
-    )
 
 
 def test_real_loop_refuses_record_when_no_head_is_resolvable_anywhere(tmp_path):
     """R28 re-pin: record-time refuses view-head-underivable when no anchor head exists anywhere.
 
     Bootstrapping with head_sha=None leaves the orders anchor without a head; layer 1c refuses at
-    record-result before certification can run. Certification's own
-    BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE branch stays directly covered by
-    ``test_round_certification.py`` (the assertion at roughly line 428), so moving this test to
-    the earlier refusal loses no coverage.
+    record-result.
     """
     seat_map = {
         "seats": {
@@ -1062,7 +1043,7 @@ def test_real_loop_refuses_record_when_no_head_is_resolvable_anywhere(tmp_path):
         head_sha=None,
         seatMap=seat_map,
         vendors=["codex"],
-        baseGuard=round_certification.BASE_GUARD_CHECKED,
+        baseGuard=round_driver.BASE_GUARD_CHECKED,
     )
     _drive_to_phase(session_dir, gitdir, [], head_path, round_driver.P_PANEL)
     state = _state(session_dir)
@@ -1098,35 +1079,6 @@ def test_real_loop_refuses_record_when_no_head_is_resolvable_anywhere(tmp_path):
             assert rec_out["ok"], (phase, seat, occurrence, rec_out)
 
 
-def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_path):
-    """Proves the engagement gate bites on a real loop, not only on a fixture."""
-    seat_map = {
-        "seats": {
-            dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
-            for dim in round_driver.DIMENSIONS
-        }
-    }
-    session_dir, gitdir, head_path = _bootstrap(
-        tmp_path,
-        name="writer-e2e-no-telemetry",
-        seatMap=seat_map,
-        vendors=["codex"],
-        baseGuard=round_certification.BASE_GUARD_CHECKED,
-    )
-    findings = [_blocking_finding("missing bounds guard", 2)]
-    folded = _drive_to_terminal_with_panel_dispatch_evidence(
-        session_dir, tmp_path, gitdir, findings, head_path,
-        telemetry_shape="no-telemetry")
-    assert round_driver.P_PANEL in folded
-    state = _state(session_dir)
-    assert state["terminal"] == "converged", state.get("certification")
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert refusal["bindingFailure"] == "execution-evidence-no-runner-action"
-
-
 def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions(
         tmp_path):
     """End-to-end: a converged loop records fixed disposition on the ledger for raised findings."""
@@ -1141,7 +1093,7 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
         name="writer-e2e-disposition-seam",
         seatMap=seat_map,
         vendors=["codex"],
-        baseGuard=round_certification.BASE_GUARD_CHECKED,
+        baseGuard=round_driver.BASE_GUARD_CHECKED,
     )
     finding = _blocking_finding("missing bounds guard", 2)
     folded = _drive_to_terminal_with_panel_dispatch_evidence(
@@ -1159,12 +1111,7 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert entry["dispositionRound"] == 2
     receipt = entry["dispositionReceipt"]
     assert isinstance(receipt.get("headSha"), str) and receipt["headSha"]
-    assert receipt["verifyResult"] == "pass"
-    cert_receipt, refusal = round_certification.certify(session_dir)
-    if refusal is not None:
-        assert (refusal["class"] != "disposition-without-receipt"
-                or refusal["detail"] != "finding has no disposition recorded"), (
-            "unexpected disposition-without-receipt: %r" % refusal)
+    assert set(receipt) == {"headSha"}
 
 
 def _git(cwd, *args, check=True):

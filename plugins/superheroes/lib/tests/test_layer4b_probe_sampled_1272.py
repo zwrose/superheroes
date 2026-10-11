@@ -8,7 +8,6 @@ import os
 import sys
 
 import pytest
-import session_contract as SC
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -18,27 +17,11 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import round_adapters as RA
-import round_certification as RC
 import round_phases as RP
 import receipt_disclosures as RD_DISCLOSURES
 
-from round_certification_fixtures import DEFAULT_PANEL_PAYLOAD_SHA
-from test_layer4a_uncertified_seats_1272 import (
-    HEAD,
-    _dispatch_observed_no_telemetry_row,
-    _manifest_seat_entry,
-    _qualifying_dispatch_row,
-    _session_with_manifest,
-)
-from test_round_certification import (
-    _dispatch_journal_with_binding,
-    _orders_emitted_journal_row,
-    _write_orders_manifest,
-    write_certifiable_session,
-)
 from test_round_driver import (
     _cfg,
-    _cfg_cert,
     _load,
     _seat_map_vendors,
 )
@@ -52,10 +35,6 @@ _L4B_PANEL_VENDORS = {
     "test-reviewer": "cursor",
     "premortem-reviewer": "codex",
 }
-
-
-def _panel_vendor_channel(vendor):
-    return SC.CHANNEL_STDOUT if vendor != "claude" else SC.CHANNEL_FILE
 
 
 def _cross_vendor_artifact(canary_result):
@@ -112,68 +91,6 @@ def _assert_absolute_invariant_anchor(baseline):
     assert baseline["terminal"] == "converged"
     assert baseline["certification_shape"].startswith("full-panel-confirmed")
     assert not any("canary-" in line for line in baseline["degraded_prose"])
-
-
-def _driver_panel_state_with_probe(canary):
-    state = RD.new_state(_cfg_cert(leg="panel", vendors=["claude", "codex", "cursor"]))
-    RD._fold_panel(state, state["config"], _cross_vendor_artifact(canary))
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    return state
-
-
-def _cert_writer_session_for_probe(tmp_path, canary):
-    """Certification-writer session: full panel telemetry + round record from driver fold."""
-    fold_state = _driver_panel_state_with_probe(canary)
-    seat_map = _seat_map_vendors(_L4B_PANEL_VENDORS)
-    journal = []
-    manifest_seats = {}
-    envelopes = []
-    for dim in RD.DIMENSIONS:
-        vendor = _L4B_PANEL_VENDORS[dim]
-        channel = _panel_vendor_channel(vendor)
-        if channel == SC.CHANNEL_STDOUT:
-            row = _qualifying_dispatch_row(dim, RP.P_PANEL)
-        else:
-            row = _dispatch_journal_with_binding(seat=dim)
-            row["phase"] = RP.P_PANEL
-            row["seat"] = dim
-            row["recordIdentity"]["phase"] = RP.P_PANEL
-            row["recordIdentity"]["seat"] = dim
-        journal.append(row)
-        skey, entry = _manifest_seat_entry(dim, channel, vendor)
-        manifest_seats[skey] = entry
-        envelopes.append({"seat": dim, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA})
-    manifest = {
-        "schema": "orders-manifest/1",
-        "session": "test-session-001",
-        "round": 1,
-        "phase": RP.P_PANEL,
-        "attempt": 0,
-        "orders": "not-emitted",
-        "seats": manifest_seats,
-    }
-    manifest_sha = SC.sha256_text(SC.canonical(manifest))
-    journal.append(_orders_emitted_journal_row(manifest_sha))
-    cert_state = {
-        "terminal": fold_state["terminal"],
-        "certification": fold_state["certification"],
-        "rounds": fold_state["rounds"],
-        "fullPanelRan": fold_state.get("fullPanelRan"),
-        "config": {
-            "fixerVendor": "claude",
-            "baseGuard": RC.BASE_GUARD_CHECKED,
-            "headSha": HEAD,
-        },
-        "seatMapReceipts": [{"round": "1", "map": seat_map}],
-    }
-    session_dir = write_certifiable_session(
-        tmp_path,
-        journal_lines=journal,
-        envelopes=envelopes,
-        state=cert_state,
-    )
-    _write_orders_manifest(session_dir, manifest)
-    return session_dir
 
 
 PROBE_CASES = [
@@ -300,54 +217,6 @@ def test_malformed_canary_assemble_not_refused(tmp_path):
         canary=[{"engine": "codex", "engaged": True}, {"engaged": True}],
     )
     assert reason is None and artifact is not None
-
-
-def test_dry_run_a_not_engaged_probe_certifies_via_writer_with_telemetry(tmp_path):
-    canary = {
-        "engine": "codex", "outcome": "vacuous", "engaged": False,
-        "detectedPlant": False, "evidence": {}, "detail": "not engaged",
-    }
-    session_dir = _cert_writer_session_for_probe(tmp_path, canary)
-    receipt, refusal = RC.certify(session_dir)
-    assert refusal is None and receipt is not None
-    assert receipt["terminalState"] == "certified"
-    r0 = receipt["rounds"][0]
-    assert r0["controlProbe"]["vendors"]["codex"] == "vacuous"
-    assert "canaryFailed" in r0
-
-
-def test_dry_run_b_plant_undetected_certifies_via_writer_no_canary_degraded_line(tmp_path):
-    canary = {
-        "engine": "codex", "outcome": "ok", "engaged": True,
-        "detectedPlant": False, "evidence": {}, "detail": "missed",
-    }
-    session_dir = _cert_writer_session_for_probe(tmp_path, canary)
-    receipt, refusal = RC.certify(session_dir)
-    assert refusal is None and receipt is not None
-    assert receipt["terminalState"] == "certified"
-    r0 = receipt["rounds"][0]
-    assert r0["controlProbe"]["vendors"]["codex"] == "plant-undetected"
-    assert not any("canary-" in line for line in receipt["degraded"])
-
-
-def test_l4b_cross_vendor_zero_finding_no_telemetry_no_probe_refuses_unrun_review(tmp_path):
-    """Fail-closed edge 5(b): probe gate removal must not certify without runner telemetry."""
-    seat = "code-reviewer"
-    row = _dispatch_observed_no_telemetry_row(seat, RP.P_PANEL)
-    session_dir, _ = _session_with_manifest(
-        tmp_path,
-        seat=seat,
-        phase=RP.P_PANEL,
-        channel=SC.CHANNEL_STDOUT,
-        vendor="codex",
-        journal_lines=[row],
-        envelopes=[{"seat": seat, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
-    )
-    receipt, refusal = RC.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert refusal["artifact"] == seat
 
 
 def test_resume_restores_control_probe(tmp_path):

@@ -22,7 +22,6 @@ def _load(name):
 RD = _load("round_driver")
 RR = _load("round_records")
 RC = _load("round_commit")
-RCE = _load("round_certification")
 TRI = importlib.import_module("test_round_driver_integration")
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -454,7 +453,7 @@ def _bootstrap_head_before_next(tmp_path, name="pre-head", **cfg_over):
 
 
 def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_head(tmp_path):
-    """Real-loop producer: the pre-next meta head binds `citedHead`; with every seat's evidence engaged the zero-finding loop certifies on that head."""
+    """Real-loop producer: the pre-next meta head binds `citedHead` on the dispatch-observed recorded row."""
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
@@ -466,7 +465,7 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
         name="cited-head-producer",
         seatMap=seat_map,
         vendors=["codex"],
-        baseGuard=RCE.BASE_GUARD_CHECKED,
+        baseGuard=RD.BASE_GUARD_CHECKED,
     )
     folded = TRI._drive_to_terminal_with_panel_dispatch_evidence(
         session_dir, tmp_path, gitdir, [], head_path, evidence_read="engaged")
@@ -478,38 +477,7 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
                 and row.get("phase") == RD.P_PANEL
                 and row.get("provenance") == RR.PROVENANCE_DISPATCH_OBSERVED]
     assert recorded, journal
-    ctx, load_refusal = RCE._load_context(session_dir)
-    assert load_refusal is None, load_refusal
-    certified_head = RCE._certified_head_sha(ctx)
-    assert recorded[0]["citedHead"] == certified_head == head_sha
-    receipt, refusal = RCE.certify(session_dir)
-    assert refusal is None, refusal
-    assert isinstance(receipt, dict)
-    assert certified_head == head_sha
-    assert receipt["terminalState"] == "certified"
-
-
-def test_real_loop_hand_landed_unknown_read_refuses_execution_evidence_not_engaged(tmp_path):
-    """Hand-landed seats with read unknown must not satisfy the read-engagement bar."""
-    seat_map = {
-        "seats": {
-            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
-            for dim in RD.DIMENSIONS
-        }
-    }
-    session_dir, gitdir, head_path, head_sha = _bootstrap_head_before_next(
-        tmp_path,
-        name="cited-head-not-engaged",
-        seatMap=seat_map,
-        vendors=["codex"],
-        baseGuard=RCE.BASE_GUARD_CHECKED,
-    )
-    TRI._drive_to_terminal_with_panel_dispatch_evidence(
-        session_dir, tmp_path, gitdir, [], head_path, evidence_read="unknown")
-    receipt, refusal = RCE.certify(session_dir)
-    assert receipt is None, receipt
-    assert refusal is not None
-    assert refusal["bindingFailure"] == "execution-evidence-not-engaged"
+    assert recorded[0]["citedHead"] == head_sha
 
 
 def test_journal_revision_helpers_removed_from_lib():

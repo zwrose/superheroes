@@ -43,7 +43,6 @@ def _load(name):
 
 
 RD = _load("round_driver")
-RC = _load("round_certification")
 SC = _load("session_contract")
 RGP = _load("review_gate_policy")
 
@@ -58,7 +57,7 @@ def _load_core_md():
 
 def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "claude",
-            "seatMap": SEAT_MAP, "baseGuard": RC.BASE_GUARD_CHECKED}
+            "seatMap": SEAT_MAP, "baseGuard": RD.BASE_GUARD_CHECKED}
     base.update(over)
     return base
 

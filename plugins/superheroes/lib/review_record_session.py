@@ -24,12 +24,12 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
 import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
-import round_certification  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract as sc  # noqa: E402
@@ -278,7 +278,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     if not (isinstance(meta, dict) and _text(meta.get("sessionId"))):
         raise Refusal(UNREADABLE, "meta.json sessionId")
     rows = _journal(session_dir)
-    if state["terminal"] not in round_certification.CERTIFIED_VERDICTS:
+    if state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS:
         raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not a certified verdict")
     if not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows):
         raise Refusal(UNSUPPORTED, "the session recorded no seat result")
@@ -293,8 +293,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
         makers.append({"family": fam, "source": "review loop fixer"})
     last = decisions[-1] if decisions else {}
-    cause = round_certification.map_terminal_cause(state["terminal"], last.get("kind")) or {}
-    capped = round_certification.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
+    cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
+    capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
