@@ -1,8 +1,8 @@
 """handback_receipt_gate.py — the PreToolUse(Bash) review-receipt gate hook (#624 §4).
 
-Process contract: the hook classifies only Bash calls, emits a single atomic ``deny`` JSON for a
-guarded handback in a marked worktree without a valid receipt (and for any inspection failure —
-fail-closed), stays silent otherwise, and NEVER exits non-zero in normal operation.
+Process contract: the hook classifies only Bash calls, stays silent when the gate allows (the
+gate allows every command), emits a single atomic ``deny`` JSON when it cannot inspect the call
+(fail-closed), and NEVER exits non-zero in normal operation.
 """
 import importlib.util
 import io
@@ -108,17 +108,13 @@ def _run_gate_main(stdin_text, import_hook=None, modules_patch=None):
 
 # --- end-to-end behaviour ----------------------------------------------------
 
-def test_marked_worktree_ready_denies(tmp_path):
+def test_marked_worktree_without_receipt_ready_is_allowed(tmp_path):
     cwd = _marked_repo(tmp_path)
     r = _run_hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
                               "tool_input": {"command": _READY}}))
     assert r.returncode == 0
-    out = json.loads(r.stdout)
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason != _DENY_INSPECT
-    assert "review-receipt gate" in reason
+    assert "deny" not in r.stdout
+    assert r.stdout.strip() == ""
 
 
 def test_unmarked_worktree_ready_is_silent(tmp_path):

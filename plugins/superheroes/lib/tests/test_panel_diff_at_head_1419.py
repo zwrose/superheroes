@@ -18,7 +18,6 @@ if _LIB not in sys.path:
 
 from session_checkout import seed_session_meta  # noqa: E402
 
-import handback_gate as hg  # noqa: E402
 import review_diff_bytes as rdb  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_records  # noqa: E402
@@ -294,7 +293,9 @@ def test_b3_review_diff_producer_byte_identical_across_consumers(tmp_path):
     proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=120)
     assert proc.returncode == 0
     panel_bytes = proc.stdout
-    handback_digest = hg._recompute_diff_sha256(base_sha, repo, head_sha)
+    digest_proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=10)
+    assert digest_proc.returncode == 0
+    handback_digest = hashlib.sha256(digest_proc.stdout).hexdigest()
     assert handback_digest == hashlib.sha256(panel_bytes).hexdigest()
     cfg = _cfg(repoRoot=repo, baseRef=base_sha, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
     state = _unknown_surface_state(cfg)
