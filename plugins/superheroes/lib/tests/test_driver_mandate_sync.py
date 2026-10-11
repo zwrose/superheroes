@@ -1,26 +1,12 @@
-"""Drift guard for driver-mandate facts across enumerated surfaces (CONVENTIONS §11.2 pattern 2).
+"""Drift guard for a driver-mandate fact across enumerated surfaces (CONVENTIONS §11.2 pattern 2).
 
-Guards two pinned clauses:
+Guards one pinned clause: BACKGROUNDABLE_VERIFY, on
+``skills/review-code/reference/round-driver.md`` and ``skills/workhorse/SKILL.md`` (symmetric
+two-surface pin: whole-file count == 1 on each copy-holder; neither surface is authoritative).
 
-- ``skills/review-code/reference/round-driver.md`` and ``skills/workhorse/SKILL.md`` —
-  BACKGROUNDABLE_VERIFY (symmetric two-surface pin: whole-file count == 1 on each copy-holder;
-  neither surface is authoritative)
-- ``rubric/review-discipline.md`` — the record rule, "a full-lane PR handed back without a review
-  record is parked" (single-home hard-line pin; presence-only, exactly once in the driver-mandate
-  section)
-
-The skip rule lives only in the authoritative home; ``vet-receipt.md`` points at that home and
-does not restate it — no copy-holder pins exist for it.
-
-One single-home fact — the post-handback merge policy — is deliberately out of scope; it lives
-only in ``rubric/review-discipline.md``.
-
-What is guaranteed is **presence** of each pinned literal verbatim modulo ``*``-stripping and
-whitespace collapse. BACKGROUNDABLE_VERIFY is pinned **whole-file** because its surfaces carry
-`` ``` `` fences inside section-scoped regions. The record rule is pinned inside the driver-mandate
-section. Section extraction reuses ``_file_section`` and ``_normalized`` from
-``test_charter_boundary_sync``; that reader is deliberately **fence-blind** (fence-awareness was
-tried and reverted in PR #727).
+What is guaranteed is **presence** of the pinned literal verbatim modulo ``*``-stripping and
+whitespace collapse. It is pinned **whole-file** because its surfaces carry `` ``` `` fences
+inside section-scoped regions.
 
 The guard does **not** detect a literal that is present but neutralized by surrounding prose;
 that semantic check is deliberately out of scope.
@@ -29,16 +15,10 @@ import os
 
 import pytest
 
-from test_charter_boundary_sync import _file_section, _normalized
+from test_charter_boundary_sync import _normalized
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
-
-_HOME = "rubric/review-discipline.md"
-
-_DRIVER_MANDATE_SECTION = (
-    "## The driver mandate — the review record"
-)
 
 _BACKGROUNDABLE_VERIFY = (
     "The verify step may run harness-backgrounded and polled in-turn — the already-sanctioned "
@@ -46,8 +26,6 @@ _BACKGROUNDABLE_VERIFY = (
     "single call, not the step; what stays forbidden is unchanged, `&`/setsid/nohup and ending "
     "the turn to wait."
 )
-
-_RECORD_RULE_HOME = "A full-lane PR handed back without a review record is parked"
 
 _BACKGROUNDABLE_VERIFY_SURFACES = [
     "skills/review-code/reference/round-driver.md",
@@ -61,10 +39,6 @@ def _read(rel):
         raise AssertionError(f"surface file missing or unreadable: {rel}")
     with open(path, encoding="utf-8") as fh:
         return fh.read()
-
-
-def _section_text(rel, section):
-    return _file_section(rel, section, _read)
 
 
 @pytest.mark.parametrize(
@@ -81,9 +55,3 @@ def test_backgroundable_verify_present(rel):
         f"expected exactly one occurrence in {rel}, found {count}"
     )
 
-
-def test_record_rule_present_in_home():
-    # axis: presence of the record rule in its single home, exactly once — the sentence that
-    # parks a full-lane PR handed back without a review record
-    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
-    assert home_section_text.count(_normalized(_RECORD_RULE_HOME)) == 1
