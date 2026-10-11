@@ -66,7 +66,7 @@ def test_pick_unchanged_setting_asks_again_with_no_id(tmp_path):
     assert result["action"] == "not-picked"
     assert result["reason"] == "pick-unchanged"
     assert result["environment"] is None
-    assert result["message"] == CE._ASK_AGAIN
+    assert result["message"] == CE._ALREADY_PICKED
 
 
 _MISSING = [
