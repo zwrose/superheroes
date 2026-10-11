@@ -3148,7 +3148,6 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
     class RECURS parks (cannot-certify) — never a silent clean (the wrong_principle property)."""
     records = tmp_path / "round-records.json"
     records.write_text("[]")
-    coverage = tmp_path / "coverage.json"
 
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "test-reviewer":
@@ -3163,8 +3162,7 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
 
     result = RD.run_loop(
         _seams(reviewer=reviewer, fix_step=fix_step),
-        _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records),
-             coveragePath=str(coverage), maxRounds=20))
+        _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records), maxRounds=20))
     assert result["verdict"] == "cannot-certify"
     assert result["certificationShape"] is None
 
@@ -3197,46 +3195,12 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
     assert fired["scoped"] == 1, "the scoped finder must fire over the real new surface"
 
 
-def test_corrupt_resume_records_cannot_certify(tmp_path):
-    """A corrupt durable round-records file fails closed in the resume seam — cannot-certify park,
-    never a run off unreadable memory."""
-    records = tmp_path / "round-records.json"
-    records.write_text("{corrupt not-a-list")
-    receipt = RD.run_loop(_seams(), _cfg_cert(recordsPath=str(records)))
-    assert receipt["verdict"] == "cannot-certify"
-    assert receipt["certificationShape"] is None
-
-
-def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
-    """Resuming with a seeded DEGRADED (low-confidence) confirmation panel + a pending-confirmation
-    marker owes a fresh full confirmation panel — the degraded seed cannot anchor certification."""
-    records = tmp_path / "round-records.json"
-    seed = [
-        {"schemaVersion": 2, "round": 1, "kind": "baseline", "confirmationPending": True,
-         "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
-                                          "tier": "reviewer-deep", "findings": []}},
-         "findings": [], "coverageDecisions": []},
-        {"schemaVersion": 2, "round": 2, "kind": "confirmation", "confirmationPending": True,
-         "dimensions": {"test-reviewer": {"status": "run", "confidence": "low",
-                                          "tier": "reviewer-deep", "findings": []}},
-         "findings": [], "coverageDecisions": []},
-    ]
-    records.write_text(json.dumps(seed))
-    receipt = RD.run_loop(_seams(),
-                          _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert receipt["verdict"] == "converged"
-    # A fresh full confirmation panel ran at the resume round (3), certifying as a full panel —
-    # NOT anchored on the degraded round-2 seed.
-    assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
-    assert any(r["round"] == 3 for r in receipt["rounds"])
-
-
 # =============================================================================
-# #720: a `recordsPath` resume restores the per-round DISCLOSURE channels
+# #720: the per-round DISCLOSURE channels the records writer persists
 # =============================================================================
 
 # One populated value per channel in RESUMABLE_DISCLOSURE_CHANNELS, shaped exactly as `_fold_panel`
-# records it. Used by the all-channel resume test; NOT a second copy of the channel list — the test
+# records it. Used by the all-channel producer test; NOT a second copy of the channel list — the test
 # asserts this map's keys equal the module constant's, so a new channel fails here too.
 _ALL_CHANNELS = {
     "fellOpen": [{"seat": "test-reviewer", "configured": "codex", "reason": "forfeit",
@@ -3289,53 +3253,8 @@ def _round_disclosures(receipt, round_no, loop_receipt=None):
     return [line for line in degraded if "(round %d)" % round_no in line]
 
 
-def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
-    """A resumed run's terminal receipt carries EVERY per-round disclosure channel the durable
-    record holds, with the same disclosure prose an unbroken run emits (#720). Before the fix
-    `_seed_resume` restored findings/coverage only, so `state["rounds"]` came back EMPTY and the
-    receipt silently under-disclosed every pre-resume round."""
-    assert set(_ALL_CHANNELS) == set(RD.RESUMABLE_DISCLOSURE_CHANNELS), \
-        "this fixture must cover exactly the restorable channel set"
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, dict(_ALL_CHANNELS))]))
-    receipt, loop_receipt = _run_loop_with_loop_receipt(
-        _seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-
-    assert _round_channels(receipt, 1) == _ALL_CHANNELS
-    prose = "\n".join(_round_disclosures(receipt, 1, loop_receipt))
-    for marker in ("reviewer-fell-open (round 1): seat test-reviewer",
-                     "reviewer-fell-open-provenance-unavailable (round 1): cross-vendor seat(s) "
-                     "security-reviewer",
-                     "reviewer-fell-open-seatmap-unavailable (round 1): live panel vendor(s) "
-                     "codex",
-                     "vacuous-seat (round 1): seat(s) architecture-reviewer",
-                     "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
-                     "seat-map-unjudgeable (round 1): a seat map was submitted and is readable, "
-                     "but its violation basis is incomplete (no-author-family)"):
-        assert marker in prose, marker
-    assert (
-        "record-orphans-ignored (round 1): hand submit folded with durable seat record(s) "
-        "code-reviewer still at this slot"
-        in "\n".join(_round_disclosures(receipt, 1, loop_receipt))
-    )
-    assert (
-        "order-vendor-provenance-gap (round 1): seat(s) architecture-reviewer"
-        in "\n".join(_round_disclosures(receipt, 1, loop_receipt))
-    )
-    # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
-    degraded_all = "\n".join(loop_receipt["degraded"])
-    assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
-            in degraded_all)
-    # seatMapViolations is a BREACH channel: restoring it must reach the receipt's breach
-    # disclosure, not just the round entry.
-    assert any(line.startswith("seat-map constraint breach:") and "cross-vendor" in line
-               for line in loop_receipt["degraded"])
-
-
-def test_driver_persists_round_disclosures_for_resume(tmp_path):
-    """The driver writes per-round disclosure channels to round-records.json after each fold so a
-    recordsPath resume restores what the run actually recorded — not only what a hand-seeded file
-    carries."""
+def test_driver_persists_round_disclosures(tmp_path):
+    """The driver writes per-round disclosure channels to round-records.json after each fold."""
     records = tmp_path / "round-records.json"
     records.write_text("[]")
     cfg = _cfg_cert(dimensions=["test-reviewer", "code-reviewer"], recordsPath=str(records),
@@ -3369,7 +3288,7 @@ def test_producer_emits_the_whole_declared_channel_set(tmp_path):
 
 def test_producer_normalizes_non_int_round_key_like_the_restorer(tmp_path):
     """A ledger record carrying round `1.0` must persist round 1's disclosures — the producer keys
-    the rounds map the way `_restore_round_disclosures` does (int-normalized), never `str(1.0)`."""
+    the rounds map through the shared `_round_disclosure_key` (int-normalized), never `str(1.0)`."""
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
@@ -3412,23 +3331,6 @@ def test_producer_skips_block_for_non_integral_round_without_aliasing(tmp_path):
     assert all("disclosures" not in r for r in on_disk)
 
 
-def test_restorer_skips_junk_round_values_through_the_shared_key():
-    """Junk rounds through `_restore_round_disclosures` itself — a regression that swapped the
-    shared helper back to bare `str(int(...))` must fail HERE, not only at the unit level:
-    `1.5` must not alias round 1's entry, bools and `inf` must be skipped without raising."""
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
-    records = [
-        {"round": 1, "disclosures": {"vacuousSeats": ["test-reviewer"]}},
-        {"round": 1.5, "disclosures": {"vacuousSeats": ["ALIASED"]}},
-        {"round": True, "disclosures": {"vacuousSeats": ["BOOL"]}},
-        {"round": float("inf"), "disclosures": {"vacuousSeats": ["INF"]}},
-        {"round": None, "disclosures": {"vacuousSeats": ["NONE"]}},
-    ]
-    RD._restore_round_disclosures(state, records)
-    assert state["rounds"]["1"] == {"vacuousSeats": ["test-reviewer"]}
-    assert set(state["rounds"]) == {"1"}
-
-
 def test_producer_omits_the_disclosures_key_when_no_channel_survives(tmp_path):
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
@@ -3457,47 +3359,18 @@ def test_producer_writes_skeletons_not_evidence_bodies(tmp_path):
     assert persisted["findings"][0]["file"] == "f.py"
 
 
-def test_producer_preserves_durable_records_outside_the_ledger(tmp_path):
+def test_producer_replaces_a_preexisting_records_file_with_this_sessions_ledger(tmp_path):
     records = tmp_path / "round-records.json"
-    seed7 = _seed_record(7, {"vacuousSeats": ["stale-seat"]})
-    records.write_text(json.dumps([_seed_record(1, {"vacuousSeats": ["x"]}), seed7]))
+    records.write_text(json.dumps([_seed_record(1, {"vacuousSeats": ["x"]}),
+                                   _seed_record(7, {"vacuousSeats": ["stale-seat"]})]))
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    state["_records"] = [r for r in state["_records"] if r.get("round") == 1]
+    state["_records"] = [_seed_record(1)]
+    state["rounds"]["1"] = {"vacuousSeats": ["live-seat"]}
     RD._persist_round_records(state, state["config"])
-    round7 = next(r for r in json.loads(records.read_text()) if r.get("round") == 7)
-    assert round7 == seed7
-
-
-def test_producer_parks_and_preserves_a_destination_that_went_corrupt(tmp_path):
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1)]))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert not state.get("_resumeCorrupt")
-    corrupt = "{not valid json at all"
-    records.write_text(corrupt)
-    state["_records"] = [_seed_record(2)]
-    state["rounds"]["2"] = {"vacuousSeats": ["test-reviewer"]}
-    RD._persist_round_records(state, state["config"])
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["shape"] is None
-    assert records.read_text() == corrupt
-    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
-
-
-def test_producer_parks_on_a_structurally_corrupt_destination(tmp_path):
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1)]))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert not state.get("_resumeCorrupt")
-    corrupt = "[null]"
-    records.write_text(corrupt)
-    state["_records"] = [_seed_record(2)]
-    state["rounds"]["2"] = {"vacuousSeats": ["test-reviewer"]}
-    RD._persist_round_records(state, state["config"])
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["shape"] is None
-    assert records.read_text() == corrupt
-    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+    expected = RD.review_memory.summarize_record(_seed_record(1))
+    expected["disclosures"] = {"vacuousSeats": ["live-seat"]}
+    assert records.read_bytes() == RD.review_memory.records_bytes([expected])
+    assert not any(r.get("round") == 7 for r in json.loads(records.read_text()))
 
 
 def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
@@ -3513,26 +3386,30 @@ def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
     ]
     state["rounds"]["1"] = {"vacuousSeats": ["a"]}
     state["rounds"]["2"] = {"vacuousSeats": ["b"]}
-    monkeypatch.setattr(
-        RD.review_memory, "persist_record",
-        lambda path, accum, rec: {"ok": False, "reason": "write-failed"})
+
+    def _fail_write(path, data):
+        raise OSError(5, "write-failed")
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _fail_write)
     RD._persist_round_records(state, state["config"])
     assert state["terminal"] == "cannot-certify"
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert "could not be persisted" in detail
     assert "write-failed" in detail
     assert records.read_text() == initial_text
 
 
-def test_producer_parks_when_persist_record_raises_oserror(tmp_path, monkeypatch):
+def test_producer_parks_when_the_atomic_write_raises_oserror(tmp_path, monkeypatch):
     records = tmp_path / "round-records.json"
     records.write_text("[]")
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     state["_records"] = [_seed_record(1)]
     state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
-    def _raise_oserror(path, accum, rec):
+
+    def _raise_oserror(path, data):
         raise OSError(13, "permission denied")
 
-    monkeypatch.setattr(RD.review_memory, "persist_record", _raise_oserror)
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _raise_oserror)
     RD._persist_round_records(state, state["config"])
     assert state["terminal"] == "cannot-certify"
     assert "permission denied" in next(
@@ -3620,44 +3497,6 @@ def _two_round_disclosure_seams():
     return _seams(reviewer=reviewer, fix_step=fix_step)
 
 
-def test_resumed_and_unresumed_receipts_disclose_the_same_channels(tmp_path):
-    """DoD row 3: resumed-vs-unresumed equivalence for disclosures in both halves of a session.
-
-    Deliberately excluded from comparison: scriptRan, the decision ledger, seatMap, and the
-    non-restored round bookkeeping in UNRESTORED_PANEL_ROUND_KEYS (seatStatus, lensCoverage,
-    compileDrops, unverified, missingSeats, verify) plus roundKind / blockingCount / verifyResult —
-    resume restores the declared disclosure channels by design and nothing else.
-
-    Round-numbering diverges after resume (unbroken live round 3 vs resumed live round 4) — so
-    equivalence is scoped to the shared rounds {1, 2} only."""
-    dims = ["test-reviewer", "code-reviewer"]
-    seams = _two_round_disclosure_seams()
-
-    records_a = tmp_path / "a.json"
-    receipt_a, loop_receipt_a = _run_loop_with_loop_receipt(
-        seams, _cfg_cert(dimensions=dims, recordsPath=str(records_a), maxRounds=8))
-    assert _round_channels(receipt_a, 1)
-    assert _round_channels(receipt_a, 2)
-
-    records_b = tmp_path / "b.json"
-    RD.run_loop(
-        seams, _cfg_cert(dimensions=dims, recordsPath=str(records_b), maxRounds=2))
-    receipt_b, loop_receipt_b = _run_loop_with_loop_receipt(
-        seams, _cfg_cert(dimensions=dims, recordsPath=str(records_b), maxRounds=8))
-
-    shared = {r["round"] for r in receipt_a["rounds"]} & {
-        r["round"] for r in receipt_b["rounds"]}
-    assert shared >= {1, 2}
-    for rnd in shared:
-        assert _round_channels(receipt_a, rnd) == _round_channels(receipt_b, rnd)
-        assert _round_disclosures(receipt_a, rnd, loop_receipt_a) == _round_disclosures(
-            receipt_b, rnd, loop_receipt_b)
-
-    b_only = {r["round"] for r in receipt_b["rounds"]} - {
-        r["round"] for r in receipt_a["rounds"]}
-    assert any(_round_channels(receipt_b, rnd) for rnd in b_only)
-
-
 def _vacuous_round1_seams():
     """Round 1: one vacuous seat (a real `vacuousSeats` + `seatMapUnavailable` record) plus a
     blocking finding so the run continues past round 1 to a terminal."""
@@ -3677,64 +3516,9 @@ def _vacuous_round1_seams():
     return _seams(reviewer=reviewer, fix_step=fix_step)
 
 
-def test_resumed_round_discloses_the_same_as_the_unbroken_run(tmp_path):
-    """Disclosure EQUIVALENCE (#720): a run whose round 1 ran live and a run that resumes past that
-    round off the durable record emit the SAME round-1 channels and the SAME round-1 disclosure
-    prose. Not merely "the key exists" — the receipt content is compared line for line."""
-    unbroken, unbroken_receipt = _run_loop_with_loop_receipt(
-        _vacuous_round1_seams(),
-        _cfg_cert(dimensions=["test-reviewer", "code-reviewer"], maxRounds=8))
-    live_channels = _round_channels(unbroken, 1)
-    live_prose = _round_disclosures(unbroken, 1, unbroken_receipt)
-    assert live_channels and live_prose, "the unbroken run must actually disclose something"
-
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, dict(live_channels), kind="baseline")]))
-    resumed, resumed_receipt = _run_loop_with_loop_receipt(
-        _seams(), _cfg_cert(dimensions=["test-reviewer", "code-reviewer"],
-                       recordsPath=str(records), maxRounds=8))
-
-    assert _round_channels(resumed, 1) == live_channels
-    assert _round_disclosures(resumed, 1, resumed_receipt) == live_prose
-
-
-def test_resume_without_a_disclosure_block_adds_no_round_entry(tmp_path):
-    """An OLDER records file (no `disclosures`) resumes exactly as before — no crash, and no
-    fabricated round entry or empty channel. Absence must never read as "checked and clean"."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1)]))
-    state = RD.new_state(_cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state["rounds"] == {}
-    assert state["round"] == 2
-    receipt = RD.run_loop(_seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert not any(r["round"] == 1 for r in receipt["rounds"])
-    assert receipt["verdict"]
-
-
-def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
-    """FAIL-CLOSED edge: a channel whose durable value has the wrong type (a string where a list
-    belongs, a list where a dict belongs) is DROPPED — never restored as a truthy channel that
-    would emit a false disclosure — while the round's well-shaped channels still resume."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, {
-        "vacuousSeats": "architecture-reviewer",          # str, not a list of str
-        "fellOpen": ["not-a-row"],                         # list of str, not list of dict
-        "seatMapUnavailable": ["codex"],                   # well-shaped — survives
-        "orderVendorProvenanceGaps": [{"seat": 7}],        # int seat — malformed
-    })]))
-    state = RD.new_state(_cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state["rounds"] == {"1": {"seatMapUnavailable": ["codex"]}}
-    receipt = RD.run_loop(_seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert _round_channels(receipt, 1) == {"seatMapUnavailable": ["codex"], "verifyPasses": []}
-    prose = "\n".join(_round_disclosures(receipt, 1))
-    assert "vacuous-seat" not in prose
-    assert "reviewer-fell-open (round 1)" not in prose
-    assert "order-vendor-provenance-gap" not in prose
-
-
-def test_prior_comments_unavailable_discloses_on_receipt_and_survives_resume(tmp_path):
-    """PR-mode absence of prior-comments.json is a provenance gap that must ride the receipt and
-    resume path — not only live in state where build_receipt and recordsPath resume drop it."""
+def test_prior_comments_unavailable_discloses_on_receipt(tmp_path):
+    """PR-mode absence of prior-comments.json is a provenance gap that must ride the receipt —
+    not only live in state where build_receipt drops it."""
     session_dir = str(tmp_path / "pr-session")
     os.makedirs(session_dir)
     os.makedirs(os.path.join(session_dir, "repo"))
@@ -3743,13 +3527,6 @@ def test_prior_comments_unavailable_discloses_on_receipt_and_survives_resume(tmp
     assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
     receipt = RD.build_receipt(state)
     assert _round_channels(receipt, 1).get("priorCommentsUnavailable") is True
-
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, {"priorCommentsUnavailable": True})]))
-    resumed = RD.new_state(_cfg(recordsPath=str(records)))
-    assert resumed["rounds"]["1"]["priorCommentsUnavailable"] is True
-    resumed_receipt = RD.build_receipt(resumed)
-    assert _round_channels(resumed_receipt, 1).get("priorCommentsUnavailable") is True
 
 
 def test_prior_comments_unavailable_degraded_prose_on_receipt():
@@ -3848,60 +3625,6 @@ def test_order_vendor_gap_missing_occurrence_still_valid():
     ovg_lines = [d for d in receipt["degraded"] if "order-vendor-provenance-gap" in d]
     assert len(ovg_lines) == 1
     assert "architecture-reviewer" in ovg_lines[0]
-
-
-def test_order_vendor_gap_non_dict_row_rejected_on_resume(tmp_path):
-    """A gap list containing a non-dict row is dropped on resume — no raise."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, {
-        "orderVendorProvenanceGaps": ["not-a-dict"],
-    })]))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state.get("rounds", {}) == {}
-    receipt = RD.build_receipt(state)
-    assert isinstance(receipt["degraded"], list)
-
-
-def test_resume_does_not_restore_an_empty_list_channel_as_a_disclosure(tmp_path):
-    """FAIL-CLOSED edge: an EMPTY list channel is not a disclosure."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, {
-        "vacuousSeats": [], "fellOpen": [], "seatMapViolations": [],
-    })]))
-    state = RD.new_state(_cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state["rounds"] == {}
-    refusal, loop_receipt = _run_loop_with_loop_receipt(
-        _seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert not any(r["round"] == 1 for r in refusal["rounds"])
-    assert not any(line.startswith("seat-map constraint breach:")
-                    for line in loop_receipt["degraded"])
-
-
-def test_restored_channel_never_clobbers_a_live_round(tmp_path):
-    """Restoration is ADDITIVE: a live post-resume round that records the same channel for the same
-    round number wins, and the restore leaves every other key on that round entry untouched."""
-    records = tmp_path / "round-records.json"
-    records.write_text(json.dumps([_seed_record(1, {"vacuousSeats": ["stale-seat"]})]))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state["rounds"]["1"] == {"vacuousSeats": ["stale-seat"]}
-    state["round"] = 1
-    RD._record_round(state, "vacuousSeats", ["live-seat"])
-    RD._record_round(state, "blockingCount", 3)
-    assert state["rounds"]["1"] == {"vacuousSeats": ["live-seat"], "blockingCount": 3}
-
-
-def test_corrupt_resume_records_still_park_with_disclosures_present(tmp_path):
-    """The corrupt-state fail-closed path is UNCHANGED by the disclosure restore: a mangled records
-    file is `_resumeCorrupt` → cannot-certify park, never a partial restore off unreadable memory."""
-    records = tmp_path / "round-records.json"
-    records.write_text('[{"round": 1, "disclosures": {"vacuousSeats": ["x"]}')  # truncated JSON
-    state = RD.new_state(_cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert state["_resumeCorrupt"]
-    assert state["rounds"] == {}
-    receipt = RD.run_loop(_seams(), _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records)))
-    assert receipt["verdict"] == "cannot-certify"
-    assert receipt["certificationShape"] is None
-    assert not any(r["round"] == 1 for r in receipt["rounds"])
 
 
 def test_disclosure_block_survives_the_durable_skeleton(tmp_path):
@@ -4043,26 +3766,15 @@ def test_panel_round_channels_are_all_accounted_for():
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
     """The census is the whole story only if `build_receipt` and the resume both READ the constant
     rather than a hand-copied literal list — and only if every named channel is really consumed by
-    the receipt (a fossil channel would pass the census while disclosing nothing). Record-only
-    channels are exempt from the read census when they are named in
-    `RECORD_ONLY_DISCLOSURE_CHANNELS` and their values reach the receipt round entry."""
+    the receipt (a fossil channel would pass the census while disclosing nothing)."""
     tree, ast_mod = _round_driver_ast()
-    for fn in ("build_receipt", "_restore_round_disclosures"):
+    for fn in ("build_receipt",):
         names = {n.id for n in ast_mod.walk(_fn_node(tree, ast_mod, fn))
                  if isinstance(n, ast_mod.Name)}
         assert "RESUMABLE_DISCLOSURE_CHANNELS" in names, \
             "%s must read the channel set from its one home" % fn
-    record_only = set(RD.RECORD_ONLY_DISCLOSURE_CHANNELS)
-    assert record_only <= set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     src = _disclosure_channel_consumer_source()
     for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
-        if chan in record_only:
-            state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
-            state["rounds"] = {"1": {chan: _ALL_CHANNELS[chan]}}
-            receipt = RD.build_receipt(state)
-            assert _round_channels(receipt, 1).get(chan) == _ALL_CHANNELS[chan], (
-                "record-only channel %r must reach receipt rounds[]" % chan)
-            continue
         assert source_obj_accesses_key(src, "rec|rrec|declared", chan), \
             "%r is named restorable but no round record read consumes it" % chan
 
@@ -7244,41 +6956,6 @@ def test_clean_below_ceiling_still_certifies_converged(tmp_path):
     assert receipt["certificationShape"] is not None
 
 
-def test_seed_resume_at_ceiling_runs_round(tmp_path):
-    """C1: records seeding round 10 with ceiling 10 resumes and runs — no halt at seed time."""
-    records = tmp_path / "round-records.json"
-    seed = [
-        {"schemaVersion": 2, "round": 9, "kind": "baseline",
-         "dimensions": {"code-reviewer": {"status": "run", "confidence": "high",
-                                            "tier": "reviewer-deep", "findings": []}},
-         "findings": [], "coverageDecisions": []},
-    ]
-    records.write_text(json.dumps(seed))
-    state = RD.new_state(_cfg(recordsPath=str(records), maxRoundsAbsolute=10))
-    assert state.get("terminal") is None
-    assert state["round"] == 10
-    assert not any(d["kind"] == "round-ceiling" for d in state["decisions"])
-
-
-def test_seed_resume_above_ceiling_halts_without_assigning_round(tmp_path):
-    """A records-seeded resume above the ceiling halts loud; counter stays below the ceiling."""
-    records = tmp_path / "round-records.json"
-    seed = [
-        {"schemaVersion": 2, "round": 10, "kind": "baseline",
-         "dimensions": {"code-reviewer": {"status": "run", "confidence": "high",
-                                            "tier": "reviewer-deep", "findings": []}},
-         "findings": [], "coverageDecisions": []},
-    ]
-    records.write_text(json.dumps(seed))
-    state = RD.new_state(_cfg(recordsPath=str(records), maxRoundsAbsolute=10))
-    assert state["terminal"] == "halted"
-    assert state["round"] == 1
-    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
-    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "round-ceiling")
-    assert "rounds reached 10" in detail
-    assert "round 11 not begun" in detail
-
-
 def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
     """A persisted non-terminal state above the ceiling parks on cmd_next — no certification."""
     # axis: persisted state at round ceiling+1 halts on cmd_next with round-ceiling, no certification
@@ -7487,12 +7164,12 @@ def _round_counter_mutation_sites():
 
 
 def test_round_counter_mutation_sites_census():
-    """state['round'] is written only by _advance_round and _seed_resume on the advance path."""
-    # axis: only _advance_round and _seed_resume may mutate state['round'] — dict literals in new_state are construction
+    """state['round'] is written only by _advance_round on the advance path."""
+    # axis: only _advance_round may mutate state['round'] — dict literals in new_state are construction
     sites = _round_counter_mutation_sites()
     assert len(sites) >= 2, "expected at least two state['round'] mutation sites"
     writers = {func for func, _lineno in sites}
-    expected = {"_advance_round", "_seed_resume"}
+    expected = {"_advance_round"}
     extra = writers - expected
     missing = expected - writers
     assert writers == expected, (

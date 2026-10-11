@@ -802,9 +802,9 @@ from any earlier round, marked `Ruled in round N`; the routing sites (`_fold_jud
 `_fold_stall`, `_fold_audits`) do not know about it — the materializer does; history rows are keyed
 by `findingKey` (the marker the writers stamp on `judgmentDispositions` entries and audit rows;
 `session_contract.finding_identity_key` is the one derivation), never by a row's `id`. **Limitation,
-stated plainly:** the carry reads the live loop record (`state.rounds`); across a `recordsPath`
-resume the gate ruling is restored (`judgmentDispositions` is a resumable channel) and the prior
-audit is not (`audits` is not), until a disposition ledger owns a finding's history.
+stated plainly:** the carry reads the live loop record (`state.rounds`) of the current session
+only; a records file is an export and is never read back, until a disposition ledger owns a
+finding's history.
 
 ## Transition — plugin versions under a live session
 
@@ -872,7 +872,7 @@ The certification receipt is a **superset** of today's `round-receipt.json` fiel
 
 - `terminalState` — `certified`, `cap`, or `cannot-certify`
 - `terminalCause` — for a non-certified terminal, a loop reason from the closed set (`latch`,
-  `resume`, `state hash`, `detector`, `fixer cycle`) or a non-loop reason (`budget`, `open findings`);
+  `state hash`, `detector`, `fixer cycle`) or a non-loop reason (`budget`, `open findings`);
   `null` when `terminalState` is `certified`
 - `seats` — each recorded seat with `provenance` in its own field (`dispatch-observed` or
   `hand-landed`), kept separate from the certification shape
@@ -996,22 +996,20 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 **Library `recordsPath` / `round-records.json` seam (#720, #1187).** When config carries
 `recordsPath`, each in-memory ledger record is written through `review_memory.summarize_record` (a
 skeleton — no evidence bodies) and carries the declared per-round disclosure block selected by
-`_declared_disclosures` from `RESUMABLE_DISCLOSURE_CHANNELS`. The producer writes the whole outgoing
-ledger in one atomic `persist_record` call — no intermediate strict-prefix state on disk. A caller
-that already owns `round-records.json` opts out with `persistRecords: False`
-(`eval/review_loop_runner.py` is the one in-repo caller that does). A destination the producer
-cannot read and a persist it cannot complete both park `cannot-certify` rather than certifying off a
-stale file; `_seed_resume` is the read path on the next invocation. The `next --records-path` flag
-seeds `recordsPath` on fresh state only — supplying it on existing state refuses
-`records-path-not-fresh-state`. The guard is session-directory containment: a records file must
-outlive the producing session so a **fresh** session can resume from it, which a path inside that
-session can never do — so any path at or inside `$SESSION_DIR` refuses `records-path-reserved`
-before any work. On the CLI path the write rides
+`_declared_disclosures` from `RESUMABLE_DISCLOSURE_CHANNELS`. The file is an export of the session's
+ledger: the producer writes the whole outgoing ledger as `review_memory.records_bytes` in one atomic
+write, replacing whatever was at that path, and the driver never reads the file — a new session
+takes nothing from it, and a file left by another session, valid or corrupt, is simply replaced on
+the first write. A caller that already owns `round-records.json` opts out with
+`persistRecords: False`. A write the producer cannot complete parks `cannot-certify` rather than
+certifying with the export out of step. The `next --records-path` flag sets `recordsPath` on fresh
+state only — supplying it on existing state refuses `records-path-not-fresh-state`. The export is
+kept outside the session folder, so any path at or inside `$SESSION_DIR` refuses
+`records-path-reserved` before any work. On the CLI path the write rides
 `cmd_submit`'s `submit-accept` commit as a `targetKind: "round-records"` sidecar, so the file
 changes only if that commit sealed and then rolls forward with the state; recovery dispatches
-sidecar replay by `targetKind` and refuses rather than falling back. The corrupt-resume
-`cannot-certify` park fires from `_cmd_next_locked` as well as `run_loop`. The library
-`run_loop` path still calls `_persist_round_records` after every fold.
+sidecar replay by `targetKind` and refuses rather than falling back. The library
+`run_loop` path calls `_persist_round_records` after every fold.
 
 ## Invariants
 
@@ -1026,8 +1024,8 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
   clean round resets the window; criteria 1 (round cap with an open finding) and 3 are unchanged,
   and a separate hard ceiling bounds the round counter — **no session's round counter exceeds the
-  ceiling without a terminal halt**; the counter is written only by `_advance_round` and
-  `_seed_resume`, each of which asks the ceiling before writing, and a loaded persisted state above
+  ceiling without a terminal halt**; the counter is written only by `_advance_round`,
+  which asks the ceiling before writing, and a loaded persisted state above
   the ceiling is guarded at command entry too — so a round above the ceiling can never begin. Callers
   of `advance` must not treat `ok: true` from a nested `cmd_submit` as a landed fold unless
   `foldLanded` is set; the `notFolded` receipt names why. A policy **naming** a

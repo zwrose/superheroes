@@ -311,8 +311,6 @@ _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
-RECORD_ONLY_DISCLOSURE_CHANNELS = receipt_disclosures.RECORD_ONLY_DISCLOSURE_CHANNELS
-_DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
 _str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
@@ -345,7 +343,6 @@ dict_list = receipt_disclosures.dict_list
 bool_value = receipt_disclosures.bool_value
 adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
-DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
 _degraded = degraded
 _base_degraded = base_degraded
 _driver_author_family = author_family
@@ -1053,8 +1050,8 @@ def _seat_map_unavailable(state):
     UNION of (a) any round recorded ``seatMapUnavailable`` and (b) no receipt anywhere carries
     seats, so neither channel alone is load-bearing.
 
-    ``_seed_resume`` restores review records and coverage only — NOT ``seatMapReceipts`` and
-    NOT the rounds ledger. This union does NOT confer resume protection."""
+    A new session starts with empty ``rounds`` and no ``seatMapReceipts`` beyond a supplied seat
+    map; nothing is carried in from a records file."""
     for rec in (state.get("rounds") or {}).values():
         if not isinstance(rec, dict):
             continue
@@ -1106,20 +1103,16 @@ def _default_config(overrides=None):
         # like maxRounds. A named ceiling below maxRounds refuses at load; unnamed uses the flat default.
         "maxRoundsAbsolute": None,
         "dimensions": list(DIMENSIONS),
-        # Optional resume/records seam (#507 WO-D). When `recordsPath` is set the driver reads it
-        # ONCE at new_state to resume at round N+1 from the durable seeds (review_loop_plan's
-        # entry-bootstrap / _resume_round twins); a corrupt/mangled record state fails closed to a
-        # cannot-certify park. `coveragePath` seeds the accumulated coverage decisions the
-        # challenged-coverage breaker reads. Absent → a fresh round-1 run (the library-test shape).
-        # The durable producer lives in `run_loop`'s post-fold step; any future wiring of
-        # `recordsPath` into the CLI (`next`) must route the producer through `cmd_submit`'s
-        # `round_commit` submit-accept transaction rather than calling it from `_fold`, because
-        # `_fold` runs before that transaction opens.
+        # Optional records export (#507 WO-D). When `recordsPath` is set the driver writes the
+        # session's round-records ledger there after each folded round — written whole, replacing
+        # whatever was at that path, and never read back. Absent → nothing is written.
+        # The library producer lives in `run_loop`'s post-fold step; the command-line path routes
+        # the producer through `cmd_submit`'s `round_commit` submit-accept transaction rather than
+        # calling it from `_fold`, because `_fold` runs before that transaction opens.
         "recordsPath": None,
         # A caller that already owns round-records.json — e.g. a harness with its own producer —
         # sets this False; the driver then never writes that file.
         "persistRecords": True,
-        "coveragePath": None,
         # PR-mode prior review comments (a list) for the author-justification post-filter. Wired from
         # the CLI's `--prior-comments` (#507 v7); None → the filter never fires.
         "priorComments": None,
@@ -1220,125 +1213,8 @@ def new_state(config=None):
         # challenged-coverage / recurrence breaker reads, plus the accumulated coverage decisions.
         "_records": [],
         "_coverage": [],
-        "_resumeCorrupt": None,
     }
-    _seed_resume(state, cfg)
     return state
-
-
-def _seed_resume(state, cfg):
-    """Resume seam (#507 WO-D): when `recordsPath` names a durable round-records file, read it ONCE
-    and resume at round N+1 the way review_panel_shell's entry-bootstrap did. A corrupt/mangled
-    record state fails closed (flagged so run_loop parks cannot-certify). Reuses the review_loop_plan
-    twins (`entry_bootstrap`/`_resume_round`) and `review_memory.load_records_state` — no re-impl."""
-    records_path = cfg.get("recordsPath")
-    if not records_path:
-        return
-    dims = _panel_dimensions(cfg)
-    try:
-        loaded = review_memory.load_records_state(records_path, dims)
-    except (AttributeError, TypeError) as exc:
-        state["_resumeCorrupt"] = (
-            "resume state corrupt (%s) — cannot certify; a fresh full reviewer-deep round is owed"
-            % exc)
-        return
-    if not loaded.get("ok"):
-        state["_resumeCorrupt"] = (
-            "resume state %s (%s) — cannot certify; a fresh full reviewer-deep round is owed"
-            % (loaded.get("state") or "unreadable", loaded.get("reason") or "unreadable"))
-        return
-    records = [r for r in (loaded.get("records") or []) if isinstance(r, dict)]
-    # Seed the accumulated coverage decisions the challenged-coverage breaker reads: prefer the
-    # explicit coveragePath, else fold the records' own coverage decisions.
-    coverage = []
-    cov_path = cfg.get("coveragePath")
-    if cov_path and os.path.exists(cov_path):
-        try:
-            with open(cov_path, encoding="utf-8") as fh:
-                loaded_cov = json.load(fh)
-            if isinstance(loaded_cov, list):
-                coverage = [d for d in loaded_cov if isinstance(d, dict)]
-        except (OSError, ValueError):
-            coverage = []
-    if not coverage:
-        for rec in records:
-            raw_cov = rec.get("coverageDecisions")
-            if raw_cov is None:
-                continue
-            if not isinstance(raw_cov, list):
-                state["_resumeCorrupt"] = (
-                    "resume state corrupt (record round %s: coverageDecisions is not a list) — "
-                    "cannot certify; a fresh full reviewer-deep round is owed"
-                    % (rec.get("round"),))
-                return
-            for d in raw_cov:
-                if isinstance(d, dict):
-                    coverage.append(d)
-    state["_records"] = records
-    state["_coverage"] = coverage
-    _restore_round_disclosures(state, records)
-    if not records:
-        return
-    for rec in records:
-        rnd = rec.get("round")
-        if rnd is not None and review_loop_plan._round_number(rnd) is None:
-            state["_resumeCorrupt"] = (
-                "resume state corrupt (record round %s: round value is not a valid round number) — "
-                "cannot certify; a fresh full reviewer-deep round is owed"
-                % (rnd,))
-            return
-    resume_round = review_loop_plan._resume_round(records)
-    if resume_round <= 1:
-        return
-    # A qualifying full confirmation panel among the seeds counts toward the confirmation budget; a
-    # degraded (not-all-fresh-deep-high-confidence) confirmation does NOT — _confirmation_qualifies
-    # is the #167 bar, so a seeded degraded panel cannot anchor certification (a proper panel is owed).
-    qualifying = sum(1 for r in records
-                     if r.get("kind") == "confirmation" and review_loop_plan._confirmation_qualifies(r))
-    state["confirmations"] = qualifying
-    if _ceiling_blocks(state, cfg, resume_round, "resume-seed"):
-        return
-    state["round"] = resume_round
-    state["step"] = P_PANEL
-    state["fullPanelRan"] = False
-    eb = review_loop_plan.entry_bootstrap(records_path, dims)
-    owed = review_loop_plan._further_confirmation_owed(records)
-    if eb.get("ok") and eb.get("confirmationPending") and owed.get("owed"):
-        # The loop stopped mid-confirmation and a further FULL confirmation panel is still owed (the
-        # seeded panel was degraded / no qualifying panel has run) — resume by running that panel.
-        _decision(state, "resume-confirmation",
-                  "resumed with a pending confirmation and no qualifying panel — running a full "
-                  "confirmation panel (a degraded seed cannot anchor certification)")
-
-
-def _restore_round_disclosures(state, records):
-    """#720: put back the per-round DISCLOSURE channels a `recordsPath` resume would otherwise lose.
-    `build_receipt` reads them out of `state["rounds"]`, so before this a resumed run whose
-    pre-resume rounds had recorded a vacuous seat / fall-open / seat-map breach emitted
-    a terminal receipt that silently claimed LESS than the run knew.
-
-    Additive by construction: a channel is written with `setdefault`, so a live post-resume round's
-    own `_record_round` for the same round number always wins and nothing already in the round entry
-    is clobbered. Fail-closed on every edge — a record with no `disclosures` block resumes exactly as
-    before (no key is invented; absence must never read as "checked and clean"), an EMPTY channel is
-    not a disclosure and is left out, a wrong-shaped value is DROPPED while the round still resumes,
-    and a record whose round number is not an integer is skipped rather than keyed on junk."""
-    for rec in records:
-        raw = rec.get(review_memory.DISCLOSURES_FIELD)
-        if not isinstance(raw, dict):
-            continue
-        key = _round_disclosure_key(rec.get("round"))
-        if key is None:
-            continue
-        target = state["rounds"].setdefault(key, {})
-        declared = _declared_disclosures(raw)
-        for chan in RESUMABLE_DISCLOSURE_CHANNELS:
-            if chan in declared:
-                target.setdefault(chan, declared[chan])
-        if not target:
-            # Nothing survived: leave `rounds` exactly as an older (channel-less) file leaves it,
-            # so a resume never invents an empty round entry in the receipt.
-            state["rounds"].pop(key, None)
 
 
 def _finding_identity_key(finding):
@@ -1898,44 +1774,22 @@ def _seed_findings_before_record_park(state):
 def _round_records_payload(state, config):
     """The ONE producer of the outgoing round-records list (#1196 WO-B).
 
-    Returns a tagged outcome: ``nothing`` (no path, persist disabled, corrupt resume, or empty
-    outgoing), ``park`` (detail string — park receipts are verbatim), or ``ready`` (path + full
-    records list for ``records_bytes`` / ``persist_record``)."""
+    Returns a tagged outcome: ``nothing`` (no path, persist disabled, or an empty ledger) or
+    ``ready`` (path + this session's full records list for ``records_bytes``). The list is built
+    from the in-memory ledger alone; the file at ``path`` is never opened."""
     path = config.get("recordsPath")
     if not path:
         return {"outcome": "nothing"}
     if not config.get("persistRecords"):
         return {"outcome": "nothing"}
-    if state.get("_resumeCorrupt"):
-        return {"outcome": "nothing"}
 
-    try:
-        loaded = review_memory.load_records_state(path, _panel_dimensions(config))
-    except (AttributeError, TypeError) as exc:
-        _seed_findings_before_record_park(state)
-        return {
-            "outcome": "park",
-            "detail": "durable round records at %s could not be refreshed (%s) — cannot certify"
-                      % (path, exc),
-        }
-    if not loaded.get("ok"):
-        _seed_findings_before_record_park(state)
-        return {
-            "outcome": "park",
-            "detail": "durable round records at %s (%s) could not be refreshed — cannot certify"
-                      % (path, loaded.get("state") or loaded.get("reason") or "unreadable"),
-        }
-    ledger = state.get("_records") or []
-    ledger_rounds = {r.get("round") for r in ledger if isinstance(r, dict)}
-    kept = [r for r in (loaded.get("records") or [])
-            if isinstance(r, dict) and r.get("round") not in ledger_rounds]
-    outgoing = list(kept)
-    for record in ledger:
+    outgoing = []
+    for record in state.get("_records") or []:
         if not isinstance(record, dict):
             continue
         durable = review_memory.summarize_record(record)
-        # Key spelling shares `_round_disclosure_key` with `_restore_round_disclosures` —
-        # a `1.0` round must not silently persist no disclosures while the restorer keys "1".
+        # A `1.0` round must not silently persist no disclosures: the key spelling is the shared
+        # `_round_disclosure_key`.
         rkey = _round_disclosure_key(record.get("round"))
         block = _declared_disclosures(state["rounds"].get(rkey) or {}) if rkey else {}
         if block:
@@ -1944,7 +1798,8 @@ def _round_records_payload(state, config):
     outgoing.sort(key=lambda r: r.get("round") if isinstance(r.get("round"), int) else 0)
     if not outgoing:
         return {"outcome": "nothing"}
-    # Mirror ``persist_record``'s single merge so CLI-path bytes and library-path bytes agree.
+    # Single merge: when the ledger holds two records for one round the later one wins, so
+    # CLI-path bytes and library-path bytes agree.
     record = outgoing[-1]
     outgoing = [r for r in outgoing[:-1] if r.get("round") != record.get("round")]
     outgoing.append(record)
@@ -1953,37 +1808,25 @@ def _round_records_payload(state, config):
 
 
 def _persist_round_records(state, config):
-    """Keep the durable round-records file equal to the in-memory ledger, disclosures included.
+    """Keep the round-records export equal to the in-memory ledger, disclosures included.
 
-    Runs after every folded phase in `run_loop` when `recordsPath` is set. A run that could not
-    refresh or persist its disclosures must park `cannot-certify` — the degraded line in a
-    terminal receipt lives only in the current run, while the stale file is the only thing a later
-    `_seed_resume` reads, so certifying after a failed persist would recreate the quiet-evidence-loss
-    class #720 closes."""
+    Runs after every folded phase in `run_loop` when `recordsPath` is set. The file is written
+    whole in one atomic write, replacing whatever was there, and is never read. A run that could
+    not persist its disclosures must park `cannot-certify` — the degraded line in a terminal
+    receipt lives only in the current run, so certifying after a failed write would recreate the
+    quiet-evidence-loss class #720 closes."""
     payload = _round_records_payload(state, config)
     if payload["outcome"] == "nothing":
         return
-    if payload["outcome"] == "park":
-        _park_cannot_certify(state, payload["detail"])
-        return
     path = payload["path"]
-    records = payload["records"]
     try:
-        result = review_memory.persist_record(path, records[:-1], records[-1])
+        round_commit.atomic_write_bytes(path, review_memory.records_bytes(payload["records"]))
     except OSError as exc:
         _seed_findings_before_record_park(state)
         _park_cannot_certify(
             state,
             "durable round records at %s could not be persisted (%s)"
             % (path, exc))
-        return
-    if not result.get("ok"):
-        _seed_findings_before_record_park(state)
-        _park_cannot_certify(
-            state,
-            "durable round records at %s could not be persisted (%s)"
-            % (path, result.get("reason") or result.get("detail") or "write-failed"))
-        return
 
 
 def load_state(session_dir):
@@ -5130,10 +4973,9 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
         if _round_entry_key_allowed("verifyPasses", form, state):
             verify_passes = rec.get("verifyPasses")
             rd["verifyPasses"] = verify_passes if isinstance(verify_passes, list) else []
-        # The per-round disclosure channels ride their ONE home (#720) — the same set a
-        # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
-        # actually recorded. `_receipt_round_disclosures` applies the shared selection rule
-        # (`_declared_disclosures` narrowed by the form gate) — same as producer and resume.
+        # The per-round disclosure channels ride their ONE home (#720) — the same set the records
+        # writer persists. `_receipt_round_disclosures` applies the shared selection rule
+        # (`_declared_disclosures` narrowed by the form gate) — same as the producer.
         # `verifyPasses` emits above (form-gated, always-emit when permitted).
         disclosures = _receipt_round_disclosures(rec, form, state)
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
@@ -5759,10 +5601,6 @@ def run_loop(seams, config=None):
         state = new_state()
         _park_cannot_certify(state, refusal.reason)
         return _driver_receipt(state)
-    if state.get("_resumeCorrupt"):
-        # A corrupt/mangled resume state fails closed — never certify off unreadable memory.
-        _park_cannot_certify(state, state["_resumeCorrupt"])
-        return _driver_receipt(state)
     guard = 0
     try:
         while not state.get("terminal") and guard < _RUN_LOOP_GUARD:
@@ -5855,21 +5693,6 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "attempt": None, "outcome": "refused-fix-batch-cap",
                                           "reason": refusal.reason})
             return {"ok": False, "reason": refusal.reason, "value": refusal.value}
-        if state.get("_resumeCorrupt"):
-            _park_cannot_certify(state, state["_resumeCorrupt"])
-            pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
-                       "attempt": 0,
-                       "payload": {"verdict": state["terminal"],
-                                   "certification": state.get("certification")}}
-            state["pending"] = pending
-            save_state(session_dir, state)
-            _journal_append(session_dir, {"cmd": "next", "phase": P_TERMINAL,
-                                          "round": state["round"], "attempt": 0,
-                                          "outcome": "resume-corrupt-park"})
-            fail = _terminal_receipt_gate(session_dir, state)
-            if fail:
-                return _receipt_fault_response(fail)
-            return _next_response(session_dir, state, pending, "next")
     else:
         state = loaded
         if config_overrides and config_overrides.get("recordsPath") is not None:
@@ -6478,8 +6301,6 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state["lastAccepted"] = {"phase": phase, "attempt": attempt, "round": round_no,
                                      "artifactHash": art_hash}
             records_payload = _round_records_payload(state, state["config"])
-            if records_payload["outcome"] == "park":
-                _park_cannot_certify(state, records_payload["detail"])
             round_records_sidecar = None
             if records_payload["outcome"] == "ready":
                 rr_path = records_payload["path"]
@@ -11096,9 +10917,8 @@ def _dispatch(args):
                 sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-reserved",
                                              "value": args.records_path}) + "\n")
                 return 1
-            # Same fresh-state-only discipline as `--seat-map`: recordsPath is read ONCE at
-            # new_state via `_seed_resume`; a later `next` on existing state would silently ignore
-            # it (#1196).
+            # Same fresh-state-only discipline as `--seat-map`: recordsPath is taken once, when the
+            # session is minted; a later `next` on existing state would silently ignore it (#1196).
             st_ok, st = load_state(args.session_dir)
             if not (st_ok and st is None):
                 sys.stdout.write(json.dumps({"ok": False, "reason": "records-path-not-fresh-state",

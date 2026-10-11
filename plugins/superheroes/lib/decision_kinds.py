@@ -22,7 +22,6 @@ DECISION_KINDS = (
     "not-discharged",
     "panel-seat-missing",
     "receipt-missing-seat",
-    "resume-confirmation",
     "ruling-recorded",
     "round-ceiling",
     "scoped-finder-skipped",
@@ -82,7 +81,6 @@ _TERMINAL_CAUSE_TABLE = {
     ("stalled", "stall-choice"): {"kind": "loop", "reason": "latch"},
     ("stalled", "stall-menu"): {"kind": "loop", "reason": "latch"},
     (ATTESTED_VERDICT, "cannot-certify"): {"kind": "loop", "reason": "detector"},
-    ("cannot-certify", "resume-confirmation"): {"kind": "loop", "reason": "resume"},
     ("cannot-certify", "self-recovery"): {"kind": "loop", "reason": "fixer-cycle"},
 }
 

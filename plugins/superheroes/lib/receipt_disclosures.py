@@ -22,9 +22,6 @@ ROUND_ENTRY_KEY_FORMS = {
     },
 }
 
-DISCLOSE_ON_PRESENCE = ()
-
-
 def str_list(value):
     return isinstance(value, list) and all(isinstance(x, str) for x in value)
 
@@ -91,9 +88,6 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "gateGuidanceRowCarried": dict_list,
 }
 
-# Ride the receipt's per-round entries; never read into a verdict or a degraded line.
-RECORD_ONLY_DISCLOSURE_CHANNELS = ()
-
 
 def _state_version(state):
     if not isinstance(state, dict):
@@ -140,14 +134,9 @@ def declared_disclosures(entry):
         entry = {}
     out = {}
     for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
-        if chan in DISCLOSE_ON_PRESENCE:
-            if chan not in entry:
-                continue
-            value = entry.get(chan)
-        else:
-            value = entry.get(chan)
-            if not value:
-                continue
+        value = entry.get(chan)
+        if not value:
+            continue
         if not shape_ok(value):
             continue
         out[chan] = value
@@ -512,9 +501,7 @@ def build_degraded_prose(state, form, journal=None):
 __all__ = (
     "RECEIPT_FORM_CERTIFIED",
     "ROUND_ENTRY_KEY_FORMS",
-    "DISCLOSE_ON_PRESENCE",
     "RESUMABLE_DISCLOSURE_CHANNELS",
-    "RECORD_ONLY_DISCLOSURE_CHANNELS",
     "VENDOR_SOURCE_DEFAULTED",
     "str_list",
     "dict_list",
