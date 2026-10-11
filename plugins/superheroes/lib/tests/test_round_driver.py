@@ -2126,6 +2126,26 @@ def test_accepted_risk_leaving_a_critical_open_parks_and_never_converges(tmp_pat
     assert entry.get("disposition") is None
 
 
+def test_accepted_risk_with_an_ineligible_critical_sibling_parks(tmp_path):
+    """An ineligible Critical (PLAUSIBLE, or no evidence) still blocks convergence."""
+    important = {"title": "imp", "severity": "Important", "file": "d.py", "line": 2,
+                 "verdict": "CONFIRMED", "evidence": "proven"}
+    plausible_crit = {"title": "plausible-crit", "severity": "Critical", "file": "c.py",
+                      "line": 1, "verdict": "PLAUSIBLE", "evidence": "maybe"}
+    noevidence_crit = {"title": "noevidence-crit", "severity": "Critical", "file": "e.py",
+                       "line": 3, "verdict": "CONFIRMED", "evidence": None}
+    for crit in (plausible_crit, noevidence_crit):
+        state, targets = _dual_stall_target_state(important, crit)
+        assert state["_acceptRiskEligible"] is True
+        RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
+        assert state["terminal"] == "cannot-certify"
+        assert state["step"] == RD.P_TERMINAL
+        assert crit["title"] in state["certification"]["reason"]
+        ledger = _ledger_by_key(state)
+        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "out-of-scope"
+        assert ledger[RD._finding_key_of(targets[1])].get("disposition") is None
+
+
 # =============================================================================
 # confirmation economics: cap-parks-on-Critical, budget 2, re-arm
 # =============================================================================

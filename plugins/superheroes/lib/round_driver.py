@@ -5349,10 +5349,10 @@ def _fold_stall(state, config, artifact):
         for target in state.get("_stallTargets") or []:
             if not isinstance(target, dict):
                 continue
-            if not _stall_target_accept_risk_eligible(target):
-                continue
             if circuit_breaker.is_critical(target.get("severity")):
                 open_criticals.append(target.get("title") or _finding_key_of(target) or "unnamed")
+                continue
+            if not _stall_target_accept_risk_eligible(target):
                 continue
             key = _finding_key_of(target)
             if not key:
