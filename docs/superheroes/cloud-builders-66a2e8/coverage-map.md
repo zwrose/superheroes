@@ -193,3 +193,5 @@ and 5 Definition of done bullets. A script parsed every bullet of the spec, keye
 and its position, and every bullet row of the table above: each of the 66 bullets appears exactly
 once, the two split bullets each appear as exactly their two declared parts, no row names a bullet
 the spec lacks, each Definition of done bullet appears once, and every row names exactly one owner.
+
+**Coverage re-check after spec amendments 1 and 2 (advisor, 2026-10-11; owner rulings "25 c" and "27 a").** FR-1's statement and both acceptances changed wording and gained two hand steps, but no acceptance criterion was added or removed: the map still holds its bullets and rows, FR-1's rows stay C4's, and every criterion is still owned exactly once. Register R3 now records how the setup learns the environment as the owner's ruling, not a C2 decide-by. Package read invocation 2 (package-read-audit.md) re-read the touched parts and verified both fixes.
