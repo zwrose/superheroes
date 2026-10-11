@@ -453,6 +453,10 @@ def _utc_stamp(now):
     return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _parse_stamp(stamp):
+    return datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+
+
 def failed_check_path(cwd, account, root=None):
     """Where the failed-check marker for ``account`` lives: the setup record's path, beside it."""
     return cloud_setup.record_path(cwd, account, root)[:-len(".json")] + FAILED_CHECK_SUFFIX
@@ -508,12 +512,24 @@ def _write_failed_check(cwd, account, root, environment, failed_parts, now):
         return False
 
 
-def _remove_failed_check(cwd, account, root):
-    """True only when no marker remains because of this call: removed, or already missing."""
+def _remove_failed_check(cwd, account, root, started=None):
+    """True only when no marker remains because of this call: removed, or already missing. With
+    `started` (the judgment's start stamp), a marker whose failedAt is equal or later was written
+    by an overlapping judgment that failed: it stays and this returns False. An absent or damaged
+    marker, or one stamped strictly earlier, is removed."""
     try:
         with mode_registry.config_lock(cwd, root) as got:
             if not got:
                 return False
+            if started is not None:
+                marker = read_failed_check(cwd, account, root)
+                try:
+                    newer = (marker is not None and not marker.get("damaged")
+                             and _parse_stamp(marker.get("failedAt")) >= _parse_stamp(started))
+                except Exception:
+                    newer = False
+                if newer:
+                    return False
             try:
                 os.unlink(failed_check_path(cwd, account, root))
             except FileNotFoundError:
@@ -552,6 +568,7 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
     true and stays). The record is never touched
     by a failed or unread result."""
     name = _project(cwd, project_name)
+    started = _utc_stamp(now)  # the judgment's start moment, taken once, whole seconds UTC
     today = cloud_setup_text._utc_date(now)
     who = account if account is not None else cloud_setup.launching_account(env, cwd)
     obj = None
@@ -593,8 +610,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                     pass_lapses=obj["confirmation"]["passLapses"], checked_at=today.isoformat(),
                     root=root)
                 written = isinstance(got, dict) and got.get("action") in ("written", "noop")
-                # axis: a marker that cannot be removed fails the check and stays in place
-                done = written and _remove_failed_check(cwd, who, root)
+                # axis: a marker that cannot be removed fails the check and stays in place; one
+                # axis: stamped at or after this judgment's start came from an overlapping failure
+                done = written and _remove_failed_check(cwd, who, root, started)
         except Exception:
             done = False
         if not done:
