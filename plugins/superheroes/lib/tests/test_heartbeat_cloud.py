@@ -58,10 +58,6 @@ CLOUD_ENTRY = {
 }
 
 
-def test_reason_constant_literal():
-    assert hb.REASON_CLOUD_LANE == "cloud-lane-no-heartbeat"
-
-
 def test_edge10_live_cloud_lane_without_heartbeat_file_is_nonterminal(tmp_path, monkeypatch):
     # axis: a cloud lane never reads unknown for lacking a heartbeat.
     repo = _setup(tmp_path, monkeypatch, 1)

@@ -9,12 +9,18 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Launcher: cloud launch
+
+- `launch` and `compose` take `--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. A launch without `--place`, or with `--place local`, is a local launch.
+- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-head-not-on-remote` when the checkout's remote-tracking branches hold no branch that contains the commit the session would start from. It also refuses with `launch-cloud-head-not-base` when the launching checkout is not on the premise's base commit.
+- `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript to read.
+
 ### Launch ledger: cloud lanes
 
 - The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
 - `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
 - Heartbeat sweep entries gain `place`.
-- An older plugin build can still read a ledger that holds a cloud lane. It reads that lane as a local one.
+- An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
 
 ### Pilot: iPhone typing helper
 

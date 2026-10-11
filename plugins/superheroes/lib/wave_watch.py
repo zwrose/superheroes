@@ -793,12 +793,20 @@ def _parse_pr_numbers(stdout):
     return numbers
 
 
-def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
-    """Return (slug, refusal). Returns (None, None) when budget is below the poll minimum; otherwise exactly one is non-None. Never raises."""
+def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env, granted=False):
+    """Return (slug, refusal). Returns (None, None) when budget is below the poll minimum; otherwise exactly one is non-None. Never raises.
+
+    granted=True means the caller already decided a request is worth starting and
+    handed over this budget: only a spent budget is refused, and the read keeps at
+    least the poll minimum, so elapsed bookkeeping cannot flip the caller's decision.
+    """
     remaining = deadline - monotonic()
-    if remaining < _MIN_PR_POLL_SECONDS:
+    if remaining < (0.0 if granted else _MIN_PR_POLL_SECONDS) or remaining <= 0:
         return None, None
     timeout = min(30.0, remaining)
+    if granted:
+        timeout = max(_MIN_PR_POLL_SECONDS, timeout)
+        remaining = max(_MIN_PR_POLL_SECONDS, remaining)
     try:
         slug, refusal = sc.resolve_repo_slug(
             repo_root,
@@ -941,7 +949,7 @@ def _poll_open_pr_numbers(
 
 
 def _valid_issue_number(value):
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    return ll.valid_lane_issue(value)
 
 
 def _parse_activity_time(value):
@@ -961,12 +969,17 @@ def _cloud_activity_query(issues):
         parts.append(
             "i%d: issue(number: %d) { updatedAt "
             "closedByPullRequestsReferences(first: 10, includeClosedPrs: true) "
-            "{ nodes { number updatedAt headRefName } } } "
+            "{ pageInfo { hasNextPage } nodes { number updatedAt headRefName } } } "
             "b%d: refs(refPrefix: \"refs/heads/\", query: \"%d\", first: 50) "
-            "{ nodes { name target { ... on Commit { committedDate } } } } "
+            "{ pageInfo { hasNextPage } nodes { name target { ... on Commit { committedDate } } } } "
             % (number, number, number, number)
         )
     return _CLOUD_ACTIVITY_QUERY_HEAD + "".join(parts) + _CLOUD_ACTIVITY_QUERY_TAIL
+
+
+def _has_next_page(connection):
+    page_info = connection.get("pageInfo") if isinstance(connection, dict) else None
+    return isinstance(page_info, dict) and page_info.get("hasNextPage") is not False
 
 
 def _lane_activity_epoch(repository, number):
@@ -980,12 +993,15 @@ def _lane_activity_epoch(repository, number):
     pr_nodes = closing.get("nodes") if isinstance(closing, dict) else None
     if not isinstance(pr_nodes, list):
         return None
+    # A truncated page is a partial read: never let it stand for "no newer activity".
+    if _has_next_page(closing):
+        return None
     for pr_node in pr_nodes:
         if not isinstance(pr_node, dict):
             return None
         stamps.append(pr_node.get("updatedAt"))
     branch_nodes = branches.get("nodes")
-    if not isinstance(branch_nodes, list):
+    if not isinstance(branch_nodes, list) or _has_next_page(branches):
         return None
     # The refs query matches substrings, so keep only a branch carrying this issue number
     # as a whole number.
@@ -1007,26 +1023,34 @@ def _lane_activity_epoch(repository, number):
 def _fetch_cloud_activity(
     repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
 ):
-    """One GraphQL read for every issue; {issue: epoch or None}. None = unreadable. Never raises."""
+    """One GraphQL read for every issue; {issue: epoch or None}. None = unreadable. Never raises.
+
+    Returns None (not a mapping) when no request could start for lack of time budget,
+    so the caller does not cache a read that was never made.
+    """
     unreadable = {number: None for number in issues}
+    # The caller decided whether a request is worth starting and granted the budget; this
+    # reader only refuses a budget that is already spent. It never re-compares the grant
+    # against the one-request minimum, so elapsed bookkeeping cannot flip that decision.
+    if deadline - monotonic() <= 0:
+        return None
     slug = known_slug
     if slug is None:
         slug, _refusal_result = _resolve_repo_slug(
-            repo_root, deadline, monotonic, gh_run, env,
+            repo_root, deadline, monotonic, gh_run, env, granted=True,
         )
     if slug is None:
         return unreadable
     remaining = deadline - monotonic()
     if remaining <= 0:
-        return unreadable
-    timeout = min(30.0, remaining)
-    if timeout < _MIN_PR_POLL_SECONDS:
-        return unreadable
+        return None
+    # A granted request always gets at least one request's minimum (the documented overrun).
+    timeout = max(_MIN_PR_POLL_SECONDS, min(30.0, remaining))
     owner, _sep, name = slug.partition("/")
     argv = [
         "gh", "api", "graphql",
-        "-F", "owner=%s" % owner,
-        "-F", "name=%s" % name,
+        "-f", "owner=%s" % owner,
+        "-f", "name=%s" % name,
         "-f", "query=%s" % _cloud_activity_query(issues),
     ]
     try:
@@ -1085,11 +1109,21 @@ def _evaluate_cloud_activity(
             activity = _fetch_cloud_activity(
                 repo_root, issues, deadline, monotonic, gh_run, env, known_slug,
             )
-            cloud_state[0] = (read_at, activity)
+            if activity is None:
+                # Skipped for lack of budget: no request was made, so leave the cache alone.
+                activity = {number: None for number in issues}
+            else:
+                cloud_state[0] = (read_at, activity)
     now = time.time()
     stale = []
     for lid in sorted(started):
         info = started[lid]
+        # bite-axis: NO RAISE — a lane whose issue is not a usable number was never
+        # requested, so it reads as unavailable; looking it up (a list or dict is an
+        # unhashable key) must not raise.
+        if not _valid_issue_number(info.get("issue")):
+            degraded.add(DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE)
+            continue
         activity_time = activity.get(info.get("issue"))
         # bite-axis: DISCLOSURE — a read that could not be made is neither stale nor clean.
         if activity_time is None:
@@ -1853,8 +1887,23 @@ def _evaluate_tick(
         else:
             repo_slug = None
 
+        # The cloud read gets half of what is left; the stack and vet reads that
+        # follow keep the other half, so a slow cloud endpoint cannot starve them. The
+        # share never falls below one request's minimum: a supported one-second arm
+        # would otherwise halve to less than the minimum and never sample the cloud
+        # (an overrun of that minimum is the loop's documented overrun).
+        # The skip-or-start decision (any arm time left) is made here, once; the
+        # grant handed to the reader is then a budget the reader cannot disagree with.
+        cloud_now = monotonic()
+        arm_remaining = deadline - monotonic()
+        if arm_remaining <= 0:
+            cloud_deadline = cloud_now
+        else:
+            cloud_deadline = cloud_now + max(
+                arm_remaining / 2, _MIN_PR_POLL_SECONDS,
+            )
         stale_cloud_launches = _evaluate_cloud_activity(
-            repo_root, live_lanes, deadline=deadline, env=env, gh_run=gh_run,
+            repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
             known_slug=repo_slug,
         )
@@ -1975,12 +2024,15 @@ def _ceiling_timer_result(
     loop_degraded,
     passed_over,
     passed_over_count,
+    cloud_lanes=None,
 ):
     final = _event_result(
         EVENT_TIMER,
         batch_id,
         loop_degraded,
     )
+    if cloud_lanes:
+        final["cloudLanes"] = cloud_lanes
     return _loop_attach_passed_over(final, passed_over, passed_over_count)
 
 
@@ -2268,6 +2320,7 @@ def loop(
         stack_state = [None]
         pr_sampled = [False]
         cloud_state = [None]
+        last_cloud_lanes = [None]
         total_start = monotonic()
         total_deadline = (
             total_start + max_total_seconds
@@ -2290,6 +2343,7 @@ def loop(
                         loop_degraded,
                         passed_over,
                         passed_over_count,
+                        last_cloud_lanes[0],
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
@@ -2327,6 +2381,7 @@ def loop(
 
             result_degraded = set(result.get("degraded", []))
             loop_degraded.update(result_degraded)
+            last_cloud_lanes[0] = result.get("cloudLanes")
 
             if _loop_exits_on(result):
                 final = dict(result)
@@ -2374,6 +2429,7 @@ def loop(
                         loop_degraded,
                         passed_over,
                         passed_over_count,
+                        last_cloud_lanes[0],
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))

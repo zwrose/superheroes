@@ -3915,7 +3915,9 @@ def _not_slot_calibrated(monkeypatch):
     )
 
 
-def _reserve_live_lane(repo, batch_id, launch_id, slot=None, generation=None, surfaces=None):
+def _reserve_live_lane(
+    repo, batch_id, launch_id, slot=None, generation=None, surfaces=None, extra=None,
+):
     rec = {
         "event": "reserved",
         "launchId": launch_id,
@@ -3935,7 +3937,8 @@ def _reserve_live_lane(repo, batch_id, launch_id, slot=None, generation=None, su
         rec["slot"] = slot
     if generation is not None:
         rec["generation"] = generation
-    ll.reserve(repo, rec)
+    rec.update(extra or {})
+    return ll.reserve(repo, rec)
 
 
 def test_slot_gate_parallel_unslotted_refuses(tmp_path, monkeypatch):
@@ -3966,6 +3969,34 @@ def test_slot_gate_parallel_slotted_passes(tmp_path, monkeypatch):
         generation=1,
     )
     assert result["ok"] is True
+
+
+def test_slot_gate_live_cloud_sibling_needs_no_slot(tmp_path, monkeypatch):
+  # axis: a live cloud sibling (no slot by contract) does not trip the slot requirement
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    reserved = _reserve_live_lane(
+        repo, "wave-test", "cloud-sibling",
+        extra={
+            "place": ll.PLACE_CLOUD,
+            "cloudEnvironment": "env_abc123",
+            "pluginVersion": "1.2.3",
+        },
+    )
+    assert reserved["ok"] is True, reserved
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["ok"] is True, folded
+    sibling = folded["launches"]["cloud-sibling"]
+    assert sibling["batchId"] == "wave-test"
+    assert sibling["place"] == ll.PLACE_CLOUD
+    assert sibling["terminal"] is False
+    assert sibling.get("slot") is None
+    result = L.walk_preflight(
+        _all_checks(), repo, batch_id="wave-test", slot="slot-a", generation=1,
+    )
+    assert result["ok"] is True, result
 
 
 def test_slot_gate_single_lane_unslotted_passes(tmp_path, monkeypatch):
