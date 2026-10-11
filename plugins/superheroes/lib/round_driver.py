@@ -372,8 +372,9 @@ CHECKPOINT_STOP_REASONS = ("tripwire", "park", "held")
 CERTIFIED_VERDICTS = ("converged", "halted", "held", "stalled", "cannot-certify",
                       "capped-with-open-critical", "capped-with-open-blocker")
 
-# A finished session of an earlier schema version is refused by every #723 hand command under this
-# reason (an unfinished one never gets that far: the upgrade gate refuses it first).
+# A finished session of an earlier schema version is refused by every hand command that loads state
+# through `_load_driver_state` (`record-result`, `advance` and the others) under this reason (an
+# unfinished one never gets that far: the upgrade gate refuses it first).
 LEGACY_SESSION_REFUSAL = "legacy-session-use-next-submit"
 LEGACY_SESSION_REFUSAL_DETAIL = ("this session is from an earlier plugin version and has finished; "
                                  "start a fresh session")

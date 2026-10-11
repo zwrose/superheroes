@@ -1,6 +1,6 @@
 # L5 — the open-recorder sees read-and-write handles: bite-proof record
 
-Implementer-run record (#1723, layer 5, order C). Method: one targeted, reversible plant; the detector run alone by its exact node id (red); the inverse edit; the detector again (green).
+Implementer-run record (the open-recorder change). Method: one targeted, reversible plant; the detector run alone by its exact node id (red); the inverse edit; the detector again (green).
 
 ## R1 — the recorder records read-write opens
 
