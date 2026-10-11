@@ -18,7 +18,7 @@ _BANNED_LITERALS = dispatch_outcome.ALL_REASONS | dispatch_outcome.ATTRIBUTIONS
 # by test_matcher_catches_attribution_literal on synthetic source.
 _LIVE_BANNED_LITERALS = dispatch_outcome.ALL_REASONS
 _EXEMPT_MODULE = "dispatch_outcome.py"
-_REQUIRED_BASENAMES = ("engine_dispatch.py", "round_driver.py", "seat_canary.py")
+_REQUIRED_BASENAMES = ("engine_dispatch.py", "round_driver.py")
 
 
 def _lineno(source_path, node):

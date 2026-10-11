@@ -13,7 +13,6 @@ _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
-import round_certification as RC  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_contract  # noqa: E402
@@ -309,10 +308,6 @@ def test_edge4_guidance_lifts_out_of_scope(tmp_path):
     live = RD._live_finding_by_key(state, key_b)
     if isinstance(live, dict):
         assert live.get("disposition") != "out-of-scope"
-    by_key, refusal = RC._certification_findings_by_key(state)
-    assert refusal is None
-    cert = by_key.get(key_b) or {}
-    assert cert.get("disposition") != "out-of-scope"
     scheduled = {RD._fix_batch_row_key(row)
                  for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
                  if isinstance(row, dict)}
@@ -677,10 +672,8 @@ def test_receipt_parity_rulings_field(tmp_path):
         {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))["ok"]
     state = _state(session_dir)
     driver_receipt = RD.build_receipt(state, session_dir=session_dir)
-    cert_rounds = RC._build_receipt_rounds(state, RC.RECEIPT_FORM_CERTIFIED)
     rnd = str(state["round"])
     assert driver_receipt["rounds"][0].get("rulings") == state["rounds"][rnd].get("rulings")
-    assert cert_rounds[0].get("rulings") == state["rounds"][rnd].get("rulings")
 
 
 def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):

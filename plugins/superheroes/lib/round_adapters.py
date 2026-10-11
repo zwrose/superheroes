@@ -9,7 +9,7 @@ One pure function per concern, none of which mutate anything:
     payload, naming the offending field.
   * `missing_policy(phase)` — what a `seat-missing/1` envelope (or an unlanded roster seat) does
     to the fold: `seat-status` | `refuse-fold` | `fold-fail-closed`.
-  * `assemble(phase, envelopes, state, config, dispatch_manifest, canary)` — the artifact, or
+  * `assemble(phase, envelopes, state, config, dispatch_manifest)` — the artifact, or
     `(None, reason)`. NEVER raises.
 
 Design rules this module is bound by (each one is a defect class it exists to prevent):
@@ -345,41 +345,24 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
     return trusted
 
 
-def _normalize_canary(canary):
-    """(probe_list_or_None, reason_or_None). Malformed probes pass through for fold-time recording."""
-    if canary is None:
-        return None, None
-    if isinstance(canary, dict):
-        return [dict(canary)], None
-    if not isinstance(canary, list):
-        return [canary], None
-    out = []
-    for probe in canary:
-        out.append(dict(probe) if isinstance(probe, dict) else probe)
-    return out, None
-
-
 # =============================================================================================
 # assemble
 # =============================================================================================
 
-def assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+def assemble(phase, envelopes, state, config, dispatch_manifest=None,
              session_dir=None):
     """(artifact_or_None, reason_or_None). NEVER raises."""
     try:
-        return _assemble(phase, envelopes, state, config, dispatch_manifest, canary, session_dir)
+        return _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir)
     except Exception as exc:  # noqa: BLE001 — the contract is total; a crash must be a reason
         return None, "adapter-internal-error:%s:%s" % (_type_name(exc), exc)
 
 
-def _assemble(phase, envelopes, state, config, dispatch_manifest, canary, session_dir):
+def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir):
     if phase not in ADAPTER_PHASES:
         return None, "unknown-phase:%s" % _label(phase)
     if dispatch_manifest is not None and not isinstance(dispatch_manifest, dict):
         return None, "dispatch-manifest-not-a-dict:%s" % _type_name(dispatch_manifest)
-    probes, fault = _normalize_canary(canary)
-    if fault:
-        return None, fault
     roster, fault = roster_for(phase, state, config)
     if fault:
         return None, "roster-unavailable:%s" % fault
@@ -396,7 +379,7 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, canary, sessio
 
     disclosures = {}
     if phase == P_PANEL:
-        artifact = _assemble_panel(roster, indexed, state, dispatch_manifest, probes, disclosures)
+        artifact = _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures)
     elif phase == P_VERIFIERS:
         artifact = _assemble_verifiers(roster, indexed, disclosures)
     elif phase == P_AUDITS:
@@ -418,7 +401,7 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, canary, sessio
     return artifact, None
 
 
-def _assemble_panel(roster, indexed, state, dispatch_manifest, probes, disclosures):
+def _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures):
     seats = {}
     missing = []
     for dim, occurrence in _roster_slots(roster):
@@ -441,10 +424,6 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, probes, disclosur
     ran_manifest = _trusted_vendors(roster, indexed, dispatch_manifest, disclosures)
     if ran_manifest:
         artifact["ranManifest"] = ran_manifest
-    if probes is not None:
-        artifact["canaryResult"] = probes
-    else:
-        disclosures["canaryUnavailable"] = True
     if missing:
         disclosures["missingSeats"] = missing
     return artifact

@@ -19,7 +19,7 @@ Facts for the PR body:
 - Diff: `src/export.py` (+48 -6), `tests/test_export.py` (+61). Size tripwire not crossed (54 of
   estimate 90-120); deleted files: none.
 - Verify command passed; CI workflow `CI` green on head `3f9c2d7e1b4a6c8d0e2f4a6b8c0d2e4f6a8b0c2d` (pushed; remote head verified).
-- Review: one codex reviewer (gpt-6-sol), control probe engaged; 1 Minor finding (a
+- Review: one codex reviewer (gpt-6-sol), its review record shows it read the change; 1 Minor finding (a
   misleading help string), fixed in the head commit.
 - No detector added or changed. No degradations.
 - Two follow-ups: (1) the `import` command lacks the same dry-run flag (craft); (2)
