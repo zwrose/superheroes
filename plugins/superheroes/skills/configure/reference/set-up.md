@@ -4,6 +4,7 @@
 - §2 — Seed the core + the light hero layers
 - §3 — Verify command first
 - §3.5 — Who it's for, and Risk and trust — one sitting
+- §3.6 — Record that item 13 lives in Canon
 - §4 — Optional heavier heroes — provisional defaults disclose
 - §4.4 — Show-it surface — provisional default
 - §4.5 — Engine preferences — per-role defaults
@@ -173,7 +174,10 @@ the set-up output. Until risk areas are set, the review treats them as not set.
 Keep this one sitting. Ask any other question about who the project serves or what it is for here,
 together with these, and not in a later step.
 
-Then record that item 13 lives in Canon:
+## 3.6 — Record that item 13 lives in Canon
+
+Runs at set-up only, after § 3.5. View-and-tune's "Set up Risk and trust" action runs § 3.5 and
+never this step.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

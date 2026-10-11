@@ -77,7 +77,7 @@ action that owns it, leaving the rest of the calibration untouched:
   (`get --item riskAndTrust` returns `effective.riskAreas`), edit it, and write all of it back. Read
   the result the same way as the `stackingTool` write below: only `written` or `noop` means it was
   saved; report anything else to the owner with its `reason` and never work around it.
-- **Set up Risk and trust** → run the sitting in `set-up.md` § 3.5, starting from its who-it's-for
+- **Set up Risk and trust** → run the sitting in `set-up.md` § 3.5 only (not § 3.6), starting from its who-it's-for
   step. This is how an already-configured project, including one whose risk areas are not set, takes
   the sitting.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
