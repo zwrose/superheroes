@@ -81,11 +81,7 @@ __all__ = (
     "EXECUTION_EVIDENCE_RUN_KIND_FIELD",
     "EXECUTION_EVIDENCE_BINDING_FIELDS",
     "runner_channel_vendor",
-    "RE_EMIT_CMD",
     "RULE_CMD",
-    "ORDERS_SUPERSEDED_OUTCOME",
-    "journal_is_orders_superseded",
-    "journal_is_re_emit_orders_superseded",
 )
 
 RAISED_ROUND_FIELD = "raisedRound"
@@ -182,24 +178,9 @@ REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
-RE_EMIT_CMD = "re-emit"
 RULE_CMD = "rule"
-ORDERS_SUPERSEDED_OUTCOME = "orders-superseded"
-_JOURNAL_ORDERS_SUPERSEDED_CMDS = frozenset((RE_EMIT_CMD,))
 META_FILE = "meta.json"
 
-
-def journal_is_orders_superseded(event):
-    """True when a journal row commits an orders-superseded protocol (re-emit or rule)."""
-    if not isinstance(event, dict):
-        return False
-    return (event.get("cmd") in _JOURNAL_ORDERS_SUPERSEDED_CMDS
-            and event.get("outcome") == ORDERS_SUPERSEDED_OUTCOME)
-
-
-def journal_is_re_emit_orders_superseded(event):
-    """Backward-compatible alias for :func:`journal_is_orders_superseded`."""
-    return journal_is_orders_superseded(event)
 CHANNEL_FILE = "file"
 CHANNEL_STDOUT = "stdout"
 SEAT_MISSING_SCHEMA = "seat-missing/1"

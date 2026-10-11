@@ -301,16 +301,15 @@ def test_a_run_directory_binds_only_by_the_runner_nonce(tmp_path):
     assert [v["runDir"] for v in shared["reviewers"]] == [None, None]
 
 
-def test_superseded_attempts_are_not_reviewers(tmp_path):
+def test_two_attempts_of_one_slot_keep_the_highest(tmp_path):
     s = Session(tmp_path)
-    s.seat("code-reviewer", attempt=0).seat("security-reviewer", attempt=0)
-    s.rows.append({"outcome": "orders-superseded", "cmd": "re-emit", "phase": "dispatch-panel", "round": 1, "attempt": 0})
+    s.seat("code-reviewer", attempt=0)
     s.seat("code-reviewer", attempt=1, head=HEAD)
     s.seat("test-reviewer", attempt=0).seat("test-reviewer", attempt=1, head=HEAD)
     s.rows.append({"outcome": "recorded", "cmd": "record-result", "phase": "dispatch-panel", "round": 1, "seat": 5})
     s.rows.append({"outcome": "recorded", "cmd": "record-result", "phase": None, "round": 1, "seat": "x"})
     account = rs.account_from_session(s.save(), extras())
-    # bites on: an attempt the orders superseded still counting, or two attempts of one slot counting twice
+    # bites on: the lower attempt of a slot winning over the higher one, or two attempts of one slot counting twice
     assert [(v["name"], v["commit"]) for v in account["reviewers"]] == [
         ("code-reviewer (round 1)", HEAD), ("test-reviewer (round 1)", HEAD)]
 

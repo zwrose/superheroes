@@ -78,11 +78,6 @@ CITED_HEAD_SOURCES = (CITED_HEAD_SOURCE_RUNNER_VIEW, CITED_HEAD_SOURCE_ORDER_ANC
 PROVENANCE_HAND_LANDED = "hand-landed"
 PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
 
-RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = "record-attempt-predates-relocation"
-RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = (
-    "the orders for this attempt were emitted before the session moved checkouts and "
-    "may already have run in the old checkout; run `re-emit` and dispatch the new attempt"
-)
 AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
 AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
 AUDIT_PROVENANCE_MIXED = "mixed-evidence"
@@ -727,7 +722,7 @@ def _probe_store_entry(spath):
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0,
                      seat_result_schema=None, envelope_override=None,
-                     evidence_minted=False, cited_head_source=None, fenced=False):
+                     evidence_minted=False, cited_head_source=None):
     """Every check `ingest_landing` performs, with NO write.
 
     When ``envelope_override`` is a dict, that dict is validated in place of reading the
@@ -902,17 +897,12 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         "storageKey": skey,
         "occurrence": occurrence,
     }
-    # axis: a landing for an attempt emitted before relocation is refused unless runner evidence minted it
-    if fenced and not evidence_minted:
-        return None, _refuse(RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
-                             message=RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL)
     return plan, None
 
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                    supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                   seat_result_schema=None, evidence_minted=False, cited_head_source=None,
-                   fenced=False):
+                   seat_result_schema=None, evidence_minted=False, cited_head_source=None):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -948,8 +938,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
                                      anchor=anchor, occurrence=occurrence,
                                      seat_result_schema=seat_result_schema,
                                      evidence_minted=evidence_minted,
-                                     cited_head_source=cited_head_source,
-                                     fenced=fenced)
+                                     cited_head_source=cited_head_source)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -960,7 +949,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
 
 
 def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None,
-                  seat_result_schema=None, evidence_minted=False, fenced=False):
+                  seat_result_schema=None, evidence_minted=False):
     """Ingest every unclaimed landing file for `phase` at `current_attempt`.
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
@@ -1018,11 +1007,6 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                                        message=("store entry %r is present but its target does not "
                                                 "resolve" % spath)))
                 continue
-        if fenced:
-            results.append(_refuse(RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
-                                   seatKey=seat_key, storageKey=skey, occurrence=occurrence,
-                                   message=RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL))
-            continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
                              occurrence=occurrence, seat_result_schema=seat_result_schema,

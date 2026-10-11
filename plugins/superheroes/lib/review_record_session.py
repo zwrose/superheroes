@@ -94,8 +94,7 @@ def _check_extras(x):
 
 
 def _slots(rows):
-    """Active review slots, {(phase, round, seat, occurrence): (attempt, row)}: superseded attempts dropped, highest attempt kept."""
-    gone = {(r.get("phase"), r.get("round"), r.get("attempt")) for r in rows if sc.journal_is_orders_superseded(r)}
+    """Active review slots, {(phase, round, seat, occurrence): (attempt, row)}: highest attempt kept."""
     out = {}
     for r in rows:
         phase, seat, rnd, att = r.get("phase"), r.get("seat"), r.get("round"), r.get("attempt")
@@ -104,7 +103,7 @@ def _slots(rows):
         if sc.run_kind_for_phase(phase) != sc.RUN_KIND_REVIEW or not (_int(rnd) and _int(att)):
             continue
         key = (phase, rnd, seat, r.get("occurrence", 0))
-        if (phase, rnd, att) not in gone and (key not in out or att >= out[key][0]):
+        if key not in out or att >= out[key][0]:
             out[key] = (att, r)
     return out
 

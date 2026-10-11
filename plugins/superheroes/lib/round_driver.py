@@ -79,7 +79,6 @@ import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
 import review_round_policy  # noqa: E402
-import record_paths  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
@@ -180,9 +179,7 @@ SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
-RE_EMIT_CMD = session_contract.RE_EMIT_CMD
 RULE_CMD = session_contract.RULE_CMD
-ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
 RULING_KINDS = frozenset(("out-of-scope", "guidance"))
 RULING_FILE_UNREADABLE = "ruling-file-unreadable"
 RULING_FILE_SHAPE = "ruling-file-shape"
@@ -425,13 +422,10 @@ STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
 
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
-RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
-RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
-RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+JOURNAL_DAMAGED_CAUSE = "journal-damaged"
 AUDITOR_UNSEATABLE_CAUSE = "auditor-unseatable"
-RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
-    "relocation evidence in the journal is unreadable or malformed; "
-    "cannot determine whether this attempt predates a checkout move"
+JOURNAL_DAMAGED_DETAIL = (
+    "the session journal has an unreadable or malformed row; the result was not recorded"
 )
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
@@ -663,7 +657,7 @@ def read_journal(session_dir, *, report_lossy=False):
                 try:
                     out.append(json.loads(line))
                 except ValueError:
-                    # axis: a lossy journal read flags unparseable lines for relocation evidence
+                    # axis: a lossy journal read flags unparseable lines
                     if report_lossy:
                         lossy = True
                     continue
@@ -678,9 +672,6 @@ def read_journal(session_dir, *, report_lossy=False):
     if report_lossy:
         return out, lossy
     return out
-
-
-_RELOCATION_EVIDENCE_INDETERMINATE = object()
 
 
 def read_fault_markers(session_dir):
@@ -6072,382 +6063,6 @@ def _next_response(session_dir, state, pending, cmd):
     }
 
 
-def _serialize_meta_json(meta_obj):
-    return (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8")
-
-
-def _relocate_target_marker_content(session_dir, target_root, branch):
-    return {
-        "schema": _REVIEW_SESSION_SCHEMA,
-        "sessionDir": os.path.realpath(session_dir),
-        "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "repoRoot": os.path.realpath(target_root),
-        "branch": branch,
-    }
-
-
-def _relocate_read_target_marker(marker_path):
-    try:
-        with open(marker_path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:
-        return None
-
-
-def _relocate_refresh_target_marker(marker_path, marker_content):
-    payload = _canonical(marker_content).encode("utf-8")
-    round_commit.atomic_write_bytes(marker_path, payload)
-
-
-def _relocate_release_target_marker(marker_path, session_rp):
-    """Remove the target marker when it still names this session."""
-    marker = _relocate_read_target_marker(marker_path)
-    if isinstance(marker, dict) and marker.get("sessionDir") == session_rp:
-        try:
-            os.remove(marker_path)
-        except Exception:
-            pass
-
-
-def _relocate_claim_target_marker(marker_path, marker_content, session_rp):
-    """Atomically claim the target checkout marker. Returns (ok, created, reason)."""
-    payload = _canonical(marker_content).encode("utf-8")
-    if os.path.lexists(marker_path):
-        marker = _relocate_read_target_marker(marker_path)
-        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
-            return False, False, "foreign"
-        try:
-            _relocate_refresh_target_marker(marker_path, marker_content)
-        except OSError:
-            return False, False, "unwritable"
-        return True, False, None
-    parent = os.path.dirname(marker_path)
-    if parent:
-        try:
-            os.makedirs(parent, exist_ok=True)
-        except OSError:
-            return False, False, "unwritable"
-    tmp = marker_path + ".claim.tmp"
-    try:
-        with open(tmp, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.link(tmp, marker_path)
-        except FileExistsError:
-            marker = _relocate_read_target_marker(marker_path)
-            if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
-                return False, False, "foreign"
-            try:
-                _relocate_refresh_target_marker(marker_path, marker_content)
-            except OSError:
-                return False, False, "unwritable"
-            return True, False, None
-        return True, True, None
-    except OSError:
-        return False, False, "unwritable"
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-
-def _relocate_recorded_head(meta, state):
-    """Resolve the recorded head for relocate checks — (head_sha, ambiguous)."""
-    cfg = state.get("config") if isinstance(state, dict) else None
-    cfg = cfg if isinstance(cfg, dict) else {}
-    meta_key = meta.get(FIX_FOLD_HEAD_KEY) if isinstance(meta, dict) else None
-    cfg_key = cfg.get(FIX_FOLD_HEAD_KEY)
-    meta_has = bool(isinstance(meta_key, str) and meta_key)
-    cfg_has = bool(isinstance(cfg_key, str) and cfg_key)
-    if meta_has != cfg_has:
-        return None, True
-    if meta_has and cfg_has and meta_key != cfg_key:
-        return None, True
-    if meta_has:
-        return meta_key, False
-    head = meta.get("headSha") if isinstance(meta, dict) else None
-    if not isinstance(head, str) or not head:
-        return None, True
-    return head, False
-
-
-def _relocate_path_inside(child, parent):
-    try:
-        return (os.path.commonpath([os.path.realpath(child), os.path.realpath(parent)])
-                == os.path.realpath(parent))
-    except ValueError:
-        return False
-
-
-def _retire_relocate_marker(old_root, session_dir):
-    try:
-        if not isinstance(old_root, str) or not old_root or not os.path.exists(old_root):
-            return "absent"
-        gitdir = store_core.get_worktree_gitdir(old_root)
-    except store_core.RepoRootUnavailable:
-        return "absent"
-    except Exception:
-        return "failed"
-    marker_path = _review_session_marker_path(gitdir)
-    if not os.path.isfile(marker_path):
-        return "absent"
-    tmp = marker_path + ".retire.tmp"
-    session_rp = os.path.realpath(session_dir)
-    try:
-        os.rename(marker_path, tmp)
-    except OSError:
-        return "failed"
-    try:
-        with open(tmp, encoding="utf-8") as fh:
-            marker = json.load(fh)
-        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
-            try:
-                os.link(tmp, marker_path)
-            except FileExistsError:
-                pass
-            os.unlink(tmp)
-            return "not-ours"
-        os.unlink(tmp)
-        return "retired"
-    except Exception:
-        try:
-            if not os.path.lexists(marker_path):
-                os.link(tmp, marker_path)
-        except Exception:
-            pass
-        try:
-            os.unlink(tmp)
-        except Exception:
-            pass
-        return "failed"
-
-
-def _relocate_try_repair_marker_retirement(session_dir, session_rp, target_toplevel):
-    """Repair a crash between session commit and old-marker retirement."""
-    for row in reversed(read_journal(session_dir)):
-        if row.get("outcome") != "relocated":
-            continue
-        if row.get("newRoot") != target_toplevel:
-            continue
-        old_root = row.get("oldRoot")
-        if not isinstance(old_root, str) or not old_root:
-            return None
-        try:
-            target_gitdir = store_core.get_worktree_gitdir(target_toplevel)
-        except Exception:
-            return None
-        marker_path = _review_session_marker_path(target_gitdir)
-        marker = _relocate_read_target_marker(marker_path)
-        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
-            return None
-        marker_outcome = _retire_relocate_marker(old_root, session_dir)
-        _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
-                                      "result": marker_outcome, "phase": None, "round": None,
-                                      "attempt": None})
-        return {"ok": True, "repaired": True, "markerRetirement": marker_outcome,
-                "relocated": {k: row.get(k) for k in (
-                    "oldRoot", "newRoot", "oldBranch", "newBranch", "sessionDir",
-                    "head", "base", "by", "at", "rewritten")}}
-    return None
-
-
-def cmd_relocate(session_dir, target_root, by):
-    """Relocate a parked review session to a different checkout at the same head and base."""
-    try:
-        with round_records.session_lock(session_dir):
-            refusal = _commit_recover_or_refuse(session_dir, "relocate")
-            if refusal is not None:
-                return refusal
-            return _cmd_relocate_locked(session_dir, target_root, by)
-    except round_records.SessionLockHeld as held:
-        return _lock_held_refusal(session_dir, "relocate", held)
-
-
-def _cmd_relocate_locked(session_dir, target_root, by):
-    ok_meta, meta_or_detail = review_base_guard.read_meta(session_dir)
-    if not ok_meta:
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
-                           detail=meta_or_detail)
-    meta = meta_or_detail
-    old_root = meta.get("repoRoot")
-    if not isinstance(old_root, str) or not old_root or not os.path.isabs(old_root):
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
-                           detail="repoRoot")
-    old_root_rp = os.path.realpath(old_root)
-    session_dir_meta = meta.get("sessionDir")
-    if (not isinstance(session_dir_meta, str) or not session_dir_meta
-            or not session_dir_meta.strip()):
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
-                           detail="sessionDir")
-    if not os.path.isabs(session_dir_meta):
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
-                           detail="sessionDir")
-    ok_state, loaded = load_state(session_dir)
-    if not ok_state or loaded is None:
-        detail = loaded if not ok_state else "loop-state.json missing — call next first"
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable", detail=detail)
-    state = loaded
-    if state.get("terminal"):
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-terminal")
-    pending = state.get("pending")
-    if isinstance(pending, dict) and pending.get("phase") == P_FIXER:
-        return _refuse_cmd(session_dir, "relocate", "relocate-inflight-fixer")
-    try:
-        resolved_root = store_core.repo_root(target_root)
-    except store_core.RepoRootUnavailable as exc:
-        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
-                           detail=str(exc))
-    if not resolved_root:
-        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
-                           detail="git rev-parse --show-toplevel failed")
-    target_toplevel = os.path.realpath(resolved_root)
-    if target_toplevel != os.path.realpath(target_root):
-        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
-                           detail="target_root is not a git toplevel")
-    if os.path.realpath(meta["sessionDir"]) != os.path.realpath(session_dir):
-        return _refuse_cmd(session_dir, "relocate", "relocate-session-dir-moved",
-                           detail="recorded %r, invoked from %r"
-                           % (meta["sessionDir"], session_dir))
-    if target_toplevel == old_root_rp:
-        repaired = _relocate_try_repair_marker_retirement(
-            session_dir, os.path.realpath(session_dir), target_toplevel)
-        if repaired is not None:
-            return repaired
-        return _refuse_cmd(session_dir, "relocate", "relocate-same-checkout")
-    cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
-    base_repo = cfg.get("baseRepo")
-    if not isinstance(base_repo, str) or not base_repo:
-        return _refuse_cmd(session_dir, "relocate", "relocate-repo-unverifiable")
-    live_origin = review_base_guard.origin_repo(target_toplevel)
-    if live_origin is None or live_origin.casefold() != base_repo.casefold():
-        return _refuse_cmd(session_dir, "relocate", "relocate-repo-mismatch",
-                           detail="origin %r does not match recorded baseRepo %r"
-                           % (live_origin, base_repo))
-    meta_base = meta.get("baseRef")
-    cfg_base = cfg.get("baseRef")
-    if meta_base != cfg_base:
-        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
-                           detail="meta.baseRef does not match config.baseRef")
-    resolved_pin, pin_reason = review_base_guard.resolve_commit_reason(
-        meta_base, target_toplevel, store_core.run_git)
-    if resolved_pin is None:
-        detail = ("baseRef does not resolve in target: %s" % pin_reason
-                  if pin_reason else "baseRef does not resolve in target")
-        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch", detail=detail)
-    if not isinstance(meta_base, str) or resolved_pin != meta_base.lower():
-        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
-                           detail="resolved pin %r does not match meta.baseRef %r"
-                           % (resolved_pin, meta_base))
-    recorded_head, head_ambiguous = _relocate_recorded_head(meta, state)
-    if head_ambiguous:
-        return _refuse_cmd(session_dir, "relocate", "relocate-head-ambiguous")
-    head_res = store_core.run_git_result(target_toplevel, "rev-parse", "HEAD")
-    if head_res.status != store_core.GIT_OK or not head_res.out:
-        return _refuse_cmd(session_dir, "relocate", "relocate-head-mismatch",
-                           detail="HEAD unresolvable in target")
-    if head_res.out.lower() != recorded_head.lower():
-        return _refuse_cmd(session_dir, "relocate", "relocate-head-mismatch",
-                           detail="target HEAD %r does not match recorded head %r"
-                           % (head_res.out, recorded_head))
-    records_path = cfg.get("recordsPath")
-    if isinstance(records_path, str):
-        if _relocate_path_inside(records_path, old_root_rp):
-            return _refuse_cmd(session_dir, "relocate", "relocate-records-path-bound",
-                               detail="recordsPath lies inside old repo root")
-    old_branch = meta.get("branch")
-    if not isinstance(old_branch, str):
-        old_branch_res = store_core.run_git_result(old_root_rp, "rev-parse", "--abbrev-ref", "HEAD")
-        old_branch = (old_branch_res.out if old_branch_res.status == store_core.GIT_OK
-                      else None)
-    branch_res = store_core.run_git_result(target_toplevel, "rev-parse", "--abbrev-ref", "HEAD")
-    new_branch = branch_res.out if branch_res.status == store_core.GIT_OK else "HEAD"
-    rewritten = []
-    new_meta = dict(meta)
-    new_meta["repoRoot"] = target_toplevel
-    new_meta["branch"] = new_branch
-    rewritten.append("meta.repoRoot")
-    rewritten.append("meta.branch")
-    new_state = json.loads(_canonical(state))
-    new_cfg = new_state.get("config") if isinstance(new_state.get("config"), dict) else {}
-    if "repoRoot" in new_cfg:
-        new_cfg["repoRoot"] = target_toplevel
-        new_state["config"] = new_cfg
-        rewritten.append("state.config.repoRoot")
-    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    session_rp = os.path.realpath(session_dir)
-    try:
-        target_gitdir = store_core.get_worktree_gitdir(target_toplevel)
-    except Exception as exc:
-        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
-                           detail=str(exc))
-    target_marker_path = _review_session_marker_path(target_gitdir)
-    if new_branch == "HEAD":
-        return _refuse_cmd(session_dir, "relocate", "relocate-target-detached")
-    marker_content = _relocate_target_marker_content(session_rp, target_toplevel, new_branch)
-    claimed, marker_created, claim_reason = _relocate_claim_target_marker(
-        target_marker_path, marker_content, session_rp)
-    if not claimed:
-        if claim_reason == "foreign":
-            marker = _relocate_read_target_marker(target_marker_path)
-            detail = ("marker sessionDir %r != %r"
-                      % (marker.get("sessionDir") if isinstance(marker, dict) else marker,
-                         session_rp))
-            return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-foreign",
-                               detail=detail)
-        return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-unwritable")
-    journal_fields = {
-        "oldRoot": old_root_rp,
-        "newRoot": target_toplevel,
-        "oldBranch": old_branch,
-        "newBranch": new_branch,
-        "sessionDir": session_rp,
-        "head": recorded_head,
-        "base": resolved_pin,
-        "by": by,
-        "at": at,
-        "rewritten": sorted(rewritten),
-    }
-    journal_entry = _journal_entry_for_commit(session_dir, "relocate", "relocated", **journal_fields)
-    try:
-        c = round_commit.begin(session_dir, "relocate")
-        c.add_replace_file(os.path.join(session_dir, round_records.META_FILE),
-                           _serialize_meta_json(new_meta))
-        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
-                           _canonical(new_state).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        if marker_created and exc.reason != "commit-cleanup-failed":
-            _relocate_release_target_marker(target_marker_path, session_rp)
-        if exc.reason == "commit-cleanup-failed":
-            marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
-            _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
-                                          "result": marker_outcome, "phase": None, "round": None,
-                                          "attempt": None})
-        return _commit_refused_response(session_dir, "relocate", exc)
-    marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
-    _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
-                                  "result": marker_outcome, "phase": None, "round": None,
-                                  "attempt": None})
-    relocated = dict(journal_fields)
-    return {"ok": True, "relocated": relocated, "markerRetirement": marker_outcome}
-
-
-def cmd_re_emit(session_dir, by):
-    """Re-emit a stale pending dispatch order at the current head as a new attempt."""
-    try:
-        with round_records.session_lock(session_dir):
-            refusal = _commit_recover_or_refuse(session_dir, "re-emit")
-            if refusal is not None:
-                return refusal
-            return _cmd_re_emit_locked(session_dir, by)
-    except round_records.SessionLockHeld as held:
-        return _lock_held_refusal(session_dir, "re-emit", held)
-
-
 def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
     for event in read_journal(session_dir):
         if event.get("outcome") != "orders-emitted":
@@ -6458,114 +6073,16 @@ def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
     return False
 
 
-def _relocation_after_emission(journal, rnd, phase, attempt):
-    """First qualifying relocated row after the attempt's last orders-emitted.
-
-    Returns the relocation row, ``None`` when no qualifying move exists, or
-    ``_RELOCATION_EVIDENCE_INDETERMINATE`` when a relocated row is present but
-    unreadable — callers must refuse rather than treat indeterminate as absent."""
-    last_emit_idx = None
-    for idx, event in enumerate(journal):
-        # axis: a non-object journal row makes relocation evidence indeterminate
-        if not isinstance(event, dict):
-            return _RELOCATION_EVIDENCE_INDETERMINATE
-        if (event.get("outcome") == "orders-emitted"
-                and event.get("round") == rnd and event.get("phase") == phase
-                and event.get("attempt") == attempt):
-            last_emit_idx = idx
-    # axis: a dispatch attempt with no emission row counts as stale when any move exists (fail closed)
-    start = 0 if last_emit_idx is None else last_emit_idx + 1
-    for event in journal[start:]:
-        if event.get("outcome") != "relocated":
-            continue
-        old_root = event.get("oldRoot")
-        new_root = event.get("newRoot")
-        if not isinstance(old_root, str) or not isinstance(new_root, str):
-            return _RELOCATION_EVIDENCE_INDETERMINATE
-        if os.path.realpath(old_root) != os.path.realpath(new_root):
-            return event
-    return None
-
-
-def _journal_has_relocated_row(journal):
-    return any(isinstance(event, dict) and event.get("outcome") == "relocated" for event in journal)
-
-
-def _relocation_lookup(session_dir, rnd, phase, attempt):
-    """Tri-state relocation evidence for fence callers: row, absent, or indeterminate."""
+def _journal_damaged(session_dir):
+    """True when the session journal has an unreadable or malformed row — callers must refuse."""
     journal, lossy = read_journal(session_dir, report_lossy=True)
-    if lossy:
-        return _RELOCATION_EVIDENCE_INDETERMINATE
-    result = _relocation_after_emission(journal, rnd, phase, attempt)
-    if result is _RELOCATION_EVIDENCE_INDETERMINATE:
-        return result
-    # axis: a journal-fault marker makes relocation evidence indeterminate when a move was recorded
-    if _journal_faulted(session_dir) and _journal_has_relocated_row(journal):
-        return _RELOCATION_EVIDENCE_INDETERMINATE
-    return result
+    return lossy or any(not isinstance(event, dict) for event in journal)
 
 
-def _refuse_relocation_evidence_indeterminate(session_dir, cmd, **kwargs):
-    return _refuse_cmd(session_dir, cmd, RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
-                       detail=RELOCATION_EVIDENCE_INDETERMINATE_DETAIL, **kwargs)
+def _refuse_journal_damaged(session_dir, cmd, **kwargs):
+    return _refuse_cmd(session_dir, cmd, JOURNAL_DAMAGED_CAUSE,
+                       detail=JOURNAL_DAMAGED_DETAIL, **kwargs)
 
-
-def _re_emit_recorded_slots(journal, rnd, phase, attempt):
-    slots = set()
-    for event in journal:
-        if event.get("outcome") != "recorded":
-            continue
-        ident = event.get("recordIdentity")
-        if isinstance(ident, dict):
-            if (event.get("round") == rnd and ident.get("phase") == phase
-                    and ident.get("attempt") == attempt):
-                seat = ident.get("seat") or event.get("seat") or "unknown"
-                slots.add((seat, ident.get("occurrence", 0)))
-        elif (event.get("round") == rnd and event.get("phase") == phase
-              and event.get("attempt") == attempt):
-            seat = event.get("seat") or "unknown"
-            slots.add((seat, event.get("occurrence", 0)))
-    return slots
-
-
-def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
-    return sorted(_slot_label(seat, occurrence)
-                  for seat, occurrence in _re_emit_recorded_slots(journal, rnd, phase, attempt))
-
-
-def _re_emit_blocking_result_names(session_dir, journal, rnd, phase, attempt, roster):
-    # axis: a landing or bare entry for an unrecorded old-attempt slot, or one that cannot be checked, blocks re-emit
-    recorded = _re_emit_recorded_slots(journal, rnd, phase, attempt)
-    names = []
-    for seat_key, occurrence in round_records.roster_slots(roster):
-        if (seat_key, occurrence) in recorded:
-            continue
-        skey = round_records.storage_key(seat_key, occurrence)
-        landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
-        bare = record_paths.bare_payload_path(session_dir, rnd, phase, skey, attempt)
-        if record_paths.landing_entry_present(landing):
-            names.append("landing:%s" % skey)
-        if record_paths.landing_entry_present(bare):
-            names.append("bare:%s" % skey)
-    return names
-
-
-def _re_emit_completed_for_attempt(journal, rnd, phase, attempt):
-    """Return (superseded_attempt, superseded_row) when re-emit already committed for ``attempt``."""
-    superseded_row = None
-    for event in journal:
-        if (session_contract.journal_is_re_emit_orders_superseded(event)
-                and event.get("round") == rnd and event.get("phase") == phase
-                and event.get("newAttempt") == attempt):
-            superseded_row = event
-    if superseded_row is None:
-        return None
-    for event in journal:
-        if (event.get("cmd") == RE_EMIT_CMD and event.get("outcome") == "orders-emitted"
-                and event.get("round") == rnd and event.get("phase") == phase
-                and event.get("attempt") == attempt):
-            return superseded_row.get("attempt"), superseded_row
-    return None
 
 
 def _row_matches_ruling_id(row, ruling_id):
@@ -6725,54 +6242,6 @@ def _fix_batch_file_sha256(session_dir, rnd, state):
         raise ValueError("order-render-refused:fix-batch-unreadable")
 
 
-def _supersede_pending_dispatch_attempt(session_dir, state, by, journal_cmd, pending,
-                                        superseded_fields_extra=None):
-    """Caller must refuse when the pending attempt already has recorded seat results."""
-    phase = pending.get("phase")
-    rnd = pending.get("round")
-    old_attempt = pending.get("attempt")
-    old_roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, old_attempt)
-    if roster_refusal is not None:
-        return roster_refusal
-    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
-    if anchor is None:
-        return None
-    new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
-    state["pending"] = dict(pending, attempt=new_attempt)
-    roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, new_attempt)
-    if roster_refusal is not None:
-        return roster_refusal
-    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    superseded_fields = {
-        "phase": phase, "round": rnd, "attempt": old_attempt, "newAttempt": new_attempt,
-        "supersededManifestSha256": anchor.get("manifestSha256"),
-        "supersededOrderSha256": anchor.get("orders"),
-        "by": by, "at": at,
-    }
-    if isinstance(superseded_fields_extra, dict):
-        superseded_fields.update(superseded_fields_extra)
-    superseded_row = _journal_entry_for_commit(
-        session_dir, journal_cmd, ORDERS_SUPERSEDED_OUTCOME, **superseded_fields)
-    try:
-        _emit_orders_manifest(
-            session_dir, state, rnd, phase, new_attempt, roster,
-            journal_cmd=journal_cmd, pending_payload=state["pending"].get("payload"),
-            seat_map=_effective_seat_map(state),
-            extra_journal_entries=[superseded_row])
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, journal_cmd, exc, phase=phase,
-                                        rnd=rnd, attempt=new_attempt)
-    except AuditorUnseatable as exc:
-        return _refuse_cmd(session_dir, journal_cmd, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
-                           rnd=rnd, attempt=new_attempt,
-                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
-                           detail=exc.detail)
-    except ValueError as exc:
-        return _refuse_cmd(session_dir, journal_cmd, "order-render-refused", phase=phase,
-                           rnd=rnd, attempt=new_attempt, detail=str(exc))
-    return {"superseded": {"attempt": old_attempt, "manifestSha256": anchor.get("manifestSha256")}}
-
-
 def cmd_rule(session_dir, ruling_file, by):
     try:
         with round_records.session_lock(session_dir):
@@ -6927,124 +6396,6 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     if (isinstance(pending_after, dict) and pending_after.get("action")
             and not state.get("terminal")):
         response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
-    return response
-
-
-def _cmd_re_emit_locked(session_dir, by):
-    ok, state = load_state(session_dir)
-    if not ok or state is None:
-        detail = state if not ok else "no state"
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-session-unreadable", detail=detail)
-
-    if state.get("terminal"):
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
-    pending = state.get("pending")
-    if not isinstance(pending, dict):
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
-    phase = pending.get("phase")
-    if not isinstance(phase, str) or not phase.startswith("dispatch-"):
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
-    rnd = pending.get("round")
-    old_attempt = pending.get("attempt")
-
-    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, RE_EMIT_CMD)
-    if refusal is not None:
-        return refusal
-
-    relocation = _relocation_lookup(session_dir, rnd, phase, old_attempt)
-    if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
-        return _refuse_relocation_evidence_indeterminate(
-            session_dir, "re-emit", phase=phase, rnd=rnd, attempt=old_attempt)
-
-    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
-    if anchor is None or not _journal_has_orders_emitted(session_dir, rnd, phase, old_attempt):
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-anchor",
-                           phase=phase, rnd=rnd, attempt=old_attempt)
-
-    cfg = state.get("config") or {}
-    meta = _session_meta(session_dir)
-    repo_root = cfg.get("repoRoot") or meta.get("repoRoot")
-    if not isinstance(repo_root, str) or not repo_root:
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
-                           detail="session repo root is unset")
-    head_res = store_core.run_git_result(repo_root, "rev-parse", "HEAD")
-    if (head_res.status in (store_core.GIT_UNAVAILABLE, store_core.GIT_DECLINED)
-            or not head_res.out):
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
-                           detail="HEAD unresolvable in session repo root")
-
-    live_head = head_res.out
-    anchor_head = anchor.get("headSha")
-    if not isinstance(anchor_head, str) or not anchor_head:
-        anchor_head = _session_certified_head(session_dir, state)
-    if not isinstance(anchor_head, str) or not anchor_head:
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
-                           detail="no headSha on anchor and no session certified head")
-
-    if anchor_head.lower() != live_head.lower():
-        return _refuse_cmd(
-            session_dir, "re-emit", "re-emit-head-moved",
-            anchorHead=anchor_head, liveHead=live_head,
-            detail=("the head moved outside the loop; a seat recorded at the live head "
-                    "cannot certify while the session's recorded head is the old one; "
-                    "re-emit does not move the session's head"))
-
-    journal = read_journal(session_dir)
-    if relocation is None:
-        completed = _re_emit_completed_for_attempt(journal, rnd, phase, old_attempt)
-        if completed is not None:
-            superseded_attempt, superseded_row = completed
-            anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
-            response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
-            if not response.get("ok"):
-                return response
-            response["superseded"] = {
-                "attempt": superseded_attempt,
-                "manifestSha256": ((anchor or {}).get("manifestSha256")
-                                     or superseded_row.get("supersededManifestSha256")),
-            }
-            return response
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-not-stale",
-                           phase=phase, rnd=rnd, attempt=old_attempt)
-
-    old_roster, roster_refusal = _roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
-    if roster_refusal is not None:
-        return roster_refusal
-
-    result_names = _re_emit_blocking_result_names(
-        session_dir, journal, rnd, phase, old_attempt, old_roster)
-    if result_names:
-        return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
-                           phase=phase, rnd=rnd, attempt=old_attempt, names=result_names)
-
-    relocation_fields = {
-        "oldRoot": relocation.get("oldRoot"),
-        "newRoot": relocation.get("newRoot"),
-        "oldBranch": relocation.get("oldBranch"),
-        "newBranch": relocation.get("newBranch"),
-        "sessionDir": relocation.get("sessionDir"),
-        "at": relocation.get("at"),
-    }
-    superseded_fields_extra = {
-        "head": live_head,
-        "relocation": relocation_fields,
-    }
-    recorded_labels = _re_emit_recorded_seat_labels(journal, rnd, phase, old_attempt)
-    if recorded_labels:
-        superseded_fields_extra["supersededRecords"] = recorded_labels
-    superseded_out = _supersede_pending_dispatch_attempt(
-        session_dir, state, by, RE_EMIT_CMD, pending, superseded_fields_extra)
-    if isinstance(superseded_out, dict) and not superseded_out.get("ok", True):
-        return superseded_out
-
-    save_state(session_dir, state)
-    response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
-    if not response.get("ok"):
-        return response
-    response["superseded"] = superseded_out.get("superseded") or {
-        "attempt": old_attempt,
-        "manifestSha256": anchor.get("manifestSha256"),
-    }
     return response
 
 
@@ -7405,20 +6756,13 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "outcome": "echo-mismatch"})
         return {"ok": False, "reason": "phase/attempt echo does not match the pending step"}
     if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
-        # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
-        relocation = _relocation_lookup(session_dir, pending.get("round"), phase, attempt)
-        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+        # axis: a hand submit of a dispatch phase over a damaged journal is refused; the advance-driven fold is not
+        if _journal_damaged(session_dir):
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
-                                          "outcome": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE})
-            return {"ok": False, "reason": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
-                    "detail": RELOCATION_EVIDENCE_INDETERMINATE_DETAIL}
-        if relocation is not None:
-            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
-                                          "round": pending.get("round"), "attempt": attempt,
-                                          "outcome": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE})
-            return {"ok": False, "reason": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
-                    "detail": RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL}
+                                          "outcome": JOURNAL_DAMAGED_CAUSE})
+            return {"ok": False, "reason": JOURNAL_DAMAGED_CAUSE,
+                    "detail": JOURNAL_DAMAGED_DETAIL}
     # The state-hash echo is the anti-stale/fork fence — REQUIRED (#507 v13). A first-time fold with
     # no hash is refused (a missing hash must never fold fail-open); exact replays are already
     # returned as duplicates above, before this point.
@@ -7998,7 +7342,7 @@ def _max_used_attempt(session_dir, rnd, phase):
     """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries only.
 
     The durable seat store is excluded: it records landings, not acceptances, so counting it
-    would advance a re-emitted unaccepted wave and orphan its recorded seats. A lost journal
+    would advance past an unaccepted wave and orphan its recorded seats. A lost journal
     entry therefore surfaces as a loud landing collision at record time rather than silent
     orphaning (#1107)."""
     return _journal_max_attempt(session_dir, rnd, phase)
@@ -9834,21 +9178,17 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
-    relocation_fenced = False
-    if isinstance(phase, str) and phase.startswith("dispatch-"):
-        relocation = _relocation_lookup(session_dir, rnd, phase, cur_attempt)
-        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
-            return _refuse_relocation_evidence_indeterminate(
-                session_dir, "record-result", phase=phase, rnd=rnd, attempt=cur_attempt,
-                seat=_slot_label(seat, occurrence))
-        relocation_fenced = relocation is not None
+    # axis: a record-result over a damaged journal is refused before it stores a seat record
+    if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
+        return _refuse_journal_damaged(
+            session_dir, "record-result", phase=phase, rnd=rnd, attempt=cur_attempt,
+            seat=_slot_label(seat, occurrence))
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
         seat_result_schema=seat_schema,
         envelope_override=assembled,
-        evidence_minted=assembled is not None,
-        fenced=relocation_fenced)
+        evidence_minted=assembled is not None)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -9929,14 +9269,9 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if isinstance(detail, round_commit.CommitRefused):
             return _commit_refused_response(session_dir, cmd, detail, phase=phase, rnd=rnd,
                                           attempt=attempt, seat=seat_key)
-    fenced = False
-    if isinstance(phase, str) and phase.startswith("dispatch-"):
-        # axis: a sweep or advance that would ingest a landing for an attempt emitted before the move is refused; one with nothing to ingest is not
-        relocation_fence = _relocation_lookup(session_dir, rnd, phase, attempt)
-        if relocation_fence is _RELOCATION_EVIDENCE_INDETERMINATE:
-            return _refuse_relocation_evidence_indeterminate(
-                session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
-        fenced = relocation_fence is not None
+    # axis: a sweep over a damaged journal is refused before it ingests any landing
+    if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
+        return _refuse_journal_damaged(session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -9964,8 +9299,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                            attempt=attempt)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor,
-                                          seat_result_schema=seat_schema,
-                                          fenced=fenced)
+                                          seat_result_schema=seat_schema)
     recorded = []
     stale_strays = []
     for result in results:
@@ -10873,11 +10207,10 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
-    if isinstance(phase, str) and phase.startswith("dispatch-"):
-        relocation = _relocation_lookup(session_dir, rnd, phase, attempt)
-        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
-            return _refuse_relocation_evidence_indeterminate(
-                session_dir, "advance", phase=phase, rnd=rnd, attempt=attempt)
+    # axis: an advance over a damaged journal is refused before it folds anything
+    if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
+        return _refuse_journal_damaged(session_dir, "advance", phase=phase, rnd=rnd,
+                                       attempt=attempt)
     anchor = _orders_anchor(state, session_dir, rnd, phase, attempt)
 
     # 1. reconcile the two-commit window. THE STORE FILE IS AUTHORITATIVE.
@@ -11599,15 +10932,6 @@ def build_parser():
     cli_contract.add_argument(pc, "--session-dir", contract="existing-directory", required=True)
     pc.add_argument("--stop-reason", required=True, choices=list(CHECKPOINT_STOP_REASONS))
 
-    prl = sub.add_parser("relocate")
-    cli_contract.add_argument(prl, "--session-dir", contract="existing-directory", required=True)
-    cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
-    cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
-
-    pre = sub.add_parser("re-emit")
-    cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
-    cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
-
     pru = sub.add_parser("rule")
     cli_contract.add_argument(pru, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pru, "--ruling-file", contract="free-text", required=True,
@@ -11799,14 +11123,6 @@ def _dispatch(args):
         out = cmd_attest(args.session_dir, args.failure, args.note)
     elif args.cmd == "checkpoint":
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
-    elif args.cmd == "relocate":
-        out = cmd_relocate(args.session_dir, args.repo_root, args.by)
-        sys.stdout.write(json.dumps(out) + "\n")
-        return 1 if not out.get("ok") else 0
-    elif args.cmd == "re-emit":
-        out = cmd_re_emit(args.session_dir, args.by)
-        sys.stdout.write(json.dumps(out) + "\n")
-        return 1 if not out.get("ok") else 0
     elif args.cmd == "rule":
         out = cmd_rule(args.session_dir, args.ruling_file, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
