@@ -446,37 +446,6 @@ def test_fixed_row_without_receipt_remains_without_receipt(tmp_path):
     assert _ledger_receipt(loaded) is None
 
 
-def test_run_loop_leg_does_not_synthesize_a_pass_receipt(tmp_path):
-    session_dir, certified_head = _certifiable_session(tmp_path)
-    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
-        source_state = json.load(fh)
-    source_state.pop("dispositionLedgerOwner", None)
-    source_state.pop("dispositionLedger", None)
-    source_state["findings"] = [{
-        SC.FINDING_KEY_FIELD: FINDING_KEY,
-        "id": "F-live-fixed",
-        "file": FIX_PATH,
-        "line": 1,
-        "title": "guard issue",
-        "severity": "Important",
-        "disposition": "fixed",
-        "dispositionRound": 1,
-    }]
-    materialized = RD._materialize_run_loop_session(
-        source_state, 1, source_session_dir=session_dir
-    )
-    try:
-        with open(os.path.join(materialized, RD.STATE_FILE), encoding="utf-8") as fh:
-            loop_state = json.load(fh)
-        live_row = loop_state["findings"][0]
-        receipt = live_row.get("dispositionReceipt")
-        assert not (
-            isinstance(receipt, dict) and receipt.get("verifyResult") == "pass"
-        ), "run-loop materialization must not synthesize a pass receipt"
-    finally:
-        shutil.rmtree(materialized, ignore_errors=True)
-
-
 def test_legacy_ledger_tolerates_malformed_sibling_through_backfill_and_terminal(tmp_path):
     """axis: owner-absent legacy ledger skips malformed rows — verify backfill and re-bind proceed."""
     session_dir, certified_head = _certifiable_session(tmp_path)

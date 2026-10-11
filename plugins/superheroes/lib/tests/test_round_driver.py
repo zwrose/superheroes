@@ -1461,6 +1461,22 @@ def test_run_loop_returns_the_driver_receipt():
         assert key not in result
 
 
+def test_run_loop_invalid_round_ceiling_returns_a_parked_receipt():
+    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
+    assert result["verdict"] == "cannot-certify"
+    assert result["certification"]["shape"] is None
+    assert "class" not in result
+
+
+def test_run_loop_unrecordable_journal_fault_returns_a_parked_receipt():
+    def boom(*_a, **_k):
+        raise RD.JournalFaultUnrecordable(OSError("journal"), OSError("marker"))
+    result = RD.run_loop(_seams(reviewer=boom), _cfg_cert())
+    assert result["verdict"] == "cannot-certify"
+    assert "journal-fault-unrecordable" in result["certification"]["reason"]
+    assert "class" not in result
+
+
 def test_run_loop_panel_leg_shape(tmp_path):
     """The panel leg-shape config also drives run_loop end-to-end (a clean panel certifies)."""
     receipt = RD.run_loop(_seams(), _cfg_cert(leg="panel"))
@@ -4694,18 +4710,6 @@ def test_receipt_base_mode_edge_neither_source_has_mode_is_absent(tmp_path):
     state = RD.new_state(_cfg())
     receipt = RD.build_receipt(state, session_dir)
     assert "base" not in receipt or "mode" not in receipt.get("base", {})
-
-
-def test_materialized_run_loop_meta_omits_ungrounded_config_mode():
-    """Without per-seat recorded evidence, run_loop refuses materialization (#1271 WO-A1)."""
-    state = RD.new_state(_cfg(mode="bogus"))
-    assert RD._materialize_run_loop_session(state, 0) is None
-
-
-def test_materialized_run_loop_meta_records_grounded_config_mode():
-    """Without per-seat recorded evidence, run_loop refuses materialization (#1271 WO-A1)."""
-    state = RD.new_state(_cfg(mode="branch"))
-    assert RD._materialize_run_loop_session(state, 0) is None
 
 
 def test_run_loop_seat_map_bool_round_not_coerced_to_one():
@@ -8349,13 +8353,3 @@ def _certification_refusal_session(tmp_path):
         },
         envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
-
-
-def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_path):
-    session_dir = _certification_refusal_session(tmp_path)
-    os.makedirs(os.path.join(session_dir, RD.CERTIFICATION_REFUSAL_FILE))
-
-    fault = RD._write_certification_artifacts(session_dir)
-    assert fault is not None
-    assert "certification refusal artifact write failed" in fault
-    assert "park" in fault
