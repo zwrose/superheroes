@@ -1314,6 +1314,37 @@ def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(tmp_path, mo
     assert _signal.getsignal(_signal.SIGTERM) is before
 
 
+def test_a_sigterm_landing_during_the_cleanup_does_not_cut_the_group_kill_short(
+    tmp_path, monkeypatch,
+):
+    # axis: a launcher cancelled while the cleanup is under way still ends the group it started
+    import os as _os
+    import signal as _signal
+
+    real_killpg = _os.killpg
+    signalled = []
+
+    def sigterm_then_killpg(pid, sig):
+        if sig == _signal.SIGKILL and not signalled:
+            signalled.append(pid)
+            _os.kill(_os.getpid(), _signal.SIGTERM)
+        return real_killpg(pid, sig)
+
+    monkeypatch.setattr(L.os, "killpg", sigterm_then_killpg)
+    before = _signal.getsignal(_signal.SIGTERM)
+    result = L._default_cloud_spawn(
+        ["sh", "-c", "sleep 30"], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 1,
+    )
+    monkeypatch.undo()
+    assert len(signalled) == 1
+    assert result["timedOut"] is True
+    assert result["rc"] is not None
+    with pytest.raises(ProcessLookupError):
+        _os.killpg(signalled[0], 0)
+    assert result["readError"] == "_LauncherTerminated"
+    assert _signal.getsignal(_signal.SIGTERM) is before
+
+
 def _flaky_started_appends(monkeypatch, failures):
     """The first `failures` tries of a `started` append fail; the count of tries made."""
     real_append = ll.append

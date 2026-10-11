@@ -1320,14 +1320,13 @@ class _LauncherTerminated(Exception):
 
 
 def _make_terminate_handler(state):
-    """A SIGTERM handler that holds the signal until the child exists, then raises.
+    """A SIGTERM handler that records the signal in `state["pending"]` and never raises.
 
-    Before the child is started and held, a raise would lose the only handle on its process group;
-    so until `state["armed"]` is set the handler only records `state["pending"]`.
+    A raise from a handler lands wherever the launcher happens to be: before the child is in hand
+    it would lose the only handle on its process group, and inside the cleanup it would cut the
+    group kill short. So the handler only records, and the read loop is what acts on the record.
     """
     def handler(signum, frame):
-        if state["armed"]:
-            raise _LauncherTerminated()
         state["pending"] = True
     return handler
 
@@ -1346,12 +1345,13 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     exception's class name) beside the output captured so far.
     """
     master, slave = pty.openpty()
-    term_state = {"armed": False, "pending": False}
+    term_state = {"pending": False}
     previous_term = None
     try:
         # axis: a launcher cancelled at any point from child creation through cleanup still ends the
-        # group it started — the handler is installed before the child exists, holds a SIGTERM that
-        # lands before the child is in hand, and raises it the moment the cleanup below can run.
+        # group it started — the handler is installed before the child exists and only records the
+        # SIGTERM; the waits below check the record between short slices, and the cleanup, which no
+        # handler can interrupt, runs its group kill and reap to the end.
         try:
             previous_term = signal.signal(
                 signal.SIGTERM, _make_terminate_handler(term_state),
@@ -1382,11 +1382,10 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
         read_error = None
         try:
             try:
-                term_state["armed"] = True
-                if term_state["pending"]:
-                    raise _LauncherTerminated()
                 deadline = time.monotonic() + timeout
                 while True:
+                    if term_state["pending"]:
+                        raise _LauncherTerminated()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         timed_out = True
@@ -1403,10 +1402,19 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                     elif proc.poll() is not None:
                         break
                 if not timed_out:
-                    try:
-                        proc.wait(timeout=max(0.1, deadline - time.monotonic()))
-                    except subprocess.TimeoutExpired:
-                        timed_out = True
+                    wait_until = max(deadline, time.monotonic() + 0.1)
+                    while True:
+                        if term_state["pending"]:
+                            raise _LauncherTerminated()
+                        remaining = wait_until - time.monotonic()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        try:
+                            proc.wait(timeout=min(remaining, 0.25))
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
             except Exception as exc:
                 read_error = type(exc).__name__
         finally:
@@ -1424,6 +1432,9 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                 pass
             except Exception as exc:
                 read_error = read_error or type(exc).__name__
+        if term_state["pending"]:
+            # A SIGTERM that landed after the waits ended (during the cleanup) is still reported.
+            read_error = read_error or _LauncherTerminated.__name__
         raw = b"".join(chunks)
         try:
             with open(log_path, "wb") as fh:
