@@ -88,7 +88,7 @@ conformance probe once per dispatchable engine before any builder launches.
 | `/superheroes:showrunner` | Run the advisor session for this project — route work, vet PRs, coordinate releases. |
 | `/superheroes:showrunner-handoff` | Hand the advisor seat over deliberately before this session goes dark. |
 | `/superheroes:showrunner-resume` | Pick the advisor seat back up from durable state in a new or restarted session. |
-| `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
+| `/superheroes:checkpoint` | Works in any session, charter or not: freshen live state, save the checkpoint notes, and emit a ready-to-paste `/compact` command. Where mods are present the superheroes mod steers every compaction automatically from those notes; on hosts without mods the PreCompact fallback steers it and the manual paste is the floor. |
 | `/superheroes:adopt-version` | Take up a newly installed superheroes version in this live seat — diff, re-read what changed, run the upgrade checklist, and brief the owner — with no handoff. Works in any charter seat. |
 | `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in two batches with the blocking ones first. |
 
@@ -104,7 +104,7 @@ finding dispositioned in the PR body, and hands back a **ready PR**. It **never 
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:workhorse` | Build a routed issue and take it to a ready-for-review PR. |
-| `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
+| `/superheroes:checkpoint` | Works in any session, charter or not: freshen live state, save the checkpoint notes, and emit a ready-to-paste `/compact` command. Where mods are present the superheroes mod steers every compaction automatically from those notes; on hosts without mods the PreCompact fallback steers it and the manual paste is the floor. |
 
 ## Detective — the diagnosis session
 
