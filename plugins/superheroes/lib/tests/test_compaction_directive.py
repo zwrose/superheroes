@@ -159,6 +159,73 @@ def test_find_transcript_returns_existing_match(tmp_path):
     assert cd.find_transcript("../x", env) is None
 
 
+# ------------------------------------- a relative CLAUDE_CONFIG_DIR resolves against the session cwd
+def _rel_env(tmp_path):
+    return {"HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": "cfg"}
+
+
+def _session_and_elsewhere(tmp_path, monkeypatch):
+    """A session cwd that is NOT the process cwd; returns (session cwd, its checkpoint dir)."""
+    session = tmp_path / "session"
+    elsewhere = tmp_path / "elsewhere"
+    session.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    return str(session), os.path.join(str(session), "cfg", "superheroes", "checkpoints")
+
+
+def test_relative_override_resolves_against_session_cwd(tmp_path, monkeypatch):
+    session, base = _session_and_elsewhere(tmp_path, monkeypatch)
+    env = _rel_env(tmp_path)
+    assert cd.checkpoint_dir(env, cwd=session) == base
+    assert cd.checkpoint_path(SID, env, cwd=session) == os.path.join(base, SID + ".md")
+    assert cd.delivered_marker_path(SID, env, cwd=session) == os.path.join(base, SID + ".delivered")
+
+
+def test_relative_override_notes_and_marker_land_under_session_cwd(tmp_path, monkeypatch):
+    session, base = _session_and_elsewhere(tmp_path, monkeypatch)
+    env = _rel_env(tmp_path)
+    notes = cd.save_notes(SID, "keep this", env, cwd=session)
+    marker = cd.mark_delivered(SID, env, cwd=session)
+    assert notes == os.path.join(base, SID + ".md") and os.path.isfile(notes)
+    assert marker == os.path.join(base, SID + ".delivered") and os.path.isfile(marker)
+    assert cd.read_notes(SID, env, cwd=session)[0] == "keep this"
+    assert cd.read_notes(SID, env)[0] == ""            # no cwd: today's behaviour, unresolvable
+    assert cd.delivered_recently(SID, env, cwd=session) is True
+    assert cd.delivered_recently(SID, env) is False
+    assert cd.consume_delivered(SID, env, cwd=session) is True
+    assert not os.path.exists(marker)
+    assert not os.path.exists(os.path.join(os.getcwd(), "cfg"))
+
+
+def test_relative_override_find_transcript_uses_session_cwd(tmp_path, monkeypatch):
+    session, _ = _session_and_elsewhere(tmp_path, monkeypatch)
+    env = _rel_env(tmp_path)
+    hit = os.path.join(session, "cfg", "projects", "-proj-a", SID + ".jsonl")
+    _touch(hit)
+    assert cd.find_transcript(SID, env, cwd=session) == hit
+    assert cd.find_transcript(SID, env) is None
+
+
+def test_absolute_override_ignores_session_cwd(tmp_path, monkeypatch):
+    session, _ = _session_and_elsewhere(tmp_path, monkeypatch)
+    env = _env(tmp_path)
+    base = os.path.join(str(tmp_path / "cfg"), "superheroes", "checkpoints")
+    assert cd.checkpoint_dir(env, cwd=session) == base == cd.checkpoint_dir(env)
+    assert cd.checkpoint_path(SID, env, cwd=session) == cd.checkpoint_path(SID, env)
+
+
+@pytest.mark.parametrize("cwd", [None, "", "session", "./session", 7])
+def test_relative_override_with_unusable_cwd_yields_none(tmp_path, cwd):
+    env = _rel_env(tmp_path)
+    assert cd.checkpoint_dir(env, cwd=cwd) is None
+    assert cd.checkpoint_path(SID, env, cwd=cwd) is None
+    assert cd.delivered_marker_path(SID, env, cwd=cwd) is None
+    assert cd.find_transcript(SID, env, cwd=cwd) is None
+    assert cd.save_notes(SID, "x", env, cwd=cwd) is None
+    assert cd.mark_delivered(SID, env, cwd=cwd) is None
+
+
 # ---------------------------------------------------------------- read_notes
 def test_read_notes_absent_is_empty(tmp_path):
     assert cd.read_notes(SID, _env(tmp_path)) == ("", None)
@@ -308,7 +375,7 @@ def test_cli_refuses_invalid_session_id(tmp_path, verb, bad):
 
 @pytest.mark.parametrize("verb", ["path", "instructions"])
 def test_cli_refuses_when_config_dir_unresolved(tmp_path, verb):
-    env = {"PATH": os.environ.get("PATH", ""), "CLAUDE_CONFIG_DIR": "relative/dir"}
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": "relative/home"}   # no override, HOME not absolute
     r = subprocess.run([sys.executable, "-B", _SCRIPT, verb, "--session-id", SID], env=env,
                        capture_output=True, text=True, timeout=20, cwd=str(tmp_path))
     assert r.returncode == 1
@@ -485,3 +552,41 @@ def test_cli_mark_failed_write_leaves_no_marker(tmp_path, monkeypatch):
 def test_cli_mark_refuses_an_invalid_session_id(tmp_path):
     code, out, _ = _run(tmp_path, "mark", "--session-id", "../x")
     assert code == 1 and out == {"ok": False, "reason": "session-id-invalid"}
+
+
+# ------------------------------------- the CLI resolves a relative override against its process cwd
+def _run_in(cwd, env_extra, *args, stdin=None):
+    env = {"PATH": os.environ.get("PATH", "")}
+    env.update(env_extra)
+    r = subprocess.run([sys.executable, "-B", _SCRIPT] + list(args), env=env, input=stdin,
+                       capture_output=True, text=True, timeout=20, cwd=str(cwd))
+    return r.returncode, (json.loads(r.stdout) if r.stdout.strip() else None), r
+
+
+def test_cli_relative_override_resolves_under_process_cwd(tmp_path):
+    session = tmp_path / "session"
+    session.mkdir()
+    env = _rel_env(tmp_path)
+    base = os.path.join(str(session), "cfg", "superheroes", "checkpoints")
+    code, out, _ = _run_in(session, env, "path", "--session-id", SID)
+    assert code == 0
+    assert out == {"ok": True, "path": os.path.join(base, SID + ".md"),
+                   "markerPath": os.path.join(base, SID + ".delivered")}
+    code, saved, _ = _run_in(session, env, "save", "--session-id", SID, stdin="cli notes")
+    assert code == 0 and saved == {"ok": True, "path": os.path.join(base, SID + ".md")}
+    code, marked, _ = _run_in(session, env, "mark", "--session-id", SID)
+    assert code == 0 and marked == {"ok": True, "path": os.path.join(base, SID + ".delivered")}
+    code, out, _ = _run_in(session, env, "instructions", "--session-id", SID)
+    assert code == 0 and out["notesFound"] is True
+    assert out["notesPath"] == os.path.join(base, SID + ".md")
+    assert out["markerPath"] == os.path.join(base, SID + ".delivered")
+    assert not os.path.exists(str(tmp_path / "cfg"))
+
+
+def test_cli_absolute_override_unaffected_by_process_cwd(tmp_path):
+    session = tmp_path / "session"
+    session.mkdir()
+    base = os.path.join(str(tmp_path / "cfg"), "superheroes", "checkpoints")
+    code, out, _ = _run_in(session, {"HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+                           "path", "--session-id", SID)
+    assert code == 0 and out["path"] == os.path.join(base, SID + ".md")

@@ -618,7 +618,8 @@ def test_checkpoint_file_record_absent_for_invalid_session_id(tmp_path, _cfg, ba
 
 
 def test_checkpoint_file_record_absent_when_config_dir_unresolvable(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/dir")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", "relative/home")        # no override, HOME not absolute
     out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", session_id=_SID)
     assert "### Checkpoint file" not in out
 
@@ -673,3 +674,39 @@ def test_assemble_without_source_omits_charter_recovery(tmp_path, monkeypatch):
 def test_charter_recovery_never_raises_on_garbage_transcript():
     assert sc.charter_recovery(None, "compact", _PLUGIN_ROOT) == ""
     assert sc.charter_recovery("/nonexistent/transcript.jsonl", "compact", _PLUGIN_ROOT) == ""
+
+
+# ------------------------------------- a relative CLAUDE_CONFIG_DIR resolves against assemble's cwd
+def test_relative_override_checkpoint_file_resolves_against_assemble_cwd(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    session = tmp_path / "session"
+    elsewhere = tmp_path / "elsewhere"
+    session.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "cfg")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    want = os.path.join(str(session), "cfg", "superheroes", "checkpoints", _SID + ".md")
+
+    out = sc.assemble(str(session), None, _PLUGIN_ROOT, "claude", session_id=_SID)
+    assert "### Checkpoint file\nThis session's checkpoint notes file: %s " % want in out
+
+    compact = sc.assemble(str(session), None, _PLUGIN_ROOT, "claude", source="compact",
+                          session_id=_SID)
+    recovery = compact.split("### Compaction recovery", 1)[1].split("\n### ", 1)[0]
+    assert want in recovery
+
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    charter = sc.assemble(str(session), str(path), _PLUGIN_ROOT, "claude", source="compact",
+                          session_id=_SID)
+    assert want in charter.split("### Charter recovery", 1)[1].split("\n### ", 1)[0]
+
+
+def test_absolute_override_checkpoint_file_unaffected_by_assemble_cwd(tmp_path, _cfg):
+    session = tmp_path / "session"
+    session.mkdir()
+    out = sc.assemble(str(session), None, _PLUGIN_ROOT, "claude", session_id=_SID)
+    assert "This session's checkpoint notes file: %s " % _cfg in out
+
