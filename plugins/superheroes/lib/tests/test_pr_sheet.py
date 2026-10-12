@@ -305,6 +305,21 @@ def test_cli_writes_the_sheet_and_prints_the_receipt(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8")) == built(BIG)
 
 
+def test_a_failed_write_leaves_the_earlier_sheet_intact(tmp_path, monkeypatch):
+    # Axis: when the replace fails, an earlier sheet at --out is untouched and no temp file is left behind.
+    path = tmp_path / "sheet.json"
+    path.write_text("earlier sheet", encoding="utf-8")
+
+    def boom(*_args):
+        raise OSError("boom")
+
+    monkeypatch.setattr(pr_sheet.os, "replace", boom)
+    with pytest.raises(OSError):
+        pr_sheet._write_replacing(str(path), "new")
+    assert path.read_text(encoding="utf-8") == "earlier sheet"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 @pytest.mark.parametrize("what", ["bad-input", "missing-record"])
 def test_cli_refuses_and_writes_nothing(tmp_path, what):
     # Axis: a refusal exits 1, prints ok false with its problems, and leaves --out absent.

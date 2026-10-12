@@ -42,7 +42,6 @@ import os
 import pathlib
 import re
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -379,21 +378,14 @@ def _load(path, problems):
 
 
 def _write_replacing(out, text):
-    """Write UTF-8 text to a temp file beside out, then replace out, so a failed write leaves any earlier sheet intact."""
-    directory = os.path.dirname(os.path.abspath(out))
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".pr-sheet.", suffix=".tmp")
+    """Write beside out, then replace it, so a failed write leaves an earlier sheet intact."""
+    tmp = f"{out}.{os.getpid()}.tmp"
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
+        pathlib.Path(tmp).write_text(text, encoding="utf-8")
         os.replace(tmp, out)
-    except BaseException:
-        try:
+    finally:
+        if os.path.exists(tmp):
             os.unlink(tmp)
-        except OSError:
-            pass
-        raise
 
 
 def main(argv=None):
