@@ -484,8 +484,7 @@ def _base_off_the_remote(monkeypatch, world):
 @pytest.mark.parametrize("cloud_kwargs,prepare,reason", [
     ({"raises": OSError("no platform")}, _terminalization_fails, "terminalization-failed:fixture"),
     ({"result": "not a spawn result"}, None, "cloud-spawn-result-invalid"),
-    ({}, _base_off_the_remote, "launch-cloud-base-not-on-remote"),
-], ids=["terminalization-failed", "spawn-result-invalid", "other-refusal"])
+], ids=["terminalization-failed", "spawn-result-invalid"])
 def test_no_other_cloud_result_falls_back(
     tmp_path, monkeypatch, capsys, machine, cloud_kwargs, prepare, reason,
 ):
@@ -501,6 +500,52 @@ def test_no_other_cloud_result_falls_back(
     assert result["placeCall"]["place"] == "cloud"
     assert machine.calls == []
     assert len([r for r in _records(world.repo, "reserved")]) == 1
+
+
+def _remote_not_asked(monkeypatch, world):
+    monkeypatch.setattr(L, "_base_on_remote_fn", lambda *args, **kwargs: None)
+
+
+@pytest.mark.parametrize("prepare,reason,need,words", [
+    (_remote_not_asked, "unreachable", None, UNREACHABLE_WORDS),
+    (_base_off_the_remote, "needs", "its base commit",
+     "It needs its base commit, which only your machine has."),
+], ids=["remote-unchecked", "base-not-on-remote"])
+def test_a_base_refusal_before_the_cloud_command_runs_the_build_locally(
+    tmp_path, monkeypatch, capsys, machine, prepare, reason, need, words,
+):
+    # axis: a refusal that ended the cloud attempt before any command ran leaves no session, so the build runs here
+    world = _world(tmp_path, monkeypatch)
+    cloud_calls = _cloud(monkeypatch)
+    prepare(monkeypatch, world)
+    code, result = _launch(world, capsys, 282)
+
+    assert code == 0, result
+    assert result["fellBack"] is True
+    assert result["cloudAttempt"]["reason"].startswith("launch-cloud-base-")
+    call = result["placeCall"]
+    assert (call["place"], call["reason"], call["need"]) == ("local", reason, need)
+    assert LP.reason_text(call) == words
+    assert cloud_calls == [] and len(machine.calls) == 1
+
+
+@pytest.mark.parametrize("prepare", [_remote_not_asked, _base_off_the_remote],
+                         ids=["remote-unchecked", "base-not-on-remote"])
+def test_a_base_refusal_whose_lane_could_not_be_ended_does_not_fall_back(
+    tmp_path, monkeypatch, capsys, machine, prepare,
+):
+    # axis: a lane that was not terminalized may be live, so no second builder starts
+    world = _world(tmp_path, monkeypatch)
+    _cloud(monkeypatch)
+    prepare(monkeypatch, world)
+    _terminalization_fails(monkeypatch, world)
+    code, result = _launch(world, capsys, 283)
+
+    assert code == 1
+    assert result["ok"] is False and result["reason"] == "terminalization-failed:fixture"
+    assert "fellBack" not in result and "cloudAttempt" not in result
+    assert result["placeCall"]["place"] == "cloud"
+    assert machine.calls == []
 
 
 # ---------------------------------------------------------------- what the advisor reported

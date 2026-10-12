@@ -679,14 +679,14 @@ def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
     monkeypatch.setattr(L, "_git_scrubbed", spy)
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
     assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
-    assert calls[1][1] == ("rev-parse", "--git-common-dir")
+    assert calls[1][:2] == (local_remote.repo, ("config", "--list", "-z"))
     scratch = calls[2][0]
     assert calls[2][1] == ("init", "-q", "--bare", scratch)
     assert calls[3][0] == scratch
-    assert calls[3][1][:2] == ("config", "include.path")
-    assert calls[4][0] == scratch
-    assert calls[4][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-                           "origin", local_remote.pushed)
+    fetch_args = calls[3][1]
+    assert fetch_args[-7:] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+                               local_remote.remote.as_uri(), local_remote.pushed)
+    assert len(calls) == 4
     assert all(c[2]["timeout"] == L._WORKTREE_GIT_TIMEOUT for c in calls)
 
 
@@ -723,8 +723,38 @@ def test_the_probe_finds_a_base_through_a_setting_only_the_launching_repo_holds(
     assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
 
 
+def test_the_probe_finds_a_base_through_a_setting_only_a_conditional_include_supplies(
+    local_remote, tmp_path,
+):
+    # axis: the transport settings are read as the launching checkout sees them, includeIf and all
+    extra = tmp_path / "private.gitconfig"
+    extra.write_text('[url "%s"]\n\tinsteadOf = alias://private/origin\n'
+                     % local_remote.remote.as_uri())
+    _git(local_remote.repo, "config", "includeIf.gitdir:" + local_remote.repo + "/.path",
+         str(extra))
+    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
+    # the include applies to the checkout, and to nothing else
+    assert _git(local_remote.repo, "remote", "get-url", "origin").strip() == (
+        local_remote.remote.as_uri())
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
+
+
+def test_the_probe_hands_over_only_transport_settings_and_leaves_the_scratch_empty(
+    local_remote, monkeypatch,
+):
+    _git(local_remote.repo, "config", "core.sshCommand", "ssh -i /k")
+    _git(local_remote.repo, "config", "credential.helper", "store")
+    _git(local_remote.repo, "config", "user.name", "Someone")
+    options = L._transport_options(local_remote.repo, None)
+    pairs = [options[i + 1] for i in range(0, len(options), 2)]
+    assert "core.sshcommand=ssh -i /k" in pairs and "credential.helper=store" in pairs
+    assert all(not p.startswith(("user.", "remote.", "core.bare")) for p in pairs)
+    assert options[::2] == ["-c"] * len(pairs)
+
+
 def test_the_probe_finds_a_base_from_a_linked_worktree(local_remote, tmp_path):
-    # axis: the config included is the common dir's, not the linked worktree's private gitdir
+    # axis: the settings are read from the linked worktree as it sees them
     _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
          "alias://private/origin")
     _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
@@ -830,7 +860,7 @@ def test_E9_the_scratch_directory_is_removed_when_the_fetch_cannot_run(local_rem
         return made[-1]
 
     def no_fetch(repo_root, *args, **kwargs):
-        if args[:1] == ("fetch",):
+        if "fetch" in args:
             return None
         return real(repo_root, *args, **kwargs)
 
@@ -847,7 +877,7 @@ def test_E8_a_fetch_that_fails_for_a_reason_other_than_the_base_still_refuses_as
     real = L._git_scrubbed
 
     def refused(repo_root, *args, **kwargs):
-        if args[:1] == ("fetch",):
+        if "fetch" in args:
             return subprocess.CompletedProcess(
                 args, 128, stdout="", stderr="fatal: remote error: upload-pack: not our ref")
         return real(repo_root, *args, **kwargs)

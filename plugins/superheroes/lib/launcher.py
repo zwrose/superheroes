@@ -2285,29 +2285,57 @@ def _place_refusal(
 _BASE_ABSENT_MARKERS = ("not our ref", "couldn't find remote ref", "no such remote ref")
 
 
+# The settings that decide how a fetch reaches and signs in to a remote. Matched on the
+# lower-cased key, which keeps a section and variable name case-blind and a subsection as typed.
+_TRANSPORT_KEY_RE = re.compile(
+    r"^(?:url\..+\.(?:insteadof|pushinsteadof)|core\.(?:sshcommand|gitproxy)"
+    r"|(?:ssh|http|credential|protocol)\..+)$",
+    re.DOTALL,
+)
+
+
+def _transport_options(repo_root, env):
+    """The transport settings as the launching checkout itself sees them, as ``-c key=value``
+    arguments for a fetch run somewhere else; None when they could not be read.
+
+    ``git config --list`` run in the checkout applies every layer, conditional includes keyed on
+    its gitdir or branch among them, and the worktree's own config.
+    """
+    listed = _git_scrubbed(
+        repo_root, "config", "--list", "-z", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if listed is None or listed.returncode != 0:
+        return None
+    options = []
+    for entry in listed.stdout.split("\0"):
+        if not entry:
+            continue
+        key, sep, value = entry.partition("\n")
+        if _TRANSPORT_KEY_RE.match(key.lower()):
+            options += ["-c", key + "=" + value if sep else key]
+    return options
+
+
 def _base_on_remote(repo_root, base, env):
     """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
     None when the remote could not be asked.
 
     The commit is fetched into an empty repository, because a fetch in the working repository
     never asks the server for an object it already has, and a local tracking ref can be stale.
-    The empty repository includes the launching repository's own config file and fetches from
-    the remote name ``origin``, so the remote's settings, ``core.sshCommand``, ``credential.*``
-    and ``http.*`` apply as they do for the launching repository. A conditional include keyed on
-    the launching repository's gitdir does not apply inside the empty repository.
+    The fetch runs against the remote's address as the launching checkout resolves it, with the
+    checkout's own transport settings (``insteadOf`` rewrites, ``core.sshCommand``,
+    ``credential.*``, ``http.*``) handed over as options, so a setting that reaches the checkout
+    only through a conditional include applies as well. The empty repository stays empty.
     """
     url = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
     if url is None or url.returncode != 0 or not url.stdout.strip():
         return None
-    common = _git_scrubbed(
-        repo_root, "rev-parse", "--git-common-dir", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    if common is None or common.returncode != 0 or not common.stdout.strip():
+    address = url.stdout.strip()
+    options = _transport_options(repo_root, env)
+    if options is None:
         return None
-    config_path = os.path.join(
-        os.path.abspath(repo_root), common.stdout.strip(), "config")
     try:
         scratch = tempfile.mkdtemp()
     except OSError:
@@ -2318,15 +2346,9 @@ def _base_on_remote(repo_root, base, env):
         )
         if made is None or made.returncode != 0:
             return None
-        included = _git_scrubbed(
-            scratch, "config", "include.path", config_path,
-            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        if included is None or included.returncode != 0:
-            return None
         fetched = _git_scrubbed(
-            scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-            "origin", base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+            scratch, *options, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+            address, base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
         )
         if fetched is None:
             return None
@@ -3465,9 +3487,17 @@ def _cli_compose(args):
     )
 
 
-# The two results of a cloud attempt that mean the launcher ended it before any session could
-# exist: the command never ran and the lane was terminalized. No other result is one.
-_CLOUD_NEVER_STARTED_REASONS = ("spawn-oserror", "log-open-failed")
+# The results of a cloud attempt that mean the launcher ended it before any session could exist:
+# the command never ran and the lane was terminalized first, so a terminalization failure
+# (a ``terminalization-failed:`` reason) is never one of them. Each maps to the placing reason the
+# local fallback records. A remote that could not be asked is the platform being out of reach;
+# a base the remote lacks is something only the owner's machine has. No other result is one.
+_CLOUD_NEVER_STARTED_REASONS = {
+    "spawn-oserror": ("unreachable", None),
+    "log-open-failed": ("unreachable", None),
+    "launch-cloud-base-remote-unchecked": ("unreachable", None),
+    "launch-cloud-base-not-on-remote": ("needs", "its base commit"),
+}
 
 
 def _premise_with_resolved_base(repo_root, premise):
@@ -3552,10 +3582,14 @@ def _cli_launch(args):
     result = launch(
         place_call, place=PLACE_CLOUD, cloud_environment=place_call["environment"],
     )
-    # axis: fall back only on the two results that mean no session could exist; any other result may have a live lane, and a second builder must never start — see bite-proof record wo_b_place_call
+    # axis: fall back only on the results that mean no session could exist; any other result may have a live lane, and a second builder must never start — see bite-proof record wo_b_place_call
     if not result.get("ok") and result.get("reason") in _CLOUD_NEVER_STARTED_REASONS:
-        # axis: a cloud attempt the launcher ended is the platform being unreachable — see bite-proof record wo_b_place_call
-        fallback_call = dict(place_call, place=PLACE_LOCAL, reason="unreachable", environment=None)
+        # axis: a cloud attempt the launcher ended is the platform being unreachable, or the build needing a commit only this machine has — see bite-proof record wo_b_place_call
+        fallback_reason, fallback_need = _CLOUD_NEVER_STARTED_REASONS[result["reason"]]
+        fallback_call = dict(
+            place_call, place=PLACE_LOCAL, reason=fallback_reason, need=fallback_need,
+            environment=None,
+        )
         local = launch_local(fallback_call)
         local["placeCall"] = fallback_call
         local["cloudAttempt"] = result
