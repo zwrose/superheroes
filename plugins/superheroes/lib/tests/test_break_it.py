@@ -240,7 +240,7 @@ def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env
     content = ("import os, subprocess\n"
                "p = subprocess.Popen([%r, '60'], start_new_session=%s%s)\n"
                "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n"
-               ) % (shutil.which("sleep"), detached, ", env={}" if clean_env else "")
+               ) % (shutil.which("sleep"), detached, ", env={}, cwd='/'" if clean_env else "")
     block = _block("tests/test_w.py", content,
                    run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
     record = break_it.run_one(str(repo), _head(repo), block)
@@ -511,3 +511,76 @@ def test_reaper_without_proc_still_propagates_the_child_exit_status(repo, monkey
     assert (passing["outcome"], passing["exitCode"]) == ("passed", 0)
     failing = break_it.run_one(str(repo), _head(repo), _block("tests/test_nf.py", "assert 1 == 2\n"))
     assert (failing["outcome"], failing["exitCode"]) == ("failed", 1)
+
+
+def test_inherited_import_path_into_the_caller_tree_is_dropped(repo, monkeypatch):
+    _write(repo, "callermod.py", "VALUE = 'copy'\n")
+    head = _commit(repo, "add callermod")
+    _write(repo, "callermod.py", "VALUE = 'caller'\n")  # uncommitted: only the caller's tree has it
+    monkeypatch.setenv("PYTHONPATH", str(repo))
+    content = "import os, sys\nsys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'copy', callermod.VALUE\n"
+    record = break_it.run_one(str(repo), head, _block("tests/test_ip.py", content))
+    assert record["outcome"] == "passed", record
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper")
+def test_exception_after_launch_still_lets_the_reaper_collect_a_detached_worker(repo, tmp_path, monkeypatch):
+    pidfile = tmp_path / "worker.pid"
+
+    def boom(self):  # the run fails after launch, once the test has started its detached worker
+        deadline = time.monotonic() + 20
+        while not (pidfile.exists() and pidfile.read_text()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(break_it._TailDrain, "start", boom)
+    content = ("import os, subprocess, time\n"
+               "p = subprocess.Popen([%r, '60'], start_new_session=True, env={}, cwd='/')\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n"
+               "time.sleep(60)\n") % shutil.which("sleep")
+    block = _block("tests/test_x.py", content,
+                   run="PIDFILE=%s %s tests/test_x.py" % (shlex.quote(str(pidfile)), PY))
+    record = break_it.run_one(str(repo), _head(repo), block)
+    assert (record["outcome"], record["reason"]) == ("not-run", "run-error")
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the detached worker outlived the failed run"
+    finally:
+        if not _gone(pid):
+            os.kill(pid, 9)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="scans /proc for the helper")
+def test_git_setup_timeout_kills_the_helper_descendants(repo, tmp_path, monkeypatch):
+    marker = "61.37"
+    _write(repo, ".gitattributes", "*.dat filter=slow\n")
+    _write(repo, "a.dat", "x\n")
+    head = _commit(repo, "add filtered file")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[filter \"slow\"]\n\tsmudge = sleep %s\n" % marker)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    monkeypatch.setattr(break_it, "_GIT_TIMEOUT", 3)
+
+    def helpers():
+        found = []
+        for name in os.listdir("/proc"):
+            try:
+                with open("/proc/%s/cmdline" % name, "rb") as fh:
+                    if marker.encode() in fh.read():
+                        found.append(int(name))
+            except OSError:
+                pass
+        return found
+
+    try:
+        record = break_it.run_one(str(repo), head, _block("tests/test_g.py", "assert True\n"))
+        assert (record["outcome"], record["reason"]) == ("not-run", "copy-failed")
+        deadline = time.monotonic() + 5
+        while helpers() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert helpers() == [], "a git helper outlived the timed-out setup"
+    finally:
+        for pid in helpers():
+            os.kill(pid, 9)

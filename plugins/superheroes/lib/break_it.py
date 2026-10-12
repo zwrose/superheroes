@@ -113,9 +113,12 @@ os._exit(code if code >= 0 else 128 - code)
 """
 
 
-def _clean_env(extra=None):
-    """The ambient environment minus every git routing variable, plus ``extra``."""
-    env = {k: v for k, v in os.environ.items() if k not in GIT_ROUTING_VARS}
+def _clean_env(extra=None, root=None):
+    """The ambient environment minus every git routing variable and, given ``root``, every variable
+    whose value names that path (an import path into the caller's checkout), plus ``extra``."""
+    named = {p for p in (os.path.abspath(root), os.path.realpath(root)) if len(p) > 1} if root else ()
+    env = {k: v for k, v in os.environ.items()
+           if k not in GIT_ROUTING_VARS and not any(p in v for p in named)}
     env.update(extra or {})
     return env
 
@@ -203,8 +206,17 @@ def _record(head, block, outcome, reason=None, exit_code=None, output=""):
 
 
 def _git(repo_root, *args):
-    return subprocess.run(["git", "-C", repo_root] + list(args), capture_output=True,
-                          timeout=_GIT_TIMEOUT, env=_clean_env())
+    """Run git in its own session, so a timeout kills the whole group (filter and hook helpers too)."""
+    cmd = ["git", "-C", repo_root] + list(args)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_clean_env(),
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=_GIT_TIMEOUT)
+    except BaseException:
+        _kill_group(proc.pid)
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _tail_text(raw, cut):
@@ -383,7 +395,7 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     try:
         # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
         proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=copy,
-                                env=_clean_env(dict(env, **{_TOKEN_ENV: token})),
+                                env=_clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True,
                                 pass_fds=(status_w,))
@@ -399,12 +411,14 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_group(proc.pid, signal.SIGTERM)
-        try:
-            proc.wait(timeout=_TERM_GRACE)
-        except subprocess.TimeoutExpired:
-            pass
     finally:
+        # axis: every exit path, an exception included, lets the reaper sweep its descendants before the group is killed — see bite-proof record wo_a_1800_break-it
+        if proc.poll() is None:
+            _kill_group(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=_TERM_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
         # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
         _kill_group(proc.pid)
         _kill_tagged(token)
