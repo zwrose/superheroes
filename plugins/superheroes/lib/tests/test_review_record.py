@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+import core_md
 import model_registry
 import pr_comment
 import review_record as rr
@@ -29,6 +30,7 @@ class Fake:
 
     def __init__(self, ci=GREEN, meta=None, marker=None, runs=None, issue_bodies=None):
         self.comments, self.writes = [], []
+        self.changed = ["README.md"]
         self.ci = ci
         self.meta = {"head": HEAD, "body": "", "issues": []} if meta is None else meta
         self.marker, self.runs, self.issue_bodies = marker, runs or {}, issue_bodies or {}
@@ -43,6 +45,7 @@ class Fake:
             "repo_name": lambda root: "o/r",
             "list_comments": lambda pr, repo: list(self.comments),
             "create_comment": self._create,
+            "changed_paths": lambda pr, repo: self.changed,
         }
 
     def _create(self, pr, repo, body):
@@ -1369,3 +1372,184 @@ def test_the_marker_decided_lane_keeps_its_reason():
     rec = build(account(laneReason=None), fake)
     assert rec["lane"]["reason"] is None and rec["lane"]["reasonSource"] is None
     assert "Lane: full (build lane marker)." in rr.render(rec)
+
+
+# --- the risk floor: the record's laneBasis and its below-floor line ---
+
+PAYMENTS = {"name": "Payments", "covers": ["src/payments/*"], "why": "Charges customers.",
+            "undo": "Hard: a charge needs a refund."}
+LIGHT_PR = {"head": HEAD, "body": "**Lane call:** light. small and safe\n", "issues": []}
+BASIS_KEYS = {"floor", "lane", "why", "riskAreas", "touched", "unmatchable", "proposed", "proposalTaken", "source"}
+FILES_SOURCE = "lane rule over the PR's changed files"
+UNREAD = "risk-unclear-no-paths: the PR's changed files could not be read"
+PAY_FLOOR = "touches-risk-area: Payments (src/payments/charge.py)"
+
+
+def risk_repo(tmp_path, areas=(PAYMENTS,)):
+    """A repo whose core.md holds the given risk areas, in the test's isolated store."""
+    repo = str(tmp_path)
+    core_md.write(repo, {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+                         "patterns": "- x: a.ts:1"}, "confirmed", now="2026-06-26")
+    assert core_md.write_project_config_item(repo, core_md.RISK_AREAS_KEY, list(areas))["action"] == "written"
+    return repo
+
+
+def gh_files(*entries):
+    """What gh api --paginate prints for the PR files endpoint: one JSON array per page."""
+    return "".join(json.dumps(list(entries[i:i + 100])) for i in range(0, len(entries), 100))
+
+
+def canned_gh(monkeypatch, out):
+    calls = []
+    monkeypatch.setattr(rr, "_run", lambda argv, cwd=None: calls.append(argv) or out)
+    return calls
+
+
+def real_reader_record(repo, monkeypatch, out):
+    """A light-lane record built with the real changed_paths reader over canned gh output."""
+    canned_gh(monkeypatch, out)
+    readers = {**Fake(meta=LIGHT_PR).readers(), "changed_paths": rr.changed_paths}
+    return rr.build_record(account(repoRoot=repo), readers)
+
+
+def test_the_record_carries_the_lane_basis_with_one_shape(tmp_path):
+    # axis: the record's laneBasis key; a record without it, or with a basis not carrying every lane_call key
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    assert set(rec["laneBasis"]) == BASIS_KEYS and rec["laneBasis"]["source"] == FILES_SOURCE
+    assert rec["laneBasis"]["floor"] == "full" and rec["laneBasis"]["why"][0] == PAY_FLOOR
+    assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
+    fake.changed = None
+    assert set(build(account(repoRoot=repo), fake)["laneBasis"]) == BASIS_KEYS
+    out = rr.write(put(tmp_path, account()), repo, fake.readers())
+    assert out["ok"]
+    stored = rr.read(7, readers=fake.readers())
+    assert set(stored["laneBasis"]) == BASIS_KEYS and stored["laneBasis"]["source"] == "unavailable"
+
+
+def test_render_shows_the_risk_floor_after_the_lane_line(tmp_path):
+    # axis: the Risk floor line; a floor, or its absence, missing from the posted summary
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    lines = rr.render(build(account(repoRoot=repo), fake)).split("\n")
+    at = next(i for i, line in enumerate(lines) if line.startswith("Lane: "))
+    assert lines[at + 1].startswith(f"Risk floor: full — {PAY_FLOOR}; ") and lines[at + 1].endswith(".")
+    fake.changed = ["README.md"]
+    assert "Risk floor: none — no-floor: " in rr.render(build(account(repoRoot=repo), fake))
+    fake.changed = None
+    assert f"Risk floor: full — {UNREAD}" in rr.render(build(account(repoRoot=repo), fake))
+
+
+def test_e9_a_lane_below_the_floor_is_not_reviewed_with_that_line(tmp_path):
+    # axis: the below-floor line; a light lane over a risk-area change leaving the record reviewed
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    assert rec["lane"]["value"] == "light" and rec["laneBasis"]["floor"] == "full"
+    line = f"the lane (light) is below the risk floor (full): {PAY_FLOOR}"
+    assert rec["status"] == "not-reviewed" and line in rec["whatIsMissing"]
+    assert line in rr.render(rec)
+
+
+def test_a_full_lane_over_a_risk_area_change_is_unaffected(tmp_path):
+    # axis: the below-floor line; a lane at the floor refused as below it
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    assert rec["lane"]["value"] == "full" and rec["laneBasis"]["floor"] == "full"
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
+
+
+def test_a_light_lane_over_a_change_outside_every_area_stays_reviewed(tmp_path):
+    # axis: the no-floor path; a change with no floor refused for its lane
+    repo = risk_repo(tmp_path)
+    rec = build(account(repoRoot=repo), Fake(meta=LIGHT_PR))
+    assert rec["laneBasis"]["floor"] is None and rec["lane"]["value"] == "light"
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
+
+
+@pytest.mark.parametrize("value", ["medium", None])
+def test_a_lane_value_the_rule_does_not_know_counts_as_below_a_full_floor(tmp_path, value):
+    # axis: the unknown-lane rank; a lane the rule does not know passing a full floor
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(lane=value, repoRoot=repo), fake)
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane ({value}) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]
+
+
+def test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavailable(tmp_path):
+    # axis: the unavailable basis; unreadable changed files leaving no floor for a light lane
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = None
+    rec = build(account(repoRoot=repo), fake)
+    basis = rec["laneBasis"]
+    assert set(basis) == BASIS_KEYS and basis["source"] == "unavailable"
+    assert basis["floor"] == "full" and basis["why"][0] == UNREAD
+    assert [w.split(": ")[0] for w in basis["why"]].count("risk-unclear-no-paths") == 1
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (light) is below the risk floor (full): {UNREAD}" in rec["whatIsMissing"]
+
+
+def test_e10_an_entry_with_no_string_filename_makes_the_files_unavailable(monkeypatch):
+    # axis: the complete-or-absent list; a file entry with no filename read as a complete list
+    for bad in ({"status": "added"}, {"filename": 7}, {"filename": None}, "src/a.py", 5):
+        canned_gh(monkeypatch, gh_files({"filename": "src/payments/a.py"}, bad))
+        assert rr.changed_paths(7, "o/r") is None
+    canned_gh(monkeypatch, gh_files({"filename": "a.py", "previous_filename": 7}))
+    assert rr.changed_paths(7, "o/r") is None
+    for out in (None, "not json", "[{"):
+        canned_gh(monkeypatch, out)
+        assert rr.changed_paths(7, "o/r") is None
+    calls = canned_gh(monkeypatch, gh_files({"filename": "a.py"}))
+    assert rr.changed_paths(7, "o/r") == ["a.py"]
+    assert calls == [["gh", "api", "repos/o/r/pulls/7/files", "--paginate"]]
+
+
+def test_e10_3000_entries_is_the_ceiling_and_makes_the_files_unavailable(tmp_path, monkeypatch):
+    # axis: the 3000-file ceiling; a list GitHub may have cut short read as the whole change
+    repo = risk_repo(tmp_path)
+
+    def entry(i):
+        return {"filename": f"docs/f{i}.md", "status": "added"}
+    canned_gh(monkeypatch, gh_files(*[entry(i) for i in range(2999)]))
+    assert len(rr.changed_paths(7, "o/r")) == 2999
+    out = gh_files(*[entry(i) for i in range(3000)])
+    canned_gh(monkeypatch, out)
+    assert rr.changed_paths(7, "o/r") is None
+    rec = real_reader_record(repo, monkeypatch, out)
+    assert rec["laneBasis"]["source"] == "unavailable" and rec["laneBasis"]["floor"] == "full"
+    assert rec["status"] == "not-reviewed"
+
+
+def test_e11_a_removed_file_inside_a_risk_area_touches_it(tmp_path, monkeypatch):
+    # axis: removed files kept in the list; a deletion inside a risk area dropped so the area looks untouched
+    repo = risk_repo(tmp_path)
+    out = gh_files({"filename": "docs/readme.md", "status": "modified"},
+                   {"filename": "src/payments/old.py", "status": "removed"})
+    canned_gh(monkeypatch, out)
+    assert rr.changed_paths(7, "o/r") == ["docs/readme.md", "src/payments/old.py"]
+    rec = real_reader_record(repo, monkeypatch, out)
+    assert rec["laneBasis"]["source"] == FILES_SOURCE and rec["laneBasis"]["floor"] == "full"
+    assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/old.py"]}]
+    assert rec["status"] == "not-reviewed"
+
+
+def test_e11_a_rename_out_of_a_risk_area_touches_it_through_the_previous_name(tmp_path, monkeypatch):
+    # axis: previous_filename kept in the list; a rename out of a risk area looking like a change outside it
+    repo = risk_repo(tmp_path)
+    out = gh_files({"filename": "docs/moved.py", "previous_filename": "src/payments/charge.py", "status": "renamed"})
+    canned_gh(monkeypatch, out)
+    assert rr.changed_paths(7, "o/r") == ["docs/moved.py", "src/payments/charge.py"]
+    rec = real_reader_record(repo, monkeypatch, out)
+    assert rec["laneBasis"]["floor"] == "full"
+    assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (light) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]

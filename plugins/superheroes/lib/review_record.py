@@ -33,6 +33,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import build_lane  # noqa: E402
+import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
@@ -49,6 +50,8 @@ GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
+# GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
+_FILES_CEILING = 3000
 _LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(full|light|micro)\b[.:]?[ \t]*(.*)$")
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
@@ -159,6 +162,33 @@ def _list_comments(pr, repo):
         return None
 
 
+def changed_paths(pr, repo):
+    """Every path the PR changes, as a list, or None when the list cannot be trusted to be complete:
+    a failed call or parse, an entry with no string filename, or GitHub's file ceiling reached.
+    Removed files are kept (a deletion inside a risk area touches it), and so is each renamed
+    file's previous name (a rename out of a risk area still touches it)."""
+    out = _run(["gh", "api", _api(repo, f"pulls/{pr}/files"), "--paginate"])
+    try:
+        files = None if out is None else pr_comment._parse_paginated_arrays(out)
+    except ValueError:
+        return None
+    # axis: a file list that may be cut short is unavailable, never read as the whole change — see bite-proof record wo_a_1795_lane-call
+    if files is None or len(files) >= _FILES_CEILING:
+        return None
+    paths = []
+    for f in files:
+        if not isinstance(f, dict) or not isinstance(f.get("filename"), str):
+            return None
+        paths.append(f["filename"])
+        previous = f.get("previous_filename")
+        if previous is not None and not isinstance(previous, str):
+            return None
+        # axis: a renamed file's previous path counts as changed, so a rename out of an area touches it — see bite-proof record wo_a_1795_lane-call
+        if previous is not None:
+            paths.append(previous)
+    return paths
+
+
 def _send(method, path, body):
     fd, tmp = tempfile.mkstemp(suffix=".md")
     try:
@@ -178,7 +208,7 @@ def _readers(overrides):
     return {"pr_meta": _pr_meta, "issue_body": _issue_body, "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name, "read_text": _read_text,
-            **(overrides or {})}
+            "changed_paths": changed_paths, **(overrides or {})}
 
 
 # --- the account ---
@@ -288,6 +318,18 @@ def _lane(a, rd, meta):
     if hit:
         return {"value": hit.group(1), "source": source, "reason": hit.group(2).strip() or None}
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
+
+
+def _lane_basis(a, rd):
+    """The risk floor for the PR's changed files, from lane_call.call. Files that cannot be read give
+    the floor full, marked unavailable, never a basis from a partial list."""
+    root, paths = a.get("repoRoot") or ".", rd["changed_paths"](a["pr"], a["repo"])
+    if isinstance(paths, list):
+        return dict(lane_call.call(root, paths), source="lane rule over the PR's changed files")
+    basis = dict(lane_call.call(root, []), source="unavailable")
+    unread = "risk-unclear-no-paths: the PR's changed files could not be read"
+    basis["why"] = [unread] + [w for w in basis["why"] if not w.startswith("risk-unclear-no-paths: ")]
+    return basis
 
 
 def _family(vendor, model):
@@ -408,6 +450,14 @@ def _finding_lines(findings):
     return lines
 
 
+def _lane_lines(rec):
+    lane, basis = rec["lane"]["value"], rec["laneBasis"]
+    # axis: a lane below the risk floor is not-reviewed; an unknown lane counts as below — see bite-proof record wo_a_1795_lane-call
+    if basis["floor"] is not None and lane_call.rank(lane) < lane_call.rank(basis["floor"]):
+        return [f"the lane ({lane}) is below the risk floor ({basis['floor']}): {basis['why'][0]}"]
+    return []
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -420,6 +470,7 @@ def _status(rec, unread=(), finding_lines=()):
     elif ci["sha"] != fc["sha"]:
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
     lines += finding_lines
+    lines += _lane_lines(rec)
     lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
               for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
@@ -464,7 +515,7 @@ def build_record(account, readers):
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
-        "finalCommit": fc,
+        "laneBasis": _lane_basis(a, rd), "finalCommit": fc,
         "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
@@ -651,6 +702,7 @@ def render(record):
         ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner.",
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
         + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
+        f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".",
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         "Reviewers:", *who])
