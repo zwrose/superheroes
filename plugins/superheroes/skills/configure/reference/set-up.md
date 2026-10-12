@@ -495,7 +495,14 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --environment <id>
    ```
 
-   Go ahead only on `matched`; `mismatched` and `unchecked` are handled as in step 5.
+   Go ahead only on `matched`; `mismatched` and `unchecked` are handled as in step 5. Read the
+   account this seat is signed in as, and keep the `account` it returns with the nonce; when it
+   returns none, say so and stop before this step.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_setup.py" account --cwd .
+   ```
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -512,11 +519,18 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    python3 -B "$ROOT_DIR/lib/cloud_environment.py" compare --environment <id>
    ```
 
-   Go ahead only on `matched`; `mismatched` and `unchecked` are handled as in step 5.
+   Go ahead only on `matched`; `mismatched` and `unchecked` are handled as in step 5. Then read the
+   account again, the same way as in step 6. When it is not the account kept from step 6, the check
+   ran under another account: say so, judge nothing, and repeat steps 6 and 7 with a new check.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --environment <id> --nonce <nonce> --line-file <file>
+   python3 -B "$ROOT_DIR/lib/cloud_setup.py" account --cwd .
+   ```
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --environment <id> --nonce <nonce> --account <the account kept from step 6> --line-file <file>
    ```
 
    Say judge's `message`. A passed check
