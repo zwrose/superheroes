@@ -28,7 +28,7 @@ In order, highest value first:
 2. **Tests that cannot fail.** When an intentional edit leaves a test file holding tests that can no longer fail, raise **one finding per file** that names each such test by `file:line` of its test function. Tests cannot fail when the code they exercised was removed or bypassed, when an assertion was weakened to always pass, or when a guard now returns before the asserted path. The consequence to state: the suite reads green while checking nothing there.
 3. **Claim/test alignment.** A test named `handles empty input` must call the code with empty input. A test that passes without checking the behaviour it claims to check is a finding. This is a top LLM-confabulation pattern, so flag it aggressively. Mock placement, network-mock mix, partial error-constant mocks, and missing auth or data-connection mocks belong here. Say how the test passes for the wrong reason.
 4. **Chance.** A test that can pass or fail by chance: an async-assertion gap, a cleanup leak, ordering between tests, wall-clock or timing dependence, randomness without a seed, shared external state, or environment-supplied posture.
-5. **Unproven checks.** A change to a check with no proof the check catches what it is for. A check is a test, guard, validator, or CI check whose job is to fail when something is wrong.
+5. **Unproven checks.** A change to a check with no proof the check catches what it is for. A check is a test, guard, validator, or CI check whose job is to fail when something is wrong. A diff that changes what an existing check accepts or rejects, with no test in the diff that shows the check catching a case past the new line, is an unproven check. Raise it in or out of a risk area. It asks for proof the check works, not for more coverage.
 6. **Test bloat.** A brittle test, a duplicate test, or a test that only pins wording.
 7. **Break-it tests** for each touched risk area.
 
@@ -112,6 +112,13 @@ Collect findings under these named smells; **every finding cites its smell by na
 - Assertions on internal state, a unit's return-value internals, or a child's prop value when the visible output would prove the same behavior.
 - A new test whose every input and assertion repeats an existing test.
 - A test that asserts exact prose whose wording is not a contract.
+- **brittle test:** an assertion that a module-private cache, registry, or counter equals an exact value. A harmless refactor of the cache turns it red.
+- **wording pin:** a test that builds a value from a string and asserts the same string back, or asserts an error message's exact prose when the message is not a contract.
+
+**Unproven checks.**
+
+- A diff that changes what an existing check accepts or rejects (a validator's bound, a guard's condition, an allow-list, a CI check's threshold) with no test in the diff that shows the check catching a case on the far side of the new line. Raise it whether or not the code sits in a risk area.
+- The `suggestion` names the case that proves the check. For a bound moved from 100 to 1000, that is a test that 1001 is rejected and 1000 is accepted.
 
 **Bite-proof gaps (diff-only — you cannot see the build record).**
 
@@ -182,7 +189,7 @@ run: <one command, run from the repository root, that runs only this test file>
 
 ## Do NOT Flag
 
-- **More test coverage in code outside every risk area your dispatch names.** Inside a touched area, a missing case on the risky path is answered with a break-it test, not a coverage request.
+- **More test coverage in code outside every risk area your dispatch names.** Inside a touched area, a missing case on the risky path is answered with a break-it test, not a coverage request. The same holds the other way: this never covers an unproven check change, which is raised in or out of a risk area.
 - **A change of test style alone:** naming, structure, parametrizing, snapshot vs assertion, or query style when the assertion is equally strong. Automated tooling owns formatting and import order.
 - Coverage-percentage targets. Meaningful checks are the goal, not a percentage.
 - "Should add a snapshot test." It is noise unless the test asserts nothing else.
@@ -220,6 +227,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
 
 Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Test"` on every entry. Do not restate the schema — follow the base rubric's.
 
+- Each finding covers one smell. Distinct tests with distinct smells get distinct findings. A test that is both a cleanup leak and a brittle test gets a finding for each, or one finding whose title names both smells. The cannot-fail finding is the one sanctioned grouping: one per file, naming each test. Never fold a different test's smell into another finding's body.
 - Fill in `consequence` on every finding, in plain words.
 - Include a non-null `suggestion` field for every Important finding — propose the exact mock or assertion change. `suggestion` may be `null` for Minor/Nit when no clean fix is obvious.
 - **`confidence`** (per the base rubric): emit `High`/`Low` on each finding (required on Important; may be omitted on Minor/Nit). Set **Low** when you emit a real-seeming finding the Chain-of-Verification couldn't fully confirm. A **Low** Important must name its uncertainty in `evidence` (e.g., "couldn't confirm the project exposes an owned seam for this primitive"). A Low-confidence test finding is **still capped at Important**; Low confidence never raises severity.

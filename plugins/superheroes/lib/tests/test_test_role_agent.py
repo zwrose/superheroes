@@ -45,6 +45,15 @@ def test_test_role_agent_pins_its_load_bearing_statements():
     assert "for bloat and for tests that pass without checking anything" in reviewer
 
 
+def test_test_role_agent_pins_unproven_checks_and_one_smell_per_finding():
+    role = _text(TEST_ROLE)
+    # Bites on: an unproven check change is raised for proof, not as a coverage request.
+    assert "It asks for proof the check works, not for more coverage." in role
+    # Bites on: one smell per finding, so a different test's smell is never folded into another finding.
+    assert "Each finding covers one smell." in role
+    assert "Never fold a different test's smell into another finding's body." in role
+
+
 def test_test_reviewer_agent_file_is_gone():
     # Bites on: a revived test-reviewer agent, which would put two test seats on one panel.
     assert not RETIRED.exists()
