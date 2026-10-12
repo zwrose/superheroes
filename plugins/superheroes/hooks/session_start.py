@@ -72,14 +72,14 @@ def _append_host_model_section(boot, value):
     return boot + "\n\n### Host model\n" + line
 
 
-def _bootstrap(cwd, transcript_path, host, source=None):
+def _bootstrap(cwd, transcript_path, host, source=None, session_id=None):
     """The always-on project-context block. On a TOTAL failure (assemble unimportable/raised),
     return a minimal in-context breadcrumb (B6, #315) rather than '' — so a fully-failed bootstrap
     still leaves the running agent something to read back, not silence (stderr is invisible to it)."""
     try:
         import session_context
         block = session_context.assemble(
-            cwd, transcript_path, _PLUGIN_ROOT, host, source=source)
+            cwd, transcript_path, _PLUGIN_ROOT, host, source=source, session_id=session_id)
         return block if (block and block.strip()) else ""
     except Exception as exc:
         sys.stderr.write("superheroes session_start: bootstrap skipped (%s)\n" % type(exc).__name__)
@@ -108,7 +108,8 @@ def main():
     host_model = _host_model(payload)
     _write_host_model_env(host_model)
 
-    boot = _bootstrap(cwd, transcript_path, args.host, source=source)   # always-on, gated by nothing
+    boot = _bootstrap(cwd, transcript_path, args.host, source=source,
+                      session_id=payload.get("session_id"))   # always-on, gated by nothing
     boot = _append_host_model_section(boot, host_model)
     if boot:
         sys.stdout.write(json.dumps({
