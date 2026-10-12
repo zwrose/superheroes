@@ -171,6 +171,15 @@ def _let_through(repo, pr, env, run):
     return bool(missing) and not parked
 
 
+def _linked_issues(body, repo):
+    """The issues the PR body's first line links: those it closes, else any `#N` it names (a non-closing link)."""
+    found = _sib("review_record").closing_issues(body, repo)
+    if found or not isinstance(body, str):
+        return found
+    first = body.split("\n", 1)[0]
+    return [int(n) for n in dict.fromkeys(re.findall(r"(?<![\w/])#([1-9]\d*)", first))]
+
+
 def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
     """(launchId, folded lane, reason) of the cloud lane: the one named by `launch_id` when given (never
     another), else the newest for the issues; (None, {}, None) when a readable ledger has none. `reason`
@@ -184,7 +193,7 @@ def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
     if not fold.get("ok", True):
         return None, {}, "launch-ledger-fold-failed"
     lanes = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
-             if i["place"] == "cloud" and (k == launch_id if launch_id else i["issue"] in issues)
+             if i["place"] == ll.PLACE_CLOUD and (k == launch_id if launch_id else i["issue"] in issues)
              and (reserved_by is None or i["reservedTs"] <= reserved_by)]
     if not lanes:
         return None, {}, None
@@ -208,18 +217,20 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     parks = [c for c in comments if isinstance(c.get("body"), str) and c["body"].strip().startswith(lapsed)]
     if not parks:
         return {"ok": True, "kind": "not-lapsed-pass", "pr": pr, "text": None}
-    if not any(e["repo"] == repo and e["pr"] == pr for e in entries):
-        parked_on = _park_day(parks[-1].get("created_at"))
+    known = [e for e in entries if e["repo"] == repo and e["pr"] == pr]
+    parked_on = _park_day(parks[-1].get("created_at"))
+    if not known or (known[0]["outcome"] == "sent-back" and parked_on and parked_on > known[0]["parkedOn"]):
         if parked_on is None:
             return _refusal("park-date-unreadable")
         pull = _pull(repo, pr, env, run)
         if pull is None:
             return _refusal("pr-read-failed")
-        issues = _sib("review_record").closing_issues(pull.get("body"), repo)
+        issues = _linked_issues(pull.get("body"), repo)
         launch_id, _, ledger_reason = (
             _lane(repo_root, issues, env, reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
+        entries[:] = [e for e in entries if e not in known]
         entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id})
         if not _save(path, entries):
             return _refusal("parked-state-unwritable")
@@ -247,7 +258,7 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             e["outcome"], changed = "closed", True
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
             continue
-        issues = _sib("review_record").closing_issues(pull.get("body"), e["repo"])
+        issues = _linked_issues(pull.get("body"), e["repo"])
         launch_id, lane, ledger_reason = (
             _lane(repo_root, issues, env, e[_LAUNCH_KEY]) if e.get(_LAUNCH_KEY) else (None, {}, None))
         issue = lane.get("issue") if lane else (issues[0] if issues else None)
