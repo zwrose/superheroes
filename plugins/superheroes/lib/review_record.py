@@ -785,6 +785,26 @@ def _shed_to_floor(basis):
 
 _SHED_STEPS = (_shed_why_paths, _shed_matched, _shed_unmatchable, _shed_to_floor)
 
+_KEPT_OBSERVATION = ("read", "toolCalls")
+
+
+def _shed_observation(record):
+    """Reviewer step 1: each observation keeps only read and toolCalls; a row with no dict observation is left as it is."""
+    rows = [dict(v, observation={k: v["observation"][k] for k in _KEPT_OBSERVATION if k in v["observation"]})
+            if isinstance(v.get("observation"), dict) else v for v in record["reviewers"]]
+    return dict(record, reviewers=rows)
+
+
+def _shed_run_dir(record):
+    """Reviewer step 2: each row's runDir becomes None."""
+    return dict(record, reviewers=[dict(v, runDir=None) for v in record["reviewers"]])
+
+
+# Only reviewer evidence detail is shed; the status, whatIsMissing, findings' outcome and reason, go-aheads and each
+# row's name, ran, planned, vendor, model, family, commit and coversFinalCommit are never touched.
+_REVIEWER_STEPS = (("observation", _shed_observation), ("runDir", _shed_run_dir))
+_REVIEWER_SHED_WHAT = {"observation": "engine telemetry", "runDir": "engine telemetry and run directories"}
+
 
 def render(record):
     record = _scrubbed(record)
@@ -819,7 +839,11 @@ def render(record):
             floor_line,
             *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
             f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
-            "Reviewers:", *who]
+            "Reviewers:", *who,
+            # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
+            *([f"Reviewer detail trimmed to fit this comment ({_REVIEWER_SHED_WHAT[r['reviewerShed']]}); each "
+               "reviewer's full output is in its raw-output comment linked under rawOutputs."]
+              if r.get("reviewerShed") else [])]
         summary = "\n".join(lines)
         # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
         # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
@@ -836,6 +860,14 @@ def render(record):
             break
         r = dict(r, laneBasis=step(r["laneBasis"]))
         body = compose(r)
+    # Then, still over the cap, the reviewers' evidence detail, one step at a time, each said on the record.
+    # axis: the reviewer steps run while the body is over the cap — see bite-proof record wo_d_1795_reviewer-shed
+    for name, step in _REVIEWER_STEPS:
+        if len(body) <= MAX_BODY_CHARS:
+            break
+        r = dict(step(r), reviewerShed=name)
+        body = compose(r)
+    # axis: a body still over the cap after every step is refused, never truncated — see bite-proof record wo_d_1795_reviewer-shed
     if len(body) > MAX_BODY_CHARS:
         raise Refusal("review-record-too-large", f"{len(body)} characters")
     return body

@@ -1765,3 +1765,140 @@ def test_composed_prose_claiming_no_bugs_is_refused_on_a_below_floor_record(tmp_
     with pytest.raises(rr.Refusal) as e:
         rr.render(rec)
     assert e.value.reason == "review-record-forbidden-claim"
+
+
+SHED_LINE = ("Reviewer detail trimmed to fit this comment (%s); each reviewer's full output is in its raw-output "
+             "comment linked under rawOutputs.")
+PROTECTED_ROW_KEYS = ("name", "ran", "planned", "vendor", "model", "family", "commit", "coversFinalCommit")
+RULING = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
+
+
+def _long_session(reviewers=45, body_chars=600):
+    """A long session's record: many engine-run reviewer rows, each with a long runDir and a full observation, a
+    planned reviewer that did not run but has a go-ahead, and findings with long bodies."""
+    runs, rows = {}, []
+    for i in range(reviewers):
+        run_dir = f"/run/r{i:02d}/".ljust(140, "d")
+        observation = {"tokens": 1000 + i, "toolCalls": 40 + i, "stdoutBytes": 90000 + i, "wallSeconds": 120 + i,
+                       "source": "codex", "read": f"read the diff and {'the files it touches, ' * 8}round {i}",
+                       "telemetry": {"model": CODEX, "turns": i, "cached": 3 * i, "notes": "n" * 120, "tail": "t" * 60}}
+        runs[run_dir] = (dict(GOOD_RUN, observation=observation), None)
+        rows.append(reviewer(f"reviewer-{i:02d}", runDir=run_dir))
+    rows.append(reviewer("security-reviewer", ran=False, runDir=None))
+    found = [finding(f"code-{i:03d}", title=f"title {i}", body="b" * body_chars, reason=f"fixed in 1a2b3c{i:x}",
+                     reviewer="reviewer-00") for i in range(15)]
+    return build(account(reviewers=rows, findings=found, goAheads=[RULING]), Fake(runs=runs))
+
+
+def _protected(rec):
+    return {"status": rec["status"], "whatIsMissing": rec["whatIsMissing"],
+            "findings": [{k: f[k] for k in ("outcome", "reason")} for f in rec["findings"]],
+            "missingReviews": rec["missingReviews"],
+            "reviewers": [{k: v[k] for k in PROTECTED_ROW_KEYS} for v in rec["reviewers"]]}
+
+
+def _unshed_size(rec, monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(rr, "MAX_BODY_CHARS", 10 ** 9)
+        return len(rr.render(rec))
+
+
+def test_a_long_session_sheds_reviewer_detail_to_fit_and_says_so(monkeypatch):
+    # axis: the reviewer shed steps and the shed line; a long session refused for size, or trimmed without saying so
+    rec = _long_session()
+    assert _unshed_size(rec, monkeypatch) > rr.MAX_BODY_CHARS
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+    lines = body.split("\n")
+    shed = SHED_LINE % "engine telemetry"
+    assert lines.count(shed) == 1 and sum(l.startswith("Reviewer detail trimmed") for l in lines) == 1
+    assert lines[lines.index(shed) - 1].startswith("- security-reviewer: did not run")
+    posted = rr._parse_body(body)
+    assert posted["reviewerShed"] == "observation"
+    assert _protected(posted) == _protected(rec)
+    assert all(set(v["observation"]) == {"read", "toolCalls"} for v in posted["reviewers"][:-1])
+    assert "reviewerShed" not in rec and all(v["runDir"] for v in rec["reviewers"][:-1])
+
+
+def test_a_never_shed_census_of_the_decision_content_over_a_shed_record():
+    # axis: the never-shed set; a shed step emptying the status, a missing line, an outcome or reason, a go-ahead or a row's identity
+    rec = _long_session()
+    posted = rr._parse_body(rr.render(rec))
+    assert "reviewerShed" in posted
+    assert rec["whatIsMissing"] and rec["missingReviews"] == [{"name": "security-reviewer", "goAhead": RULING}]
+    assert posted["status"] == rec["status"] == "not-reviewed"
+    assert posted["whatIsMissing"] == rec["whatIsMissing"]
+    assert [(f["outcome"], f["reason"]) for f in posted["findings"]] == [
+        ("fixed", f"fixed in 1a2b3c{i:x}") for i in range(15)]
+    assert posted["missingReviews"] == rec["missingReviews"]
+    assert [{k: v[k] for k in PROTECTED_ROW_KEYS} for v in posted["reviewers"]] == [
+        {k: v[k] for k in PROTECTED_ROW_KEYS} for v in rec["reviewers"]]
+    assert len(posted["reviewers"]) == 46 and posted["reviewers"][0]["ran"] == "engine-record"
+
+
+def test_the_shed_line_names_exactly_what_was_shed(monkeypatch):
+    # axis: the shed line's wording; the line naming run directories when only telemetry went, or the reverse
+    rec = _long_session()
+    # pinned: the lane-basis steps are off so the caps below are exact; in production they shave a few characters
+    # first, so the reviewer steps start a little later than this test shows
+    with monkeypatch.context() as m:
+        m.setattr(rr, "_SHED_STEPS", ())
+        after_observation = _unshed_size(dict(rr._shed_observation(rec), reviewerShed="observation"), m)
+    with monkeypatch.context() as m:
+        m.setattr(rr, "_SHED_STEPS", ())
+        m.setattr(rr, "MAX_BODY_CHARS", after_observation)
+        only = rr.render(rec)
+        m.setattr(rr, "MAX_BODY_CHARS", after_observation - 1)
+        both = rr.render(rec)
+    assert rr._parse_body(only)["reviewerShed"] == "observation" and SHED_LINE % "engine telemetry" in only.split("\n")
+    assert rr._parse_body(both)["reviewerShed"] == "runDir"
+    assert SHED_LINE % "engine telemetry and run directories" in both.split("\n")
+    assert SHED_LINE % "engine telemetry" not in both.split("\n")
+    kept = rr._parse_body(only)["reviewers"][0]
+    assert set(kept["observation"]) == {"read", "toolCalls"} and kept["runDir"] == rec["reviewers"][0]["runDir"]
+
+
+def test_a_reviewer_row_without_a_dict_observation_is_left_as_it_is():
+    # axis: the observation step on a row with no dict observation; a crash, or an observation made up for the row
+    rec = _long_session()
+    rec["reviewers"][1].pop("observation")
+    rec["reviewers"][2]["observation"] = None
+    rec["reviewers"][3]["observation"] = "read it all"
+    rec["reviewers"][4]["observation"] = ["tokens", 5]
+    posted = rr._parse_body(rr.render(rec))
+    assert "reviewerShed" in posted
+    assert "observation" not in posted["reviewers"][1]
+    assert [posted["reviewers"][i]["observation"] for i in (2, 3, 4)] == [None, "read it all", ["tokens", 5]]
+    assert set(posted["reviewers"][0]["observation"]) == {"read", "toolCalls"}
+
+
+def test_a_record_that_cannot_fit_after_every_step_is_refused_not_truncated():
+    # axis: the refusal after the last shed step; a body still over the cap posted, or cut to fit
+    for field in ("whatIsMissing", "reason"):
+        rec = _long_session()
+        if field == "whatIsMissing":
+            rec["whatIsMissing"] = rec["whatIsMissing"] + ["w" * rr.MAX_BODY_CHARS]
+        else:
+            rec["findings"][0]["reason"] = "r" * rr.MAX_BODY_CHARS
+        with pytest.raises(rr.Refusal) as e:
+            rr.render(rec)
+        assert e.value.reason == "review-record-too-large"
+
+
+def test_a_record_under_the_cap_renders_with_no_shed_line_and_no_reviewer_shed(monkeypatch):
+    # axis: the reviewer steps run only while over the cap; a record that fits trimmed or marked as shed
+    rec = _long_session(reviewers=3, body_chars=20)
+    body = rr.render(rec)
+    assert _unshed_size(rec, monkeypatch) == len(body) < rr.MAX_BODY_CHARS
+    assert "Reviewer detail trimmed" not in body and "reviewerShed" not in rr._parse_body(body)
+    posted = rr._parse_body(body)
+    assert all(v["runDir"] and set(v["observation"]) >= {"tokens", "telemetry"} for v in posted["reviewers"][:-1])
+
+
+def test_a_record_that_needed_only_the_lane_basis_steps_carries_no_shed_line(tmp_path):
+    # axis: the reviewer steps start only after the lane-basis steps; a lane-basis shed also trimming reviewers
+    body = rr.render(_astral_record(tmp_path, per_area=150))
+    posted = rr._parse_body(body)
+    assert posted["laneBasis"]["basisShed"] in ("why-paths", "matched", "unmatchable")
+    assert "Reviewer detail trimmed" not in body and "reviewerShed" not in posted
+    assert posted["reviewers"][0]["runDir"]
