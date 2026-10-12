@@ -1,7 +1,8 @@
 // The one parser of the checkpoint block a session ends its reply with
 // (`skills/checkpoint/SKILL.md` step 4). Pure: no `claude-code` import.
 
-const INFO = 'superheroes-checkpoint'
+/** The one definition of the checkpoint fence's info string; tests import it, and the skill cites this file. */
+export const CHECKPOINT_INFO = 'superheroes-checkpoint'
 const OPEN = /^ {0,3}(`{3,})([^`]*)$/
 const CLOSE = /^ {0,3}(`{3,})[ \t]*$/
 
@@ -37,7 +38,7 @@ export function extractCheckpointBlock(text: string): string | null {
       body.push(line)
     }
 
-    if ((open[2] ?? '').trim() === INFO) {
+    if ((open[2] ?? '').trim() === CHECKPOINT_INFO) {
       last = { body, isClosed }
     }
   }

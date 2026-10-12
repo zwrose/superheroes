@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { extractCheckpointBlock } from './checkpoint-block'
+import { CHECKPOINT_INFO, extractCheckpointBlock } from './checkpoint-block'
 
 const TICKS = '```'
-const fenced = (body: string, info = 'superheroes-checkpoint', fence = TICKS) =>
+const fenced = (body: string, info = CHECKPOINT_INFO, fence = TICKS) =>
   `${fence}${info}\n${body}\n${fence}\n`
 
 test('no block: null', () => {
@@ -20,11 +20,11 @@ test('the body keeps inner blank lines and indentation', () => {
 })
 
 test('unclosed block: null', () => {
-  expect(extractCheckpointBlock(`${TICKS}superheroes-checkpoint\nnotes\nmore notes\n`)).toBeNull()
+  expect(extractCheckpointBlock(`${TICKS}${CHECKPOINT_INFO}\nnotes\nmore notes\n`)).toBeNull()
 })
 
 test('a shorter fence line does not close a longer fence', () => {
-  expect(extractCheckpointBlock(`${TICKS}\`superheroes-checkpoint\nnotes\n${TICKS}\n`)).toBeNull()
+  expect(extractCheckpointBlock(`${TICKS}\`${CHECKPOINT_INFO}\nnotes\n${TICKS}\n`)).toBeNull()
 })
 
 test('empty or whitespace-only body: null', () => {
@@ -39,27 +39,27 @@ test('two blocks: the last wins', () => {
 })
 
 test('the last block wins even when it is the one left unclosed or empty', () => {
-  expect(extractCheckpointBlock(`${fenced('first')}\n${TICKS}superheroes-checkpoint\nhalf\n`)).toBeNull()
+  expect(extractCheckpointBlock(`${fenced('first')}\n${TICKS}${CHECKPOINT_INFO}\nhalf\n`)).toBeNull()
   expect(extractCheckpointBlock(`${fenced('first')}\n${fenced('')}`)).toBeNull()
 })
 
 test('a longer fence may contain a three-backtick line', () => {
   const body = `before\n${TICKS}bash\necho hi\n${TICKS}\nafter`
-  const text = `Intro\n\n\`\`\`\`superheroes-checkpoint\n${body}\n\`\`\`\`\n`
+  const text = `Intro\n\n\`\`\`\`${CHECKPOINT_INFO}\n${body}\n\`\`\`\`\n`
 
   expect(extractCheckpointBlock(text)).toBe(body)
 })
 
 test('a closing fence may be longer than the opening one', () => {
-  expect(extractCheckpointBlock(`${TICKS}superheroes-checkpoint\nnotes\n\`\`\`\`\`\n`)).toBe('notes')
+  expect(extractCheckpointBlock(`${TICKS}${CHECKPOINT_INFO}\nnotes\n\`\`\`\`\`\n`)).toBe('notes')
 })
 
 test('wrong info string: null', () => {
   expect(extractCheckpointBlock(fenced('notes', 'text'))).toBeNull()
   expect(extractCheckpointBlock(fenced('notes', ''))).toBeNull()
-  expect(extractCheckpointBlock(fenced('notes', 'superheroes-checkpoint-v2'))).toBeNull()
-  expect(extractCheckpointBlock(fenced('notes', 'superheroes-checkpoints'))).toBeNull()
-  expect(extractCheckpointBlock(fenced('notes', 'superheroes-checkpoint extra'))).toBeNull()
+  expect(extractCheckpointBlock(fenced('notes', `${CHECKPOINT_INFO}-v2`))).toBeNull()
+  expect(extractCheckpointBlock(fenced('notes', `${CHECKPOINT_INFO}s`))).toBeNull()
+  expect(extractCheckpointBlock(fenced('notes', `${CHECKPOINT_INFO} extra`))).toBeNull()
 })
 
 test('a checkpoint fence quoted inside another fence is not a block', () => {

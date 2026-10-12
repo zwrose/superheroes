@@ -2,6 +2,8 @@ import type { On, SessionCompactInput } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { CHECKPOINT_INFO } from './checkpoint-block'
+
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
 type Cli = { exitCode: number; stdout: string } | null
@@ -131,7 +133,7 @@ const nth = <T>(items: readonly T[], i: number): T => {
   return item
 }
 
-const block = (body: string) => `Here you go.\n\n\`\`\`superheroes-checkpoint\n${body}\n\`\`\`\n`
+const block = (body: string) => `Here you go.\n\n\`\`\`${CHECKPOINT_INFO}\n${body}\n\`\`\`\n`
 
 for (const trigger of ['manual', 'auto'] as const) {
   test(`session.compact (${trigger}): the CLI's instructions reach the summarizer, the marker lands first`, async ($, on) => {
@@ -330,8 +332,8 @@ test("turn.complete: a subagent's checkpoint block never reaches the parent's no
 
 for (const [name, answer] of [
   ['no block', 'Just an answer.'],
-  ['an unclosed block', '```superheroes-checkpoint\nnotes with no end\n'],
-  ['an empty block', '```superheroes-checkpoint\n\n```\n'],
+  ['an unclosed block', `\`\`\`${CHECKPOINT_INFO}\nnotes with no end\n`],
+  ['an empty block', `\`\`\`${CHECKPOINT_INFO}\n\n\`\`\`\n`],
 ] as const) {
   test(`turn.complete with ${name}: no CLI call, no write, no toast`, async ($, on) => {
     const r = rig(on, () => saveAnswer)

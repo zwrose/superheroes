@@ -113,7 +113,8 @@ Confirm each item from durable artifacts and the session ledger, not from memory
 
 ## Step 4 — Write the notes and the compaction instructions as one block
 
-End the reply with **one** fenced block whose info string is exactly `superheroes-checkpoint`.
+End the reply with **one** fenced block whose info string is exactly `superheroes-checkpoint` — the token `CHECKPOINT_INFO` in
+`hooks/mod/checkpoint-block.ts` (the one parser and the one definition; change it there first).
 Its body is the freshened notes (step 3) followed by the compaction instructions (the five
 parts of step 5, as prose). Rules:
 
