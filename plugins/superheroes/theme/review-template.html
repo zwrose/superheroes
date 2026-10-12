@@ -1680,7 +1680,11 @@
         const option = optionOf(index, held.optionId);
         return option !== undefined && option.sendsBack === false;
       }).length;
-      const locked = accepted < total;
+      const incomplete = accepted < total;
+      // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
+      // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
+      const clearUnsaved = verdictController.state().answer === null && (verdictController.state().save === "failed" || verdictController.state().save === "stalled");
+      const locked = incomplete || clearUnsaved;
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -1689,7 +1693,7 @@
       verdictController.setChoice("merge", locked ? fill(prWords.mergeLocked, { merge: mergeLabel }) : mergeLabel, locked);
       verdictController.setShown(!sendsBack);
       unlockLine.textContent = fill(prWords.unlocks, { accepted: accepted, total: total });
-      unlockLine.hidden = !locked || sendsBack;
+      unlockLine.hidden = !incomplete || sendsBack;
       sendBackLine.hidden = !sendsBack;
       if (ready && locked && verdictController.state().answer === "merge") verdictController.clear();
     }

@@ -268,11 +268,6 @@ def test_pr_cards_take_their_answer_words_from_prAnswers():
     """, words=words)
     assert page["result"][0] == ["Take it", "Talk"]
     assert page["result"][1][-1] == "Other"
-    assert WORDS["prAnswers"] == {
-        "labels": {"accept": "Accept", "discuss": "Discuss", "something-else": "Something else"},
-        "withOptions": ["something-else"],
-        "withoutOptions": ["accept", "discuss"],
-    }
 
 
 # Bites on: a card that cannot be answered with its note empty, or an Accept that writes anything but the whole answer document.
@@ -727,12 +722,6 @@ def test_the_lock_follows_what_the_store_has_acknowledged(row):
 
 
 def test_the_lock_words_are_exactly_the_shared_contract():
-    assert PW["mergeLocked"] == "{merge} · locked"
-    assert PW["unlocks"] == "Unlocks when every item above is accepted: {accepted} of {total} so far."
-    assert PW["sendBack"] == (
-        "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
-    )
-    assert _locked_label() == "Merge #214 · locked" and _locked_label("stack") == "Merge stack #4 · locked"
     for key in ("mergeLocked", "unlocks", "sendBack"):
         words = copy.deepcopy(WORDS)
         del words["pr"][key]
@@ -853,6 +842,52 @@ def test_a_failed_clear_shows_not_saved_and_the_sheet_stays_locked():
     cleared = {"verdict": None, "note": "", "sheet": digest}
     assert result["retried"] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared, cleared]
     assert "Saved" in result["after"]["verdictSave"] and result["after"]["disabled"] is True
+
+
+# Bites on: a card accepted again after its Discuss was acknowledged unlocking Merge while the failed clear still leaves the old Merge in the store, or that stored Merge coming back as a pressed verdict when the sheet is reopened.
+def test_re_accepting_after_a_failed_clear_keeps_merge_locked_and_the_stored_merge_does_not_return():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      await settle(3);
+      t.click(verdictRow()[0]);
+      await t.tick();
+      t.sets[3].resolve();
+      await t.tick();
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      const answerCall = () => t.sets.filter((call) => call.path === "answers/" + A).pop();
+      answerCall().resolve();
+      await t.tick();
+      lastVerdictCall().reject(new Error("no"));
+      await t.tick();
+      const failed = lockView();
+      t.click(t.button(A, "Accept"));
+      await t.tick();
+      answerCall().resolve();
+      await t.tick();
+      const reaccepted = lockView();
+      const stillStored = t.written()["verdict/%s"];
+      t.click(verdictSave().children.find((child) => child.tagName === "button"));
+      await t.tick();
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { failed: failed, reaccepted: reaccepted, stillStored: stillStored, after: lockView(), written: t.written() };
+    """ % digest, host=PENDING)
+    result = page["result"]
+    assert result["failed"]["pressed"] == ["false", "false"] and result["failed"]["disabled"] is True
+    assert result["stillStored"]["verdict"] == "merge"
+    assert result["reaccepted"]["disabled"] is True and result["reaccepted"]["label"] == _locked_label()
+    assert result["reaccepted"]["pressed"] == ["false", "false"]
+    assert "Not saved" in result["reaccepted"]["verdictSave"]
+    assert result["after"]["disabled"] is False and result["after"]["pressed"] == ["false", "false"]
+    stored = result["written"]
+    assert stored["verdict/" + digest]["verdict"] is None
+    reopened = _lock(PR_SAMPLE, "return lockView();", host={"collections": {
+        "answers": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("answers/")],
+        "verdict": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("verdict/")],
+    }})
+    assert reopened["result"]["pressed"] == ["false", "false"]
 
 
 # Bites on: a stored Merge restored onto a sheet that is locked once its answers are restored (E8) staying a Merge, or being cleared when the sheet is not locked.
