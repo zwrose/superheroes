@@ -267,7 +267,8 @@ For each item under `sendBack`, send `message` to the item's `cloudSessionName` 
 account that is `SendMessage`. On another account (`configDir`) it is the relay's `ensure`,
 `compose`, `SendMessage`, `check`. Then record it:
 
-- After `delivered: true`, run `python3 -B <plugin root>/lib/cloud_parked.py sent --repo-root <root>
+- After a direct `SendMessage` returns `success: true`, or the relay's `check` returns
+  `delivered: true`, run `python3 -B <plugin root>/lib/cloud_parked.py sent --repo-root <root>
   --repo <owner/name> --pr <n>`. A second call is `unchanged`.
 - After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed`, run `sent` too. The builder
   may already hold the text, so never resend it automatically; tell the owner.

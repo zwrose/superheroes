@@ -109,6 +109,8 @@ def _lapses(repo_root, env, config_dir=None, environment=None):
         else:
             env = dict(env, **{cd.CONFIG_DIR_ENV: config_dir})
     account = cs.launching_account(env=env, cwd=repo_root)
+    if account and _sib("cloud_check").read_failed_check(repo_root, account) is not None:
+        return None  # the latest check failed (or its marker is unreadable): the saved date is stale
     record = cs.read(repo_root, account)["record"] if account else None
     if isinstance(record, dict) and isinstance(environment, str) and environment \
             and record.get("environment") != environment:
@@ -134,6 +136,11 @@ def _park_day(created_at):
     return stamp.astimezone(datetime.timezone.utc).date().isoformat()
 
 
+def _park_time(comment):
+    """Epoch seconds of a park comment already known to carry a readable `created_at`."""
+    return datetime.datetime.fromisoformat(comment["created_at"].replace("Z", "+00:00")).timestamp()
+
+
 def _comments(repo, pr, env, run):
     code, out = _sib("cloud_builder")._gh(run, ["api", "--paginate", "repos/%s/issues/%d/comments" % (repo, pr)], env)
     try:
@@ -153,20 +160,22 @@ def _pull(repo, pr, env, run):
 
 
 def _let_through(repo, pr, env, run):
-    """True when the owner already let it through: its latest review record names missing reviews, all
-    with go-aheads. None when the record could not be read for a reason other than there being none."""
+    """True when the owner already let it through: its latest review record names missing reviews and the
+    record itself says it is no longer parked (its writer owns that decision). None when the record could not be read for a reason other than there being none."""
     got = _sib("review_record").read(pr, repo=repo, readers={"list_comments": lambda p, r: _comments(r, p, env, run)})
     if not got.get("ok"):
         return False if got.get("reason") in _NO_RECORD else None
-    missing = got.get("missingReviews")
-    return bool(missing) and isinstance(missing, list) and all(
-        isinstance(m, dict) and m.get("goAhead") is not None for m in missing)
+    missing, parked = got.get("missingReviews"), got.get("parked")
+    if not (isinstance(missing, list) and isinstance(parked, bool)):
+        return None
+    return bool(missing) and not parked
 
 
-def _lane(repo_root, issues, env, launch_id=None):
+def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
     """(launchId, folded lane, reason) of the cloud lane: the one named by `launch_id` when given (never
     another), else the newest for the issues; (None, {}, None) when a readable ledger has none. `reason`
-    names a ledger that could not be read or folded."""
+    names a ledger that could not be read or folded. With `reserved_by` (epoch seconds), a launch
+    reserved after it is not the lane."""
     ll = _sib("launch_ledger")
     got = ll.read(repo_root, env=env)
     if got["state"] not in ("ok", "missing", "tornTail"):
@@ -175,7 +184,8 @@ def _lane(repo_root, issues, env, launch_id=None):
     if not fold.get("ok", True):
         return None, {}, "launch-ledger-fold-failed"
     lanes = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
-             if i["place"] == "cloud" and (k == launch_id if launch_id else i["issue"] in issues)]
+             if i["place"] == "cloud" and (k == launch_id if launch_id else i["issue"] in issues)
+             and (reserved_by is None or i["reservedTs"] <= reserved_by)]
     if not lanes:
         return None, {}, None
     best = max(lanes, key=lambda t: t[0])
@@ -206,7 +216,8 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         if pull is None:
             return _refusal("pr-read-failed")
         issues = _sib("review_record").closing_issues(pull.get("body"), repo)
-        launch_id, _, ledger_reason = _lane(repo_root, issues, env) if issues else (None, {}, None)
+        launch_id, _, ledger_reason = (
+            _lane(repo_root, issues, env, reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
         entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id})

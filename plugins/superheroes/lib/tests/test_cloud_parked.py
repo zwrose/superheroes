@@ -15,6 +15,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_builder  # noqa: E402
+import cloud_check  # noqa: E402
 import cloud_parked as CP  # noqa: E402
 import cloud_pass  # noqa: E402
 import cloud_ready as CR  # noqa: E402
@@ -36,6 +37,8 @@ STAMP = "sha256:" + "ab" * 32
 TODAY = "2026-10-12"
 NOW = datetime.datetime(2026, 10, 12, 12, tzinfo=datetime.timezone.utc).timestamp()
 PAST = "2026-10-05"
+LAUNCHED = datetime.datetime(2026, 10, 4, 12, tzinfo=datetime.timezone.utc).timestamp()  # before the park comment
+RELAUNCHED = datetime.datetime(2026, 10, 10, 12, tzinfo=datetime.timezone.utc).timestamp()
 FUTURE = "2026-12-01"
 REPO = "owner/name"
 BATCH = "b-parked"
@@ -90,7 +93,8 @@ def _lapsed_comment(pr, created_at="2026-10-05T10:00:00Z"):
 
 
 def _record_comment(pr, missing):
-    rec = {"schema": RR.RECORD_SCHEMA, "pr": pr, "missingReviews": missing}
+    rec = {"schema": RR.RECORD_SCHEMA, "pr": pr, "missingReviews": missing,
+           "parked": any(m["goAhead"] is None for m in missing)}
     return {"id": 500 + pr, "body": RR.MARKER + "\n<details>\n\n```json\n" + json.dumps(rec) + "\n```\n</details>\n"}
 
 
@@ -157,8 +161,8 @@ def _renew(w, account=ACCOUNT, date=FUTURE):
     assert got["action"] == "written", got
 
 
-def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None):
-    extra = {} if config_dir is None else {"configDir": config_dir}
+def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None, ts=LAUNCHED):
+    extra = {"ts": ts} if config_dir is None else {"ts": ts, "configDir": config_dir}
     rec = _reserved(launch_id, BATCH, [surface], w.repo, issue=issue, place="cloud",
                     cloudEnvironment=ENVIRONMENT, pluginVersion="1.2.3", **extra)
     assert ll.reserve(w.repo, rec, env=w.env)["ok"]
@@ -253,6 +257,36 @@ def test_a_later_launch_for_the_same_issue_never_receives_the_original_prs_revie
     out = _send(w)
     assert [s["cloudSessionName"] for s in out["sendBack"]] == ["orig-session"]
     assert out["sendBack"][0]["launchId"] == "l-orig"
+
+
+def test_a_first_notice_after_a_later_launch_still_finds_the_original_prs_lane(w):
+    _lane(w, "l-orig", 101, "orig-session", "a", finished=True)
+    _lane(w, "l-later", 101, "later-session", "a2", ts=RELAUNCHED)
+    _park(w, 10, issue=101)
+    assert _entries(w)[0]["launchId"] == "l-orig"
+    _renew(w)
+    assert [s["cloudSessionName"] for s in _send(w)["sendBack"]] == ["orig-session"]
+
+
+def test_a_first_notice_with_only_a_launch_made_after_the_park_lists_the_pr_under_no_lane(w):
+    _lane(w, "l-later", 101, "later-session", "a", ts=RELAUNCHED)
+    _park(w, 10, issue=101)
+    assert _entries(w)[0]["launchId"] is None
+    _renew(w)
+    out = _send(w)
+    assert out["sendBack"] == [] and out["noLane"] == [{"pr": 10, "issue": 101}]
+
+
+def test_a_failed_reviewer_check_after_the_renewal_keeps_the_pr_unrenewed(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    marker = cloud_check.failed_check_path(w.repo, ACCOUNT, w.store)
+    os.makedirs(os.path.dirname(marker), exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as fh:
+        fh.write("not json")
+    out = _send(w)
+    assert out["sendBack"] == [] and out["notRenewed"] == [10]
 
 
 def test_a_parked_pr_whose_original_launch_is_unknown_is_reported_not_given_another_lane(w):
