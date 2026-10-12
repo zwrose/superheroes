@@ -136,7 +136,7 @@ Then check how the notes get saved:
 printenv SUPERHEROES_COMPACT_MOD
 ```
 
-The variable's name and meaning are defined by `COMPACT_MOD_ENV` in `hooks/mod/checkpoint-block.ts`
+The variable's name and meaning are defined by the `$.env.set` call in `hooks/mod/register.ts`
 (change it there first): the mod sets it to the id of the session it runs in.
 
 - **Prints this session's id** (the one in the step 2 notes file name): the mod saves the block to the notes

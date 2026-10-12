@@ -53,8 +53,11 @@ const text = (value: unknown): string | null =>
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     try {
-      // `$.env.set` takes a literal name; the test pins it to COMPACT_MOD_ENV
-      // (checkpoint-block.ts), the one definition of the signal's name and meaning.
+      // The one definition of the mod-presence signal: the mod exports this variable
+      // to the session's Bash children with the session's own id as its value. The
+      // checkpoint skill reads it back: its own id means the mod runs in THIS
+      // session and saves the reply's block; unset or another id means no mod here.
+      // `$.env.set` needs a literal name, so this call is the one home; the skill cites it.
       await $.env.set('SUPERHEROES_COMPACT_MOD', await $.session.id())
     } catch (error) {
       note($, `session.start: ${String(error)}`)
@@ -125,10 +128,17 @@ export const register: Register = on => {
         const block = extractCheckpointBlock(e.answer)
 
         if (block !== null) {
-          // The CLI replaces the notes atomically (temp file + rename): a failed
-          // save leaves the last good notes in place.
-          await directive($, 'save', ['--session-id', await $.session.id()], block)
-          $.ui.toast('Checkpoint notes saved')
+          try {
+            // The CLI replaces the notes atomically (temp file + rename): a failed
+            // save leaves the last good notes in place.
+            await directive($, 'save', ['--session-id', await $.session.id()], block)
+            $.ui.toast('Checkpoint notes saved')
+          } catch (error) {
+            // The skill was told not to write the file (the presence signal is set),
+            // so a failed save must reach the owner; the answer itself goes on unchanged.
+            note($, `turn.complete: ${String(error)}`)
+            $.ui.toast('Checkpoint notes NOT saved: the previous notes are still in place')
+          }
         }
       } catch (error) {
         note($, `turn.complete: ${String(error)}`)

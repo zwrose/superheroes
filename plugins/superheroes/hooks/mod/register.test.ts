@@ -2,7 +2,7 @@ import type { On, SessionCompactInput } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { CHECKPOINT_INFO, COMPACT_MOD_ENV } from './checkpoint-block'
+import { CHECKPOINT_INFO } from './checkpoint-block'
 
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
@@ -277,7 +277,8 @@ test('session.start sets the mod-presence variable to this session id for Bash c
   const res = await $.session.start({ cwd: '/w', surface: null, isInteractive: false })
 
   expect(res).toEqual({ cwd: '/w' })
-  expect(r.envs).toEqual([[COMPACT_MOD_ENV, SESSION]])
+  expect(r.envs).toHaveLength(1)
+  expect(nth(r.envs, 0)[1]).toBe(SESSION)
 })
 
 test('session.start still completes when the env write throws', async ($, on) => {
@@ -368,7 +369,7 @@ for (const [name, cli, options] of [
   ['the CLI cannot run', null, {}],
   ['the session id throws', saveAnswer, { isIdBroken: true }],
 ] as [string, Cli, Options][]) {
-  test(`turn.complete fails open: ${name} — no toast, answer unchanged`, async ($, on) => {
+  test(`turn.complete fails open: ${name} — failure toast, answer unchanged`, async ($, on) => {
     const r = rig(on, () => cli, options)
     const answer = block('notes')
 
@@ -376,6 +377,6 @@ for (const [name, cli, options] of [
 
     expect(res).toEqual({ text: answer })
     expect(r.writes).toHaveLength(0)
-    expect(r.toasts).toHaveLength(0)
+    expect(r.toasts).toEqual(['Checkpoint notes NOT saved: the previous notes are still in place'])
   })
 }

@@ -4,16 +4,6 @@
 /** The one definition of the checkpoint fence's info string; tests import it, and the skill cites this file. */
 export const CHECKPOINT_INFO = 'superheroes-checkpoint'
 
-/**
- * The one definition of the mod-presence signal: the mod exports this variable
- * to the session's Bash children with the session's own id as its value. A
- * checkpoint skill that reads back its own session id knows the mod runs in
- * THIS session and will save the reply's block; anything else (unset, or an id
- * inherited from another session's child, e.g. a dispatched Codex child) means
- * no mod here. The mod's `$.env.set` needs a literal name, so register.ts spells it and
- * register.test.ts pins that literal to this constant; the skill cites this file.
- */
-export const COMPACT_MOD_ENV = 'SUPERHEROES_COMPACT_MOD'
 // CommonMark: a fence is three or more backticks (info string without a backtick)
 // or three or more tildes; it closes only on the same character, at least as long.
 const OPEN = /^ {0,3}(?:(`{3,})([^`]*)|(~{3,})(.*))$/
