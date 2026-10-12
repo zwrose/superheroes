@@ -25,6 +25,7 @@ def _load(name):
 CS = _load("cloud_setup")
 PC = _load("project_config")
 CM = _load("core_md")
+CC = _load("cloud_check")
 
 _CORE_FACTS = {
     "verifyCommand": "npm test",
@@ -166,6 +167,61 @@ def test_switch_on_refused_without_account(tmp_path):
     assert got["action"] == "refused"
     assert got["reason"] == CS.REASON_MISSING
     assert _stored(repo, store)["raw"] is None
+
+
+def _refused_for_a_failed_check(repo, store, monkeypatch):
+    monkeypatch.setitem(sys.modules, "cloud_check", CC)
+    got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
+    assert got == {
+        "action": "refused",
+        "reason": CS.REASON_CHECK_FAILED,
+        "message": CS.switch_message("check-failed", "fixture"),
+    }
+    stored = _stored(repo, store)
+    assert stored["raw"] is None
+    assert stored["effective"] is False
+
+
+def test_switch_on_refused_when_the_last_check_failed_and_stores_nothing(tmp_path, monkeypatch):
+    # axis: a failed-check marker that is present keeps cloud builds from switching on — see bite-proof record wo_d_place_call
+    repo, store = _setup_repo(tmp_path)
+    _check(repo, store)
+    assert CC._write_failed_check(repo, ACCOUNT, store, ENVIRONMENT, ["version"], 0) is True
+    assert CS.REASON_CHECK_FAILED == "cloud-check-failed"
+    _refused_for_a_failed_check(repo, store, monkeypatch)
+
+
+def test_switch_on_refused_when_the_failed_check_marker_is_damaged(tmp_path, monkeypatch):
+    repo, store = _setup_repo(tmp_path)
+    _check(repo, store)
+    path = CC.failed_check_path(repo, ACCOUNT, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    _refused_for_a_failed_check(repo, store, monkeypatch)
+
+
+def test_switch_on_goes_ahead_with_a_ready_record_and_no_failed_check_marker(tmp_path, monkeypatch):
+    repo, store = _setup_repo(tmp_path)
+    _check(repo, store)
+    assert not os.path.lexists(CC.failed_check_path(repo, ACCOUNT, store))
+    monkeypatch.setitem(sys.modules, "cloud_check", CC)
+    got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
+    assert got["action"] == "written"
+    assert got["message"] == CS.switch_message("on", "fixture")
+    assert _stored(repo, store)["raw"] is True
+
+
+def test_switch_on_refused_when_the_failed_check_marker_cannot_be_read(tmp_path, monkeypatch):
+    # axis: a marker read that raises refuses the switch-on, never proceeds — see bite-proof record wo_d_place_call
+    repo, store = _setup_repo(tmp_path)
+    _check(repo, store)
+
+    def _boom(*a, **k):
+        raise RuntimeError("the marker read failed")
+
+    monkeypatch.setattr(CC, "read_failed_check", _boom)
+    _refused_for_a_failed_check(repo, store, monkeypatch)
 
 
 def test_switch_with_non_boolean_is_malformed_before_the_reader_is_asked(tmp_path, monkeypatch):
@@ -453,6 +509,10 @@ def test_switch_messages_are_the_approved_words():
     assert CS.switch_message("refused", "demo") == (
         "Cloud builds can't be switched on yet. This project has no cloud setup on this "
         'Claude account. Say "set up cloud builds" and I\'ll walk you through it.'
+    )
+    assert CS.switch_message("check-failed", "demo") == (
+        "Cloud builds can't be switched on yet: the last check of this project's cloud setup "
+        'failed. Fix what it named, then say "check again".'
     )
     with pytest.raises(ValueError):
         CS.switch_message("maybe", "demo")

@@ -14,6 +14,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cloud_check  # noqa: E402
 import cloud_setup  # noqa: E402
 import cloud_setup_text  # noqa: E402
 
@@ -21,9 +22,18 @@ CONDITION_ORDER = ("setup", "passPresent", "passLive", "version", "calibration",
 REASON_FOR = {"setup": "no-setup", "passPresent": "no-pass", "passLive": "pass-lapsed",
               "version": "version", "calibration": "calibration", "platform": "unreachable"}
 REPORTED_KEYS = ("pluginVersion", "noPass", "unreachable")
+# The one condition a failed check's part forces false; any other part, or a marker that cannot be
+# read, forces the setup condition false.
+FAILED_PART_CONDITION = {
+    # axis: the reviewer part forces the pass-present condition false — see bite-proof record wo_c_place_call
+    "reviewer": "passPresent",
+    # axis: the version part forces the version condition false — see bite-proof record wo_c_place_call
+    "version": "version",
+    # axis: the calibration part forces the calibration condition false — see bite-proof record wo_c_place_call
+    "calibration": "calibration",
+}
 
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def valid_reported(reported):
@@ -47,17 +57,8 @@ def _placed_stamp(cwd, root):
     return cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(cwd, root))
 
 
-def _lapses_ok(lapses, today):
-    if not (isinstance(lapses, str) and _DATE_RE.fullmatch(lapses)):
-        return False
-    try:
-        return datetime.date.fromisoformat(lapses) >= today
-    except ValueError:
-        return False
-
-
 def _result(conditions, *, setting=False, account=None, environment=None, cloud_version=None,
-            advisor_version=None, picks_up=None, checked_at=None):
+            advisor_version=None, picks_up=None, checked_at=None, failed_check=None):
     # axis: the reason is the first false condition in the fixed order — see bite-proof record wo_a_place_call
     reason = next((REASON_FOR[name] for name in CONDITION_ORDER if not conditions[name]), None)
     return {
@@ -71,6 +72,7 @@ def _result(conditions, *, setting=False, account=None, environment=None, cloud_
         "advisorVersion": advisor_version,
         "picksUpVersion": picks_up,
         "checkedAt": checked_at,
+        "failedCheck": failed_check,
     }
 
 
@@ -96,6 +98,21 @@ def _today(given):
     return datetime.datetime.now(datetime.timezone.utc).date()
 
 
+def _failed_check(cwd, account, root):
+    """None when no failed-check marker is present, else the marker's failed parts: an empty list
+    when the marker is damaged or its read raises."""
+    try:
+        marker = cloud_check.read_failed_check(cwd, account, root)
+        if marker is None:
+            return None
+        parts = marker.get("failedParts")
+        if marker.get("damaged") is True or not isinstance(parts, list):
+            return []
+        return list(parts)
+    except Exception:
+        return []
+
+
 def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen):
     if account is None:
         account = cloud_setup.launching_account(env, cwd)
@@ -115,10 +132,18 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
     if not setup:
         return _result(conditions, **fallback)
     record = got["record"] if isinstance(got.get("record"), dict) else {}
+    # axis: any failed-check marker present means the latest check failed, so the setup is not ready — see bite-proof record wo_c_place_call
+    failed = _failed_check(cwd, account, root)
+    forced = set()
+    if failed is not None:
+        # axis: any other failed part, or a marker that cannot be read, forces the setup condition false — see bite-proof record wo_c_place_call
+        if not failed or any(part not in FAILED_PART_CONDITION for part in failed):
+            return _result(conditions, failed_check=failed, **fallback)
+        forced = {FAILED_PART_CONDITION[part] for part in failed}
     conditions["setup"] = setup
     conditions["passPresent"] = reported.get("noPass") is not True
     # axis: the pass is live only while its recorded lapse date is not before today — see bite-proof record wo_a_place_call
-    conditions["passLive"] = _lapses_ok(record.get("passLapses"), _today(today))
+    conditions["passLive"] = cloud_check._lapses_ok(record.get("passLapses"), _today(today))
     # axis: a version the cloud reported stands in place of the record's — see bite-proof record wo_a_place_call
     if reported.get("pluginVersion") is not None:
         cloud_version = reported["pluginVersion"]
@@ -127,6 +152,9 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
         cloud_version = record.get("pluginVersion")
         conditions["version"] = advisor is not None and (
             cloud_version == advisor or record.get("picksUpVersion") is True)
+        # axis: a failed version check leaves the old record in place, so its version is not the cloud's current one — see bite-proof record wo_d_place_call
+        if failed is not None and "version" in failed:
+            cloud_version = None
     try:
         # axis: the calibration matches only when the placed stamp equals the recorded one — see bite-proof record wo_a_place_call
         conditions["calibration"] = (stamp_fn or _placed_stamp)(cwd, root) == record.get(
@@ -134,16 +162,26 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
     except Exception:
         conditions["calibration"] = False
     conditions["platform"] = reported.get("unreachable") is not True
+    for name in forced:
+        conditions[name] = False
     return _result(
         conditions, setting=setting, account=seen["account"], environment=record.get("environment"),
         cloud_version=cloud_version, advisor_version=advisor,
-        picks_up=record.get("picksUpVersion"), checked_at=record.get("checkedAt"))
+        picks_up=record.get("picksUpVersion"), checked_at=record.get("checkedAt"),
+        failed_check=failed)
 
 
 def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=None,
               root=None, env=None, stamp_fn=None):
     """Whether the cloud can take a build now, with every condition and the facts behind them.
-    Never raises; any unexpected failure reads as not ready."""
+    Never raises; any unexpected failure reads as not ready.
+
+    The result's keys are ready, reason, conditions, setting, account, environment, cloudVersion,
+    advisorVersion, picksUpVersion, checkedAt and failedCheck. `failedCheck` is None unless the
+    setup is on record and the latest check for the account failed; then it is the failed parts
+    the check left (an empty list when that note cannot be read). A failed check forces its parts'
+    conditions false: the reviewer part the pass, the version part the version, the calibration
+    part the calibration, and any other part, or a marker that cannot be read, the setup."""
     seen = {"setting": False, "account": None}
     try:
         return _readiness(

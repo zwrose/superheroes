@@ -9,19 +9,6 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
-### Launcher: cloud launch
-
-- `launch` and `compose` take `--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. A launch without `--place`, or with `--place local`, is a local launch.
-- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-head-not-on-remote` when the checkout's remote-tracking branches hold no branch that contains the commit the session would start from. It also refuses with `launch-cloud-head-not-base` when the launching checkout is not on the premise's base commit.
-- `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript to read.
-
-### Launch ledger: cloud lanes
-
-- The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
-- `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
-- Heartbeat sweep entries gain `place`.
-- An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
-
 ### Before you upgrade
 
 - After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
@@ -46,6 +33,19 @@ These retirements ship in the same release as the review record, and never apart
 - **The exact-head evidence chain.** The head-content blobs and their recomputation check are gone. The review record is judged against the PR's final commit instead.
 - A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
 - A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
+
+### Launcher: cloud launch
+
+- `launch` and `compose` take `--place cloud --cloud-environment <id>`, and `preflight` takes `--place`. A launch without `--place`, or with `--place local`, is a local launch.
+- A cloud launch provisions no worktree, leaves no process on the owner's machine, and pushes no branch. It refuses with `launch-cloud-base-not-on-remote` when the base commit the launch names is not on the remote, read fresh from the remote, and with `launch-cloud-base-remote-unchecked` when the remote could not be asked.
+- `canary` refuses a cloud lane with `canary-cloud-lane`, because a cloud lane has no local transcript to read.
+
+### Launch ledger: cloud lanes
+
+- The launch ledger accepts a cloud lane: a `reserved` record with `place: "cloud"`, and a `started` record that names the cloud session. Records without `place` read as before.
+- `count`'s `laneDetail` entries gain `place`, and `lanes` gains `cloud`.
+- Heartbeat sweep entries gain `place`.
+- An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
 
 ### Pilot: iPhone typing helper
 
@@ -84,6 +84,13 @@ These retirements ship in the same release as the review record, and never apart
 - A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
 - `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message.
 - A new state file, `cloud-still.json`, sits in the project store's `state` folder.
+### Cloud builds: the setup sitting
+
+- A project is set up for cloud builds by asking the advisor to set up cloud builds. The advisor lists four hand steps: make a cloud environment and pick it by name with Claude Code's `/remote-env` picker on the account the builds run on, paste the setup text into it, sign in once to the separate reviewer sign-in, and paste the reviewer pass. It then runs one check session in that environment and reports three results: the cloud's plugin version, its calibration, and whether the reviewer answered.
+- New `lib/cloud_environment.py` reads the environment the owner picked from Claude Code's user settings (`remote.defaultEnvironmentId` in `settings.json` under the account's config directory): `snapshot` before the pick, `pick --before <value>` after it (a retry adds `--confirmed <id>`, so an unchanged value equal to the confirmed id is kept, not asked again). A missing or unchanged value is no pick, and the owner is asked to pick again; the owner is never asked for the id.
+- New `lib/cloud_check.py` holds the sitting: `setup-message`, `sign-in`, `start`, `report`, `judge` and `setup-text`. `start` and `judge` take `--environment <id>`. A passed check writes the setup record and leaves the cloud-builds setting as it was. A failed check writes nothing and switches cloud builds off when they were on.
+- `cloud_pass.py make` takes `--environment <id>` and then adds a fifth line to its block, `SUPERHEROES_CLOUD_ENVIRONMENT`, naming the environment. The check passes only when the session reports that same id, because a cloud launch naming an id that matches no environment lands in the account's default environment without an error. A pass block made without `--environment` fails the check.
+- The setup text ends with its tool-steps marker line, a log line and `exit 0`. A project's own install steps go directly under the marker line.
 
 ## 0.42.0
 

@@ -18,6 +18,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import architect_config  # noqa: E402
+import cloud_check  # noqa: E402
 import cloud_pass  # noqa: E402
 import cloud_ready as CR  # noqa: E402
 import cloud_setup as CS  # noqa: E402
@@ -90,14 +91,14 @@ def _needs(*things):
 
 
 def _call(place="local", pointed=True, reason=None, by="setting", need=None, cloud=None,
-          advisor=None, environment=None, reported=None):
+          advisor=None, environment=None, reported=None, failed=None):
     return {"place": place, "pointedAtCloud": pointed, "by": by, "reason": reason, "need": need,
             "cloudVersion": cloud, "advisorVersion": advisor, "environment": environment,
-            "reported": reported}
+            "reported": reported, "failedCheck": failed}
 
 
 PLACE_KEYS = {"place", "pointedAtCloud", "by", "reason", "need", "cloudVersion",
-              "advisorVersion", "environment", "reported"}
+              "advisorVersion", "environment", "reported", "failedCheck"}
 
 
 # ---------------------------------------------------------------- fixtures: stores and worlds
@@ -217,10 +218,10 @@ def _route(repo, store, env, premise=None, word=None, **kw):
 
 
 def test_the_eight_reasons_are_the_boards_words():
-    assert LP.REASON_CODES == ("local-word", "needs", "pass-lapsed", "no-pass", "no-setup",
-                               "version", "calibration", "unreachable")
-    assert LP.NOT_READY_CODES == ("pass-lapsed", "no-pass", "no-setup", "version", "calibration",
-                                  "unreachable")
+    assert LP.REASON_CODES[:2] == ("local-word", "needs")
+    # the not-ready reasons are exactly the ones the readiness check can give
+    assert set(LP.NOT_READY_CODES) == set(CR.REASON_FOR.values())
+    assert set(LP.REASON_CODES[2:]) == set(LP.NOT_READY_CODES)
     assert set(LP.REASONS) == set(LP.REASON_CODES)
     assert (LP.LOCAL_WORD, LP.CLOUD_WORD) == ("local", "cloud")
     fix_pass = ('To fix it, run the pass command on your machine, paste the %spass into the '
@@ -272,6 +273,43 @@ def test_reason_text_renders_each_code_and_fills_unknown_versions():
     assert LP.reason_text(_call(reason="version", cloud="0.41.0", advisor="")) == (
         "The cloud's plugin is 0.41.0 and mine is unknown.")
     assert LP.reason_text(_call(reason="needs", need=None)) == _needs_text("something")
+
+
+CHECK_AGAIN_ONLY = 'Say "check again" and I\'ll run the check again.'
+
+
+def test_fix_text_is_the_tables_fix_when_no_check_failed():
+    for code in LP.REASON_CODES:
+        assert LP.fix_text(_call(reason=code)) == LP.REASONS[code]["fix"]
+
+
+def test_E10_fix_text_without_a_reason_or_a_fix_is_none():
+    assert LP.fix_text(_call(reason=None)) is None
+    assert LP.fix_text(_call(reason="not-a-code", failed=["reviewer"])) is None
+    assert LP.fix_text("not a mapping") is None
+    for code in ("local-word", "needs"):
+        assert LP.fix_text(_call(reason=code, failed=["version"])) is None
+
+
+def test_fix_text_after_a_failed_check_asks_for_the_check_again():
+    # axis: after a failed check the fix ends by asking for the check to be run again
+    assert LP.fix_text(_call(reason="no-setup", failed=[])) == CHECK_AGAIN_ONLY
+    assert LP.fix_text(_call(reason="no-setup", failed=["record"])) == CHECK_AGAIN_ONLY
+    assert LP.fix_text(_call(reason="version", failed=["version"])) == (
+        SETUP_TEXT_FIX + ' Then say "check again".')
+    assert LP.fix_text(_call(reason="calibration", failed=["calibration"])) == (
+        SETUP_TEXT_FIX + ' Then say "check again".')
+
+
+def test_fix_text_does_not_repeat_check_again_where_the_fix_has_it():
+    fix = LP.REASONS["no-pass"]["fix"]
+    assert 'say "check again"' in fix
+    assert LP.fix_text(_call(reason="no-pass", failed=["reviewer"])) == fix
+
+
+def test_fix_text_leaves_the_other_reasons_alone_after_a_failed_check():
+    for code in ("pass-lapsed", "unreachable"):
+        assert LP.fix_text(_call(reason=code, failed=["reviewer"])) == LP.REASONS[code]["fix"]
 
 
 # ---------------------------------------------------------------- what only the machine has
@@ -562,6 +600,58 @@ def test_R_FR14_no_pass_in_the_cloud_gives_its_words(tmp_path):
     call = _route(repo, store, env, premise={"reportedCloud": {"noPass": True}})
     assert call["reason"] == "no-pass"
     assert LP.reason_text(call) == "There is no reviewer pass in the cloud environment."
+
+
+def _fail_the_check(repo, store, parts):
+    path = cloud_check.failed_check_path(repo, ACCOUNT, store)
+    marker = {"schema": cloud_check.FAILED_CHECK_SCHEMA, "account": ACCOUNT,
+              "environment": ENVIRONMENT, "failedAt": "2026-10-10T00:00:00Z",
+              "failedParts": parts}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(marker, fh)
+
+
+def test_the_place_call_carries_the_failed_check_from_readiness(tmp_path):
+    repo, store, env = _on(tmp_path)
+    assert _route(repo, store, env)["failedCheck"] is None
+    _fail_the_check(repo, store, ["version"])
+    call = _route(repo, store, env)
+    assert set(call) == PLACE_KEYS
+    assert call["place"] == "local" and call["reason"] == "version"
+    assert call["failedCheck"] == ["version"]
+    assert LP.fix_text(call) == SETUP_TEXT_FIX + ' Then say "check again".'
+
+
+def test_a_failed_check_with_no_known_part_gives_no_setup_and_check_again(tmp_path):
+    repo, store, env = _on(tmp_path)
+    _fail_the_check(repo, store, ["unread"])
+    call = _route(repo, store, env)
+    assert call["reason"] == "no-setup" and call["failedCheck"] == ["unread"]
+    assert LP.fix_text(call) == CHECK_AGAIN_ONLY
+
+
+def test_failed_check_is_on_every_path_and_none_when_not_known():
+    assert LP.route("cwd", {}, None, readiness_fn=_fn(), needs_fn=_no_needs)["failedCheck"] is None
+    assert LP.route("cwd", {}, "local", readiness_fn=_fn(), needs_fn=_no_needs)["failedCheck"] is None
+    assert LP.route("cwd", {}, None, readiness_fn=_fn(), needs_fn=_needs(PHONE))["failedCheck"] is None
+
+    def boom(cwd, reported=None, root=None, env=None):
+        raise RuntimeError("readiness exploded")
+
+    assert LP.route("cwd", {}, None, readiness_fn=boom, needs_fn=_no_needs)["failedCheck"] is None
+
+    def now_failed(cwd, reported=None, root=None, env=None):
+        got = _now(ready=False, reason="no-setup")
+        got["failedCheck"] = ["record"]
+        return got
+
+    def needs_boom(cwd, premise, root=None):
+        raise RuntimeError("needs exploded")
+
+    after = LP.route("cwd", {}, None, readiness_fn=now_failed, needs_fn=needs_boom)
+    assert after["failedCheck"] == ["record"]
+    waiting = LP.route("cwd", {}, None, readiness_fn=now_failed, needs_fn=_no_needs)
+    assert waiting["failedCheck"] == ["record"]
 
 
 def test_R_FR10_a_record_for_another_account_is_no_setup(tmp_path):

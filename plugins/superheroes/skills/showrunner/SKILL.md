@@ -771,6 +771,8 @@ above).
    refusal is a no-go: clear its cause, never force it.**
    A launch can run in a cloud session and a lane can be a cloud lane. Their mechanics are in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md`.
+   A project is set up for cloud builds in configure's setup sitting,
+   `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/set-up.md` § 6.
    **Where each build runs** — the place call, the needs you check for, the launch report after every launch, and the "Still on your machine" line at the top of each later message — is in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` § Where a build runs. **Read it at dispatch time, and run its `report` and `still` steps.**
    **Headless builder launches run on the `opus` tier** — the launcher pins it explicitly rather than
    letting a dispatch inherit whatever tier the account or session happens to default to. **`fable` is
