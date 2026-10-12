@@ -320,6 +320,24 @@ def _lane(a, rd, meta):
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
 
 
+BASIS_EVIDENCE_MAX = 10
+
+
+def _bound_basis(basis):
+    """The basis as it goes on the record: at most BASIS_EVIDENCE_MAX matched and unmatchable paths each,
+    with the full counts beside any list that was cut. The floor and its reasons are unchanged."""
+    cap = BASIS_EVIDENCE_MAX
+    touched = []
+    for hit in basis["touched"]:
+        if len(hit["matched"]) > cap:
+            hit = dict(hit, matched=hit["matched"][:cap], matchedCount=len(hit["matched"]))
+        touched.append(hit)
+    out = dict(basis, touched=touched)
+    if len(basis["unmatchable"]) > cap:
+        out.update(unmatchable=basis["unmatchable"][:cap], unmatchableCount=len(basis["unmatchable"]))
+    return out
+
+
 def _lane_basis(a, rd, lane_value):
     """The risk floor for the PR's changed files, from lane_call.call, with the record's own lane as the
     proposal. An account that names no repository, or files that cannot be read, give the floor full,
@@ -332,7 +350,7 @@ def _lane_basis(a, rd, lane_value):
             proposed=lane_value), source="unavailable")
     paths = rd["changed_paths"](a["pr"], a["repo"])
     if isinstance(paths, list):
-        return dict(lane_call.call(repo_root, paths, proposed=lane_value),
+        return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
                     source="lane rule over the PR's changed files")
     return dict(lane_call.unavailable(
         "risk-unclear-no-paths: the PR's changed files could not be read", proposed=lane_value),

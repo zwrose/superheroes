@@ -1618,3 +1618,18 @@ def test_e11_a_rename_out_of_a_risk_area_touches_it_through_the_previous_name(tm
     assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
     assert rec["status"] == "not-reviewed"
     assert f"the lane (light) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]
+
+
+def test_a_broad_change_renders_under_the_cap_with_the_floor_full(tmp_path):
+    # axis: the record's laneBasis evidence is bounded; a change touching thousands of paths still publishes
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    matched = ["src/payments/%s%04d.py" % ("x" * 50, i) for i in range(3100)]
+    unmatched = ["/abs/%s%04d.py" % ("y" * 55, i) for i in range(3100)]
+    fake.changed = matched + unmatched
+    rec = build(account(repoRoot=repo), fake)
+    basis = rec["laneBasis"]
+    assert basis["floor"] == "full" and basis["source"] == FILES_SOURCE
+    assert basis["touched"] == [{"name": "Payments", "matched": matched[:10], "matchedCount": 3100}]
+    assert basis["unmatchable"] == unmatched[:10] and basis["unmatchableCount"] == 3100
+    assert len(rr.render(rec)) < rr.MAX_BODY_CHARS

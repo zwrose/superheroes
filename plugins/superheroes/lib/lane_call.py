@@ -27,6 +27,13 @@ import risk_areas  # noqa: E402
 
 LANES = ("micro", "light", "full")
 FLOOR_FULL = "full"
+WHY_SAMPLE = 3
+
+
+def _sample(items, render=str):
+    """The why-line form of a list: all of it when short, else the count and the first few."""
+    shown = ", ".join(render(i) for i in items[:WHY_SAMPLE])
+    return shown if len(items) <= WHY_SAMPLE else "%d paths: %s, ..." % (len(items), shown)
 
 
 def rank(lane):
@@ -45,7 +52,7 @@ def call(cwd, paths, proposed=None, root=None):
     # axis: a change that touches a risk area gets the floor full — see bite-proof record wo_a_1795_lane-call
     for hit in hits:
         floor = FLOOR_FULL
-        why.append("touches-risk-area: %s (%s)" % (hit["name"], ", ".join(hit["matched"])))
+        why.append("touches-risk-area: %s (%s)" % (hit["name"], _sample(hit["matched"])))
     # axis: risk areas that are not set (missing, empty or unreadable) get the floor full — see bite-proof record wo_a_1795_lane-call
     if state != "set":
         floor = FLOOR_FULL
@@ -55,7 +62,7 @@ def call(cwd, paths, proposed=None, root=None):
     if unmatchable:
         floor = FLOOR_FULL
         why.append("risk-unclear-unmatchable: %d changed path(s) cannot be matched against an area (%s)"
-                   % (len(unmatchable), ", ".join(repr(p) for p in unmatchable)))
+                   % (len(unmatchable), _sample(unmatchable, repr)))
     # axis: a change with no changed paths gets the floor full — see bite-proof record wo_a_1795_lane-call
     if isinstance(paths, list) and not paths:
         floor = FLOOR_FULL

@@ -423,3 +423,18 @@ def test_cli_unreadable_paths_file_exits_two_with_an_error(tmp_path):
     run = _cli("call", "--cwd", repo, "--root", store, "--paths-file", str(tmp_path / "missing.txt"))
     out = json.loads(run.stdout)
     assert run.returncode == 2 and out["error"] == "paths-file-unreadable" and out["detail"]
+
+
+def test_a_broad_change_keeps_every_path_in_touched_but_bounds_the_why_lines(tmp_path):
+    # axis: the why line stays short however many paths match; touched and unmatchable stay complete
+    repo, store = _payments_repo(tmp_path)
+    matched = ["src/payments/%s%04d.py" % ("x" * 50, i) for i in range(3000)]
+    unmatched = ["/abs/%s%04d.py" % ("y" * 50, i) for i in range(3000)]
+    got = L.call(repo, matched + unmatched, root=store)
+    assert got["floor"] == "full"
+    assert got["touched"] == [{"name": "Payments", "matched": matched}] and got["unmatchable"] == unmatched
+    assert got["why"][0] == "touches-risk-area: Payments (3000 paths: %s, ...)" % ", ".join(matched[:3])
+    unmatchable_why = next(w for w in got["why"] if w.startswith("risk-unclear-unmatchable"))
+    assert "3000 changed path(s)" in unmatchable_why and repr(unmatched[2]) in unmatchable_why
+    assert repr(unmatched[3]) not in unmatchable_why
+    assert sum(len(w) for w in got["why"]) < 2000
