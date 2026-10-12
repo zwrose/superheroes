@@ -1,14 +1,8 @@
 """The advisor's side of a cloud build parked by a lapsed reviewer pass.
 
   cloud_parked.py notice --repo-root D --repo O/N --pr P
-                          is this PR parked by the lapsed pass? If so, the words for the owner, and
-                          the PR is recorded with the day it was parked
   cloud_parked.py send-back --repo-root D
-                          lists the due PRs: each recorded PR whose own builder account's pass was
-                          renewed after the day it was parked, still open, not let through by the
-                          owner, and with a lane session to send to. It records nothing as sent.
   cloud_parked.py sent --repo-root D --repo O/N --pr P
-                          records one PR as sent back, after its message was delivered
 
 Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
@@ -47,8 +41,9 @@ def _refusal(reason):
     return {"ok": False, "reason": reason}
 
 
-def _check_args(repo, pr, today):
-    """(refusal or None, pr as int, today as date). Each named argument is checked only when given."""
+def _check_args(repo, pr, today, *, need=False):
+    """(refusal or None, pr as int, today as date). Each named argument is checked only when given;
+    with `need`, a missing repo or pr is refused after the rest."""
     try:
         if today is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", today):
             raise ValueError
@@ -60,6 +55,8 @@ def _check_args(repo, pr, today):
         return _refusal("pr-invalid"), None, None
     if repo is not None and not (isinstance(repo, str) and _sib("cloud_builder")._REPO_RE.match(repo)):
         return _refusal("repo-invalid"), None, None
+    if need and (repo is None or pr is None):
+        return _refusal("repo-invalid" if repo is None else "pr-invalid"), None, None
     return None, number, day
 
 
@@ -165,13 +162,9 @@ def _lane(repo_root, issue, env):
 def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     """Is this PR parked by the lapsed pass? Records it when so; says nothing about any other PR."""
     env = os.environ if env is None else env
-    bad, pr, _ = _check_args(repo, pr, today)
+    bad, pr, _ = _check_args(repo, pr, today, need=True)
     if bad:
         return bad
-    if repo is None:
-        return _refusal("repo-invalid")
-    if pr is None:
-        return _refusal("pr-invalid")
     path, entries = _load(repo_root, env)
     if entries is None:
         return path
@@ -242,13 +235,9 @@ def send_back(repo_root, today=None, *, env=None, run=None):
 def sent(repo_root, repo, pr, *, env=None):
     """Record one parked PR as sent back, once its message was delivered. Saying it twice changes nothing."""
     env = os.environ if env is None else env
-    bad, pr, _ = _check_args(repo, pr, None)
+    bad, pr, _ = _check_args(repo, pr, None, need=True)
     if bad:
         return bad
-    if repo is None:
-        return _refusal("repo-invalid")
-    if pr is None:
-        return _refusal("pr-invalid")
     path, entries = _load(repo_root, env)
     if entries is None:
         return path
