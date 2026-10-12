@@ -1120,6 +1120,8 @@
       let timer = null;
       let switchedOn = false;
       let retryButton = null;
+      // True while a save is due but spec.mayWrite said no: nothing was sent, and resume() sends it once the page allows.
+      let waiting = false;
       // The answers whose button is held off by the page (the merge verdict's, while the sheet is locked): they stay off whatever setEnabled says.
       const heldAnswers = new Set();
 
@@ -1229,7 +1231,15 @@
         if (!ready) return;
         if (inFlight !== null) return;
         if (forced !== true && sameAnswer(latest, acked)) {
-          if (shown === "saving") showStatus(heldStatus(acked));
+          const held = waiting;
+          waiting = false;
+          if (shown === "saving" || held) showStatus(heldStatus(acked));
+          return;
+        }
+        // The page can hold a write back (a card's, while a withdrawn Merge may still stand in the store); the line is then worked out by resume().
+        if (spec.mayWrite !== undefined && !spec.mayWrite()) {
+          waiting = true;
+          refreshSheet();
           return;
         }
         send();
@@ -1237,6 +1247,7 @@
 
       function send() {
         const body = latest;
+        waiting = false;
         inFlight = body;
         // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
         acked = unknown;
@@ -1247,7 +1258,6 @@
           stalled = true;
           showStatus("stalled");
         }, STALL_MS);
-        showStatus("saving");
         let request;
         try {
           // The document written here has the shape the schema defines for this saver's path.
@@ -1255,6 +1265,8 @@
         } catch (error) {
           request = Promise.reject(error);
         }
+        // After the request is made: showing the status redraws the sheet, which may send another saver's held answer, and that must come after this one.
+        showStatus("saving");
         request.then(function () { settle(body, true); }, function () { settle(body, false); });
       }
 
@@ -1335,6 +1347,12 @@
         current: function () {
           return { answer: latest.answer, optionId: latest.optionId, note: latest.note };
         },
+        // Re-runs a save that was held back: it goes out once mayWrite() allows; until then the line says Saving…, or Not saved (no Try again) when the page says what it waits on has failed or stalled.
+        resume: function (lost) {
+          if (!waiting) return;
+          if (spec.mayWrite()) save();
+          else if (lost !== (shown === "stalled")) showStatus(lost ? "stalled" : "saving");
+        },
         // Cuts a note's pause short: the pending save runs now.
         flush: function () {
           if (timer !== null) save();
@@ -1366,6 +1384,15 @@
       return choices;
     }
 
+    // A card of a pr or stack sheet writes only while the store cannot end up holding a Merge beside the changed answer: not while the
+    // verdict's acknowledged pick is Merge, and not while the verdict is unsaved with no pick (its clear in flight, failed or stalled).
+    function cardMayWrite() {
+      if (!onePageKind(sheetKind) || verdictController === null) return true;
+      const confirmed = verdictController.confirmed();
+      if (confirmed !== null && confirmed.answer === "merge") return false;
+      return !(verdictController.unsaved() && verdictController.state().answer === null);
+    }
+
     // A card's answers: the choices it offers, and a document written whole at answers/<card id>.
     function addAnswerParts(card, article) {
       const choices = offeredChoices(card);
@@ -1375,6 +1402,7 @@
         noteId: "note-" + card.id,
         path: "answers/" + card.id,
         live: canEdit,
+        mayWrite: cardMayWrite,
         document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
         // A stored document restores a pick only when it fits the schema's answer rule and the card offers
         // that answer now. A document that does not fit, or names an answer the card no longer offers,
@@ -1689,14 +1717,6 @@
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const clearUnsaved = verdictController.state().answer === null && (verdictController.state().save === "failed" || verdictController.state().save === "stalled");
       const locked = incomplete || clearUnsaved;
-      // The store keeps no record that a Merge was withdrawn, so while the clear of one is unacknowledged (in flight, failed
-      // or stalled) the cards stay off: an answer saved then could make every card accepted beside the old Merge, and a
-      // reopened sheet would restore that Merge as current. They come back on when the clear lands.
-      const holdCards = verdictController.state().answer === null && verdictController.unsaved();
-      if (holdCards !== cardsHeld) {
-        cardsHeld = holdCards;
-        syncControls();
-      }
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -1708,6 +1728,8 @@
       unlockLine.hidden = !incomplete || sendsBack;
       sendBackLine.hidden = !sendsBack;
       if (ready && locked && verdictController.state().answer === "merge") verdictController.clear();
+      // The answers held back until the withdrawn Merge's clear is acknowledged go out now, in card order.
+      controllers.forEach(function (controller) { controller.resume(clearUnsaved); });
     }
 
     // The words a final sheet shares with the chat prose (lib/sheet_prose.py) live in one file, sheet-words.json,
@@ -1742,11 +1764,9 @@
     let sendBackLine = null;
 
     // Controls are on only when the sheet allows edits; the last card's also need a schema that says what a verdict is.
-    // True while a withdrawn Merge's clear is unacknowledged: the cards are off then (see lockVerdict).
-    let cardsHeld = false;
     function syncControls() {
       const on = canEdit();
-      controllers.forEach(function (controller) { controller.setEnabled(on && !cardsHeld); });
+      controllers.forEach(function (controller) { controller.setEnabled(on); });
       if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null && sheetDigest !== null);
     }
 

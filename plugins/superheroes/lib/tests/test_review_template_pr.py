@@ -844,66 +844,157 @@ def test_a_failed_clear_shows_not_saved_and_the_sheet_stays_locked():
     assert "Saved" in result["after"]["verdictSave"] and result["after"]["disabled"] is True
 
 
-# Bites on: a card accepted again after its Discuss was acknowledged while the failed clear still leaves the old Merge in the store (the cards must stay off until the clear lands, so no accepted-everywhere store can sit beside the withdrawn Merge), Merge enabling while its clear is pending, or the stored Merge coming back as a pressed verdict when the sheet is reopened before the retry.
-def test_a_failed_clear_holds_the_cards_off_so_a_reopen_before_the_retry_cannot_restore_the_withdrawn_merge():
+def _collections(stored):
+    """The documents a page wrote, as the collections a reopened sheet reads them from."""
+    return {
+        "answers": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("answers/")],
+        "verdict": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("verdict/")],
+    }
+
+
+# Every card accepted and saved, then Merge saved: the store holds the Merge beside the three accepted answers.
+MERGE_SAVED = """
+  const answerWrites = (id) => t.sets.filter((call) => call.path === "answers/" + id);
+  const lineButtons = (id) => t.saveLine(id).children.filter((child) => child.tagName === "button").length;
+  await acceptAll();
+  await settle(3);
+  t.click(verdictRow()[0]);
+  await t.tick();
+  t.sets[3].resolve();
+  await t.tick();
+"""
+
+REOPEN = "return { view: lockView(), a: t.state(A), b: t.state(B), writes: verdictWrites() };"
+
+
+# Bites on: a card's answer going out beside a Merge whose clear has not landed (the card's wait): with the clear rejected, the old Merge must stay in the store beside the old answers, so a reopen restores both; the card's line must say "Not saved" with no Try again of its own once the clear failed.
+def test_a_failed_clear_keeps_the_changed_answer_from_the_store_so_a_reopen_restores_the_merge_with_the_old_answers():
     digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      const waiting = { line: t.saveText(A), sent: answerWrites(A).length };
+      lastVerdictCall().reject(new Error("no"));
+      await t.tick();
+      const failed = { line: t.saveText(A), sent: answerWrites(A).length, buttons: lineButtons(A), view: lockView() };
+      t.click(t.button(A, "Accept"));
+      await t.tick();
+      return { waiting: waiting, failed: failed, back: { line: t.saveText(A), sent: answerWrites(A).length }, written: t.written() };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["waiting"] == {"line": "Saving…", "sent": 1}
+    assert result["failed"]["sent"] == 1 and "Not saved" in result["failed"]["line"] and result["failed"]["buttons"] == 0
+    assert result["failed"]["view"]["pressed"] == ["false", "false"] and result["failed"]["view"]["disabled"] is True
+    assert result["back"]["sent"] == 1 and result["back"]["line"] == "Saved"
+    assert result["written"]["verdict/" + digest]["verdict"] == "merge"
+    assert result["written"]["answers/" + CARD_A]["answer"] == "accept"
+
+    reopened = _lock(PR_SAMPLE, REOPEN, host={"collections": _collections(result["written"])})["result"]
+    assert reopened["view"]["pressed"] == ["true", "false"] and reopened["view"]["disabled"] is False
+    assert reopened["a"]["pressed"] == ["true", "false"] and reopened["writes"] == []
+
+
+# Bites on: the answer written before the clear is acknowledged, or never written after it; a rejected answer write leaving the Merge in the store or restoring as pressed.
+def test_an_answer_goes_out_only_after_the_clear_lands_and_a_rejected_answer_leaves_the_cleared_verdict_with_the_old_answers():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      const beforeClear = answerWrites(A).length;
+      lastVerdictCall().resolve();
+      await t.tick();
+      const afterClear = answerWrites(A).map((call) => call.body);
+      answerWrites(A).pop().reject(new Error("no"));
+      await t.tick();
+      return { beforeClear: beforeClear, afterClear: afterClear, line: t.saveText(A), buttons: lineButtons(A), written: t.written() };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["beforeClear"] == 1
+    assert result["afterClear"][-1] == {"answer": "discuss", "optionId": None, "note": ""} and len(result["afterClear"]) == 2
+    assert "Not saved" in result["line"] and result["buttons"] == 1
+    assert result["written"]["verdict/" + digest]["verdict"] is None
+    assert result["written"]["answers/" + CARD_A]["answer"] == "accept"
+
+    reopened = _lock(PR_SAMPLE, REOPEN, host={"collections": _collections(result["written"])})["result"]
+    assert reopened["view"]["pressed"] == ["false", "false"] and reopened["a"]["pressed"] == ["true", "false"]
+
+
+# Bites on: an answer change waiting when no Merge is saved (the wait applying to every write, not only while a Merge may stand).
+def test_with_no_saved_merge_an_answer_change_is_written_at_once():
     page = _lock(PR_SAMPLE, """
       await acceptAll();
       await settle(3);
-      t.click(verdictRow()[0]);
-      await t.tick();
-      t.sets[3].resolve();
-      await t.tick();
       t.click(t.button(A, "Discuss"));
+      const sent = t.sets.filter((call) => call.path === "answers/" + A).map((call) => call.body);
       await t.tick();
-      const answerCall = () => t.sets.filter((call) => call.path === "answers/" + A).pop();
-      answerCall().resolve();
-      await t.tick();
-      lastVerdictCall().reject(new Error("no"));
-      await t.tick();
-      const failed = lockView();
-      const cardsOff = t.state(A).disabled;
-      const answerWrites = t.sets.filter((call) => call.path === "answers/" + A).length;
-      t.click(t.button(A, "Accept"));
-      await t.tick();
-      const afterClick = { writes: t.sets.filter((call) => call.path === "answers/" + A).length, view: lockView() };
-      const beforeRetry = t.written();
-      const retry = verdictSave().children.find((child) => child.tagName === "button");
-      t.click(retry);
-      await t.tick();
-      const pending = { view: lockView(), cardsOff: t.state(A).disabled };
-      lastVerdictCall().resolve();
-      await t.tick();
-      const cardsBack = t.state(A).disabled;
-      t.click(t.button(A, "Accept"));
-      await t.tick();
-      answerCall().resolve();
-      await t.tick();
-      return { failed: failed, cardsOff: cardsOff, answerWrites: answerWrites, afterClick: afterClick, beforeRetry: beforeRetry, pending: pending, after: lockView(), cardsBack: cardsBack, written: t.written() };
+      return { sent: sent, line: t.saveText(A), verdictWrites: verdictWrites() };
     """, host=PENDING)
     result = page["result"]
-    assert result["failed"]["pressed"] == ["false", "false"] and result["failed"]["disabled"] is True
-    assert all(result["cardsOff"])
-    assert result["afterClick"]["writes"] == result["answerWrites"]
-    assert result["afterClick"]["view"]["disabled"] is True and result["afterClick"]["view"]["pressed"] == ["false", "false"]
-    assert result["beforeRetry"]["verdict/" + digest]["verdict"] == "merge"
-    assert result["pending"]["view"]["disabled"] is True and result["pending"]["view"]["pressed"] == ["false", "false"]
-    assert all(result["pending"]["cardsOff"])
-    assert result["after"]["disabled"] is False and not any(result["cardsBack"])
-    assert result["written"]["verdict/" + digest]["verdict"] is None
+    assert result["sent"] == [{"answer": "accept", "optionId": None, "note": ""}, {"answer": "discuss", "optionId": None, "note": ""}]
+    assert result["line"] == "Saving…" and result["verdictWrites"] == []
 
-    def collections(stored):
-        return {
-            "answers": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("answers/")],
-            "verdict": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("verdict/")],
-        }
 
-    # The store as it stood before the retry: the Merge is still there beside a Discuss, so the reopened sheet is locked and clears it.
-    reopened = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": collections(result["beforeRetry"])})
-    assert reopened["result"]["view"]["pressed"] == ["false", "false"] and reopened["result"]["view"]["disabled"] is True
-    assert reopened["result"]["writes"] == [{"verdict": None, "note": "", "sheet": digest}]
-    final = _lock(PR_SAMPLE, "return lockView();", host={"collections": collections(result["written"])})
-    assert final["result"]["pressed"] == ["false", "false"]
+# Bites on: an accepted-to-accepted change (Keep it to Fix in a follow-up, which leaves the sheet unlocked) writing while the withdrawn Merge's clear is rejected: a reopen would restore the old Merge as current beside the new answer.
+def test_an_accepted_to_accepted_change_waits_for_the_clear_and_a_reopen_restores_the_old_answer():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(t.button(B, "Fix in a follow-up"));
+      await t.tick();
+      const waiting = { line: t.saveText(B), sent: answerWrites(B).length, verdict: verdictWrites() };
+      lastVerdictCall().reject(new Error("no"));
+      await t.tick();
+      return { waiting: waiting, line: t.saveText(B), sent: answerWrites(B).length, written: t.written() };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["waiting"]["sent"] == 1 and result["waiting"]["verdict"][-1] == {"verdict": None, "note": "", "sheet": digest}
+    assert result["sent"] == 1 and "Not saved" in result["line"]
+    assert result["written"]["verdict/" + digest]["verdict"] == "merge"
+    assert result["written"]["answers/" + CARD_B]["optionId"] == "keep-it"
+
+    reopened = _lock(PR_SAMPLE, REOPEN, host={"collections": _collections(result["written"])})["result"]
+    assert reopened["view"]["pressed"] == ["true", "false"] and reopened["view"]["disabled"] is False
+    assert reopened["b"]["pressed"][0] == "true" and reopened["b"]["pressed"].count("true") == 1
+
+
+# Bites on: waiting answers going out together with the clear, or out of card order, or one of them twice, or a note typed while waiting making a second write or losing the newest state.
+def test_several_waiting_cards_write_once_each_in_card_order_after_the_clear_with_the_newest_note():
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(t.button(B, "Fix in a follow-up"));
+      t.click(t.button(A, "Discuss"));
+      t.type(t.note(A), "why", "change");
+      await t.tick();
+      const before = t.sets.length;
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { before: before, after: t.sets.slice(before).map((call) => [call.path, call.body]) };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["after"] == [
+        ["answers/" + CARD_A, {"answer": "discuss", "optionId": None, "note": "why"}],
+        ["answers/" + CARD_B, {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""}],
+    ]
+
+
+# Bites on: a stalled clear leaving the waiting answers on "Saving…", or the answers going out before the verdict's Try again lands.
+def test_a_stalled_clear_shows_the_waiting_answer_as_not_saved_and_it_goes_out_after_the_retry_lands():
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      await t.advance(10000);
+      const stalled = { line: t.saveText(A), buttons: lineButtons(A), sent: answerWrites(A).length };
+      lastVerdictCall().reject(new Error("no"));
+      await t.tick();
+      t.click(verdictSave().children.find((child) => child.tagName === "button"));
+      await t.tick();
+      const retrying = answerWrites(A).length;
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { stalled: stalled, retrying: retrying, sent: answerWrites(A).map((call) => call.body) };
+    """, host=dict(PENDING, **TIMED))
+    result = page["result"]
+    assert "Not saved" in result["stalled"]["line"] and result["stalled"]["buttons"] == 0 and result["stalled"]["sent"] == 1
+    assert result["retrying"] == 1
+    assert result["sent"][-1] == {"answer": "discuss", "optionId": None, "note": ""} and len(result["sent"]) == 2
 
 
 # Bites on: a stored Merge restored onto a sheet that is locked once its answers are restored (E8) staying a Merge, or being cleared when the sheet is not locked.
