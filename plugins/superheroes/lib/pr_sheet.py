@@ -42,6 +42,7 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -377,6 +378,24 @@ def _load(path, problems):
         problems.append(f"{path} could not be read as JSON: {err}")
 
 
+def _write_replacing(out, text):
+    """Write UTF-8 text to a temp file beside out, then replace out, so a failed write leaves any earlier sheet intact."""
+    directory = os.path.dirname(os.path.abspath(out))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".pr-sheet.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Build a PR sheet's data file.")
     parser.add_argument("command", choices=["build"])
@@ -389,7 +408,7 @@ def main(argv=None):
         if problems:
             raise Refusal(problems)
         sheet = build(loaded[:-2], loaded[-2], loaded[-1]["pr"])
-        pathlib.Path(args.out).write_text(json.dumps(sheet, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        _write_replacing(args.out, json.dumps(sheet, indent=2, ensure_ascii=False) + "\n")
         result, code = {"ok": True, "out": args.out, "cards": len(sheet["cards"])}, 0
     except (Refusal, OSError) as err:
         result, code = {"ok": False, "problems": err.problems if isinstance(err, Refusal) else [str(err)]}, 1
