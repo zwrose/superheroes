@@ -112,7 +112,7 @@ def _locked(fn):
         deadline = time.monotonic() + _LOCK_WAIT_SECONDS
         while True:
             try:
-                fl.acquire(lock)
+                fl.acquire(lock, reclaim_dead_holder=True)
                 break
             except fl.LockHeld:
                 if time.monotonic() >= deadline:

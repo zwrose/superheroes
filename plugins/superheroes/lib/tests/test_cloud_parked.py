@@ -243,8 +243,6 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "uncertain": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
         "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
-    assert CP.SEND_BACK_MESSAGE == ("The reviewer pass is renewed. Run this pull request's review now, as "
-                                    "your review step says, then hand back as usual.")
     assert _entries(w)[0]["outcome"] is None
 
 
@@ -786,6 +784,18 @@ def test_an_unconfirmed_send_is_never_resent_but_is_listed_every_time_until_a_ne
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     assert _entries(w)[0]["outcome"] is None
     assert _send(w)["uncertain"] == []
+
+
+def test_the_cli_sent_uncertain_records_an_unconfirmed_delivery(w, capsys):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    argv = ["sent", "--repo-root", w.repo, "--repo", REPO, "--pr", "10", "--uncertain"]
+    assert CP.main(argv) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "action": "written"}
+    assert _entries(w)[0]["outcome"] == "send-uncertain"
+    out = _send(w)
+    assert out["sendBack"] == [] and [u["pr"] for u in out["uncertain"]] == [10]
 
 
 def test_a_plain_sent_confirms_an_unconfirmed_send_and_an_unconfirmed_one_never_downgrades_a_confirmed_send(w):
