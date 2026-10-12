@@ -1577,7 +1577,7 @@
       itemsHost.hidden = total === 0;
       cardsHost.hidden = total === 0;
       whyBox.hidden = sheetKind !== "remainder";
-      historyBox.hidden = sheetKind !== "final" && sheetKind !== "pr" && sheetKind !== "stack";
+      historyBox.hidden = sheetKind !== "final";
       finalHost.hidden = sheetKind !== "final";
       // The no-digest caption shows only once the sheet is ready, the schema says what a verdict is and this
       // browser can't work out which revision the sheet is: the last card's controls are then off, and this says why.
@@ -1659,42 +1659,6 @@
       finalHost.replaceChildren(article, textElement("p", "sh-caption", finalWords.doneStep), next);
     }
 
-    // A pr or stack sheet states the review's facts in the box above the cards: what changed and who reviewed it,
-    // the craft calls and earlier rulings, and the history lines (missing reviews, reviews of an earlier commit,
-    // checks), so the owner answers the cards with those in view. The lines are already worded by the builder.
-    function buildPr(pr, kind) {
-      const what = pr.whatChanged;
-      const parts = [textElement("h2", "", kind === "stack" ? "The stack" : "What changed in PR #" + pr.number)];
-      parts.push(linkedElement("p", "", what.summary));
-      if (kind === "stack") {
-        const prs = document.createElement("ul");
-        pr.prs.forEach(function (item) { prs.appendChild(linkedElement("li", "", "#" + item.number + " " + item.title + " (" + item.commit.slice(0, 7) + ")")); });
-        parts.push(prs);
-      }
-      const facts = document.createElement("ul");
-      what.reviewers.forEach(function (reviewer) {
-        facts.appendChild(linkedElement("li", "", "Reviewer " + reviewer.name + " (" + reviewer.family + "): " + reviewer.ran +
-          (reviewer.notIndependent === true ? ", not independent" : "")));
-      });
-      what.caught.forEach(function (line) { facts.appendChild(linkedElement("li", "", "Caught: " + line)); });
-      facts.appendChild(linkedElement("li", "", plural(what.rounds, "review round") + (what.stoppedAtCap ? ", stopped at the round cap" : "")));
-      facts.appendChild(linkedElement("li", "", "Checks: " + what.ci.state + (what.ci.commit === null ? "" : " on " + what.ci.commit.slice(0, 7))));
-      if (what.lane !== null) facts.appendChild(linkedElement("li", "", "Lane: " + what.lane + (what.laneReason ? ". " + what.laneReason : "")));
-      parts.push(facts);
-      [["Craft decisions", pr.craft], ["Already decided", pr.alreadyDecided]].forEach(function (group) {
-        if (group[1].length === 0) return;
-        const list = document.createElement("ul");
-        group[1].forEach(function (entry) { list.appendChild(linkedElement("li", "", entry.title + ": " + entry.detail)); });
-        parts.push(textElement("h2", "", group[0]), list);
-      });
-      if (pr.history.length > 0) {
-        const list = document.createElement("ul");
-        pr.history.forEach(function (line) { list.appendChild(linkedElement("li", "", line)); });
-        parts.push(textElement("h2", "", "How the review went"), list);
-      }
-      historyBox.replaceChildren(...parts);
-    }
-
     function render(sheet) {
       const fragment = document.createDocumentFragment();
       controllers.clear();
@@ -1714,7 +1678,6 @@
       whyHeading.textContent = "Why only these " + sheet.cards.length;
       whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
       if (sheetKind === "final") buildFinal(sheet.final);
-      if (sheetKind === "pr" || sheetKind === "stack") buildPr(sheet.prSheet, sheetKind);
       itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
