@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -526,6 +527,10 @@ def _sitting_commands():
     return [b for number in sorted(run) for b in _section_blocks(number)]
 
 
+def _is_coverage_block(block):
+    return re.search(r'risk_areas\.py"? touched\b', block) is not None
+
+
 def test_the_menu_action_routes_to_the_sitting_and_not_the_migration_step():
     run, skipped = _menu_routing()
     # Both expected sections are identified from set-up.md's own content, not by number.
@@ -556,7 +561,16 @@ def test_menu_action_sitting_commands_end_to_end(tmp_path, who_set):
     head_before = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD"],
                                  capture_output=True).returncode
     ran, who_read = [], None
-    for block in blocks:
+    wrote_areas_at, coverage_runs = None, []
+    for position, block in enumerate(blocks):
+        if _is_coverage_block(block):
+            assert wrote_areas_at is not None and position > wrote_areas_at
+            cmd = block.replace("--cwd .", "--cwd . --root " + shlex.quote(store))
+            res = subprocess.run(["bash", "-c", cmd], env=env, cwd=repo,
+                                 capture_output=True, text=True)
+            assert res.returncode == 0, res.stderr
+            coverage_runs.append(json.loads(res.stdout))
+            continue
         if "project_config.py" not in block:
             continue
         item = "riskAndTrust" if "riskAndTrust" in block else "whoItsFor"
@@ -566,11 +580,11 @@ def test_menu_action_sitting_commands_end_to_end(tmp_path, who_set):
                 continue  # the read command returned a recorded answer: not asked again
             if item == "riskAndTrust" and '"threatModel"' in block:
                 continue  # the threat-model half is offered only on the owner's yes
-            cmd = block.split("<<'SUPERHEROES_ANSWER'")[0].replace("--cwd .", "--cwd . --root " + store)
+            cmd = block.split("<<'SUPERHEROES_ANSWER'")[0].replace("--cwd .", "--cwd . --root " + shlex.quote(store))
             res = subprocess.run(["bash", "-c", cmd], input=answers[item] + "\n", env=env,
                                  cwd=repo, capture_output=True, text=True)
         else:
-            cmd = block.replace("--cwd .", "--cwd . --root " + store)
+            cmd = block.replace("--cwd .", "--cwd . --root " + shlex.quote(store))
             res = subprocess.run(["bash", "-c", cmd], env=env, cwd=repo,
                                  capture_output=True, text=True)
         assert res.returncode == 0, res.stderr
@@ -578,9 +592,12 @@ def test_menu_action_sitting_commands_end_to_end(tmp_path, who_set):
         if not is_set and item == "whoItsFor":
             who_read = out
         ran.append((item, is_set, out))
+        if is_set and item == "riskAndTrust":
+            wrote_areas_at = position
     assert who_read is not None and bool(who_read["raw"]) is who_set
     assert any(i == "whoItsFor" and s for i, s, o in ran) is (not who_set)
     assert any(s and o["action"] == "written" and i == "riskAndTrust" for i, s, o in ran)
+    assert coverage_runs and all(run["riskAreas"] == "set" for run in coverage_runs)
     who = PC.get_item(repo, "whoItsFor", root=store)
     assert who["raw"] == (who_text if who_set else "Owners of small shops, to take payments.")
     got = PC.get_item(repo, "riskAndTrust", root=store)
@@ -588,3 +605,27 @@ def test_menu_action_sitting_commands_end_to_end(tmp_path, who_set):
     assert not os.path.exists(os.path.join(repo, ".canon"))
     assert subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD"],
                           capture_output=True).returncode == head_before
+
+
+def test_coverage_check_names_an_area_that_covers_no_tracked_file(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    os.makedirs(os.path.join(repo, "src", "payments"))
+    with open(os.path.join(repo, "src", "payments", "charge.py"), "w", encoding="utf-8") as fh:
+        fh.write("x = 1\n")
+    subprocess.run(["git", "-C", repo, "add", "src/payments/charge.py"], check=True)
+    subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit",
+                    "-q", "-m", "fixture"], check=True)
+    areas = [dict(PAYMENTS, covers=["src/payments"]),
+             dict(CUSTOMER_DATA, name="Ghost", covers=["src/nowhere"])]
+    assert PC.set_item(repo, "riskAndTrust", {"riskAreas": areas}, root=store)["action"] == "written"
+    section = next(n for n in _setup_section_numbers() if "Risk and trust" in _setup_heading(n))
+    block = next(b for b in _section_blocks(section) if _is_coverage_block(b))
+    cmd = block.replace("--cwd .", "--cwd . --root " + shlex.quote(store))
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=os.path.join(_REPO_ROOT, "plugins/superheroes"))
+    res = subprocess.run(["bash", "-c", cmd], env=env, cwd=repo, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["riskAreas"] == "set"
+    assert [a["name"] for a in out["areas"]] == ["Payments", "Ghost"]
+    assert [t["area"]["name"] for t in out["touched"]] == ["Payments"]
+    assert out["touched"][0]["matched"] == ["src/payments/charge.py"]

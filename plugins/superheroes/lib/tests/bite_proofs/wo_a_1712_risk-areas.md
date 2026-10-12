@@ -568,3 +568,308 @@ C3 green:
 .                                                                        [100%]
 1 passed in 14.39s
 ```
+
+## WO-D
+
+Guarded elements for the folder-covers-everything-beneath rule in `risk_areas.pattern_matches` and the paths-file reader (`_read_paths_file`), plus the G8 guard re-run against the cold `test_touched_makes_no_model_call`. Same method as above: one targeted edit, the single node alone (never `-k`), the inverse edit, the restored line quoted back, the same node green. `T` = `plugins/superheroes/lib/tests/test_risk_areas.py`. Redaction: none needed.
+
+| ID | Guarded element | Axis | Neutralization | Node | Red |
+|---|---|---|---|---|---|
+| D1 | the whole beneath-folder rule | a path beneath a stored folder is covered | both beneath clauses removed (`path.startswith(pattern + "/")` and `fnmatch.fnmatchcase(path, pattern + "/*")`) | `T::test_a_folder_pattern_covers_every_file_beneath_it` | `assert [] == [{'area': ... 'matched': ['src/payments/charge.py']}]` |
+| D2 | the literal `startswith` clause | a folder whose name holds glob characters (`app/[id]`) covers what is beneath it | `path.startswith(pattern + "/")` line removed | `T::test_a_folder_named_with_glob_characters_covers_what_is_beneath_it` | `assert False` on `_covered(... ['app/[id]'], 'app/[id]/page.tsx')` |
+| D3 | the `pattern + "/*"` glob clause | a glob that names folders covers what is beneath them | `fnmatch.fnmatchcase(path, pattern + "/*")` line removed | `T::test_a_glob_that_names_folders_covers_what_is_beneath_them` | `assert False` on `_covered(... ['src/*/payments'], 'src/eu/payments/charge.py')` |
+| D4 | the equality clause | a literal pattern holding glob characters covers its own path | `path == pattern` → `False` | `T::test_a_literal_pattern_holding_glob_characters_covers_its_own_path` | `assert False` on `_covered(... ['app/[id]/page.tsx'], 'app/[id]/page.tsx')` |
+| D5 | the `/` boundary | `src/pay` does not cover `src/payments/...` | `path.startswith(pattern + "/")` → `path.startswith(pattern)` | `T::test_a_folder_pattern_stops_at_the_slash_boundary` | `assert not True` on `_covered(... ['src/pay'], 'src/payments/charge.py')` |
+| D6 | the paths-file reader keeps in-name whitespace | only line endings are stripped | `[line for line ...]` → `[line.strip() for line ...]` | `T::test_cli_keeps_in_name_whitespace_and_drops_only_line_endings` | `['src/payments/a b.py'] == ['src/payments/a b.py ']` |
+| G8 (cold) | no-model-call guard, cold | the reader starts no process other than git identity lookups | `import subprocess` and `subprocess.run(["true"])` as the first statements after the paths check in `touched` | `T::test_touched_makes_no_model_call` | `AssertionError: a process, a shell or a connection was started` |
+
+Note on G8 (cold): measured, the cold reader starts five git identity lookups, not only the repo-root one: `git -C <cwd> rev-parse --show-toplevel`, `git -C <cwd> remote get-url origin`, `git -C <cwd> rev-parse --path-format=absolute --git-common-dir`, `git -C <cwd> rev-parse --git-common-dir`, `git -C <cwd> rev-parse --absolute-git-dir`. The test therefore lets `rev-parse` and `remote get-url` through (and records them), and raises for anything else; the real `subprocess.run` starts its process through `subprocess.Popen`, which stays raising except inside that one pass-through call.
+
+### D1 — the whole beneath-folder rule
+
+Neutralization: `plugins/superheroes/lib/risk_areas.py` `pattern_matches`, both beneath clauses removed, leaving `return (path == pattern\n            or fnmatch.fnmatchcase(path, pattern))`.
+
+Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_a_folder_pattern_covers_every_file_beneath_it ______________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1330/test_a_folder_pattern_covers_e0')
+
+    def test_a_folder_pattern_covers_every_file_beneath_it(tmp_path):
+        area = dict(PAYMENTS, covers=["src/payments"])
+        repo, store = _repo(tmp_path, [area])
+        for path in ("src/payments/charge.py", "src/payments/sub/refund.py", "src/payments"):
+            got = R.touched(repo, ["./" + path], root=store)
+>           assert got["touched"] == [{"area": area, "matched": [path]}]
+E           AssertionError: assert [] == [{'area': {'n.../charge.py']}]
+E
+E             Right contains one more item: {'area': {'name': 'Payments', 'covers': ['src/payments'], 'why': 'Charges customers.', 'undo': 'Hard: a charge needs a refund.'}, 'matched': ['src/payments/charge.py']}
+E             Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:260: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_folder_pattern_covers_every_file_beneath_it
+1 failed in 6.26s
+```
+
+Restore: the inverse edit. Restored line quoted back: `50:    return (path == pattern` / `51:            or path.startswith(pattern + "/")` / `52:            or fnmatch.fnmatchcase(path, pattern)` / `53:            or fnmatch.fnmatchcase(path, pattern + "/*"))`
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 5.31s
+```
+
+### D2 — the literal `startswith` clause
+
+Neutralization: `risk_areas.py`, the line `            or path.startswith(pattern + "/")` removed.
+
+Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_a_folder_named_with_glob_characters_covers_what_is_beneath_it ______
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1332/test_a_folder_named_with_glob_0')
+
+    def test_a_folder_named_with_glob_characters_covers_what_is_beneath_it(tmp_path):
+>       assert _covered(tmp_path, ["app/[id]"], "app/[id]/page.tsx")
+E       AssertionError: assert False
+E        +  where False = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1332/test_a_folder_named_with_glob_0'), ['app/[id]'], 'app/[id]/page.tsx')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:270: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_folder_named_with_glob_characters_covers_what_is_beneath_it
+1 failed in 4.74s
+```
+
+Restore: the inverse edit. Restored line quoted back: `51:            or path.startswith(pattern + "/")`
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 4.71s
+```
+
+### D3 — the `pattern + "/*"` glob clause
+
+Neutralization: `risk_areas.py`, the line `            or fnmatch.fnmatchcase(path, pattern + "/*"))` removed (the previous line closes the parenthesis).
+
+Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_a_glob_that_names_folders_covers_what_is_beneath_them __________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1334/test_a_glob_that_names_folders0')
+
+    def test_a_glob_that_names_folders_covers_what_is_beneath_them(tmp_path):
+>       assert _covered(tmp_path, ["src/*/payments"], "src/eu/payments/charge.py")
+E       AssertionError: assert False
+E        +  where False = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1334/test_a_glob_that_names_folders0'), ['src/*/payments'], 'src/eu/payments/charge.py')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:280: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_glob_that_names_folders_covers_what_is_beneath_them
+1 failed in 4.85s
+```
+
+Restore: the inverse edit. Restored line quoted back: `53:            or fnmatch.fnmatchcase(path, pattern + "/*"))`
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 4.67s
+```
+
+### D4 — the equality clause
+
+Neutralization: `risk_areas.py`, `return (path == pattern` → `return (False`.
+
+Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_a_literal_pattern_holding_glob_characters_covers_its_own_path ______
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1336/test_a_literal_pattern_holding0')
+
+    def test_a_literal_pattern_holding_glob_characters_covers_its_own_path(tmp_path):
+>       assert _covered(tmp_path, ["app/[id]/page.tsx"], "app/[id]/page.tsx")
+E       AssertionError: assert False
+E        +  where False = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1336/test_a_literal_pattern_holding0'), ['app/[id]/page.tsx'], 'app/[id]/page.tsx')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:275: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_literal_pattern_holding_glob_characters_covers_its_own_path
+1 failed in 4.87s
+```
+
+Restore: the inverse edit. Restored line quoted back: `50:    return (path == pattern`
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 4.96s
+```
+
+### D5 — the `/` boundary
+
+Neutralization: `risk_areas.py`, `path.startswith(pattern + "/")` → `path.startswith(pattern)`.
+
+Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_a_folder_pattern_stops_at_the_slash_boundary _______________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1338/test_a_folder_pattern_stops_at0')
+
+    def test_a_folder_pattern_stops_at_the_slash_boundary(tmp_path):
+>       assert not _covered(tmp_path, ["src/pay"], "src/payments/charge.py")
+E       AssertionError: assert not True
+E        +  where True = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1338/test_a_folder_pattern_stops_at0'), ['src/pay'], 'src/payments/charge.py')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:264: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_folder_pattern_stops_at_the_slash_boundary
+1 failed in 5.69s
+```
+
+Restore: the inverse edit. Restored line quoted back: `51:            or path.startswith(pattern + "/")`
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 5.36s
+```
+
+### D6 — the paths-file reader keeps in-name whitespace
+
+Neutralization: `risk_areas.py` `_read_paths_file`, `return [line for line in text.splitlines() if line.strip()]` → `return [line.strip() for line in text.splitlines() if line.strip()]`.
+
+Red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_cli_keeps_in_name_whitespace_and_drops_only_line_endings _________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1340/test_cli_keeps_in_name_whitesp0')
+capsys = <_pytest.capture.CaptureFixture object at 0x105d89910>
+
+    def test_cli_keeps_in_name_whitespace_and_drops_only_line_endings(tmp_path, capsys):
+        repo, store = _repo(tmp_path, [PAYMENTS])
+        listing = tmp_path / "paths.txt"
+        listing.write_bytes(b"src/payments/a b.py \r\n   \r\n")
+        rc = R.main(["touched", "--cwd", repo, "--root", store, "--paths-file", str(listing)])
+        from_file = json.loads(capsys.readouterr().out)
+>       assert rc == 0 and from_file["touched"][0]["matched"] == ["src/payments/a b.py "]
+E       AssertionError: assert (0 == 0 and ['src/payments/a b.py'] == ['src/payments/a b.py ']
+E
+E         At index 0 diff: 'src/payments/a b.py' != 'src/payments/a b.py '
+E         Use -v to get more diff)
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:478: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_cli_keeps_in_name_whitespace_and_drops_only_line_endings
+1 failed in 5.59s
+```
+
+Restore: the inverse edit. Restored line quoted back: `113:    return [line for line in text.splitlines() if line.strip()]`
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 5.65s
+```
+
+### G8 (cold)
+
+Neutralization: `risk_areas.py`, `    import subprocess` and `    subprocess.run(["true"])` inserted as the first two statements after the paths check in `touched`, before `stored = core_md.read_risk_areas(...)`.
+
+Red (the traceback is the full pytest output):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________________ test_touched_makes_no_model_call _______________________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1342/test_touched_makes_no_model_ca0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109808440>
+
+    def test_touched_makes_no_model_call(tmp_path, monkeypatch):
+        repo, store = _repo(tmp_path, [PAYMENTS])
+        real_run, real_popen = subprocess.run, subprocess.Popen
+        passed_through = []
+
+        def _refuse(*args, **kwargs):
+            raise AssertionError("a process, a shell or a connection was started")
+
+        def _is_identity_lookup(argv):
+            # the repo-root and gitdir lookups (rev-parse) and the remote lookup (remote get-url)
+            return bool(argv) and argv[0] == "git" and (
+                "rev-parse" in argv or argv[-3:-1] == ["remote", "get-url"])
+
+        def _only_the_identity_lookups(argv, *args, **kwargs):
+            if _is_identity_lookup(argv):
+                passed_through.append(list(argv))
+                # the real run starts its process through Popen: let it, for this one call only
+                monkeypatch.setattr(subprocess, "Popen", real_popen)
+                try:
+                    return real_run(argv, *args, **kwargs)
+                finally:
+                    monkeypatch.setattr(subprocess, "Popen", _refuse)
+            return _refuse()
+
+        # no warming call and no identity memo: the reader's git identity lookups run for real, and
+        # anything else it started would reach the raising stand-ins
+        monkeypatch.setattr(subprocess, "run", _only_the_identity_lookups)
+        monkeypatch.setattr(subprocess, "Popen", _refuse)
+        monkeypatch.setattr(os, "system", _refuse)
+        monkeypatch.setattr(socket.socket, "connect", _refuse)
+>       got = R.touched(repo, ["src/payments/charge.py", "./src/payments/charge.py"], root=store)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:424:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/risk_areas.py:75: in touched
+    subprocess.run(["true"])
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:416: in _only_the_identity_lookups
+    return _refuse()
+           ^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+args = (), kwargs = {}
+
+    def _refuse(*args, **kwargs):
+>       raise AssertionError("a process, a shell or a connection was started")
+E       AssertionError: a process, a shell or a connection was started
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:400: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_touched_makes_no_model_call
+1 failed in 5.27s
+```
+
+Restore: the inverse edit (the two inserted lines removed). The edit tool trimmed the trailing space of `stored = ` on that edit, leaving `stored =core_md...`; the green run below ran on that spelling, which is valid Python. A second inverse edit then put the space back, and the restored line quoted back is: `    stored = core_md.read_risk_areas(cwd, root=root)`. The final targeted run (see the return) covers the restored file.
+
+Green:
+
+```
+.                                                                        [100%]
+1 passed in 5.87s
+```

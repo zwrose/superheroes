@@ -43,10 +43,14 @@ def normalize_change_path(path):
 
 
 def pattern_matches(pattern, path):
-    """Case-sensitive glob match, the rule ``size_count`` applies to ``sizeExclude`` globs: ``*``
-    crosses ``/``, so ``src/payments/*`` covers every file under ``src/payments/``."""
+    """Case-sensitive cover test: ``path`` is covered by ``pattern`` when it equals it, lies beneath
+    it as a folder, or matches it as a glob (``*`` crosses ``/``), and a glob that names folders
+    also covers what is beneath them."""
     # axis: a normalised path that falls under a stored pattern is reported touched — see bite-proof record wo_a_1712_risk-areas
-    return fnmatch.fnmatchcase(path, pattern)
+    return (path == pattern
+            or path.startswith(pattern + "/")
+            or fnmatch.fnmatchcase(path, pattern)
+            or fnmatch.fnmatchcase(path, pattern + "/*"))
 
 
 def _result(risk_areas, reason=None, detail=None, areas=None, touched_areas=None,
@@ -106,7 +110,7 @@ def _read_paths_file(spec):
     else:
         with open(spec, encoding="utf-8") as fh:
             text = fh.read()
-    return [line.strip() for line in text.splitlines() if line.strip()]
+    return [line for line in text.splitlines() if line.strip()]
 
 
 def main(argv):

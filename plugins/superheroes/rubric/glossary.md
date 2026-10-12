@@ -263,7 +263,8 @@ the advisor.
 
 A named part of the project where a mistake costs money, customer data, safety, access, or something
 that cannot be undone. It names the parts it covers, why it is risky, and how hard a mistake there is
-to undo. A change that touches one is matched from the area itself, without model judgment.
+to undo. A folder it names covers every file beneath that folder. A change that touches one is matched
+from the area itself, without model judgment.
 
 ### Ground-truth sources
 

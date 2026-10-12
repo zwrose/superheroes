@@ -247,6 +247,48 @@ def test_matching_is_case_sensitive_and_star_crosses_slash(tmp_path):
     assert R.touched(repo, ["SRC/payments/x.py"], root=store)["touched"] == []
 
 
+def _covered(tmp_path, covers, path):
+    repo, store = _repo(tmp_path, [dict(PAYMENTS, covers=covers)])
+    return R.touched(repo, [path], root=store)["touched"] != []
+
+
+def test_a_folder_pattern_covers_every_file_beneath_it(tmp_path):
+    area = dict(PAYMENTS, covers=["src/payments"])
+    repo, store = _repo(tmp_path, [area])
+    for path in ("src/payments/charge.py", "src/payments/sub/refund.py", "src/payments"):
+        got = R.touched(repo, ["./" + path], root=store)
+        assert got["touched"] == [{"area": area, "matched": [path]}]
+
+
+def test_a_folder_pattern_stops_at_the_slash_boundary(tmp_path):
+    assert not _covered(tmp_path, ["src/pay"], "src/payments/charge.py")
+    assert not R.pattern_matches("src/pay", "src/payments/charge.py")
+    assert R.pattern_matches("src/pay", "src/pay/charge.py")
+
+
+def test_a_folder_named_with_glob_characters_covers_what_is_beneath_it(tmp_path):
+    assert _covered(tmp_path, ["app/[id]"], "app/[id]/page.tsx")
+    assert R.pattern_matches("what?", "what?/x.py")
+
+
+def test_a_literal_pattern_holding_glob_characters_covers_its_own_path(tmp_path):
+    assert _covered(tmp_path, ["app/[id]/page.tsx"], "app/[id]/page.tsx")
+    assert R.pattern_matches("app/[id]", "app/[id]")
+
+
+def test_a_glob_that_names_folders_covers_what_is_beneath_them(tmp_path):
+    assert _covered(tmp_path, ["src/*/payments"], "src/eu/payments/charge.py")
+    assert R.pattern_matches("src/*/payments", "src/eu/payments")
+    assert not R.pattern_matches("src/*/payments", "src/eu/other/charge.py")
+
+
+def test_a_file_glob_does_not_match_by_prefix(tmp_path):
+    repo, store = _repo(tmp_path, [dict(PAYMENTS, covers=["src/db/*.sql"])])
+    assert R.touched(repo, ["src/db/q.sql"], root=store)["touched"] != []
+    assert R.touched(repo, ["src/db/notes.txt"], root=store)["touched"] == []
+    assert R.touched(repo, ["src/db.sql"], root=store)["touched"] == []
+
+
 def test_change_outside_every_area_is_set_and_touches_none(tmp_path):
     repo, store = _repo(tmp_path, [PAYMENTS, CUSTOMER_DATA])
     got = R.touched(repo, ["docs/readme.md"], root=store)
@@ -351,21 +393,38 @@ def test_touched_writes_nothing(tmp_path):
 
 def test_touched_makes_no_model_call(tmp_path, monkeypatch):
     repo, store = _repo(tmp_path, [PAYMENTS])
+    real_run, real_popen = subprocess.run, subprocess.Popen
+    passed_through = []
 
     def _refuse(*args, **kwargs):
         raise AssertionError("a process, a shell or a connection was started")
 
-    # the reader's one git lookup (the repo root) is answered by the identity memo, which is
-    # warmed first; anything else the reader started would reach the raising stand-ins below
-    with CM.store_core.repo_identity_memo():
-        assert R.touched(repo, [], root=store)["riskAreas"] == "set"
-        monkeypatch.setattr(subprocess, "run", _refuse)
-        monkeypatch.setattr(subprocess, "Popen", _refuse)
-        monkeypatch.setattr(os, "system", _refuse)
-        monkeypatch.setattr(socket.socket, "connect", _refuse)
-        got = R.touched(repo, ["src/payments/charge.py", "./src/payments/charge.py"], root=store)
+    def _is_identity_lookup(argv):
+        # the repo-root and gitdir lookups (rev-parse) and the remote lookup (remote get-url)
+        return bool(argv) and argv[0] == "git" and (
+            "rev-parse" in argv or argv[-3:-1] == ["remote", "get-url"])
+
+    def _only_the_identity_lookups(argv, *args, **kwargs):
+        if _is_identity_lookup(argv):
+            passed_through.append(list(argv))
+            # the real run starts its process through Popen: let it, for this one call only
+            monkeypatch.setattr(subprocess, "Popen", real_popen)
+            try:
+                return real_run(argv, *args, **kwargs)
+            finally:
+                monkeypatch.setattr(subprocess, "Popen", _refuse)
+        return _refuse()
+
+    # no warming call and no identity memo: the reader's git identity lookups run for real, and
+    # anything else it started would reach the raising stand-ins
+    monkeypatch.setattr(subprocess, "run", _only_the_identity_lookups)
+    monkeypatch.setattr(subprocess, "Popen", _refuse)
+    monkeypatch.setattr(os, "system", _refuse)
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+    got = R.touched(repo, ["src/payments/charge.py", "./src/payments/charge.py"], root=store)
     assert got["riskAreas"] == "set"
     assert got["touched"] == [{"area": PAYMENTS, "matched": ["src/payments/charge.py"]}]
+    assert passed_through and all(_is_identity_lookup(argv) for argv in passed_through)
 
 
 def test_risk_areas_module_imports_no_process_network_or_engine_module():
@@ -398,7 +457,7 @@ def test_cli_prints_the_result_and_exits_zero_even_when_not_set(tmp_path, capsys
 def test_cli_reads_paths_from_a_file_and_from_stdin(tmp_path, capsys, monkeypatch):
     repo, store = _repo(tmp_path, [PAYMENTS])
     listing = tmp_path / "paths.txt"
-    listing.write_text("docs/readme.md\n\n  src/payments/a.py  \n", encoding="utf-8")
+    listing.write_text("docs/readme.md\n\nsrc/payments/a.py\n", encoding="utf-8")
     rc = R.main(["touched", "--cwd", repo, "--root", store, "--paths-file", str(listing),
                  "--path", "src/payments/b.py"])
     out = json.loads(capsys.readouterr().out)
@@ -408,6 +467,18 @@ def test_cli_reads_paths_from_a_file_and_from_stdin(tmp_path, capsys, monkeypatc
     rc = R.main(["touched", "--cwd", repo, "--root", store, "--paths-file", "-"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["touched"][0]["matched"] == ["src/payments/c.py"]
+
+
+def test_cli_keeps_in_name_whitespace_and_drops_only_line_endings(tmp_path, capsys):
+    repo, store = _repo(tmp_path, [PAYMENTS])
+    listing = tmp_path / "paths.txt"
+    listing.write_bytes(b"src/payments/a b.py \r\n   \r\n")
+    rc = R.main(["touched", "--cwd", repo, "--root", store, "--paths-file", str(listing)])
+    from_file = json.loads(capsys.readouterr().out)
+    assert rc == 0 and from_file["touched"][0]["matched"] == ["src/payments/a b.py "]
+    rc = R.main(["touched", "--cwd", repo, "--root", store, "--path", "src/payments/a b.py "])
+    by_flag = json.loads(capsys.readouterr().out)
+    assert rc == 0 and by_flag["touched"][0]["matched"] == ["src/payments/a b.py "]
 
 
 def test_cli_unreadable_paths_file_exits_two_with_an_error(tmp_path, capsys):

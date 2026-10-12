@@ -135,9 +135,10 @@ and go on. The configure view shows item 14 as unset until it is set.
 
 **What the answers become.** The advisor turns the answers to the first three questions into
 **risk areas**. For each part the owner names, the advisor finds the code that implements it and
-writes the area's `covers` patterns itself, takes `why` from the unacceptable outcomes, and takes
-`undo` from the answer on undoing. A part where a mistake costs money, customer data, safety,
-access, or something that cannot be undone can each be its own area. Before writing, the advisor
+writes the area's `covers` patterns itself (a pattern is a repo-relative path or glob; a pattern that
+names a folder covers every file beneath that folder, and `*` also crosses `/`), takes `why` from the
+unacceptable outcomes, and takes `undo` from the answer on undoing. A part where a mistake costs
+money, customer data, safety, access, or something that cannot be undone can each be its own area. Before writing, the advisor
 reads the areas back in product terms: the name, what it covers in the owner's words, why it is
 risky, and how hard a mistake there is to undo. It writes them only on the owner's yes, with the
 whole list in one call, through a quoted here-document as for item 14:
@@ -163,6 +164,20 @@ SUPERHEROES_ANSWER
 Each call sets one half, and setting `riskAreas` replaces the whole list. Read the result as the
 other `set` calls are read: only `written` or `noop` means it was saved. Anything else is reported
 to the owner with its `reason` and never worked around.
+
+**The coverage check.** After a `written` or `noop` answer, the advisor runs the reader over the
+project's tracked files:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+git ls-files | python3 -B "$ROOT_DIR/lib/risk_areas.py" touched --cwd . --paths-file -
+```
+
+and checks that every area in `areas` appears in `touched`. An area that matched nothing is read
+back to the owner in product terms ("Payments covers no file in the project today"), and the
+advisor corrects its `covers` with the owner and writes the whole list again before finishing. An
+area may legitimately cover files that do not exist yet; keeping it as it is, is the owner's call,
+and the advisor says so in the set-up output. No write is refused for covering nothing.
 
 The answer to the fourth question is checked against what the project's calibration already
 records: the verify command, and test-pilot's profile when test-pilot is set up. A gap is offered to
