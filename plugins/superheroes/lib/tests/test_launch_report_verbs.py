@@ -400,3 +400,22 @@ def test_cli_still_prints_the_line_or_null_and_exits_zero(world, monkeypatch, ca
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True
     assert out["line"].startswith("Still on your machine\n")
+
+
+def test_cli_still_names_a_state_file_it_cannot_read_and_keeps_it(world, monkeypatch, capsys):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"]["action"] == "written"
+    path = LR._still_path(repo, None)
+    real_open = open
+
+    def deny(file, *args, **kwargs):
+        if str(file) == path:
+            raise PermissionError("not readable")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", deny)
+    assert launcher.main(["still", "--repo-root", repo]) == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": LR.STILL_UNREADABLE}
+    monkeypatch.undo()
+    assert os.path.exists(path)

@@ -3526,7 +3526,10 @@ def _cli_report(args):
 
 
 def _cli_still(args):
-    return {"ok": True, "line": launch_report.still_line(args.repo_root)}
+    got = launch_report.still_check(args.repo_root)
+    if got["refused"] is not None:
+        return _fail(got["refused"])
+    return {"ok": True, "line": got["line"]}
 
 
 def main(argv=None):

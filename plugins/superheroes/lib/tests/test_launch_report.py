@@ -404,6 +404,34 @@ def test_a_failed_check_keeps_its_recheck_step_in_the_report_and_the_still_line(
     assert line.endswith(SETUP_TEXT_FIX + ' Then say "check again".')
 
 
+def test_a_failed_check_after_an_ordinary_fallback_keeps_its_recheck_step(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    plain = _call(reason="calibration")
+    failed = dict(_call(reason="calibration", by="word"), failedCheck=["calibration"])
+    recheck = SETUP_TEXT_FIX + ' Then say "check again".'
+    assert LR.render_report([_lane(1, plain), _lane(2, failed)]).endswith(recheck)
+    assert LR.render_report([_lane(1, plain), _lane(2, plain)]).endswith(SETUP_TEXT_FIX)
+    third = _call(reason="no-setup", pointed=True)
+    assert LR.render_report([_lane(1, plain), _lane(2, third), _lane(3, failed)]).endswith(recheck)
+    same = _call(reason="calibration")
+    assert LR.render_report([_lane(1, same), _lane(2, dict(same, failedCheck=["calibration"]))]
+                            ).endswith(recheck)
+    LR.record_still(repo, [plain, failed], root=store, today=TODAY)
+    assert _stored(repo, store)["failedCheck"] == ["calibration"]
+    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="calibration")).endswith(recheck)
+
+
+def test_a_word_directed_fallback_beside_a_setting_directed_one_stays_word_directed(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    calls = [_call(reason="calibration", by="setting"), _call(reason="calibration", by="word")]
+    LR.record_still(repo, calls, root=store, today=TODAY)
+    assert _stored(repo, store)["by"] == "word"
+    line = _line(repo, store, ready=False, reason="calibration", setting=False)
+    assert line is not None and line.startswith("Still on your machine\n")
+    assert os.path.exists(_still_path(repo, store))
+
+
 def test_record_still_clears_when_a_build_went_to_the_cloud(tmp_path):
     repo, store = _gitdir(tmp_path)
     LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
@@ -617,6 +645,27 @@ def test_E16_a_state_file_in_the_wrong_shape_is_deleted_and_gives_no_line(tmp_pa
     path = _put(_still_path(repo, store), text)
     assert _line(repo, store, ready=False, reason="no-setup") is None
     assert not os.path.exists(path)
+
+
+def test_a_state_file_that_cannot_be_read_is_kept_and_named_not_deleted(tmp_path, monkeypatch):
+    repo, store = _still_with(tmp_path, _call(reason="no-setup"))
+    path = _still_path(repo, store)
+    real_open = open
+
+    def deny(file, *args, **kwargs):
+        if str(file) == path:
+            raise PermissionError("not readable")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", deny)
+    got = LR.still_check(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="no-setup"))
+    assert got == {"line": None, "refused": LR.STILL_UNREADABLE}
+    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="no-setup")) is None
+    monkeypatch.undo()
+    assert os.path.exists(path)
+    assert _line(repo, store, ready=False, reason="no-setup").startswith("Still on your machine")
 
 
 def test_a_good_state_file_written_by_hand_gives_its_line(tmp_path):

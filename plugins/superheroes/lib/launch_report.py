@@ -3,7 +3,7 @@
 later messages.
 
 Stdlib plus plugin imports only. Every reason either one prints is drawn from the one `REASONS`
-table in `launch_place`. None of `render_report`, `record_still`, `still_line` and `clear_still`
+table in `launch_place`. None of `render_report`, `record_still`, `still_check`, `still_line` and `clear_still`
 ever raises. The stored reason is the first not-ready condition in the cloud check's order, and it
 is forgotten once a build goes to the cloud or the condition behind it is fixed."""
 import datetime
@@ -24,6 +24,8 @@ from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reas
 _STILL_SCHEMA = "cloud-still/1"
 _STILL_HEADER = "Still on your machine"
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_UNREADABLE = object()
+STILL_UNREADABLE = "still-state-unreadable"
 
 # The condition behind each reason, read back out of the readiness registry.
 _CONDITION_FOR = {reason: name for name, reason in cloud_ready.REASON_FOR.items()}
@@ -49,6 +51,12 @@ def _fix_line(code, call):
     return _fill(fix_text(call), call.get("cloudVersion"), call.get("advisorVersion"))
 
 
+def _recheck_first(calls):
+    """The call that carries the failed check when any of these does, else the first: the fix for
+    a reason must keep the recheck step whichever call came first."""
+    return next((c for c in calls if c.get("failedCheck") is not None), calls[0])
+
+
 def _summary(lanes):
     """The all-on-your-machine form, or None when the lanes do not share one reason."""
     calls = [lane["placeCall"] for lane in lanes]
@@ -59,7 +67,7 @@ def _summary(lanes):
         return None
     if len({reason_text(c) for c in calls}) != 1:
         return None
-    first = calls[0]
+    first = _recheck_first(calls)
     code = first["reason"]
     wasnt = _fill(REASONS[code]["wasnt"], first.get("cloudVersion"), first.get("advisorVersion"))
     return "%s, all on your machine. The cloud wasn't ready: %s\n%s" % (
@@ -91,13 +99,11 @@ def render_report(lanes):
         fixes = []
         for name in cloud_ready.CONDITION_ORDER:
             code = cloud_ready.REASON_FOR[name]
-            for lane in local:
-                call = lane["placeCall"]
-                if call.get("reason") == code:
-                    line = _fix_line(code, call)
-                    if line not in fixes:
-                        fixes.append(line)
-                    break
+            shared = [lane["placeCall"] for lane in local if lane["placeCall"].get("reason") == code]
+            if shared:
+                line = _fix_line(code, _recheck_first(shared))
+                if line not in fixes:
+                    fixes.append(line)
         return "\n".join(out + fixes)
     except Exception:
         return None
@@ -159,9 +165,13 @@ def record_still(cwd, place_calls, *, root=None, today=None):
                  and c.get("reason") in NOT_READY_CODES]
         if stuck:
             rank = [cloud_ready.REASON_FOR[name] for name in cloud_ready.CONDITION_ORDER]
-            call = min(stuck, key=lambda c: rank.index(c["reason"]))
+            best = min(rank.index(c["reason"]) for c in stuck)
+            tied = [c for c in stuck if rank.index(c["reason"]) == best]
+            call = _recheck_first(tied)
+            # a launch the owner pointed at the cloud by word stays unresolved when the setting is off
+            by = "word" if any(c.get("by") == "word" for c in tied) else call.get("by")
             state = {
-                "schema": _STILL_SCHEMA, "reason": call["reason"], "by": call.get("by"),
+                "schema": _STILL_SCHEMA, "reason": call["reason"], "by": by,
                 "cloudVersion": call.get("cloudVersion"),
                 "advisorVersion": call.get("advisorVersion"),
                 "reported": call.get("reported"),
@@ -177,13 +187,16 @@ def record_still(cwd, place_calls, *, root=None, today=None):
 
 
 def _read_still(path):
-    """The stored state, or None when it is absent or not in the exact shape written."""
+    """The stored state; None when it is absent, False when it is not in the exact shape written,
+    and _UNREADABLE when the file could not be read at all."""
     try:
         with open(path, encoding="utf-8") as fh:
             state = json.load(fh)
     except FileNotFoundError:
         return None
-    except (OSError, ValueError, RecursionError):
+    except OSError:
+        return _UNREADABLE
+    except (ValueError, RecursionError):
         return False
     if not isinstance(state, dict) or state.get("schema") != _STILL_SCHEMA:
         return False
@@ -248,17 +261,20 @@ def _fixed(state, now, cwd=None, root=None):
         return False
 
 
-def still_line(cwd, *, root=None, today=None, readiness_fn=None):
-    """The line to repeat at the top of a later message, or None; clears the stored reason once
-    it is fixed. Never raises."""
+def still_check(cwd, *, root=None, today=None, readiness_fn=None):
+    """The line to repeat at the top of a later message (None when there is none) and the refusal
+    when the stored state could not be read; an unreadable file is left in place, not cleared.
+    Clears the stored reason once it is fixed. Never raises."""
     try:
         path = _still_path(cwd, root)
         state = _read_still(path)
         if state is None:
-            return None
+            return {"line": None, "refused": None}
+        if state is _UNREADABLE:
+            return {"line": None, "refused": STILL_UNREADABLE}
         if state is False:
             _remove(path)
-            return None
+            return {"line": None, "refused": None}
         try:
             now = (readiness_fn or cloud_ready.readiness)(cwd, reported=None, root=root)
             fixed = _fixed(state, now, cwd, root)
@@ -266,16 +282,21 @@ def still_line(cwd, *, root=None, today=None, readiness_fn=None):
             fixed = False
         if fixed:
             _remove(path)
-            return None
+            return {"line": None, "refused": None}
         code = state["reason"]
         words = _words(code, state.get("cloudVersion"), state.get("advisorVersion"))
         failed = state.get("failedCheck")
         # after a failed check the reminder carries the recheck step, as the launch report does
         fix = REASONS[code]["short"] if failed is None else fix_text(
             {"reason": code, "failedCheck": failed})
-        return "%s\n%s %s" % (_STILL_HEADER, words, fix)
+        return {"line": "%s\n%s %s" % (_STILL_HEADER, words, fix), "refused": None}
     except Exception:
-        return None
+        return {"line": None, "refused": None}
+
+
+def still_line(cwd, *, root=None, today=None, readiness_fn=None):
+    """The line to repeat at the top of a later message, or None. Never raises."""
+    return still_check(cwd, root=root, today=today, readiness_fn=readiness_fn)["line"]
 
 
 def clear_still(cwd, *, root=None):
