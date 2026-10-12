@@ -3,7 +3,6 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
 import { CHECKPOINT_INFO } from './checkpoint-block'
-import { USER_CONFIG } from './user-config.fixture'
 
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
@@ -28,6 +27,14 @@ const steer = ok({
   markerPath: MARKER,
 })
 const saveAnswer = ok({ path: NOTES })
+
+// A test-local `userConfig` in the manifest's shape, its values deliberately not the manifest's:
+// these tests cover the mod's use of the settings, not the manifest's numbers.
+const USER_CONFIG = {
+  autoCheckpointTokens: { default: 400000, min: 20000, max: 1500000 },
+  autoCheckpointAllowance: { default: 90000, min: 0, max: 950000 },
+  autoCheckpointMode: { default: 'auto', options: ['auto', 'click-only', 'off'] },
+}
 
 // What the stubbed lib/compaction_cli.json reads as. The mod takes its vocabulary from that
 // file; the real file's agreement with the real CLI is lib/tests/test_compaction_mod_argv_1814.py.
@@ -84,6 +91,8 @@ type Rig = {
   // what `session.usage` answers (null: it fails) and what the notes file holds (null: missing)
   usage: SessionUsage | null
   notes: string | null
+  // the notes file exists but cannot be read
+  isUnreadable: boolean
   compactAttempts: number
 }
 
@@ -118,6 +127,7 @@ function rig(
     sets: [],
     usage: usageAt(0),
     notes: 'old notes',
+    isUnreadable: false,
     compactAttempts: 0,
   }
 
@@ -146,6 +156,10 @@ function rig(
     r.reads.push(e.path)
 
     if (e.path === NOTES) {
+      if (r.isUnreadable) {
+        return { deny: 'permission denied' }
+      }
+
       return r.notes === null ? { deny: 'no such file' } : { value: r.notes }
     }
 
@@ -159,6 +173,7 @@ function rig(
       ? { deny: 'no such file' }
       : { value: options.vocabulary ?? VOCABULARY }
   })
+  on('fs.exists', (_$, e) => ({ value: e.path === NOTES && (r.notes !== null || r.isUnreadable) }))
   on('fs.write', (_$, e) => {
     r.writes.push({ path: e.path, text: e.text })
     r.order.push(`write:${e.path}`)
@@ -505,11 +520,12 @@ for (const [name, cli, options] of [
 
 const COMMAND = 'superheroes:checkpoint auto'
 const SUCCESS = 'Checkpointed and compacted'
-const SKIPPED = 'Auto-checkpoint skipped: the notes file did not change'
+const LATER = '; next try after more context'
+const SKIPPED = `Auto-checkpoint skipped: the notes file did not change${LATER}`
 const COMPACT_FAILED = 'Auto-checkpoint saved the notes but could not compact'
 const COMMAND_FAILED = 'Auto-checkpoint failed'
 
-// Above the 500000 default trigger / inside its 50000 heads-up band / below the band.
+// Above the 500000 trigger (the options the kit passes are the manifest's defaults) / inside its 50000 heads-up band / below the band.
 const PAST = 520000
 const NEAR = 470000
 const FAR_BELOW = 100000
@@ -678,7 +694,7 @@ test('a failed save never compacts, even when the notes file changed', async ($,
   await complete($, block('notes'))
   await r.clock.advance(5000)
 
-  expect(r.toasts).toContain('Auto-checkpoint skipped: the notes could not be saved')
+  expect(r.toasts).toContain(`Auto-checkpoint skipped: the notes could not be saved${LATER}`)
   expect(r.seen).toHaveLength(0)
 })
 
@@ -693,7 +709,24 @@ test('an unreadable baseline never compacts and says why', async ($, on) => {
   await complete($, 'Done.')
   await r.clock.advance(5000)
 
-  expect(r.toasts).toEqual(['Auto-checkpoint skipped: the notes could not be read before the checkpoint'])
+  expect(r.toasts).toEqual([`Auto-checkpoint skipped: the notes could not be read before the checkpoint${LATER}`])
+  expect(r.seen).toHaveLength(0)
+})
+
+test('a notes file that exists but cannot be read never compacts and says why', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  r.isUnreadable = true
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.isUnreadable = false
+  r.notes = 'fresh notes'
+
+  await complete($, 'Done.')
+  await r.clock.advance(5000)
+
+  expect(r.toasts).toEqual([`Auto-checkpoint skipped: the notes could not be read before the checkpoint${LATER}`])
   expect(r.seen).toHaveLength(0)
 })
 
@@ -708,7 +741,7 @@ test('a missing or malformed manifest schema runs nothing and draws no band', as
   expect(r.sets.filter(([key]) => key === 'band').every(([, value]) => value === false)).toBe(true)
 })
 
-test('a checkpoint that left the notes unchanged does not compact, and a later one may run', async ($, on) => {
+test('a checkpoint that left the notes unchanged does not compact, and does not start again at the same fill', async ($, on) => {
   const r = rig(on, () => saveAnswer)
 
   await start($)
@@ -721,7 +754,15 @@ test('a checkpoint that left the notes unchanged does not compact, and a later o
   expect(r.toasts).toEqual([SKIPPED])
   expect(r.seen).toHaveLength(0)
 
+  // the engine's measurement after the turn, at the same fill: no second run
   await measure($, r, PAST)
+  await measure($, r, PAST + 99999)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+
+  // once the fill has grown by the snooze step, the automatic run may start again
+  await measure($, r, PAST + 100000)
   await r.clock.settle()
 
   expect(r.commands).toEqual([COMMAND, COMMAND])
@@ -895,6 +936,52 @@ test('Now runs the checkpoint in auto mode too, below the trigger', async ($, on
   await measure($, r, PAST)
   await r.clock.settle()
   expect(r.commands).toEqual([COMMAND])
+})
+
+test('Now during a running turn starts nothing, tells the owner, and writes no checkpoint state', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, NEAR)
+  const ui = await mountBand($, 'terminal')
+
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await ui.press({ key: 'now' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+  expect(r.toasts).toEqual(['Auto-checkpoint: wait for the current turn to finish'])
+  expect(r.sets.filter(([key]) => key === 'checkpoint')).toEqual([])
+})
+
+test('Now through the save and the compaction: the reply block is saved, then the session compacts and says so', async ($, on) => {
+  const r: Rig = rig(on, argv => {
+    if (argv[3] === 'save') {
+      r.notes = 'fresh notes'
+    }
+
+    return saveAnswer
+  })
+
+  await start($)
+  await measure($, r, NEAR)
+  const ui = await mountBand($, 'terminal')
+
+  await ui.press({ key: 'now' })
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
+
+  await complete($, block('the notes'))
+
+  expect(r.notes).toBe('fresh notes')
+  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.toasts).toEqual(['Checkpoint notes saved'])
+  expect(r.seen).toHaveLength(0)
+
+  await r.clock.advance(1000)
+
+  expect(r.seen).toHaveLength(1)
+  expect(r.toasts).toEqual(['Checkpoint notes saved', SUCCESS])
 })
 
 test('off: no band and no run', { options: { autoCheckpointMode: 'off' } }, async ($, on) => {

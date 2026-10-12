@@ -11,13 +11,16 @@ import {
   snooze,
 } from './decide'
 import type { DecideInput, Settings } from './decide'
-import { USER_CONFIG } from './user-config.fixture'
 
 type Spec = { default: number; min: number; max: number }
 
-// The manifest's `userConfig` (a fixture kept equal to it) is the one home of the settings'
-// defaults and bounds.
-const schemaOf = (): Record<string, any> => USER_CONFIG
+// A test-local schema in the manifest's shape, its values deliberately not the manifest's:
+// these tests cover the coercion logic. (The manifest itself: lib/tests/test_user_config_1814.py.)
+const schemaOf = (): Record<string, any> => ({
+  autoCheckpointTokens: { default: 400000, min: 20000, max: 1500000 },
+  autoCheckpointAllowance: { default: 90000, min: 0, max: 950000 },
+  autoCheckpointMode: { default: 'auto', options: ['auto', 'click-only', 'off'] },
+})
 const settingsOf = (schema: unknown, options: unknown): Settings => settingsFrom(options, schema)!
 const TRIGGER = 500000
 
@@ -94,14 +97,14 @@ test('window clamp: auto-compact on pulls the trigger to threshold minus the all
 
   const settings = { ...DEFAULT_SETTINGS, thresholdTokens: 900000 }
 
-  // 967000 - 120000 = 847000, earlier than the owner's 900000
-  expect(effectiveTrigger(settings, AUTO_COMPACT, true)).toBe(847000)
+  // 967000 - 90000 = 877000, earlier than the owner's 900000
+  expect(effectiveTrigger(settings, AUTO_COMPACT, true)).toBe(877000)
 })
 
 test('window clamp: a threshold earlier than the window keeps the threshold', () => {
   const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
 
-  expect(effectiveTrigger(DEFAULT_SETTINGS, AUTO_COMPACT, true)).toBe(500000)
+  expect(effectiveTrigger(DEFAULT_SETTINGS, AUTO_COMPACT, true)).toBe(400000)
 })
 
 test('window clamp: auto-compact off, or its threshold unknown, leaves the threshold alone', () => {

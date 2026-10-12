@@ -99,8 +99,8 @@ async function loadSettings($: EngineInterface, options: unknown): Promise<Setti
   }
 }
 
-// The session's checkpoint notes as they stand: null when there is no file (the path
-// resolves but the read finds nothing), undefined when the path could not be resolved.
+// The session's checkpoint notes as they stand: null when there is no file, undefined when
+// the path could not be resolved or the file exists but could not be read.
 async function readNotes($: EngineInterface): Promise<string | null | undefined> {
   let path: string | null
 
@@ -111,10 +111,13 @@ async function readNotes($: EngineInterface): Promise<string | null | undefined>
   } catch {
     return undefined
   }
-  try {
-    return path === null ? null : await $.fs.read(path)
-  } catch {
+  if (path === null) {
     return null
+  }
+  try {
+    return (await $.fs.exists(path)) ? await $.fs.read(path) : null
+  } catch {
+    return undefined
   }
 }
 
@@ -136,8 +139,9 @@ async function abandonCheckpoint($: EngineInterface, error: unknown): Promise<vo
   }
 }
 
-// Runs /superheroes:checkpoint (automatic, or the band's Now). Never starts a second one.
-async function startCheckpoint($: EngineInterface): Promise<void> {
+// Runs /superheroes:checkpoint (automatic, or the band's Now). Never starts a second one,
+// and Now waits out a running turn.
+async function startCheckpoint($: EngineInterface, isNow = false): Promise<void> {
   if (isStarting) {
     return
   }
@@ -147,13 +151,23 @@ async function startCheckpoint($: EngineInterface): Promise<void> {
     if ((await runningCheckpoint($)) !== null) {
       return
     }
+    if (isNow && (await $.state.get(isTurnActive)).value === true) {
+      $.ui.toast('Auto-checkpoint: wait for the current turn to finish')
+
+      return
+    }
 
     const notesBefore = await readNotes($)
+    // the fill it started at: a checkpoint that ends without compacting snoozes to it
+    let tokens: number | undefined
 
-    await $.state.set(
-      checkpoint,
-      notesBefore === undefined ? { startedAt: await $.clock.now() } : { startedAt: await $.clock.now(), notesBefore },
-    )
+    try {
+      tokens = (await $.session.usage()).context.tokens
+    } catch {
+      // an unread fill only means no snooze when this checkpoint is skipped
+    }
+
+    await $.state.set(checkpoint, { startedAt: await $.clock.now(), tokens, ...(notesBefore === undefined ? {} : { notesBefore }) })
     await $.state.set(band, false)
     // not awaited: the call settles with the checkpoint turn, which must not hold a hook
     $.command.run({ command: 'superheroes:checkpoint', args: 'auto' }).catch(error =>
@@ -302,7 +316,11 @@ async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promis
     compactSoon($)
   } else {
     await $.state.set(checkpoint, null)
-    $.ui.toast(`Auto-checkpoint skipped: ${why}`)
+    // the next automatic run waits for the fill to grow, or this would start again at once
+    if (typeof value.tokens === 'number') {
+      await $.state.set(snoozeUntilTokens, snooze(value.tokens))
+    }
+    $.ui.toast(`Auto-checkpoint skipped: ${why}; next try after more context`)
   }
 }
 
@@ -385,7 +403,7 @@ export const register: Register = (on, options) => {
         drawn = Box({
           children: [
             Text({ dimColor: true, children: `${headsUp} ` }),
-            Button({ key: 'now', label: 'Now', onPress: () => startCheckpoint($) }),
+            Button({ key: 'now', label: 'Now', onPress: () => startCheckpoint($, true) }),
             Button({
               key: 'snooze',
               label: 'Snooze',
