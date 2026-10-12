@@ -1,0 +1,22 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "stack",
+  "number": 4,
+  "title": "Gift cards",
+  "summary": "Customers can buy a gift card, spend it at checkout and see what is left on it.",
+  "prs": [
+    {"number": 5, "title": "Add the gift-card table"},
+    {"number": 6, "title": "Redeem a gift card at checkout"},
+    {"number": 7, "title": "Show the gift-card balance"}
+  ],
+  "leftovers": {
+    "6:H1": {
+      "recommendation": {"text": "Fix it before merge", "reason": "A surprise second payment loses the sale.", "optionId": "fix-before-merge"}
+    }
+  },
+  "walk": [
+    {"id": "gift-card-table", "title": "The gift-card table", "pr": 5},
+    {"id": "checkout-redeem", "title": "Spending a card at checkout", "pr": 6},
+    {"id": "balance-page", "title": "The balance on the account page", "pr": 7}
+  ]
+}

@@ -31,10 +31,13 @@
     ],
     "closureQuestion": "Close the spec {spec} with this merge",
     "closureIfLeft": "The spec stays open after this PR merges.",
+    "closureReceipt": "The closure receipt",
+    "nothingToAccept": "Nothing. The review left nothing for you.",
     "historyRounds": "{rounds} rounds ran.",
     "historyCap": "The loop stopped at its round cap.",
     "historyShownWrong": "Shown wrong: {title}. {reason}",
     "historyMissing": "{name} did not run. {goAhead}",
+    "historyGoAhead": "Go-ahead to merge without it: {goAhead}.",
     "historyNoGoAhead": "No owner's word or standing ruling lets the PR go ahead without it.",
     "historyNotIndependent": "{name} is from a maker's model family, so its review was not independent."
   }

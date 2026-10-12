@@ -1,0 +1,183 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "pr",
+  "title": "Retry a failed payment",
+  "prSheet": {
+    "number": 214,
+    "commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "whatChanged": {
+      "summary": "A payment that fails is tried again up to three times before the order is given up.",
+      "reviewers": [
+        {
+          "name": "code-reviewer",
+          "family": "codex",
+          "ran": "engine-record",
+          "notIndependent": false
+        },
+        {
+          "name": "test-reviewer",
+          "family": "cursor",
+          "ran": "reported-by-session",
+          "notIndependent": false
+        },
+        {
+          "name": "design-reviewer",
+          "family": "claude",
+          "ran": "engine-record",
+          "notIndependent": true
+        }
+      ],
+      "caught": [
+        "A retry could charge the card twice"
+      ],
+      "rounds": 3,
+      "stoppedAtCap": false,
+      "ci": {
+        "state": "green",
+        "commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+      },
+      "lane": "full",
+      "laneReason": "The change touches how payments are charged."
+    },
+    "craft": [
+      {
+        "title": "Retries wait longer after each failure",
+        "detail": "A growing wait is the usual way to avoid hammering the bank."
+      },
+      {
+        "title": "The retry limit lives in the shop settings",
+        "detail": "One place to change it without a release."
+      },
+      {
+        "title": "Log lines name the order, not the card",
+        "detail": "Card details never reach the logs."
+      }
+    ],
+    "alreadyDecided": [
+      {
+        "title": "A failed payment keeps its original order number",
+        "detail": "Ruled earlier: the order number is the customer's receipt."
+      }
+    ],
+    "history": [
+      "3 rounds ran.",
+      "Shown wrong: The retry loop never stops. It stops after three tries; the reviewer misread the counter.",
+      "security-reviewer did not run. No owner's word or standing ruling lets the PR go ahead without it.",
+      "design-reviewer is from a maker's model family, so its review was not independent."
+    ],
+    "walk": [
+      {
+        "id": "retry-loop",
+        "title": "The retry loop",
+        "pr": 214
+      },
+      {
+        "id": "payment-tests",
+        "title": "The new payment tests",
+        "pr": 214
+      }
+    ]
+  },
+  "cards": [
+    {
+      "id": "f-e490915872bd",
+      "callKind": "Leftover",
+      "warning": false,
+      "question": "Customers are not told a retry happened",
+      "context": [
+        {
+          "title": "If left",
+          "blocks": [
+            {
+              "paragraph": "A customer may see a second charge attempt on their statement with no explanation."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [],
+      "recommendation": {
+        "text": "Leave it as is",
+        "reason": "The statement line already names the shop."
+      }
+    },
+    {
+      "id": "f-a5cb88b79507",
+      "callKind": "Leftover",
+      "warning": false,
+      "question": "A payment that fails three times ends with no email",
+      "context": [
+        {
+          "title": "If left",
+          "blocks": [
+            {
+              "paragraph": "A customer whose card keeps failing hears nothing and may think the order went through."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "keep-it",
+          "label": "Keep it",
+          "consequence": "Ships as is; no follow-up.",
+          "sendsBack": false
+        },
+        {
+          "id": "fix-in-a-follow-up",
+          "label": "Fix in a follow-up",
+          "consequence": "Ships now; a follow-up issue is filed with a revisit date.",
+          "sendsBack": false
+        },
+        {
+          "id": "fix-before-merge",
+          "label": "Fix before merge",
+          "consequence": "The PR goes back for the fix and returns with a new sheet.",
+          "sendsBack": true
+        }
+      ],
+      "recommendation": {
+        "text": "Fix it in a follow-up",
+        "reason": "The email needs wording the owner has not chosen yet.",
+        "optionId": "fix-in-a-follow-up"
+      }
+    },
+    {
+      "id": "i-6f4a068f1373",
+      "callKind": "Behavior change",
+      "warning": false,
+      "question": "Retry for ten minutes after a failure",
+      "context": [
+        {
+          "title": "If left",
+          "blocks": [
+            {
+              "paragraph": "A failed payment is retried for ten minutes, then the order is cancelled."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "ten-minutes",
+          "label": "Ten minutes",
+          "consequence": "Orders wait up to ten minutes for a payment to clear.",
+          "sendsBack": false
+        },
+        {
+          "id": "one-minute",
+          "label": "One minute",
+          "consequence": "The PR goes back to shorten the window and returns with a new sheet.",
+          "sendsBack": true
+        }
+      ],
+      "recommendation": {
+        "text": "Keep ten minutes",
+        "reason": "Most card declines clear within that time.",
+        "optionId": "ten-minutes"
+      }
+    }
+  ]
+}
