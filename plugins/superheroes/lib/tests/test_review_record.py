@@ -1713,3 +1713,25 @@ def test_a_stable_head_gives_the_normal_basis(tmp_path):
     repo = risk_repo(tmp_path)
     rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD]))
     assert rec["laneBasis"]["source"] == FILES_SOURCE
+
+
+DOCS_AREA = {"name": "Docs", "covers": ["docs/*"], "why": "Owner-facing docs.", "undo": "Easy: revert the page."}
+
+
+def test_a_changed_file_named_bug_free_still_publishes(tmp_path, monkeypatch):
+    # axis: the claim guard at the render boundary; a path in the lane basis's reason lines blocking the record
+    repo = risk_repo(tmp_path, areas=(DOCS_AREA,))
+    rec = real_reader_record(repo, monkeypatch, gh_files({"filename": "docs/bug-free.md"}))
+    assert "docs/bug-free.md" in "; ".join(rec["laneBasis"]["why"])
+    body = rr.render(rec)
+    assert "docs/bug-free.md" in body
+
+
+def test_composed_prose_claiming_no_bugs_is_still_refused_with_a_path_in_the_basis(tmp_path, monkeypatch):
+    # axis: the claim guard still reading writer-composed summary text; the path exemption widening to prose
+    repo = risk_repo(tmp_path, areas=(DOCS_AREA,))
+    rec = real_reader_record(repo, monkeypatch, gh_files({"filename": "docs/bug-free.md"}))
+    rec["whatIsMissing"] = ["the change has no bugs"]
+    with pytest.raises(rr.Refusal) as e:
+        rr.render(rec)
+    assert e.value.reason == "review-record-forbidden-claim"

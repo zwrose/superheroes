@@ -818,7 +818,13 @@ def render(record):
             *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
             f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
             "Reviewers:", *who])
-        _assert_no_bug_free_claim(summary)
+        # The lane basis's reason lines hold literal data (area names, sampled changed paths), not prose this
+        # writer composes, so the claim guard checks the summary with each of them left out, as it does the
+        # JSON block. Every other word of the summary is still checked.
+        checked = summary
+        for reason in sorted(r["laneBasis"]["why"], key=len, reverse=True):
+            checked = checked.replace(reason, "")
+        _assert_no_bug_free_claim(checked)
         return (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
                 f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
 
