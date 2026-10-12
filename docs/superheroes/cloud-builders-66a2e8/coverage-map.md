@@ -61,10 +61,11 @@ each names the one owner and the register entry that binds the other child:
 - **UFR-5** (a version mismatch runs the build on the owner's machine and names both versions) is
   **C5**'s: its readiness check keeps such a build off the cloud, and its launch report names both
   versions. Where a mismatch reaches a cloud builder anyway, C6's builder stops before building and
-  ends with `refusal`, and C7 relaunches the build routed as a launch, so it runs on the owner's
-  machine with both versions named; R2 binds C5, C6 and C7. No bullet moves, so this is not a
-  split.
-- **UFR-9** (a stopped cloud builder is recovered at once, routed as a launch is) is **C7**'s. The
+  ends with `refusal`, and C7b (moved from C7 at the 2026-10-12 size split) relaunches the build
+  routed as a launch, so it runs on the owner's machine with both versions named; R2 binds C5, C6
+  and C7b. No bullet moves, so this is not a split.
+- **UFR-9** (a stopped cloud builder is recovered at once, routed as a launch is) is **C7b**'s
+  (moved from C7 at the 2026-10-12 size split). The
   routing it reuses is C5's one routing step (R5), and the liveness that shows the builder stopped
   is C1's (R1).
 
@@ -80,7 +81,7 @@ run). Because the whole epic is one native stack, closure follows that file's st
 one merge, when every other layer already has a green vet. So the validation run runs **before the
 merge**, against the stack's head, meaning the plugin as the whole stack has it: the plugin's automated conformance checks run on that head, and the children's recorded runs are collected and graded against the spec's success bullets as far as they reach: a project set up in one sitting and its check session (C4), cloud builds switched on and builds routed (C5), cloud builds launched, listed and answered (C1, C7), a cloud build reaching a ready PR with its independent review run through the pass (C6b), and cleanup (C8). No real wave and no full-size build is required before the merge: the spec's Definition of done says the work ships once the build has tested what it can, with nothing shown in a real wave first (Canon 2026-10-10-ca3e7e0d-15), so what the recorded runs do not reach, a real multi-build wave and a full-size cloud build among them, is recorded in the closure receipt as left to be learned in use. The run also collects the children's recorded runs for the spec's other five tested cases (several cloud builders at once: C1; a project that
 keeps its calibration outside the repository: C4; a lapsed pass sending builds to the owner's
-machine: C5; a builder's question answered mid-build and a stopped builder recovered: C7). Its
+machine: C5; a builder's question answered mid-build: C7; a stopped builder recovered: C7b). Its
 result goes with C8's handback, in the closure receipt, presented to the owner with the delivery
 decision in one sitting before the stack merges. Its five rows are the last rows of the table.
 
@@ -92,9 +93,9 @@ falls between children.
 | --- | --- | --- |
 | Part D's lead-in (the guardian's store a cloud session cannot reach) | a cloud builder reads the placed calibration copy, never the store | C6 (FR-27) and C3 (which places the copy) |
 | Part E's lead-in | the new gardening duty is appended as duty 8, the seven keep their numbers, the list stays closed at eight | C8 |
-| UI / UX | the approved build board (`board/build-board.html`) is the design, and its wording is the product's wording | each child's What names its artboards: C4 "1 Setup", C2 and C4 "2 The setting"; C5 "3 The launch report"; C1 and C6 "4 While a cloud build runs"; C6 and C7 "5 Mid-build trouble"; C8 "6 Cleanup" and "7 The gardening pass" |
+| UI / UX | the approved build board (`board/build-board.html`) is the design, and its wording is the product's wording | each child's What names its artboards: C4 "1 Setup", C2 and C4 "2 The setting"; C5 "3 The launch report"; C1 and C6 "4 While a cloud build runs"; C6, C7 and C7b "5 Mid-build trouble"; C8 "6 Cleanup" and "7 The gardening pass" |
 | Glossary | cloud build, builder and lane; cloud environment; cloud setup; setup text; reviewer pass; check session; launch report; launch word | the child that first ships each term (R10) |
-| Constraints | no dependence on several accounts; the pass from the owner's ordinary sign-in, business tokens ruled out; no ceiling on cloud builders; no recovery machinery beyond what the requirements name; project and plugin rules only; one tap per cleanup | R9 (no dependence on several accounts); R4 (the pass); C1 (no ceiling: the launcher adds none); C7 and R1 (recovery kept to what is named); C4 (the setup message says it) and C6 (the builder runs on them); C8 (one tap) |
+| Constraints | no dependence on several accounts; the pass from the owner's ordinary sign-in, business tokens ruled out; no ceiling on cloud builders; no recovery machinery beyond what the requirements name; project and plugin rules only; one tap per cleanup | R9 (no dependence on several accounts); R4 (the pass); C1 (no ceiling: the launcher adds none); C7b and R1 (recovery kept to what is named); C4 (the setup message says it) and C6 (the builder runs on them); C8 (one tap) |
 | Assumptions & dependencies | cloud sessions on the owner's plan; a reviewer sign-in that can be placed as a pass; self-archive only on a person's approval; one-way messaging; the review spec's release; the version pickup not yet proven | the owner's setup (C2 to C4); R4; C8; R6; R7 and R8; C3 and C5 (FR-37) |
 | Out of scope | hands-off upkeep of the pass and calibration; the advisor, discovery and detective in the cloud; checks needing a phone or the signed-in browser; cleanup with no tap; an owner-hosted build machine; carrying Canon or specs outside the repository to the cloud | none; C5 judges the last three kinds of build as needing the owner's machine (R5) |
 
@@ -110,7 +111,7 @@ once C1, C2 and C3 have handed back; C5 once C1 and C2 have; C6 once C1 and C3 h
 #1708's #1716 and #1718 are on main. Wave 2: C7, once C5 and C6 have handed back. The stack merges with
 one `gh stack merge` when every layer is vetted.
 
-**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 12 · C5b 3 (FR-15, FR-16 and UFR-6, moved from C5 at the 2026-10-11 size split) · C6 5 · C6b 8 (FR-18, FR-20, FR-21, FR-24, FR-25 and UFR-12's builder's half, moved from C6 at the 2026-10-11 size split) · C7 14 ·
+**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 12 · C5b 3 (FR-15, FR-16 and UFR-6, moved from C5 at the 2026-10-11 size split) · C6 5 · C6b 8 (FR-18, FR-20, FR-21, FR-24, FR-25 and UFR-12's builder's half, moved from C6 at the 2026-10-11 size split) · C7 8 · C7b 6 (UFR-9, UFR-10 and UFR-13, moved from C7 at the 2026-10-12 size split) ·
 C8 9 · closure validation run 5. Total 73 rows: 68 bullet rows (66 bullets, two of them split in
 two) and 5 Definition of done rows.
 
@@ -175,15 +176,15 @@ two) and 5 Definition of done rows.
 | UFR-7 | 4 | rule | The cloud is not stricter than a build on the owner's machine here. | **C6** |
 | UFR-8 | 1 | GWT | Given a PR parked by UFR-7, when the advisor next writes to the owner, then the message names the PR, the… | **C7** |
 | UFR-8 | 2 | rule | The advisor reports a review that did not run for any other reason as the review rules already say, with no… | **C7** |
-| UFR-9 | 1 | GWT | Given a stopped cloud builder and the cloud ready, when the advisor recovers the lane, then the new builder… | **C7** |
-| UFR-9 | 2 | rule | A recovery never leaves two builders working one issue. | **C7** |
-| UFR-10 | 1 | rule | The work redone is the work since the builder's last push that could not be saved. | **C7** |
+| UFR-9 | 1 | GWT | Given a stopped cloud builder and the cloud ready, when the advisor recovers the lane, then the new builder… | **C7b** |
+| UFR-9 | 2 | rule | A recovery never leaves two builders working one issue. | **C7b** |
+| UFR-10 | 1 | rule | The work redone is the work since the builder's last push that could not be saved. | **C7b** |
 | UFR-11 | 1 | rule | The plugin sends no reminder about an unanswered archive prompt. | **C8** |
 | UFR-12 | 1a | GWT | then the builder parks with its work pushed | **C6b** |
 | UFR-12 | 1b | GWT | and the advisor answers and resumes the lane when it is back | **C7** |
-| UFR-13 | 1 | GWT | Given a stalled cloud builder that still answers, when the advisor recovers the lane, then the advisor asks… | **C7** |
-| UFR-13 | 2 | rule | Work that cannot be saved is redone, and the advisor says how much. | **C7** |
-| UFR-13 | 3 | rule | A build that never pushed starts again from the beginning. | **C7** |
+| UFR-13 | 1 | GWT | Given a stalled cloud builder that still answers, when the advisor recovers the lane, then the advisor asks… | **C7b** |
+| UFR-13 | 2 | rule | Work that cannot be saved is redone, and the advisor says how much. | **C7b** |
+| UFR-13 | 3 | rule | A build that never pushed starts again from the beginning. | **C7b** |
 | DoD | 1 | success | An owner can set a project up for the cloud in one sitting, switch cloud builds on, and launch a wave in which every build that can run in the cloud does. | **closure validation run** |
 | DoD | 2 | success | Those builds reach ready PRs with real independent reviews, and the owner's machine does none of their build work. | **closure validation run** |
 | DoD | 3 | success | The work ships once the build has tested what it can test. Nothing has to be shown in a real wave first. | **closure validation run** |
@@ -207,3 +208,5 @@ the spec lacks, each Definition of done bullet appears once, and every row names
 **Coverage re-check after the C5 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C5 split into C5 (where a build runs: the readiness reader, the routing step, the launcher wiring, #1746) and C5b (the launch report, the still line and the doctrine, #1775). FR-15, FR-16 and UFR-6 moved to C5b; C5 keeps FR-10 to FR-14, FR-37's second acceptance, UFR-3, UFR-4 and UFR-5, its routing result carrying each reason and fix that C5b renders. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C5b in the stack's order; R2, R3, R5, R8, R9, R10 and R11 name it as a consumer.
 
 **Coverage re-check after the C6 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C6 split into C6 (the builder's cloud path, machine side: the cloud builder module, the calibration guard, the runner's pass scrub, the history fetch, the GitHub probe over REST and the bootstrap's marker fix, #1747) and C6b (the builder's cloud doctrine and live run, #1777). The criteria the recorded live run grades moved to C6b: FR-18, FR-20, both of FR-21's acceptances, both of FR-24's, FR-25 and UFR-12's builder's half (with UFR-12's statement). C6 keeps FR-27 and UFR-7's four acceptances, which its tests grade, and the version-mismatch refusal that UFR-5's note names. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C6b in the stack's order; R4, R6, R7, R8, R9 and R11 name it as a consumer, and R11 gives it the workhorse charter and the review-discipline line.
+
+**Coverage re-check after the C7 size split (advisor, 2026-10-12, at the 600 bar; craft, owner veto open).** Cloud C7 split into C7 (answering a cloud builder: the builder-note watch event, the relay session and its exact-text check, the advisor's return, the lapsed-pass parked notice and the send-back after renewal, #1748) and C7b (recovering a cloud builder: the adoption routed through C5's routing step, the push ask, the recovery message, the successor launch naming the pushed branch, the version-mismatch relaunch and the recovery folds, #1784). The recovery criteria moved to C7b: both of UFR-9's acceptances, UFR-10, and UFR-13's three. C7 keeps FR-22, FR-35's second sentence, FR-36's three, UFR-8's two and UFR-12's advisor's half. UFR-5's row stays C5's; the relaunch its note names is now C7b's. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C7b in the stack's order; R1, R2, R5, R6, R8, R9 and R11 name it as a consumer, and R11 gives it the recovery parts of the files it shares with C7.
