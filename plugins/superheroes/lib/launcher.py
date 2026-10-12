@@ -63,7 +63,7 @@ _IPHONE_CREATE_TIMEOUT = 20
 _DEVICE_HUB_CMD_TIMEOUT = 30
 _DEVICE_HUB_POLL_SECONDS = 10
 # The iPhone steps together never run longer than this; the launch deadline is extended by exactly the time they took.
-_IPHONE_CEILING_SECONDS = 90
+_IPHONE_CEILING_SECONDS = ll.IPHONE_CEILING_SECONDS
 # The shortest timeout the poll's last lookup gets once the poll deadline has passed.
 _DEVICE_HUB_FINAL_LOOKUP_SECONDS = 1
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
@@ -93,7 +93,7 @@ STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (5, 15, 45)
-_TOTAL_DEADLINE_SECONDS = 300
+_TOTAL_DEADLINE_SECONDS = ll.LAUNCH_DEADLINE_SECONDS
 
 _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -116,7 +116,7 @@ _WORKHORSE_CMD = "/superheroes:workhorse"
 # sequences, which are stripped before anything is matched.
 PLACE_LOCAL = ll.PLACE_LOCAL
 PLACE_CLOUD = ll.PLACE_CLOUD
-_CLOUD_SPAWN_TIMEOUT_SECONDS = 120
+_CLOUD_SPAWN_TIMEOUT_SECONDS = ll.CLOUD_SPAWN_TIMEOUT_SECONDS
 _CLOUD_APPEND_TRIES = 3
 _CLOUD_APPEND_PAUSE_SECONDS = 0.2
 _CLOUD_CREATED_PREFIX = "Created cloud session: "
@@ -1573,34 +1573,14 @@ def _started_already_landed(repo_root, launch_id, env):
     return bool(lane and lane.get("started"))
 
 
-def _ledger_synced(repo_root, env):
-    """True only when an fsync of the ledger file succeeds now; any failure answers False.
-
-    A re-read can serve cached bytes, so it proves the record is visible, not that it is durable.
-    """
-    opened = ll.open_ledger(repo_root, "a", env=env)
-    if not opened["ok"]:
-        return False
-    fh = opened["fh"]
-    try:
-        os.fsync(fh.fileno())
-        return True
-    except OSError:
-        return False
-    finally:
-        try:
-            fh.close()
-        except OSError:
-            pass
-
-
 def _append_started(repo_root, record, env):
     """Append a cloud lane's `started` record, trying up to three times; the last result.
 
     The append takes a lock, and a brief contention for it is the ordinary cause of a failure, so
     one failure must not strand a lane whose command has already run. After each failure the
-    ledger is read again: a lane whose `started` record landed and is confirmed durable is a
-    success, and is never appended a second time; one that cannot be confirmed durable stays a failure.
+    ledger is read again: a lane whose `started` record is already visible is never appended a
+    second time, and its failure stands (a visible record is not proof it is durable, and a retried
+    sync cannot prove it either), so the pending record is kept for the repair verb.
     """
     for attempt in range(_CLOUD_APPEND_TRIES):
         result = _append_under_lock(repo_root, record, env=env)
@@ -1608,14 +1588,8 @@ def _append_started(repo_root, record, env):
             return result
         # axis: a failed append is not taken as proof the record is absent — the ledger is re-read.
         if _started_already_landed(repo_root, record.get("launchId"), env):
-            # axis: visible is not durable — without a confirmed sync the failure and the pending repair stand, and no second append is made.
-            if not _ledger_synced(repo_root, env):
-                return result
-            lp = ll.ledger_path(repo_root, env=env)
-            return {
-                "ok": True, "reason": None, "path": lp["path"] if lp["ok"] else None,
-                "recoveredAfter": result["reason"],
-            }
+            # axis: a reported storage error stands — a record seen again, or a second sync, does not prove it reached storage (a failed writeback can leave a clean cached page), so the failure and the pending repair stay, and no second append is made.
+            return result
         if attempt + 1 < _CLOUD_APPEND_TRIES:
             _pause_between_appends()
     return result

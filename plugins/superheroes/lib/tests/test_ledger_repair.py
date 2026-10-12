@@ -8,6 +8,7 @@ names a remedy: a lane whose record actually landed is a normal success.
 """
 import json
 import os
+import time
 
 import pytest
 
@@ -51,6 +52,18 @@ def _local_lane(tmp_path, monkeypatch, launch_id="l1", batch="b-local"):
 
 def _cloud_lane(tmp_path, monkeypatch, launch_id="c1"):
     return _setup_cloud_lane(tmp_path, monkeypatch, launch_id, started=False)
+
+
+def _aged(place):
+    """A clock reading past the launch window of a lane of this place, reserved just now."""
+    return time.time() + ll.launch_window_seconds(place) + 1
+
+
+def _age_the_clock(monkeypatch, place):
+    """Move the ledger's clock past the launch window, for the CLI verb that takes no clock."""
+    aged_by = ll.launch_window_seconds(place) + 1
+    real_time = time.time
+    monkeypatch.setattr(ll.time, "time", lambda: real_time() + aged_by)
 
 
 def _lane(repo, launch_id):
@@ -122,7 +135,9 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
         else _local_lane(tmp_path, monkeypatch)
     )
     launch_id = "c1" if place == "cloud" else "l1"
-    result = ll.repair_never_started(repo, launch_id, evidence="the launch command never ran")
+    result = ll.repair_never_started(
+        repo, launch_id, evidence="the launch command never ran", now=_aged(place),
+    )
     assert result == {
         "ok": True, "repaired": "terminal", "launchId": launch_id, "kind": "refused",
     }
@@ -132,6 +147,54 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
     refused = [r for r in ll.read(repo)["records"] if r["event"] == "refused"][0]
     assert refused["stage"] == "never-started" and refused["reason"] == "never-started"
     assert refused["evidence"] == "the launch command never ran"
+
+
+# --- the launch window: a fresh reservation is never terminalized ------------------------------
+
+
+@pytest.mark.parametrize("place", ["cloud", "local"])
+def test_repair_without_pending_refuses_a_lane_still_inside_its_launch_window(
+    tmp_path, monkeypatch, place,
+):
+    # axis: lane-may-be-launching — the launcher may still spawn and append `started`.
+    repo = (
+        _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
+        else _local_lane(tmp_path, monkeypatch)
+    )
+    launch_id = "c1" if place == "cloud" else "l1"
+    before = ll.read(repo)["records"]
+    reserved_ts = _lane(repo, launch_id)["reservedTs"]
+    window = ll.launch_window_seconds(place)
+    just_inside = reserved_ts + window - 1
+    result = ll.repair_never_started(repo, launch_id, evidence="never ran", now=just_inside)
+    assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
+    assert result["reason"] == "lane-may-be-launching"
+    assert ll.read(repo)["records"] == before
+    # The aged side of the same lane repairs.
+    aged = ll.repair_never_started(
+        repo, launch_id, evidence="never ran", now=reserved_ts + window + 1,
+    )
+    assert aged["ok"] is True and aged["repaired"] == "terminal"
+
+
+@pytest.mark.parametrize("place", ["cloud", "local"])
+def test_repair_restores_a_pending_started_inside_the_launch_window(tmp_path, monkeypatch, place):
+    repo = (
+        _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
+        else _local_lane(tmp_path, monkeypatch)
+    )
+    launch_id = "c1" if place == "cloud" else "l1"
+    pending = _cloud_started(launch_id) if place == "cloud" else _started(launch_id)
+    result = ll.repair_never_started(repo, launch_id, pending_started=pending)
+    assert result == {"ok": True, "repaired": "started", "launchId": launch_id}
+
+
+def test_the_launch_window_reads_the_launchers_own_timeouts():
+    import launcher
+    assert ll.launch_window_seconds("cloud") == launcher._CLOUD_SPAWN_TIMEOUT_SECONDS
+    assert ll.launch_window_seconds("local") == (
+        launcher._TOTAL_DEADLINE_SECONDS + launcher._IPHONE_CEILING_SECONDS
+    )
 
 
 # --- refusals ----------------------------------------------------------------------------------
@@ -152,7 +215,7 @@ def test_repair_refuses_a_lane_that_already_has_started(tmp_path, monkeypatch):
 
 def test_repair_refuses_a_terminal_lane(tmp_path, monkeypatch):
     repo = _cloud_lane(tmp_path, monkeypatch)
-    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"]
+    assert ll.repair_never_started(repo, "c1", evidence="never ran", now=_aged("cloud"))["ok"]
     before = ll.read(repo)["records"]
     for kwargs in ({"pending_started": _cloud_started("c1")}, {"evidence": "again"}):
         result = ll.repair_never_started(repo, "c1", **kwargs)
@@ -260,7 +323,9 @@ def test_repair_refuses_when_the_lock_is_held_by_another_holder(tmp_path, monkey
         ll._release_lock(lock["path"])
     assert result == {"ok": False, "reason": "lock-unavailable"}
     assert ll.read(repo)["records"] == before
-    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"] is True
+    assert ll.repair_never_started(
+        repo, "c1", evidence="never ran", now=_aged("cloud"),
+    )["ok"] is True
 
 
 # --- the launcher reads the ledger before it names a remedy ------------------------------------
@@ -295,21 +360,17 @@ def _fsync_fails_during_started_appends(monkeypatch, repo):
     return syncs
 
 
-def test_a_started_that_landed_before_its_sync_failed_is_a_normal_success(tmp_path, monkeypatch):
-    # axis: the re-read in `_append_started` — without it the retry appends a second `started`.
+def test_a_started_that_landed_before_its_sync_failed_stays_a_failure(tmp_path, monkeypatch):
+    # axis: a reported storage error stands — the record is visible, but a clean cached page after a failed writeback proves nothing.
     repo = _cloud_repo(tmp_path)
     syncs = _fsync_fails_during_started_appends(monkeypatch, repo)
     result = _launch(repo, tmp_path, _fake_spawn())
     assert syncs, "the failing sync was never reached"
-    assert result["ok"] is True, result
-    assert result["cloudSessionId"] == SESSION_ID
-    assert "pendingStarted" not in result and "startedAppend" not in result
+    assert result["ok"] is False, result
+    assert result["reason"] == "cloud-started-append-failed"
+    assert "pendingStarted" in result and "startedAppend" in result
     launch_id = result["launchId"]
     assert len(_records(repo, launch_id, "started")) == 1
-    assert _lanes(repo)[launch_id]["started"] is True
-    ended = L.record_outcome(repo, launch_id, "died", "ended normally after the sync failure")
-    assert ended["ok"] is True, ended
-    assert _lanes(repo)[launch_id]["terminal"] is True
 
 
 def test_a_started_whose_sync_stays_failed_is_not_reported_as_a_success(tmp_path, monkeypatch):
@@ -339,7 +400,7 @@ def test_a_started_whose_sync_stays_failed_is_not_reported_as_a_success(tmp_path
     assert len(_records(repo, result["launchId"], "started")) == 1
 
 
-def test_a_started_that_landed_is_recovered_by_the_append_helper(tmp_path, monkeypatch):
+def test_a_started_that_landed_keeps_its_failure_and_is_not_appended_again(tmp_path, monkeypatch):
     repo = _setup_cloud_lane(tmp_path, monkeypatch, "c1", started=True)
     calls = []
 
@@ -350,9 +411,7 @@ def test_a_started_that_landed_is_recovered_by_the_append_helper(tmp_path, monke
     monkeypatch.setattr(L, "_append_under_lock", failing)
     monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
     result = L._append_started(repo, _cloud_started("c1"), None)
-    assert result["ok"] is True and result["reason"] is None
-    assert result["recoveredAfter"] == "ledger-append-failed"
-    assert result["path"] == ll.ledger_path(repo)["path"]
+    assert result == {"ok": False, "reason": "ledger-append-failed", "path": None}
     assert len(calls) == 1
 
 
@@ -423,6 +482,7 @@ def test_cli_repair_lane_restores_started_from_a_pending_file(tmp_path, monkeypa
 
 def test_cli_repair_lane_records_the_terminal_event_from_evidence(tmp_path, monkeypatch, capsys):
     repo = _cloud_lane(tmp_path, monkeypatch)
+    _age_the_clock(monkeypatch, "cloud")
     code = L.main([
         "repair-lane", "--repo-root", repo, "--launch-id", "c1", "--evidence", "never ran",
     ])

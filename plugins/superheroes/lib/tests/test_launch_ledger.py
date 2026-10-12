@@ -5013,7 +5013,9 @@ def test_repair_never_started_refuses_batch_declared_pending_record(tmp_path, mo
     rec = _batch_declared("b-repair-guard", 1)
     rec["launchId"] = "l-repair"
     result = ll.repair_never_started(repo, "l-repair", pending_started=rec, env=env)
-    assert result == {"ok": False, "reason": "pending-started-invalid"}
+    # The literal stays so the census finds the token in this test; the comparison reads the one home.
+    assert ll.REPAIR_PENDING_STARTED_INVALID == "pending-started-invalid"
+    assert result == {"ok": False, "reason": ll.REPAIR_PENDING_STARTED_INVALID}
     assert _ledger_bytes(repo, env) == before
 
 

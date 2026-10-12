@@ -49,7 +49,7 @@ These retirements ship in the same release as the review record, and never apart
 
 ### Launcher: repairing a never-started lane
 
-- New verb `repair-lane --repo-root <root> --launch-id <id> [--pending-file <file>] [--evidence <text>]`. Under the ledger lock it restores a never-started lane's `started` record from a pending record that fits the lane, or, without one, records the lane's terminal event from its `reserved` record. It refuses `lane-already-started`, `outcome-already-terminal`, `terminal-unknown-launch`, `pending-started-invalid` and `outcome-evidence-empty`.
+- New verb `repair-lane --repo-root <root> --launch-id <id> [--pending-file <file>] [--evidence <text>]`. Under the ledger lock it restores a never-started lane's `started` record from a pending record that fits the lane, or, without one, records the lane's terminal event from its `reserved` record, and only once that reservation is older than the launch window (the cloud spawn timeout for a cloud lane; the launch deadline plus the iPhone ceiling for a local one). It refuses `lane-already-started`, `outcome-already-terminal`, `terminal-unknown-launch`, `pending-started-invalid`, `outcome-evidence-empty` and `lane-may-be-launching` (the terminal repair on a lane whose launcher may still be running; wait out the window, or restore the pending record, which is allowed at any age).
 - When the launcher's write of a cloud lane's `started` record reports failure, it re-reads the ledger first: a `started` record that landed (the write succeeded and its sync failed) reads as a normal launch. The `cloud-started-append-failed` and unconfirmed-append remedies now say to read the ledger and name `repair-lane`.
 
 ### Pilot: iPhone typing helper

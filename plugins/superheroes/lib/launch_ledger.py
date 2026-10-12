@@ -54,6 +54,14 @@ AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
 # record_outcome call, never a hand-written claim.
 CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
 REPAIR_PENDING_STARTED_INVALID = "pending-started-invalid"
+REPAIR_LANE_MAY_BE_LAUNCHING = "lane-may-be-launching"
+# The launcher's own timeouts, kept here so the repair's launch window and the launcher read one
+# home (the launcher aliases these). A cloud launch waits at most the spawn timeout for its
+# command; a local launch is bounded by the launch deadline, which the iPhone steps extend by
+# exactly the time they took, up to the iPhone ceiling.
+CLOUD_SPAWN_TIMEOUT_SECONDS = 120
+LAUNCH_DEADLINE_SECONDS = 300
+IPHONE_CEILING_SECONDS = 90
 VET_RULINGS = ("ready", "not-ready", "parked-blocker")
 _AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
@@ -2085,14 +2093,29 @@ def _repair_refusal(reason):
     return {"ok": False, "reason": reason}
 
 
+def launch_window_seconds(place):
+    """The longest a launch of this place can take from its `reserved` record to its `started` append.
+
+    Derived from the launcher's own timeouts, never a separate number: a cloud launch is bounded
+    by the cloud spawn timeout; a local launch by the launch deadline plus the iPhone ceiling
+    (the deadline is extended by the time the iPhone steps took).
+    """
+    if place == PLACE_CLOUD:
+        return CLOUD_SPAWN_TIMEOUT_SECONDS
+    return LAUNCH_DEADLINE_SECONDS + IPHONE_CEILING_SECONDS
+
+
 def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None, env=None,
-                         lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+                         lock_timeout=_DEFAULT_LOCK_TIMEOUT, now=None):
     """Bring a never-started lane (reserved, no `started`, not terminal) to a readable state.
 
     One locked operation, and it refuses every lane that is not never-started: with
     `pending_started` it appends that `started` record; without it, it records the lane's terminal
-    event. A lane that already has its `started` record is ended with `record_outcome`, never
-    repaired here. Never raises.
+    event, and only once the lane's reservation is older than the launch window
+    (`launch_window_seconds`): within it the original launcher may still spawn and append
+    `started`, so the terminal repair refuses `lane-may-be-launching` (the pending-record restore
+    is allowed at any age). A lane that already has its `started` record is ended with
+    `record_outcome`, never repaired here. `now` is the clock, for tests. Never raises.
     """
     lock_path = None
     locked = False
@@ -2142,6 +2165,14 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
 
         if not isinstance(evidence, str) or not evidence.strip():
             return _repair_refusal("outcome-evidence-empty")
+        # axis: a missing `started` does not prove the launcher stopped — within the launch window
+        # it may still spawn and append, and a terminal event written now would orphan its session.
+        reserved_ts = info.get("reservedTs")
+        clock = time.time() if now is None else now
+        if not _is_number(reserved_ts) or (
+            clock - reserved_ts < launch_window_seconds(info.get("place"))
+        ):
+            return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
         terminal = terminalize(
             repo_root, launch_id, child_ever_spawned=False, reason="never-started",
             stage="never-started", evidence=evidence, env=env, _lock_held=True,
