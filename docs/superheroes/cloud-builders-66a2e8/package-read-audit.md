@@ -1538,3 +1538,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "owner ruling 2026-10-12 (walk item 41 = a, collector #695 item 107): a new layer C7s, stack layers build in the cloud, between C7b and C8",
+ "ceiling": 2,
+ "invocation": "inv11",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 5
+ },
+ "override": "one new layer with no spec criterion of its own (a declared note on FR-12), consumer lines on R5, R6, R8, R9 and R11, R8's order and narrow R11 clauses; C7b and C8 renumbered",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
