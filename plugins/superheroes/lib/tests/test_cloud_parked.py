@@ -92,15 +92,15 @@ def _lapsed_comment(pr, created_at="2026-10-05T10:00:00Z"):
     return comment
 
 
-def _record_comment(pr, missing):
-    rec = {"schema": RR.RECORD_SCHEMA, "pr": pr, "missingReviews": missing,
+def _record_comment(pr, missing, sha="h1"):
+    rec = {"schema": RR.RECORD_SCHEMA, "pr": pr, "missingReviews": missing, "finalCommit": {"sha": sha},
            "parked": any(m["goAhead"] is None for m in missing)}
     return {"id": 500 + pr, "body": RR.MARKER + "\n<details>\n\n```json\n" + json.dumps(rec) + "\n```\n</details>\n"}
 
 
 def _pull(issue=None, state="open", merged=False):
     body = "Closes #%d\n\nthe work" % issue if issue else "the work"
-    return {"state": state, "merged": merged, "body": body}
+    return {"state": state, "merged": merged, "body": body, "head": {"sha": "h1"}}
 
 
 def _account_file(directory, account):
@@ -257,6 +257,33 @@ def test_a_later_launch_for_the_same_issue_never_receives_the_original_prs_revie
     out = _send(w)
     assert [s["cloudSessionName"] for s in out["sendBack"]] == ["orig-session"]
     assert out["sendBack"][0]["launchId"] == "l-orig"
+
+
+def test_a_later_park_of_a_sent_back_pr_keeps_its_original_lane_and_a_newer_comment_rearms_it(w):
+    _lane(w, "l-orig", 101, "orig-session", "a")
+    _park(w, 10, issue=101)
+    assert ll.terminalize(w.repo, "l-orig", child_ever_spawned=True, outcome="park", evidence="x", env=w.env)["ok"]
+    _lane(w, "l-later", 101, "later-session", "a2", ts=RELAUNCHED)
+    _renew(w)
+    assert [s["cloudSessionName"] for s in _send(w)["sendBack"]] == ["orig-session"]
+    assert _sent(w, 10)["ok"]
+    assert _send(w)["sendBack"] == []
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z"))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    entry = _entries(w)[0]
+    assert entry["outcome"] is None and entry["parkedOn"] == "2026-10-11" and entry["launchId"] == "l-orig"
+    out = _send(w)["sendBack"]
+    assert [s["cloudSessionName"] for s in out] == ["orig-session"]
+
+
+def test_a_go_ahead_recorded_for_an_earlier_head_does_not_let_the_current_head_through(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    w.gh.comments[10].append(_record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}], sha="old"))
+    _renew(w)
+    out = _send(w)
+    assert out["skipped"] == [] and [s["pr"] for s in out["sendBack"]] == [10]
+    assert _entries(w)[0]["outcome"] is None
 
 
 def test_a_first_notice_after_a_later_launch_still_finds_the_original_prs_lane(w):
@@ -657,6 +684,17 @@ def test_a_pr_whose_closing_line_uses_another_accepted_form_still_finds_its_lane
     _renew(w)
     out = _send(w)
     assert out["noLane"] == [] and [s["pr"] for s in out["sendBack"]] == [10, 11]
+
+
+def test_a_pr_whose_first_line_only_says_part_of_an_issue_still_finds_its_cloud_lane(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    w.gh.comments[12] = [_lapsed_comment(12)]
+    w.gh.pulls[12] = {"state": "open", "merged": False, "body": "Part of #101.\n\nthe work", "head": {"sha": "h1"}}
+    assert _notice(w, 12)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-a"
+    _renew(w)
+    out = _send(w)
+    assert out["noLane"] == [] and [s["cloudSessionName"] for s in out["sendBack"]] == ["session-a"]
 
 
 def test_a_default_account_lane_recording_the_default_root_resolves_the_default_account(w):

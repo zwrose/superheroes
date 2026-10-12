@@ -159,16 +159,19 @@ def _pull(repo, pr, env, run):
     return pull if isinstance(pull, dict) and isinstance(pull.get("state"), str) else None
 
 
-def _let_through(repo, pr, env, run):
-    """True when the owner already let it through: its latest review record names missing reviews and the
-    record itself says it is no longer parked (its writer owns that decision). None when the record could not be read for a reason other than there being none."""
+def _let_through(repo, pr, env, run, head):
+    """True when the owner already let it through: its latest review record covers the PR's current `head`,
+    names missing reviews and itself says it is no longer parked (its writer owns that decision). A record
+    for an earlier head is no go-ahead. None when the record could not be read for a reason other than there being none."""
     got = _sib("review_record").read(pr, repo=repo, readers={"list_comments": lambda p, r: _comments(r, p, env, run)})
     if not got.get("ok"):
         return False if got.get("reason") in _NO_RECORD else None
     missing, parked = got.get("missingReviews"), got.get("parked")
     if not (isinstance(missing, list) and isinstance(parked, bool)):
         return None
-    return bool(missing) and not parked
+    commit = got.get("finalCommit")
+    covers = isinstance(head, str) and isinstance(commit, dict) and commit.get("sha") == head
+    return bool(missing) and not parked and covers
 
 
 def _linked_issues(body, repo):
@@ -227,7 +230,8 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
             return _refusal("pr-read-failed")
         issues = _linked_issues(pull.get("body"), repo)
         launch_id, _, ledger_reason = (
-            _lane(repo_root, issues, env, reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
+            _lane(repo_root, issues, env, known[0].get(_LAUNCH_KEY) if known else None,
+                  reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
         entries[:] = [e for e in entries if e not in known]
@@ -269,7 +273,7 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         if not _renewed(e["parkedOn"], lapses, day):
             out["notRenewed"].append(e["pr"])
             continue
-        through = _let_through(e["repo"], e["pr"], env, run)
+        through = _let_through(e["repo"], e["pr"], env, run, (pull.get("head") or {}).get("sha"))
         if through is None:
             out["unread"].append({"pr": e["pr"], "reason": "review-record-read-failed"})
             continue
