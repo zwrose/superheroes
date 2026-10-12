@@ -112,8 +112,8 @@ park. A review that already finished before the lapse stays recorded as it was.
 
 A cloud build hands back only with its review record written, as the charter's §11 and
 `rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. In a cloud session
-the record writer reads the repository, the PR and its issue through REST, and takes the issue the PR closes from the body's first line, so write the close link there. The record is
-not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
+the record writer reads the repository, the PR and its issue through REST, and takes the issue the
+PR closes from the body's first line, so write the close link there. The record is not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
 final commit was reported by the session rather than read from the PR (`whatIsMissing` names an
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
 as a comment naming the head it reviewed, leaves the PR not ready, and parks, naming the review
