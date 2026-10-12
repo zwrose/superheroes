@@ -476,6 +476,17 @@ def test_R_still_leg_a_the_setting_switched_off_clears_it(tmp_path):
     assert _line(word_repo, word_store, ready=False, reason="unreachable", setting=False) is not None
 
 
+def test_R_still_leg_a_an_unreadable_setting_does_not_clear_it(tmp_path, monkeypatch):
+    repo, store = _still_with(tmp_path, _call(reason="no-setup", by="setting"))
+
+    def unreadable(*args, **kwargs):
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(PC, "get_item", unreadable)
+    assert _line(repo, store, ready=False, reason="no-setup", setting=False) is not None
+    assert os.path.exists(_still_path(repo, store))
+
+
 @pytest.mark.parametrize("code,condition", [("no-setup", "setup"), ("pass-lapsed", "passLive"),
                                             ("calibration", "calibration")])
 def test_R_still_leg_b_the_matching_condition_holding_again_clears_it(tmp_path, code, condition):

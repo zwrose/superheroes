@@ -208,10 +208,23 @@ def _read_still(path):
     return state
 
 
-def _fixed(state, now):
+def _setting_read_off(cwd, root):
+    """True only when the cloud-builds setting was read cleanly and is off. The readiness reader
+    gives an unreadable setting as off, so a setting-directed reminder is not dropped on its word."""
+    try:
+        import project_config
+
+        got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
+        return got.get("effective") is False and got.get("malformed") is not True
+    except Exception:
+        return False
+
+
+def _fixed(state, now, cwd=None, root=None):
     reason = state["reason"]
     reported = state.get("reported") or {}
-    if state["by"] == "setting" and now.get("setting") is not True:
+    # a setting the reader could not read is not a setting switched off
+    if state["by"] == "setting" and now.get("setting") is not True and _setting_read_off(cwd, root):
         return True
     conditions = now.get("conditions") or {}
     if reason in _REREAD_REASONS:
@@ -243,7 +256,7 @@ def still_line(cwd, *, root=None, today=None, readiness_fn=None):
             return None
         try:
             now = (readiness_fn or cloud_ready.readiness)(cwd, reported=None, root=root)
-            fixed = _fixed(state, now)
+            fixed = _fixed(state, now, cwd, root)
         except Exception:
             fixed = False
         if fixed:
