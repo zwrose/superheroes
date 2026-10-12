@@ -182,6 +182,10 @@ def test_held_line_appended_byte_for_byte(project, capsys, tmp_path, ground, ext
     assert code == 0 and held["comment"].splitlines()[0] == canon.HELD_MARKER
     comment = tmp_path / "held.md"
     comment.write_text(held["comment"])
+    fields = held["line"].split(canon.SEP)
+    if "scope" in extra:
+        assert extra["scope"] in fields
+        assert 'owner\'s words: "%s"' % extra["owners_words"] in fields
     before = open(project["path"]).read()
     code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(comment))
     assert code == 0 and out["appended"] == [held["line"]]
@@ -545,3 +549,17 @@ def test_append_refused_while_the_project_lock_is_held(project, capsys):
     assert open(project["path"], "rb").read() == before
     code, out = _run(capsys, "append", *argv)
     assert code == 0 and out["ok"] is True
+
+
+# axis: a final entry line with no terminator (cut-off export) is refused on both incoming paths.
+@pytest.mark.parametrize("flag", ["--lines-file", "--held-file"])
+def test_unterminated_final_entry_refused(project, capsys, tmp_path, flag):
+    code, held = _run(capsys, "hold", *_fields())
+    cut = tmp_path / "cut.md"
+    cut.write_text(held["comment"].rstrip("\n"))
+    before = open(project["path"]).read()
+    extra = ("--root", ".", flag, str(cut)) if flag == "--lines-file" else (
+        *_fields(), flag, str(cut))
+    code, out = _run(capsys, "append", *extra)
+    assert code == 1 and out["reason"] == "canon-bad-line"
+    assert open(project["path"]).read() == before
