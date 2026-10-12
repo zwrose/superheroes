@@ -111,7 +111,8 @@ If the pass has lapsed before the review runs, do not substitute a reviewer. Pos
 park. A review that already finished before the lapse stays recorded as it was.
 
 A cloud build hands back only with its review record written, as the charter's §11 and
-`rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. The record is
+`rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. In a cloud session
+the record writer reads the repository, the PR and its issue through REST, and takes the issue the PR closes from the body's first line, so write the close link there. The record is
 not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
 final commit was reported by the session rather than read from the PR (`whatIsMissing` names an
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
@@ -143,7 +144,7 @@ off a cloud build's path:
 |---|---|---|
 | `skills/review-code/SKILL.md`, PR mode setup | `gh pr list --head`, `gh pr view --json`, `gh repo view --json nameWithOwner` | the stand-ins in § GitHub reads |
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
-| `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | no stand-in yet: the park rule in § Review |
+| `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `lib/pr_comment.py`, `lib/cloud_builder.py` | `gh api` (REST) | works |
 | `lib/preflight_probe.py`, `gh_auth_probe` REST fallback | `gh api repos/<o>/<r>` | works |
