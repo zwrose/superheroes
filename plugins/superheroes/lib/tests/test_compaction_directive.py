@@ -410,8 +410,9 @@ def test_mod_roundtrip_saved_notes_reach_compaction_then_fallback_defers(tmp_pat
     assert code == 0 and out["notesFound"] is True
     assert "PR 12 is the record" in out["instructions"]
     assert "keep the API names" in out["instructions"]
-    # ... and writes the delivered marker the way the mod does
-    _touch(out["markerPath"], text=str(int(time.time() * 1000)))
+    # ... and publishes the delivered marker through the `mark` verb, as the mod does
+    code, marked, _ = _run(tmp_path, "mark", "--session-id", SID)
+    assert code == 0 and marked["path"] == out["markerPath"]
     # PreCompact fallback hook, same session: it consumes the marker and prints nothing
     hook_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
                 "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")}
@@ -455,3 +456,32 @@ def test_save_notes_failure_leaves_the_previous_notes_and_no_temp_file(tmp_path,
     assert os.listdir(directory) == [SID + ".md"]
     with open(cd.checkpoint_path(SID, env), encoding="utf-8") as fh:
         assert fh.read() == "old notes\n"
+
+
+def test_cli_mark_publishes_a_complete_marker_atomically(tmp_path):
+    env = _env(tmp_path)
+    code, out, _ = _run(tmp_path, "mark", "--session-id", SID)
+    assert code == 0 and out == {"ok": True, "path": cd.delivered_marker_path(SID, env)}
+    with open(out["path"], encoding="utf-8") as fh:
+        assert fh.read().isdigit()
+    assert cd.delivered_recently(SID, env) is True
+    assert not [n for n in os.listdir(os.path.dirname(out["path"])) if n.endswith(".tmp")]
+
+
+def test_cli_mark_failed_write_leaves_no_marker(tmp_path, monkeypatch):
+    env = _env(tmp_path)
+
+    def boom(_fd, _mode, *a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cd.os, "fdopen", boom)
+    with pytest.raises(OSError):
+        cd.mark_delivered(SID, env)
+    marker = cd.delivered_marker_path(SID, env)
+    assert not os.path.exists(marker)
+    assert not [n for n in os.listdir(os.path.dirname(marker)) if n.endswith(".tmp")]
+
+
+def test_cli_mark_refuses_an_invalid_session_id(tmp_path):
+    code, out, _ = _run(tmp_path, "mark", "--session-id", "../x")
+    assert code == 1 and out == {"ok": False, "reason": "session-id-invalid"}

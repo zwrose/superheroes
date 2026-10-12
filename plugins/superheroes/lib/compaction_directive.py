@@ -193,13 +193,9 @@ def read_notes(session_id, env=None, max_chars=20000):
         return "", None
 
 
-def save_notes(session_id, text, env=None):
-    """Atomically replace this session's checkpoint notes with ``text``; the notes path, or
-    ``None`` when there is no path. The destination is only replaced once the whole text is
-    on disk, so a failed save leaves the last good notes intact. Raises on I/O failure."""
-    path = checkpoint_path(session_id, env)
-    if path is None:
-        return None
+def _atomic_write(path, text):
+    """Write ``text`` to ``path`` through a temp file in the same directory and ``os.replace``:
+    the destination is only ever absent/old or complete. Raises on I/O failure (temp removed)."""
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".checkpoint.", suffix=".tmp")
@@ -215,6 +211,27 @@ def save_notes(session_id, text, env=None):
         except OSError:
             pass
         raise
+
+
+def save_notes(session_id, text, env=None):
+    """Atomically replace this session's checkpoint notes with ``text``; the notes path, or
+    ``None`` when there is no path. The destination is only replaced once the whole text is
+    on disk, so a failed save leaves the last good notes intact. Raises on I/O failure."""
+    path = checkpoint_path(session_id, env)
+    if path is None:
+        return None
+    _atomic_write(path, text)
+    return path
+
+
+def mark_delivered(session_id, env=None, now=None):
+    """Atomically publish this session's delivery marker (a complete timestamp or no marker at
+    all, so a failed write cannot leave an empty or partial marker for the PreCompact fallback to
+    consume); the marker path, or ``None`` when there is no path. Raises on I/O failure."""
+    path = delivered_marker_path(session_id, env)
+    if path is None:
+        return None
+    _atomic_write(path, str(int((time.time() if now is None else now) * 1000)))
     return path
 
 
@@ -301,6 +318,8 @@ def _build_parser():
     p.add_argument("--session-id", required=True)
     sv = sub.add_parser("save")
     sv.add_argument("--session-id", required=True)
+    mk = sub.add_parser("mark")
+    mk.add_argument("--session-id", required=True)
     m = sub.add_parser("mode")
     m.add_argument("--transcript", required=True)
     i = sub.add_parser("instructions")
@@ -332,6 +351,15 @@ def _verb_save(args):
     return _emit({"ok": True, "path": path})
 
 
+def _verb_mark(args):
+    if not _valid_session_id(args.session_id):
+        return _refuse("session-id-invalid")
+    path = mark_delivered(args.session_id)
+    if path is None:
+        return _refuse("config-dir-unresolved")
+    return _emit({"ok": True, "path": path})
+
+
 def _verb_mode(args):
     return _emit({"ok": True, "mode": detect_mode(args.transcript)})
 
@@ -355,7 +383,7 @@ def main(argv=None):
     argv = _glue_user_instructions(list(sys.argv[1:] if argv is None else argv))
     args = _build_parser().parse_args(argv)     # argparse usage errors exit 2 by design
     try:
-        verb = {"path": _verb_path, "save": _verb_save, "mode": _verb_mode, "instructions": _verb_instructions}
+        verb = {"path": _verb_path, "save": _verb_save, "mark": _verb_mark, "mode": _verb_mode, "instructions": _verb_instructions}
         return verb[args.verb](args)
     except Exception:
         return _refuse("internal-error")

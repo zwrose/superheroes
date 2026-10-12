@@ -97,7 +97,9 @@ export const register: Register = on => {
           throw new Error('instructions answer lacks instructions or markerPath')
         }
 
-        await $.fs.write(markerPath, String(Date.now()))
+        // The CLI publishes the marker atomically (temp file + rename): a failed
+        // write leaves no marker, so the PreCompact fallback still steers.
+        await directive($, 'mark', ['--session-id', await $.session.id()])
         steered = { ...e, instructions }
       } catch (error) {
         note($, `session.compact: ${String(error)}`)

@@ -45,7 +45,7 @@ type Rig = {
 function rig(
   on: On,
   cli: (argv: readonly string[]) => Cli,
-  options: { isIdBroken?: boolean; isWriteBroken?: boolean; isEnvBroken?: boolean; isStateBroken?: boolean } = {},
+  options: { isIdBroken?: boolean; isEnvBroken?: boolean; isStateBroken?: boolean } = {},
 ): Rig {
   const r: Rig = { argv: [], stdins: [], writes: [], seen: [], envs: [], states: [], toasts: [], order: [] }
 
@@ -54,6 +54,7 @@ function rig(
   )
   on('process.run', (_$, e) => {
     r.argv.push([...e.argv])
+    r.order.push(`cli:${e.argv[3]}`)
     r.stdins.push(e.init?.stdin)
     const out = cli(e.argv)
 
@@ -70,9 +71,6 @@ function rig(
         }
   })
   on('fs.write', (_$, e) => {
-    if (options.isWriteBroken) {
-      return { deny: 'disk full' }
-    }
     r.writes.push({ path: e.path, text: e.text })
     r.order.push(`write:${e.path}`)
 
@@ -145,17 +143,18 @@ for (const trigger of ['manual', 'auto'] as const) {
     expect(r.seen).toHaveLength(1)
     expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
     expect(nth(r.seen, 0).trigger).toBe(trigger)
-    expect(r.argv).toHaveLength(1)
+    expect(r.argv).toHaveLength(2)
     expect(nth(r.argv, 0)[0]).toBe('python3')
     expect(nth(r.argv, 0)[1]).toBe('-B')
     expect(nth(r.argv, 0)[2]?.endsWith('/lib/compaction_directive.py')).toBe(true)
     expect(nth(r.argv, 0)[3]).toBe('instructions')
     expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
     expect(nth(r.argv, 0)).not.toContain('--user-instructions')
-    expect(r.writes).toHaveLength(1)
-    expect(nth(r.writes, 0).path).toBe(MARKER)
-    expect(/^\d+$/.test(nth(r.writes, 0).text)).toBe(true)
-    expect(r.order).toEqual([`write:${MARKER}`, 'compact'])
+    // the CLI publishes the marker atomically; the mod writes no file itself
+    expect(nth(r.argv, 1)[3]).toBe('mark')
+    expect(flag(nth(r.argv, 1), '--session-id')).toBe(SESSION)
+    expect(r.writes).toHaveLength(0)
+    expect(r.order).toEqual(['cli:instructions', 'cli:mark', 'compact'])
   })
 }
 
@@ -233,7 +232,6 @@ const failures: [string, Cli, Options][] = [
   ['markerPath is missing', ok({ instructions: DIRECTIVE }), {}],
   ['the CLI cannot run (missing or timed out)', null, {}],
   ['the session id throws', steer, { isIdBroken: true }],
-  ['the marker write throws', steer, { isWriteBroken: true }],
 ]
 
 for (const [name, cli, options] of failures) {
@@ -248,6 +246,20 @@ for (const [name, cli, options] of failures) {
     expect(r.writes).toHaveLength(0)
   })
 }
+
+test('session.compact fails open when the marker cannot be published: no marker, original instructions', async ($, on) => {
+  const r = rig(on, argv =>
+    argv[3] === 'mark' ? { exitCode: 1, stdout: '{"ok": false, "reason": "x"}' } : steer,
+  )
+
+  const res = await compact($, { instructions: 'keep this' })
+
+  expect(res).toEqual({ messages: SUMMARY })
+  expect(nth(r.seen, 0).instructions).toBe('keep this')
+  expect(r.order).toEqual(['cli:instructions', 'cli:mark', 'compact'])
+  // the mod never writes a marker file itself, so a failed publish leaves none behind
+  expect(r.writes).toHaveLength(0)
+})
 
 test('session.compact fails open with no owner text: instructions stay absent', async ($, on) => {
   const r = rig(on, () => ({ exitCode: 1, stdout: '' }))
@@ -332,6 +344,8 @@ test("turn.complete: a subagent's checkpoint block never reaches the parent's no
 
 for (const [name, answer] of [
   ['no block', 'Just an answer.'],
+  ['a checkpoint example quoted in a tilde fence', `~~~markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n~~~\n`],
+  ['a checkpoint example quoted in a backtick fence', `\`\`\`\`markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n\`\`\`\`\n`],
   ['an unclosed block', `\`\`\`${CHECKPOINT_INFO}\nnotes with no end\n`],
   ['an empty block', `\`\`\`${CHECKPOINT_INFO}\n\n\`\`\`\n`],
 ] as const) {

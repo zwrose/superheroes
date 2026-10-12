@@ -81,6 +81,14 @@ Confirm each item from durable artifacts and the session ledger, not from memory
 - outstanding PR vets;
 - open owner decisions.
 
+Then **freshen the resume point** at the top of this session's ledger — it is where
+`skills/showrunner-handoff/SKILL.md` and `skills/showrunner-resume/SKILL.md` read the
+advisor's state, and the notes file of step 2 is not a substitute for it. **If** the
+session keeps one, bring it up to date and confirm it reflects current reality (the items
+above); **if** it keeps none, say so in one line and continue — invent no format, path, or
+filename. This is in addition to the per-session notes file, which the compaction
+instructions still use.
+
 **Workhorse** — confirm:
 
 - the issue being built;
@@ -218,6 +226,7 @@ skill triggers compaction programmatically.
 | Writing the notes file when `SUPERHEROES_COMPACT_MOD` is set | The mod saves the block from the reply; writing it too races the mod. Write the file only when the variable is unset. |
 | Putting anything after the `superheroes-checkpoint` block, or a second fence inside it | The block must be the last thing in the reply with no inner fence; otherwise the notes are not saved. |
 | Using another info string, or fewer than three backticks | The fence's info string is exactly `superheroes-checkpoint`. |
+| Skipping the ledger resume point in a Showrunner session because the notes file was saved | The incoming advisor reads the ledger resume point, not the notes file; freshen both (step 3). |
 | Inventing a notes path or filename | Use the bootstrap's `Checkpoint file` line, else the lib's `path` verb. |
 | Pasting charter prose into the `/compact` line | The line carries pointers and live state; the charter reloads from disk after compaction. |
 | Claiming checkpoint compacts by itself | It saves notes and prints the line; the mod steers compaction, or the owner pastes `/compact` once — that is the floor. |
