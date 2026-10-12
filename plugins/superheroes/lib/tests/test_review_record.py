@@ -2128,6 +2128,23 @@ def test_an_engine_record_that_does_not_name_the_row_reviewer_is_not_run(record)
     assert v["ran"] == "not-run" and v["runNote"] == "the run record names a different reviewer than the account row"
 
 
+@pytest.mark.parametrize("vendor,alias,model_id", [
+    ("claude", model_registry.dispatch_token("claude", "sonnet-5.5"), "sonnet-5.5"),
+    ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6"),
+])
+def test_a_supported_dispatch_spelling_of_the_model_names_the_same_reviewer(vendor, alias, model_id):
+    # axis: the run-identity check; a dispatch spelling (tier alias, effort suffix) of the engine record's model demoted
+    run = dict(GOOD_RUN, source=vendor, engineModel=model_id)
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    v = build(account(makers=[{"family": "someone-else"}], reviewers=[reviewer(vendor=vendor, model=alias)]), fake)["reviewers"][0]
+    # bites on: the raw string comparison rejecting a completed review for naming the model by its dispatch token
+    assert v["ran"] == "engine-record" and "runNote" not in v
+    other = model_registry.codex_models()[1]
+    run = dict(GOOD_RUN, source="codex", engineModel=other)
+    fake = Fake(runs={"/run/code-reviewer": (run, None)})
+    assert build(account(), fake)["reviewers"][0]["ran"] == "not-run"
+
+
 def test_the_family_comes_from_the_credited_run_record(monkeypatch):
     # axis: the family read from the row rather than from the engine record that was credited
     seen = []

@@ -234,6 +234,28 @@ def test_a_target_with_no_eligible_auditor_gets_no_order_and_a_missing_envelope(
     assert stored["reason"] == round_driver.UNFILLED_SEAT_REASON
 
 
+def test_a_hand_submit_target_with_no_eligible_auditor_gets_no_order_and_a_missing_envelope(tmp_path):
+    """The hand-submit path is not runner-only, but an ineligible audit target still gets no order."""
+    session_dir, state, target = _audits_emit_fixture(tmp_path, submit_used=True)
+    target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    state["_auditTargets"] = [target_no_vendor]
+    state["config"]["vendors"] = ["claude"]
+    state["config"]["fixerVendor"] = "claude"
+    assert not state.get("_advanceUsed")
+    round_driver.save_state(session_dir, state)
+    round_driver._emit_orders_manifest(
+        session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
+        journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
+    manifest = round_driver.round_records.read_json(_orders_manifest_path(session_dir, 1, 0))[0]
+    # bites on: the hand path rendering an audit order with an absent vendor for a target no auditor can take
+    assert manifest["seats"] == {}
+    spath = round_driver.round_records.store_path(
+        session_dir, 1, P_AUDITS, round_driver.round_records.storage_key(target_no_vendor["id"], 0), 0)
+    stored = round_driver.round_records.read_json(spath)[0]
+    assert stored["schema"] == round_driver.round_records.SEAT_MISSING_SCHEMA
+    assert stored["reason"] == round_driver.UNFILLED_SEAT_REASON
+
+
 def test_auditor_constraints_keep_every_maker_family_an_earlier_map_named():
     state = {"seatMapReceipts": [
         {"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "codex"}},

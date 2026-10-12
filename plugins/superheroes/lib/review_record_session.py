@@ -300,6 +300,15 @@ def _findings(state):
     return out
 
 
+def _original_maker_families(state, fix_round):
+    """Maker families named by the maps submitted no later than the first fix's round (a round's map is
+    folded before that round's fix); the seeded and legacy maps (non-numeric round) count."""
+    early = [e for e in seat_map_receipts.receipts(state)
+             if not str(e.get("round")).isdigit() or int(str(e["round"])) <= fix_round]
+    return (seat_map_receipts.maker_family_union(early) or frozenset()) \
+        | receipt_disclosures.maker_families(seat_map_receipts.effective_seat_map({**state, "seatMapReceipts": early, "seatMap": None}))
+
+
 def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     _check_extras(extras)
     if not os.path.isdir(session_dir):
@@ -327,9 +336,13 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
     # shadow that baseline entry, or the original maker would drop out of the early panels' independence check
-    if fam and fam not in baseline and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
+    # ...but a family first named by a map submitted after the first fix was introduced by that fix, not a maker
+    # of the original change: the cumulative union stays the baseline for later auditor selection, while only
+    # the maps submitted up to the first fix decide whether the fixer's family faced the whole review
+    fixed = [int(n) for n, r in rounds.items() if isinstance(r, dict) and "fix" in r and str(n).isdigit()]
+    original = _original_maker_families(state, min(fixed)) if fixed else baseline
+    if fam and fam not in original and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
-        fixed = [int(n) for n, r in rounds.items() if isinstance(r, dict) and "fix" in r and str(n).isdigit()]
         makers.append({"family": fam, "source": "review loop fixer",
                        **({"fromStep": 2 * min(fixed) + 1} if fixed else {})})
     for family in sorted(baseline):

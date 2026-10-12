@@ -8368,7 +8368,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
     noauditor_ids = set()  # audit targets with no eligible auditor: no order, a missing envelope instead
-    if phase == P_AUDITS and state.get("_advanceUsed"):
+    if phase == P_AUDITS:
         targets = pending_payload.get("targets")
         if not isinstance(targets, list):
             targets = []
@@ -8385,9 +8385,13 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                     # No eligible auditor exists at all: nothing to seat on any channel, so the
                     # target folds as an audit that did not run rather than refusing the emission:
                     # its slot is recorded missing below, in the orders-emit commit, with no order.
+                    # Both channels: a hand-submit session has no runner-channel rule to refuse
+                    # under, but an ineligible target still gets no order.
                     if isinstance(target.get("id"), str):
                         noauditor_ids.add(target["id"])
                     continue
+                if not state.get("_advanceUsed"):
+                    continue  # hand next/submit: any seatable auditor is allowed, only the none-eligible case is skipped
                 if host_independent is not None:
                     detail = (
                         "The durable-record path requires a fix auditor dispatched through the "

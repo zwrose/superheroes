@@ -332,6 +332,23 @@ def test_an_original_maker_that_also_fixes_keeps_its_whole_review_maker_status(t
     assert rec["status"] != "reviewed"
 
 
+def test_a_fixer_family_first_named_after_the_first_fix_keeps_its_delayed_start(tmp_path):
+    claude = {"vendor": "claude", "model": "sonnet-5.5"}
+    first = {"seats": {"code-reviewer": claude}, "makerFamilies": ["openai"]}
+    later = {"seats": {"code-reviewer": claude}, "makerFamilies": ["openai", "anthropic"]}
+    s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"},
+                rounds={"1": {"fix": {"fixes": []}}, "2": {}},
+                seatMapReceipts=[{"round": "1", "map": first}, {"round": "2", "map": later}])
+    s.seat("code-reviewer", rnd=1, nonce="n1")
+    runs = {"/run/n1": (dict(GOOD_RUN, source="claude", engineModel="sonnet-5.5", runnerNonce="n1",
+                             viewHeadSha=EARLIER), None)}
+    account = rs.account_from_session(s.save(), extras(runDirs=["/run/n1"]), Fake(runs=runs).readers())
+    # bites on: the cumulative union standing in for the original makers, dropping the fixer's fromStep entry
+    assert {"family": "anthropic", "source": "review loop fixer", "fromStep": 3} in account["makers"]
+    assert not any(m["family"] == "anthropic" and "fromStep" not in m for m in account["makers"])
+    assert {m["family"] for m in account["makers"]} == {"openai", "anthropic"}
+
+
 def test_a_reviewer_after_the_fix_from_the_fixers_family_is_still_not_independent(tmp_path):
     account, fake = _fixer_then_reviewer_account(tmp_path, 2)
     assert account["reviewers"][0]["step"] == 4

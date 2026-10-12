@@ -423,6 +423,15 @@ def _lane_basis(a, rd, lane_value, final_sha):
     return out
 
 
+def _canonical_model(vendor, model):
+    """A model as the registry's id: a dispatch spelling (a Claude tier alias, a Cursor id with its effort
+    suffix) resolves to the id the engine record carries; an unrecognised string stays as written."""
+    if not isinstance(vendor, str) or not isinstance(model, str) or model_registry.is_registered(vendor, model):
+        return model
+    parsed = model_registry.parse_dispatch_token(vendor, model)
+    return parsed[0] if parsed else model
+
+
 def _family(vendor, model):
     fam = model_registry.model_family(vendor, model)
     if fam or vendor not in _VENDOR_MODELS:
@@ -502,7 +511,8 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
 
     # axis: the credited run is the run the row names; the family is read from the engine record, never from the row — see bite-proof record wo_a_1796_reading-independence
     if credited is not None:
-        if credited.get("source") != r["vendor"] or credited.get("engineModel") != r["model"]:
+        if credited.get("source") != r["vendor"] \
+                or _canonical_model(r["vendor"], credited.get("engineModel")) != _canonical_model(r["vendor"], r["model"]):
             demote("the run record names a different reviewer than the account row")
         else:
             out["family"] = _family(credited["source"], credited["engineModel"])
