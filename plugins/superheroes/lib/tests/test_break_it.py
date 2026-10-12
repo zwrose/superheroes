@@ -423,3 +423,14 @@ def test_t15_run_one_bounds_stored_output(repo, monkeypatch):
     record = break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", content))
     assert record["outcome"] == "failed"
     assert len(record["output"].encode("utf-8")) <= 256
+
+
+def test_reaper_without_proc_still_propagates_the_child_exit_status(repo, monkeypatch):
+    # A host with no /proc (macOS): the reaper's descendant sweep is a no-op and the exit status survives.
+    assert 'PROC_ROOT = "/proc"' in break_it._REAPER
+    monkeypatch.setattr(break_it, "_REAPER",
+                        break_it._REAPER.replace('PROC_ROOT = "/proc"', 'PROC_ROOT = "/nonexistent-proc-root"'))
+    passing = break_it.run_one(str(repo), _head(repo), _block("tests/test_np.py", "assert 1 == 1\n"))
+    assert (passing["outcome"], passing["exitCode"]) == ("passed", 0)
+    failing = break_it.run_one(str(repo), _head(repo), _block("tests/test_nf.py", "assert 1 == 2\n"))
+    assert (failing["outcome"], failing["exitCode"]) == ("failed", 1)

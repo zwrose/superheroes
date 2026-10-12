@@ -46,6 +46,7 @@ _TERM_GRACE = 5
 _REAPER = r"""
 import ctypes, os, signal, subprocess, sys, time
 
+PROC_ROOT = "/proc"
 status_fd = int(sys.argv[1])
 argv = sys.argv[2:]
 try:
@@ -56,10 +57,14 @@ except Exception:
 
 def descendants():
     parent, state = {}, {}
-    for name in os.listdir("/proc"):
+    try:
+        names = os.listdir(PROC_ROOT)
+    except OSError:
+        return []  # no /proc on this host: nothing to scan, the parent's token sweep is the net
+    for name in names:
         if name.isdigit():
             try:
-                with open("/proc/%s/stat" % name) as fh:
+                with open("%s/%s/stat" % (PROC_ROOT, name)) as fh:
                     tail = fh.read().rsplit(")", 1)[1].split()
                 parent[int(name)], state[int(name)] = int(tail[1]), tail[0]
             except (OSError, IndexError, ValueError):
