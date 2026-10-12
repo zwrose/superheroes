@@ -199,11 +199,13 @@ def _gone(pid):
 
 
 # T9
-def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path):
+# axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
+@pytest.mark.parametrize("detached", [False, True])
+def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached):
     pidfile = tmp_path / "worker.pid"
     content = ("import os, subprocess\n"
-               "p = subprocess.Popen(['sleep', '60'], start_new_session=False)\n"
-               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n")
+               "p = subprocess.Popen(['sleep', '60'], start_new_session=%s)\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % detached
     block = _block("tests/test_w.py", content,
                    run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
     record = break_it.run_one(str(repo), _head(repo), block)
@@ -238,7 +240,7 @@ def test_t11_run_one_leaves_nothing_behind(repo, monkeypatch):
     monkeypatch.setattr(break_it.tempfile, "mkdtemp", spy)
     head = _head(repo)
     break_it.run_one(str(repo), head, _block("tests/test_a.py", "assert True\n"))
-    break_it.run_one(str(repo), head, _block("tests/test_b.py", "assert False\n"))
+    break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", "assert False\n"))
     break_it.run_one(str(repo), head, _block("README.md", "x\n"))
     break_it.run_one(str(repo), "no-such-rev", _block("tests/test_c.py", "assert True\n"))
     assert len(made) == 4
@@ -365,3 +367,43 @@ def test_t13_check_kept_unresolved(repo):
     assert break_it.check_kept(str(repo), None, head, record)["outcome"] == "unresolved"
     assert break_it.check_kept(str(repo), base, head, {})["outcome"] == "unresolved"
     assert break_it.check_kept(str(repo), "no-such-rev", head, record)["outcome"] == "unresolved"
+
+
+# T13
+def test_t13_git_routing_is_scrubbed_and_refused(repo, tmp_path, monkeypatch):
+    head = _head(repo)
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    content = ("import os, subprocess\n"
+               "assert 'GIT_DIR' not in os.environ and 'GIT_WORK_TREE' not in os.environ\n"
+               "top = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip()\n"
+               "assert os.path.realpath(top) == os.path.realpath(os.getcwd()), top\n")
+    record = break_it.run_one(str(repo), head, _block("tests/test_r.py", content))
+    assert record["outcome"] == "passed", record
+    refused = _block("tests/test_r.py", "pass\n", run="GIT_DIR=/x %s tests/test_r.py" % PY)
+    record = break_it.run_one(str(repo), head, refused)
+    assert (record["outcome"], record["reason"]) == ("not-run", "run-env-refused")
+
+
+# T14
+def test_t14_copy_has_independent_git_metadata(repo):
+    content = ("import subprocess\n"
+               "subprocess.check_call(['git', 'config', '--local', 'break.it', 'x'])\n"
+               "subprocess.check_call(['git', 'tag', 'break-it-tag'])\n")
+    record = break_it.run_one(str(repo), _head(repo), _block("tests/test_m.py", content))
+    assert record["outcome"] == "passed", record
+    assert _git(repo, "tag", "--list") == ""
+    done = subprocess.run(["git", "-C", str(repo), "config", "--local", "break.it"], capture_output=True)
+    assert done.returncode != 0
+
+
+# T15
+def test_t15_run_one_bounds_stored_output(repo, monkeypatch):
+    monkeypatch.setattr(break_it, "OUTPUT_TAIL_BYTES", 256)
+    content = "import sys\nfor i in range(20000):\n    sys.stdout.write('x' * 100 + '\\n')\nassert False\n"
+    record = break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", content))
+    assert record["outcome"] == "failed"
+    assert len(record["output"].encode("utf-8")) <= 256

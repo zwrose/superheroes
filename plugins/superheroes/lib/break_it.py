@@ -15,10 +15,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import uuid
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+
+from git_routing import GIT_ROUTING_VARS  # noqa: E402
 
 SCHEMA = "break-it-run/1"
 ROLE = "test-role"
@@ -36,6 +40,15 @@ _GIT_TIMEOUT = 120
 _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
 _REGULAR_MODES = ("100644", "100755")
+_TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
+_DRAIN_JOIN = 5
+
+
+def _clean_env(extra=None):
+    """The ambient environment minus every git routing variable, plus ``extra``."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ROUTING_VARS}
+    env.update(extra or {})
+    return env
 
 
 def is_break_it(finding):
@@ -93,6 +106,9 @@ def parse_command(run):
         m = _ENV_TOKEN.match(tokens[0])
         if not m:
             break
+        # axis: a leading git routing assignment is refused, so the copy's git can never be redirected — see bite-proof record wo_a_1800_break-it
+        if m.group(1) in GIT_ROUTING_VARS or m.group(1) == _TOKEN_ENV:
+            return None, None, "run-env-refused"
         env[m.group(1)] = m.group(2)
         tokens.pop(0)
     if not tokens:
@@ -109,7 +125,7 @@ def _record(head, block, outcome, reason=None, exit_code=None, output=""):
 
 def _git(repo_root, *args):
     return subprocess.run(["git", "-C", repo_root] + list(args), capture_output=True,
-                          timeout=_GIT_TIMEOUT)
+                          timeout=_GIT_TIMEOUT, env=_clean_env())
 
 
 def _tail_text(raw, cut):
@@ -127,16 +143,31 @@ def _tail_text(raw, cut):
     return text[start:]
 
 
-def _read_tail(log_path):
-    try:
-        with open(log_path, "rb") as fh:
-            size = os.fstat(fh.fileno()).st_size
-            # axis: only the last OUTPUT_TAIL_BYTES of a run's output reach the record — see bite-proof record wo_a_1800_break-it
-            offset = max(0, size - OUTPUT_TAIL_BYTES)
-            fh.seek(offset)
-            return _tail_text(fh.read(), offset > 0)
-    except OSError:
-        return ""
+class _TailDrain(threading.Thread):
+    """Reads a pipe to its end, keeping only the last ``OUTPUT_TAIL_BYTES`` bytes."""
+
+    def __init__(self, stream):
+        super().__init__(daemon=True)
+        self.stream = stream
+        self.buf = b""
+        self.cut = False
+
+    def run(self):
+        try:
+            while True:
+                chunk = os.read(self.stream.fileno(), 65536)
+                if not chunk:
+                    return
+                self.buf += chunk
+                # axis: the stored output never exceeds OUTPUT_TAIL_BYTES while the test runs — see bite-proof record wo_a_1800_break-it
+                if len(self.buf) > OUTPUT_TAIL_BYTES:
+                    self.buf = self.buf[-OUTPUT_TAIL_BYTES:]
+                    self.cut = True
+        except (OSError, ValueError):
+            return
+
+    def tail(self):
+        return _tail_text(self.buf, self.cut)
 
 
 def _kill_group(pid):
@@ -144,6 +175,44 @@ def _kill_group(pid):
         os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def _tagged_pids(token):
+    """Pids of processes whose environment carries ``token`` (inherited through any session)."""
+    needle = (_TOKEN_ENV + "=" + token).encode()
+    found = []
+    if os.path.isdir("/proc/self"):
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                try:
+                    with open("/proc/%s/environ" % name, "rb") as fh:
+                        if needle in fh.read().split(b"\0"):
+                            found.append(int(name))
+                except OSError:
+                    pass
+        return found
+    try:
+        out = subprocess.run(["ps", "-Eww", "-A", "-o", "pid=,command="], capture_output=True,
+                             timeout=_GIT_TIMEOUT).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return found
+    for line in out.splitlines():
+        if needle in line.split():
+            try:
+                found.append(int(line.split(None, 1)[0]))
+            except (ValueError, IndexError):
+                pass
+    return found
+
+
+def _kill_tagged(token):
+    """Kill every process the run started, even one that left the command's session."""
+    for pid in _tagged_pids(token):
+        if pid != os.getpid():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 def _write_confined(copy, rel, content):
@@ -184,7 +253,13 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         return _record(head, block, outcome, reason, exit_code, output)
 
     try:
-        added = _git(repo_root, "worktree", "add", "--detach", copy, head)
+        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
+        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
+                     "--", os.path.abspath(repo_root), copy)
+        if added.returncode == 0:
+            added = _git(copy, "remote", "remove", "origin")
+        if added.returncode == 0:
+            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
     except (OSError, subprocess.TimeoutExpired) as exc:
         return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     if added.returncode != 0:
@@ -197,25 +272,32 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
             refusal = "write-failed"
         if refusal:
             return rec(OUTCOME_NOT_RUN, refusal)
-    log_path = os.path.join(d, "output.log")
-    with open(log_path, "wb") as log:
+    token = uuid.uuid4().hex
+    try:
+        proc = subprocess.Popen(argv, cwd=copy, env=_clean_env(dict(env, **{_TOKEN_ENV: token})),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    except (FileNotFoundError, PermissionError):
+        return rec(OUTCOME_NOT_RUN, "command-not-found")
+    drain = _TailDrain(proc.stdout)
+    drain.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_group(proc.pid)
+        proc.wait()
+    finally:
+        # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
+        _kill_group(proc.pid)
+        _kill_tagged(token)
+        drain.join(_DRAIN_JOIN)
         try:
-            proc = subprocess.Popen(argv, cwd=copy, env=dict(os.environ, **env),
-                                    stdin=subprocess.DEVNULL, stdout=log,
-                                    stderr=subprocess.STDOUT, start_new_session=True)
-        except (FileNotFoundError, PermissionError):
-            return rec(OUTCOME_NOT_RUN, "command-not-found")
-        timed_out = False
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_group(proc.pid)
-            proc.wait()
-        finally:
-            # axis: the whole process group dies after every exit, so a lingering worker never outlives the call — see bite-proof record wo_a_1800_break-it
-            _kill_group(proc.pid)
-    output = _read_tail(log_path)
+            proc.stdout.close()
+        except OSError:
+            pass
+    output = drain.tail()
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
     code = proc.returncode
@@ -240,15 +322,7 @@ def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
     except Exception as exc:  # the caller decides from the record; nothing is raised
         result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     finally:
-        try:
-            _git(repo_root, "worktree", "remove", "--force", copy)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
         shutil.rmtree(d, ignore_errors=True)
-        try:
-            _git(repo_root, "worktree", "prune")
-        except (OSError, subprocess.TimeoutExpired):
-            pass
     return result
 
 
