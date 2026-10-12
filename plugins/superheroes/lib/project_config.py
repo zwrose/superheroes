@@ -869,14 +869,14 @@ def _entry_fields(line):
     found = _ENTRY_ID_PATTERN.match(line)
     if not found:
         return None
-    parts = line.split(" · ")
-    if len(parts) < 4:
+    parts = canon.entry_fields(line)
+    if parts is None:
         return None
     return {
         "id": found.group(1),
-        "scope": parts[2],
-        "ruling": parts[3],
-        "migrated": parts[-1].startswith("where: " + _MIGRATION_ORIGIN_PHRASE),
+        "scope": parts["scope"],
+        "ruling": parts["ruling"],
+        "migrated": parts["where"].startswith("where: " + _MIGRATION_ORIGIN_PHRASE),
         "line": line.strip(),
     }
 

@@ -166,6 +166,13 @@ def build_line(a, entry_id):
     return line
 
 
+def entry_fields(line):
+    """The one decoder of an entry line's positions: scope, ruling and the final provenance field,
+    or None when the line has fewer than the four fields every reader needs."""
+    f = line.split(SEP)
+    return {"scope": f[2], "ruling": f[3], "where": f[-1]} if len(f) >= 4 else None
+
+
 _MID_RE = re.compile(r"(?:cedes: [^\x00\s][^\x00]*)?(?:\x00?supersedes: [^\x00\s][^\x00]*)?")
 
 
@@ -174,7 +181,7 @@ def _entry_shape_ok(line):
     words and a final `where:` field, every one non-empty."""
     f = line.split(SEP)
     m = _ID_RE.match(line)
-    if not m or len(f) < 6 or f[0] != m.group(0) or not (
+    if len(line.splitlines()) != 1 or not m or len(f) < 6 or f[0] != m.group(0) or not (
             _DATE_RE.fullmatch(f[1]) and _SCOPE_RE.fullmatch(f[2]) and f[3].strip()):
         return False
     mid = "\x00".join(f[4:-2])

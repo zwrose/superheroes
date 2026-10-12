@@ -515,3 +515,33 @@ def test_store_nested_in_another_repository_refused(project, capsys, monkeypatch
         a, 0, stdout=os.path.dirname(cwd) + "\n", stderr=""))
     code, out = _run(capsys, "append", *_fields())
     assert code == 1 and out["reason"] == "canon-not-git"
+
+
+# axis: a replayed entry holding a character str.splitlines() splits on is refused before any
+# write, so the written file always reads back whole (the same rule as a fresh entry).
+@pytest.mark.parametrize("sep", [" ", "\x85"])
+def test_replayed_entry_with_unicode_line_separator_refused(project, capsys, tmp_path, sep):
+    entry = _entry(2).replace("A ruling.", "Keep data." + sep + "Never clear.")
+    batch = tmp_path / "batch.md"
+    batch.write_text(entry + "\n", encoding="utf-8")
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(batch))
+    assert code == 1 and out["ok"] is False
+    assert open(project["path"], "rb").read() == before
+
+
+# axis: the append lock is the actual project's: held there, the append refuses and writes
+# nothing; released, the same append succeeds.
+def test_append_refused_while_the_project_lock_is_held(project, capsys):
+    import mode_registry
+    root = project["gitRoot"]
+    argv = _fields()
+    argv[argv.index("--root") + 1] = root
+    before = open(project["path"], "rb").read()
+    with mode_registry.config_lock(root) as got:
+        assert got
+        code, out = _run(capsys, "append", *argv)
+        assert code == 1 and out["reason"] == "canon-lock-contended"
+    assert open(project["path"], "rb").read() == before
+    code, out = _run(capsys, "append", *argv)
+    assert code == 0 and out["ok"] is True
