@@ -215,7 +215,7 @@ def test_the_fixers_family_joins_the_makers_and_the_session_marks_no_reviewer_in
     session = s.save()
     account = rs.account_from_session(session, extras(makers=[{"family": "other", "source": "the extras"}]))
     # bites on: the fixer's family missing from the makers, or the session marking independence (the record writer decides it)
-    assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "review loop fixer"}]
+    assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "review loop fixer", "fromStep": 3}]
     marks = {v["name"]: v.get("notIndependent") for v in account["reviewers"]}
     assert marks == {"code-reviewer (round 1)": None, "security-reviewer (round 1)": None}
     listed = rs.account_from_session(session, extras(makers=[{"family": fam, "source": "the extras"}]))
@@ -277,6 +277,56 @@ def test_a_later_map_omitting_an_earlier_maker_family_does_not_release_it(tmp_pa
     account = rs.account_from_session(s.save(), extras(), Fake().readers())
     # bites on: the final record dropping a maker family an earlier receipt named
     assert {m["family"] for m in account["makers"]} == {"anthropic", "openai"}
+
+
+def test_later_map_omitting_an_earlier_maker_does_not_make_that_maker_the_independent_auditor():
+    seat = {"code-reviewer": {"vendor": "cursor", "source": "rotated"}}
+    state = round_driver.new_state({"vendors": ["claude", "codex", "cursor"], "fixerVendor": "claude"})
+    state["seatMapReceipts"] = [
+        {"round": "1", "map": {"seats": seat, "makerFamilies": ["anthropic", "openai"]}},
+        {"round": "2", "map": {"seats": seat, "makerFamilies": ["anthropic"]}}]
+    state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
+    targets = round_driver._audit_targets(state, state["config"], {})
+    # bites on: audit selection reading only the latest map, seating the earlier maker (codex, openai) as independent
+    assert targets[0]["auditorVendor"] == "cursor"
+    assert receipt_disclosures.accumulated_maker_families(state) == frozenset({"anthropic", "openai"})
+
+
+def _fixer_then_reviewer_account(tmp_path, review_round):
+    claude = {"vendor": "claude", "model": "sonnet-5.5"}
+    s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"},
+                rounds={"1": {"fix": {"fixes": []}}, "2": {}} if review_round == 2 else {"1": {"fix": {"fixes": []}}},
+                seatMapReceipts=[{"round": str(review_round), "map": {"seats": {"code-reviewer": claude}}}])
+    s.seat("code-reviewer", rnd=review_round, nonce="n1")
+    runs = {"/run/n1": (dict(GOOD_RUN, source="claude", engineModel="sonnet-5.5", runnerNonce="n1",
+                             viewHeadSha=EARLIER), None)}
+    account = rs.account_from_session(s.save(), extras(runDirs=["/run/n1"]), Fake(runs=runs).readers())
+    account["reviewers"][0].update(claude)  # the stored envelope names codex; this reviewer is the fixer's family
+    account["reviewers"].append({"name": "audit (round 1)", "vendor": "codex", "model": CODEX, "planned": True,
+                                 "ran": True, "runDir": "/run/n3", "commit": None, "step": 3})
+    runs["/run/n3"] = (dict(GOOD_RUN, runnerNonce="n3", viewHeadSha=HEAD), None)
+    return account, Fake(runs=runs)
+
+
+def test_a_reviewer_before_the_fix_is_judged_against_the_makers_it_faced(tmp_path):
+    account, fake = _fixer_then_reviewer_account(tmp_path, 1)
+    fixer = next(m for m in account["makers"] if m["source"] == "review loop fixer")
+    assert fixer["fromStep"] == 3 and account["reviewers"][0]["step"] == 2
+    rec = rr.build_record(account, fake.readers())
+    # bites on: a reviewer credited to an earlier commit demoted because its family later made a fix
+    by_name = {v["name"]: v for v in rec["reviewers"]}
+    assert by_name["code-reviewer (round 1)"]["ran"] == "engine-record"
+    assert by_name["audit (round 1)"]["ran"] == "engine-record" and by_name["audit (round 1)"]["coversFinalCommit"]
+    assert rec["missingReviews"] == [] and rec["status"] == "reviewed"
+
+
+def test_a_reviewer_after_the_fix_from_the_fixers_family_is_still_not_independent(tmp_path):
+    account, fake = _fixer_then_reviewer_account(tmp_path, 2)
+    assert account["reviewers"][0]["step"] == 4
+    rec = rr.build_record(account, fake.readers())
+    # bites on: the temporal rule releasing a reviewer that read the fixer's own change
+    by_name = {v["name"]: v for v in rec["reviewers"]}
+    assert by_name["code-reviewer (round 2)"]["ran"] == "not-run"
 
 
 def test_an_unfilled_seat_a_later_round_filled_is_recovered_not_left_missing(tmp_path):

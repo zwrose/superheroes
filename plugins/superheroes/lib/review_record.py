@@ -216,6 +216,18 @@ def _readers(overrides):
 
 # --- the account ---
 
+def _step_ok(v):
+    return v is None or (isinstance(v, int) and not isinstance(v, bool))
+
+
+def _makers_for(makers, step):
+    """Families that were makers of what a reviewer at `step` reviewed: a maker with a `fromStep` joined
+    only after earlier steps, so a reviewer before that step is judged against the makers it faced. A
+    reviewer with no step, or a maker with no `fromStep`, counts in full."""
+    return frozenset(m["family"] for m in makers
+                     if m.get("fromStep") is None or step is None or step >= m["fromStep"])
+
+
 def _validate(a):
     def chk(ok, key):
         if not ok:
@@ -241,12 +253,14 @@ def _validate(a):
             chk(isinstance(r.get(k), bool), f"reviewers[{i}].{k}")
         chk(sn(r.get("runDir")), f"reviewers[{i}].runDir")
         chk(sn(r.get("commit")), f"reviewers[{i}].commit")
+        chk(_step_ok(r.get("step")), f"reviewers[{i}].step")
         chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
         chk(isinstance(m, dict) and ne(m.get("family")), f"makers[{i}]")
+        chk(_step_ok(m.get("fromStep")), f"makers[{i}].fromStep")
     for i, f in enumerate(lst("findings")):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
@@ -617,8 +631,8 @@ def build_record(account, readers):
             dis.append({"fact": fact, "session": session, "code": code})
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
-    maker_families = frozenset(m["family"] for m in a["makers"])
-    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"], maker_families)
+    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
+                           _makers_for(a["makers"], r.get("step")))
                  for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:

@@ -162,14 +162,20 @@ def _bind(ran, run_dirs, engine_run):
     return {k: v[0] for k, v in hits.items() if len(v) == 1}
 
 
-def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None):
+def _step(rnd, phase):
+    """Where in the loop a reviewer sat: two steps a round, a panel or gap-sweep read before the round's
+    fix (even), every other review phase after it (odd)."""
+    return 2 * rnd + (0 if phase in (round_phases.P_PANEL, round_phases.P_GAPSWEEP) else 1)
+
+
+def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None, phase=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
     entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
     return {"name": f"{stem}{seat} (round {rnd})", "planned": True, "ran": ran,
             "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
             "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
-            "commit": commit, "runDir": run_dir}
+            "commit": commit, "runDir": run_dir, "step": _step(rnd, phase) if phase else None}
 
 
 def _unfilled_reviewer(rnd, seat):
@@ -221,7 +227,7 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
         out.append(_reviewer(state, rnd, seat, stem, key in ran, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
-                             _text(r.get("citedHead")), bound.get(key)))
+                             _text(r.get("citedHead")), bound.get(key), phase))
     out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
             if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
@@ -315,7 +321,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
-        makers.append({"family": fam, "source": "review loop fixer"})
+        fixed = [int(n) for n, r in rounds.items() if isinstance(r, dict) and "fix" in r and str(n).isdigit()]
+        makers.append({"family": fam, "source": "review loop fixer",
+                       **({"fromStep": 2 * min(fixed) + 1} if fixed else {})})
     for family in sorted(receipt_disclosures.accumulated_maker_families(state)):
         if not any(isinstance(m, dict) and m.get("family") == family for m in makers):
             makers.append({"family": family, "source": "seat map maker list"})

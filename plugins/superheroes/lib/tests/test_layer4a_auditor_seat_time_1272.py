@@ -191,9 +191,11 @@ def test_t2c_emit_orders_manifest_does_not_refuse_a_target_with_no_eligible_audi
     folds as an audit that did not run."""
     session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
     target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    target_no_vendor["independence"] = "unseatable"
     state["_auditTargets"] = [target_no_vendor]
     state["config"]["vendors"] = ["claude"]
     state["config"]["fixerVendor"] = "claude"
+    state["headDiff"] = HEAD_DIFF
     round_driver.save_state(session_dir, state)
     try:
         round_driver._emit_orders_manifest(
@@ -201,8 +203,14 @@ def test_t2c_emit_orders_manifest_does_not_refuse_a_target_with_no_eligible_audi
             journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
     except round_driver.AuditorUnseatable:
         pytest.fail("a target with no eligible auditor at all must not be refused")
-    except ValueError:
-        pass  # downstream render errors are fine; the unseatable guard did not refuse
+    # bites on: a render refusal (order-render-refused:*) passing as a successful emission
+    assert os.path.exists(_orders_manifest_path(session_dir, 1, 0))
+    state = _state(session_dir)
+    round_driver._fold_audits(state, state["config"], {"results": []})
+    outcome = state["_auditOutcome"]
+    assert outcome["notDischarged"] == [target_no_vendor["id"]]
+    assert outcome["discharged"] == []
+    assert outcome["unaudited"] == [target_no_vendor["id"]]
 
 
 def test_a_target_with_no_eligible_auditor_gets_no_order_and_a_missing_envelope(tmp_path):
