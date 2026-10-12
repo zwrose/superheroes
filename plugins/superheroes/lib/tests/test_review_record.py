@@ -1721,6 +1721,27 @@ def test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_un
     assert basis["source"] == "unavailable" and basis["floor"] == "full"
     assert basis["why"][0] == "risk-unclear-no-paths: the PR head moved while its changed files were read"
     assert rec["finalCommit"]["sha"] == HEAD
+    assert basis["headMoved"] is True
+    assert rec["status"] == "not-reviewed"
+    assert "the PR head moved while the record was written; this record does not cover the new head" in rec["whatIsMissing"]
+
+
+def test_a_head_that_cannot_be_re_read_gives_the_could_not_be_re_read_reason_and_no_moved_head(tmp_path):
+    # axis: the unreadable-head reason kept apart from the moved-head one; a head never read called a moved head
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    count = []
+
+    def meta(pr, repo_name):
+        count.append(1)
+        return fake.readers()["pr_meta"](pr, repo_name) if len(count) == 1 else None
+    rec = rr.build_record(account(repoRoot=repo), {**fake.readers(), "pr_meta": meta})
+    basis = rec["laneBasis"]
+    assert len(count) >= 2
+    assert basis["source"] == "unavailable" and basis["floor"] == "full"
+    assert basis["why"][0] == "risk-unclear-no-paths: the PR head could not be re-read while its changed files were read"
+    assert "headMoved" not in basis
+    assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
 
 
 def test_a_stable_head_gives_the_normal_basis(tmp_path):
@@ -1781,8 +1802,8 @@ def test_composed_prose_claiming_no_bugs_is_refused_on_a_below_floor_record(tmp_
     assert e.value.reason == "review-record-forbidden-claim"
 
 
-SHED_LINE = ("Reviewer detail trimmed to fit this comment (%s); each reviewer's full output is in its raw-output "
-             "comment linked under rawOutputs.")
+SHED_LINE = ("Reviewer detail trimmed to fit this comment (%s); the reviewers' findings are in the raw-output "
+             "comments linked under rawOutputs, and the trimmed engine detail is in the engines' own run records.")
 SHED_LINE_RUN_RECORDS = ("Reviewer detail trimmed to fit this comment (%s); the engines' own run records hold the "
                          "full output.")
 PROTECTED_ROW_KEYS = ("name", "ran", "planned", "vendor", "model", "family", "commit", "coversFinalCommit")

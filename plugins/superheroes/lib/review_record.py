@@ -384,10 +384,14 @@ def _lane_basis(a, rd, lane_value, final_sha):
     paths = rd["changed_paths"](a["pr"], a["repo"])
     # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
     after = rd["pr_meta"](a["pr"], a["repo"]) if isinstance(paths, list) else None
-    if isinstance(paths, list) and not (after and after.get("head") == final_sha):
+    if isinstance(paths, list) and not (after and after.get("head")):
+        return dict(lane_call.unavailable(
+            lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read",
+            proposed=lane_value), source="unavailable")
+    if isinstance(paths, list) and after["head"] != final_sha:
         return dict(lane_call.unavailable(
             lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read",
-            proposed=lane_value), source="unavailable")
+            proposed=lane_value), source="unavailable", headMoved=True)
     if isinstance(paths, list):
         return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
                     source="lane rule over the PR's changed files")
@@ -519,8 +523,14 @@ def _lane_lines(rec):
     # axis: a lane below the risk floor is not-reviewed; an unknown lane counts as below — see bite-proof record wo_a_1795_lane-call
     if basis["floor"] is not None and lane_call.rank(lane) < lane_call.rank(basis["floor"]):
         # fixed prose: only the lane and floor tokens enter, never the basis's free-text reasons (the Risk floor line holds those)
-        return [f"the lane ({lane}) is below the risk floor ({basis['floor']}); the Risk floor line gives why"]
-    return []
+        lines = [f"the lane ({lane}) is below the risk floor ({basis['floor']}); the Risk floor line gives why"]
+    else:
+        lines = []
+    # axis: a head read and found moved from the recorded final commit is not-reviewed, whatever the lane — see bite-proof record wo_g_1795_head-moved
+    if basis.get("headMoved"):
+        # fixed prose: no data enters
+        lines.append("the PR head moved while the record was written; this record does not cover the new head")
+    return lines
 
 
 def _status(rec, unread=(), finding_lines=()):
@@ -808,7 +818,8 @@ def _reviewer_shed_line(record):
     """The shed line for a record whose reviewerShed lists the applied steps: it names only those steps, and points
     only at output the record links."""
     what = " and ".join(_REVIEWER_SHED_WHAT[n] for n in record["reviewerShed"])
-    where = ("each reviewer's full output is in its raw-output comment linked under rawOutputs"
+    where = ("the reviewers' findings are in the raw-output comments linked under rawOutputs, and the trimmed "
+             "engine detail is in the engines' own run records"
              if _links_raw_output(record) else "the engines' own run records hold the full output")
     return f"Reviewer detail trimmed to fit this comment ({what}); {where}."
 
