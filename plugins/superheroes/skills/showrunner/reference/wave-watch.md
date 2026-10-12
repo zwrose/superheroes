@@ -425,6 +425,11 @@ Each note names the session to answer (`cloudSessionName`) and the account it ru
 Compare `configDir` with the account you run on, your resolved config directory (`CLAUDE_CONFIG_DIR`
 when set, otherwise `~/.claude`). Answer by message, never on the issue.
 
+**What the answer says.** Name the chosen option literally, in your own words: the line, value or
+step the builder should use, written out in full. Never answer by reference to the note ("go ahead
+as your note proposes", "the usual"): a cloud builder cannot message back to ask what you meant, so
+an answer it cannot act on costs a second round trip and the gate below still reads it as delivered.
+
 **One-time setup.** Each Claude account the builders run on must have opened Claude Code in the
 repository root once and accepted its trust prompt. The owner does this once per account, before the
 relay on that account can start.
