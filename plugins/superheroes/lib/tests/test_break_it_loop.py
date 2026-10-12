@@ -228,7 +228,8 @@ def test_b2_only_the_test_roles_seat_can_trigger_a_break_it_run(world, monkeypat
         return real(findings, *args, **kwargs)
 
     monkeypatch.setattr(break_it, "intercept", counting)
-    impostor = _break_it_finding(title="Break-it: from the code reviewer", dimension="Code")
+    # the label says Test, the seat says code-reviewer: only the roster key is trusted
+    impostor = _break_it_finding(title="Break-it: from the code reviewer", dimension="Test")
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seats["code-reviewer"] = {"findings": [impostor]}
     RD._fold(world.state, world.state["config"], RD.P_PANEL, {"seats": seats},
@@ -237,6 +238,50 @@ def test_b2_only_the_test_roles_seat_can_trigger_a_break_it_run(world, monkeypat
     assert "breakItRuns" not in world.round_record
     assert world.state["_toVerify"] == []
     assert _drop_reasons(world.state) == ["outside the round diff scope"]
+
+
+def test_b2b_a_test_role_finding_labeled_code_still_runs(world):
+    world.fold_panel(_break_it_finding(dimension="Code"))
+    (entry,) = world.round_record["breakItRuns"]
+    assert entry["outcome"] == "failed"
+
+
+def test_a_malformed_block_keeps_ordinary_scope_checking(world):
+    world.fold_panel(_break_it_finding(
+        file="unrelated.py", line=42, suggestion="not a valid break-it block"))
+    assert world.state["_toVerify"] == []
+    assert _drop_reasons(world.state) == ["outside the round diff scope"]
+    # a path-mismatched block and a block off line 1 lose the exemption too
+    other = World(world.session.parent / "other")
+    other.fold_panel(_break_it_finding(file="unrelated.py", line=1),
+                     _break_it_finding(title="Break-it: off line one", line=2))
+    assert other.state["_toVerify"] == []
+    assert _drop_reasons(other.state) == ["outside the round diff scope"] * 2
+
+
+def test_a_deduplicated_proposal_binds_no_kept_check(world):
+    other_test = _TEST_FAILING + "# a different proposal\n"
+    world.fold_panel(_break_it_finding(), _break_it_finding(other_test))
+    runs = world.round_record["breakItRuns"]
+    assert len(runs) == 2
+    assert [r["findingKey"] is not None for r in runs] == [True, False]
+    assert runs[1]["supersededAtCompile"] is True
+    world.disposition("fixed")
+    world.fix(_TEST_FAILING)
+    assert RD._break_it_kept_step(world.state, world.state["config"]) is False
+    (row,) = world.round_record["breakItKept"]
+    assert row["outcome"] == "kept"
+
+
+def test_a_failing_final_run_is_kept_in_the_row_and_the_park_reason(world):
+    world.fold_panel(_break_it_finding())
+    world.disposition("fixed")
+    world.fix(_TEST_FAILING, code=_CHARGE_RETRYING + "# still retrying\n")
+    RD._terminal_converged(world.state, world.state["config"], full_panel=True)
+    assert world.state["terminal"] == "cannot-certify"
+    (row,) = world.round_record["breakItKept"]
+    assert row["outcome"] == "failing" and row["run"]["exitCode"] != 0
+    assert "charged 2 times" in world.state["certification"]["reason"]
 
 
 def test_l4_merge_and_rank_never_merges_a_break_it_finding():

@@ -569,7 +569,9 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             continue
         copy[RUN_FIELD] = record
         kept.append(copy)
-        exempt_ids.add(id(copy))
+        # axis: only a well-formed block on its own file at line 1 buys the scope exemption; a malformed one keeps ordinary scope checking
+        if not refusal and block["path"] == copy.get("file") and copy.get("line") == 1:
+            exempt_ids.add(id(copy))
     return kept, runs, exempt_ids
 
 

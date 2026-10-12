@@ -85,7 +85,7 @@ def _fake(outcome, calls=None):
 
 def _finding(path, **extra):
     block = _wire(path, "%s %s" % (PY, path), "assert True\n")
-    out = {"title": "Break-it: %s" % path, "file": path, "taxonomy": break_it.TAXONOMY,
+    out = {"title": "Break-it: %s" % path, "file": path, "line": 1, "taxonomy": break_it.TAXONOMY,
            "suggestion": block}
     out.update(extra)
     return out
@@ -403,11 +403,12 @@ def test_t12_intercept_runs_every_finding_and_refuses_a_path_mismatch(repo):
     calls.clear()
     kept, runs, exempt = break_it.intercept([mismatch], str(repo), "H", runner=_fake("passed", calls))
     assert calls == []
-    assert kept[0]["breakItRun"]["reason"] == "path-mismatch" and id(kept[0]) in exempt
+    assert kept[0]["breakItRun"]["reason"] == "path-mismatch" and id(kept[0]) not in exempt
     bad = _finding("t/real.py", suggestion="not a block")
     kept, runs, exempt = break_it.intercept([bad], str(repo), "H", runner=_fake("passed", calls))
     assert kept[0]["breakItRun"]["reason"] == "block-header-missing"
     assert kept[0]["breakItRun"]["sha256"] is None and calls == []
+    assert id(kept[0]) not in exempt
 
 
 # T13

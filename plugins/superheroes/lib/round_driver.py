@@ -2352,9 +2352,16 @@ def _break_it_run_keys(runs, compiled):
             entry["findingKey"] = None
         else:
             match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
-            entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
-            if match is None:
-                entry["droppedAtCompile"] = True
+            stamp = match.get(break_it.RUN_FIELD) if match else None
+            if match is not None and isinstance(stamp, dict) and any(
+                    stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):
+                # axis: a run whose proposal compile merged away binds to no finding, so the kept-check sees only the surviving test
+                entry["findingKey"] = None
+                entry["supersededAtCompile"] = True
+            else:
+                entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
+                if match is None:
+                    entry["droppedAtCompile"] = True
         out.append(entry)
     return out
 
@@ -4990,7 +4997,7 @@ def _break_it_kept_step(state, config):
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
-               "reason": got.get("reason")}
+               "reason": got.get("reason"), "run": got.get("run")}
         rows.append(row)
         # axis: a fixed break-it finding whose test is not kept parks, it never certifies
         if got.get("outcome") != break_it.KEPT:
@@ -5002,8 +5009,10 @@ def _break_it_kept_step(state, config):
                  sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
                  sum(1 for r in rows if r["outcome"] == "not-required")))
     if failed:
+        why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
         _park_cannot_certify(
-            state, "break-it test not kept: %s (%s)" % (failed[0]["path"], failed[0]["outcome"]))
+            state, "break-it test not kept: %s (%s%s)"
+            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else ""))
         return True
     return False
 
