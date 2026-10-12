@@ -1039,6 +1039,124 @@ else:
     assert got["rawOutputs"][0]["withheld"] is True
 
 
+def test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line(tmp_path):
+    # axis: the CLI entry point in a cloud session; no gh pr/issue/repo call, and the first-line issue reaches the lane read
+    import test_engine_dispatch as ted
+    stream = ted._codex_event_stream(json.dumps({"resultKind": "findings", **ted._native_review_branch("findings")}))
+    run_dir = str(tmp_path / "run")
+    res = ted.ED.dispatch_review(
+        seat=ted._codex_seat(), prompt_path=ted._valid_prompt(tmp_path), repo_root=ted._repo(tmp_path),
+        run_engine=ted.FakeRunner([(stream, False, 0, "")]), build_view=ted._fake_build_view(tmp_path),
+        run_dir=run_dir)
+    assert res["ok"] is True
+    journal, jerr = ted.ED.run_execution_record(run_dir)
+    assert jerr is None and journal["graded"] is True
+    head = journal["viewHeadSha"]
+    state, argv_log = tmp_path / "gh-state.json", tmp_path / "gh-argv.log"
+    state.write_text(json.dumps({"comments": []}))
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    gh_dir = tmp_path / "bin"
+    gh_dir.mkdir()
+    gh = gh_dir / "gh"
+    gh.write_text(f"""#!{sys.executable}
+import json, os, sys
+a = sys.argv[1:]
+state = {str(state)!r}
+head = {head!r}
+checkout = {str(checkout)!r}
+with open({str(argv_log)!r}, "a") as log:
+    log.write(json.dumps(a) + "\\n")
+s = json.load(open(state))
+if a == ["api", "repos/{{owner}}/{{repo}}", "--jq", ".full_name"]:
+    if os.path.realpath(os.getcwd()) != os.path.realpath(checkout):
+        sys.exit(2)
+    print("o/r")
+elif a == ["api", "repos/o/r/pulls/7"]:
+    print(json.dumps({{"head": {{"sha": head}}, "body": "Closes #9.\\nmore"}}))
+elif a == ["api", "repos/o/r/issues/9"]:
+    print(json.dumps({{"body": "intro\\n**Lane call:** light because small\\n"}}))
+elif a[0] == "api" and a[1].endswith("/check-runs?per_page=100"):
+    print(json.dumps({{"total_count": 1, "check_runs": [{{"name": "v", "status": "completed", "conclusion": "success"}}]}}))
+elif a[0] == "api" and a[1].endswith("/status"):
+    print(json.dumps({{"state": "pending", "total_count": 0, "statuses": []}}))
+elif a[0] == "api" and "-X" in a:
+    body = open(a[a.index("-F") + 1].split("=@", 1)[1]).read()
+    n = len(s["comments"]) + 1
+    s["comments"].append({{"id": n, "user": {{"login": "bot"}}, "body": body, "html_url": "http://c/%d" % n}})
+    json.dump(s, open(state, "w"))
+    print(json.dumps({{"id": n, "html_url": "http://c/%d" % n}}))
+elif a[0] == "api" and a[1].endswith("/comments"):
+    print(json.dumps(s["comments"]))
+else:
+    sys.exit(2)
+""")
+    gh.chmod(0o755)
+    env = {"PATH": f"{gh_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_CODE_REMOTE": "true"}
+    acct = account(finalCommit=head, reviewers=[reviewer(runDir=run_dir)])
+    proc = subprocess.run([sys.executable, "-B", rr.__file__, "write", "--account", put(tmp_path, acct),
+                           "--repo-root", str(checkout)], capture_output=True, text=True, env=env,
+                          cwd=str(tmp_path))
+    out = json.loads(proc.stdout)
+    assert proc.returncode == 0 and out["ok"] and out["action"] == "created", (proc.stdout, proc.stderr)
+    calls = [json.loads(line) for line in argv_log.read_text().splitlines()]
+    assert not [c for c in calls if c[0] in ("pr", "issue", "repo")], calls
+    assert ["api", "repos/o/r/pulls/7"] in calls and ["api", "repos/o/r/issues/9"] in calls
+    posted = rr._parse_body(json.loads(state.read_text())["comments"][-1]["body"])
+    assert posted["lane"]["value"] == "light" and posted["lane"]["source"] == "issue lane call"
+
+
+def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_true(monkeypatch):
+    # axis: reader selection; a cloud session on the old gh pr/issue/repo readers, or an off-cloud session moved off them
+    old = {"pr_meta": rr._pr_meta, "issue_body": rr._issue_body, "repo_name": rr._repo_name}
+    rest = {"pr_meta": rr._pr_meta_rest, "issue_body": rr._issue_body_rest, "repo_name": rr._repo_name_rest}
+    own = {"pr_meta": "mine", "issue_body": "mine", "repo_name": "mine"}
+    monkeypatch.delenv(rr.cloud_pass.CLOUD_ENV, raising=False)
+    got = rr._readers(None)
+    assert {k: got[k] for k in old} == old
+    assert {k: v for k, v in rr._readers(own).items() if k in own} == own
+    monkeypatch.setenv(rr.cloud_pass.CLOUD_ENV, "true")
+    got = rr._readers(None)
+    assert {k: got[k] for k in rest} == rest
+    assert {k: v for k, v in rr._readers(own).items() if k in own} == own
+    monkeypatch.setenv(rr.cloud_pass.CLOUD_ENV, "1")
+    got = rr._readers(None)
+    assert {k: got[k] for k in old} == old
+
+
+@pytest.mark.parametrize("body,repo,expected", [
+    pytest.param(None, "o/r", [], id="body-none"),
+    pytest.param("", "o/r", [], id="body-empty"),
+    pytest.param("Part of #4.", "o/r", [], id="non-closing-verb"),
+    pytest.param("Closes #12.", "o/r", [12], id="closes"),
+    pytest.param("closes #12", "o/r", [12], id="lowercase"),
+    pytest.param("Fixes: #3", "o/r", [3], id="colon"),
+    pytest.param("Closes #3. Resolves #5. Closes #3.", "o/r", [3, 5], id="several-deduplicated"),
+    pytest.param("Closes #3, #5", "o/r", [3], id="one-issue-per-keyword"),
+    pytest.param("Intro\nCloses #3.", "o/r", [], id="not-on-the-first-line"),
+    pytest.param("Closes #3.\r\nx", "o/r", [3], id="crlf"),
+    pytest.param("Closes O/R#8", "o/r", [8], id="qualified-same-repo"),
+    pytest.param("Closes x/y#8", "o/r", [], id="qualified-other-repo"),
+    pytest.param("Encloses #3", "o/r", [], id="not-a-whole-word-keyword"),
+    pytest.param("Closes #3a", "o/r", [], id="not-a-whole-number"),
+])
+def test_closing_issues_reads_only_the_first_line_and_fails_closed(body, repo, expected):
+    # axis: the closing-issue rule; a later line, another repository, a non-closing verb or a partial word read as a closed issue
+    assert rr._closing_issues(body, repo) == expected
+
+
+def test_rest_pr_and_issue_readers_fail_closed_on_a_missing_or_malformed_answer(monkeypatch):
+    # axis: the REST readers; an absent, headless or non-object answer read as PR or issue data
+    for answer in (None, {"body": "Closes #1."}, {"head": {}, "body": ""}, ["x"]):
+        monkeypatch.setattr(rr, "_gh_json", lambda *a, answer=answer: answer)
+        assert rr._pr_meta_rest(7, "o/r") is None
+    for answer in (None, ["x"], "text"):
+        monkeypatch.setattr(rr, "_gh_json", lambda *a, answer=answer: answer)
+        assert rr._issue_body_rest(9, "o/r") is None
+    monkeypatch.setattr(rr, "_gh_json", lambda *a: {"head": {"sha": HEAD}, "body": None})
+    assert rr._pr_meta_rest(7, "o/r") == {"head": HEAD, "body": "", "issues": []}
+
+
 def test_a_credential_used_as_a_dictionary_key_is_redacted_and_colliding_keys_survive():
     # axis: key scrubbing; a credential quoted as a mapping key published verbatim, or two redacted keys overwriting each other
     k1, k2 = "ghp_" + "A" * 36, "ghp_" + "B" * 36

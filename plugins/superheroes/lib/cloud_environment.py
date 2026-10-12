@@ -2,6 +2,7 @@
 
   cloud_environment.py snapshot [--cwd D]
   cloud_environment.py pick [--before ID] [--confirmed ID] [--cwd D]
+  cloud_environment.py compare --environment ID [--cwd D]
 
 Claude Code saves the pick as `remote.defaultEnvironmentId` in the user settings file of the
 account it runs on. `snapshot` reads that value before the owner picks; `pick` reads it again and
@@ -15,6 +16,10 @@ after the pick, because another account's pick in between would be read as this 
 library plus `config_dir` and `engine_adapter`. Every public function returns a plain dict and
 never raises; nothing here prints, logs or writes a file except the one result line of the command
 line.
+
+`compare` runs just before a step uses an environment id: it reads the one the picker holds now
+and says whether it is the id about to be used, so no step runs against an environment other than
+the one the owner picked.
 """
 import argparse
 import json
@@ -39,6 +44,11 @@ _UNREADABLE = ("I can't read this account's Claude Code settings, so I can't see
 _BEFORE_INVALID = "The value read before the pick is not an environment id."
 _CONFIRMED_INVALID = "The environment confirmed earlier is not an environment id."
 _KEPT = "Got it: I can see you kept the same environment."
+_MISMATCHED = ("The environment picked in /remote-env is a different one from the one I was about "
+               "to use. The sitting will use the picked one.")
+_UNCHECKED = ("I can't confirm which environment is picked in /remote-env, so I'm stopping here. "
+              "Check that Claude Code's settings file on this machine is readable and that an "
+              "environment shows as picked in /remote-env, then tell me and I'll look again.")
 
 
 def _is_id(value):
@@ -76,10 +86,10 @@ def _read(env, cwd):
         return False, None
     if not isinstance(data, dict):
         return False, None
-    remote = data.get("remote")
+    remote = data.get(engine_adapter.CLOUD_SETTINGS_SECTION)
     if not isinstance(remote, dict):
         return True, None
-    value = remote.get("defaultEnvironmentId")
+    value = remote.get(engine_adapter.CLOUD_SETTINGS_ENVIRONMENT_KEY)
     if not _is_id(value):
         return True, None
     return True, value
@@ -129,20 +139,43 @@ def pick(before=None, confirmed=None, env=None, cwd=None):
                 "message": _UNREADABLE}
 
 
+def _unchecked(reason):
+    return {"action": "unchecked", "reason": reason, "environment": None, "message": _UNCHECKED}
+
+
+def compare(environment, env=None, cwd=None):
+    """Compare the id about to be used with the one the picker holds now. Never raises."""
+    try:
+        if not _is_id(environment):
+            return _unchecked("environment-invalid")
+        readable, current = _read(env, cwd)
+        if not readable or current is None:
+            return _unchecked("pick-unreadable")
+        if environment == current:
+            return {"action": "matched", "reason": None, "environment": current}
+        return {"action": "mismatched", "reason": "picked-differs", "environment": current,
+                "message": _MISMATCHED}
+    except Exception:
+        return _unchecked("compare-failed")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="cloud_environment.py")
-    parser.add_argument("verb", choices=["snapshot", "pick"])
+    parser.add_argument("verb", choices=["snapshot", "pick", "compare"])
     parser.add_argument("--cwd", default=None)
     parser.add_argument("--before", default=None)
     parser.add_argument("--confirmed", default=None)
+    parser.add_argument("--environment", default=None)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.verb == "snapshot":
         result = snapshot(cwd=cwd)
+    elif args.verb == "compare":
+        result = compare(args.environment, cwd=cwd)
     else:
         result = pick(before=args.before, confirmed=args.confirmed, cwd=cwd)
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
-    return 0 if result["action"] in ("read", "picked") else 1
+    return 0 if result["action"] in ("read", "picked", "matched") else 1
 
 
 if __name__ == "__main__":

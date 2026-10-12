@@ -3,34 +3,80 @@
 later messages.
 
 Stdlib plus plugin imports only. Every reason either one prints is drawn from the one `REASONS`
-table in `launch_place`. None of `render_report`, `record_still`, `still_check`, `still_line` and `clear_still`
-ever raises. The stored reason is the first not-ready condition in the cloud check's order, and it
-is forgotten once a build goes to the cloud or the condition behind it is fixed."""
+table in `launch_place`. Neither `render_report`, `still_check` nor `still_line` ever raises, and
+nothing here writes: the line is worked out each time from the launch ledger and the cloud's
+readiness at that moment. It is the first not-ready condition in the cloud check's order, among the
+local fallbacks since the last build that went to the cloud and not yet fixed."""
 import datetime
 import json
 import os
 import re
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_ready  # noqa: E402
-import mode_registry  # noqa: E402
+import launch_ledger as ll  # noqa: E402
 from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text  # noqa: E402
 
-_STILL_SCHEMA = "cloud-still/1"
 _STILL_HEADER = "Still on your machine"
+STILL_LEDGER_UNREADABLE = "still-ledger-unreadable"
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_UNREADABLE = object()
-STILL_UNREADABLE = "still-state-unreadable"
 
 # The condition behind each reason, read back out of the readiness registry.
 _CONDITION_FOR = {reason: name for name, reason in cloud_ready.REASON_FOR.items()}
-# The still-state clearing legs: a reason fixed by a condition this machine can read again.
-_REREAD_REASONS = ("no-setup", "pass-lapsed", "calibration")
+# The reasons a condition this machine can read again clears.
+_REREAD_REASONS = tuple(cloud_ready.REASON_FOR[name] for name in ("setup", "passLive", "calibration"))
+# The reason whose fact the cloud reports as a plugin version.
+_VERSION_REASON = cloud_ready.REASON_FOR["version"]
+# Where each reason stands in the cloud check's order: the lower the number, the sooner it is shown.
+_RANK = {cloud_ready.REASON_FOR[name]: place for place, name in enumerate(cloud_ready.CONDITION_ORDER)}
+
+
+# ---------------------------------------------------------------- what a ledger launch says about its place
+
+
+def report_place_call(raw_reserved, folded_place):
+    """The lane's place call: the reserved record's own when it agrees with the ledger's folded
+    place, otherwise one synthesized from that place with no reason."""
+    premise = raw_reserved.get("premise") if isinstance(raw_reserved, dict) else None
+    call = premise.get("placeCall") if isinstance(premise, dict) else None
+    if (
+        isinstance(call, dict)
+        and call.get("place") == folded_place
+        and isinstance(call.get("pointedAtCloud"), bool)
+    ):
+        return call
+    return {"place": folded_place, "pointedAtCloud": folded_place == ll.PLACE_CLOUD, "reason": None}
+
+
+def decides_still(call):
+    """True when the place call moves the "Still on your machine" line: a build in the cloud, or
+    one the cloud was meant for that ran locally because it was not ready."""
+    return call.get("place") == ll.PLACE_CLOUD or bool(
+        call.get("place") == ll.PLACE_LOCAL and call.get("pointedAtCloud")
+        and call.get("reason") in NOT_READY_CODES)
+
+
+def started_indexes(records):
+    """Each launch's ledger position of its latest started event. Launches reserve and spawn in
+    separate steps, so the position a launch started at, not the one it reserved at, is the order
+    in which the launches actually happened."""
+    return {
+        rec["launchId"]: idx for idx, rec in enumerate(records)
+        if isinstance(rec, dict) and rec.get("event") == "started"
+    }
+
+
+def launch_day(info):
+    """The UTC date the launch started; None when the ledger carries no usable time."""
+    stamp = info.get("startedTs", info.get("reservedTs"))
+    try:
+        return datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
 
 
 # ---------------------------------------------------------------- the launch report
@@ -60,7 +106,7 @@ def _recheck_first(calls):
 def _summary(lanes):
     """The all-on-your-machine form, or None when the lanes do not share one reason."""
     calls = [lane["placeCall"] for lane in lanes]
-    if not all(c["place"] == "local" and c["pointedAtCloud"] for c in calls):
+    if not all(c["place"] == ll.PLACE_LOCAL and c["pointedAtCloud"] for c in calls):
         return None
     codes = {c.get("reason") for c in calls}
     if len(codes) != 1 or not codes <= set(NOT_READY_CODES):
@@ -81,14 +127,14 @@ def render_report(lanes):
         if not lanes:
             return None
         calls = [lane["placeCall"] for lane in lanes]
-        if not any(c["pointedAtCloud"] or c["place"] == "cloud" for c in calls):
+        if not any(c["pointedAtCloud"] or c["place"] == ll.PLACE_CLOUD for c in calls):
             return None
         summary = _summary(lanes)
         if summary is not None:
             return summary
         out = ["%s." % _count(lanes)]
-        cloud = [_label(lane) for lane in lanes if lane["placeCall"]["place"] == "cloud"]
-        local = [lane for lane in lanes if lane["placeCall"]["place"] != "cloud"]
+        cloud = [_label(lane) for lane in lanes if lane["placeCall"]["place"] == ll.PLACE_CLOUD]
+        local = [lane for lane in lanes if lane["placeCall"]["place"] != ll.PLACE_CLOUD]
         if cloud:
             out.append("In the cloud: %s." % ", ".join(cloud))
         if local:
@@ -112,116 +158,16 @@ def render_report(lanes):
 # ---------------------------------------------------------------- the line at the top of later messages
 
 
-def _still_path(cwd, root):
-    return os.path.join(mode_registry.project_store_dir(cwd, root), "state", "cloud-still.json")
+def _configuration_is_whole(path):
+    """True when the profile's projectConfiguration is absent or a mapping. The profile reader gives
+    any other value as an empty mapping, which the config reader then gives as the setting's default."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    import core_md
 
-
-def _today(given):
-    if isinstance(given, datetime.datetime):
-        return given.date()
-    if isinstance(given, datetime.date):
-        return given
-    return datetime.datetime.now(datetime.timezone.utc).date()
-
-
-def _remove(path):
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        return {"action": "unchanged"}
-    except OSError:
-        return {"action": "refused"}
-    return {"action": "cleared"}
-
-
-def _write_still(path, state):
-    directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".cloud-still-", dir=directory, text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(state, sort_keys=True, indent=2) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        tmp = None
-    finally:
-        if tmp is not None:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-
-
-def record_still(cwd, place_calls, *, root=None, today=None):
-    """After a launch: keep the one reason the cloud was not used, or forget it once a build went
-    to the cloud. Never raises."""
-    try:
-        path = _still_path(cwd, root)
-        if any(c.get("place") == "cloud" for c in place_calls):
-            # axis: a build that went to the cloud clears the stored reason even beside a local not-ready fallback — see bite-proof record wo_a_launch_report
-            return {"action": _remove(path)["action"], "reason": None}
-        stuck = [c for c in place_calls if c.get("place") == "local" and c.get("pointedAtCloud")
-                 and c.get("reason") in NOT_READY_CODES]
-        if stuck:
-            rank = [cloud_ready.REASON_FOR[name] for name in cloud_ready.CONDITION_ORDER]
-            best = min(rank.index(c["reason"]) for c in stuck)
-            tied = [c for c in stuck if rank.index(c["reason"]) == best]
-            call = _recheck_first(tied)
-            # a launch the owner pointed at the cloud by word stays unresolved when the setting is off
-            by = "word" if any(c.get("by") == "word" for c in tied) else call.get("by")
-            # a builder-reported version on any tied call keeps the later-day clearing, whichever call came first
-            reported = next((c["reported"] for c in tied if isinstance(c.get("reported"), dict)
-                             and c["reported"].get("pluginVersion") is not None), call.get("reported"))
-            state = {
-                "schema": _STILL_SCHEMA, "reason": call["reason"], "by": by,
-                "cloudVersion": call.get("cloudVersion"),
-                "advisorVersion": call.get("advisorVersion"),
-                "reported": reported,
-                "observedOn": _today(today).isoformat(),
-            }
-            if call.get("failedCheck") is not None:
-                state["failedCheck"] = call["failedCheck"]
-            _write_still(path, state)
-            return {"action": "written", "reason": call["reason"]}
-        return {"action": "unchanged", "reason": None}
-    except Exception:
-        return {"action": "refused", "reason": "write-failed"}
-
-
-def _read_still(path):
-    """The stored state; None when it is absent, False when it is not in the exact shape written,
-    and _UNREADABLE when the file could not be read at all."""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            state = json.load(fh)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return _UNREADABLE
-    except (ValueError, RecursionError):
-        return False
-    if not isinstance(state, dict) or state.get("schema") != _STILL_SCHEMA:
-        return False
-    if state.get("reason") not in NOT_READY_CODES or state.get("by") not in ("setting", "word"):
-        return False
-    for key in ("cloudVersion", "advisorVersion"):
-        if state.get(key) is not None and not isinstance(state[key], str):
-            return False
-    if not cloud_ready.valid_reported(state.get("reported")):
-        return False
-    failed = state.get("failedCheck")
-    if failed is not None and not (
-            isinstance(failed, list) and all(isinstance(part, str) for part in failed)):
-        return False
-    observed = state.get("observedOn")
-    if not (isinstance(observed, str) and _DATE_RE.fullmatch(observed)):
-        return False
-    try:
-        datetime.date.fromisoformat(observed)
-    except ValueError:
-        return False
-    return state
+    block = json.loads(core_md._JSON_BLOCK.search(text).group(1))
+    return block.get(core_md.PROJECT_CONFIGURATION_KEY) is None or isinstance(
+        block[core_md.PROJECT_CONFIGURATION_KEY], dict)
 
 
 def _setting_read_off(cwd, root):
@@ -233,7 +179,10 @@ def _setting_read_off(cwd, root):
         import core_md
         import project_config
 
-        if core_md.read(cwd, root) is None and not core_md.gate_config_profile_is_absent(cwd, root):
+        if core_md.read(cwd, root) is None:
+            if not core_md.gate_config_profile_is_absent(cwd, root):
+                return False
+        elif not _configuration_is_whole(core_md.core_path(cwd, root)):
             return False
         got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
         return got.get("effective") is False and got.get("malformed") is not True
@@ -241,55 +190,116 @@ def _setting_read_off(cwd, root):
         return False
 
 
-def _fixed(state, now, cwd=None, root=None):
-    reason = state["reason"]
-    reported = state.get("reported") or {}
+def _fixed(candidate, now, cwd=None, root=None):
+    reason = candidate["reason"]
+    reported = candidate.get("reported") or {}
     # a setting the reader could not read is not a setting switched off
-    if state["by"] == "setting" and now.get("setting") is not True and _setting_read_off(cwd, root):
+    if candidate["by"] == "setting" and now.get("setting") is not True and _setting_read_off(cwd, root):
         return True
     conditions = now.get("conditions") or {}
     if reason in _REREAD_REASONS:
         return conditions.get(_CONDITION_FOR[reason]) is True
-    if reason == "version" and reported.get("pluginVersion") is None:
+    if reason == _VERSION_REASON and reported.get("pluginVersion") is None:
         return conditions.get(_CONDITION_FOR[reason]) is True
     checked = now.get("checkedAt")
-    if not (isinstance(checked, str) and _DATE_RE.fullmatch(checked)):
+    observed = candidate.get("observedOn")
+    # a launch with no start date has no day for a later check to follow
+    if not (isinstance(checked, str) and _DATE_RE.fullmatch(checked)) or observed is None:
         return False
     try:
         # axis: a reported fact is fixed only by a check made on a later day — see bite-proof record wo_a_launch_report
-        later = datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(state["observedOn"])
+        later = datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(observed)
         # axis: a reported fact clears only when the reader reads ready now — see bite-proof record wo_a_launch_report
         return later and now.get("ready") is True
     except ValueError:
         return False
 
 
-def still_check(cwd, *, root=None, today=None, readiness_fn=None):
-    """The line to repeat at the top of a later message (None when there is none) and the refusal
-    when the stored state could not be read; an unreadable file is left in place, not cleared.
-    Clears the stored reason once it is fixed. Never raises."""
+def _candidate(call, info):
+    """What the line needs from one local fallback, kept to the shapes it can print."""
+    reported = call.get("reported")
+    failed = call.get("failedCheck")
+    day = launch_day(info)
+    return {
+        "reason": call["reason"],
+        "by": call.get("by"),
+        "cloudVersion": call["cloudVersion"] if isinstance(call.get("cloudVersion"), str) else None,
+        "advisorVersion": call["advisorVersion"] if isinstance(call.get("advisorVersion"), str) else None,
+        "reported": reported if cloud_ready.valid_reported(reported) else None,
+        "failedCheck": failed if isinstance(failed, list) and all(isinstance(p, str) for p in failed) else None,
+        "observedOn": None if day is None else day.isoformat(),
+    }
+
+
+def _fallbacks(records, launches):
+    """The local fallbacks since the last build that went to the cloud, oldest start first. A launch
+    counts once it has started. One whose cloud session is unconfirmed may not exist, so it is
+    neither a cloud build nor a fallback."""
+    started_at = started_indexes(records)
+    reserved = {
+        rec["launchId"]: rec for rec in records
+        if isinstance(rec, dict) and rec.get("event") == "reserved"
+    }
+    deciding = []
+    for launch_id, info in launches.items():
+        # axis: an unconfirmed cloud launch does not clear the line — see bite-proof record wo_a_launch_report
+        if not info["started"] or info.get("cloudSessionUnconfirmed"):
+            continue
+        call = report_place_call(reserved.get(launch_id), info["place"])
+        if decides_still(call):
+            deciding.append((started_at.get(launch_id, info["reservedIndex"]), call, info))
+    deciding.sort(key=lambda entry: entry[0])
+    # axis: only the fallbacks after the last confirmed cloud launch count — see bite-proof record wo_a_launch_report
+    last_cloud = max((at for at, (_pos, call, _info) in enumerate(deciding)
+                      if call.get("place") == ll.PLACE_CLOUD), default=-1)
+    return [_candidate(call, info) for _pos, call, info in deciding[last_cloud + 1:]]
+
+
+def _still_fixed(candidate, now, cwd, root):
+    """True when this fallback's reason reads fixed now. Readiness that could not be read fixes nothing."""
+    if now is None:
+        return False
     try:
-        path = _still_path(cwd, root)
-        state = _read_still(path)
-        if state is None:
+        return _fixed(candidate, now, cwd, root)
+    except Exception:
+        return False
+
+
+def still_check(repo_root, *, root=None, readiness_fn=None):
+    """The line to repeat at the top of a later message (None when there is none), and the refusal
+    when the launch ledger could not be read. Nothing is saved: the line is worked out from the
+    ledger and from the cloud's readiness now. Never raises."""
+    try:
+        try:
+            read = ll.read(repo_root)
+        except Exception:
+            # a reader that breaks leaves the ledger's state unknown: refuse, never read it as no reminder
+            return {"line": None, "refused": STILL_LEDGER_UNREADABLE}
+        if read["state"] == "missing":
             return {"line": None, "refused": None}
-        if state is _UNREADABLE:
-            return {"line": None, "refused": STILL_UNREADABLE}
-        if state is False:
-            _remove(path)
+        if read["state"] != "ok":
+            return {"line": None, "refused": STILL_LEDGER_UNREADABLE}
+        folded = ll.fold(read["records"])
+        if not folded["ok"]:
+            return {"line": None, "refused": STILL_LEDGER_UNREADABLE}
+        candidates = _fallbacks(read["records"], folded["launches"])
+        if not candidates:
             return {"line": None, "refused": None}
         try:
-            now = (readiness_fn or cloud_ready.readiness)(cwd, reported=None, root=root)
-            fixed = _fixed(state, now, cwd, root)
+            now = (readiness_fn or cloud_ready.readiness)(repo_root, reported=None, root=root)
         except Exception:
-            fixed = False
-        if fixed:
-            _remove(path)
+            now = None
+        # axis: a fixed candidate is skipped, so the next one still standing shows — see bite-proof record wo_a_launch_report
+        standing = [c for c in candidates if not _still_fixed(c, now, repo_root, root)]
+        if not standing:
             return {"line": None, "refused": None}
-        code = state["reason"]
-        words = _words(code, state.get("cloudVersion"), state.get("advisorVersion"))
-        failed = state.get("failedCheck")
-        # after a failed check the reminder carries the recheck step, as the launch report does
+        # the reason first in the cloud check's order; of equals, the one that carries the recheck
+        # step, then the latest started (the list runs oldest first, so it is walked from the end)
+        shown = min(reversed(standing), key=lambda c: (_RANK[c["reason"]], c["failedCheck"] is None))
+        code = shown["reason"]
+        words = _words(code, shown["cloudVersion"], shown["advisorVersion"])
+        failed = shown["failedCheck"]
+        # after a failed check the line carries the recheck step, as the launch report does
         fix = REASONS[code]["short"] if failed is None else fix_text(
             {"reason": code, "failedCheck": failed})
         return {"line": "%s\n%s %s" % (_STILL_HEADER, words, fix), "refused": None}
@@ -297,14 +307,6 @@ def still_check(cwd, *, root=None, today=None, readiness_fn=None):
         return {"line": None, "refused": None}
 
 
-def still_line(cwd, *, root=None, today=None, readiness_fn=None):
+def still_line(repo_root, *, root=None, readiness_fn=None):
     """The line to repeat at the top of a later message, or None. Never raises."""
-    return still_check(cwd, root=root, today=today, readiness_fn=readiness_fn)["line"]
-
-
-def clear_still(cwd, *, root=None):
-    """Forget the stored reason. Never raises."""
-    try:
-        return _remove(_still_path(cwd, root))
-    except Exception:
-        return {"action": "refused"}
+    return still_check(repo_root, root=root, readiness_fn=readiness_fn)["line"]

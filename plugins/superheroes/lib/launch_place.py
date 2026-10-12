@@ -108,8 +108,8 @@ def _canon_outside(cwd, root):
 
 
 def _specs_outside(cwd, root):
-    """True unless the doc policy, the recorded mode and the project store all say the specs are
-    in the repository. Read strictly: a policy that is missing, malformed or too new counts as
+    """True unless the doc policy and the project store say the specs are in the repository; the
+    storage mode does not decide it. Read strictly: a policy that is missing, malformed or too new counts as
     outside, and nothing is created, written or backfilled."""
     try:
         with open(architect_config.policy_path(cwd, root), encoding="utf-8") as fh:
@@ -125,9 +125,6 @@ def _specs_outside(cwd, root):
             return True
         location = policy.get("location")
         if not isinstance(location, str) or architect_config._safe_location(location) != location:
-            return True
-        # axis: the specs are in the repository only when the recorded mode is in-repo — see bite-proof record wo_a_place_call
-        if mode_registry.resolve(cwd, root, persist_backfill=False)["mode"] != mode_registry.IN_REPO:
             return True
         docs = os.path.join(mode_registry.project_store_dir(cwd, root), "docs")
         # axis: the specs are in the repository only when the project store holds none — see bite-proof record wo_a_place_call

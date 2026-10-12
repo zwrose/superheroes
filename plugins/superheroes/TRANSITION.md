@@ -90,8 +90,7 @@ These retirements ship in the same release as the review record, and never apart
 
 - Once cloud builds are switched on, the launcher decides where each build runs: the setting gives the default, and a launch word overrides it for one build.
 - A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
-- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message. `still` refuses with `still-state-unreadable` (exit 1) when the stored state cannot be read, and it keeps the file. The reminder `report` records comes from every launch in the ledger, in the order they started, whichever batch is reported.
-- A new state file, `cloud-still.json`, sits in the project store's `state` folder.
+- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON fields `report` and `lanes`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message. `still` reads the launch ledger and the cloud's readiness each time and saves nothing. When the ledger cannot be read, `still` refuses with `still-ledger-unreadable` (exit 1).
 
 ### Workhorse: building in a cloud session
 
@@ -100,7 +99,7 @@ These retirements ship in the same release as the review record, and never apart
 - When the `gh` probe reports `channel: "rest"`, the preflight write check goes through the session's GitHub tools, and `cloud_builder.py github-channel` names the channel for the rest of the build.
 - GitHub reads use the REST stand-ins (`cloud_builder.py pr-json`, `cloud_builder.py repo-json`, `gh api`) in place of `gh pr`, `gh issue` and `gh repo` reads. Stack link and stack check read GraphQL, so a cloud builder of a stack layer leaves them to the advisor and says so in its handback.
 - A cloud builder asks the advisor with a builder note on its issue (`cloud_builder.py note`), waits in-turn for the reply window `rubric/review-discipline.md` § Size sets, and with no answer commits, pushes and parks.
-- A cloud build hands back only with its review record written. When the writer refuses with `review-record-gh-failed`, or writes a record whose final commit the session reported instead of reading it from the PR, the builder posts a review receipt naming the head it reviewed, leaves the PR not ready, and parks naming the review record as missing.
+- A cloud build hands back only with its review record written. In a cloud session (`CLAUDE_CODE_REMOTE` is `true`), `review_record.py` reads the repository, the pull request and its issue through `gh api` REST, and takes the issue the pull request closes from the body's first line (`Closes #N`) in place of GitHub's closing references. When the writer refuses with `review-record-gh-failed`, or writes a record whose final commit the session reported instead of reading it from the PR, the builder posts a review receipt naming the head it reviewed, leaves the PR not ready, and parks naming the review record as missing.
 - `rubric/review-discipline.md` § Size names the builder note as how a cloud builder messages the advisor at the size tripwire.
 
 ### Showrunner: builder notes in the wave watch

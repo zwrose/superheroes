@@ -58,7 +58,7 @@ Before a launch, judge from the build's order whether it needs anything only the
 ### How each check reads for a cloud launch
 
 - `engine-auth`: unchanged. It probes this machine's engines. Whether the cloud can run the reviewer is the launcher's readiness check, not this one.
-- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. The launcher's refusals `launch-cloud-base-not-on-remote` and `launch-cloud-base-remote-unchecked` are launch refusals, a no-go you clear like any other launcher refusal. They are not a place decision, and the place call's never-held, never-dropped rule covers only where a launched build runs.
+- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. When the launcher's own cloud base check refuses with `launch-cloud-base-not-on-remote` or `launch-cloud-base-remote-unchecked`, the build is not a no-go: it falls back to the owner's machine (`fellBack: true`), and the place call records why. `launch-cloud-base-remote-unchecked` reads as an unreachable cloud, and `launch-cloud-base-not-on-remote` as a build that needs its base commit, which only this machine has.
 - `disjoint-surfaces`: unchanged. A cloud lane takes no slot.
 - `workspace-isolation`: a cloud launch makes no worktree on this machine. The cloud session works in its own copy of the repository, so the check passes with that reason.
 - `standing-rulings`: unchanged. The launcher establishes them.
@@ -74,7 +74,7 @@ Once every launch in the batch has returned, run `lib/launcher.py report --repo-
 
 ### Until the cloud is fixed: the "Still on your machine" line
 
-`report` remembers the reason when builds ran on the owner's machine because the cloud was not ready. Before **every** later message to the owner, run `lib/launcher.py still --repo-root <root>`. While its JSON field `line` is not null, open the message with that line. Never write the line by hand.
+`still` works the reason out each time it runs, from the launch ledger and the cloud's readiness at that moment; nothing is saved. Before **every** later message to the owner, run `lib/launcher.py still --repo-root <root>`. While its JSON field `line` is not null, open the message with that line. Never write the line by hand.
 
 How it knows the reason is fixed:
 
