@@ -394,3 +394,16 @@ Green:
 .                                                                        [100%]
 1 passed in 5.22s
 ```
+
+## Review-round elements (builder-run, after the review loop)
+
+The review loop's fixer rounds added four guards to `plugins/superheroes/lib/review_record.py`. The builder proved each one in a detached probe worktree at `5bf3d5a60`, in the same shape as above: one targeted edit, the single node run alone (red), the inverse edit with the file confirmed byte-equal and `git status --porcelain` empty, then the node again (green). Command: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-probe -m pytest '<node>' -q -p no:cacheprovider`. Declared set: H3–H6.
+
+| ID | Guarded element | Axis | Neutralization | Node (`R::`) | Red | Green |
+|---|---|---|---|---|---|---|
+| H3 | `_lane_basis` head re-check | a file list read while the PR head moved is unavailable | `if isinstance(paths, list) and not (after and after.get("head") == final_sha):` → `if False and …` | `test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_unavailable_basis` | `AssertionError: assert ('lane rule ov...changed files' == 'unavailable'` · `1 failed` | `1 passed` |
+| H4 | `render` claim guard on composed prose | composed prose that claims no bugs is refused | `… for l in lines if l is not floor_line` → `… for l in lines if False` | `test_composed_prose_claiming_no_bugs_is_refused_on_a_below_floor_record` | `Failed: DID NOT RAISE Refusal` · `1 failed` | `1 passed` |
+| H5 | `render` shed loop | an oversized body sheds lane-basis evidence until it fits | `r = dict(r, laneBasis=step(r["laneBasis"]))` → `r = dict(r, laneBasis=r["laneBasis"])` | `test_four_byte_paths_across_many_areas_render_under_the_cap_with_the_floor_full` | `review_record.Refusal: ('review-record-too-large', '191910 characters')` · `1 failed` | `1 passed` |
+| H6 | `render` floor-line exemption | the Risk floor line's literal paths never trip the claim guard | `… for l in lines if l is not floor_line` → `"\n".join(lines)` | `test_a_below_floor_oversized_record_with_a_bug_free_path_publishes_not_reviewed` | `review_record.Refusal: ('review-record-forbidden-claim', 'bug-free')` · `1 failed` | `1 passed` |
+
+H4 and H6 neutralize the same line in opposite directions: H4 checks no line and H6 checks every line. One proves the guard still bites on prose, and the other proves the exemption is what lets literal data through.
