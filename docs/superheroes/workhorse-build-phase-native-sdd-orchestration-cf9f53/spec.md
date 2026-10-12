@@ -7,6 +7,7 @@ issue: 87
 size: large
 status: approved
 gates: {review: passed}
+approved: "2026-06-25"
 producedBy: "the-architect@0.2.0"
 created: "2026-06-22"
 updated: "2026-06-25"

@@ -7,6 +7,7 @@ issue: 90
 size: medium
 status: approved
 gates: {review: passed}
+approved: "2026-06-26"
 producedBy: "the-architect@0.2.0"
 created: "2026-06-25"
 updated: "2026-06-26"

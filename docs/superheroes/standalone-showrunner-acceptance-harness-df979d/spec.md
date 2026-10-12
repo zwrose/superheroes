@@ -7,6 +7,7 @@ issue: null
 size: medium
 status: approved
 gates: {review: passed}
+approved: "2026-07-02"
 producedBy: "the-architect@0.3.0"
 created: "2026-07-01"
 updated: "2026-07-02"
