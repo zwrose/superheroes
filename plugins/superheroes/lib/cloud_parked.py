@@ -1,11 +1,14 @@
 """The advisor's side of a cloud build parked by a lapsed reviewer pass.
 
-  cloud_parked.py notice --repo-root D --repo O/N --pr P [--today YYYY-MM-DD]
+  cloud_parked.py notice --repo-root D --repo O/N --pr P
                           is this PR parked by the lapsed pass? If so, the words for the owner, and
-                          the PR is recorded
-  cloud_parked.py send-back --repo-root D [--today YYYY-MM-DD]
-                          for each recorded PR whose pass is renewed: send it back for its review,
-                          unless it closed or the owner already let it through
+                          the PR is recorded with the day it was parked
+  cloud_parked.py send-back --repo-root D
+                          lists the due PRs: each recorded PR whose own builder account's pass was
+                          renewed after the day it was parked, still open, not let through by the
+                          owner, and with a lane session to send to. It records nothing as sent.
+  cloud_parked.py sent --repo-root D --repo O/N --pr P
+                          records one PR as sent back, after its message was delivered
 
 Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
@@ -28,8 +31,10 @@ NOTICE_TEXT = ("#%d is parked. The reviewer pass lapsed mid-build, so its review
                "Renew the pass and I'll send it back for review.")
 SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's review now, as your "
                      "review step says, then hand back as usual.")
-_ENTRY_KEYS = ("repo", "pr", "parkedCommentId", "parkedAt", "lapseSeen", "noticedAt", "outcome")
+_ENTRY_KEYS = ("repo", "pr", "parkedOn", "outcome")
+_NO_RECORD = ("review-record-missing", "review-record-unreadable")
 _CLOSES_RE = re.compile(r"Closes #(\d+)")
+_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
 
 def _sib(name):
@@ -76,7 +81,7 @@ def _load(repo_root, env):
     if not (isinstance(entries, list) and all(
             isinstance(e, dict) and set(e) == set(_ENTRY_KEYS) and isinstance(e["repo"], str)
             and isinstance(e["pr"], int) and e["outcome"] in (None,) + OUTCOMES
-            and (e["lapseSeen"] is None or cs._date_ok(e["lapseSeen"])) for e in entries)):
+            and cs._date_ok(e["parkedOn"]) for e in entries)):
         return _refusal("parked-state-unreadable"), None
     return path, entries
 
@@ -90,19 +95,34 @@ def _save(path, entries):
     return True
 
 
-def _lapses(repo_root, env):
-    """The setup record's lapse date; None when the record is missing, unreadable or has no date."""
+def _lapses(repo_root, env, config_dir=None):
+    """The lapse date in the setup record of the account the lane ran on: the account its `config_dir`
+    names when that is a non-empty string, else the caller's own. None when the account cannot be
+    resolved or the record is missing, unreadable or has no date."""
     cs = _sib("cloud_setup")
+    if isinstance(config_dir, str) and config_dir:
+        env = dict(env, **{_sib("config_dir").CONFIG_DIR_ENV: config_dir})
     account = cs.launching_account(env=env, cwd=repo_root)
     record = cs.read(repo_root, account)["record"] if account else None
     lapses = record.get("passLapses") if isinstance(record, dict) else None
     return lapses if cs._date_ok(lapses) else None
 
 
-def _renewed(seen, current, today):
-    """Renewed: the pass now lapses on a date that is not past, and later than the one seen."""
-    return (current is not None and _sib("cloud_check")._lapses_ok(current, today)
-            and (seen is None or current > seen))
+def _renewed(parked_on, current, today):
+    """Renewed: the pass now lapses on a date that is not past, and later than the day it was parked."""
+    return (_sib("cloud_setup")._date_ok(current) and _sib("cloud_check")._lapses_ok(current, today)
+            and current > parked_on)
+
+
+def _park_day(created_at):
+    """The UTC `YYYY-MM-DD` of a comment's `created_at`; None when it is missing or not an ISO timestamp."""
+    if not (isinstance(created_at, str) and _TIMESTAMP_RE.fullmatch(created_at)):
+        return None
+    try:
+        stamp = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp.astimezone(datetime.timezone.utc).date().isoformat()
 
 
 def _comments(repo, pr, env, run):
@@ -124,9 +144,12 @@ def _pull(repo, pr, env, run):
 
 
 def _let_through(repo, pr, env, run):
-    """The owner already let it through: its latest review record names missing reviews, all with go-aheads."""
+    """True when the owner already let it through: its latest review record names missing reviews, all
+    with go-aheads. None when the record could not be read for a reason other than there being none."""
     got = _sib("review_record").read(pr, repo=repo, readers={"list_comments": lambda p, r: _comments(r, p, env, run)})
-    missing = got.get("missingReviews") if got.get("ok") else None
+    if not got.get("ok"):
+        return False if got.get("reason") in _NO_RECORD else None
+    missing = got.get("missingReviews")
     return bool(missing) and isinstance(missing, list) and all(
         isinstance(m, dict) and m.get("goAhead") is not None for m in missing)
 
@@ -142,7 +165,7 @@ def _lane(repo_root, issue, env):
 def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     """Is this PR parked by the lapsed pass? Records it when so; says nothing about any other PR."""
     env = os.environ if env is None else env
-    bad, pr, day = _check_args(repo, pr, today)
+    bad, pr, _ = _check_args(repo, pr, today)
     if bad:
         return bad
     path, entries = _load(repo_root, env)
@@ -156,17 +179,18 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     if not parks:
         return {"ok": True, "kind": "not-lapsed-pass", "pr": pr, "text": None}
     if not any(e["repo"] == repo and e["pr"] == pr for e in entries):
-        last = parks[-1]
-        entries.append({"repo": repo, "pr": pr, "parkedCommentId": last.get("id"),
-                        "parkedAt": last.get("created_at"), "lapseSeen": _lapses(repo_root, env),
-                        "noticedAt": day.isoformat(), "outcome": None})
+        parked_on = _park_day(parks[-1].get("created_at"))
+        if parked_on is None:
+            return _refusal("park-date-unreadable")
+        entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None})
         if not _save(path, entries):
             return _refusal("parked-state-unwritable")
     return {"ok": True, "kind": "lapsed-pass", "pr": pr, "text": NOTICE_TEXT % pr}
 
 
 def send_back(repo_root, today=None, *, env=None, run=None):
-    """Decide each undecided entry whose pass is renewed: sent back, closed, or let through."""
+    """The undecided entries due for their review. A closed or let-through entry is decided here; a due
+    one is listed and stays undecided until `sent` records it."""
     env = os.environ if env is None else env
     bad, _, day = _check_args(None, None, today)
     if bad:
@@ -174,43 +198,77 @@ def send_back(repo_root, today=None, *, env=None, run=None):
     path, entries = _load(repo_root, env)
     if entries is None:
         return path
-    current = _lapses(repo_root, env)
-    out = {"ok": True, "lapses": current, "sendBack": [], "skipped": [], "unread": [], "notRenewed": []}
+    out = {"ok": True, "sendBack": [], "skipped": [], "unread": [], "notRenewed": [], "noLane": []}
+    changed = False
     for e in (e for e in entries if e["outcome"] is None):
-        if not _renewed(e["lapseSeen"], current, day):
-            out["notRenewed"].append(e["pr"])
-            continue
         pull = _pull(e["repo"], e["pr"], env, run)
         if pull is None:
             out["unread"].append({"pr": e["pr"], "reason": "pr-read-failed"})
-        elif pull["state"] == "closed" or pull.get("merged") is True:
-            e["outcome"] = "closed"
-        elif _let_through(e["repo"], e["pr"], env, run):
-            e["outcome"] = "owner-let-through"
-        else:
-            e["outcome"] = "sent-back"
-            first = (pull.get("body") or "").splitlines()[:1]
-            hit = _CLOSES_RE.match(first[0]) if first else None
-            issue = int(hit.group(1)) if hit else None
-            launch_id, lane = _lane(repo_root, issue, env) if issue else (None, {})
-            out["sendBack"].append({"pr": e["pr"], "issue": issue, "launchId": launch_id,
-                                    "cloudSessionName": lane.get("cloudSessionName"),
-                                    "configDir": lane.get("configDir"), "message": SEND_BACK_MESSAGE})
-        if e["outcome"] in ("closed", "owner-let-through"):
+            continue
+        if pull["state"] == "closed" or pull.get("merged") is True:
+            e["outcome"], changed = "closed", True
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
-    if (out["sendBack"] or out["skipped"]) and not _save(path, entries):
+            continue
+        first = (pull.get("body") or "").splitlines()[:1]
+        hit = _CLOSES_RE.match(first[0]) if first else None
+        issue = int(hit.group(1)) if hit else None
+        launch_id, lane = _lane(repo_root, issue, env) if issue else (None, {})
+        if not _renewed(e["parkedOn"], _lapses(repo_root, env, lane.get("configDir")), day):
+            out["notRenewed"].append(e["pr"])
+            continue
+        through = _let_through(e["repo"], e["pr"], env, run)
+        if through is None:
+            out["unread"].append({"pr": e["pr"], "reason": "review-record-read-failed"})
+            continue
+        if through:
+            e["outcome"], changed = "owner-let-through", True
+            out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
+            continue
+        if not lane.get("cloudSessionName"):
+            out["noLane"].append({"pr": e["pr"], "issue": issue})
+            continue
+        out["sendBack"].append({"pr": e["pr"], "repo": e["repo"], "issue": issue, "launchId": launch_id,
+                                "cloudSessionName": lane["cloudSessionName"],
+                                "configDir": lane.get("configDir"), "message": SEND_BACK_MESSAGE})
+    if changed and not _save(path, entries):
         return _refusal("parked-state-unwritable")
     return out
+
+
+def sent(repo_root, repo, pr, *, env=None):
+    """Record one parked PR as sent back, once its message was delivered. Saying it twice changes nothing."""
+    env = os.environ if env is None else env
+    bad, pr, _ = _check_args(repo, pr, None)
+    if bad:
+        return bad
+    if repo is None:
+        return _refusal("repo-invalid")
+    if pr is None:
+        return _refusal("pr-invalid")
+    path, entries = _load(repo_root, env)
+    if entries is None:
+        return path
+    found = [e for e in entries if e["repo"] == repo and e["pr"] == pr]
+    if not found:
+        return _refusal("not-parked")
+    entry = found[0]
+    if entry["outcome"] in ("closed", "owner-let-through"):
+        return _refusal("already-decided")
+    if entry["outcome"] == "sent-back":
+        return {"ok": True, "action": "unchanged"}
+    entry["outcome"] = "sent-back"
+    if not _save(path, entries):
+        return _refusal("parked-state-unwritable")
+    return {"ok": True, "action": "written"}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="cloud_parked.py")
     verbs = parser.add_subparsers(dest="verb", required=True)
-    for name in ("notice", "send-back"):
+    for name in ("notice", "send-back", "sent"):
         sub = verbs.add_parser(name)
         sub.add_argument("--repo-root", required=True)
-        sub.add_argument("--today")
-        if name == "notice":
+        if name != "send-back":
             sub.add_argument("--repo", required=True)
             sub.add_argument("--pr", required=True)
     try:
@@ -219,9 +277,11 @@ def main(argv=None):
         sys.stdout.write(json.dumps(_refusal("usage")) + "\n")
         return 0 if exc.code == 0 else 1
     if args.verb == "notice":
-        result = notice(args.repo_root, args.repo, args.pr, args.today)
+        result = notice(args.repo_root, args.repo, args.pr)
+    elif args.verb == "sent":
+        result = sent(args.repo_root, args.repo, args.pr)
     else:
-        result = send_back(args.repo_root, args.today)
+        result = send_back(args.repo_root)
     sys.stdout.write(json.dumps(result) + "\n")
     return 1 if result.get("ok") is False else 0
 
