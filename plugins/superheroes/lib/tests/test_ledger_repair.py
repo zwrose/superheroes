@@ -131,6 +131,7 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
     assert _events(repo, launch_id) == ["reserved", "refused"]
     refused = [r for r in ll.read(repo)["records"] if r["event"] == "refused"][0]
     assert refused["stage"] == "never-started" and refused["reason"] == "never-started"
+    assert refused["evidence"] == "the launch command never ran"
 
 
 # --- refusals ----------------------------------------------------------------------------------
@@ -428,6 +429,24 @@ def test_cli_repair_lane_refuses_an_unreadable_pending_file(tmp_path, monkeypatc
     assert code == 1
     assert out == {"ok": False, "reason": "pending-file-unreadable"}
     assert _lane(repo, "c1")["started"] is False
+
+
+def test_cli_repair_lane_refuses_a_null_pending_file_without_closing_the_lane(
+    tmp_path, monkeypatch, capsys,
+):
+    repo = _cloud_lane(tmp_path, monkeypatch)
+    pending_file = tmp_path / "pending.json"
+    pending_file.write_text("null", encoding="utf-8")
+    before = ll.read(repo)["records"]
+    code = L.main([
+        "repair-lane", "--repo-root", repo, "--launch-id", "c1",
+        "--pending-file", str(pending_file), "--evidence", "never ran",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert out == {"ok": False, "reason": "pending-started-invalid"}
+    assert ll.read(repo)["records"] == before
+    assert _lane(repo, "c1")["terminal"] is False
 
 
 # --- the slot remedy ---------------------------------------------------------------------------

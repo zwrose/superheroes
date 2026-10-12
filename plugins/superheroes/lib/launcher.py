@@ -3528,6 +3528,10 @@ def _cli_repair_lane(args):
                 pending = json.load(fh)
         except (OSError, ValueError):
             return _fail("pending-file-unreadable")
+        if pending is None:
+            # A file holding JSON `null` decodes to the same None as an omitted file; an
+            # explicit file that carries no record must refuse, not fall to terminalization.
+            return _fail("pending-started-invalid")
     return ll.repair_never_started(
         args.repo_root, args.launch_id, pending_started=pending, evidence=args.evidence,
     )

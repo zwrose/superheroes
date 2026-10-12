@@ -2048,6 +2048,8 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "stage": park_stage,
                 "reason": park_reason,
             }
+            if isinstance(evidence, str) and evidence.strip():
+                record["evidence"] = evidence
 
         if reaped:
             record["reaped"] = True
