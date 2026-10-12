@@ -562,3 +562,49 @@ def test_with_a_lapsed_pass_the_owner_hears_it_on_the_report_the_still_line_and_
     assert words in report
     assert still.startswith("Still on your machine") and words in still
     assert parked.startswith("#10 is parked.") and "Renew the pass" in parked
+
+
+# ---------------------------------------------------------------- review-round fixes
+
+
+def test_a_pr_whose_closing_line_uses_another_accepted_form_still_finds_its_lane(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    for pr, first in ((10, "Fixes: #101"), (11, "Closes %s#101." % REPO)):
+        w.gh.comments[pr] = [_lapsed_comment(pr)]
+        w.gh.pulls[pr] = {"state": "open", "merged": False, "body": first + "\n\nthe work"}
+        assert _notice(w, pr)["kind"] == "lapsed-pass"
+    _renew(w)
+    out = _send(w)
+    assert out["noLane"] == [] and [s["pr"] for s in out["sendBack"]] == [10, 11]
+
+
+def test_a_default_account_lane_recording_the_default_root_resolves_the_default_account(w):
+    _lane(w, "l-a", 101, "session-a", "a", config_dir=str(w.home / ".claude"))
+    _park(w, 10, issue=101)
+    _renew(w)
+    assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
+
+
+def test_a_renewal_in_another_environment_does_not_release_the_lanes_pr(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    got = CS.record_check(
+        w.repo, root=w.store, account=ACCOUNT, environment="other-environment", plugin_version="1.2.3",
+        picks_up_version=False, calibration_stamp=STAMP, calibration_date="2026-10-01",
+        pass_lapses=FUTURE, checked_at="2026-10-01")
+    assert got["action"] == "written", got
+    out = _send(w)
+    assert out["sendBack"] == [] and out["notRenewed"] == [10]
+
+
+def test_an_unreadable_launch_ledger_leaves_a_renewed_pr_unread_not_without_a_lane(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    path = ll.ledger_path(w.repo, w.env)["path"]
+    with open(path, "ab") as fh:
+        fh.write(b"not json\n{\"event\": \"x\"}\n")
+    out = _send(w)
+    assert out["sendBack"] == [] and out["noLane"] == []
+    assert out["unread"] and out["unread"][0]["pr"] == 10
+    assert _entries(w)[0]["outcome"] is None

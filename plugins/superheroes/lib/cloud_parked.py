@@ -27,7 +27,6 @@ SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's revi
                      "review step says, then hand back as usual.")
 _ENTRY_KEYS = ("repo", "pr", "parkedOn", "outcome")
 _NO_RECORD = ("review-record-missing", "review-record-unreadable")
-_CLOSES_RE = re.compile(r"Closes #(\d+)")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
 
@@ -92,15 +91,26 @@ def _save(path, entries):
     return True
 
 
-def _lapses(repo_root, env, config_dir=None):
+def _lapses(repo_root, env, config_dir=None, environment=None):
     """The lapse date in the setup record of the account the lane ran on: the account its `config_dir`
-    names when that is a non-empty string, else the caller's own. None when the account cannot be
-    resolved or the record is missing, unreadable or has no date."""
+    names when that is a non-empty string, else the caller's own. A `config_dir` that is the default
+    root is the default account (no override), as the launcher records it. When `environment` is a
+    non-empty string the record must name that environment. None when the account cannot be resolved
+    or the record is missing, unreadable, for another environment or has no date."""
     cs = _sib("cloud_setup")
+    cd = _sib("config_dir")
     if isinstance(config_dir, str) and config_dir:
-        env = dict(env, **{_sib("config_dir").CONFIG_DIR_ENV: config_dir})
+        bare = {k: v for k, v in env.items() if k != cd.CONFIG_DIR_ENV}
+        default = cd.resolve(bare, repo_root)
+        if default is not None and os.path.normpath(config_dir) == os.path.normpath(default):
+            env = bare
+        else:
+            env = dict(env, **{cd.CONFIG_DIR_ENV: config_dir})
     account = cs.launching_account(env=env, cwd=repo_root)
     record = cs.read(repo_root, account)["record"] if account else None
+    if isinstance(record, dict) and isinstance(environment, str) and environment \
+            and record.get("environment") != environment:
+        return None
     lapses = record.get("passLapses") if isinstance(record, dict) else None
     return lapses if cs._date_ok(lapses) else None
 
@@ -151,12 +161,22 @@ def _let_through(repo, pr, env, run):
         isinstance(m, dict) and m.get("goAhead") is not None for m in missing)
 
 
-def _lane(repo_root, issue, env):
-    """(launchId, folded lane) of the newest cloud lane for the issue; (None, {}) when none."""
+def _lane(repo_root, issues, env):
+    """(launchId, folded lane, reason) of the newest cloud lane for the issues; (None, {}, None) when a
+    readable ledger has none. `reason` names a ledger that could not be read or folded."""
     ll = _sib("launch_ledger")
-    folded = ll.fold(ll.read(repo_root, env=env)["records"])["launches"]
-    lanes = [(i["reservedIndex"], k, i) for k, i in folded.items() if i["place"] == "cloud" and i["issue"] == issue]
-    return (max(lanes, key=lambda t: t[0])[1:] if lanes else (None, {}))
+    got = ll.read(repo_root, env=env)
+    if got["state"] not in ("ok", "missing", "tornTail"):
+        return None, {}, "launch-ledger-unreadable"
+    fold = ll.fold(got["records"])
+    if not fold.get("ok", True):
+        return None, {}, "launch-ledger-fold-failed"
+    lanes = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
+             if i["place"] == "cloud" and i["issue"] in issues]
+    if not lanes:
+        return None, {}, None
+    best = max(lanes, key=lambda t: t[0])
+    return best[1], best[2], None
 
 
 def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
@@ -206,11 +226,11 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             e["outcome"], changed = "closed", True
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
             continue
-        first = (pull.get("body") or "").splitlines()[:1]
-        hit = _CLOSES_RE.match(first[0]) if first else None
-        issue = int(hit.group(1)) if hit else None
-        launch_id, lane = _lane(repo_root, issue, env) if issue else (None, {})
-        if not _renewed(e["parkedOn"], _lapses(repo_root, env, lane.get("configDir")), day):
+        issues = _sib("review_record").closing_issues(pull.get("body"), e["repo"])
+        launch_id, lane, ledger_reason = _lane(repo_root, issues, env) if issues else (None, {}, None)
+        issue = lane.get("issue") if lane else (issues[0] if issues else None)
+        lapses = _lapses(repo_root, env, lane.get("configDir"), lane.get("cloudEnvironment"))
+        if not _renewed(e["parkedOn"], lapses, day):
             out["notRenewed"].append(e["pr"])
             continue
         through = _let_through(e["repo"], e["pr"], env, run)
@@ -220,6 +240,9 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         if through:
             e["outcome"], changed = "owner-let-through", True
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
+            continue
+        if ledger_reason:
+            out["unread"].append({"pr": e["pr"], "reason": ledger_reason})
             continue
         if not lane.get("cloudSessionName"):
             out["noLane"].append({"pr": e["pr"], "issue": issue})
