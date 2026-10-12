@@ -165,7 +165,7 @@ Collect findings under these named smells; **every finding cites its smell by na
 
 Your dispatch names the risk areas this change touches. When it names none, or says risk areas are not set, write no break-it tests.
 
-For each touched area, write at least one **break-it test**: a new test file, in the project's own test framework and test folder, that tries to break the change on a named risky scenario in that area (for example, a payment charged twice on retry). The test must be deterministic, need no network, and target the code the diff changed. Write at most three break-it tests per review (the executor enforces the same cap as `MAX_RUNS` in `lib/break_it.py`). While under that cap, write at least one per touched area.
+For each touched area, write at least one **break-it test**: a new test file, in the project's own test framework and test folder, that tries to break the change on a named risky scenario in that area (for example, a payment charged twice on retry). The test must be deterministic, need no network, and target the code the diff changed. Write at most three break-it tests per review. While under that cap, write at least one per touched area.
 
 You never write the file into the repository. You deliver it as a finding, and the review loop runs it in a throwaway copy of the change and records the run under your name. A failing run is your finding. A passing run means the change held, and the loop drops that finding. Writing break-it tests does not make you a maker of the change.
 

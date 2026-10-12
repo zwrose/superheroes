@@ -1,8 +1,8 @@
 import copy
 import hashlib
 import os
-import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -201,12 +201,17 @@ def _gone(pid):
 
 # T9
 # axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
-@pytest.mark.parametrize("detached", [False, True])
-def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached):
+# A detached worker that also clears its environment is contained by the Linux reaper only.
+@pytest.mark.parametrize("detached,clean_env", [
+    (False, False), (True, False),
+    pytest.param(True, True, marks=pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper"))])
+def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env):
     pidfile = tmp_path / "worker.pid"
     content = ("import os, subprocess\n"
-               "p = subprocess.Popen(['sleep', '60'], start_new_session=%s)\n"
-               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % detached
+               "p = subprocess.Popen([%r, '60'], start_new_session=%s%s)\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n"
+               ) % (shutil.which("sleep"), detached, ", env={}" if clean_env else "")
     block = _block("tests/test_w.py", content,
                    run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
     record = break_it.run_one(str(repo), _head(repo), block)
@@ -285,38 +290,27 @@ def test_t12_intercept_drops_a_passed_run_and_keeps_failed_and_not_run(repo):
     assert all(k["breakItRun"]["role"] == break_it.ROLE for k in kept)
 
 
-def test_run_cap_matches_the_agent_statement():
-    text = open(os.path.join(_LIB, "..", "agents", "test-role.md"), encoding="utf-8").read()
-    words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
-    m = re.search(r"Write at most (\w+) break-it tests per review", text)
-    assert m, "agents/test-role.md no longer states the break-it cap"
-    stated = words.get(m.group(1).lower(), m.group(1))
-    assert stated == break_it.MAX_RUNS or stated == str(break_it.MAX_RUNS)
-
-
 @pytest.mark.parametrize("run", [
     "sh -c 'printf probe | wc -c'", "bash -c 'x'", "/bin/dash -c x", "zsh -c x", "ksh -c x",
-    "mksh -c x", "fish -c x", "busybox sh -c x", "env sh -c x", "env -i FOO=1 bash -c x",
-    "FOO=1 env /usr/bin/env zsh -c x"])
+    "mksh -c x", "fish -c x", "busybox sh -c x", "FOO=1 sh -c x"])
 def test_parse_command_refuses_shell_interpreters(run):
     assert break_it.parse_command(run) == (None, None, "run-shell-interpreter")
 
 
-def test_parse_command_allows_non_shell_env_prefix():
-    assert break_it.parse_command("env FOO=1 python t.py") == (["env", "FOO=1", "python", "t.py"], {}, None)
+@pytest.mark.parametrize("run", [
+    "env -u X sh -c 'x'", "env -S \"sh -c x\"", "env python t.py", "env FOO=1 python t.py",
+    "/usr/bin/env zsh -c x", "FOO=1 env -i bash -c x"])
+def test_parse_command_refuses_the_env_program(run):
+    assert break_it.parse_command(run) == (None, None, "run-env-program")
 
 
-def test_t12_intercept_caps_the_runs_and_refuses_a_path_mismatch(repo):
+def test_t12_intercept_runs_every_finding_and_refuses_a_path_mismatch(repo):
     calls = []
     findings = [_finding("t/%d.py" % i) for i in range(4)]
     kept, runs, exempt = break_it.intercept(findings, str(repo), "H",
                                             runner=_fake("failed", calls))
-    assert calls == ["t/%d.py" % i for i in range(break_it.MAX_RUNS)]
+    assert calls == ["t/%d.py" % i for i in range(4)]
     assert len(kept) == 4 and len(exempt) == 4
-    capped = kept[3]["breakItRun"]
-    assert (capped["outcome"], capped["reason"], capped["head"]) == ("not-run", "run-cap", "H")
-    assert set(capped) == set(runs[0]) - {"title", "file"}
-    assert capped["sha256"] is not None and capped["exitCode"] is None
     mismatch = _finding("t/real.py", file="t/other.py")
     calls.clear()
     kept, runs, exempt = break_it.intercept([mismatch], str(repo), "H", runner=_fake("passed", calls))

@@ -28,8 +28,6 @@ SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
-# The per-review run cap: the single home. agents/test-role.md states the same number for reviewer seats that cannot read the plugin; a drift test pins the two equal.
-MAX_RUNS = 3
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
@@ -44,6 +42,70 @@ _SHELL_PROGRAMS = frozenset(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish",
 _REGULAR_MODES = ("100644", "100755")
 _TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
 _DRAIN_JOIN = 5
+_TERM_GRACE = 5
+_REAPER = r"""
+import ctypes, os, signal, subprocess, sys, time
+
+status_fd = int(sys.argv[1])
+argv = sys.argv[2:]
+try:
+    ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+except Exception:
+    pass
+
+
+def descendants():
+    parent, state = {}, {}
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                with open("/proc/%s/stat" % name) as fh:
+                    tail = fh.read().rsplit(")", 1)[1].split()
+                parent[int(name)], state[int(name)] = int(tail[1]), tail[0]
+            except (OSError, IndexError, ValueError):
+                pass
+    found, frontier = [], [os.getpid()]
+    while frontier:
+        nxt = [p for p, pp in parent.items() if pp in frontier and p not in found]
+        found.extend(nxt)
+        frontier = nxt
+    return [p for p in found if state.get(p) != "Z"]
+
+
+def sweep():
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        live = descendants()
+        if not live:
+            return
+        for pid in live:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            while os.waitpid(-1, os.WNOHANG)[0]:
+                pass
+        except OSError:
+            pass
+        time.sleep(0.02)
+
+
+def on_term(signum, frame):
+    sweep()
+    os._exit(143)
+
+
+signal.signal(signal.SIGTERM, on_term)
+try:
+    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
+except OSError:
+    os.write(status_fd, b"E")
+    os._exit(127)
+code = child.wait()
+sweep()
+os._exit(code if code >= 0 else 128 - code)
+"""
 
 
 def _clean_env(extra=None):
@@ -89,7 +151,8 @@ def parse_block(text):
 
 def parse_command(run):
     """``(argv, env, None)`` for a plain argv command with optional leading ``NAME=value`` entries,
-    else ``(None, None, reason)``. Shell syntax is refused: the command is never run by a shell."""
+    else ``(None, None, reason)``. Shell syntax, shell interpreters and the ``env`` program are
+    refused: the command is never run by a shell."""
     if not isinstance(run, str) or not run.strip():
         return None, None, "run-empty"
     # axis: command substitution is refused on the raw text, before any tokenising — see bite-proof record wo_a_1800_break-it
@@ -115,25 +178,14 @@ def parse_command(run):
         tokens.pop(0)
     if not tokens:
         return None, None, "run-empty"
-    # axis: a shell interpreter, bare or behind an env prefix, is refused — its script argument is shell syntax — see bite-proof record wo_a_1800_break-it
-    if _selects_shell(tokens):
+    program = os.path.basename(tokens[0])
+    # axis: the env program is refused outright (-u and -S reach a shell the leading NAME=value entries never need) — see bite-proof record wo_a_1800_break-it
+    if program == "env":
+        return None, None, "run-env-program"
+    # axis: a shell interpreter is refused — its script argument is shell syntax — see bite-proof record wo_a_1800_break-it
+    if program in _SHELL_PROGRAMS:
         return None, None, "run-shell-interpreter"
     return tokens, env, None
-
-
-def _selects_shell(tokens):
-    """True when the command's program is a shell interpreter, directly or behind an ``env`` prefix."""
-    rest = list(tokens)
-    while rest:
-        name = os.path.basename(rest[0])
-        if name in _SHELL_PROGRAMS:
-            return True
-        if name != "env":
-            return False
-        rest.pop(0)
-        while rest and (rest[0].startswith("-") or _ENV_TOKEN.match(rest[0])):
-            rest.pop(0)
-    return False
 
 
 def _record(head, block, outcome, reason=None, exit_code=None, output=""):
@@ -190,9 +242,9 @@ class _TailDrain(threading.Thread):
         return _tail_text(self.buf, self.cut)
 
 
-def _kill_group(pid):
+def _kill_group(pid, sig=signal.SIGKILL):
     try:
-        os.killpg(pid, signal.SIGKILL)
+        os.killpg(pid, sig)
     except (ProcessLookupError, PermissionError):
         pass
 
@@ -293,12 +345,19 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         if refusal:
             return rec(OUTCOME_NOT_RUN, refusal)
     token = uuid.uuid4().hex
+    status_r, status_w = os.pipe()
     try:
-        proc = subprocess.Popen(argv, cwd=copy, env=_clean_env(dict(env, **{_TOKEN_ENV: token})),
+        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net and the only one on other hosts, where a descendant that both leaves the session and clears its environment is not contained.
+        proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=copy,
+                                env=_clean_env(dict(env, **{_TOKEN_ENV: token})),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                pass_fds=(status_w,))
     except (FileNotFoundError, PermissionError):
+        os.close(status_r)
+        os.close(status_w)
         return rec(OUTCOME_NOT_RUN, "command-not-found")
+    os.close(status_w)
     drain = _TailDrain(proc.stdout)
     drain.start()
     timed_out = False
@@ -306,18 +365,26 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_group(proc.pid)
-        proc.wait()
+        _kill_group(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=_TERM_GRACE)
+        except subprocess.TimeoutExpired:
+            pass
     finally:
         # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
         _kill_group(proc.pid)
         _kill_tagged(token)
+        proc.wait()
+        launch_failed = os.read(status_r, 1) == b"E"
+        os.close(status_r)
         drain.join(_DRAIN_JOIN)
         try:
             proc.stdout.close()
         except OSError:
             pass
     output = drain.tail()
+    if launch_failed and not timed_out:
+        return rec(OUTCOME_NOT_RUN, "command-not-found")
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
     code = proc.returncode
@@ -362,12 +429,12 @@ def _safe_run(runner, repo_root, head, block, **kwargs):
 
 
 def intercept(findings, repo_root, head, *, runner=run_one):
-    """Run the break-it findings and fold the results in. Returns ``(kept, runs, exempt_ids)``:
+    """Run every break-it finding (each run is bounded by its timeout; how many to write is the test
+    role's policy, stated in its agent file) and fold the results in. Returns ``(kept, runs, exempt_ids)``:
     ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
     not-run ones stamped with ``RUN_FIELD``; ``runs`` is one entry per break-it finding;
     ``exempt_ids`` holds ``id()`` of each stamped copy."""
     kept, runs, exempt_ids = [], [], set()
-    attempted = 0
     for finding in findings or []:
         if not isinstance(finding, dict):
             kept.append(finding)
@@ -379,16 +446,12 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             kept.append(copy)
             continue
         block, refusal = parse_block(copy.get("suggestion"))
-        if attempted >= MAX_RUNS:
-            record = _not_run(head, block, "run-cap")
+        if refusal:
+            record = _not_run(head, block, refusal)
+        elif block["path"] != copy.get("file"):
+            record = _not_run(head, block, "path-mismatch")
         else:
-            attempted += 1
-            if refusal:
-                record = _not_run(head, block, refusal)
-            elif block["path"] != copy.get("file"):
-                record = _not_run(head, block, "path-mismatch")
-            else:
-                record = _safe_run(runner, repo_root, head, block)
+            record = _safe_run(runner, repo_root, head, block)
         runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
         # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
         if record["outcome"] == OUTCOME_PASSED:
