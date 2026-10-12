@@ -48,15 +48,6 @@ _DISPOSITION_RE = re.compile(r"^\s*(?:@?\d+(?:-\d+)?\s*[-–:=]\s*)?\(?[a-h]\)?\
 _BOOKKEEPING_RE = re.compile(
     r"\bfiled as #\d+|\btracked (?:by|in|on) #\d+|"
     r"\b(?:scheduled|slotted|moved|queued) (?:for|into|to|in) (?:the )?(?:phase|milestone)\b", re.I)
-# What may follow a go-verb for it to be an instruction, not a noun: an article, a pronoun, a
-# target (#n, PR, a version), a lane or tier word, or the preposition or conjunction that opens one.
-_OBJECT_WORDS = frozenset(("the", "a", "an", "it", "this", "that", "them", "now", "pr", "full",
-                           "light", "micro", "to", "into", "once", "when", "after"))
-_OBJECT_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
-# A recurrence word makes the sentence a rule for later work, not a one-time authorization.
-_RECURRING_RE = re.compile(r"\b(?:every|each|always|never|whenever|all|any)\b")
-_STANDING_COND_RE = re.compile(r"\b(?:every|each|always|never|whenever|any)\b")
-_CONDITION_WORDS = frozenset(("after", "when", "once", "if", "before", "until", "as"))
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCOPE_RE = re.compile(r"standing|piece [a-z0-9][a-z0-9-]*")
 HEADER = ("# Canon\n\nThis file is the project's Canon, the record of the owner's decisions. Its "
@@ -100,38 +91,20 @@ def _refuse_stays_out(kind, why):
                   kind=kind, home=home or "not found in %s; read it there" % STAYS_OUT)
 
 
-def _go_word(text, limit):
-    """The go-verb a short imperative starts with, or None: the verb leads and stands alone or is
-    followed by an object or qualifier, so a noun usage ("Release notes ...") is not read as one."""
-    tokens = [t.strip(".,;:!?\"'()") for t in text.lower().split()]
-    # a condition ("after all checks pass") does not make a one-time act a rule: judge the act alone
-    cut = next((i for i, t in enumerate(tokens) if i and t in _CONDITION_WORDS), len(tokens))
-    if _STANDING_COND_RE.search(" ".join(tokens[cut:])):  # "after every version": a standing rule
-        return None
-    tokens = tokens[:cut]
-    if not tokens or tokens[0] not in GO_VERBS or len(tokens) > limit or _RECURRING_RE.search(
-            " ".join(tokens)):
-        return None
-    if len(tokens) == 1 or tokens[1] in _OBJECT_WORDS or _OBJECT_RE.fullmatch(tokens[1]):
-        return tokens[0]
-    return None
-
-
 def recognize(ruling, words):
-    """The stays-out kind a ruling or the owner's words read as, or None. Narrow by design: a real
-    ruling that mentions a merge or a launch is not refused, only a bare go-word or disposition.
-    The owner's words are tested for a go-word only: an answer to an owner call given as an option
-    letter is a real ruling, so a disposition is read from the ruling text alone."""
+    """The stays-out kind a ruling or the owner's words read as, or None. A narrow backstop with
+    fixed shapes: a ruling that is a collector disposition, owner's words that are a bare go-word
+    (a go-verb first, a short object after it, no sentence break), or filing/phase bookkeeping.
+    A disposition is read from the ruling text alone: an option letter answering an owner call
+    is a real ruling when the ruling states one."""
     if _DISPOSITION_RE.match(ruling):
         return "disposition", "a collector disposition (%r)" % ruling[:60]
     words = _DISPOSITION_RE.sub("", words or "", count=1)
-    if re.search(r"[;.]\s+\S", words):  # mixed words: the ruling is the rule extracted from them
-        words = ""
-    for text, limit in ((words, 8), (ruling, 16)):
-        verb = _go_word(text, limit)
-        if verb:
-            kind = "merge" if verb in ("merge", "release", "cut", "publish") else "act"
-            return kind, "a go-word (%r)" % text[:60]
+    tokens = [t.strip(".,;:!?\"'()") for t in words.lower().split()]
+    if (tokens and tokens[0] in GO_VERBS and len(tokens) <= 8
+            and not re.search(r"[;.]\s+\S", words)):
+        kind = "merge" if tokens[0] in ("merge", "release", "cut", "publish") else "act"
+        return kind, "a go-word (%r)" % words[:60]
     hit = _BOOKKEEPING_RE.search(ruling)
     if hit:
         return "board", "filing or phase bookkeeping (%r)" % hit.group(0)
@@ -184,6 +157,23 @@ def build_line(a, entry_id):
     return entry_line(entry_id, a.date, a.scope, ruling, SEP.join(mid), where)
 
 
+_MID_RE = re.compile(r"(?:cedes: [^\x00\s][^\x00]*)?(?:\x00?supersedes: [^\x00\s][^\x00]*)?")
+
+
+def _entry_shape_ok(line):
+    """The one entry shape: id, date, scope, a ruling, optional cedes then supersedes, the owner's
+    words and a final `where:` field, every one non-empty."""
+    f = line.split(SEP)
+    m = _ID_RE.match(line)
+    if not m or len(f) < 6 or f[0] != m.group(0) or not (
+            _DATE_RE.fullmatch(f[1]) and _SCOPE_RE.fullmatch(f[2]) and f[3].strip()):
+        return False
+    mid = "\x00".join(f[4:-2])
+    return bool(_MID_RE.fullmatch(mid) and f[-2].startswith("owner's words: ")
+                and f[-2][len("owner's words: "):].strip() and f[-1].startswith("where: ")
+                and f[-1][len("where: "):].strip())
+
+
 def _git(cwd, *args):
     import definition_doc
     return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
@@ -215,8 +205,7 @@ def _locate(root):
         with open(loc["path"], encoding="utf-8") as fh:
             working = fh.read()
     for l in working.splitlines():  # a failed append can leave a cut entry: fence further writes
-        if _ID_RE.match(l) and not l.split(SEP)[-1].startswith("where: ") or (
-                _ID_RE.match(l) and len(l.split(SEP)) < 6):
+        if l.startswith("- **") and not _entry_shape_ok(l):
             raise Refusal("canon-partial-entry", "Canon ends in an incomplete entry (%r), likely "
                           "from a failed write; repair it by hand before any further write"
                           % l[:80])
@@ -300,7 +289,7 @@ def _check_held_line(line):
     fields = line.split(SEP)
     words = next((f[len("owner's words: "):].strip('"') for f in fields
                   if f.startswith("owner's words: ")), "")
-    if not _ID_RE.match(line) or len(fields) < 6:
+    if not _entry_shape_ok(line):
         raise Refusal("canon-bad-line", "not a Canon entry line: %r" % line[:80])
     hit = recognize(fields[3], "" if words == "none recorded" else words)
     if hit:

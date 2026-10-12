@@ -92,18 +92,15 @@ def test_declared_stays_out_ground_refused_with_home(project, capsys, ground):
     assert canon.STAYS_OUT in out["detail"]
 
 
-# axis: a ruling or the owner's words recognized as stays-out is refused with its home, whatever
-# ground was declared.
+# axis: the closed shapes beyond a declared ground: a disposition ruling, bare go-word owner's
+# words, and bookkeeping are refused with the record's home, whatever ground was declared.
 @pytest.mark.parametrize("ruling,words,kind", [
-    ("Merge #1810 once CI is green.", None, "merge"),
-    ("Launch it now in the cloud.", None, "act"),
-    ("The importer keeps old data.", "a - launch it now in the cloud", "act"),
-    ("Tier full.", None, "act"),
-    ("File a follow-up for the importer.", None, "act"),
-    ("Force-push the feature branch.", None, "act"),
-    ("Release v0.43.0 tonight.", None, "merge"),
-    ("Merge the stack once CI is green and the vet receipt is posted.", None, "merge"),
     ("116 - a", None, "disposition"),
+    ("The importer keeps old data.", "a - launch it now in the cloud", "act"),
+    ("The importer keeps old data.", "merge #1810", "merge"),
+    ("The importer keeps old data.", "ship it", "act"),
+    ("The importer keeps old data.", "tier full", "act"),
+    ("The importer keeps old data.", "force-push the branch", "act"),
     ("The importer keeps old data; filed as #1820.", None, "board"),
     ("The importer keeps old data, scheduled for phase 2.", None, "board"),
 ])
@@ -114,16 +111,11 @@ def test_recognized_stays_out_refused_with_home(project, capsys, ruling, words, 
     assert out["home"] == _contract_homes()[kind]
 
 
-# axis: recognition is narrow: a ruling that uses a go-word as a noun is a real ruling.
-@pytest.mark.parametrize("ruling", [
-    "Release notes name each breaking change in plain words.",
-    "File names in the spec folder use the work-item slug.",
-    "Merge conflicts in canon.md are resolved by keeping both lines.",
-    "Launch prompts carry only the workhorse command and the issue pointer.",
-    "Tier labels on the board are informational only.",
-])
-def test_go_word_used_as_a_noun_is_appended(project, capsys, ruling):
-    code, out = _run(capsys, "append", *_fields(ruling=ruling))
+# axis: accepted gap, pinned so nobody widens recognition: a full ruling sentence under a valid
+# ground is not caught (canon-contract.md, "Every session writes through the helper").
+def test_full_ruling_sentence_with_valid_ground_is_not_refused_accepted_gap(project, capsys):
+    ruling = "Merge the stack once CI is green and the vet receipt is posted."
+    code, out = _run(capsys, "append", *_fields(ruling=ruling, owners_words="none recorded"))
     assert code == 0 and out["appended"][0].split(canon.SEP)[3] == ruling
 
 
@@ -250,7 +242,7 @@ def test_held_comment_without_marker_refused(project, capsys, tmp_path):
 
 # axis: a held line that reads as stays-out is refused at append too.
 def test_held_go_word_refused_at_append(project, capsys, tmp_path):
-    bad = _entry(9).replace("A ruling.", "Merge #1810 now.")
+    bad = _entry(9).replace("owner's words: none recorded", "owner's words: \"Merge #1810 now.\"")
     (tmp_path / "held.md").write_text(canon.HELD_MARKER + "\n" + bad + "\n")
     code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(tmp_path / "held.md"))
     assert code == 1 and out["reason"] == "canon-stays-out"
@@ -410,15 +402,32 @@ def test_partial_entry_fences_further_writes(project, capsys):
     assert open(project["path"]).read() == before
 
 
-# axis: a standing rule or an extracted rule is not read as a one-time go-word.
-@pytest.mark.parametrize("ground,ruling,words", [
-    ("principle", "Release the notes alongside every version.", None),
-    ("principle", "Release notes accompany every version.", "Release the notes after every version is tagged."),
-    ("principle", "File a report when any import fails.", None),
-    ("owner-call", "A failed import keeps the previous data.",
-     "Launch it; failed imports keep previous data."),
+# axis: a held line is validated like a fresh entry: a cut or malformed line is refused before any
+# byte is written.
+@pytest.mark.parametrize("damage", [
+    lambda l: l[:-len("here: s, time not recorded") + 1].rstrip() + " wher",
+    lambda l: l.replace(" · where: s, time not recorded", ""),
+    lambda l: l.replace("where: s, time not recorded", "where: "),
+    lambda l: l.replace("owner's words: none recorded", "owner's words: "),
+    lambda l: l.replace(" · standing · ", " · whenever · "),
+    lambda l: l.replace(" · A ruling. · ", " ·  · "),
+    lambda l: l.replace(" · owner's words", " · supersedes: x · cedes: y · owner's words"),
 ])
-def test_standing_rule_is_not_a_go_word(project, capsys, ground, ruling, words):
-    extra = {"owners_words": words} if words else {}
-    code, out = _run(capsys, "append", *_fields(ground=ground, ruling=ruling, **extra))
-    assert code == 0 and out["appended"][0].split(canon.SEP)[3] == ruling
+def test_malformed_held_line_refused_before_writing(project, capsys, tmp_path, damage):
+    bad = damage(_entry(9))
+    assert bad != _entry(9)
+    (tmp_path / "held.md").write_text(canon.HELD_MARKER + "\n" + bad + "\n")
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(tmp_path / "held.md"))
+    assert code == 1 and out["reason"] == "canon-bad-line"
+    assert open(project["path"], "rb").read() == before
+
+
+# axis: a write cut inside the entry id still fences further writes and leaves the bytes alone.
+def test_partial_entry_cut_inside_the_id_fences_further_writes(project, capsys):
+    with open(project["path"], "a", encoding="utf-8") as fh:
+        fh.write("- **2026-10-12-abcd")
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-partial-entry"
+    assert open(project["path"], "rb").read() == before

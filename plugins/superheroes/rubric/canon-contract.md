@@ -254,7 +254,10 @@ What stays out is never written.
 the entry's fields and a declared ground (`owner-call`, `principle`, `ceded-call` or `take-back`).
 It refuses an entry declared or recognized as something [What stays out, and where it
 goes](#what-stays-out-and-where-it-goes) keeps out, and its refusal names that record's home as the
-section's table and paragraphs give it. It runs steps 2 to 6 below: it probes the default-branch
+section's table and paragraphs give it. That recognition is a narrow backstop with exactly three
+shapes: a declared stays-out ground, a ruling that is a collector disposition, and owner's words
+that are a bare go-word. The declared ground and What stays out still bind the session: an act
+written as a full ruling sentence under a valid ground is not caught by the helper. It runs steps 2 to 6 below: it probes the default-branch
 copy, mints the id by the id rule, creates the file shape and the `.gitattributes` line, and
 appends one line. It prints the paths to commit; steps 1, 7 and 8 stay the session's.
 `canon.py append --lines-file <file>` appends held lines byte for byte, skipping a line Canon
