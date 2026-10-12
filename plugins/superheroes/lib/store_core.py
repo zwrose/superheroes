@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import os
+import pathlib
 import re
 import stat
 import subprocess
@@ -462,10 +463,10 @@ def is_calibration_path(path):
     real = os.path.realpath(os.path.abspath(path))
     parent, name = os.path.split(real)
     import core_md
-    in_repo_dir = os.path.dirname(core_md.in_repo_core_rel_path()).split(os.sep)
-    if name.endswith(".md") and parent.split(os.sep)[-len(in_repo_dir):] == in_repo_dir:
+    in_repo_dir = pathlib.PurePath(os.path.dirname(core_md.in_repo_core_rel_path())).parts
+    if name.endswith(".md") and pathlib.PurePath(parent).parts[-len(in_repo_dir):] == in_repo_dir:
         return True
-    parts = real.split(os.sep)
+    parts = pathlib.PurePath(real).parts
     if len(parts) >= 3 and parts[-3] == "projects" and parts[-1] in _STORE_TOP_FILES:
         return True
     if len(parts) >= 4 and parts[-4] == "projects":
