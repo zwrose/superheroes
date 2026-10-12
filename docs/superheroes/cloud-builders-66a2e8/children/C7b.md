@@ -1,4 +1,4 @@
-**STATE:** route build-ready · filed 2026-10-12 by the advisor's size-split ruling on cloud C7 (#1748; the builder's measured estimate of about 700 before code, against the 600 bar, `rubric/review-discipline.md` § Size; craft, owner veto open) · layer 14 of 15 in the cloud-builders stack (a direct sub-issue of the epic), on C7p (C7 was split again on 2026-10-12 into C7, C7r and C7p) · launches on C7p's pushed head once C7p hands back (C7's launch word covers the layers a size split adds) · not launched · merges only with the whole stack
+**STATE:** route build-ready · filed 2026-10-12 by the advisor's size-split ruling on cloud C7 (#1748; the builder's measured estimate of about 700 before code, against the 600 bar, `rubric/review-discipline.md` § Size; craft, owner veto open) · layer 14 of 16 in the cloud-builders stack (a direct sub-issue of the epic), on C7p (C7 was split again on 2026-10-12 into C7, C7r and C7p) · launches on C7p's pushed head once C7p hands back (C7's launch word covers the layers a size split adds) · not launched · merges only with the whole stack
 
 **Order (advisor-launched):**
 - Launched on **claude-two**, per the owner's standing instruction (2026-10-11: "switch everything to claude-two now"); usage-limit fallback claude-four (owner 2026-10-12). Message the advisor session **"superheroes advisor"** (seat `~/.claude`) for size, scope or premise questions, and post any ruling you receive on this issue.
@@ -40,7 +40,7 @@ DoD:
   A search of the changed shipped files for requirement numbers, Canon entry ids, issue numbers and project names returns nothing (R9).
 - The PR's first line is `Closes #<this issue>`, it names the epic only as `part of #1741`, and its base is C7p's branch. The register-quote check passes for `C7b` on the epic's body. The four validators pass and CI is green on the PR head. The PR carries its pre-handback review receipt under the review discipline its session runs.
 
-**Epic:** #1741 (artifacts in `docs/superheroes/cloud-builders-66a2e8/`, `children/C7b.md` once the split docs PR merges); the epic is the stack's feature issue. **Child:** C7b, recovering a cloud builder, split from C7 at the 600 bar (C7's brief issuecomment-6120341858; DoD rows from issuecomment-6120352556). **Sequencing:** layer 14 of the cloud-builders stack, on C7p, with C8 above it.
+**Epic:** #1741 (artifacts in `docs/superheroes/cloud-builders-66a2e8/`, `children/C7b.md` once the split docs PR merges); the epic is the stack's feature issue. **Child:** C7b, recovering a cloud builder, split from C7 at the 600 bar (C7's brief issuecomment-6120341858; DoD rows from issuecomment-6120352556). **Sequencing:** layer 14 of the cloud-builders stack, on C7p, with C7s above it.
 
 **Lane call:** full. A recovery that leaves two builders on one issue duplicates work and collides on the branch, and a wrong remedy on a never-started lane leaves the ledger unreadable.
 
