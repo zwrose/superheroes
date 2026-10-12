@@ -3334,31 +3334,21 @@ def _started_indexes(records):
     }
 
 
-def _record_batch_still(repo_root, batch_id, launches, reserved, started_at):
-    """Apply the batch's started launches to the reminder state in the order they started, so a
-    build that went to the cloud clears only what came before it and a later local fallback still
-    writes, however the launches interleaved when they reserved.
-
-    A batch whose last deciding launch is older than a deciding launch of another batch is left
-    out: that newer launch already decided the state, and replaying the older one must not undo it."""
+def _record_batch_still(repo_root, launches, reserved, started_at):
+    """Replay every confirmed, started launch in the ledger that decides the reminder, whichever
+    batch it belongs to, in the order they started: the last cloud launch clears everything before
+    it, and the deciding local fallbacks after it are recorded together, dated by the latest of
+    their start days. The reminder is the same whichever batch is reported."""
     decided = []
-    newest_elsewhere = -1
     for launch_id, info in launches.items():
         if not info["started"] or info.get("cloudSessionUnconfirmed"):
             continue
         call = _report_place_call(reserved.get(launch_id), info["place"])
-        if not _decides_still(call):
-            continue
-        order = started_at.get(launch_id, info["reservedIndex"])
-        if info.get("batchId") == batch_id:
-            decided.append((order, call, info))
-        else:
-            newest_elsewhere = max(newest_elsewhere, order)
+        if _decides_still(call):
+            decided.append((started_at.get(launch_id, info["reservedIndex"]), call, info))
     decided.sort(key=lambda entry: entry[0])
     if not decided:
         return launch_report.record_still(repo_root, [], root=None)
-    if newest_elsewhere > decided[-1][0]:
-        return {"action": "unchanged", "reason": None}
     last_cloud = max(
         (pos for pos, (_idx, call, _info) in enumerate(decided) if call.get("place") == PLACE_CLOUD),
         default=None,
@@ -3419,7 +3409,7 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
         "ok": True,
         "report": launch_report.render_report(lanes),
         "still": _record_batch_still(
-            repo_root, batch_id, folded["launches"], reserved, _started_indexes(read["records"])),
+            repo_root, folded["launches"], reserved, _started_indexes(read["records"])),
         "lanes": len(lanes),
     }
 

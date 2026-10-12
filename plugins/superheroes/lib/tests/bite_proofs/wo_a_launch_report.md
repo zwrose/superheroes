@@ -1,6 +1,6 @@
 # Launch report WO-A bite-proof: the "Still on your machine" state's clearing legs
 
-Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G14, G15, G16), detectors in `plugins/superheroes/lib/tests/test_launch_report.py` (`TLR`) and `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`); G15 neutralizes `plugins/superheroes/lib/launcher.py`. Every red, restore and green below was run in this dispatch on the worktree head, against `launch_report.py` and `test_launch_report.py`.
+Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G14, G15, G16, G17), detectors in `plugins/superheroes/lib/tests/test_launch_report.py` (`TLR`) and `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`); G15 and G17 neutralize `plugins/superheroes/lib/launcher.py`. Every red, restore and green below was run in this dispatch on the worktree head, against `launch_report.py` and `test_launch_report.py`.
 
 - **Run command.** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-wo1 -m pytest -p no:cacheprovider -q "<T>::<node>"`.
 - **Pinned condition.** `TLR` builds its stores, repositories, account files and records under `tmp_path`; the clock is a fixed `today` (`2026-10-11`) and readiness is injected. The pin makes unobservable: the real home directory, the process environment, the network and the real wall clock.
@@ -12,6 +12,7 @@ G13 the still state's reported-fact clearing leg also requires the reader to rea
 G14 a build that went to the cloud clears the stored reason even when a local not-ready fallback sits beside it in the same batch.
 G15 the launch report orders issues by their first reservation, not their last.
 G16 with no stored still state, the readiness function is never called.
+G17 the reminder replays every batch's launches.
 
 ## Per-element receipts
 
@@ -236,4 +237,52 @@ FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_R_still_no_stat
 ```
 .                                                                        [100%]
 1 passed in 1.75s
+```
+
+### G17: the reminder replays every batch's launches. Axis: scope (all launches in the ledger, not the reported batch's)
+
+- **Neutralization applied.** At the one call site in `launch_report_for_batch`, `_record_batch_still` was passed `{lid: info for lid, info in folded["launches"].items() if info.get("batchId") == batch_id}` instead of `folded["launches"]`.
+- **Node.** `TLV::test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch ____
+
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1350/test_reporting_an_older_batch_0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1350/test_reporting_an_older_batch_0/store')
+
+    def test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch(world):
+        repo, store = world
+        assert _declare(repo, "b-newer", 4)["ok"]
+        _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+        _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="no-setup")}, batch="b-newer")
+        _start(repo, "b")
+        # the newer batch has not reported; "no-setup" outranks "unreachable", so only its launch can supply it
+>       assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+E       AssertionError: assert {'action': 'w...'unreachable'} == {'action': 'w...': 'no-setup'}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'reason': 'unreachable'} != {'reason': 'no-setup'}
+E         Use -v to get more diff
+
+plugins/superheroes/lib/tests/test_launch_report_verbs.py:412: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch
+1 failed in 7.42s
+```
+
+- **Restore.** The inverse Edit; quoted from `launcher.py:3411-3412`:
+
+```
+        "still": _record_batch_still(
+            repo_root, folded["launches"], reserved, _started_indexes(read["records"])),
+```
+
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 8.60s
 ```

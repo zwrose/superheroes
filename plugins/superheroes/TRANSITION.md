@@ -90,7 +90,7 @@ These retirements ship in the same release as the review record, and never apart
 
 - Once cloud builds are switched on, the launcher decides where each build runs: the setting gives the default, and a launch word overrides it for one build.
 - A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
-- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message.
+- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message. `still` refuses with `still-state-unreadable` (exit 1) when the stored state cannot be read, and it keeps the file. The reminder `report` records comes from every launch in the ledger, in the order they started, whichever batch is reported.
 - A new state file, `cloud-still.json`, sits in the project store's `state` folder.
 
 ## 0.42.0

@@ -398,8 +398,41 @@ def test_replaying_an_older_batch_report_does_not_undo_a_newer_batchs_reminder(w
     _start(repo, "b")
     newer = launcher.launch_report_for_batch(repo, "b-newer", title_fn=_titles)
     assert newer["still"] == {"action": "written", "reason": "unreachable"}
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
     assert _stored(repo, store)["reason"] == "unreachable"
+
+
+def test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch(world):
+    repo, store = world
+    assert _declare(repo, "b-newer", 4)["ok"]
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="no-setup")}, batch="b-newer")
+    _start(repo, "b")
+    # the newer batch has not reported; "no-setup" outranks "unreachable", so only its launch can supply it
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    assert _stored(repo, store)["reason"] == "no-setup"
+
+
+@pytest.mark.parametrize("order", [
+    ("x", "y", "z"), ("x", "z", "y"), ("y", "x", "z"), ("y", "z", "x"), ("z", "x", "y"), ("z", "y", "x"),
+])
+def test_the_reminder_is_the_same_whichever_order_the_batches_report(world, order):
+    repo, store = world
+    for batch in ("x", "y", "z"):
+        assert _declare(repo, "b-" + batch, 4)["ok"]
+    _reserve(repo, "lx", 11, "cloud", {"placeCall": _call("cloud", reason=None)}, batch="b-x")
+    _start(repo, "lx", "cloud")
+    _reserve(repo, "ly", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-y")
+    _start(repo, "ly")
+    _reserve(repo, "lz", 33, "local", {"placeCall": _call(reason="no-setup")}, batch="b-z")
+    _start(repo, "lz")
+    for batch in order:
+        assert launcher.launch_report_for_batch(repo, "b-" + batch, title_fn=_titles)["ok"] is True
+    # the cloud launch clears what came before it; the two fallbacks after it keep the one that ranks first
+    day = launcher._launch_day(ll.fold(ll.read(repo)["records"])["launches"]["lz"])
+    assert _stored(repo, store) == {
+        "schema": LR._STILL_SCHEMA, "reason": "no-setup", "by": "setting", "cloudVersion": None,
+        "advisorVersion": None, "reported": None, "observedOn": day.isoformat()}
 
 
 def test_replaying_the_same_batch_report_keeps_the_day_it_first_observed(world, monkeypatch):
