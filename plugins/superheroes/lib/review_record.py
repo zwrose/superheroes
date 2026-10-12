@@ -15,6 +15,7 @@ from the session's account.
 CLI:
   review_record.py write --account FILE --repo-root DIR
   review_record.py read --pr N [--repo OWNER/NAME]
+  review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
 """
 from __future__ import annotations
 
@@ -428,13 +429,18 @@ def _short(sha):
     return (sha or "")[:7] or "unknown"
 
 
-def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
+def _own_word_ok(word):
+    return isinstance(word, dict) and all(isinstance(word.get(k), str) and word[k].strip() for k in ("words", "where"))
+
+
+def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset()):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
     out["findingsCoverage"] = SESSION
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
     target = r["commit"] if named else head
+    credited = None
     if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
         out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
         if r["ran"]:
@@ -448,6 +454,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         where = f"the commit this reviewer was listed for {_short(target)}" if named else "the final commit"
         if isinstance(seen, str) and seen and seen == target and graded and review:
             out.update(ran="engine-record", observation=rec.get("observation"))
+            credited = rec
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
@@ -471,10 +478,39 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
         out["ran"] = "not-run"
+
+    def demote(note):
+        out.pop("observation", None)
+        out.update(ran="not-run", runNote=note)
+        if r["ran"]:
+            dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
+
+    # axis: the credited run is the run the row names; the family is read from the engine record, never from the row — see bite-proof record wo_a_1796_reading-independence
+    if credited is not None:
+        if credited.get("source") != r["vendor"] or credited.get("engineModel") != r["model"]:
+            demote("the run record names a different reviewer than the account row")
+        else:
+            out["family"] = _family(credited["source"], credited["engineModel"])
+    if lane_value != "full":
+        # axis: outside the full lane a reviewer counts only when the engine's own record reads engaged — see bite-proof record wo_a_1796_reading-independence
+        if out["ran"] == "engine-record":
+            obs = out.get("observation")
+            if not isinstance(obs, dict) or obs.get("read") != "engaged":
+                demote("the engine's record of the run does not show that the reviewer read the change")
+        elif out["ran"] == "reported-by-session":
+            demote("no engine record of the run shows that the reviewer read the change")
+        out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
+    # axis: a reviewer from a maker's family counts only with the owner's word; independence is computed here, never taken from the account — see bite-proof record wo_a_1796_reading-independence
+    if out["ran"] != "not-run" and maker_families:
+        if out["family"] is None:
+            demote("the reviewer's model family could not be read, so independence cannot be shown")
+        elif out["family"] in maker_families:
+            if _own_word_ok(r.get("ownerWord")):
+                out["notIndependent"] = True
+            else:
+                demote("the reviewer is from a maker's family and no owner's word for this change lets it run")
     out["commit"] = target if named else None
     out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
-    if isinstance(r.get("notIndependent"), bool):
-        out["notIndependent"] = r["notIndependent"]
     if isinstance(r.get("ownerWord"), dict):
         out["ownerWord"] = r["ownerWord"]
     return out
@@ -553,6 +589,10 @@ def _status(rec, unread=(), finding_lines=()):
         lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
     lines += finding_lines
     lines += _lane_lines(rec)
+    # axis: no named maker is not-reviewed, since independence cannot be shown — see bite-proof record wo_a_1796_reading-independence
+    if not rec["makers"]:
+        # fixed prose: no data enters
+        lines.append("no maker is named, so independence cannot be shown")
     lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
               for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
@@ -577,7 +617,9 @@ def build_record(account, readers):
             dis.append({"fact": fact, "session": session, "code": code})
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
-    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"]) for r in a["reviewers"]]
+    maker_families = frozenset(m["family"] for m in a["makers"])
+    reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"], maker_families)
+                 for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
@@ -1016,6 +1058,54 @@ def read(pr, repo=None, readers=None):
     return _guarded(go)
 
 
+def _shows_reading(run):
+    obs = run.get("observation") if isinstance(run, dict) else None
+    return isinstance(obs, dict) and obs.get("read") == "engaged"
+
+
+def _move_up_blocker(seat_map, maker_families):
+    """The first reason a seat map does not let a second no-reading review move up to the full lane, else None."""
+    roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
+    if not isinstance(roster, list) or not roster:
+        return "the seat map has no roster"
+    seats = seat_map.get("seats")
+    if not isinstance(seats, dict) or not all(isinstance(seats.get(n), dict) for n in roster):
+        return "the seat map has no entry for a roster seat"
+    # axis: a roster seat that is unfilled, or whose family is a maker's, cannot be shown independent, so the lane is parked, never moved up — see bite-proof record wo_a_1796_reading-independence
+    if any(seats[n].get("source") == "unfilled" for n in roster):
+        return "a roster seat in the seat map is unfilled"
+    if not all(isinstance(seats[n].get("family"), str) and seats[n]["family"] for n in roster):
+        return "a roster seat in the seat map names no family"
+    if not maker_families:
+        return "no maker is named, so independence cannot be shown"
+    if any(seats[n]["family"] in maker_families for n in roster):
+        return "a roster seat in the seat map is from a maker's family"
+    return None
+
+
+def reading_next(runs, seat_map, maker_families):
+    """What follows a review whose reading is not shown: accept, rerun, move-up or park. Pure: no model call, no write."""
+    runs = list(runs)[:2]
+    if any(_shows_reading(run) for run in runs):
+        return {"next": "accept", "reason": "the engine's record shows that the reviewer read the change"}
+    if not runs:
+        return {"next": "park", "reason": "no run was given, so no reading can be shown"}
+    if len(runs) < 2:
+        return {"next": "rerun", "reason": "the one run does not show that the reviewer read the change"}
+    blocker = _move_up_blocker(seat_map, frozenset(maker_families))
+    if blocker:
+        return {"next": "park", "reason": blocker}
+    return {"next": "move-up", "reason": "two runs do not show a reading and the seat map holds independent seats"}
+
+
+def _read_seat_map(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (TypeError, OSError, ValueError):
+        return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="review_record")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1025,7 +1115,15 @@ def main(argv=None):
     r = sub.add_parser("read")
     r.add_argument("--pr", type=int, required=True)
     r.add_argument("--repo", default=None)
+    n = sub.add_parser("reading-next")
+    n.add_argument("--run-dir", action="append", default=[], dest="run_dirs")
+    n.add_argument("--seat-map", default=None, dest="seat_map")
+    n.add_argument("--maker-family", action="append", default=[], dest="maker_families")
     args = parser.parse_args(argv)
+    if args.command == "reading-next":
+        runs = [_engine_run(d)[0] for d in args.run_dirs]
+        print(json.dumps(reading_next(runs, _read_seat_map(args.seat_map), args.maker_families)))
+        return 0
     result = write(args.account, args.repo_root) if args.command == "write" else read(args.pr, args.repo)
     print(json.dumps(result))
     return 0 if result.get("ok") else 1
