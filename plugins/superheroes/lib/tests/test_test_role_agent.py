@@ -1,9 +1,10 @@
 """Drift guard for the test role's agent file and the code reviewer's break-it reading duty.
 
-Bites on: the load-bearing statements of ``agents/test-role.md`` and ``agents/code-reviewer.md``,
-each pinned by a short literal; and the absence of the retired ``agents/test-reviewer.md``.
+Bites on: the exact line shape of the ``break-it-test v1`` block in ``agents/test-role.md``, which
+the review loop parses; the ``break-it-test`` taxonomy token in ``agents/code-reviewer.md``; and
+the absence of the retired ``agents/test-reviewer.md``.
 
-Residual blind spot: a literal proves the sentence is present, not that a reviewer obeys it.
+Pins structure only, never a prose sentence.
 """
 import re
 from pathlib import Path
@@ -19,39 +20,17 @@ def _text(path):
     return re.sub(r"\s+", " ", path.read_text(encoding="utf-8").replace("*", ""))
 
 
-def test_test_role_agent_pins_its_load_bearing_statements():
+def test_test_role_agent_pins_the_break_it_block_shape():
     raw = TEST_ROLE.read_text(encoding="utf-8")
-    role = _text(TEST_ROLE)
     reviewer = _text(CODE_REVIEWER)
-    # Bites on: the role's first duty, the mutation-survival question for each changed test.
-    assert "would this test fail if the code under test were wrong" in role
-    # Bites on: the cannot-fail finding, one per file, naming each such test.
-    assert "one finding per file" in role
-    assert "names each such test" in role
     # Bites on: the break-it block's header line, which the review loop parses.
     assert "```\nbreak-it-test v1\npath:" in raw
     # Bites on: the block's path and run lines, which the review loop parses.
     assert "path: <the same repo-relative path as `file`>\nrun: <one command, run from the repository root, that runs only this test file>\n" in raw
     # Bites on: the block's separator line between the header lines and the file content.
     assert "that runs only this test file>\n---\n<the complete file content>" in raw
-    # Bites on: the first dropped duty, no coverage request outside every risk area.
-    assert "More test coverage in code outside every risk area" in role
-    # Bites on: the second dropped duty, no change of test style alone.
-    assert "A change of test style alone" in role
-    # Bites on: the rule that the share of test code is never a finding.
-    assert "How much of a change is test code is never a finding on its own" in role
-    # Bites on: the code reviewer reads the break-it tests a change keeps.
+    # Bites on: the code reviewer's taxonomy token for the break-it tests a change keeps.
     assert "break-it-test" in reviewer
-    assert "for bloat and for tests that pass without checking anything" in reviewer
-
-
-def test_test_role_agent_pins_unproven_checks_and_one_smell_per_finding():
-    role = _text(TEST_ROLE)
-    # Bites on: an unproven check change is raised for proof, not as a coverage request.
-    assert "It asks for proof the check works, not for more coverage." in role
-    # Bites on: one smell per finding, so a different test's smell is never folded into another finding.
-    assert "Each finding covers one smell." in role
-    assert "Never fold a different test's smell into another finding's body." in role
 
 
 def test_test_reviewer_agent_file_is_gone():
