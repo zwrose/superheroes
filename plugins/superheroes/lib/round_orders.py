@@ -75,6 +75,7 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "PR_CHECKOUT_PATH",
     "PRIOR_COMMENTS_PATH",
     "ROLE_BRIEF_PATH",
+    "RISK_AREAS_TEXT",
 })
 
 _COMMON_CONTEXT_KEYS = (
@@ -377,6 +378,10 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["ROLE_BRIEF_LINE"] = (
         "- Your role brief (read it first; it binds over the generic assignment above): %s"
         % role_brief if role_brief else ""
+    )
+    risk_text = ph.get("RISK_AREAS_TEXT", "").strip()
+    ph["RISK_AREAS_LINE"] = (
+        "- Risk areas this change touches: %s" % risk_text if risk_text else ""
     )
     return ph
 
