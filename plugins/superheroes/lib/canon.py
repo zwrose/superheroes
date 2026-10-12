@@ -55,6 +55,7 @@ _OBJECT_WORDS = frozenset(("the", "a", "an", "it", "this", "that", "them", "now"
 _OBJECT_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
 # A recurrence word makes the sentence a rule for later work, not a one-time authorization.
 _RECURRING_RE = re.compile(r"\b(?:every|each|always|never|whenever|all|any)\b")
+_STANDING_COND_RE = re.compile(r"\b(?:every|each|always|never|whenever|any)\b")
 _CONDITION_WORDS = frozenset(("after", "when", "once", "if", "before", "until", "as"))
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCOPE_RE = re.compile(r"standing|piece [a-z0-9][a-z0-9-]*")
@@ -105,6 +106,8 @@ def _go_word(text, limit):
     tokens = [t.strip(".,;:!?\"'()") for t in text.lower().split()]
     # a condition ("after all checks pass") does not make a one-time act a rule: judge the act alone
     cut = next((i for i, t in enumerate(tokens) if i and t in _CONDITION_WORDS), len(tokens))
+    if _STANDING_COND_RE.search(" ".join(tokens[cut:])):  # "after every version": a standing rule
+        return None
     tokens = tokens[:cut]
     if not tokens or tokens[0] not in GO_VERBS or len(tokens) > limit or _RECURRING_RE.search(
             " ".join(tokens)):
@@ -182,7 +185,9 @@ def build_line(a, entry_id):
 
 
 def _git(cwd, *args):
-    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+    import definition_doc
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                          env=definition_doc._scrubbed_git_env())
 
 
 def _locate(root):
@@ -209,6 +214,12 @@ def _locate(root):
     if os.path.isfile(loc["path"]):
         with open(loc["path"], encoding="utf-8") as fh:
             working = fh.read()
+    for l in working.splitlines():  # a failed append can leave a cut entry: fence further writes
+        if _ID_RE.match(l) and not l.split(SEP)[-1].startswith("where: ") or (
+                _ID_RE.match(l) and len(l.split(SEP)) < 6):
+            raise Refusal("canon-partial-entry", "Canon ends in an incomplete entry (%r), likely "
+                          "from a failed write; repair it by hand before any further write"
+                          % l[:80])
     return loc, working, default_text
 
 
@@ -445,8 +456,8 @@ def main(argv):
         out = exc.payload
     except OSError as exc:
         out = {"ok": False, "reason": "canon-write-failed", "detail": "%s: %s; Canon's entries "
-               "are untouched (an existing Canon is only appended to); check `git status`, then "
-               "run it again" % (type(exc).__name__, exc)}
+               "may hold part of an entry (an existing Canon is only appended to); check the "
+               "file's last line and `git status`, repair it, then run it again" % (type(exc).__name__, exc)}
     sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0 if out["ok"] else 1
 

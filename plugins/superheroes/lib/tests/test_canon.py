@@ -398,12 +398,23 @@ def test_write_failure_is_a_structured_refusal(project, capsys, monkeypatch):
 
     monkeypatch.setattr(canon, "_write", boom)
     code, out = _run(capsys, "append", *_fields())
-    assert code == 1 and out["reason"] == "canon-write-failed" and "untouched" in out["detail"]
+    assert code == 1 and out["reason"] == "canon-write-failed" and "last line" in out["detail"]
+
+
+def test_partial_entry_fences_further_writes(project, capsys):
+    with open(project["path"], "a", encoding="utf-8") as fh:
+        fh.write("- **2026-01-01-abcd1234-1** · 2026-01-01 · standing · A cut rul")
+    before = open(project["path"]).read()
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-partial-entry"
+    assert open(project["path"]).read() == before
 
 
 # axis: a standing rule or an extracted rule is not read as a one-time go-word.
 @pytest.mark.parametrize("ground,ruling,words", [
     ("principle", "Release the notes alongside every version.", None),
+    ("principle", "Release notes accompany every version.", "Release the notes after every version is tagged."),
+    ("principle", "File a report when any import fails.", None),
     ("owner-call", "A failed import keeps the previous data.",
      "Launch it; failed imports keep previous data."),
 ])
