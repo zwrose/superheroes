@@ -733,6 +733,51 @@ def _scrubbed(value):
     return value
 
 
+_SHED_PATHS = ("touches-risk-area:", "risk-unclear-unmatchable:")
+
+
+def _shed_why_paths(basis):
+    """Step 1: the sampled paths leave the reason lines (``name (a, b, c)`` becomes ``name``)."""
+    names = [t["name"] for t in basis["touched"]]
+    why = []
+    for w in basis["why"]:
+        if w.startswith(_TOUCHES):
+            name = next((n for n in names if w.startswith("%s %s (" % (_TOUCHES, n))), None)
+            w = "%s %s" % (_TOUCHES, name) if name is not None else w.split(" (", 1)[0]
+        elif w.startswith("risk-unclear-unmatchable:") and " against an area (" in w:
+            w = w.split(" against an area (", 1)[0] + " against an area"
+        why.append(w)
+    return dict(basis, why=why, whyCount=basis.get("whyCount", len(basis["why"])), basisShed="why-paths")
+
+
+def _shed_matched(basis):
+    """Step 2: the matched path lists go; each area keeps its name and its matchedCount."""
+    touched = [dict(t, matched=[], matchedCount=t.get("matchedCount", len(t["matched"])))
+               for t in basis["touched"]]
+    return dict(basis, touched=touched, basisShed="matched")
+
+
+def _shed_unmatchable(basis):
+    """Step 3: the unmatchable list goes; unmatchableCount stays."""
+    return dict(basis, unmatchable=[],
+                unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
+                basisShed="unmatchable")
+
+
+def _shed_to_floor(basis):
+    """Last resort: the floor, the lane, the first reason line and the counts."""
+    out = {k: basis[k] for k in ("floor", "lane", "proposalTaken", "source") if k in basis}
+    out.update(why=basis["why"][:1], whyCount=basis.get("whyCount", len(basis["why"])),
+               touchedCount=basis.get("touchedCount", len(basis["touched"])),
+               matchedCount=sum(t.get("matchedCount", len(t["matched"])) for t in basis["touched"]),
+               unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
+               basisShed="floor-only")
+    return out
+
+
+_SHED_STEPS = (_shed_why_paths, _shed_matched, _shed_unmatchable, _shed_to_floor)
+
+
 def render(record):
     record = _scrubbed(record)
     r, lane, ci = record, record["lane"], record["ci"]
@@ -753,19 +798,31 @@ def render(record):
         waits.append("findings left for the owner (" + ", ".join(r["leftForOwner"]) + ") wait for the owner's decision")
     if r["parked"]:
         waits.append("a review with no go-ahead is parked until the owner decides")
-    summary = "\n".join([
-        f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
-        + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
-        ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner.",
-        f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
-        + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
-        f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".",
-        *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
-        f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
-        "Reviewers:", *who])
-    _assert_no_bug_free_claim(summary)
-    body = (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
-            f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
+    waits_text = ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner."
+
+    def compose(r):
+        summary = "\n".join([
+            f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
+            + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
+            waits_text,
+            f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
+            + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
+            f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".",
+            *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
+            f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
+            "Reviewers:", *who])
+        _assert_no_bug_free_claim(summary)
+        return (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
+                f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
+
+    # The size bound is on what is posted (the JSON-escaped body), so it is measured here: shed the lane
+    # basis's path evidence in a fixed order until the body fits. The floor, lane and proposalTaken never change.
+    body = compose(r)
+    for step in _SHED_STEPS:
+        if len(body) <= MAX_BODY_CHARS:
+            break
+        r = dict(r, laneBasis=step(r["laneBasis"]))
+        body = compose(r)
     if len(body) > MAX_BODY_CHARS:
         raise Refusal("review-record-too-large", f"{len(body)} characters")
     return body

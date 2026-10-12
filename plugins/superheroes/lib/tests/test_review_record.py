@@ -1651,3 +1651,39 @@ def test_many_risk_areas_with_long_paths_render_under_the_cap_with_the_floor_ful
     assert any("more touches-risk-area lines omitted" in w for w in basis["why"])
     assert basis["why"][0].startswith("touches-risk-area:")
     assert len(rr.render(rec)) < rr.MAX_BODY_CHARS
+
+
+def _astral_record(tmp_path, per_area, area_chars=60, path_chars=290):
+    glyph = "\U0001F600"
+    areas = [dict(PAYMENTS, name="Area%02d%s" % (n, glyph * area_chars), covers=["src/area%02d/*" % n])
+             for n in range(20)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake()
+    fake.changed = ["src/area%02d/%s%04d.py" % (n, glyph * path_chars, i) for n in range(20) for i in range(per_area)]
+    return build(account(repoRoot=repo), fake)
+
+
+def test_four_byte_paths_across_many_areas_render_under_the_cap_with_the_floor_full(tmp_path):
+    # axis: the size bound is on the posted (JSON-escaped) body, so non-ASCII paths shed evidence rather than refuse
+    rec = _astral_record(tmp_path, per_area=150)
+    assert sum(t.get("matchedCount", len(t["matched"])) for t in rec["laneBasis"]["touched"]) == 3000
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+    shed = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["laneBasis"]
+    assert shed["basisShed"] in ("why-paths", "matched", "unmatchable")
+    assert shed["floor"] == "full" and shed["lane"] == rec["laneBasis"]["lane"]
+    assert shed["proposalTaken"] == rec["laneBasis"]["proposalTaken"]
+    assert [t["name"] for t in shed["touched"]] == [t["name"] for t in rec["laneBasis"]["touched"]]
+    assert "basisShed" not in rec["laneBasis"]
+
+
+def test_a_shed_that_reaches_the_last_resort_still_fits(tmp_path, monkeypatch):
+    # axis: the shed terminates by construction: the last resort holds the floor, lane, first reason and counts
+    rec = _astral_record(tmp_path, per_area=2, area_chars=290)
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+    shed = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["laneBasis"]
+    assert shed["basisShed"] == "floor-only" and shed["floor"] == "full"
+    assert set(shed) == {"floor", "lane", "proposalTaken", "source", "why", "whyCount", "touchedCount",
+                         "matchedCount", "unmatchableCount", "basisShed"}
+    assert shed["touchedCount"] == 20 and shed["matchedCount"] == 40 and len(shed["why"]) == 1
