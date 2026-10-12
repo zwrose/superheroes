@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Run a break-it test the test role wrote as text, in a throwaway copy, and check it was kept (#1800).
+
+Stdlib only. A break-it test runs **only** inside a detached copy of the reviewed head: it never
+touches the caller's tree, index or HEAD, never writes outside the copy, and its process tree never
+outlives the call. Every outcome is a record — ``failed``, ``passed`` or ``not-run`` with a reason —
+and the caller decides from the record; nothing is raised."""
+import hashlib
+import os
+import re
+import shlex
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+SCHEMA = "break-it-run/1"
+ROLE = "test-role"
+TAXONOMY = "break-it-test"
+RUN_FIELD = "breakItRun"
+MAX_RUNS = 3
+DEFAULT_TIMEOUT = 300
+OUTPUT_TAIL_BYTES = 8192
+OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
+KEPT, KEPT_MISSING, KEPT_CHANGED, KEPT_NOT_REGULAR, KEPT_FAILING, KEPT_UNRESOLVED = (
+    "kept", "missing", "changed", "not-regular", "failing", "unresolved")
+
+_HEADER = "break-it-test v1"
+_GIT_TIMEOUT = 120
+_ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+_SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
+_REGULAR_MODES = ("100644", "100755")
+
+
+def is_break_it(finding):
+    return isinstance(finding, dict) and finding.get("taxonomy") == TAXONOMY
+
+
+def _path_unsafe(path):
+    if not isinstance(path, str) or not path or "\\" in path or "\0" in path:
+        return True
+    return any(seg in ("", ".", "..") for seg in path.split("/"))
+
+
+def parse_block(text):
+    """``({"path", "run", "content", "sha256"}, None)`` for a well-formed ``break-it-test v1``
+    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact."""
+    if not isinstance(text, str):
+        return None, "block-not-a-string"
+    parts = text.split("\n", 4)
+    if parts[0] != _HEADER:
+        return None, "block-header-missing"
+    path = parts[1][len("path:"):].strip() if len(parts) > 1 and parts[1].startswith("path:") else ""
+    if not path:
+        return None, "block-path-missing"
+    run = parts[2][len("run:"):].strip() if len(parts) > 2 and parts[2].startswith("run:") else ""
+    if not run:
+        return None, "block-run-missing"
+    if len(parts) < 4 or parts[3] != "---":
+        return None, "block-separator-missing"
+    # axis: an absolute, backslashed or dot-segment path is refused before anything is written — see bite-proof record wo_a_1800_break-it
+    if _path_unsafe(path):
+        return None, "path-unsafe"
+    content = parts[4] if len(parts) == 5 else ""
+    sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return {"path": path, "run": run, "content": content, "sha256": sha}, None
+
+
+def parse_command(run):
+    """``(argv, env, None)`` for a plain argv command with optional leading ``NAME=value`` entries,
+    else ``(None, None, reason)``. Shell syntax is refused: the command is never run by a shell."""
+    if not isinstance(run, str) or not run.strip():
+        return None, None, "run-empty"
+    # axis: command substitution is refused on the raw text, before any tokenising — see bite-proof record wo_a_1800_break-it
+    if "`" in run or "$(" in run:
+        return None, None, "run-shell-syntax"
+    try:
+        tokens = shlex.split(run, posix=True)
+    except ValueError:
+        return None, None, "run-unparseable"
+    for tok in tokens:
+        # axis: a pipe, chain, redirect or terminator token is refused, not run as a literal arg — see bite-proof record wo_a_1800_break-it
+        if (tok in _SHELL_TOKENS or tok.startswith((">", "<")) or tok.endswith((";", "|"))):
+            return None, None, "run-shell-syntax"
+    env = {}
+    while tokens:
+        m = _ENV_TOKEN.match(tokens[0])
+        if not m:
+            break
+        env[m.group(1)] = m.group(2)
+        tokens.pop(0)
+    if not tokens:
+        return None, None, "run-empty"
+    return tokens, env, None
+
+
+def _record(head, block, outcome, reason=None, exit_code=None, output=""):
+    block = block if isinstance(block, dict) else {}
+    return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
+            "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
+            "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output}
+
+
+def _git(repo_root, *args):
+    return subprocess.run(["git", "-C", repo_root] + list(args), capture_output=True,
+                          timeout=_GIT_TIMEOUT)
+
+
+def _tail_text(raw, cut):
+    """The last ``OUTPUT_TAIL_BYTES`` bytes of ``raw`` as text, never more once re-encoded."""
+    if cut:
+        while raw and 0x80 <= raw[0] <= 0xBF:
+            raw = raw[1:]
+    text = raw.decode("utf-8", errors="replace")
+    total, start = 0, len(text)
+    for i in range(len(text) - 1, -1, -1):
+        total += len(text[i].encode("utf-8"))
+        if total > OUTPUT_TAIL_BYTES:
+            break
+        start = i
+    return text[start:]
+
+
+def _read_tail(log_path):
+    try:
+        with open(log_path, "rb") as fh:
+            size = os.fstat(fh.fileno()).st_size
+            # axis: only the last OUTPUT_TAIL_BYTES of a run's output reach the record — see bite-proof record wo_a_1800_break-it
+            offset = max(0, size - OUTPUT_TAIL_BYTES)
+            fh.seek(offset)
+            return _tail_text(fh.read(), offset > 0)
+    except OSError:
+        return ""
+
+
+def _kill_group(pid):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _write_confined(copy, rel, content):
+    """Create ``rel`` inside ``copy`` and nowhere else. None on success, else the not-run reason."""
+    parts = rel.split("/")
+    current = copy
+    for part in parts[:-1]:
+        current = os.path.join(current, part)
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            os.mkdir(current)
+            continue
+        # axis: a symlinked ancestor inside the copy is refused, never followed out of it — see bite-proof record wo_a_1800_break-it
+        if stat.S_ISLNK(mode):
+            return "path-escapes"
+        if not stat.S_ISDIR(mode):
+            return "path-exists"
+    target = os.path.join(copy, *parts)
+    real_copy = os.path.realpath(copy)
+    real_parent = os.path.realpath(os.path.dirname(target))
+    if real_parent != real_copy and not real_parent.startswith(real_copy + os.sep):
+        return "path-escapes"
+    try:
+        # axis: O_EXCL refuses to overwrite a file the head already tracks — see bite-proof record wo_a_1800_break-it
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except FileExistsError:
+        return "path-exists"
+    except OSError:
+        return "write-failed"
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(content.encode("utf-8"))
+    return None
+
+
+def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
+    def rec(outcome, reason=None, exit_code=None, output=""):
+        return _record(head, block, outcome, reason, exit_code, output)
+
+    try:
+        added = _git(repo_root, "worktree", "add", "--detach", copy, head)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    if added.returncode != 0:
+        return rec(OUTCOME_NOT_RUN, "copy-failed",
+                   output=_tail_text(added.stderr, True))
+    if write:
+        try:
+            refusal = _write_confined(copy, block["path"], block["content"])
+        except OSError:
+            refusal = "write-failed"
+        if refusal:
+            return rec(OUTCOME_NOT_RUN, refusal)
+    log_path = os.path.join(d, "output.log")
+    with open(log_path, "wb") as log:
+        try:
+            proc = subprocess.Popen(argv, cwd=copy, env=dict(os.environ, **env),
+                                    stdin=subprocess.DEVNULL, stdout=log,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        except (FileNotFoundError, PermissionError):
+            return rec(OUTCOME_NOT_RUN, "command-not-found")
+        timed_out = False
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(proc.pid)
+            proc.wait()
+        finally:
+            # axis: the whole process group dies after every exit, so a lingering worker never outlives the call — see bite-proof record wo_a_1800_break-it
+            _kill_group(proc.pid)
+    output = _read_tail(log_path)
+    if timed_out:
+        return rec(OUTCOME_NOT_RUN, "timeout", output=output)
+    code = proc.returncode
+    return rec(OUTCOME_PASSED if code == 0 else OUTCOME_FAILED, exit_code=code, output=output)
+
+
+def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
+    """Run one parsed block in a throwaway detached copy of ``head``. Always returns a record."""
+    block = dict(block) if isinstance(block, dict) else {}
+    argv, env, refusal = parse_command(block.get("run"))
+    if refusal:
+        return _record(head, block, OUTCOME_NOT_RUN, refusal)
+    if (not isinstance(head, str) or not head or head.startswith("-")
+            or not isinstance(repo_root, str) or not repo_root):
+        return _record(head, block, OUTCOME_NOT_RUN, "head-unresolved")
+    if write and (not isinstance(block.get("content"), str) or _path_unsafe(block.get("path"))):
+        return _record(head, block, OUTCOME_NOT_RUN, "path-unsafe")
+    d = tempfile.mkdtemp(prefix="break-it-")
+    copy = os.path.join(d, "copy")
+    try:
+        result = _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write)
+    except Exception as exc:  # the caller decides from the record; nothing is raised
+        result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
+    finally:
+        try:
+            _git(repo_root, "worktree", "remove", "--force", copy)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+        try:
+            _git(repo_root, "worktree", "prune")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return result
+
+
+def _not_run(head, block, reason):
+    return _record(head, block, OUTCOME_NOT_RUN, reason)
+
+
+def _safe_run(runner, repo_root, head, block, **kwargs):
+    try:
+        got = runner(repo_root, head, block, **kwargs)
+    except Exception:  # the caller decides from the record; nothing is raised
+        return _not_run(head, block, "runner-error")
+    if not isinstance(got, dict) or got.get("outcome") not in (
+            OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN):
+        return _not_run(head, block, "runner-error")
+    return got
+
+
+def intercept(findings, repo_root, head, *, runner=run_one):
+    """Run the break-it findings and fold the results in. Returns ``(kept, runs, exempt_ids)``:
+    ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
+    not-run ones stamped with ``RUN_FIELD``; ``runs`` is one entry per break-it finding;
+    ``exempt_ids`` holds ``id()`` of each stamped copy."""
+    kept, runs, exempt_ids = [], [], set()
+    attempted = 0
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            kept.append(finding)
+            continue
+        copy = dict(finding)
+        # axis: a seat-supplied RUN_FIELD stamp is never trusted, on any finding — see bite-proof record wo_a_1800_break-it
+        copy.pop(RUN_FIELD, None)
+        if not is_break_it(copy):
+            kept.append(copy)
+            continue
+        block, refusal = parse_block(copy.get("suggestion"))
+        if attempted >= MAX_RUNS:
+            record = _not_run(head, block, "run-cap")
+        else:
+            attempted += 1
+            if refusal:
+                record = _not_run(head, block, refusal)
+            elif block["path"] != copy.get("file"):
+                record = _not_run(head, block, "path-mismatch")
+            else:
+                record = _safe_run(runner, repo_root, head, block)
+        runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
+        # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
+        if record["outcome"] == OUTCOME_PASSED:
+            continue
+        copy[RUN_FIELD] = record
+        kept.append(copy)
+        exempt_ids.add(id(copy))
+    return kept, runs, exempt_ids
+
+
+def check_kept(repo_root, base, head, record, *, runner=run_one):
+    """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
+    Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
+    record = record if isinstance(record, dict) else {}
+    path = record.get("path")
+
+    def res(outcome, reason=None, run=None):
+        return {"path": path, "outcome": outcome, "reason": reason, "run": run}
+
+    for value in (repo_root, base, head, path, record.get("command"), record.get("sha256")):
+        if not isinstance(value, str) or not value:
+            return res(KEPT_UNRESOLVED, "input-missing")
+    if base.startswith("-") or head.startswith("-") or _path_unsafe(path):
+        return res(KEPT_UNRESOLVED, "input-unsafe")
+    try:
+        tree = _git(repo_root, "ls-tree", "-z", head, "--", path)
+        if tree.returncode != 0:
+            return res(KEPT_UNRESOLVED, "ls-tree-failed")
+        entry = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0]
+        if not entry:
+            return res(KEPT_MISSING, "not-in-head")
+        meta = entry.partition("\t")[0].split()
+        if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
+            return res(KEPT_NOT_REGULAR, "not-a-regular-file")
+        diff = _git(repo_root, "diff", "--name-only", base + "..." + head, "--", path)
+        if diff.returncode != 0:
+            return res(KEPT_UNRESOLVED, "diff-failed")
+        # axis: a file the final diff does not carry is missing, even when head holds a file at that path — see bite-proof record wo_a_1800_break-it
+        if not diff.stdout.strip():
+            return res(KEPT_MISSING, "not-in-diff")
+        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            return res(KEPT_UNRESOLVED, "cat-file-failed")
+    except (OSError, subprocess.TimeoutExpired):
+        return res(KEPT_UNRESOLVED, "git-failed")
+    # axis: the committed bytes must hash to the sha256 the loop ran, else the test was changed — see bite-proof record wo_a_1800_break-it
+    if hashlib.sha256(blob.stdout).hexdigest() != record["sha256"]:
+        return res(KEPT_CHANGED, "sha256-differs")
+    run = _safe_run(runner, repo_root, head,
+                    {"path": path, "run": record["command"], "content": "",
+                     "sha256": record["sha256"]}, write=False)
+    if run["outcome"] == OUTCOME_PASSED:
+        return res(KEPT, run=run)
+    return res(KEPT_FAILING, run.get("reason"), run)
