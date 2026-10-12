@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Review sheet data file",
-  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids.",
+  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids; stop ids are unique within the walk.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "kind", "title", "cards"],
@@ -183,10 +183,10 @@
       "pattern": "^[0-9a-f]{7,40}$"
     },
     "prSheet": {
-      "description": "What the owner needs to see of one PR, or of a stack of PRs that merges whole: what changed, the craft decisions made, the calls already decided, how the review went, and a walk through the change.",
+      "description": "What the owner needs to see of one PR, or of a stack of PRs that merges whole: what changed, the craft decisions made, the calls already decided, how the review went, and, when there is something to try, a walk through the change.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["number", "commit", "whatChanged", "craft", "alreadyDecided", "history", "walk"],
+      "required": ["number", "commit", "whatChanged", "craft", "alreadyDecided", "history"],
       "properties": {
         "number": {
           "description": "The PR's number on a pr sheet, or the stack's number on a stack sheet.",
@@ -301,9 +301,8 @@
           "items": {"type": "string", "minLength": 1}
         },
         "walk": {
-          "description": "The stops of the walk through the change, in order.",
-          "type": "array",
-          "items": {"$ref": "#/$defs/walkStop"}
+          "description": "The walk through the change, absent when the PR has nothing to try.",
+          "$ref": "#/$defs/walk"
         },
         "prs": {
           "description": "The PRs of the stack, bottom PR first, present only on a stack sheet.",
@@ -357,27 +356,71 @@
         }
       }
     },
-    "walkStop": {
-      "description": "One stop of the walk through the change: its id, its title and the PR it belongs to.",
+    "walk": {
+      "description": "The part of a PR sheet where the owner tries the change, stop by stop: how to open the product, where the pictures come from, and the stops.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "pr"],
+      "required": ["open", "picturesFrom", "stops"],
       "properties": {
-        "id": {
-          "description": "The id of the stop.",
-          "$ref": "#/$defs/id"
+        "open": {
+          "description": "How to open the product the walk is about.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label"],
+          "properties": {
+            "label": {"description": "The way to open the product, such as Open the test shop.", "type": "string", "minLength": 1},
+            "url": {"description": "A link to the product itself, never to a picture.", "type": "string", "pattern": "^https?://\\S+$"},
+            "detail": {"description": "What else is needed to open it, such as how to sign in.", "type": "string", "minLength": 1}
+          }
         },
-        "title": {
-          "description": "The stop's title.",
-          "type": "string",
-          "minLength": 1
-        },
-        "pr": {
-          "description": "The number of the PR the stop belongs to.",
-          "type": "integer",
-          "minimum": 1
+        "note": {"description": "The advisor's line under the heading.", "type": "string", "minLength": 1},
+        "picturesFrom": {"description": "Where the walk's pictures come from, in the advisor's words.", "type": "string", "minLength": 1},
+        "stops": {
+          "description": "The stops of the walk, in order.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/walkStop"}
         }
       }
+    },
+    "walkStop": {
+      "description": "One stop of the walk: a try stop is walked by hand, a look stop is a screen that cannot be reached by hand and is only looked at.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "pr", "group", "kind", "steps", "expect", "pictures"],
+      "properties": {
+        "id": {"description": "The id of the stop.", "$ref": "#/$defs/id"},
+        "title": {"description": "The stop's title.", "type": "string", "minLength": 1},
+        "pr": {"description": "The number of the PR the stop belongs to.", "type": "integer", "minimum": 1},
+        "group": {"description": "The named group the stop is listed under.", "type": "string", "minLength": 1},
+        "kind": {"description": "A try stop is walked by hand; a look stop is only looked at.", "enum": ["try", "look"]},
+        "steps": {
+          "description": "The steps of a try stop, in order; empty on a look stop.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "expect": {"description": "The Expect line on a try stop, the Look for line on a look stop.", "type": "string", "minLength": 1},
+        "optional": {"description": "True when the stop is not needed for the merge.", "type": "boolean"},
+        "notWalked": {"description": "Why the advisor did not walk this stop.", "type": "string", "minLength": 1},
+        "pictures": {"type": "array", "items": {"$ref": "#/$defs/walkPicture"}}
+      },
+      "allOf": [
+        {"description": "A try stop needs at least one step.", "if": {"properties": {"kind": {"const": "try"}}, "required": ["kind"]},
+         "then": {"properties": {"steps": {"minItems": 1}}}},
+        {"description": "A look stop has no steps.", "if": {"properties": {"kind": {"const": "look"}}, "required": ["kind"]},
+         "then": {"properties": {"steps": {"const": []}}}}
+      ]
+    },
+    "walkPicture": {
+      "description": "A picture copied into the sheet's own published files, or one that could not be copied and shows as missing; neither names another page.",
+      "anyOf": [
+        {"type": "object", "additionalProperties": false, "required": ["src", "alt"], "properties": {
+          "src": {"type": "string", "pattern": "^pictures/[0-9a-f]{12}\\.(png|jpg|jpeg|gif|webp)$"},
+          "alt": {"type": "string", "minLength": 1}, "caption": {"type": "string", "minLength": 1}}},
+        {"type": "object", "additionalProperties": false, "required": ["missing", "alt"], "properties": {
+          "missing": {"const": true},
+          "alt": {"type": "string", "minLength": 1}, "caption": {"type": "string", "minLength": 1}}}
+      ]
     },
     "id": {
       "description": "A short lowercase identifier made of letters, digits and hyphens that starts with a letter or digit.",
@@ -424,6 +467,23 @@
             "properties": {"optionId": {"type": "null"}}
           }
         }
+      ]
+    },
+    "walkAnswer": {
+      "description": "The document a PR sheet stores for one walk stop, at walk/<stop id> in the sheet's own store. Each document is written whole on every change and the owner's last tap counts. Works is offered on a try stop and Looks right on a look stop; the other counts as unanswered. A fix is chosen only on a Problem. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answer", "fix", "note", "shots"],
+      "properties": {
+        "answer": {"description": "What the owner tapped, or null when nothing is picked.", "enum": ["works", "looks-right", "problem", "skip", null]},
+        "fix": {"description": "What should happen with a Problem, or null.", "enum": ["before-merge", "follow-up", null]},
+        "note": {"description": "What the owner saw, an empty string when there is no note.", "type": "string"},
+        "shots": {"description": "The asset ids of the screenshots the owner added.", "type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "allOf": [
+        {"description": "A fix is chosen only on a Problem.",
+         "if": {"properties": {"answer": {"enum": ["works", "looks-right", "skip", null]}}, "required": ["answer"]},
+         "then": {"properties": {"fix": {"const": null}}}}
       ]
     },
     "verdict": {

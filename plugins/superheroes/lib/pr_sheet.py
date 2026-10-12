@@ -4,7 +4,8 @@
 CLI:
   pr_sheet.py build --record FILE [--record FILE ...] --input FILE --out FILE
 
-On success it writes the data file to --out, prints {"ok": true, "out": ..., "cards": N} and exits 0.
+On success it writes the data file to --out and each walk picture it could copy to pictures/ beside it, prints
+{"ok": true, "out": ..., "cards": N, "pictures": [the sheet's picture paths]} and exits 0.
 On a refusal it writes nothing, prints {"ok": false, "problems": [...]} (one line each) and exits 1; an
 unreadable or non-JSON file is a refusal problem that names the file.
 
@@ -26,8 +27,12 @@ The advisor's input is one JSON object; any key not listed is refused.
   items          Optional list. Each is {id, kind, title, ifLeft, options, recommendation?} with options
                  "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items.
   closesSpec     Optional. Null, or {"spec": ..., "receipt": ...}.
-  walk           Optional list of {id, title, pr}; id as above and unique, pr equal to number on a pr or
-                 one of prs on a stack.
+  walk           Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
+                 http(s); stops is at least 1 of {id, title, pr, group, kind, steps?, expect, optional?, notWalked?,
+                 pictures?}: id as above and unique, pr equal to number on a pr or one of prs on a stack, kind
+                 "try" (steps, at least 1) or "look" (no steps), optional a boolean, pictures a list of
+                 {path, alt, caption?}. A path is a file (png, jpg, jpeg, gif or webp), absolute or relative to the
+                 input's folder; a picture whose path is a link or cannot be read as one is shown as missing.
 An option is {id, label, consequence, sendsBack}, all required, sendsBack a boolean, ids unique within the
 item. A recommendation is {text, reason, optionId?}; optionId must name one of the item's options and is
 refused where the options are "none".
@@ -35,6 +40,7 @@ refused where the options are "none".
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
@@ -59,6 +65,8 @@ with open(SCHEMA_PATH, encoding="utf-8") as _fh:
 # The identifier and commit patterns are read from the sheet schema, their one home.
 _ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
 _COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
+_URL = re.compile(_SCHEMA["$defs"]["walk"]["properties"]["open"]["properties"]["url"]["pattern"])
+_PICTURE_TYPES = ("png", "jpg", "jpeg", "gif", "webp")
 _LANES = review_record.LANES
 _RAN = review_record.RAN_STATES
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
@@ -242,12 +250,46 @@ def _check_input(adv, words, problems):
     if spec is not None and _keys("closesSpec", spec, ("spec", "receipt"), (), problems) \
             and not (_text(spec["spec"]) and _text(spec["receipt"])):
         problems.append("closesSpec needs a spec and a receipt, both non-empty strings")
-    for stop in _check_list("walk", adv.get("walk", []), ("id", "title", "pr"), (), problems):
-        if not _num(stop["pr"]):
-            problems.append(f"walk stop {stop['id']} needs pr, an integer 1 or more")
-        elif allowed is not None and stop["pr"] not in allowed:
-            problems.append(f"walk stop {stop['id']} is for PR #{stop['pr']}, which is not in this sheet")
+    if "walk" in adv:
+        _check_walk(adv["walk"], allowed, problems)
     return allowed
+
+
+def _check_walk(walk, allowed, problems):
+    if not _keys("walk", walk, ("open", "picturesFrom", "stops"), ("note",), problems):
+        return
+    problems.extend(f"walk {k} must be a non-empty string" for k in ("note", "picturesFrom") if k in walk and not _text(walk[k]))
+    opened = walk["open"]
+    if _keys("walk open", opened, ("label",), ("url", "detail"), problems):
+        problems.extend(f"walk open {k} must be a non-empty string" for k in ("label", "detail") if k in opened and not _text(opened[k]))
+        if "url" in opened and not (isinstance(opened["url"], str) and _URL.match(opened["url"])):
+            problems.append("walk open url must be an http or https link")
+    if not (isinstance(walk["stops"], list) and walk["stops"]):
+        problems.append("walk needs at least one stop")
+        return
+    for stop in _check_list("walk stops", walk["stops"], ("id", "title", "pr", "group", "kind", "expect"),
+                            ("steps", "optional", "notWalked", "pictures"), problems):
+        w, steps, pictures = f"walk stop {stop['id']}", stop.get("steps", []), stop.get("pictures", [])
+        if not _num(stop["pr"]):
+            problems.append(f"{w} needs pr, an integer 1 or more")
+        elif allowed is not None and stop["pr"] not in allowed:
+            problems.append(f"{w} is for PR #{stop['pr']}, which is not in this sheet")
+        if stop["kind"] not in ("try", "look"):
+            problems.append(f'{w} needs kind to be "try" or "look"')
+        if not (isinstance(steps, list) and all(_text(t) for t in steps)):
+            problems.append(f"{w} needs steps to be a list of non-empty strings")
+        elif (stop["kind"] == "try" and not steps) or (stop["kind"] == "look" and steps):
+            problems.append(f"{w} is a {stop['kind']} stop, so it {'needs at least one step' if stop['kind'] == 'try' else 'takes no steps'}")
+        if "optional" in stop and not isinstance(stop["optional"], bool):
+            problems.append(f"{w} needs optional to be true or false")
+        if "notWalked" in stop and not _text(stop["notWalked"]):
+            problems.append(f"{w} needs notWalked to be a non-empty string")
+        if not isinstance(pictures, list):
+            problems.append(f"{w} needs pictures to be a list")
+        for n, pic in enumerate(pictures if isinstance(pictures, list) else [], 1):
+            if _keys(f"{w} picture {n}", pic, ("path", "alt"), ("caption",), problems) \
+                    and not all(_text(pic[k]) for k in pic):
+                problems.append(f"{w} picture {n} needs a non-empty path and alt, and a non-empty caption when it has one")
 
 
 def _lookups(kind, pr, finding):
@@ -272,7 +314,20 @@ def _card(prefix, pr, identity, call_kind, question, context, options, recommend
     return {"id": card_id(prefix, pr, identity, card), **card}
 
 
-def build(records, advisor, words):
+def _walk(walk, place):
+    """The walk as the sheet carries it; place(path) is a picture's sheet src, or None when it cannot be copied."""
+    def picture(pic):
+        src = place(pic["path"]) if place else None
+        return {**({"src": src} if src else {"missing": True}), "alt": pic["alt"],
+                **({"caption": pic["caption"]} if "caption" in pic else {})}
+    stops = [{"id": s["id"], "title": s["title"], "pr": s["pr"], "group": s["group"], "kind": s["kind"],
+              "steps": list(s.get("steps", [])), "expect": s["expect"], "pictures": [picture(p) for p in s.get("pictures", [])],
+              **{k: s[k] for k in ("optional", "notWalked") if k in s}} for s in walk["stops"]]
+    return {"open": dict(walk["open"]), **({"note": walk["note"]} if "note" in walk else {}),
+            "picturesFrom": walk["picturesFrom"], "stops": stops}
+
+
+def build(records, advisor, words, place=None):
     """Returns the sheet's data file as a dict, or raises Refusal with every problem found."""
     problems = []
     if not isinstance(advisor, dict):
@@ -365,7 +420,9 @@ def build(records, advisor, words):
             "rounds": sum(r["rounds"]["count"] for r in recs), "stoppedAtCap": any(r["rounds"]["stoppedAtCap"] for r in recs),
             "ci": {"state": top["ci"]["state"], "commit": top["ci"].get("sha")},
             "lane": top["lane"].get("value"), "laneReason": top["lane"].get("reason")},
-        "craft": craft, "alreadyDecided": decided, "history": history, "walk": copy.deepcopy(advisor.get("walk", []))}
+        "craft": craft, "alreadyDecided": decided, "history": history}
+    if "walk" in advisor:
+        sheet["walk"] = _walk(advisor["walk"], place)
     if advisor.get("previousCommit"):
         sheet["previousCommit"] = advisor["previousCommit"]
     if stack:
@@ -385,11 +442,38 @@ def _write_replacing(out, text):
     """Write beside out, then replace it, so a failed write leaves an earlier sheet intact."""
     tmp = f"{out}.{os.getpid()}.tmp"
     try:
-        pathlib.Path(tmp).write_text(text, encoding="utf-8")
+        pathlib.Path(tmp).write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
         os.replace(tmp, out)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def _stager(base, staged):
+    """The place() for build: remembers each picture file's bytes in staged by its sheet src; None when it cannot be copied."""
+    def place(path):
+        if not path or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", path):
+            return None
+        file = pathlib.Path(base, path)
+        try:
+            data = file.read_bytes() if file.suffix.lower()[1:] in _PICTURE_TYPES and file.is_file() else b""
+        except OSError:
+            data = b""
+        if not data:
+            return None
+        src = f"pictures/{hashlib.sha256(data).hexdigest()[:12]}{file.suffix.lower()}"
+        staged[src] = data
+        return src
+    return place
+
+
+def _write_pictures(folder, staged, created):
+    """Writes each staged picture beside the data file unless one is already there; lists what this run created."""
+    for src, data in sorted(staged.items()):
+        if not (folder / src).exists():
+            (folder / src).parent.mkdir(exist_ok=True)
+            created.append(folder / src)
+            _write_replacing(str(folder / src), data)
 
 
 def main(argv=None):
@@ -403,9 +487,20 @@ def main(argv=None):
         loaded = [_load(p, problems) for p in [*args.record, args.input, WORDS_PATH]]
         if problems:
             raise Refusal(problems)
-        sheet = build(loaded[:-2], loaded[-2], loaded[-1]["pr"])
-        _write_replacing(args.out, json.dumps(sheet, indent=2, ensure_ascii=False) + "\n")
-        result, code = {"ok": True, "out": args.out, "cards": len(sheet["cards"])}, 0
+        staged, created, folder = {}, [], pathlib.Path(args.out).parent
+        sheet = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(pathlib.Path(args.input).parent, staged))
+        fresh = not (folder / "pictures").exists()
+        try:
+            _write_pictures(folder, staged, created)
+            _write_replacing(args.out, json.dumps(sheet, indent=2, ensure_ascii=False) + "\n")
+        except BaseException:
+            for file in created:
+                file.unlink(missing_ok=True)
+            if fresh:
+                with contextlib.suppress(OSError):
+                    (folder / "pictures").rmdir()
+            raise
+        result, code = {"ok": True, "out": args.out, "cards": len(sheet["cards"]), "pictures": sorted(staged)}, 0
     except (Refusal, OSError) as err:
         result, code = {"ok": False, "problems": err.problems if isinstance(err, Refusal) else [str(err)]}, 1
     print(json.dumps(result, ensure_ascii=False))

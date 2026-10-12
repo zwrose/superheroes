@@ -65,6 +65,9 @@ files     = {"comic-panel.css": "<staged comic-panel.css>",
 capabilities = {"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}
 ```
 
+A PR sheet's call adds `"assets": {}` to `capabilities`: Add a screenshot uploads through it, and it makes
+the sheet organization-internal.
+
 The publish call also declares the sheet's store and viewer. This lets everyone who can open the
 sheet read it, and only its owner answer.
 
@@ -200,7 +203,12 @@ list. Its parts come in this order:
 
 1. What changed: what changed, who reviewed it, what the review caught, the rounds, CI and the commit it
    ran on, the lane and why, and the commit the sheet describes.
-2. The walk: its stops. On a stack each stop names its PR.
+2. The walk, when the PR has something to try: a box to open the product, the count walked, a line saying
+   the advisor walked it first and where the pictures come from, then the stops in named groups. A try
+   stop shows its numbered steps, an Expect line, its pictures, **Works**, **Problem** and **Skip**, and a
+   note. A look stop shows a Look for line and **Looks right**. A Problem asks **Fix before merge** or
+   **Fix in a follow-up**, offers **Add a screenshot**, and labels the note "What did you see?". On a
+   stack each stop names its PR.
 3. The items, under the accepting heading.
 4. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
    review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
@@ -227,8 +235,8 @@ No PR sheet offers an answer button outside these four:
 
 - Pick: an item with a real choice. One of its options, or Something else.
 - Agree: an item with no real choice. Accept is the yes-word.
-- Check: a walk stop, answered Works, Problem or Skip. The page draws the walk as a plain list with no
-  answer controls, so this pattern is the rule for walk stops and the page shows no check buttons.
+- Check: a walk stop, answered Works (Looks right on a look stop), Problem or Skip. A Problem then asks
+  for a fix choice.
 - Sign-off: the merge verdict, Merge or Not yet.
 
 Discovery's sheets use agree (Aligned), pick and sign-off (Approve), unchanged. A PR sheet differs from
@@ -251,8 +259,16 @@ answer that sends the PR back never counts.
 
 - Choosing Fix before merge, or any option that sends the PR back, replaces the verdict with a message
   that the PR goes back for that fix and returns with a new sheet, with nothing to answer here.
+- A walk stop answered Problem with no saved fix choice keeps the verdict locked. Fix before merge on a stop
+  replaces the verdict with the same send-back message. Stops not walked never lock the verdict, which says
+  how many are not walked, optional stops not counted.
 - Un-accepting an item after a Merge clears the Merge, saved as null with the note kept. A Merge
   restored onto a sheet that is locked is cleared the same way.
+
+### Pictures on the walk
+
+The builder copies each walk picture into `pictures/` beside `sheet.json` and lists the paths in its
+result; publish each listed path in `files`. A picture it could not copy shows as missing and links nowhere.
 
 ### A changed PR
 
@@ -267,6 +283,10 @@ chat. Nothing is merged, sent back, filed or recorded from a sheet before then.
 
 A saved Merge together with "done" is the owner's word to merge that PR. Neither alone is, and a saved
 Not yet, or no verdict, with "done" is not.
+
+The walk's results are stored at `walk/<stop id>` (`$defs/walkAnswer`) and read with the answers and
+verdict after "done". A stop's `shots` are asset ids shown at `/_blob/<id>`. A Fix in a follow-up on a
+stop is the owner's word to file that follow-up.
 
 A note that disagrees with its answer (Keep it with a note that says to fix it first) leaves the item
 open, and the session asks which one stands.

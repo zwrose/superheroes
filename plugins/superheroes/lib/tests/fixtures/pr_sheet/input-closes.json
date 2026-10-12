@@ -32,8 +32,14 @@
     "spec": "retry-failed-payments",
     "receipt": "Every line of the spec's acceptance list has a merged test: retry limit, back-off, order number kept."
   },
-  "walk": [
-    {"id": "retry-loop", "title": "The retry loop", "pr": 214},
-    {"id": "payment-tests", "title": "The new payment tests", "pr": 214}
-  ]
+  "walk": {
+    "open": {"label": "Open the test shop"},
+    "picturesFrom": "the advisor's own test shop",
+    "stops": [
+      {"id": "retry-loop", "title": "The retry loop", "pr": 214, "group": "Payments", "kind": "try",
+       "steps": ["Pay with a card that fails once"], "expect": "The second try goes through.", "pictures": []},
+      {"id": "payment-tests", "title": "The new payment tests", "pr": 214, "group": "Payments", "kind": "look",
+       "expect": "A green run in the checks.", "pictures": []}
+    ]
+  }
 }

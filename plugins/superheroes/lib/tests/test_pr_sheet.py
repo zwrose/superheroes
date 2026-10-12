@@ -1,7 +1,10 @@
 """Guards for the PR sheet builder: its facts, where each finding lands, card ids, refusals, the CLI and the samples."""
 import copy
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +28,7 @@ BIG = (["record-big.json"], "input-big.json")
 SMALL = (["record-small.json"], "input-small.json")
 STACK = (["record-stack-1.json", "record-stack-2.json", "record-stack-3.json"], "input-stack.json")
 CLOSES = (["record-big.json"], "input-closes.json")
+WALK = (["record-big.json"], "input-walk.json")
 TWIN = (["record-twin-a.json", "record-twin-b.json"], "input-twin.json")
 
 
@@ -123,7 +127,7 @@ def test_an_empty_record_gives_an_empty_sheet():
     sheet = built(SMALL)
     assert sheet["cards"] == []
     part = sheet["prSheet"]
-    assert part["craft"] == [] and part["alreadyDecided"] == [] and part["walk"] == []
+    assert part["craft"] == [] and part["alreadyDecided"] == [] and "walk" not in part
     assert part["whatChanged"]["caught"] == [] and part["history"] == ["1 rounds ran."]
     assert WORDS["nothingToAccept"] == "Nothing. The review left nothing for you."
 
@@ -212,7 +216,7 @@ def test_a_stack_gets_one_sheet_from_all_its_records():
                            for n, t in [(5, "Add the gift-card table"), (6, "Redeem a gift card at checkout"),
                                         (7, "Show the gift-card balance")]]
     assert part["commit"] == load("record-stack-3.json")["finalCommit"]["sha"]
-    assert all(stop["pr"] in [p["number"] for p in part["prs"]] for stop in part["walk"])
+    assert all(stop["pr"] in [p["number"] for p in part["prs"]] for stop in part["walk"]["stops"])
     assert [c["callKind"] for c in sheet["cards"]] == ["Leftover · #6"]
     assert part["whatChanged"]["rounds"] == 7 and part["whatChanged"]["stoppedAtCap"] is True
     assert part["whatChanged"]["caught"] == ["#5: A gift card could be created with a negative balance"]
@@ -265,7 +269,7 @@ REFUSALS = [
     pytest.param(BIG, lambda r, a: a["leftovers"].update({"F99": {}}), "names no left-for-owner finding", id="unknown-leftovers-key"),
     pytest.param(STACK, lambda r, a: r.pop(), "the records are for PRs", id="stack-mismatch"),
     pytest.param(BIG, lambda r, a: a.update(number=215), "not PR #215", id="pr-number-differs"),
-    pytest.param(STACK, lambda r, a: a["walk"][0].update(pr=999), "which is not in this sheet", id="walk-stop-not-in-stack"),
+    pytest.param(STACK, lambda r, a: a["walk"]["stops"][0].update(pr=999), "which is not in this sheet", id="walk-stop-not-in-stack"),
     pytest.param(BIG, lambda r, a: a["items"][0]["recommendation"].update(optionId="nope"), "optionId 'nope' is not one of its options", id="option-id-unknown"),
     pytest.param(BIG, lambda r, a: a["items"][0].update(options="none"), "is not one of its options", id="option-id-on-none"),
     pytest.param(BIG, lambda r, a: a.update(extra=1), "unknown key extra", id="unknown-top-level-key"),
@@ -276,7 +280,7 @@ REFUSALS = [
     pytest.param(STACK, lambda r, a: r.append(copy.deepcopy(r[0])), "has more than one record", id="stack-duplicate-record"),
     pytest.param(BIG, lambda r, a: a.update(prs=[{"number": 1, "title": "x"}]), "prs is refused", id="prs-on-a-pr-sheet"),
     pytest.param(STACK, lambda r, a: a.pop("prs"), "a stack needs prs", id="stack-without-prs"),
-    pytest.param(BIG, lambda r, a: a["walk"].append(copy.deepcopy(a["walk"][0])), "repeats the id", id="walk-repeats-an-id"),
+    pytest.param(BIG, lambda r, a: a["walk"]["stops"].append(copy.deepcopy(a["walk"]["stops"][0])), "repeats the id", id="walk-repeats-an-id"),
 ]
 
 
@@ -302,7 +306,7 @@ def test_cli_writes_the_sheet_and_prints_the_receipt(tmp_path):
     out = tmp_path / "sheet.json"
     done = cli([FIXTURES / "record-big.json"], FIXTURES / "input-big.json", out)
     assert done.returncode == 0, done.stderr
-    assert json.loads(done.stdout) == {"ok": True, "out": str(out), "cards": 3}
+    assert json.loads(done.stdout) == {"ok": True, "out": str(out), "cards": 3, "pictures": []}
     assert json.loads(out.read_text(encoding="utf-8")) == built(BIG)
 
 
@@ -405,7 +409,7 @@ def test_a_walk_stop_pr_must_be_an_integer_one_or_more(bad):
     # Axis: a walk stop's pr is refused by name unless it is an int, not a bool, of 1 or more; true is never PR #1.
     records, advisor = bundle(BIG)
     records[0]["pr"] = advisor["number"] = 1
-    advisor["walk"][0]["pr"] = bad
+    advisor["walk"]["stops"][0]["pr"] = bad
     assert WALK_STOP in problems_of(records, advisor)
 
 
@@ -413,9 +417,9 @@ def test_a_walk_stop_for_pr_one_still_builds():
     # Axis: the integer 1 is a good walk stop pr, so the bool check refuses true and not the number it equals.
     records, advisor = bundle(BIG)
     records[0]["pr"] = advisor["number"] = 1
-    for stop in advisor["walk"]:
+    for stop in advisor["walk"]["stops"]:
         stop["pr"] = 1
-    assert [stop["pr"] for stop in build(records, advisor)["prSheet"]["walk"]] == [1, 1]
+    assert [stop["pr"] for stop in build(records, advisor)["prSheet"]["walk"]["stops"]] == [1, 1]
 
 
 def test_a_leftover_with_no_identity_is_refused_up_front():
@@ -461,7 +465,7 @@ def test_one_input_with_several_problems_is_refused_with_all_of_them():
     # Axis: problems from the advisor's input, a walk stop, a finding's identity and a reviewer all come back in one refusal.
     records, advisor = bundle(BIG)
     advisor["extra"] = 1
-    advisor["walk"][0]["pr"] = True
+    advisor["walk"]["stops"][0]["pr"] = True
     without_identity(records, advisor)
     records[0]["reviewers"][1]["family"] = 5
     problems = problems_of(records, advisor)
@@ -478,3 +482,273 @@ def test_a_leftover_with_no_override_gets_the_words_three_options():
     assert card["options"] == WORDS["leftoverOptions"] and len(card["options"]) == 3
     assert [o["sendsBack"] for o in card["options"]] == [False, False, True]
     assert "recommendation" not in card
+
+
+PICTURE_FILES = ["cart-empty.png", "cart-paid.png", "declined-screen.png"]
+FIXED_SRC = "pictures/0123456789ab.png"
+
+
+def src_of(name):
+    return "pictures/" + hashlib.sha256((FIXTURES / "elsewhere" / name).read_bytes()).hexdigest()[:12] + ".png"
+
+
+def test_the_full_walk_is_carried_through():
+    # Axis: the open box, note, source of pictures, groups, steps, expectations and marks come through, each stop in the schema's key order.
+    records, advisor = bundle(WALK)
+    sheet = pr_sheet.build(records, advisor, WORDS, place=lambda path: FIXED_SRC)
+    walk = sheet["prSheet"]["walk"]
+    assert list(walk) == ["open", "note", "picturesFrom", "stops"]
+    assert walk["open"] == advisor["walk"]["open"] and walk["note"] == "Walk on your phone."
+    assert walk["picturesFrom"] == advisor["walk"]["picturesFrom"]
+    p1, p2, p3, p4, f1 = walk["stops"]
+    assert [s["id"] for s in walk["stops"]] == ["p1", "p2", "p3", "p4", "f1"]
+    assert list(p1) == ["id", "title", "pr", "group", "kind", "steps", "expect", "pictures"]
+    assert p1["steps"] == advisor["walk"]["stops"][0]["steps"] and p1["group"] == "On your phone"
+    assert p1["pictures"] == [{"src": FIXED_SRC, "alt": "The empty cart", "caption": "Where you start"},
+                              {"src": FIXED_SRC, "alt": "The paid order"}]
+    assert p2["pictures"] == [] and p3["pictures"] == [] and p3["optional"] is True and p3["steps"] == ["Pay with a second test card"]
+    assert p4["notWalked"] == "It needs your own sign-in to the bank's test dashboard." and "optional" not in p4
+    assert f1["kind"] == "look" and f1["steps"] == [] and f1["group"] == "Failure screens · look only"
+    assert "optional" not in p1 and "notWalked" not in p1
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_a_stack_walks_stops_keep_their_pr():
+    # Axis: on a stack each stop is carried with the PR it belongs to, and a stop without steps gets an empty list.
+    stops = built(STACK)["prSheet"]["walk"]["stops"]
+    assert [(s["id"], s["pr"], s["steps"]) for s in stops] == [("gift-card-table", 5, []), ("checkout-redeem", 6, ["Pay with a gift card"])]
+
+
+def test_a_sheet_without_a_walk_has_no_walk_key():
+    # Axis: an input with no walk gives a sheet with no walk key at all, not an empty one.
+    assert "walk" not in built(SMALL)["prSheet"]
+
+
+def test_without_a_place_every_picture_is_missing():
+    # Axis: with no place to copy pictures to, each picture is carried as missing, with no src.
+    records, advisor = bundle(WALK)
+    stops = pr_sheet.build(records, advisor, WORDS)["prSheet"]["walk"]["stops"]
+    pictures = [p for s in stops for p in s["pictures"]]
+    assert len(pictures) == 4 and all(p["missing"] is True and "src" not in p for p in pictures)
+    assert pictures[0] == {"missing": True, "alt": "The empty cart", "caption": "Where you start"}
+
+
+def test_a_place_that_cannot_copy_gives_a_missing_picture():
+    # Axis: a place that answers None for one picture marks that one missing and leaves the others copied.
+    records, advisor = bundle(WALK)
+    sheet = pr_sheet.build(records, advisor, WORDS, place=lambda path: None if "paid" in path else FIXED_SRC)
+    first = sheet["prSheet"]["walk"]["stops"][0]["pictures"]
+    assert first[0]["src"] == FIXED_SRC and first[1] == {"missing": True, "alt": "The paid order"}
+
+
+def set_walk(key, value):
+    return lambda a: a["walk"].__setitem__(key, value)
+
+
+def set_stop(stop, key, value):
+    return lambda a: a["walk"]["stops"][stop].__setitem__(key, value)
+
+
+def set_picture(key, value, stop=0, picture=0):
+    return lambda a: a["walk"]["stops"][stop]["pictures"][picture].__setitem__(key, value)
+
+
+WALK_REFUSALS = [
+    pytest.param(lambda a: a.__setitem__("walk", []), "walk must be an object", id="walk-not-an-object"),
+    pytest.param(set_walk("extra", 1), "walk has an unknown key extra", id="walk-unknown-key"),
+    pytest.param(lambda a: a["walk"].pop("picturesFrom"), "walk is missing picturesFrom", id="no-pictures-from"),
+    pytest.param(set_walk("picturesFrom", " "), "walk picturesFrom must be a non-empty string", id="empty-pictures-from"),
+    pytest.param(set_walk("note", ""), "walk note must be a non-empty string", id="empty-note"),
+    pytest.param(lambda a: a["walk"]["open"].update(extra=1), "walk open has an unknown key extra", id="open-unknown-key"),
+    pytest.param(lambda a: a["walk"]["open"].update(label=""), "walk open label must be a non-empty string", id="open-empty-label"),
+    pytest.param(lambda a: a["walk"]["open"].update(detail=""), "walk open detail must be a non-empty string", id="open-empty-detail"),
+    pytest.param(lambda a: a["walk"]["open"].update(url="javascript:x"), "walk open url must be an http or https link", id="open-url-not-http"),
+    pytest.param(lambda a: a["walk"]["open"].update(url="https://"), "walk open url must be an http or https link", id="open-url-empty-host"),
+    pytest.param(set_walk("stops", []), "walk needs at least one stop", id="no-stops"),
+    pytest.param(set_walk("stops", "p1"), "walk needs at least one stop", id="stops-not-a-list"),
+    pytest.param(set_stop(0, "extra", 1), "walk stops entry 1 has an unknown key extra", id="stop-unknown-key"),
+    pytest.param(lambda a: a["walk"]["stops"][0].pop("group"), "walk stops entry 1 is missing group", id="stop-no-group"),
+    pytest.param(set_stop(0, "group", ""), "walk stops entry 1 needs an id", id="stop-empty-group"),
+    pytest.param(set_stop(0, "expect", ""), "walk stops entry 1 needs an id", id="stop-empty-expect"),
+    pytest.param(set_stop(0, "id", "Bad Id"), "walk stops entry 1 needs an id", id="stop-bad-id"),
+    pytest.param(set_stop(1, "id", "p1"), "walk stops entry 2 repeats the id p1", id="stop-repeats-an-id"),
+    pytest.param(set_stop(0, "pr", 999), "walk stop p1 is for PR #999", id="stop-pr-not-in-sheet"),
+    pytest.param(set_stop(0, "kind", "scroll"), 'walk stop p1 needs kind to be "try" or "look"', id="stop-unknown-kind"),
+    pytest.param(set_stop(0, "steps", []), "walk stop p1 is a try stop, so it needs at least one step", id="try-without-steps"),
+    pytest.param(lambda a: a["walk"]["stops"][0].pop("steps"), "walk stop p1 is a try stop, so it needs at least one step", id="try-with-no-steps-key"),
+    pytest.param(set_stop(4, "steps", ["Look"]), "walk stop f1 is a look stop, so it takes no steps", id="look-with-steps"),
+    pytest.param(set_stop(0, "steps", ["ok", ""]), "walk stop p1 needs steps to be a list of non-empty strings", id="empty-step"),
+    pytest.param(set_stop(0, "steps", "Open it"), "walk stop p1 needs steps to be a list of non-empty strings", id="steps-not-a-list"),
+    pytest.param(set_stop(2, "optional", "yes"), "walk stop p3 needs optional to be true or false", id="optional-not-a-boolean"),
+    pytest.param(set_stop(3, "notWalked", ""), "walk stop p4 needs notWalked to be a non-empty string", id="empty-not-walked"),
+    pytest.param(set_stop(0, "pictures", "a.png"), "walk stop p1 needs pictures to be a list", id="pictures-not-a-list"),
+    pytest.param(lambda a: a["walk"]["stops"][0]["pictures"][0].pop("alt"), "walk stop p1 picture 1 is missing alt", id="picture-without-alt"),
+    pytest.param(lambda a: a["walk"]["stops"][0]["pictures"][0].pop("path"), "walk stop p1 picture 1 is missing path", id="picture-without-path"),
+    pytest.param(set_picture("path", ""), "walk stop p1 picture 1 needs a non-empty path and alt", id="picture-empty-path"),
+    pytest.param(set_picture("alt", ""), "walk stop p1 picture 1 needs a non-empty path and alt", id="picture-empty-alt"),
+    pytest.param(set_picture("caption", ""), "walk stop p1 picture 1 needs a non-empty path and alt", id="picture-empty-caption"),
+    pytest.param(set_picture("src", "pictures/a.png"), "walk stop p1 picture 1 has an unknown key src", id="picture-unknown-key"),
+]
+
+
+@pytest.mark.parametrize("mutate, expected", WALK_REFUSALS)
+def test_refuses_a_walk_that_breaks_a_rule(mutate, expected):
+    # Axis: each rule of the advisor's walk is refused with one problem line that names the stop or field it is about.
+    records, advisor = bundle(WALK)
+    mutate(advisor)
+    problems = problems_of(records, advisor)
+    assert [p for p in problems if expected in p], problems
+
+
+def test_a_stack_walk_stop_for_a_pr_outside_the_stack_is_refused():
+    # Axis: on a stack the stop's PR must be one of the stack's PRs.
+    records, advisor = bundle(STACK)
+    advisor["walk"]["stops"][1]["pr"] = 4
+    assert any("walk stop checkout-redeem is for PR #4" in p for p in problems_of(records, advisor))
+
+
+def run_walk(tmp_path, advisor=None):
+    """The CLI over the walk fixture and the big record, writing into tmp_path/out; an altered input is written
+    into tmp_path/in beside a copy of the fixture's pictures, so its relative paths still resolve."""
+    source = FIXTURES / "input-walk.json"
+    if advisor is not None:
+        shutil.copytree(FIXTURES / "elsewhere", tmp_path / "in" / "elsewhere")
+        source = tmp_path / "in" / "input.json"
+        source.write_text(json.dumps(advisor), encoding="utf-8")
+    (tmp_path / "out").mkdir(exist_ok=True)
+    return cli([FIXTURES / "record-big.json"], source, tmp_path / "out" / "sheet.json")
+
+
+def picture_names(folder):
+    return sorted(p.name for p in (folder / "pictures").iterdir()) if (folder / "pictures").is_dir() else []
+
+
+def test_the_cli_copies_each_picture_beside_the_data_file(tmp_path):
+    # Axis: each copyable picture is written to pictures/<hash>.png byte for byte, listed in the result, and the sheet names no path or link for it.
+    done = run_walk(tmp_path)
+    out = tmp_path / "out"
+    assert done.returncode == 0, done.stderr
+    expected = sorted(src_of(n) for n in PICTURE_FILES)
+    assert json.loads(done.stdout)["pictures"] == expected
+    for name in PICTURE_FILES:
+        assert (out / src_of(name)).read_bytes() == (FIXTURES / "elsewhere" / name).read_bytes()
+    assert picture_names(out) == sorted(e.split("/")[1] for e in expected)
+    text = (out / "sheet.json").read_text(encoding="utf-8")
+    sheet = json.loads(text)
+    shown = json.dumps(sheet["prSheet"]["walk"]["stops"])
+    assert "http" not in shown and "://" not in shown and "elsewhere" not in text
+    assert text.count("://") == 1 and sheet["prSheet"]["walk"]["open"]["url"] == "https://shop.example.test"
+    assert [p["src"] for s in sheet["prSheet"]["walk"]["stops"] for p in s["pictures"] if "src" in p] == [
+        src_of("cart-empty.png"), src_of("cart-paid.png"), src_of("declined-screen.png")]
+
+
+def test_the_picture_that_cannot_be_found_is_missing_with_no_src(tmp_path):
+    # Axis: a picture whose file does not exist is carried as missing with its alt and no src, and the sheet still builds.
+    done = run_walk(tmp_path)
+    assert done.returncode == 0, done.stderr
+    look = json.loads((tmp_path / "out" / "sheet.json").read_text(encoding="utf-8"))["prSheet"]["walk"]["stops"][4]
+    assert look["pictures"][1] == {"missing": True, "alt": "The gave-up screen on a small phone"}
+
+
+def test_a_link_is_never_a_picture(tmp_path):
+    # Axis: a picture path with a URL scheme, a file: link included, becomes a missing picture; nothing is fetched or copied.
+    real = (FIXTURES / "elsewhere" / "cart-empty.png").resolve()
+    advisor = load("input-walk.json")
+    paths = ["https://example.com/a.png", "HTTP://example.com/a.png", real.as_uri(), "file:" + str(real), "data:image/png;base64,AAAA"]
+    advisor["walk"]["stops"] = [dict(advisor["walk"]["stops"][1], pictures=[{"path": p, "alt": "A link"} for p in paths])]
+    done = run_walk(tmp_path, advisor)
+    assert done.returncode == 0, done.stderr
+    sheet = json.loads((tmp_path / "out" / "sheet.json").read_text(encoding="utf-8"))
+    assert sheet["prSheet"]["walk"]["stops"][0]["pictures"] == [{"missing": True, "alt": "A link"}] * len(paths)
+    assert json.loads(done.stdout)["pictures"] == [] and not (tmp_path / "out" / "pictures").exists()
+
+
+def test_a_picture_file_that_cannot_be_copied_is_missing(tmp_path, monkeypatch):
+    # Axis: a directory, an empty file, a wrong suffix, a dangling link and an unreadable file are each missing; a good file beside them is copied.
+    (tmp_path / "folder.png").mkdir()
+    (tmp_path / "empty.png").write_bytes(b"")
+    (tmp_path / "notes.txt").write_bytes(b"not a picture")
+    (tmp_path / "dangling.png").symlink_to(tmp_path / "gone.png")
+    (tmp_path / "locked.png").write_bytes(b"locked")
+    good = tmp_path / "good.PNG"
+    good.write_bytes((FIXTURES / "elsewhere" / "cart-empty.png").read_bytes())
+    staged = {}
+    place = pr_sheet._stager(tmp_path, staged)
+    real = Path.read_bytes
+
+    def read_bytes(self):
+        if self.name == "locked.png":
+            raise PermissionError("locked")
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    names = ["folder.png", "empty.png", "notes.txt", "dangling.png", "locked.png", "nothing", "", "gone.png", "C:\\x.png"]
+    assert [place(n) for n in names] == [None] * len(names)
+    assert staged == {}
+    assert place("good.PNG") == src_of("cart-empty.png") and place(str(good)) == src_of("cart-empty.png")
+    assert list(staged) == [src_of("cart-empty.png")]
+
+
+def test_two_stops_naming_the_same_file_share_one_copy(tmp_path):
+    # Axis: the same picture used twice, under one path or two, is copied once and both pictures carry the same src.
+    advisor = load("input-walk.json")
+    pictures = [{"path": "elsewhere/cart-empty.png", "alt": "One"}, {"path": "./elsewhere/../elsewhere/cart-empty.png", "alt": "Two"}]
+    advisor["walk"]["stops"] = [dict(advisor["walk"]["stops"][1], pictures=pictures)]
+    done = run_walk(tmp_path, advisor)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)["pictures"] == [src_of("cart-empty.png")] and len(picture_names(tmp_path / "out")) == 1
+
+
+def test_an_absolute_path_is_copied_too(tmp_path):
+    # Axis: a picture path may be absolute as well as relative to the input's folder.
+    advisor = load("input-walk.json")
+    path = str((FIXTURES / "elsewhere" / "cart-paid.png").resolve())
+    advisor["walk"]["stops"] = [dict(advisor["walk"]["stops"][1], pictures=[{"path": path, "alt": "Paid"}])]
+    done = run_walk(tmp_path, advisor)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)["pictures"] == [src_of("cart-paid.png")]
+
+
+def test_a_refused_input_writes_nothing_not_even_pictures(tmp_path):
+    # Axis: an input with pictures that is refused leaves no data file, no pictures folder and no temp file.
+    advisor = load("input-walk.json")
+    advisor["extra"] = 1
+    done = run_walk(tmp_path, advisor)
+    assert done.returncode == 1 and json.loads(done.stdout)["ok"] is False
+    assert list((tmp_path / "out").iterdir()) == []
+
+
+def test_a_rerun_over_an_existing_folder_leaves_the_pictures_untouched(tmp_path):
+    # Axis: a picture file already at its content-addressed name is not rewritten, and a second run succeeds.
+    first = run_walk(tmp_path)
+    assert first.returncode == 0, first.stderr
+    path = tmp_path / "out" / src_of("cart-paid.png")
+    path.write_bytes(b"left alone")
+    second = run_walk(tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert path.read_bytes() == b"left alone"
+    assert json.loads(second.stdout)["pictures"] == json.loads(first.stdout)["pictures"]
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["fresh-folder", "one-picture-already-there"])
+def test_a_failed_write_removes_the_pictures_this_run_created(tmp_path, monkeypatch, capsys, existing):
+    # Axis: when the data file cannot be written after the pictures were, the run exits 1 and removes every picture it created, keeping one that was already there.
+    out = tmp_path / "sheet.json"
+    kept = tmp_path / src_of("cart-paid.png")
+    if existing:
+        kept.parent.mkdir()
+        kept.write_bytes((FIXTURES / "elsewhere" / "cart-paid.png").read_bytes())
+    real = os.replace
+
+    def replace(src, dst):
+        if str(dst) == str(out):
+            raise OSError("disk full")
+        return real(src, dst)
+
+    monkeypatch.setattr(pr_sheet.os, "replace", replace)
+    code = pr_sheet.main(["build", "--record", str(FIXTURES / "record-big.json"), "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1 and result == {"ok": False, "problems": ["disk full"]}
+    assert not out.exists() and list(tmp_path.glob("**/*.tmp")) == []
+    assert picture_names(tmp_path) == ([kept.name] if existing else [])
+    assert (tmp_path / "pictures").exists() is existing

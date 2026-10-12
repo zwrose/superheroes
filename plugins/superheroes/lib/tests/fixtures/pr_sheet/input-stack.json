@@ -14,9 +14,14 @@
       "recommendation": {"text": "Fix it before merge", "reason": "A surprise second payment loses the sale.", "optionId": "fix-before-merge"}
     }
   },
-  "walk": [
-    {"id": "gift-card-table", "title": "The gift-card table", "pr": 5},
-    {"id": "checkout-redeem", "title": "Spending a card at checkout", "pr": 6},
-    {"id": "balance-page", "title": "The balance on the account page", "pr": 7}
-  ]
+  "walk": {
+    "open": {"label": "Open the test shop"},
+    "picturesFrom": "the advisor's own test shop",
+    "stops": [
+      {"id": "gift-card-table", "title": "The gift-card table", "pr": 5, "group": "Gift cards", "kind": "look",
+       "expect": "The new table in the admin view.", "pictures": []},
+      {"id": "checkout-redeem", "title": "Spending a card at checkout", "pr": 6, "group": "Gift cards", "kind": "try",
+       "steps": ["Pay with a gift card"], "expect": "The balance drops by the price.", "pictures": []}
+    ]
+  }
 }
