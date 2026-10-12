@@ -78,6 +78,7 @@ import review_diff_bytes  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
+import risk_areas  # noqa: E402
 import review_round_policy  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import round_commit  # noqa: E402
@@ -7316,6 +7317,71 @@ def _role_brief_path(seat_key):
     return os.path.join(_plugin_resource_root(), "agents", "%s.md" % seat_key)
 
 
+_RISK_AREAS_MATCHED_SHOWN = 5
+_RISK_AREAS_GIT_TIMEOUT_S = 120
+
+
+def _risk_areas_unreadable(detail):
+    line = " ".join(str(detail).split()) or "unknown"
+    return "not set (changed-paths-unreadable: %s)" % line
+
+
+def _risk_areas_changed_paths(repo_root, base, head):
+    """(paths, None) for the change `base...head` touches, else (None, not-set text). Never raises."""
+    if not isinstance(base, str) or not base:
+        return None, _risk_areas_unreadable("base unresolved")
+    if not isinstance(head, str) or not head:
+        return None, _risk_areas_unreadable("head unresolved")
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "diff", "--name-only", "-z", "--no-renames",
+             "%s...%s" % (base, head)],
+            capture_output=True, timeout=_RISK_AREAS_GIT_TIMEOUT_S)
+    except FileNotFoundError:
+        return None, _risk_areas_unreadable("git not found")
+    except subprocess.TimeoutExpired:
+        return None, _risk_areas_unreadable("git diff timed out")
+    except OSError as exc:
+        return None, _risk_areas_unreadable("%s: %s" % (type(exc).__name__, exc))
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        return None, _risk_areas_unreadable(
+            "git diff exited %d: %s" % (proc.returncode, err) if err
+            else "git diff exited %d" % proc.returncode)
+    names = proc.stdout.decode("utf-8", "surrogateescape").split("\0")
+    return [name for name in names if name], None
+
+
+def _risk_areas_text(seat_key, repo_root, base, head):
+    """The test role's risk-areas clause: which of the project's risk areas the reviewed change
+    touches, as read by `risk_areas.touched` over every changed path. Empty for any other seat.
+    Never raises; a change that cannot be read says so rather than claiming it touches none."""
+    if seat_key != "test-role":
+        return ""
+    try:
+        paths, unreadable = _risk_areas_changed_paths(repo_root, base, head)
+        if unreadable is not None:
+            return unreadable
+        r = risk_areas.touched(repo_root, paths)
+        if r["riskAreas"] == "not-set":
+            detail = r.get("detail")
+            if isinstance(detail, str) and detail:
+                return "not set (%s: %s)" % (r["reason"], detail)
+            return "not set (%s)" % r["reason"]
+        if not r["touched"]:
+            return "none of this project's risk areas"
+        entries = []
+        for hit in r["touched"]:
+            matched = hit["matched"]
+            shown = ", ".join(matched[:_RISK_AREAS_MATCHED_SHOWN])
+            if len(matched) > _RISK_AREAS_MATCHED_SHOWN:
+                shown += ", +%d more" % (len(matched) - _RISK_AREAS_MATCHED_SHOWN)
+            entries.append("%s (matched: %s)" % (hit["area"]["name"], shown))
+        return "; ".join(entries)
+    except Exception as exc:  # the order render must never fail on this clause
+        return _risk_areas_unreadable("%s: %s" % (type(exc).__name__, exc))
+
+
 def _normalize_focus_notes(value):
     if value is None:
         return ""
@@ -7688,6 +7754,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
     "ROLE_BRIEF_LINE",
+    "RISK_AREAS_LINE",
     "MODE",
     "MODE_EVIDENCE",
     "REPO",
@@ -8029,6 +8096,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
             "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
+            "RISK_AREAS_TEXT": _risk_areas_text(
+                seat_key, repo_root, cfg.get("baseRef") or meta.get("baseRef"),
+                _session_certified_head(session_dir, state)),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,

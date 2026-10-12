@@ -20,6 +20,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 - CLAUDE.md (project conventions): CLAUDE.md
 
 
+
 - Prior comments + author justifications: /tmp/superheroes-session-wo4-golden/prior-comments.json
 - Focus: touch auth paths carefully
 
