@@ -8,6 +8,7 @@
 |---|---|---|---|---|
 | C-select | the cloud condition in `_readers` | a cloud session on the old `gh pr`/`gh issue`/`gh repo` readers | `test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line` | proven |
 | L-first-line | the first-line cut in `_closing_issues` | a closing keyword on a later line read as the PR's closing issue | `test_closing_issues_reads_only_the_first_line_and_fails_closed[not-on-the-first-line]` | proven |
+| C-cwd | the `cwd=repo_root` argument in `_repo_name_rest` | the cloud repo read run in a directory other than the repo root | `test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line` | proven |
 
 Unproven (no neutralization run, inside the order's six-command budget): the other
 `_closing_issues` rows (non-closing verb, whole-word keyword, whole-number, other-repo qualified
@@ -87,3 +88,40 @@ EXIT=1
 **raw green:** not run apart from the full post-restore state: the order's six-command budget was spent
 (baseline, post-edit suite, red 1, green 1, red 2, validator), so this element has no separate green
 capture. The restored line is quoted above; the orchestrator's re-run closes it.
+
+## C-cwd — the cloud repo read runs in the repo root
+
+**guarded element:** the argument `cwd=repo_root` in the `_run` call inside `_repo_name_rest`.
+**axis:** the REST repo-name read (`gh api repos/{owner}/{repo}`) runs with the repo root as its
+working directory, so `gh` resolves the checkout's repository; the fake `gh` answers `o/r` only from
+`tmp_path / "checkout"` (passed as `--repo-root`) and exits 2 from the subprocess's own cwd, `tmp_path`.
+
+**neutralization:** in `plugins/superheroes/lib/review_record.py`, `_repo_name_rest`:
+`out = _run(["gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name"], cwd=repo_root)` became
+`out = _run(["gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name"])`.
+
+**raw red:** (run of
+`test_review_record.py::test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line`
+alone, no `-n auto`; the pytest source dump of the test body is elided here, the failure lines are verbatim)
+```
+F                                                                        [100%]
+>       assert proc.returncode == 0 and out["ok"] and out["action"] == "created", (proc.stdout, proc.stderr)
+E       AssertionError: ('{"ok": false, "reason": "review-record-gh-failed", "detail": "the repository could not be resolved from the repo root"}
+E         ', '')
+E       assert (1 == 0)
+FAILED plugins/superheroes/lib/tests/test_review_record.py::test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line
+1 failed in 11.62s
+EXIT=1
+```
+
+**restore:** the inverse edit, `.full_name"])` back to `.full_name"], cwd=repo_root)`.
+
+**restore receipt:** `grep -n 'full_name' review_record.py` printed
+`129:    out = _run(["gh", "api", "repos/{owner}/{repo}", "--jq", ".full_name"], cwd=repo_root)`.
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 12.34s
+EXIT=0
+```

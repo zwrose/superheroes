@@ -1054,18 +1054,23 @@ def test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_bo
     head = journal["viewHeadSha"]
     state, argv_log = tmp_path / "gh-state.json", tmp_path / "gh-argv.log"
     state.write_text(json.dumps({"comments": []}))
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
     gh_dir = tmp_path / "bin"
     gh_dir.mkdir()
     gh = gh_dir / "gh"
     gh.write_text(f"""#!{sys.executable}
-import json, sys
+import json, os, sys
 a = sys.argv[1:]
 state = {str(state)!r}
 head = {head!r}
+checkout = {str(checkout)!r}
 with open({str(argv_log)!r}, "a") as log:
     log.write(json.dumps(a) + "\\n")
 s = json.load(open(state))
 if a == ["api", "repos/{{owner}}/{{repo}}", "--jq", ".full_name"]:
+    if os.path.realpath(os.getcwd()) != os.path.realpath(checkout):
+        sys.exit(2)
     print("o/r")
 elif a == ["api", "repos/o/r/pulls/7"]:
     print(json.dumps({{"head": {{"sha": head}}, "body": "Closes #9.\\nmore"}}))
@@ -1090,7 +1095,8 @@ else:
     env = {"PATH": f"{gh_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_CODE_REMOTE": "true"}
     acct = account(finalCommit=head, reviewers=[reviewer(runDir=run_dir)])
     proc = subprocess.run([sys.executable, "-B", rr.__file__, "write", "--account", put(tmp_path, acct),
-                           "--repo-root", str(tmp_path)], capture_output=True, text=True, env=env)
+                           "--repo-root", str(checkout)], capture_output=True, text=True, env=env,
+                          cwd=str(tmp_path))
     out = json.loads(proc.stdout)
     assert proc.returncode == 0 and out["ok"] and out["action"] == "created", (proc.stdout, proc.stderr)
     calls = [json.loads(line) for line in argv_log.read_text().splitlines()]

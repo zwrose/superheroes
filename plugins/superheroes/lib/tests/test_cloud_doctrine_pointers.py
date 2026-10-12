@@ -31,6 +31,7 @@ def _charter_section(number):
 
 @pytest.mark.parametrize("number", _CLOUD_SECTIONS)
 def test_each_cloud_section_points_at_the_cloud_reference(number):
+    # axis: section pointers; a cloud section of the charter with no pointer to the cloud reference
     assert _CLOUD_REF in _charter_section(number), (
         "charter section %s has no pointer to %s" % (number, _CLOUD_REF))
 
@@ -45,6 +46,7 @@ def _parser_verbs():
 
 
 def test_every_cloud_builder_verb_the_reference_names_exists():
+    # axis: verbs; a verb the reference names that the CLI lacks, or a required verb the reference omits
     named = _named_verbs(_read_plugin(_CLOUD_REF))
     verbs = _parser_verbs()
     assert named, "%s names no cloud_builder.py verb" % _CLOUD_REF
@@ -54,6 +56,7 @@ def test_every_cloud_builder_verb_the_reference_names_exists():
 
 
 def test_size_names_the_builder_note():
+    # axis: the Size section; the review-discipline Size section not naming the builder note and the cloud reference
     text = _read_plugin("rubric/review-discipline.md")
     match = re.search(r"(?ms)^### Size\n.*?(?=^#{2,3} |\Z)", text)
     assert match, "review-discipline.md has no ### Size section"
@@ -62,6 +65,7 @@ def test_size_names_the_builder_note():
 
 
 def test_verb_census_reads_whole_tokens():
+    # axis: whole tokens; a misspelled verb that merely starts with a real one read as the real one
     named = _named_verbs("cloud_builder.py intake2 --repo-root /repo --launch-file /launch")
     assert named == {"intake2"}
     assert named - set(_parser_verbs()) == {"intake2"}
