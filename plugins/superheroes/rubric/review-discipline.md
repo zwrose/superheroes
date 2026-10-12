@@ -60,7 +60,9 @@ lanes. **Crossing twice the estimate is the tripwire**; for a range estimate, tw
 line (for 40–90, 180). The first commit past 2× is the crossing,
 even when a later count falls back under it. At that commit the builder
 messages the advisor session its order names — the count, the estimate, and a proposed split — and
-writes or dispatches no more code until the reply, waiting in-turn as the host tool map says. The
+writes or dispatches no more code until the reply, waiting in-turn as the host tool map says. A
+builder in a cloud session messages the advisor by posting a builder note on its issue
+(`skills/workhorse/reference/cloud.md`). The
 advisor replies **split or continue** — or **park**, when the same commit also crossed 600 — and
 records the ruling on the issue for the owner's veto; the ruling is the advisor's craft call. With no
 reply within **15 minutes**, or no way on the host to message the advisor, the builder posts the same

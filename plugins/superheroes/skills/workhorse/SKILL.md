@@ -186,6 +186,8 @@ Intake is the last owner-interactive step. You set up the workspace and run the 
 §3) while the owner is still here. Everything after that runs autonomously, with no further prompt
 until a consequential flag or handback.
 
+**Read `skills/workhorse/reference/cloud.md` § Intake when the launch prompt says `Place: cloud session`.**
+
 **Done when:** the route is `build-ready`, the Anchor resolves, any register-check passed with its
 output in the intake note, and any extra launch-prompt text sits on the issue. Or the issue carries
 your route-back or stop report, and you have stopped.
@@ -244,6 +246,8 @@ autonomous work, run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/build_lane.py" decla
 The declaration writes the full-lane scope marker, bound to the branch. Light and micro lanes
 declare nothing.
 
+**Read `skills/workhorse/reference/cloud.md` § Workspace when the launch prompt says `Place: cloud session`.**
+
 **Done when:** `git rev-parse --show-toplevel` names your own build worktree in the issue's repo,
 any supplied slot and generation verified, the resolved git identity is present and correct, the
 app is up or recorded as none, and a full-lane build's declaration succeeded.
@@ -269,6 +273,8 @@ they are here. An unproven tool stalls the build at its first approval prompt, w
 middle of the night.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/preflight.md` when you run the preflight.** It holds every check and the go/no-go gate.
+
+**Read `skills/workhorse/reference/cloud.md` § Preflight when the launch prompt says `Place: cloud session`.**
 
 **Done when:** every capability class the build uses passed a real exercise, writes included, and
 the browser probe passed or is recorded N/A for the PR.
@@ -611,6 +617,8 @@ on that behavior is fixed or honestly parked, never deferred as out of scope.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Bounded acceptance — prose-contract DoDs when the DoD under review is prose.**
 
+**Read `skills/workhorse/reference/cloud.md` § Review when the launch prompt says `Place: cloud session`.**
+
 **Done when:** the review converged with no open blocker on the final head, or a park names the open
 blocker, and the dispositions table and the durable review receipt are posted.
 
@@ -682,6 +690,8 @@ merge.** Hand back to the owner.
 
 **Read `skills/workhorse/reference/handback.md` when you compose or rewrite the PR body.**
 
+**Read `skills/workhorse/reference/cloud.md` § Handback when the launch prompt says `Place: cloud session`.**
+
 **Done when:** the ready PR's remote head contains every commit your receipts claim, its first line
 is the close link, the advisor-vet slot carries its marker and reminder, and the build-record,
 degradations, follow-ups, size tripwire, and DoD table sections are all present.
@@ -704,6 +714,8 @@ route, or a decision you cannot make, **park honestly with receipts**: what is d
 blocked, and what you need. A truthful park beats a false ship.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` when a park hands a decision back to the owner**, and give the blocked decision the per-item spine that file defines.
+
+**Read `skills/workhorse/reference/cloud.md` § Asking the advisor: the builder note when the launch prompt says `Place: cloud session` and you need the advisor's answer or must park.**
 
 **Done when:** every post-handback change has the re-review its delta row names and the body reads
 correct top to bottom, or a park with receipts is posted on the PR.
