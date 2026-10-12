@@ -1871,11 +1871,6 @@
         showErrors(problems);
         return;
       }
-      if (sheet.kind === "pr" || sheet.kind === "stack") {
-        // The page does not draw the prSheet block yet; refuse rather than show cards without the CI facts, missing reviews and verdict.
-        showErrors(["This page cannot draw a " + sheet.kind + " sheet yet, so it would leave out the review evidence and the merge verdict. Nothing is shown rather than part of it."]);
-        return;
-      }
       let words = null;
       let wordsProblem = null;
       try {
