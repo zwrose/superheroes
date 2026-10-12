@@ -656,6 +656,11 @@ def test_a_link_is_never_a_picture(tmp_path):
     advisor = load("input-walk.json")
     paths = ["https://example.com/a.png", "HTTP://example.com/a.png", real.as_uri(), "file:" + str(real), "data:image/png;base64,AAAA"]
     advisor["walk"]["stops"] = [dict(advisor["walk"]["stops"][1], pictures=[{"path": p, "alt": "A link"} for p in paths])]
+    # A real picture sits in the input's folder at the path each link would map to, so only the scheme guard keeps it out.
+    for path in paths:
+        planted = Path(tmp_path / "in", path)
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_bytes(real.read_bytes())
     done = run_walk(tmp_path, advisor)
     assert done.returncode == 0, done.stderr
     sheet = json.loads((tmp_path / "out" / "sheet.json").read_text(encoding="utf-8"))

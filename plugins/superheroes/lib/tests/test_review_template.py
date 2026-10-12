@@ -27,6 +27,7 @@ def _validator_for(definition):
 
 # Every document the page may write, by where it goes. A write anywhere else fails the test that made it.
 VERDICT_VALIDATOR = _validator_for("verdict")
+WALK_VALIDATOR = _validator_for("walkAnswer")
 
 FORBIDDEN_PROPERTIES = (
     "font-family", "font-weight", "box-shadow", "letter-spacing", "text-transform", "color",
@@ -180,6 +181,10 @@ class Node {
     this.focusCount += 1;
     document.activeElement = this;
   }
+  // A click made by the page itself (a file input opening its picker).
+  click() {
+    this.clicks = (this.clicks || 0) + 1;
+  }
   scrollIntoView(options) {
     scrollIntoViews.push([this, options]);
   }
@@ -247,7 +252,7 @@ sheetPageNode.className = "sheet-page";
 documentRoot.appendChild(sheetPageNode);
 Object.keys(elements).forEach((id) => sheetPageNode.appendChild(elements[id]));
 const viewerNodes = {};
-[["sheet-viewer", "div"], ["sheet-viewer-caption", "span"], ["sheet-viewer-close", "button"], ["sheet-viewer-frame", "div"], ["sheet-viewer-picture", "img"]].forEach(([id, tag]) => {
+[["sheet-viewer", "div"], ["sheet-viewer-caption", "span"], ["sheet-viewer-zoom", "span"], ["sheet-viewer-close", "button"], ["sheet-viewer-frame", "div"], ["sheet-viewer-picture", "img"]].forEach(([id, tag]) => {
   viewerNodes[id] = new Node(tag);
   viewerNodes[id].id = id;
   elements[id] = viewerNodes[id];
@@ -259,12 +264,12 @@ viewerNodes["sheet-viewer-close"].setAttribute("type", "button");
 viewerNodes["sheet-viewer-close"].textContent = "Close";
 const viewerBar = new Node("div");
 viewerBar.className = "sheet-viewer-bar";
-viewerBar.children = [viewerNodes["sheet-viewer-caption"], viewerNodes["sheet-viewer-close"]];
+viewerBar.children = [viewerNodes["sheet-viewer-caption"], viewerNodes["sheet-viewer-zoom"], viewerNodes["sheet-viewer-close"]];
 viewerNodes["sheet-viewer-frame"].children = [viewerNodes["sheet-viewer-picture"]];
 viewerNodes["sheet-viewer"].children = [viewerBar, viewerNodes["sheet-viewer-frame"]];
 documentRoot.appendChild(viewerNodes["sheet-viewer"]);
 [viewerBar, viewerNodes["sheet-viewer-frame"]].forEach((node) => { node.parent = viewerNodes["sheet-viewer"]; });
-[viewerNodes["sheet-viewer-caption"], viewerNodes["sheet-viewer-close"]].forEach((node) => { node.parent = viewerBar; });
+[viewerNodes["sheet-viewer-caption"], viewerNodes["sheet-viewer-zoom"], viewerNodes["sheet-viewer-close"]].forEach((node) => { node.parent = viewerBar; });
 viewerNodes["sheet-viewer-picture"].parent = viewerNodes["sheet-viewer-frame"];
 // A frame's scroll size is its own size or the picture's width and height attributes, whichever is larger, so a scroll position can really be clamped.
 ["Width", "Height"].forEach((side) => {
@@ -321,6 +326,8 @@ const setLog = [];
 const reads = [];
 const uses = [];
 const ownerChecks = [];
+// Every upload the page asked the picture store for, in order; `host.assets` says how the store answers.
+const uploadLog = [];
 function deferred() {
   const handle = {};
   handle.promise = new Promise((resolve, reject) => {
@@ -450,6 +457,24 @@ if (host.claude !== "missing") {
           },
         });
       }
+      if (name === "assets") {
+        // Absent: no picture store. "use-rejects": asking for it fails. "no-upload": a store that cannot upload.
+        // "ok" resolves each upload with the next asset, "reject" fails it, "hold" leaves it for the scenario to settle.
+        if (host.assets === "use-rejects") return Promise.reject(new Error("no assets"));
+        if (host.assets === undefined) return Promise.resolve(null);
+        if (host.assets === "no-upload") return Promise.resolve({});
+        return Promise.resolve({
+          upload: (file) => {
+            const call = deferred();
+            call.file = file;
+            uploadLog.push(call);
+            const id = "asset-" + uploadLog.length;
+            if (host.assets === "ok") call.resolve({ id: id, url: "https://assets.example/" + id + ".png", sizeBytes: 12, contentType: "image/png" });
+            if (host.assets === "reject") call.reject({ code: "upstream_error" });
+            return call.promise;
+          },
+        });
+      }
       return Promise.resolve(null);
     },
   };
@@ -496,6 +521,7 @@ const tools = {
   written: () => JSON.parse(JSON.stringify(written)),
   reads: reads,
   uses: uses,
+  uploads: uploadLog,
   ownerChecks: ownerChecks,
   snapshotOf: snapshotOf,
   fire: fire,
@@ -846,6 +872,8 @@ def _run_page(files, host=None, scenario="return null;"):
         elif re.fullmatch(r"verdict/[0-9a-f]{64}", path):
             VERDICT_VALIDATOR.validate(recorded["body"])
             assert recorded["body"]["sheet"] == path.split("/")[1], "a verdict not stored under its own revision's digest"
+        elif re.fullmatch(r"walk/[a-z0-9][a-z0-9-]*", path):
+            WALK_VALIDATOR.validate(recorded["body"])
         else:
             pytest.fail("the page wrote to %s, which is not a document it may write" % path)
     return page
