@@ -582,6 +582,17 @@ def test_B4_a_profile_the_reader_could_not_read_does_not_clear_the_line(world, d
     assert _line(repo, ready=False, reason="no-setup", setting=False) is not None
 
 
+@pytest.mark.parametrize("damaged", ["[]", '"off"', "3"])
+def test_B4_a_wrongly_typed_configuration_does_not_clear_the_line(world, damaged):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup", by="setting"))
+    _put(CM.core_path(repo, None), (
+        '```json superheroes-core\n{"schemaVersion": 1, "verifyCommand": null, "stackTags": [], '
+        '"enginePreferences": {}, "projectConfiguration": %s}\n```\n' % damaged))
+    assert PC.get_item(repo, PC.CLOUD_BUILDS_SLUG, root=None)["effective"] is False
+    assert _line(repo, ready=False, reason="no-setup", setting=False) is not None
+
+
 def test_B4_a_word_directed_fallback_stays_when_the_setting_is_off(world):
     repo, _store = world
     _launch(repo, "a", 11, "local", _call(reason="unreachable", by="word"))

@@ -8,6 +8,7 @@ nothing here writes: the line is worked out each time from the launch ledger and
 readiness at that moment. It is the first not-ready condition in the cloud check's order, among the
 local fallbacks since the last build that went to the cloud and not yet fixed."""
 import datetime
+import json
 import os
 import re
 import sys
@@ -155,6 +156,18 @@ def render_report(lanes):
 # ---------------------------------------------------------------- the line at the top of later messages
 
 
+def _configuration_is_whole(path):
+    """True when the profile's projectConfiguration is absent or a mapping. The profile reader gives
+    any other value as an empty mapping, which the config reader then gives as the setting's default."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    import core_md
+
+    block = json.loads(core_md._JSON_BLOCK.search(text).group(1))
+    return block.get(core_md.PROJECT_CONFIGURATION_KEY) is None or isinstance(
+        block[core_md.PROJECT_CONFIGURATION_KEY], dict)
+
+
 def _setting_read_off(cwd, root):
     """True only when the cloud-builds setting was read cleanly and is off. The readiness reader
     gives an unreadable setting as off, so a setting-directed reminder is not dropped on its word.
@@ -164,7 +177,10 @@ def _setting_read_off(cwd, root):
         import core_md
         import project_config
 
-        if core_md.read(cwd, root) is None and not core_md.gate_config_profile_is_absent(cwd, root):
+        if core_md.read(cwd, root) is None:
+            if not core_md.gate_config_profile_is_absent(cwd, root):
+                return False
+        elif not _configuration_is_whole(core_md.core_path(cwd, root)):
             return False
         got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
         return got.get("effective") is False and got.get("malformed") is not True
