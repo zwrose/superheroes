@@ -42,7 +42,7 @@ host that does not name one, this step has no equivalent and the mode is `generi
 Then ask the plugin lib for the mode. The lib's verbs and flags are defined in
 `lib/compaction_cli.json` — read it and use its names where `<VERB>` and `<FLAG>` stand below
 (`<VERB>` is the `verbs` key for the action — here `mode` — and `<FLAG>` is that entry's value
-for the input — here `transcript`):
+for the input — here `transcriptPath`):
 
 ```bash
 cat "${CLAUDE_PLUGIN_ROOT}/lib/compaction_cli.json"
