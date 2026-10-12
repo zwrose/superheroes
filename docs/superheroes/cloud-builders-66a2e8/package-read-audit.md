@@ -1332,3 +1332,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C7 second size split into C7, C7r and C7p (advisor craft call at the 450 stop line): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv9",
+ "kind": "invocation",
+ "measurables": {
+  "children": 5,
+  "registerEntries": 9
+ },
+ "override": "a re-allocation of already-read content across C7, C7r, C7p, C7b and C8, with no new requirement and no new register sentence beyond R8's order and R11's allocations; four consumer drops for C7 need checking; light weight with a 2-round ceiling is enough",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
