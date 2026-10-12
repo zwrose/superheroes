@@ -34,12 +34,14 @@ _CLASS3_APPEND_ALLOWLIST = {
         "reserve",            # holds lock around append(repo_root, ...)
         "terminalize",        # holds lock around repair started + terminal append
         "amend",              # holds lock around append(repo_root, ...)
+        "repair_never_started",  # holds lock around the restored started append
     }),
 }
 # Allowlisted writers that must genuinely take the ledger lock. `append` is deliberately
 # absent: it is the validated pass-through whose callers are censused, not a lock holder.
 _CLASS3_LOCK_HOLDING = frozenset({
     "append_under_lock", "declare_batch", "reserve", "terminalize", "amend",
+    "repair_never_started",
 })
 _DEFAULT_LEDGER_MODULE_IDS = frozenset({"ll", "launch_ledger"})
 
