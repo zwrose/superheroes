@@ -87,7 +87,6 @@ WRITE_DISPATCH_PROCESS_RULE = (
 
 DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
-CLOUD_HISTORY_MIN_BUDGET = 60       # floor for cloud history preparation under a short --max-wait
 MIN_SYNC_WAIT = 0                # a zero slice is legal (open the run, return now); negative is not
 MAX_WAIT_REFUSAL_RANGE = "max-wait-out-of-range"
 MAX_WAIT_REFUSAL_TYPE = "max-wait-not-an-integer"
@@ -6087,6 +6086,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     run_dir=run_dir_real, engine=engine,
                 )
 
+        history_spent = 0.0  # cloud history preparation time, deducted from the supervise slice
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             resolved_claude_mode["claudeMode"] = claude_mode
@@ -6095,14 +6095,19 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 # is built. Never blocks: if it is not ok, build_view still refuses as it does today.
                 try:
                     import cloud_builder  # lazy: only a cloud session needs it
-                    # Bounded by the dispatch's wait budget (the 540 s cap, or the caller's
-                    # smaller --max-wait but never under a minute: a fetch needs some time), so a
-                    # stalled origin cannot hold the launch past it before the run is opened.
-                    history = cloud_builder.ensure_history(
-                        repo_detail,
-                        budget=(MAX_SYNC_WAIT if max_wait is None
-                                else max(int(max_wait), CLOUD_HISTORY_MIN_BUDGET)),
-                    )
+                    # Bounded by the caller's wait, exactly as asked (the 540 s cap when none): a
+                    # stalled origin cannot hold the launch past it, and a spent budget ends the
+                    # preparation unfetched (build_view then refuses as it does today). The time
+                    # spent is deducted from the supervise slice below, so the caller's wait is
+                    # one budget, not two.
+                    history_started = time.monotonic()
+                    try:
+                        history = cloud_builder.ensure_history(
+                            repo_detail,
+                            budget=MAX_SYNC_WAIT if max_wait is None else int(max_wait),
+                        )
+                    finally:
+                        history_spent = time.monotonic() - history_started
                 except Exception:
                     history = {"ok": False, "reason": "raised"}
                 if cloud_history is not None:
@@ -6261,6 +6266,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
 
         # Validated at entry (#862) — honored as asked, never clamped.
         slice_wait = MAX_SYNC_WAIT if max_wait is None else int(max_wait)
+        slice_wait = max(0.0, slice_wait - history_spent)
         while True:
             deadline = time.monotonic() + slice_wait
             try:

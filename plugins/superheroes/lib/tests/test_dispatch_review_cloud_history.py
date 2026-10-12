@@ -162,3 +162,19 @@ def test_ensure_history_is_bounded_by_the_dispatch_wait_budget(tmp_path, monkeyp
     clone, shas = make_shallow_clone(tmp_path)
     review(tmp_path, clone, shas[2], clean_review_runner())
     assert seen == [engine_dispatch.MAX_SYNC_WAIT]
+
+
+def test_ensure_history_gets_the_callers_short_wait_exactly_with_no_floor(tmp_path, monkeypatch):
+    # Axis: --max-wait 0 ("open the run, return now") never lends history preparation more time.
+    import cloud_builder
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    seen = []
+
+    def spy(repo_root, **kw):
+        seen.append(kw.get("budget"))
+        return {"ok": False, "reason": "spied", "fetched": []}
+
+    monkeypatch.setattr(cloud_builder, "ensure_history", spy)
+    clone, shas = make_shallow_clone(tmp_path)
+    review(tmp_path, clone, shas[2], clean_review_runner(), max_wait=0)
+    assert seen == [0]
