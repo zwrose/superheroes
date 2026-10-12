@@ -63,6 +63,8 @@ class Gh:
             if self.comments_fail_from is not None and self.comment_reads >= self.comments_fail_from:
                 return SimpleNamespace(returncode=1, stdout="")
             pages = [json.dumps([c]) for c in self.comments.get(number, [])]
+            if "--paginate" not in argv:
+                pages = pages[:1]
             return SimpleNamespace(returncode=0, stdout="\n".join(pages) if pages else "[]")
         return SimpleNamespace(returncode=0, stdout=json.dumps(self.pulls[number]))
 
@@ -182,11 +184,14 @@ def _entries(w):
 
 
 def test_notice_for_a_lapsed_pass_park_names_the_pr_the_reason_and_the_renewal(w):
+    _lane(w, "l-42", 101, "session-42", "a")
     w.gh.comments[42] = [{"id": 1, "body": "hello"}, _lapsed_comment(42)]
+    w.gh.pulls[42] = _pull(101)
     out = _notice(w, 42)
     assert out == {"ok": True, "kind": "lapsed-pass", "pr": 42, "text": CP.NOTICE_TEXT % 42}
     assert out["text"].startswith("#42 is parked.") and "lapsed" in out["text"] and "Renew the pass" in out["text"]
-    assert _entries(w) == [{"repo": REPO, "pr": 42, "parkedOn": "2026-10-05", "outcome": None}]
+    assert _entries(w) == [{"repo": REPO, "pr": 42, "parkedOn": "2026-10-05", "outcome": None,
+                            "launchId": "l-42"}]
 
 
 def test_a_pr_whose_review_did_not_run_for_another_reason_gets_no_renewal_words(w):
@@ -201,6 +206,7 @@ def test_the_park_day_is_the_newest_lapsed_comments_day_in_utc(w):
     w.gh.comments[10] = [_lapsed_comment(10, "2026-09-30T08:00:00Z"),
                          {"id": 3, "body": "later chatter", "created_at": "2026-10-09T08:00:00Z"},
                          _lapsed_comment(10, "2026-10-06T23:30:00-05:00")]
+    w.gh.pulls[10] = _pull()
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     assert [e["parkedOn"] for e in _entries(w)] == ["2026-10-07"]
 
@@ -209,7 +215,7 @@ def test_noticing_a_recorded_pr_again_keeps_its_first_park_day(w):
     _park(w, 10)
     w.gh.comments[10] = [_lapsed_comment(10, "2026-10-09T10:00:00Z")]
     assert _notice(w, 10)["kind"] == "lapsed-pass"
-    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": None}]
+    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": None, "launchId": None}]
 
 
 def test_a_park_comment_without_a_readable_date_refuses_the_notice_and_writes_nothing(w):
@@ -235,6 +241,46 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     assert CP.SEND_BACK_MESSAGE == ("The reviewer pass is renewed. Run this pull request's review now, as "
                                     "your review step says, then hand back as usual.")
     assert _entries(w)[0]["outcome"] is None
+
+
+def test_a_later_launch_for_the_same_issue_never_receives_the_original_prs_review(w):
+    _lane(w, "l-orig", 101, "orig-session", "a")
+    _park(w, 10, issue=101)
+    assert _entries(w)[0]["launchId"] == "l-orig"
+    assert ll.terminalize(w.repo, "l-orig", child_ever_spawned=True, outcome="park", evidence="x", env=w.env)["ok"]
+    _lane(w, "l-later", 101, "later-session", "a2")
+    _renew(w)
+    out = _send(w)
+    assert [s["cloudSessionName"] for s in out["sendBack"]] == ["orig-session"]
+    assert out["sendBack"][0]["launchId"] == "l-orig"
+
+
+def test_a_parked_pr_whose_original_launch_is_unknown_is_reported_not_given_another_lane(w):
+    _park(w, 10, issue=101)
+    assert _entries(w)[0]["launchId"] is None
+    _lane(w, "l-later", 101, "later-session", "a")
+    _renew(w)
+    out = _send(w)
+    assert out["sendBack"] == [] and out["noLane"] == [{"pr": 10, "issue": 101}]
+
+
+def test_comments_are_read_with_the_paginate_flag_so_later_pages_count(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    w.gh.comments[10] = [{"id": 1, "body": "chatter"}, _lapsed_comment(10)]
+    w.gh.pulls[10] = _pull(101)
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert any("--paginate" in c for c in w.gh.calls if "/comments" in c[-1])
+    w.gh.comments[11] = [{"id": 1, "body": "chatter"}, {"id": 2, "body": "chatter"}]
+    assert _notice(w, 11)["kind"] == "not-lapsed-pass"
+
+
+def test_an_owner_go_ahead_on_a_later_comment_page_is_still_seen(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    w.gh.comments[10] += [{"id": 8, "body": "chatter"},
+                          _record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}])]
+    _renew(w)
+    assert _send(w)["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}]
 
 
 def test_a_parked_pr_closed_or_merged_before_the_renewal_is_not_sent_back(w):
@@ -390,7 +436,7 @@ def test_a_pr_stays_listed_until_it_is_recorded_as_sent_and_never_after(w):
     assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
     assert _entries(w)[0]["outcome"] is None
     assert _sent(w, 10) == {"ok": True, "action": "written"}
-    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": "sent-back"}]
+    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": "sent-back", "launchId": "l-a"}]
     calls = len(w.gh.calls)
     again = _send(w)
     assert again["sendBack"] == [] and again["skipped"] == [] and again["notRenewed"] == []
@@ -498,6 +544,7 @@ def test_a_state_file_that_cannot_be_written_refuses_and_decides_nothing(w, monk
 
     monkeypatch.setattr(store_core, "atomic_write", broken)
     w.gh.comments[12] = [_lapsed_comment(12)]
+    w.gh.pulls[12] = _pull(101)
     assert _notice(w, 12) == {"ok": False, "reason": "parked-state-unwritable"}
     assert _sent(w, 10) == {"ok": False, "reason": "parked-state-unwritable"}
     assert _send(w) == {"ok": False, "reason": "parked-state-unwritable"}

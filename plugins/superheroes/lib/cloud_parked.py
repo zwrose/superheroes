@@ -26,6 +26,7 @@ NOTICE_TEXT = ("#%d is parked. The reviewer pass lapsed mid-build, so its review
 SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's review now, as your "
                      "review step says, then hand back as usual.")
 _ENTRY_KEYS = ("repo", "pr", "parkedOn", "outcome")
+_LAUNCH_KEY = "launchId"  # the lane the park came from; absent on an entry written before it was kept
 _NO_RECORD = ("review-record-missing", "review-record-unreadable")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
@@ -75,9 +76,10 @@ def _load(repo_root, env):
         return _refusal("parked-state-unreadable"), None
     cs = _sib("cloud_setup")
     if not (isinstance(entries, list) and all(
-            isinstance(e, dict) and set(e) == set(_ENTRY_KEYS) and isinstance(e["repo"], str)
-            and isinstance(e["pr"], int) and e["outcome"] in (None,) + OUTCOMES
-            and cs._date_ok(e["parkedOn"]) for e in entries)):
+            isinstance(e, dict) and set(e) in (set(_ENTRY_KEYS), set(_ENTRY_KEYS) | {_LAUNCH_KEY})
+            and isinstance(e["repo"], str) and isinstance(e["pr"], int) and e["outcome"] in (None,) + OUTCOMES
+            and isinstance(e.get(_LAUNCH_KEY), (str, type(None))) and cs._date_ok(e["parkedOn"])
+            for e in entries)):
         return _refusal("parked-state-unreadable"), None
     return path, entries
 
@@ -161,9 +163,10 @@ def _let_through(repo, pr, env, run):
         isinstance(m, dict) and m.get("goAhead") is not None for m in missing)
 
 
-def _lane(repo_root, issues, env):
-    """(launchId, folded lane, reason) of the newest cloud lane for the issues; (None, {}, None) when a
-    readable ledger has none. `reason` names a ledger that could not be read or folded."""
+def _lane(repo_root, issues, env, launch_id=None):
+    """(launchId, folded lane, reason) of the cloud lane: the one named by `launch_id` when given (never
+    another), else the newest for the issues; (None, {}, None) when a readable ledger has none. `reason`
+    names a ledger that could not be read or folded."""
     ll = _sib("launch_ledger")
     got = ll.read(repo_root, env=env)
     if got["state"] not in ("ok", "missing", "tornTail"):
@@ -172,7 +175,7 @@ def _lane(repo_root, issues, env):
     if not fold.get("ok", True):
         return None, {}, "launch-ledger-fold-failed"
     lanes = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
-             if i["place"] == "cloud" and i["issue"] in issues]
+             if i["place"] == "cloud" and (k == launch_id if launch_id else i["issue"] in issues)]
     if not lanes:
         return None, {}, None
     best = max(lanes, key=lambda t: t[0])
@@ -199,7 +202,14 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         parked_on = _park_day(parks[-1].get("created_at"))
         if parked_on is None:
             return _refusal("park-date-unreadable")
-        entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None})
+        pull = _pull(repo, pr, env, run)
+        if pull is None:
+            return _refusal("pr-read-failed")
+        issues = _sib("review_record").closing_issues(pull.get("body"), repo)
+        launch_id, _, ledger_reason = _lane(repo_root, issues, env) if issues else (None, {}, None)
+        if ledger_reason:
+            return _refusal(ledger_reason)
+        entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id})
         if not _save(path, entries):
             return _refusal("parked-state-unwritable")
     return {"ok": True, "kind": "lapsed-pass", "pr": pr, "text": NOTICE_TEXT % pr}
@@ -227,7 +237,8 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
             continue
         issues = _sib("review_record").closing_issues(pull.get("body"), e["repo"])
-        launch_id, lane, ledger_reason = _lane(repo_root, issues, env) if issues else (None, {}, None)
+        launch_id, lane, ledger_reason = (
+            _lane(repo_root, issues, env, e[_LAUNCH_KEY]) if e.get(_LAUNCH_KEY) else (None, {}, None))
         issue = lane.get("issue") if lane else (issues[0] if issues else None)
         lapses = _lapses(repo_root, env, lane.get("configDir"), lane.get("cloudEnvironment"))
         if not _renewed(e["parkedOn"], lapses, day):
