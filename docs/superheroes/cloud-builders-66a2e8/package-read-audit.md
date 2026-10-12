@@ -1474,3 +1474,22 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "vet 460 on cloud C7 PR #1789: R11 allocated orchestration.md to C1, C7p and C7b, but C7's builder-note sentences in the cloud-lane paragraph are C7's doctrine; R11 now allocates them",
+ "ceiling": 1,
+ "invocation": "inv10",
+ "kind": "invocation",
+ "measurables": {
+  "children": 1,
+  "registerEntries": 1
+ },
+ "override": "one clause added to R11's orchestration.md allocation, mirrored in the epic quote; nothing else moves",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
