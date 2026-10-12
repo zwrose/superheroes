@@ -198,10 +198,18 @@ def test_cloud_argv_shape_and_order():
         "argv": [
             "claude", "--cloud", "the prompt",
             "--settings", '{"remote":{"defaultEnvironmentId":"%s"}}' % ENV_ID,
-            "--model", "opus", "--effort", "medium", "-n", "issue-1-ab",
+            "--model", "opus", "--effort", "medium", "--permission-mode", "auto", "-n", "issue-1-ab",
         ],
         "reason": None,
     }
+
+
+@pytest.mark.parametrize("effort", [None, "", "medium"])
+def test_cloud_argv_runs_the_session_in_auto_permission_mode(effort):
+    # A cloud builder nobody watches stalls on a permission prompt; the argv is the only carrier.
+    argv = EA.claude_cloud_builder_argv("opus", effort, "p", ENV_ID, "n")["argv"]
+    assert argv.count("--permission-mode") == 1
+    assert argv[argv.index("--permission-mode") + 1] == "auto"
 
 
 @pytest.mark.parametrize("effort", [None, ""])
