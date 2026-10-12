@@ -61,10 +61,11 @@ def touches_omitted_line(count):
 
 def why_line_paths_stripped(line, names=()):
     """``line`` without its sample paths: a touches-risk-area line keeps the area name (one of ``names``
-    when its prefix matches, else the text before the first `` (``); an unmatchable line keeps its count
-    and loses the sample; any other line is returned unchanged."""
+    when its prefix matches — the longest such name, so ``Payments (refunds)`` is not cut to ``Payments`` —
+    else the text before the first `` (``); an unmatchable line keeps its count and loses the sample; any
+    other line is returned unchanged."""
     if line.startswith(WHY_TOUCHES):
-        name = next((n for n in names if line.startswith("%s %s (" % (WHY_TOUCHES, n))), None)
+        name = max((n for n in names if line.startswith("%s %s (" % (WHY_TOUCHES, n))), key=len, default=None)
         return "%s %s" % (WHY_TOUCHES, name) if name is not None else line.split(" (", 1)[0]
     if line.startswith(WHY_UNMATCHABLE) and _AGAINST_AREA + " (" in line:
         return line.split(_AGAINST_AREA + " (", 1)[0] + _AGAINST_AREA

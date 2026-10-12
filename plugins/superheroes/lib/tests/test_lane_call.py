@@ -456,6 +456,20 @@ def test_a_broad_change_keeps_every_path_in_touched_but_bounds_the_why_lines(tmp
     assert sum(len(w) for w in got["why"]) < 2000
 
 
+def test_stripping_a_line_built_for_a_longer_area_name_keeps_that_whole_name():
+    # axis: the area name kept when one name prefixes another; the longer name cut back to its shorter prefix
+    names = ["Payments", "Payments (refunds)"]
+    line = "%s %s (%s)" % (L.WHY_TOUCHES, "Payments (refunds)", "src/refunds/a.py, src/refunds/b.py")
+    assert L.why_line_paths_stripped(line, names) == "%s Payments (refunds)" % L.WHY_TOUCHES
+
+
+def test_stripping_a_line_built_for_the_shorter_area_name_keeps_that_name():
+    # axis: the area name kept when one name prefixes another; the shorter name widened to its longer neighbour
+    names = ["Payments", "Payments (refunds)"]
+    line = "%s %s (%s)" % (L.WHY_TOUCHES, "Payments", "src/payments/a.py, src/payments/b.py")
+    assert L.why_line_paths_stripped(line, names) == "%s Payments" % L.WHY_TOUCHES
+
+
 def test_review_record_repeats_no_lane_reason_token_literal():
     """lane_call owns the reason tokens and the path-stripping format; review_record imports them."""
     import lane_call as lc
