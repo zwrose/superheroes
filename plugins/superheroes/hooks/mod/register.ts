@@ -5,6 +5,14 @@
 // the decisions are ./decide). Every hook here fails open — on any error the event
 // goes on unchanged (`next(e)` once), no delivered-marker is written, and the
 // PreCompact command hook steers in its place.
+//
+// Two engine facts, measured on harness 2.1.296 (#1814, comment 6134267207).
+// First: the mod's own `session.compact` hook runs for a compaction the mod starts with
+// `$.session.compact()` (`e.trigger === 'plugin'`). That hook is the only place
+// instructions are composed and the marker is marked, so the mod's own compaction
+// passes no instructions and resets no fill itself.
+// Second: `session.measure` fires after the main `turn.complete` (and once at session
+// start), so the idle gate needs no timer to measure again after a turn.
 
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
@@ -16,10 +24,8 @@ import type { Settings } from './decide'
 
 const CLI_TIMEOUT_MS = 15000
 
-// The compaction waits until the turn has ended; the post-turn re-measure waits for the
-// measurement that follows a turn.
+// The compaction waits until the turn has ended.
 const COMPACT_DELAY_MS = 1000
-const REMEASURE_DELAY_MS = 2000
 
 // A checkpoint that never saw its turn complete stops blocking the next one after this.
 const STALE_CHECKPOINT_MS = 30 * 60 * 1000
@@ -168,8 +174,8 @@ async function evaluate($: EngineInterface, settings: Settings): Promise<void> {
 
 // The compaction input with the session's directive and notes as its instructions (the
 // owner's own text rides along inside them). Fails open: on any error the input comes
-// back as it was. The engine does not run the mod's own `session.compact` hook for the
-// compaction the mod starts, so that one calls this itself.
+// back as it was. The `session.compact` hook is the one caller: every main-loop
+// compaction, the mod's own included, is steered there and nowhere else.
 async function steer<T extends { instructions?: string }>($: EngineInterface, e: T): Promise<T> {
   let steered = e
 
@@ -215,11 +221,11 @@ async function forgetFill($: EngineInterface): Promise<void> {
 
 // Compacts after the turn that ended the checkpoint; `$.session.compact` rejects while a
 // turn runs, so it waits, and a rejection is tried once more before the owner is told.
+// No instructions here: the `session.compact` hook steers this compaction too.
 function compactSoon($: EngineInterface, isRetry = false): void {
   $.clock.after(COMPACT_DELAY_MS, async () => {
     try {
-      await $.session.compact(await steer($, {}))
-      await forgetFill($)
+      await $.session.compact()
     } catch (error) {
       if (!isRetry) {
         compactSoon($, true)
@@ -233,12 +239,12 @@ function compactSoon($: EngineInterface, isRetry = false): void {
 }
 
 // Ends the checkpoint the finished main-loop turn belonged to: compacts once the notes
-// file changed, otherwise says why not. True when there was a checkpoint to end.
-async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promise<boolean> {
+// file changed, otherwise says why not.
+async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promise<void> {
   const { value } = await $.state.get(checkpoint)
 
   if (!value) {
-    return false
+    return
   }
 
   const notesAfter = await readNotes($)
@@ -252,8 +258,6 @@ async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promis
       `Auto-checkpoint skipped: ${saveFailed ? 'the notes could not be saved' : 'the notes file did not change'}`,
     )
   }
-
-  return true
 }
 
 export const register: Register = (on, options) => {
@@ -401,13 +405,7 @@ export const register: Register = (on, options) => {
       }
 
       try {
-        // The measurement that follows a turn can come before its idle flag is cleared:
-        // measure again once the turn has settled (not after a checkpoint, which compacts).
-        if (!(await finishCheckpoint($, warning !== null))) {
-          $.clock.after(REMEASURE_DELAY_MS, () => {
-            evaluate($, settings).catch(error => note($, `remeasure: ${String(error)}`))
-          })
-        }
+        await finishCheckpoint($, warning !== null)
       } catch (error) {
         await abandonCheckpoint($, error)
       }

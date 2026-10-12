@@ -579,8 +579,13 @@ test('a turn in progress holds the automatic run until the turn completes', asyn
   expect(r.commands).toEqual([])
 
   await complete($, 'done')
-  // the measurement that follows the turn finds it idle
-  await r.clock.advance(5000)
+  await r.clock.settle()
+
+  // no timer measures again: the engine's own measurement after the turn finds it idle
+  expect(r.commands).toEqual([])
+
+  await measure($, r, PAST)
+  await r.clock.settle()
 
   expect(r.commands).toEqual([COMMAND])
 })
@@ -598,10 +603,7 @@ test('usage cannot be read: no band change and nothing runs', async ($, on) => {
 })
 
 test('a checkpoint that changed the notes compacts after the turn and toasts', async ($, on) => {
-  // the CLI answers each verb: the compaction the mod starts is steered by it (see `steer`)
-  const r = rig(on, argv =>
-    argv[3] === 'instructions' ? steer : argv[3] === 'mark' ? ok({ path: MARKER }) : saveAnswer,
-  )
+  const r = rig(on, () => saveAnswer)
 
   await start($)
   await measure($, r, PAST)
@@ -617,8 +619,12 @@ test('a checkpoint that changed the notes compacts after the turn and toasts', a
   await r.clock.advance(1000)
 
   expect(r.seen).toHaveLength(1)
-  // the instructions are the session's directive, which the mod fetched for its own compaction
-  expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
+  // The mod passes no instructions: the real engine runs the mod's own `session.compact` hook
+  // for the compaction it starts, and that hook steers it (measured on #1814, comment
+  // 6134267207). The kit's `session.compact` bottom need not emulate that.
+  expect(nth(r.seen, 0).instructions).toBeUndefined()
+  // and the mod itself composed nothing and marked nothing
+  expect(r.argv.filter(argv => argv[3] === 'instructions' || argv[3] === 'mark')).toEqual([])
 })
 
 test('a checkpoint that left the notes unchanged does not compact, and a later one may run', async ($, on) => {
@@ -763,6 +769,12 @@ test('Snooze defers the automatic run to the fill it names, and compaction clear
   r.notes = 'fresh notes'
   await complete($, 'Done.')
   await r.clock.advance(1000)
+
+  // the mod's own compaction resets nothing itself: its `session.compact` hook does (see above)
+  expect(r.seen).toHaveLength(1)
+  expect(r.sets.filter(([key]) => key === 'snoozeUntilTokens').at(-1)).toEqual(['snoozeUntilTokens', NEAR + 100000])
+
+  await compact($)
 
   expect(r.sets.filter(([key]) => key === 'snoozeUntilTokens').at(-1)).toEqual(['snoozeUntilTokens', null])
 })
