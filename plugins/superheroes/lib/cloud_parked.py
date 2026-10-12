@@ -193,7 +193,7 @@ def _pull(repo, pr, env, run):
 
 def _let_through(repo, pr, env, run, head):
     """True when the owner already let it through: its latest review record covers the PR's current `head`,
-    names missing reviews and itself says it is no longer parked (its writer owns that decision). A record
+    covers no missing review or names them, and itself says it is no longer parked (its writer owns that decision). A record
     for an earlier head is no go-ahead. None when the record could not be read for a reason other than there being none."""
     got = _sib("review_record").read(pr, repo=repo, readers={"list_comments": lambda p, r: _comments(r, p, env, run)})
     if not got.get("ok"):
@@ -203,7 +203,7 @@ def _let_through(repo, pr, env, run, head):
         return None
     commit = got.get("finalCommit")
     covers = isinstance(head, str) and isinstance(commit, dict) and commit.get("sha") == head
-    return bool(missing) and not parked and covers
+    return not parked and covers
 
 
 def _linked_issues(body, repo):
@@ -257,7 +257,7 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     parked_on = _park_day(parks[-1].get("created_at"))
     park_id = parks[-1].get("id")
     park_id = park_id if isinstance(park_id, (str, int)) and not isinstance(park_id, bool) else None
-    if known and known[0]["outcome"] == "sent-back":
+    if known and known[0]["outcome"] in ("sent-back", "owner-let-through"):
         seen = known[0].get(_PARK_KEY)
         newer = park_id != seen if (park_id is not None and seen is not None) else (
             bool(parked_on) and parked_on > known[0]["parkedOn"])

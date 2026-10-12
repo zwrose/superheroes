@@ -386,6 +386,28 @@ def test_a_parked_pr_the_owner_let_through_is_not_sent_back(w):
     assert [e["outcome"] for e in _entries(w)] == ["owner-let-through", None]
 
 
+def test_a_pr_already_reviewed_on_its_current_head_is_not_sent_back(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    w.gh.comments[10].append(_record_comment(10, []))
+    _renew(w)
+    out = _send(w)
+    assert out["sendBack"] == [] and out["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}]
+
+
+def test_a_later_park_on_a_new_head_rearms_a_pr_the_owner_let_through(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    w.gh.comments[10].append(_record_comment(10, [{"name": "codex", "goAhead": {"kind": "owner-words"}}]))
+    _renew(w)
+    assert _send(w)["skipped"] == [{"pr": 10, "outcome": "owner-let-through"}]
+    w.gh.pulls[10]["head"]["sha"] = "h2"
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["outcome"] is None
+    assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
+
+
 def test_a_review_record_that_cannot_be_parsed_does_not_count_as_a_let_through(w):
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
