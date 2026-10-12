@@ -555,9 +555,6 @@
     // The words on the final sheet's verdict buttons, by the value a stored verdict takes. A pr sheet or a stack
     // sheet takes its verdict words from sheet-words.json instead.
     const VERDICT_LABELS = { approve: "Approve", "not-yet": "Not yet" };
-    // The verdicts each kind offers and restores, in button order. A stored verdict outside its kind's set
-    // restores only its note.
-    const VERDICTS_BY_KIND = { final: ["approve", "not-yet"], pr: ["merge", "not-yet"], stack: ["merge", "not-yet"] };
 
     // What the sheet's schema says a verdict is (its $defs.verdict): { root, rule, values }, where values lists
     // the sheet kind's verdicts the schema gives, in the kind's order. Null until the schema was read, and left null
@@ -571,15 +568,22 @@
 
     function readVerdictShape(schema, kind) {
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
-      const offered = VERDICTS_BY_KIND[kind];
-      const rule = isObject(schema.$defs) ? schema.$defs.verdict : undefined;
-      if (offered === undefined || !isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.verdict)) return null;
+      const defs = isObject(schema.$defs) ? schema.$defs : {};
+      const rule = defs.verdict;
+      // The verdicts the kind offers and restores, in button order, are the schema's own ($defs.verdictsByKind): the page keeps no list of them.
+      const byKind = isObject(defs.verdictsByKind) && isObject(defs.verdictsByKind.properties) ? defs.verdictsByKind.properties[kind] : undefined;
+      if (!isObject(byKind) || !Array.isArray(byKind.enum)) return null;
+      if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.verdict)) return null;
       const listed = rule.properties.verdict.enum;
       if (!Array.isArray(listed)) return null;
-      const values = listed.filter(function (item) { return item !== null; });
-      const known = Object.keys(VERDICTS_BY_KIND).flatMap(function (name) { return VERDICTS_BY_KIND[name]; });
-      if (values.length === 0 || values.some(function (item) { return typeof item !== "string" || !known.includes(item); })) return null;
-      if (offered.some(function (value) { return !values.includes(value); })) return null;
+      const offered = byKind.enum;
+      // A verdict the document can hold but no kind offers is one the page has no words for: the controls stay off.
+      const known = Object.keys(defs.verdictsByKind.properties).flatMap(function (name) {
+        const item = defs.verdictsByKind.properties[name];
+        return isObject(item) && Array.isArray(item.enum) ? item.enum : [];
+      });
+      if (listed.some(function (value) { return value !== null && !known.includes(value); })) return null;
+      if (offered.length === 0 || offered.some(function (value) { return typeof value !== "string" || !listed.includes(value); })) return null;
       return { root: schema, rule: rule, values: offered };
     }
 

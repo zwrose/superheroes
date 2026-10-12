@@ -447,6 +447,16 @@
         }
       }
     },
+    "verdictsByKind": {
+      "description": "Which verdicts each kind of sheet offers on its last card, in button order, by the sheet's kind. The page builds its verdict buttons from this list and restores a stored verdict only when its own kind offers it; a stored verdict outside its kind's list restores only its note. A remainder sheet or a plain sheet has no verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "final": {"enum": ["approve", "not-yet"]},
+        "pr": {"enum": ["merge", "not-yet"]},
+        "stack": {"enum": ["merge", "not-yet"]}
+      }
+    },
     "card": {
       "description": "One call the owner has to make, with the question, the context the sending session writes, and the options and recommendation if there are any.",
       "type": "object",

@@ -1040,3 +1040,14 @@ def test_a_final_sheet_still_saves_approve_with_no_lock():
         "answers": [], "verdict": [{"id": digest, "data": {"verdict": "approve", "note": "", "sheet": digest}}],
     }})
     assert stored["result"]["state"]["pressed"] == ["true", "false"] and stored["result"]["sets"] == []
+
+
+# Bites on: the page keeping its own copy of which verdicts each kind offers: the schema's $defs.verdictsByKind must drive the buttons' order and set, and a schema without it switches the verdict controls off.
+def test_the_verdict_buttons_come_from_the_schemas_per_kind_list():
+    schema = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
+    schema["$defs"]["verdictsByKind"]["properties"]["pr"]["enum"] = ["not-yet", "merge"]
+    page = _page(PR_SAMPLE, "return verdictState();", schema=schema)
+    assert page["result"]["labels"][0] == "Not yet" and page["result"]["labels"][1].startswith("Merge #214")
+    del schema["$defs"]["verdictsByKind"]
+    off = _page(PR_SAMPLE, "return verdictState();", schema=schema)
+    assert off["result"]["labels"] == [] or all(off["result"]["disabled"])
