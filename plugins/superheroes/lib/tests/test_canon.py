@@ -1,0 +1,228 @@
+"""Tests for lib/canon.py, the Canon write helper (#1820)."""
+import json
+import os
+import subprocess
+import sys
+
+import pytest
+
+_LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import canon  # noqa: E402
+import definition_doc  # noqa: E402
+
+REPO_CANON = os.path.join(_LIB, "..", "..", "..", "docs", "superheroes", "canon.md")
+WRITTEN = "2026-10-12"
+SID = "abcd1234-ffff"
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-C", cwd, *args], check=True, capture_output=True, text=True)
+
+
+def _entry(n, sid="abcd1234"):
+    return ("- **%s-%s-%d** · %s · standing · A ruling. · owner's words: none recorded · "
+            "where: s, time not recorded" % (WRITTEN, sid, n, WRITTEN))
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    """A repo whose default branch (origin/main) holds Canon entry -3 and whose working branch
+    holds entry -1 only; the lookup is pinned to the repo home with that default ref."""
+    origin, work = str(tmp_path / "origin.git"), str(tmp_path / "work")
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", origin], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", work], check=True)
+    _git(work, "config", "user.email", "t@t")
+    _git(work, "config", "user.name", "t")
+    path = os.path.join(work, "docs", "superheroes", "canon.md")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w") as fh:
+        fh.write(canon.HEADER + _entry(3) + "\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "canon")
+    _git(work, "remote", "add", "origin", origin)
+    _git(work, "push", "-q", "origin", "main")
+    _git(work, "remote", "set-head", "origin", "main")
+    _git(work, "checkout", "-qb", "work")
+    with open(path, "w") as fh:
+        fh.write(canon.HEADER + _entry(1) + "\n")
+    loc = {"path": path, "home": "repo", "gitRoot": work, "exists": True,
+           "defaultRef": "origin/main"}
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
+    return loc
+
+
+def _run(capsys, *argv):
+    code = canon.main(["canon.py", *argv])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def _fields(ground="owner-call", ruling="A failed import keeps the previous data.", **extra):
+    argv = ["--root", ".", "--session-id", SID, "--written", WRITTEN, "--ground", ground,
+            "--date", WRITTEN, "--scope", extra.pop("scope", "standing"), "--ruling", ruling,
+            "--where", "advisor session abcd1234, 14:05 UTC"]
+    for k, v in extra.items():
+        argv += ["--" + k.replace("_", "-"), v]
+    return argv
+
+
+def _contract_homes():
+    with open(canon.CONTRACT, encoding="utf-8") as fh:
+        return canon._homes(fh.read())
+
+
+# axis: the homes are read from § What stays out itself; every kind the helper refuses has one.
+def test_homes_read_from_the_contract_cover_every_kind():
+    homes = _contract_homes()
+    assert set(homes) == {"act", "merge", "disposition", "board"}
+    assert "collector" in homes["disposition"].lower()
+    assert "owner half" in homes["merge"]
+    assert "STATE block" in homes["act"]
+    assert homes["board"] == "the board"
+
+
+# axis: every declared stays-out ground is refused with the record's home named.
+@pytest.mark.parametrize("ground", sorted(canon.STAY_OUT_GROUNDS))
+def test_declared_stays_out_ground_refused_with_home(project, capsys, ground):
+    code, out = _run(capsys, "append", *_fields(ground=ground))
+    assert code == 1 and out["reason"] == "canon-stays-out"
+    assert out["home"] == _contract_homes()[canon.STAY_OUT_GROUNDS[ground]]
+    assert canon.STAYS_OUT in out["detail"]
+
+
+# axis: a ruling or the owner's words recognized as stays-out is refused with its home, whatever
+# ground was declared.
+@pytest.mark.parametrize("ruling,words,kind", [
+    ("Merge #1810 once CI is green.", None, "merge"),
+    ("Launch it now in the cloud.", None, "act"),
+    ("The importer keeps old data.", "a - launch it now in the cloud", "act"),
+    ("116 - a", None, "disposition"),
+    ("The importer keeps old data; filed as #1820.", None, "board"),
+    ("The importer keeps old data, scheduled for phase 2.", None, "board"),
+])
+def test_recognized_stays_out_refused_with_home(project, capsys, ruling, words, kind):
+    extra = {"owners_words": words} if words else {}
+    code, out = _run(capsys, "append", *_fields(ruling=ruling, **extra))
+    assert code == 1 and out["reason"] == "canon-stays-out" and out["kind"] == kind
+    assert out["home"] == _contract_homes()[kind]
+
+
+# axis: recognition is narrow: no real entry in this repo's Canon reads as a stays-out record.
+def test_repo_canon_has_no_false_positive():
+    with open(REPO_CANON, encoding="utf-8") as fh:
+        lines = [l.rstrip("\n") for l in fh if canon._ID_RE.match(l)]
+    assert len(lines) > 100
+    for line in lines:
+        canon._check_held_line(line)
+
+
+def test_unknown_ground_refused(project, capsys):
+    code, out = _run(capsys, "append", *_fields(ground="vibe"))
+    assert code == 1 and out["reason"] == "canon-unknown-ground"
+
+
+def test_separator_in_a_field_refused(project, capsys):
+    code, out = _run(capsys, "append", *_fields(ruling="One · two"))
+    assert code == 1 and out["reason"] == "canon-bad-field"
+
+
+# axis: a valid owner-call, principle and ceded-call line is held, then appended byte for byte.
+@pytest.mark.parametrize("ground,extra", [
+    ("owner-call", {"scope": "piece importer-1a2b3c", "owners_words": "keep the old data"}),
+    ("principle", {}),
+    ("ceded-call", {"cedes": "test-fixture naming", "example": "fixture_old_data"}),
+])
+def test_held_line_appended_byte_for_byte(project, capsys, tmp_path, ground, extra):
+    code, held = _run(capsys, "hold", *_fields(ground=ground, **extra))
+    assert code == 0 and held["comment"].splitlines()[0] == canon.HELD_MARKER
+    comment = tmp_path / "held.md"
+    comment.write_text(held["comment"])
+    before = open(project["path"]).read()
+    code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(comment))
+    assert code == 0 and out["appended"] == [held["line"]]
+    assert open(project["path"]).read() == before + held["line"] + "\n"
+    code, again = _run(capsys, "append", "--root", ".", "--lines-file", str(comment))
+    assert again["appended"] == [] and again["skipped"] == [held["line"]]
+
+
+# axis: the id continues past the default-branch copy, the working copy, and the held lines.
+def test_id_counts_default_copy(project, capsys):
+    assert _run(capsys, "hold", *_fields())[1]["id"] == "%s-abcd1234-4" % WRITTEN
+
+
+def test_id_counts_working_copy(project, capsys):
+    with open(project["path"], "a") as fh:
+        fh.write(_entry(5) + "\n")
+    assert _run(capsys, "append", *_fields())[1]["appended"][0].startswith(
+        "- **%s-abcd1234-6**" % WRITTEN)
+
+
+def test_id_counts_held_lines(project, capsys, tmp_path):
+    held = tmp_path / "held.md"
+    held.write_text(canon.HELD_MARKER + "\n" + _entry(7) + "\n")
+    code, out = _run(capsys, "hold", *_fields(), "--held-file", str(held))
+    assert out["id"] == "%s-abcd1234-8" % WRITTEN
+    assert out["comment"] == canon.HELD_MARKER + "\n" + _entry(7) + "\n" + out["line"] + "\n"
+
+
+def test_held_comment_without_marker_refused(project, capsys, tmp_path):
+    held = tmp_path / "held.md"
+    held.write_text("some other comment\n" + _entry(7) + "\n")
+    code, out = _run(capsys, "hold", *_fields(), "--held-file", str(held))
+    assert code == 1 and out["reason"] == "canon-held-not-marked"
+
+
+# axis: a held line that reads as stays-out is refused at append too.
+def test_held_go_word_refused_at_append(project, capsys, tmp_path):
+    bad = _entry(9).replace("A ruling.", "Merge #1810 now.")
+    (tmp_path / "held.md").write_text(canon.HELD_MARKER + "\n" + bad + "\n")
+    code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(tmp_path / "held.md"))
+    assert code == 1 and out["reason"] == "canon-stays-out"
+
+
+# axis: the file shape and the union-merge attribute are created with the first entry.
+def test_new_file_gets_shape_and_union_attribute(project, capsys):
+    os.remove(project["path"])
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 0
+    assert open(project["path"]).read() == canon.HEADER + out["appended"][0] + "\n"
+    attrs = os.path.join(os.path.dirname(project["path"]), ".gitattributes")
+    assert open(attrs).read() == "canon.md merge=union\n"
+    assert out["commitPaths"] == [project["path"], attrs]
+
+
+def test_project_store_canon_is_never_held(project, capsys, monkeypatch):
+    monkeypatch.setattr(definition_doc, "resolve_canon",
+                        lambda root: dict(project, home="project-store", defaultRef=None))
+    code, out = _run(capsys, "hold", *_fields())
+    assert code == 1 and out["reason"] == "canon-store-never-held"
+
+
+def test_ruling_record_quotes_the_owner_and_posts(capsys, tmp_path, monkeypatch):
+    words = tmp_path / "w.txt"
+    words.write_text("a - launch it now\nin the cloud\n")
+    seen = {}
+
+    def fake_run(cmd, capture_output, text):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "https://x/issues/695#issuecomment-1\n", "")
+
+    monkeypatch.setattr(canon.subprocess, "run", fake_run)
+    code, out = _run(capsys, "ruling-record", "--date", WRITTEN, "--time", "14:05",
+                     "--words-file", str(words), "--context", "collector item 116", "--post",
+                     "--repo", "o/r", "--collector", "695")
+    assert code == 0 and out["permalink"] == "https://x/issues/695#issuecomment-1"
+    assert out["body"].startswith(canon.RULING_MARKER + "\n")
+    assert "2026-10-12 14:05 UTC" in out["body"]
+    assert "> a - launch it now\n> in the cloud" in out["body"]
+    assert seen["cmd"][:3] == ["gh", "api", "repos/o/r/issues/695/comments"]
+
+
+def test_ruling_record_needs_a_utc_time(capsys, tmp_path):
+    words = tmp_path / "w.txt"
+    words.write_text("yes")
+    code, out = _run(capsys, "ruling-record", "--date", WRITTEN, "--time", "2pm",
+                     "--words-file", str(words), "--context", "c")
+    assert code == 1 and out["reason"] == "canon-bad-field"
