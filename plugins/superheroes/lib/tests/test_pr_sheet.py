@@ -350,8 +350,8 @@ def test_an_unstated_independence_stays_unstated():
     assert shown and all("notIndependent" not in v for v in shown)
 
 
-def test_the_schema_ran_enum_is_the_record_writers_completed_states():
-    # Axis: the sheet schema's ran enum equals the review record's ran states less not-run.
+def test_the_record_writer_reads_its_ran_states_from_the_schema():
+    # Axis: the review record's ran states are the schema's ran enum plus not-run, read from the schema, not restated.
     import review_record
     enum = SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["reviewers"]["items"]["properties"]["ran"]["enum"]
-    assert tuple(enum) == tuple(x for x in review_record.RAN_STATES if x != review_record.RAN_NOT_RUN)
+    assert review_record.RAN_STATES == tuple(enum) + (review_record.RAN_NOT_RUN,)

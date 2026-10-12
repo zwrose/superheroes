@@ -47,12 +47,16 @@ FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
 MAX_BODY_CHARS = 65000
 GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
-# The reviewer ran-state vocabulary, its one home: the sheet builder reads RAN_STATES, and a test holds the
-# sheet schema's completed-run enum to RAN_STATES less RAN_NOT_RUN.
-RAN_ENGINE_RECORD = "engine-record"
-RAN_REPORTED_BY_SESSION = "reported-by-session"
+# The reviewer ran-state vocabulary is read from the sheet schema, its one home (the ran enum of the prSheet
+# reviewer entry); the writer, the sheet builder and the schema readers all take it from there. RAN_NOT_RUN
+# is the one state the schema does not list, because a reviewer that did not run carries no ran fact.
+_SHEET_SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "theme", "sheet.schema.json")
+with open(_SHEET_SCHEMA_PATH, encoding="utf-8") as _fh:
+    _RAN_ENUM = tuple(json.load(_fh)["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["reviewers"]
+                      ["items"]["properties"]["ran"]["enum"])
+RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION = _RAN_ENUM
 RAN_NOT_RUN = "not-run"
-RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
+RAN_STATES = _RAN_ENUM + (RAN_NOT_RUN,)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 _LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(full|light|micro)\b[.:]?[ \t]*(.*)$")
@@ -336,7 +340,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         # A run is credited against exactly one commit: the one the row names, else the final commit.
         where = f"the commit this reviewer was listed for {_short(target)}" if named else "the final commit"
         if isinstance(seen, str) and seen and seen == target and graded and review:
-            out.update(ran="engine-record", observation=rec.get("observation"))
+            out.update(ran=RAN_ENGINE_RECORD, observation=rec.get("observation"))
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
@@ -352,7 +356,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
             if r["ran"]:
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     elif r["ran"] and (named or (reported_commit and reported_commit == head)):
-        out["ran"] = "reported-by-session"
+        out["ran"] = RAN_REPORTED_BY_SESSION
     elif r["ran"]:
         note = (f"the session reported a review of {_short(reported_commit)}, not the final commit {_short(head)}"
                 if reported_commit else "the session did not say which commit it reviewed")
@@ -462,9 +466,9 @@ def build_record(account, readers):
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
-    walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
+    walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == RAN_ENGINE_RECORD
              and isinstance(v.get("observation"), dict)]
-    toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
+    toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == RAN_ENGINE_RECORD
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
@@ -477,7 +481,7 @@ def build_record(account, readers):
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
                  "tokens": sum(toks) if toks else None, "source": "engine records",
-                 "notCounted": [v["name"] for v in reviewers if v["ran"] != "engine-record"]},
+                 "notCounted": [v["name"] for v in reviewers if v["ran"] != RAN_ENGINE_RECORD]},
         "sessionDisagreements": dis,
         "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
                     "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
@@ -636,7 +640,7 @@ def render(record):
     r, lane, ci = record, record["lane"], record["ci"]
     who = []
     for v in r["reviewers"]:
-        label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
+        label = {RAN_ENGINE_RECORD: "ran (engine record)", RAN_REPORTED_BY_SESSION: f"ran ({SESSION})"}.get(
             v["ran"], "did not run")
         if v["ran"] != "not-run" and v.get("commit") and v["commit"] != r["finalCommit"]["sha"]:
             label += f" on {v['commit'][:7]}"
