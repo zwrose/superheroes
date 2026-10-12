@@ -16,6 +16,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_environment as CE  # noqa: E402
+import engine_adapter  # noqa: E402
 
 ENV_ID = "env_01ABCdef"
 OTHER_ENV_ID = "env_09ZYXwvu"
@@ -37,7 +38,16 @@ def _write(env, data):
 
 
 def _with_value(value):
-    return {"remote": {"defaultEnvironmentId": value}}
+    return {engine_adapter.CLOUD_SETTINGS_SECTION: {engine_adapter.CLOUD_SETTINGS_ENVIRONMENT_KEY: value}}
+
+
+def test_settings_path_has_one_home_and_the_external_spelling_is_pinned():
+    # The one literal pin of Claude Code's own spelling; everything else reads the adapter's home.
+    assert (engine_adapter.CLOUD_SETTINGS_SECTION, engine_adapter.CLOUD_SETTINGS_ENVIRONMENT_KEY) == (
+        "remote", "defaultEnvironmentId")
+    built = engine_adapter.claude_cloud_builder_argv("opus", None, "p", ENV_ID, "n")
+    assert json.loads(built["argv"][built["argv"].index("--settings") + 1]) == {
+        "remote": {"defaultEnvironmentId": ENV_ID}}
 
 
 def test_first_pick_unchanged_asks_to_confirm_by_name(tmp_path):
@@ -204,7 +214,7 @@ def test_reader_follows_the_account_config_dir(tmp_path):
 def test_no_message_asks_to_type_or_paste_an_id():
     messages = [value for name, value in vars(CE).items()
                 if name.startswith("_") and name.isupper() and isinstance(value, str)]
-    assert len(messages) == 7
+    assert len(messages) == 9
     for message in messages:
         assert not re.search(r"\b(type|paste|copy)\b", message, re.IGNORECASE), message
 
@@ -302,3 +312,61 @@ def test_cli_relative_config_dir_with_relative_cwd_reads(tmp_path, monkeypatch, 
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "acct")
     code, out = _run(capsys, ["snapshot", "--cwd", "."])
     assert code == 0 and out == {"action": "read", "reason": None, "environment": ENV_ID}
+
+
+def test_compare_matched_when_the_id_is_the_picked_environment(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    result = CE.compare(ENV_ID, env=env, cwd=str(tmp_path))
+    assert result["action"] == "matched" and result["environment"] == ENV_ID
+
+
+def test_compare_mismatched_returns_the_current_picked_environment(tmp_path):
+    env = _env(tmp_path)
+    _write(env, _with_value(OTHER_ENV_ID))
+    result = CE.compare(ENV_ID, env=env, cwd=str(tmp_path))
+    assert result["action"] == "mismatched"
+    assert result["environment"] == OTHER_ENV_ID
+    assert result["message"] == CE._MISMATCHED
+    assert "use the picked one" in result["message"]
+
+
+@pytest.mark.parametrize("content", [None, "not json", {}, _with_value("bad id")])
+def test_compare_unchecked_without_a_valid_current_pick(tmp_path, content):
+    env = _env(tmp_path)
+    if content is not None:
+        _write(env, content)
+    result = CE.compare(ENV_ID, env=env, cwd=str(tmp_path))
+    assert result["action"] == "unchecked" and result["environment"] is None
+    assert result["message"] == CE._UNCHECKED
+
+
+@pytest.mark.parametrize("environment", [None, "", "bad id", 5])
+def test_compare_unchecked_for_a_malformed_environment(tmp_path, environment):
+    env = _env(tmp_path)
+    _write(env, _with_value(ENV_ID))
+    result = CE.compare(environment, env=env, cwd=str(tmp_path))
+    assert result["action"] == "unchecked" and result["environment"] is None
+
+
+def test_compare_never_raises(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(CE, "_read", boom)
+    result = CE.compare(ENV_ID, env=_env(tmp_path), cwd=str(tmp_path))
+    assert result["action"] == "unchecked"
+
+
+def test_compare_cli_exit_codes(tmp_path, monkeypatch, capsys):
+    env = _env(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
+    monkeypatch.setenv("HOME", env["HOME"])
+    _write(env, _with_value(ENV_ID))
+    code, out = _run(capsys, ["compare", "--environment", ENV_ID])
+    assert code == 0 and out["action"] == "matched"
+    code, out = _run(capsys, ["compare", "--environment", OTHER_ENV_ID])
+    assert code == 1 and out["action"] == "mismatched" and out["environment"] == ENV_ID
+    code, out = _run(capsys, ["compare", "--environment", "bad id"])
+    assert code == 1 and out["action"] == "unchecked"
+    code, out = _run(capsys, ["compare"])
+    assert code == 1 and out["action"] == "unchecked"
