@@ -2293,26 +2293,49 @@ _TRANSPORT_KEY_RE = re.compile(
 )
 
 
-def _transport_options(repo_root, env):
-    """The transport settings as the launching checkout itself sees them, as ``-c key=value``
-    arguments for a fetch run somewhere else; None when they could not be read.
+def _transport_pairs(repo_root, env):
+    """The transport settings only the launching checkout holds, as ordered ``(key, value)``
+    pairs, a multivalued key in its order; None when they could not be read.
 
     ``git config --list`` run in the checkout applies every layer, conditional includes keyed on
-    its gitdir or branch among them, and the worktree's own config.
+    its gitdir or branch among them, and the worktree's own config. Only the ``local`` and
+    ``worktree`` scopes are kept: the global, system and environment layers reach the fetch run
+    somewhere else by themselves, and handing them over too would apply them twice.
     """
     listed = _git_scrubbed(
-        repo_root, "config", "--list", "-z", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        repo_root, "config", "--list", "--show-scope", "-z",
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
     if listed is None or listed.returncode != 0:
         return None
-    options = []
-    for entry in listed.stdout.split("\0"):
-        if not entry:
+    pairs = []
+    # With ``--show-scope -z`` each setting is two NUL-terminated fields: the scope, then
+    # ``key``, a newline and the value (the newline absent for a key set without a value).
+    fields = listed.stdout.split("\0")
+    for scope, entry in zip(fields[0::2], fields[1::2]):
+        if scope not in ("local", "worktree"):
             continue
         key, sep, value = entry.partition("\n")
         if _TRANSPORT_KEY_RE.match(key.lower()):
-            options += ["-c", key + "=" + value if sep else key]
-    return options
+            pairs.append((key, value if sep else ""))
+    return pairs
+
+
+def _env_with_config(env, pairs):
+    """A copy of ``env`` (the process environment when None) carrying ``pairs`` as
+    ``GIT_CONFIG_KEY_<n>`` / ``GIT_CONFIG_VALUE_<n>`` entries after any the environment already
+    holds, with ``GIT_CONFIG_COUNT`` the new total. A setting value never rides on a command line."""
+    merged = dict(env if env is not None else os.environ)
+    try:
+        inherited = int(merged.get("GIT_CONFIG_COUNT", "0") or 0)
+    except ValueError:
+        inherited = 0
+    inherited = max(inherited, 0)
+    for offset, (key, value) in enumerate(pairs):
+        merged["GIT_CONFIG_KEY_%d" % (inherited + offset)] = key
+        merged["GIT_CONFIG_VALUE_%d" % (inherited + offset)] = value
+    merged["GIT_CONFIG_COUNT"] = str(inherited + len(pairs))
+    return merged
 
 
 def _base_on_remote(repo_root, base, env):
@@ -2322,9 +2345,10 @@ def _base_on_remote(repo_root, base, env):
     The commit is fetched into an empty repository, because a fetch in the working repository
     never asks the server for an object it already has, and a local tracking ref can be stale.
     The fetch runs against the remote's address as the launching checkout resolves it, with the
-    checkout's own transport settings (``insteadOf`` rewrites, ``core.sshCommand``,
-    ``credential.*``, ``http.*``) handed over as options, so a setting that reaches the checkout
-    only through a conditional include applies as well. The empty repository stays empty.
+    checkout's own repository-level transport settings (``insteadOf`` rewrites, ``core.sshCommand``,
+    ``credential.*``, ``http.*``) handed over through the environment, so a setting that reaches
+    the checkout only through a conditional include applies as well and every other layer applies
+    once, as the fetch inherits it. The empty repository stays empty.
     """
     url = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
@@ -2332,9 +2356,10 @@ def _base_on_remote(repo_root, base, env):
     if url is None or url.returncode != 0 or not url.stdout.strip():
         return None
     address = url.stdout.strip()
-    options = _transport_options(repo_root, env)
-    if options is None:
+    pairs = _transport_pairs(repo_root, env)
+    if pairs is None:
         return None
+    fetch_env = _env_with_config(env, pairs)
     try:
         scratch = tempfile.mkdtemp()
     except OSError:
@@ -2346,8 +2371,8 @@ def _base_on_remote(repo_root, base, env):
         if made is None or made.returncode != 0:
             return None
         fetched = _git_scrubbed(
-            scratch, *options, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-            address, base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+            scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+            address, base, env=fetch_env, timeout=_WORKTREE_GIT_TIMEOUT,
         )
         if fetched is None:
             return None

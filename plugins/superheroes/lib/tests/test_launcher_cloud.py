@@ -679,7 +679,7 @@ def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
     monkeypatch.setattr(L, "_git_scrubbed", spy)
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
     assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
-    assert calls[1][:2] == (local_remote.repo, ("config", "--list", "-z"))
+    assert calls[1][:2] == (local_remote.repo, ("config", "--list", "--show-scope", "-z"))
     scratch = calls[2][0]
     assert calls[2][1] == ("init", "-q", "--bare", scratch)
     assert calls[3][0] == scratch
@@ -746,11 +746,64 @@ def test_the_probe_hands_over_only_transport_settings_and_leaves_the_scratch_emp
     _git(local_remote.repo, "config", "core.sshCommand", "ssh -i /k")
     _git(local_remote.repo, "config", "credential.helper", "store")
     _git(local_remote.repo, "config", "user.name", "Someone")
-    options = L._transport_options(local_remote.repo, None)
-    pairs = [options[i + 1] for i in range(0, len(options), 2)]
-    assert "core.sshcommand=ssh -i /k" in pairs and "credential.helper=store" in pairs
-    assert all(not p.startswith(("user.", "remote.", "core.bare")) for p in pairs)
-    assert options[::2] == ["-c"] * len(pairs)
+    pairs = L._transport_pairs(local_remote.repo, None)
+    assert ("core.sshcommand", "ssh -i /k") in pairs
+    assert ("credential.helper", "store") in pairs
+    assert all(not k.startswith(("user.", "remote.", "core.bare")) for k, _ in pairs)
+
+
+def _fetch_calls(monkeypatch):
+    """Record each scratch fetch's argv and the environment it ran under."""
+    real = L._git_scrubbed
+    seen = []
+
+    def spy(repo_root, *args, **kwargs):
+        if "fetch" in args:
+            seen.append((args, kwargs.get("env")))
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", spy)
+    return seen
+
+
+def _effective(env, key, tmp_path):
+    scratch = tmp_path / "effective"
+    subprocess.run(["git", "init", "-q", str(scratch)], check=True)
+    run = subprocess.run(["git", "-C", str(scratch), "config", "--get-all", key],
+                         capture_output=True, text=True, env=env)
+    return run.stdout.splitlines()
+
+
+def test_an_inherited_header_reaches_the_scratch_fetch_exactly_once(
+    local_remote, monkeypatch, tmp_path,
+):
+    # axis: a setting the fetch already inherits is not handed over a second time
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.extraHeader")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "Authorization: Bearer inherited")
+    _git(local_remote.repo, "config", "--add", "http.extraHeader", "X-Local: one")
+    seen = _fetch_calls(monkeypatch)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    (args, env), = seen
+    headers = _effective(L.ll.scrub_env(env), "http.extraHeader", tmp_path)
+    assert headers == ["Authorization: Bearer inherited", "X-Local: one"]
+
+
+def test_a_repo_local_rewrite_reaches_the_fetch_through_the_environment_not_argv(
+    local_remote, monkeypatch, tmp_path,
+):
+    # axis: no setting value rides on the fetch command line
+    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
+         "alias://private/origin")
+    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
+    seen = _fetch_calls(monkeypatch)
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    (args, env), = seen
+    assert "-c" not in args
+    assert not any(a.startswith(("url.", "http.", "core.", "credential.")) for a in args)
+    rewrites = _effective(L.ll.scrub_env(env),
+                          "url." + local_remote.remote.as_uri() + ".insteadOf", tmp_path)
+    assert rewrites == ["alias://private/origin"]
 
 
 def test_the_probe_finds_a_base_from_a_linked_worktree(local_remote, tmp_path):
