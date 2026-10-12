@@ -38,6 +38,7 @@ import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
 import store_core  # noqa: E402
 
@@ -1085,6 +1086,9 @@ def _move_up_blocker(seat_map, maker_families):
     roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
     if not isinstance(roster, list) or not roster:
         return "the seat map has no roster"
+    # axis: a map composed for fewer seats than the full panel cannot show the whole panel independent, so it parks
+    if not set(seat_map_module.PANEL_ROSTER) <= set(roster):
+        return "the seat map's roster omits a panel seat"
     seats = seat_map.get("seats")
     if not isinstance(seats, dict) or not all(isinstance(seats.get(n), dict) for n in roster):
         return "the seat map has no entry for a roster seat"

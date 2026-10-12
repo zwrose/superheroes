@@ -292,11 +292,12 @@ def test_later_map_omitting_an_earlier_maker_does_not_make_that_maker_the_indepe
     assert receipt_disclosures.accumulated_maker_families(state) == frozenset({"anthropic", "openai"})
 
 
-def _fixer_then_reviewer_account(tmp_path, review_round):
+def _fixer_then_reviewer_account(tmp_path, review_round, original_makers=None):
     claude = {"vendor": "claude", "model": "sonnet-5.5"}
     s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"},
                 rounds={"1": {"fix": {"fixes": []}}, "2": {}} if review_round == 2 else {"1": {"fix": {"fixes": []}}},
-                seatMapReceipts=[{"round": str(review_round), "map": {"seats": {"code-reviewer": claude}}}])
+                seatMapReceipts=[{"round": str(review_round), "map": {"seats": {"code-reviewer": claude},
+                                                                                   **({"makerFamilies": original_makers} if original_makers else {})}}])
     s.seat("code-reviewer", rnd=review_round, nonce="n1")
     runs = {"/run/n1": (dict(GOOD_RUN, source="claude", engineModel="sonnet-5.5", runnerNonce="n1",
                              viewHeadSha=EARLIER), None)}
@@ -318,6 +319,17 @@ def test_a_reviewer_before_the_fix_is_judged_against_the_makers_it_faced(tmp_pat
     assert by_name["code-reviewer (round 1)"]["ran"] == "engine-record"
     assert by_name["audit (round 1)"]["ran"] == "engine-record" and by_name["audit (round 1)"]["coversFinalCommit"]
     assert rec["missingReviews"] == [] and rec["status"] == "reviewed"
+
+
+def test_an_original_maker_that_also_fixes_keeps_its_whole_review_maker_status(tmp_path):
+    account, fake = _fixer_then_reviewer_account(tmp_path, 1, original_makers=["anthropic"])
+    anthropic = [m for m in account["makers"] if m["family"] == "anthropic"]
+    # bites on: the fixer's delayed fromStep shadowing the seat map's baseline entry for the same family
+    assert anthropic == [{"family": "anthropic", "source": "seat map maker list"}]
+    rec = rr.build_record(account, fake.readers())
+    by_name = {v["name"]: v for v in rec["reviewers"]}
+    assert by_name["code-reviewer (round 1)"]["ran"] == "not-run"
+    assert rec["status"] != "reviewed"
 
 
 def test_a_reviewer_after_the_fix_from_the_fixers_family_is_still_not_independent(tmp_path):

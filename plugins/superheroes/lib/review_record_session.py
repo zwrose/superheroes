@@ -324,12 +324,15 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                 review_record._readers(readers)["engine_run"], raw_dir)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
-    if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
+    baseline = receipt_disclosures.accumulated_maker_families(state)
+    # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
+    # shadow that baseline entry, or the original maker would drop out of the early panels' independence check
+    if fam and fam not in baseline and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
         fixed = [int(n) for n, r in rounds.items() if isinstance(r, dict) and "fix" in r and str(n).isdigit()]
         makers.append({"family": fam, "source": "review loop fixer",
                        **({"fromStep": 2 * min(fixed) + 1} if fixed else {})})
-    for family in sorted(receipt_disclosures.accumulated_maker_families(state)):
+    for family in sorted(baseline):
         if not any(isinstance(m, dict) and m.get("family") == family for m in makers):
             makers.append({"family": family, "source": "seat map maker list"})
     last = decisions[-1] if decisions else {}

@@ -11,6 +11,7 @@ import core_md
 import model_registry
 import pr_comment
 import review_record as rr
+import seat_map as seat_map_module
 
 HEAD = "b" * 40
 EARLIER = "a" * 40
@@ -2193,8 +2194,9 @@ def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
 
 # --- reading-next ---
 
-SEAT_MAP = {"roster": ["a", "b"], "seats": {"a": {"source": "live", "family": "openai"},
-                                            "b": {"source": "live", "family": "google"}}}
+PANEL = list(seat_map_module.PANEL_ROSTER)
+SEAT_MAP = {"roster": PANEL, "seats": {n: {"source": "live", "family": "openai" if i % 2 else "google"}
+                                       for i, n in enumerate(PANEL)}}
 ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
 NO_READING = {"observation": {"read": "unknown"}}
 
@@ -2236,25 +2238,32 @@ def test_reading_next_parks_when_no_run_is_given():
 
 def test_reading_next_parks_when_a_roster_seat_is_unfilled():
     # axis: the unfilled-seat park; a map with an unfilled roster seat letting the lane move up
-    seats = {"a": {"source": "unfilled", "family": "openai"}, "b": SEAT_MAP["seats"]["b"]}
+    seats = dict(SEAT_MAP["seats"], **{PANEL[0]: {"source": "unfilled", "family": "openai"}})
     out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
     assert out == {"next": "park", "reason": "a roster seat in the seat map is unfilled"}
 
 
 def test_reading_next_parks_when_a_roster_seat_is_a_makers_family():
     # axis: the maker-family-seat park; a map with a seat from a maker's family letting the lane move up
-    seats = {"a": SEAT_MAP["seats"]["a"], "b": {"source": "live", "family": "anthropic"}}
+    seats = dict(SEAT_MAP["seats"], **{PANEL[-1]: {"source": "live", "family": "anthropic"}})
     out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
     assert out == {"next": "park", "reason": "a roster seat in the seat map is from a maker's family"}
 
 
+def _without(name):
+    return {"roster": [n for n in PANEL if n != name],
+            "seats": {n: v for n, v in SEAT_MAP["seats"].items() if n != name}}
+
+
 @pytest.mark.parametrize("seat_map", [
-    None, "text", [], {}, _seats(roster=[]), _seats(roster="ab"), {"roster": ["a", "b"]},
-    _seats(seats="x"), _seats(seats={"a": SEAT_MAP["seats"]["a"]}),
-    _seats(seats={"a": SEAT_MAP["seats"]["a"], "b": "x"}),
-    _seats(seats={"a": SEAT_MAP["seats"]["a"], "b": {"source": "live"}}),
-    _seats(seats={"a": SEAT_MAP["seats"]["a"], "b": {"source": "live", "family": ""}}),
-    _seats(seats={"a": SEAT_MAP["seats"]["a"], "b": {"source": "live", "family": 3}}),
+    None, "text", [], {}, _seats(roster=[]), _seats(roster="ab"), {"roster": PANEL},
+    _seats(seats="x"), _seats(seats={PANEL[0]: SEAT_MAP["seats"][PANEL[0]]}),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: "x"})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live"}})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": ""}})),
+    _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": 3}})),
+    {"roster": ["code-reviewer"], "seats": {"code-reviewer": {"source": "live", "family": "openai"}}},
+    _without("test-reviewer"), _without("grounding-seat"),
 ])
 def test_reading_next_parks_on_a_map_that_cannot_show_independence(seat_map):
     out = rr.reading_next([NO_READING, NO_READING], seat_map, ["anthropic"])
