@@ -71,6 +71,7 @@
     "mergeStackLabel": "Merge stack #{number}",
     "notYetLabel": "Not yet",
     "verdictCaption": "Saved as you tap. Your merge word is this verdict plus \"done\" in the chat.",
+    "verdictInChat": "Answer {merge} or Not yet here in the chat, then say you're done. {merge} counts only once every item above is accepted; an answer that sends the PR back is not accepted.",
     "acceptedCount": "{accepted} of {total} accepted",
     "nothingToAcceptCount": "Nothing to accept"
   }

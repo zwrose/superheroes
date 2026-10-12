@@ -849,12 +849,231 @@ def _pr_kind_sheet(kind):
     return {"schema": "superheroes-sheet/1", "kind": kind, "title": "PR 1724", "prSheet": body, "cards": [card]}
 
 
-# Bites on: the renderer printing chat prose for a pr or stack sheet, which has no chat form, or a refusal that skips stderr, prints to stdout, or exits 0.
+# Bites on: the renderer refusing a pr or stack sheet instead of printing its prose, or printing it to stderr, or exiting non-zero.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
-def test_prose_refuses_a_pr_sheet_with_one_line(tmp_path, kind):
+def test_prose_renders_a_pr_sheet(tmp_path, kind):
     path = tmp_path / "sheet.json"
     path.write_text(json.dumps(_pr_kind_sheet(kind)), encoding="utf-8")
     result = _run(path)
-    assert result.returncode == 1, result.stdout
-    assert result.stdout == ""
-    assert result.stderr == "This is a PR sheet, which has no chat form. Open the sheet's link to answer it.\n"
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.startswith("**PR 1724**: 1 item for you.\n")
+    assert "1. **Is this what you meant?**" in result.stdout
+
+
+PR_WORDS = WORDS["pr"]
+PR_ANSWER_WORDS = WORDS["prAnswers"]
+SAMPLE_PR = PLUGIN / "theme" / "sample-pr-sheet.json"
+SAMPLE_STACK = PLUGIN / "theme" / "sample-stack-sheet.json"
+SAMPLES = {"pr": SAMPLE_PR, "stack": SAMPLE_STACK}
+COMMIT_RULE = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["$defs"]["commit"]["description"]
+
+
+def _sample(kind):
+    return json.loads(SAMPLES[kind].read_text(encoding="utf-8"))
+
+
+def _prose_of(tmp_path, sheet):
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    return result.stdout
+
+
+def _reviewers_line(reviewers):
+    named = []
+    for reviewer in reviewers:
+        notes = [reviewer["family"] or PR_WORDS["familyUnknown"]] + ([PR_WORDS["notIndependentMark"]] if reviewer.get("notIndependent") else [])
+        named.append("%s (%s)" % (reviewer["name"], ", ".join(notes)))
+    return PR_WORDS["reviewedBy"].replace("{reviewers}", "; ".join(named))
+
+
+def _pr_markers(sheet):
+    """Every line the sheet's prose must carry, each read from the data file or the words file, in the order it must come."""
+    part, facts, stack = sheet["prSheet"], sheet["prSheet"]["whatChanged"], sheet["kind"] == "stack"
+    merge = (PR_WORDS["mergeStackLabel"] if stack else PR_WORDS["mergeLabel"]).replace("{number}", str(part["number"]))
+    count = "1 item" if len(sheet["cards"]) == 1 else "%d items" % len(sheet["cards"])
+    markers = ["**%s**: %s for you." % (sheet["title"], count),
+               "**%s**" % PR_WORDS["whatChangedHeading"], facts["summary"], _reviewers_line(facts["reviewers"]),
+               "**%s**" % PR_WORDS["caughtHeading"]]
+    markers += ["- " + line for line in facts["caught"]]
+    markers.append(PR_WORDS["roundsLine"].replace("{rounds}", "%d rounds" % facts["rounds"]))
+    markers += [PR_WORDS["historyCap"]] if facts["stoppedAtCap"] else []
+    markers += [PR_WORDS["ciLine"].replace("{state}", facts["ci"]["state"]).replace("{commit}", facts["ci"]["commit"][:7]),
+                PR_WORDS["laneLine"].replace("{lane}", facts["lane"]).replace("{reason}", facts["laneReason"]),
+                PR_WORDS["describesCommit"].replace("{commit}", part["commit"][:7]), "**%s**" % PR_WORDS["walkHeading"]]
+    markers += ["- %s%s" % ("#%d " % stop["pr"] if stack else "", stop["title"]) for stop in part["walk"]]
+    markers.append("**%s**" % PR_WORDS["acceptingHeading"])
+    markers += ["%d. **%s**" % (number, card["question"]) for number, card in enumerate(sheet["cards"], 1)]
+    folded = [(PR_WORDS["craftHeading"], ["%s — %s" % (e["title"], e["detail"]) for e in part["craft"]]),
+              (PR_WORDS["decidedHeading"], ["%s — %s" % (e["title"], e["detail"]) for e in part["alreadyDecided"]]),
+              (PR_WORDS["reviewHeading"], list(part["history"]))]
+    if stack:
+        folded.append((PR_WORDS["prsHeading"], ["#%d %s · %s" % (p["number"], p["title"], p["commit"][:7]) for p in part["prs"]]))
+    for heading, entries in folded:
+        markers += ["**%s (%d)**" % (heading, len(entries))] + ["- " + entry for entry in entries]
+    markers += ["**%s**" % PR_WORDS["verdictHeading"], PR_WORDS["verdictInChat"].replace("{merge}", merge)]
+    return markers
+
+
+# Bites on: the prose for a pr or stack sheet leaving out a fact of the data file, changing a word of the words file, or printing a part out of the page's order.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_prints_a_pr_sheet_in_the_pages_order_with_the_data_files_facts(tmp_path, kind):
+    sheet = _sample(kind)
+    out = _prose_of(tmp_path, sheet)
+    position = 0
+    for marker in _pr_markers(sheet):
+        found = out.find(marker, position)
+        assert found >= 0, "%r is missing, or comes out of order, after position %d" % (marker, position)
+        position = found + len(marker)
+    assert out.count("**%s**" % PR_WORDS["verdictHeading"]) == 1
+    assert out.endswith(PR_WORDS["verdictInChat"].replace("{merge}", "Merge%s #%d" % (" stack" if kind == "stack" else "", sheet["prSheet"]["number"])) + "\n")
+
+
+def test_prose_verdict_line_is_the_words_file_line_with_the_merge_word_filled(tmp_path):
+    # Axis: the merge word is Merge #<number> on a pr sheet and Merge stack #<number> on a stack sheet, in both places the line names it.
+    assert "Answer Merge #214 or Not yet here in the chat, then say you're done. Merge #214 counts only once every item above is accepted;" in _prose_of(tmp_path, _sample("pr"))
+    assert "Answer Merge stack #4 or Not yet here in the chat, then say you're done. Merge stack #4 counts only once" in _prose_of(tmp_path, _sample("stack"))
+
+
+def test_prose_says_the_pr_moved_between_what_changed_and_the_walk(tmp_path):
+    # Axis: a sheet with a previousCommit prints the changed heading and its paragraph, with the first 7 of that commit, after What changed and before the walk.
+    sheet = _sample("pr")
+    sheet["prSheet"]["previousCommit"] = "0123456789abcdef"
+    out = _prose_of(tmp_path, sheet)
+    paragraph = PR_WORDS["changed"].replace("{previous}", "0123456")
+    heading = "**%s**" % PR_WORDS["changedHeading"]
+    assert out.index("Describes commit") < out.index(heading) < out.index(paragraph) < out.index("**%s**" % PR_WORDS["walkHeading"])
+    assert "0123456789" not in out
+    assert PR_WORDS["changedHeading"] not in _prose_of(tmp_path, _sample("pr"))
+
+
+# Bites on: a pr or stack card offering the discovery answers (Aligned) instead of the PR answers (Accept), or a discovery sheet offering Accept.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_offers_a_pr_card_the_pr_answers(tmp_path, kind):
+    sheet = _sample(kind)
+    out = _prose_of(tmp_path, sheet)
+    labels = PR_ANSWER_WORDS["labels"]
+    for card in sheet["cards"]:
+        offered = ("a, b, c, or %s" % labels["something-else"]) if len(card["options"]) == 3 else (
+            "a, b, or %s" % labels["something-else"] if card["options"] else "%s or %s" % (labels["accept"], labels["discuss"]))
+        assert "   - Answer: %s\n" % offered in out, card["id"]
+    assert "Aligned" not in out
+    discovery = _prose_of(tmp_path, json.loads(SAMPLE.read_text(encoding="utf-8")))
+    assert "Accept" not in discovery
+    assert "Aligned" in discovery
+
+
+def test_prose_offers_a_pr_card_without_options_accept_or_discuss(tmp_path):
+    # Axis: a pr card with no options is offered exactly the words' accept and discuss labels, not the discovery pair.
+    out = _prose_of(tmp_path, _sample("pr"))
+    assert "   - Answer: Accept or Discuss\n" in out
+    assert "Aligned or Discuss" not in out
+
+
+def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_path):
+    # Axis: with zero cards the accepting heading is followed by the nothing-to-accept line, no item is numbered, and the verdict line is still printed.
+    for kind in ("pr", "stack"):
+        sheet = _sample(kind)
+        sheet["cards"] = []
+        out = _prose_of(tmp_path, sheet)
+        assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], PR_WORDS["nothingToAccept"]) in out, kind
+        assert not re.search(r"^1\. ", out, re.M), kind
+        assert out.index(PR_WORDS["nothingToAccept"]) < out.index("**%s**" % PR_WORDS["verdictHeading"]) < out.index("Answer Merge"), kind
+
+
+def test_prose_leaves_out_each_empty_part(tmp_path):
+    # Axis: an empty caught list, walk, craft list, decided list and history leave out their headings; a stack still lists its PRs.
+    for kind in ("pr", "stack"):
+        sheet = _sample(kind)
+        part = sheet["prSheet"]
+        part["whatChanged"]["caught"], part["walk"], part["craft"], part["alreadyDecided"], part["history"] = [], [], [], [], []
+        out = _prose_of(tmp_path, sheet)
+        for heading in ("caughtHeading", "walkHeading", "craftHeading", "decidedHeading", "reviewHeading"):
+            assert PR_WORDS[heading] not in out, (kind, heading)
+        assert (PR_WORDS["prsHeading"] in out) == (kind == "stack")
+        assert "**%s**" % PR_WORDS["whatChangedHeading"] in out and "**%s**" % PR_WORDS["verdictHeading"] in out
+
+
+def test_prose_names_a_reviewer_with_no_family_as_family_unknown(tmp_path):
+    # Axis: a null family reads as the words' family-unknown note, and a reviewer that is not independent adds its mark after it.
+    sheet = _sample("pr")
+    sheet["prSheet"]["whatChanged"]["reviewers"] = [{"name": "code-reviewer", "family": None, "ran": "engine-record"},
+                                                    {"name": "design-reviewer", "family": None, "ran": "engine-record", "notIndependent": True}]
+    out = _prose_of(tmp_path, sheet)
+    assert "Reviewed by code-reviewer (%s); design-reviewer (%s, %s)." % (
+        PR_WORDS["familyUnknown"], PR_WORDS["familyUnknown"], PR_WORDS["notIndependentMark"]) in out
+
+
+def test_prose_shows_checks_on_no_commit_and_no_lane_as_the_page_does(tmp_path):
+    # Axis: checks on no commit print their state alone, a null lane prints no lane line, and a lane with no reason prints without its colon.
+    sheet = _sample("pr")
+    facts = sheet["prSheet"]["whatChanged"]
+    facts["ci"], facts["lane"], facts["laneReason"] = {"state": "none ran", "commit": None}, None, None
+    out = _prose_of(tmp_path, sheet)
+    assert "\nnone ran\n" in out and " lane" not in out and "CI " not in out
+    facts["lane"] = "light"
+    assert "\nlight lane\n" in _prose_of(tmp_path, sheet)
+
+
+def test_prose_escapes_markdown_in_a_pr_sheets_text(tmp_path):
+    # Axis: every string of a pr sheet's data file is escaped so it prints as typed.
+    sheet = _sample("pr")
+    sheet["prSheet"]["whatChanged"]["summary"] = "Adds *bold* and `code`"
+    sheet["prSheet"]["craft"][0]["title"] = "A_b_c"
+    sheet["prSheet"]["walk"][0]["title"] = "[link](x)"
+    out = _prose_of(tmp_path, sheet)
+    assert "Adds \\*bold\\* and \\`code\\`" in out and "A\\_b\\_c — " in out and "- \\[link\\](x)" in out
+
+
+# Bites on: the CLI refusing a pr sheet, or printing nothing for it.
+def test_cli_exits_zero_and_prints_the_prose_for_a_pr_sheet():
+    for kind in ("pr", "stack"):
+        result = _run(SAMPLES[kind])
+        assert result.returncode == 0 and result.stderr == "", kind
+        assert result.stdout.startswith("**%s**: " % _sample(kind)["title"]), kind
+        assert result.stdout.endswith("\n") and not result.stdout.endswith("\n\n"), kind
+
+
+# Bites on: a refusal for a malformed commit that is worded as the id rule, which names the wrong rule.
+def test_a_malformed_commit_is_refused_by_the_commit_rule_not_the_id_rule(tmp_path):
+    sheet = _sample("pr")
+    sheet["prSheet"]["commit"] = "NOT-A-COMMIT"
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == 'PrSheet.commit has the value "NOT-A-COMMIT", which does not fit its rule: %s\n' % COMMIT_RULE
+    assert "lowercase id" not in result.stderr
+
+
+def test_a_malformed_card_id_keeps_the_id_wording(tmp_path):
+    # Axis: a card id that breaks the schema's own id rule is still refused as an id.
+    sheet = _sample("pr")
+    sheet["cards"][0]["id"] = "Bad Id"
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == 'Cards[0].id ("Bad Id") is not a lowercase id of letters, digits and hyphens.\n'
+
+
+def test_a_pattern_with_no_description_is_named_by_the_pattern(tmp_path, monkeypatch, capsys):
+    # Axis: a pattern that is not the id rule and whose node has no description is worded "it must match the pattern <pattern>".
+    schema = _planted_schema(lambda planted: planted["$defs"]["commit"].pop("description"))
+    planted = tmp_path / "planted.schema.json"
+    planted.write_text(json.dumps(schema), encoding="utf-8")
+    sheet = _sample("pr")
+    sheet["prSheet"]["commit"] = "xyz"
+    (tmp_path / "sheet.json").write_text(json.dumps(sheet), encoding="utf-8")
+    module = _load_prose_module()
+    monkeypatch.setattr(module, "SCHEMA", planted)
+    assert module.main(["render", "--sheet", str(tmp_path / "sheet.json")]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == 'PrSheet.commit has the value "xyz", which does not fit its rule: it must match the pattern ^[0-9a-f]{7,40}$\n'
+
+
+def test_a_data_file_that_fails_the_check_is_still_refused_before_rendering(tmp_path):
+    # Axis: a pr sheet that breaks a rule of the schema prints nothing on stdout and the problem on stderr, with exit 1.
+    sheet = _sample("pr")
+    del sheet["prSheet"]["walk"]
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == "PrSheet has no walk.\n"
