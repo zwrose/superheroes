@@ -57,6 +57,13 @@ These retirements ship in the same release as the review record, and never apart
 - `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.
 - A PR body that keeps its DoD table or other marked sections in that span must move them below the build-record marker before the advisor's write will run. The advisor's own slot text and the builder's reminder comment still write as before.
 
+### Canon: the write helper and the chat-ruling record
+
+- A project's advisor, and every other session, now writes Canon through `lib/canon.py`: `hold` for a ruling held on the collector, `append` for a new entry or held lines. Each takes a declared ground (`owner-call`, `principle`, `ceded-call` or `take-back`) and mints the id.
+- The helper refuses, with `canon-stays-out` and the record's home, an entry whose declared ground is a go-word (launch, merge, release, tier, filing, force-push), a collector disposition, or filing or phase bookkeeping. It recognizes only a ruling that is a collector disposition, owner's words that are a bare go-word, and a ruling that records filing with an issue reference. An act written as a full ruling sentence under a valid ground is not caught, so the session's own ground and the advisor's vet still have to catch it. A project whose advisor logged those into Canon from a project memory should drop that memory; the refusal names where each belongs.
+- A ruling given in chat now gets the standard chat-ruling record: one dated collector comment quoting the owner's words (`canon.py ruling-record --post` returns its permalink). An issue Anchor cites that permalink, so Canon is no longer the only reachable record of a chat ruling.
+- Nothing already in Canon changes, and no sweep is owed. Until a project adopts this release, its advisor writes Canon by hand as before.
+
 ### Configure: Risk and trust
 
 - Item 10 is renamed "Risk and trust", and its slug `threatModel` is replaced by `riskAndTrust`. Callers of `project_config.py get --item threatModel` or `set --item threatModel` now get `unknown-slug`.
