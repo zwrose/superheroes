@@ -111,12 +111,12 @@ def test_parse_launch_reads_the_three_lines():
     text = "  Advisor plugin version: 1.2.3  \nnoise\n\tCloud environment: env_abc123\r\n" \
            "Base commit: %s\n" % SHA
     assert cb.parse_launch(text) == {"advisorVersion": "1.2.3", "environment": "env_abc123",
-                                     "baseCommit": SHA}
+                                     "baseCommit": SHA, "adoptsBranch": None}
 
 
 def test_parse_launch_missing_lines_are_none():
     assert cb.parse_launch("nothing here") == {"advisorVersion": None, "environment": None,
-                                               "baseCommit": None}
+                                               "baseCommit": None, "adoptsBranch": None}
     assert cb.parse_launch(None)["baseCommit"] is None
 
 
@@ -347,7 +347,7 @@ def test_intake_success_runs_the_checks_in_order_and_returns_the_board_text():
     result = _intake(run)
     assert result == {"ok": True, "outcome": None, "reason": None, "startedFrom": SHA,
                       "comment": cb.INTAKE_TEXT.format(v=VERSION, sha=SHA),
-                      "pluginVersion": VERSION}
+                      "pluginVersion": VERSION, "branch": None}
     tails = [" ".join(a[3:]) for a in run.git_calls]
     assert tails == [SHALLOW_KEY, MAIN_FETCH_KEY, VERIFY_KEY, SHALLOW_KEY, _sha_key("fetch"),
                      _sha_key("cat"), _sha_key("checkout")]
@@ -479,7 +479,7 @@ def test_the_launchers_cloud_prompt_passes_intake(tmp_path):
     assert composed["ok"] is True, composed
     parsed = cb.parse_launch(composed["prompt"])
     assert parsed == {"advisorVersion": composed["pluginVersion"],
-                      "environment": ENV_ID, "baseCommit": SHA}
+                      "environment": ENV_ID, "baseCommit": SHA, "adoptsBranch": None}
 
 
 @pytest.mark.parametrize("content", ["{not json", "[1, 2]", "\"ok\"", None])
