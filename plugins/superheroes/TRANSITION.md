@@ -122,7 +122,7 @@ These retirements ship in the same release as the review record, and never apart
 - `lib/cloud_parked.py` is new, with three verbs: `notice` tells the owner when a cloud build's PR is parked because the reviewer pass lapsed, `send-back` lists the parked PRs that can go back for their review, and `sent` records one sent.
 - Its state is `cloud-parked.json`, beside the launch ledger.
 - A parked PR goes back only after a cloud session confirms the renewed pass; the pass command alone does not count. It never goes back when it closed first or the owner already let it through.
-- The advisor records a PR sent only after the message is delivered, or may have reached the builder, so a send-back that was not delivered keeps being listed.
+- The advisor records a PR sent only after the message is delivered. When delivery could not be confirmed it runs `sent --uncertain`: the PR is never resent on its own and is listed under `uncertain` until the owner decides. A send-back that was not delivered keeps being listed.
 
 ## 0.42.0
 

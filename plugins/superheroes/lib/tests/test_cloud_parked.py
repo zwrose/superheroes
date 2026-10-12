@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -239,7 +240,7 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     _park(w, 10, issue=101)
     _renew(w)
     out = _send(w)
-    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "sendBack": [{
+    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "uncertain": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
         "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
     assert CP.SEND_BACK_MESSAGE == ("The reviewer pass is renewed. Run this pull request's review now, as "
@@ -764,3 +765,100 @@ def test_an_unreadable_launch_ledger_leaves_a_renewed_pr_unread_not_without_a_la
     assert out["sendBack"] == [] and out["noLane"] == []
     assert out["unread"] and out["unread"][0]["pr"] == 10
     assert _entries(w)[0]["outcome"] is None
+
+
+def _uncertain(w, pr):
+    return CP.sent(w.repo, REPO, pr, uncertain=True, env=w.env)
+
+
+def test_an_unconfirmed_send_is_never_resent_but_is_listed_every_time_until_a_newer_park_rearms_it(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    assert _uncertain(w, 10) == {"ok": True, "action": "written"}
+    assert _entries(w)[0]["outcome"] == "send-uncertain"
+    assert _uncertain(w, 10) == {"ok": True, "action": "unchanged"}
+    for _ in range(2):
+        out = _send(w)
+        assert out["sendBack"] == []
+        assert out["uncertain"] == [{"pr": 10, "repo": REPO, "launchId": "l-a"}]
+    w.gh.comments[10] = [_lapsed_comment(10, created_at="2026-10-08T10:00:00Z", cid=999)]
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["outcome"] is None
+    assert _send(w)["uncertain"] == []
+
+
+def test_a_plain_sent_confirms_an_unconfirmed_send_and_an_unconfirmed_one_never_downgrades_a_confirmed_send(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    assert _uncertain(w, 10)["action"] == "written"
+    assert _sent(w, 10) == {"ok": True, "action": "written"}
+    assert _entries(w)[0]["outcome"] == "sent-back"
+    assert _uncertain(w, 10) == {"ok": True, "action": "unchanged"}
+    assert _entries(w)[0]["outcome"] == "sent-back"
+    assert _send(w)["uncertain"] == []
+
+
+def _paused_run(gh):
+    """A `run` that parks its first call (inside a verb's lock, after the state was loaded) until released."""
+    inside, release = threading.Event(), threading.Event()
+    first = []
+
+    def run(argv, **kw):
+        if not first:
+            first.append(argv)
+            inside.set()
+            assert release.wait(10)
+        return gh(argv, **kw)
+    return run, inside, release
+
+
+def _in_thread(fn):
+    box = {}
+    thread = threading.Thread(target=lambda: box.setdefault("out", fn()), daemon=True)
+    thread.start()
+    return thread, box
+
+
+def test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one_pr(w):
+    for pr in (10, 11):
+        w.gh.comments[pr] = [_lapsed_comment(pr)]
+        w.gh.pulls[pr] = _pull()
+    run_a, a_inside, release_a = _paused_run(w.gh)
+    b_started = threading.Event()
+
+    def run_b(argv, **kw):
+        b_started.set()
+        return w.gh(argv, **kw)
+    first, first_box = _in_thread(lambda: CP.notice(w.repo, REPO, 10, TODAY, env=w.env, run=run_a))
+    try:
+        assert a_inside.wait(10)
+        second, second_box = _in_thread(lambda: CP.notice(w.repo, REPO, 11, TODAY, env=w.env, run=run_b))
+        assert not b_started.wait(0.5), "the second notice read the state while the first held it"
+    finally:
+        release_a.set()
+    first.join(10)
+    second.join(10)
+    assert first_box["out"]["kind"] == second_box["out"]["kind"] == "lapsed-pass"
+    assert sorted(e["pr"] for e in _entries(w)) == [10, 11]
+
+
+def test_a_sent_overlapping_a_state_writing_send_back_keeps_the_sent_back_outcome(w):
+    _park(w, 10)
+    w.gh.comments[12] = [_lapsed_comment(12)]
+    w.gh.pulls[12] = _pull()
+    assert _notice(w, 12)["kind"] == "lapsed-pass"
+    w.gh.pulls[12] = _pull(state="closed")
+    run_a, a_inside, release_a = _paused_run(w.gh)
+    first, first_box = _in_thread(lambda: CP.send_back(w.repo, TODAY, env=w.env, run=run_a))
+    try:
+        assert a_inside.wait(10)
+        second, second_box = _in_thread(lambda: _sent(w, 10))
+        second.join(0.5)
+        assert second.is_alive(), "sent ran while send-back held the state"
+    finally:
+        release_a.set()
+    first.join(10)
+    second.join(10)
+    assert second_box["out"] == {"ok": True, "action": "written"}
+    assert {e["pr"]: e["outcome"] for e in _entries(w)} == {10: "sent-back", 12: "closed"}

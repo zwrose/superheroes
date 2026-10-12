@@ -2,7 +2,7 @@
 
   cloud_parked.py notice --repo-root D --repo O/N --pr P
   cloud_parked.py send-back --repo-root D
-  cloud_parked.py sent --repo-root D --repo O/N --pr P
+  cloud_parked.py sent --repo-root D --repo O/N --pr P [--uncertain]
 
 Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
@@ -21,7 +21,8 @@ import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_NAME = "cloud-parked.json"
-OUTCOMES = ("sent-back", "closed", "owner-let-through")
+UNCERTAIN = "send-uncertain"  # a send-back whose delivery could not be confirmed; never resent on its own
+OUTCOMES = ("sent-back", UNCERTAIN, "closed", "owner-let-through")
 NOTICE_TEXT = ("#%d is parked. The reviewer pass lapsed mid-build, so its review didn't run. "
                "Renew the pass and I'll send it back for review.")
 SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's review now, as your "
@@ -257,7 +258,7 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     parked_on = _park_day(parks[-1].get("created_at"))
     park_id = parks[-1].get("id")
     park_id = park_id if isinstance(park_id, (str, int)) and not isinstance(park_id, bool) else None
-    if known and known[0]["outcome"] in ("sent-back", "owner-let-through"):
+    if known and known[0]["outcome"] in ("sent-back", UNCERTAIN, "owner-let-through"):
         seen = known[0].get(_PARK_KEY)
         newer = park_id != seen if (park_id is not None and seen is not None) else (
             bool(parked_on) and parked_on > known[0]["parkedOn"])
@@ -286,7 +287,8 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
 @_locked
 def send_back(repo_root, today=None, *, env=None, run=None):
     """The undecided entries due for their review. A closed or let-through entry is decided here; a due
-    one is listed and stays undecided until `sent` records it."""
+    one is listed and stays undecided until `sent` records it. An entry whose send could not be confirmed
+    is never listed for sending again, but is listed under `uncertain` every time."""
     env = os.environ if env is None else env
     bad, _, day = _check_args(None, None, today)
     if bad:
@@ -294,7 +296,9 @@ def send_back(repo_root, today=None, *, env=None, run=None):
     path, entries = _load(repo_root, env)
     if entries is None:
         return path
-    out = {"ok": True, "sendBack": [], "skipped": [], "unread": [], "notRenewed": [], "noLane": []}
+    out = {"ok": True, "sendBack": [], "skipped": [], "unread": [], "notRenewed": [], "noLane": [],
+           "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY)}
+                         for e in entries if e["outcome"] == UNCERTAIN]}
     changed = False
     for e in (e for e in entries if e["outcome"] is None):
         pull = _pull(e["repo"], e["pr"], env, run)
@@ -336,8 +340,9 @@ def send_back(repo_root, today=None, *, env=None, run=None):
 
 
 @_locked
-def sent(repo_root, repo, pr, *, env=None):
-    """Record one parked PR as sent back, once its message was delivered. Saying it twice changes nothing."""
+def sent(repo_root, repo, pr, *, uncertain=False, env=None):
+    """Record one parked PR as sent back, once its message was delivered; with `uncertain`, as sent with
+    delivery unconfirmed. Saying it twice changes nothing, and `uncertain` never downgrades a confirmed send."""
     env = os.environ if env is None else env
     bad, pr, _ = _check_args(repo, pr, None, need=True)
     if bad:
@@ -351,9 +356,10 @@ def sent(repo_root, repo, pr, *, env=None):
     entry = found[0]
     if entry["outcome"] in ("closed", "owner-let-through"):
         return _refusal("already-decided")
-    if entry["outcome"] == "sent-back":
+    outcome = UNCERTAIN if uncertain else "sent-back"
+    if entry["outcome"] == outcome or (uncertain and entry["outcome"] == "sent-back"):
         return {"ok": True, "action": "unchanged"}
-    entry["outcome"] = "sent-back"
+    entry["outcome"] = outcome
     if not _save(path, entries):
         return _refusal("parked-state-unwritable")
     return {"ok": True, "action": "written"}
@@ -368,6 +374,8 @@ def main(argv=None):
         if name != "send-back":
             sub.add_argument("--repo", required=True)
             sub.add_argument("--pr", required=True)
+        if name == "sent":
+            sub.add_argument("--uncertain", action="store_true")
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     except SystemExit as exc:
@@ -376,7 +384,7 @@ def main(argv=None):
     if args.verb == "notice":
         result = notice(args.repo_root, args.repo, args.pr)
     elif args.verb == "sent":
-        result = sent(args.repo_root, args.repo, args.pr)
+        result = sent(args.repo_root, args.repo, args.pr, uncertain=args.uncertain)
     else:
         result = send_back(args.repo_root)
     sys.stdout.write(json.dumps(result) + "\n")
