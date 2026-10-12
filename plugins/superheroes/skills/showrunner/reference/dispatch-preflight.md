@@ -78,7 +78,7 @@ Once every launch in the batch has returned, run `lib/launcher.py report --repo-
 
 How it knows the reason is fixed:
 
-- The line always stops once the cloud builds setting is off.
+- A reason that came from the cloud builds setting stops once the setting reads switched off. A reason that came from a launch word follows the rules below.
 - A reason this machine can read again stops once that condition reads true again. These are no cloud setup, a lapsed reviewer pass, a calibration mismatch, and a version mismatch read from the setup record.
 - Any other reason stops only once a check made on a later day has passed and the cloud reads ready. These are no reviewer pass, an unreachable cloud, and a version a builder reported.
 - It also clears once any build in a later launch goes to the cloud.

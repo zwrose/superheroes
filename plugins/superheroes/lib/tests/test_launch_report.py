@@ -354,7 +354,7 @@ def test_R_eight_every_line_of_a_report_is_scaffolding_or_a_table_fragment(tmp_p
 
 
 def _still_path(repo, store):
-    return os.path.join(_store_dir(repo, store), "state", "cloud-still.json")
+    return LR._still_path(repo, store)
 
 
 def _stored(repo, store):
@@ -374,7 +374,7 @@ def test_record_still_writes_the_first_reason_in_condition_order(tmp_path):
     got = LR.record_still(repo, calls, root=store, today=TODAY)
     assert got == {"action": "written", "reason": "version"}
     assert _stored(repo, store) == {
-        "schema": "cloud-still/1", "reason": "version", "by": "setting",
+        "schema": LR._STILL_SCHEMA, "reason": "version", "by": "setting",
         "cloudVersion": "0.41.0", "advisorVersion": "0.42.0",
         "reported": {"pluginVersion": "0.41.0"}, "observedOn": "2026-10-11"}
     again = LR.record_still(repo, [_call(reason="no-pass", reported={"noPass": True})],
@@ -460,10 +460,15 @@ def _line(repo, store, **kw):
 def test_R_still_no_state_means_no_line(tmp_path):
     repo, store = _gitdir(tmp_path)
 
-    def must_not_be_asked(*args, **kwargs):
-        raise AssertionError("readiness read for no state")
+    asked = []
 
-    assert LR.still_line(repo, root=store, readiness_fn=must_not_be_asked) is None
+    def record_the_ask(*args, **kwargs):
+        asked.append((args, kwargs))
+        return _now()
+
+    # still_line swallows an exception from the readiness read, so the callback records, not raises
+    assert LR.still_line(repo, root=store, readiness_fn=record_the_ask) is None
+    assert asked == []
 
 
 def test_R_still_leg_a_the_setting_switched_off_clears_it(tmp_path):
@@ -586,13 +591,13 @@ def test_clear_still_that_cannot_delete_is_refused(tmp_path, monkeypatch):
     assert LR.clear_still(repo, root=store) == {"action": "refused"}
 
 
-_GOOD = {"schema": "cloud-still/1", "reason": "no-setup", "by": "setting", "cloudVersion": None,
+_GOOD = {"schema": LR._STILL_SCHEMA, "reason": "no-setup", "by": "setting", "cloudVersion": None,
          "advisorVersion": None, "reported": None, "observedOn": "2026-10-11"}
 
 
 @pytest.mark.parametrize("text", [
     "", "{not json", "[]", "null", "42",
-    json.dumps(dict(_GOOD, schema="cloud-still/2")),
+    json.dumps(dict(_GOOD, schema=LR._STILL_SCHEMA + "-other")),
     json.dumps({k: v for k, v in _GOOD.items() if k != "schema"}),
     json.dumps(dict(_GOOD, reason="needs")),
     json.dumps(dict(_GOOD, reason="local-word")),

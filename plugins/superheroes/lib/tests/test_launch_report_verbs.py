@@ -94,10 +94,11 @@ def _folds(repo):
     assert ll.fold(ll.read(repo)["records"])["ok"]
 
 
-def _stored(store):
+def _stored(repo, store):
+    name = os.path.basename(LR._still_path(repo, store))
     for dirpath, _dirs, files in os.walk(store):
-        if "cloud-still.json" in files:
-            with open(os.path.join(dirpath, "cloud-still.json"), encoding="utf-8") as fh:
+        if name in files:
+            with open(os.path.join(dirpath, name), encoding="utf-8") as fh:
                 return json.load(fh)
     return None
 
@@ -124,7 +125,7 @@ def test_I1_a_refused_launch_is_never_listed_E5(world):
     _folds(repo)
     assert _report(repo) == {"ok": True, "report": None, "still": {"action": "unchanged", "reason": None},
                              "lanes": 0}
-    assert _stored(store) is None
+    assert _stored(repo, store) is None
 
 
 def test_I1_a_refused_launch_beside_a_started_one_is_not_counted(world):
@@ -154,13 +155,17 @@ def test_I1_the_last_started_launch_of_an_issue_is_the_one_listed(world):
 def test_I1_the_issue_order_is_its_first_reservation_not_its_last(world):
     repo, _store = world
     _launch(repo, "c1", 44, "cloud")
-    _launch(repo, "z", 55, "cloud")
     _finish(repo, "c1")
+    _launch(repo, "m1", 55, "local", _call(reason="needs", need=PHONE))
     _launch(repo, "l1", 44, "local", _call(reason="needs", need=PHONE))
+    _folds(repo)
     got = _report(repo)
+    assert got["lanes"] == 2
+    # both issues land under "On your machine", so their relative order is observed: first reservation
+    # puts 44 ahead of 55, last reservation would put 55 ahead of 44
     lines = got["report"].splitlines()
-    assert lines[1] == "In the cloud: #55 Title 55."
-    assert lines[3].startswith("- #44 ")
+    assert lines[1] == "On your machine:"
+    assert lines[2].startswith("- #44 ") and lines[3].startswith("- #55 ")
 
 
 def test_E6_a_refused_last_reservation_leaves_the_earlier_started_launch_listed(world):
@@ -218,7 +223,7 @@ def test_I2_E7_E8_an_unusable_place_call_is_synthesized_without_a_reason(world, 
     assert got["report"] == ("Launched 2 builds.\nIn the cloud: #22 Title 22.\nOn your machine:\n"
                              "- #11 Title 11.")
     assert got["still"] == {"action": "unchanged", "reason": None}
-    assert _stored(store) is None
+    assert _stored(repo, store) is None
 
 
 def test_I2_a_synthesized_local_call_alone_prints_no_report(world):
@@ -338,11 +343,11 @@ def test_E11_a_cloud_build_beside_a_local_not_ready_fallback_clears_the_still_st
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
     got = _report(repo)
     assert got["still"] == {"action": "written", "reason": "no-setup"}
-    assert _stored(store)["reason"] == "no-setup"
+    assert _stored(repo, store)["reason"] == "no-setup"
     _launch(repo, "b", 22, "cloud")
     got = _report(repo)
     assert got["still"] == {"action": "cleared", "reason": None}
-    assert _stored(store) is None
+    assert _stored(repo, store) is None
 
 
 def test_an_unconfirmed_cloud_session_is_not_reported_and_leaves_the_still_state(world):
@@ -358,7 +363,7 @@ def test_an_unconfirmed_cloud_session_is_not_reported_and_leaves_the_still_state
     assert got["lanes"] == 1
     assert "#22" not in got["report"] and "In the cloud" not in got["report"]
     assert got["still"] == {"action": "written", "reason": "no-setup"}
-    assert _stored(store)["reason"] == "no-setup"
+    assert _stored(repo, store)["reason"] == "no-setup"
 
 
 # ---------------------------------------------------------------- the CLI
