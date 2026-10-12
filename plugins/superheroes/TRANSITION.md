@@ -52,6 +52,14 @@ These retirements ship in the same release as the review record, and never apart
 - A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
 - A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
 
+### Configure: Risk and trust
+
+- Item 10 is renamed "Risk and trust", and its slug `threatModel` is replaced by `riskAndTrust`. Callers of `project_config.py get --item threatModel` or `set --item threatModel` now get `unknown-slug`.
+- `set --item riskAndTrust` takes one half per call: `{"threatModel": ...}` or `{"riskAreas": [...]}`. Setting `riskAreas` replaces the whole list. `get --item riskAndTrust` returns `effective.threatModel` and `effective.riskAreas`.
+- A new reader, `lib/risk_areas.py touched --cwd . --path <path>`, says which risk areas a change touches. Its `riskAreas` is `set` (with `touched`) or `not-set` (with a `reason`: `missing`, `empty` or `unreadable`).
+- An existing project's threat model carries over unchanged as the first half, and its risk areas start empty.
+- The setup sitting lives in configure: set-up § 3.5, or view-and-tune's "Set up Risk and trust" for a project that is already configured.
+
 ## 0.42.0
 
 ### Before you upgrade

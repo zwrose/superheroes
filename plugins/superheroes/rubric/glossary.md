@@ -253,6 +253,19 @@ The values a project supplies through `configure` that the plugin's rules read.
 
 One value within [project configuration](#project-configuration).
 
+### Risk and trust
+
+The [configuration item](#configuration-item) that holds the project's threat model ("what we
+defend against") and its [risk areas](#risk-area). It is set up with the owner in one sitting with
+the advisor.
+
+### Risk area
+
+A named part of the project where a mistake costs money, customer data, safety, access, or something
+that cannot be undone. It names the parts it covers, why it is risky, and how hard a mistake there is
+to undo. A folder it names covers every file beneath that folder. A change that touches one is matched
+from the area itself, without model judgment.
+
 ### Ground-truth sources
 
 The sources whose word is taken as true without further checking, such as CI's exit code or git's

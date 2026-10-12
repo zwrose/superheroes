@@ -21,7 +21,7 @@ import core_md  # noqa: E402
 import guardian_sweep  # noqa: E402
 
 HOME_PROJECT_CONFIGURATION = "projectConfiguration"
-HOME_THREAT_MODEL = "threatModel"
+HOME_RISK_AND_TRUST = "riskAndTrust"
 HOME_GUARDIAN_CADENCE = "guardianCadence"
 
 BUDGET_DERIVATION_PROSE = (
@@ -131,10 +131,10 @@ ITEMS = (
     },
     {
         "number": 10,
-        "slug": "threatModel",
-        "name": "Threat model",
-        "home": HOME_THREAT_MODEL,
-        "shape": "prose",
+        "slug": "riskAndTrust",
+        "name": "Risk and trust",
+        "home": HOME_RISK_AND_TRUST,
+        "shape": "riskAndTrust",
         "plugin_default": None,
     },
     {
@@ -222,6 +222,19 @@ def _validate_threat_model(value):
         if line.lstrip().startswith("## "):
             return REASON_MALFORMED_VALUE
     return None
+
+
+def _validate_risk_and_trust(value):
+    # axis: a set carries exactly one half, the threat model or the risk areas — see bite-proof record wo_a_1712_risk-areas
+    if not isinstance(value, dict) or len(value) != 1:
+        return REASON_MALFORMED_VALUE
+    if "threatModel" in value:
+        return _validate_threat_model(value["threatModel"])
+    if "riskAreas" in value:
+        if core_md.validate_risk_areas(value["riskAreas"]):
+            return REASON_MALFORMED_VALUE
+        return None
+    return REASON_MALFORMED_VALUE
 
 
 def _validate_prose_list(value):
@@ -323,13 +336,12 @@ _VALIDATORS = {
     "conditionWindows": _validate_condition_windows,
     "guardianCadence": _validate_guardian_cadence,
     "severityLadder": _validate_severity_ladder,
+    "riskAndTrust": _validate_risk_and_trust,
 }
 
 
 def validate_item_value(item, value):
     """Return a refusal reason when ``value`` does not match ``item``'s shape."""
-    if item["slug"] == "threatModel":
-        return _validate_threat_model(value)
     validator = _VALIDATORS.get(item["shape"])
     if validator is None:
         return REASON_MALFORMED_VALUE
@@ -414,7 +426,8 @@ def _read_project_config_raw(mapping, slug):
     return mapping[slug]
 
 
-def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
+def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None,
+                        risk_areas_read=None):
     slug = item["slug"]
     malformed = False
     if slug == "budgetN":
@@ -465,21 +478,30 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
             "malformed": False,
         }
 
-    if slug == "threatModel":
-        if isinstance(raw, str) and raw.strip():
-            return {
-                "raw": raw,
-                "effective": raw,
-                "source": "stamped",
-                "malformed": False,
-            }
-        if raw is not None and not isinstance(raw, str):
-            malformed = True
+    if slug == "riskAndTrust":
+        raw = raw if isinstance(raw, dict) else {}
+        threat = raw.get("threatModel")
+        areas = raw.get("riskAreas")
+        threat_set = isinstance(threat, str) and bool(threat.strip())
+        # axis: the risk-areas half is derived only from core_md.read_risk_areas — see bite-proof record wo_a_1712_risk-areas
+        areas_read = risk_areas_read or {}
+        areas_malformed = areas_read.get("reason") in (
+            core_md.RISK_AREAS_REASON_MALFORMED, core_md.RISK_AREAS_REASON_UNREADABLE)
+        if areas_malformed:
+            effective_areas = None
+        elif areas_read.get("declared"):
+            effective_areas = areas_read.get("areas")
+        else:
+            effective_areas = []
+        stamped = threat_set or bool(effective_areas)
         return {
-            "raw": raw if raw is not None else None,
-            "effective": None,
-            "source": "unset",
-            "malformed": malformed,
+            "raw": {"threatModel": threat, "riskAreas": areas},
+            "effective": {
+                "threatModel": threat if threat_set else None,
+                "riskAreas": effective_areas,
+            },
+            "source": "stamped" if stamped else "unset",
+            "malformed": areas_malformed or (threat is not None and not isinstance(threat, str)),
         }
 
     if slug == MATERIAL_LINE_SLUG and is_material_line_marker(raw):
@@ -527,13 +549,14 @@ def read(cwd, root=None):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
     facts = core_md.read(cwd, root)
     guardian_cfg = guardian_sweep.read_config(cwd, root)
+    risk_areas_read = core_md.read_risk_areas(cwd, root)
     if facts is None:
         absent_items = []
         dial_entry = _resolve_item_entry(_SLUG_INDEX["dial"], None)
         for item in ITEMS:
             slug = item["slug"]
-            if item["home"] == HOME_THREAT_MODEL:
-                raw = None
+            if item["home"] == HOME_RISK_AND_TRUST:
+                raw = {"threatModel": None, "riskAreas": None}
             elif item["home"] == HOME_GUARDIAN_CADENCE:
                 raw = _guardian_cadence_raw(cwd, root)
             else:
@@ -543,6 +566,7 @@ def read(cwd, root=None):
                 raw,
                 dial_effective=dial_entry["effective"],
                 guardian_cfg=guardian_cfg,
+                risk_areas_read=risk_areas_read,
             )
             absent_items.append({"slug": slug, **entry})
         return {
@@ -557,10 +581,12 @@ def read(cwd, root=None):
     items = []
     for item in ITEMS:
         slug = item["slug"]
-        if item["home"] == HOME_THREAT_MODEL:
-            raw = facts.get("threatModel")
-            if isinstance(raw, str) and not raw.strip():
-                raw = None
+        if item["home"] == HOME_RISK_AND_TRUST:
+            threat = facts.get("threatModel")
+            if isinstance(threat, str) and not threat.strip():
+                threat = None
+            raw = {"threatModel": threat,
+                   "riskAreas": _read_project_config_raw(mapping, core_md.RISK_AREAS_KEY)}
         elif item["home"] == HOME_GUARDIAN_CADENCE:
             raw = _guardian_cadence_raw(cwd, root)
         else:
@@ -570,6 +596,7 @@ def read(cwd, root=None):
             raw,
             dial_effective=dial_entry["effective"],
             guardian_cfg=guardian_cfg,
+            risk_areas_read=risk_areas_read,
         )
         items.append({
             "slug": slug,
@@ -640,6 +667,48 @@ def _material_line_in_canon_refusal():
     }
 
 
+def _risk_and_trust_raw(cwd, root):
+    """Item 10's two stored halves, or None when they cannot be read."""
+    reread = get_item(cwd, "riskAndTrust", root=root)
+    raw = reread.get("raw")
+    return raw if isinstance(raw, dict) else None
+
+
+def _set_risk_and_trust(cwd, value, root):
+    """Write one half of item 10 to its own home, then read both halves back."""
+    half = "threatModel" if "threatModel" in value else "riskAreas"
+    other = "riskAreas" if half == "threatModel" else "threatModel"
+    before = _risk_and_trust_raw(cwd, root)
+    if half == "threatModel":
+        write_result = core_md.write_threat_model(cwd, value["threatModel"], root=root)
+    else:
+        write_result = core_md.write_project_config_item(
+            cwd, core_md.RISK_AREAS_KEY, value["riskAreas"], root=root)
+    if write_result.get("action") not in ("written", "noop"):
+        return write_result
+
+    after = _risk_and_trust_raw(cwd, root)
+    # write_threat_model stores the prose stripped, so the stripped text is what reads back
+    submitted = value[half].strip() if half == "threatModel" else value[half]
+    # axis: the read-back compares only the half that was written — see bite-proof record wo_a_1712_risk-areas
+    if after is None or not _values_equal(after.get(half), submitted):
+        return {
+            "action": "refused",
+            "reason": REASON_SET_MISMATCH,
+            "expected": {half: submitted},
+            "observed": {half: None if after is None else after.get(half)},
+        }
+    # axis: a set that moved the other half is refused, since each half has one home — see bite-proof record wo_a_1712_risk-areas
+    if before is not None and not _values_equal(after.get(other), before.get(other)):
+        return {
+            "action": "refused",
+            "reason": REASON_SET_MISMATCH,
+            "expected": {other: before.get(other)},
+            "observed": {other: after.get(other)},
+        }
+    return write_result
+
+
 def set_item(cwd, slug, value, root=None):
     """Validate and write one item to its home only."""
     item = _item_by_slug(slug)
@@ -665,9 +734,9 @@ def set_item(cwd, slug, value, root=None):
     if facts.get("behind"):
         return {"action": "behind", "record": facts}
 
-    if item["home"] == HOME_THREAT_MODEL:
-        write_result = core_md.write_threat_model(cwd, value, root=root)
-    elif item["home"] == HOME_GUARDIAN_CADENCE:
+    if item["home"] == HOME_RISK_AND_TRUST:
+        return _set_risk_and_trust(cwd, value, root)
+    if item["home"] == HOME_GUARDIAN_CADENCE:
         write_result = core_md.write_guardian_cadence(cwd, value, root=root)
     elif slug == MATERIAL_LINE_SLUG:
         # axis: the adoption check and the write share one lock, so a set never undoes a migration — see bite-proof record wo_a_1618_set-cas
