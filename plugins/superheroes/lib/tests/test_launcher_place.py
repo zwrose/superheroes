@@ -36,6 +36,7 @@ from test_launcher_cloud import (  # noqa: E402
     _cloud_repo,
     _fake_spawn,
     _git,
+    _local_remote_has,
     _spawned,
 )
 
@@ -69,6 +70,8 @@ def _isolated(tmp_path, monkeypatch):
     # The instance-pin gate applies only on a Claude-hosted seat; these tests are not one.
     monkeypatch.delenv("CLAUDE_PID", raising=False)
     monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
+    # The base is kept on a local bare remote and asked of it, not of GitHub.
+    monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
     # A local child that is still alive after this long counts as started.
     monkeypatch.setattr(L, "_SETTLE_SECONDS", 0.3)
 

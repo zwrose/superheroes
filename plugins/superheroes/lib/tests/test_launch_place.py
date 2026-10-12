@@ -739,6 +739,17 @@ def test_R_FR37_a_cloud_that_picks_up_the_version_goes_to_the_cloud(tmp_path):
     assert call["cloudVersion"] == "1.2.2" and call["advisorVersion"] == ADVISOR
 
 
+def test_R_FR37_a_cloud_that_does_not_pick_up_the_version_gets_the_setup_text_fix(tmp_path):
+    repo, store, env = _on(tmp_path, plugin_version="1.2.2", picks_up_version=False)
+    place_call = _route(repo, store, env)
+    assert place_call["place"] == "local" and place_call["reason"] == "version"
+    assert place_call["cloudVersion"] == "1.2.2" and place_call["advisorVersion"] == ADVISOR
+    reason = LP.reason_text(place_call)
+    assert "1.2.2" in reason and ADVISOR in reason
+    assert LP.fix_text(place_call) == LP.REASONS["version"]["fix"]
+    assert "paste the new setup text" in LP.REASONS["version"]["fix"]
+
+
 def test_R_FU1_a_record_that_goes_bad_after_the_switch_reads_as_no_setup(tmp_path):
     repo, store, env = _on(tmp_path)
     assert _route(repo, store, env)["place"] == "cloud"

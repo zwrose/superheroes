@@ -16,12 +16,10 @@ import pty
 import re
 import secrets
 import select
-import shutil
 import signal
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -2280,88 +2278,63 @@ def _place_refusal(
     return None
 
 
-# What a failed fetch prints when the server answered and does not have the commit. Any other
-# failure (an unresolved host, a refused login, a dropped connection) leaves the question open.
-_BASE_ABSENT_MARKERS = ("not our ref", "couldn't find remote ref", "no such remote ref")
+# GitHub's answer when the repository has no such commit: HTTP 422 with this message. Any other
+# failure (a missing or private repository, a refused login, a dropped connection) leaves the
+# question open.
+_BASE_ABSENT_MARKER = "no commit found for sha"
 
-
-# The settings that decide how a fetch reaches and signs in to a remote. Matched on the
-# lower-cased key, which keeps a section and variable name case-blind and a subsection as typed.
-_TRANSPORT_KEY_RE = re.compile(
-    r"^(?:url\..+\.(?:insteadof|pushinsteadof)|core\.(?:sshcommand|gitproxy)"
-    r"|(?:ssh|http|credential|protocol)\..+)$",
-    re.DOTALL,
+# The forms of a GitHub remote address: scp-like ssh, ssh URL, https URL; ``.git`` optional.
+_GITHUB_REMOTE_RE = re.compile(
+    r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
+    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
 
-def _transport_options(repo_root, env):
-    """The transport settings as the launching checkout itself sees them, as ``-c key=value``
-    arguments for a fetch run somewhere else; None when they could not be read.
-
-    ``git config --list`` run in the checkout applies every layer, conditional includes keyed on
-    its gitdir or branch among them, and the worktree's own config.
-    """
-    listed = _git_scrubbed(
-        repo_root, "config", "--list", "-z", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    if listed is None or listed.returncode != 0:
+def _gh_commit_lookup(owner, repo, sha, env, timeout):
+    """Ask GitHub's commits endpoint for ``sha`` with ``gh``; the completed process, or None when
+    ``gh`` could not run or timed out. Tests replace it."""
+    try:
+        return subprocess.run(
+            ["gh", "api", "repos/%s/%s/commits/%s" % (owner, repo, sha), "--jq", ".sha"],
+            capture_output=True,
+            text=True,
+            env=ll.scrub_env(env),
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
         return None
-    options = []
-    for entry in listed.stdout.split("\0"):
-        if not entry:
-            continue
-        key, sep, value = entry.partition("\n")
-        if _TRANSPORT_KEY_RE.match(key.lower()):
-            options += ["-c", key + "=" + value if sep else key]
-    return options
 
 
 def _base_on_remote(repo_root, base, env):
-    """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
+    """Whether the commit ``base`` is on the remote, asked of GitHub afresh: True, False, or
     None when the remote could not be asked.
 
-    The commit is fetched into an empty repository, because a fetch in the working repository
-    never asks the server for an object it already has, and a local tracking ref can be stale.
-    The fetch runs against the remote's address as the launching checkout resolves it, with the
-    checkout's own transport settings (``insteadOf`` rewrites, ``core.sshCommand``,
-    ``credential.*``, ``http.*``) handed over as options, so a setting that reaches the checkout
-    only through a conditional include applies as well. The empty repository stays empty.
+    The launching checkout's ``origin`` address names the owner and repository, and the launcher
+    asks GitHub's commits endpoint through ``gh`` whether that commit exists there: the host the
+    cloud session clones from, and no local tracking ref can be stale. True only when the call
+    succeeds and answers with the same commit; False only when GitHub says it has no such commit
+    (HTTP 422). Everything else is None: an origin that is not on github.com or is missing, no
+    ``gh``, a timeout, a missing or private repository, a refused login, a dropped connection.
     """
     url = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
-    if url is None or url.returncode != 0 or not url.stdout.strip():
+    if url is None or url.returncode != 0:
         return None
-    address = url.stdout.strip()
-    options = _transport_options(repo_root, env)
-    if options is None:
+    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
+    if matched is None:
         return None
-    try:
-        scratch = tempfile.mkdtemp()
-    except OSError:
+    asked = _gh_commit_lookup(
+        matched.group("owner"), matched.group("repo"), base, env, _WORKTREE_GIT_TIMEOUT,
+    )
+    if asked is None:
         return None
-    try:
-        made = _git_scrubbed(
-            scratch, "init", "-q", "--bare", scratch, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        if made is None or made.returncode != 0:
-            return None
-        fetched = _git_scrubbed(
-            scratch, *options, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-            address, base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        if fetched is None:
-            return None
-        if fetched.returncode == 0:
-            return True
-        # Only the server saying it lacks the commit is an answer; a failure to reach it or to
-        # sign in is not, and says nothing about the commit.
-        said = (fetched.stderr or "").lower()
-        if any(marker in said for marker in _BASE_ABSENT_MARKERS):
-            return False
-        return None
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    if asked.returncode == 0:
+        return True if (asked.stdout or "").strip() == base else None
+    said = (asked.stderr or "").lower()
+    if _BASE_ABSENT_MARKER in said and "http 422" in said:
+        return False
+    return None
 
 
 # The round-trip to the remote; tests replace it.
