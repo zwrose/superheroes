@@ -113,10 +113,12 @@ park. A review that already finished before the lapse stays recorded as it was.
 A cloud build hands back only with its review record written, as the charter's §11 and
 `rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. The record is
 not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
-final commit was reported by the session rather than read from the PR, or its status is not
-`reviewed` (`whatIsMissing` names an unreadable PR). In any of these the builder does not hand back.
-It posts the review receipt on the PR as a comment naming the head it reviewed, leaves the PR not
-ready, and parks, naming the review record as missing.
+final commit was reported by the session rather than read from the PR (`whatIsMissing` names an
+unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
+as a comment naming the head it reviewed, leaves the PR not ready, and parks, naming the review
+record as missing. A record that was written and reads `not-reviewed` for any other reason, such as
+an owner-authorized go-ahead covering a missing review, is a written record: handback follows
+`skills/review-code/reference/review-record.md`.
 
 ## Verify: cloud-only failures
 
