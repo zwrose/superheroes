@@ -11,7 +11,7 @@ belongs to and lists every change with its replacement.
 
 ### Before you upgrade
 
-- After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
+- After upgrading, run configure once. `rubric-version` moves from 11 to 13, so each project's review profile reads as behind until configure refreshes it.
 - After upgrading, the owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets.
 - The project keeps working before the sitting. Until then, every change whose risk is unclear goes to the full lane, and every leftover with a real consequence comes to the owner.
 - The earlier plugin version is not kept runnable after this release. Downgrading under these changes is not supported.
