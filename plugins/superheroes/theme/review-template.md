@@ -10,9 +10,9 @@ A session never edits the template's code to make a sheet. It writes a data file
 
 ## Who uses it
 
-Discovery's remainder sheets and its final sheet use the template, and so do the PR sheets and stack
-sheets the advisor makes for a PR's merge. Any session may use it when it has calls for the owner, and
-the owner may ask for one. No other review is required to use it.
+Discovery's remainder sheets and its final sheet use the template, and so do PR sheets and stack
+sheets, which put a PR's review to the owner before it merges. Any session may use it when it has
+calls for the owner, and the owner may ask for one. No other review is required to use it.
 
 ## The data file
 
