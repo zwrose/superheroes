@@ -106,7 +106,7 @@ def _recheck_first(calls):
 def _summary(lanes):
     """The all-on-your-machine form, or None when the lanes do not share one reason."""
     calls = [lane["placeCall"] for lane in lanes]
-    if not all(c["place"] == "local" and c["pointedAtCloud"] for c in calls):
+    if not all(c["place"] == ll.PLACE_LOCAL and c["pointedAtCloud"] for c in calls):
         return None
     codes = {c.get("reason") for c in calls}
     if len(codes) != 1 or not codes <= set(NOT_READY_CODES):
@@ -127,14 +127,14 @@ def render_report(lanes):
         if not lanes:
             return None
         calls = [lane["placeCall"] for lane in lanes]
-        if not any(c["pointedAtCloud"] or c["place"] == "cloud" for c in calls):
+        if not any(c["pointedAtCloud"] or c["place"] == ll.PLACE_CLOUD for c in calls):
             return None
         summary = _summary(lanes)
         if summary is not None:
             return summary
         out = ["%s." % _count(lanes)]
-        cloud = [_label(lane) for lane in lanes if lane["placeCall"]["place"] == "cloud"]
-        local = [lane for lane in lanes if lane["placeCall"]["place"] != "cloud"]
+        cloud = [_label(lane) for lane in lanes if lane["placeCall"]["place"] == ll.PLACE_CLOUD]
+        local = [lane for lane in lanes if lane["placeCall"]["place"] != ll.PLACE_CLOUD]
         if cloud:
             out.append("In the cloud: %s." % ", ".join(cloud))
         if local:

@@ -857,6 +857,31 @@ def test_cli_still_prints_the_line_or_null_and_exits_zero(world, monkeypatch, ca
     assert out["line"].startswith("Still on your machine\n")
 
 
+def test_cli_still_through_the_real_readiness_reader_reminds_clears_and_writes_nothing(
+        tmp_path, monkeypatch, capsys):
+    repo, store, env = _real_world(tmp_path, monkeypatch, pass_lapses=PAST)
+    monkeypatch.setattr(control_plane, "store_root", lambda: store)
+    monkeypatch.setenv("HOME", env["HOME"])
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    call = _route(repo, store, env)
+    assert call["reason"] == "pass-lapsed"
+    _day_launch(repo, "a", 11, DAY, call)
+    # no registry yet: a read that resolved the mode with its default would write one
+    assert mode_registry.read_registry(repo, store) is None
+    before = _snapshot(mode_registry.project_store_dir(repo, None), repo, store)
+    assert launcher.main(["still", "--repo-root", repo]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "line": (
+        'Still on your machine\nThe reviewer pass has lapsed. Paste a fresh pass and say '
+        '"check again" to fix it.')}
+    assert _snapshot(mode_registry.project_store_dir(repo, None), repo, store) == before
+    assert mode_registry.read_registry(repo, store) is None
+    assert CS.confirm_pass(repo, ACCOUNT, "2099-01-01", root=store)["action"] == "written"
+    repaired = _snapshot(mode_registry.project_store_dir(repo, None), repo, store)
+    assert launcher.main(["still", "--repo-root", repo]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "line": None}
+    assert _snapshot(mode_registry.project_store_dir(repo, None), repo, store) == repaired
+
+
 def test_B9_cli_still_on_an_unreadable_ledger_refuses_and_exits_one(world, capsys):
     repo, _store = world
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
