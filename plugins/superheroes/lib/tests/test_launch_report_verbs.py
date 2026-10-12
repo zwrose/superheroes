@@ -350,6 +350,50 @@ def test_E11_a_cloud_build_beside_a_local_not_ready_fallback_clears_the_still_st
     assert _stored(repo, store) is None
 
 
+def test_a_finished_cloud_build_before_a_local_fallback_does_not_hide_the_fallback(world):
+    repo, store = world
+    _launch(repo, "a", 11, "cloud")
+    _finish(repo, "a")
+    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
+    assert _stored(repo, store)["reason"] == "unreachable"
+
+
+def test_an_earlier_cloud_launch_of_a_retried_issue_still_clears_the_old_reminder(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    _launch(repo, "b", 22, "cloud")
+    _finish(repo, "b")
+    _launch(repo, "c", 22, "local", _call(reason=None, pointed=False))
+    assert _report(repo)["still"] == {"action": "cleared", "reason": None}
+    assert _stored(repo, store) is None
+
+
+def test_replaying_an_older_batch_report_does_not_undo_a_newer_batchs_reminder(world):
+    repo, store = world
+    assert _declare(repo, "b-newer", 4)["ok"]
+    _launch(repo, "a", 11, "cloud")
+    _finish(repo, "a")
+    _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-newer")
+    _start(repo, "b")
+    newer = launcher.launch_report_for_batch(repo, "b-newer", title_fn=_titles)
+    assert newer["still"] == {"action": "written", "reason": "unreachable"}
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _stored(repo, store)["reason"] == "unreachable"
+
+
+def test_replaying_the_same_batch_report_keeps_the_day_it_first_observed(world, monkeypatch):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    first = _report(repo)
+    assert first["still"] == {"action": "written", "reason": "no-setup"}
+    observed = _stored(repo, store)["observedOn"]
+    monkeypatch.setattr(LR, "_today", lambda given: given or LR.datetime.date(2001, 1, 1))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    assert _stored(repo, store)["observedOn"] == observed
+
+
 def test_an_unconfirmed_cloud_session_is_not_reported_and_leaves_the_still_state(world):
     repo, store = world
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))

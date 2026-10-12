@@ -3306,6 +3306,65 @@ def _report_title(title_fn, repo_root, issue):
     return title if isinstance(title, str) and title else None
 
 
+def _decides_still(call):
+    """True when the place call moves the "Still on your machine" state: a build in the cloud, or
+    one the cloud was meant for that ran locally because it was not ready."""
+    return call.get("place") == PLACE_CLOUD or bool(
+        call.get("place") == PLACE_LOCAL and call.get("pointedAtCloud")
+        and call.get("reason") in launch_place.NOT_READY_CODES)
+
+
+def _launch_day(info):
+    """The UTC date the launch started, so a replayed report keeps the day it first observed; None
+    when the ledger carries no usable time (the reminder then takes today's date)."""
+    stamp = info.get("startedTs", info.get("reservedTs"))
+    try:
+        return datetime.fromtimestamp(stamp, timezone.utc).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _record_batch_still(repo_root, batch_id, launches, reserved):
+    """Apply the batch's started launches to the reminder state in launch order, so a build that
+    went to the cloud clears only what came before it and a later local fallback still writes.
+
+    A batch whose last deciding launch is older than a deciding launch of another batch is left
+    out: that newer launch already decided the state, and replaying the older one must not undo it."""
+    decided = []
+    newest_elsewhere = -1
+    for launch_id, info in launches.items():
+        if not info["started"] or info.get("cloudSessionUnconfirmed"):
+            continue
+        call = _report_place_call(reserved.get(launch_id), info["place"])
+        if not _decides_still(call):
+            continue
+        if info.get("batchId") == batch_id:
+            decided.append((info["reservedIndex"], call, info))
+        else:
+            newest_elsewhere = max(newest_elsewhere, info["reservedIndex"])
+    decided.sort(key=lambda entry: entry[0])
+    if not decided:
+        return launch_report.record_still(repo_root, [], root=None)
+    if newest_elsewhere > decided[-1][0]:
+        return {"action": "unchanged", "reason": None}
+    last_cloud = max(
+        (pos for pos, (_idx, call, _info) in enumerate(decided) if call.get("place") == PLACE_CLOUD),
+        default=None,
+    )
+    result = {"action": "unchanged", "reason": None}
+    if last_cloud is not None:
+        _idx, cloud_call, cloud_info = decided[last_cloud]
+        result = launch_report.record_still(
+            repo_root, [cloud_call], root=None, today=_launch_day(cloud_info))
+    later = decided[last_cloud + 1 if last_cloud is not None else 0:]
+    if later:
+        days = [day for day in (_launch_day(info) for _idx, _call, info in later) if day is not None]
+        result = launch_report.record_still(
+            repo_root, [call for _idx, call, _info in later], root=None,
+            today=max(days) if days else None)
+    return result
+
+
 def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     """The launch report for one batch, built from the ledger's started launches, and the
     "Still on your machine" state updated from the same place calls."""
@@ -3347,8 +3406,7 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),
-        "still": launch_report.record_still(
-            repo_root, [lane["placeCall"] for lane in lanes], root=None),
+        "still": _record_batch_still(repo_root, batch_id, folded["launches"], reserved),
         "lanes": len(lanes),
     }
 
