@@ -6299,6 +6299,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 return result
             if max_wait is not None:
                 return result
+            # History time is charged to the first slice only; later slices get the full wait.
+            slice_wait = MAX_SYNC_WAIT
             time.sleep(SUPERVISOR_POLL_INTERVAL)
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
