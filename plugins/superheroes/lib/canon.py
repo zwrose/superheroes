@@ -42,6 +42,9 @@ STAY_OUT_GROUNDS = {
 }
 GO_VERBS = ("launch", "merge", "release", "cut", "ship", "publish", "file", "force-push", "tier",
             "go")
+# What may follow the go-verb in a bare go-word: a pronoun, a reference, or a lane/tier word.
+GO_TARGETS = ("it", "this", "that", "them", "pr", "full", "light", "micro")
+_GO_REF_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
 _ID_RE = re.compile(r"^- \*\*(\d{4}-\d{2}-\d{2})-([0-9a-z]{8})-([1-9]\d*)\*\*")
 _DISPOSITION_RE = re.compile(r"^\s*(?:@?\d+(?:-\d+)?\s*[-–:=]\s*)?\(?[a-h]\)?\s*(?:[-–:,]|$)",
                              re.I)
@@ -94,7 +97,7 @@ def _refuse_stays_out(kind, why):
 def recognize(ruling, words):
     """The stays-out kind a ruling or the owner's words read as, or None. A narrow backstop with
     fixed shapes: a ruling that is a collector disposition, owner's words that are a bare go-word
-    (a go-verb first, a short object after it, no sentence break), or filing/phase bookkeeping.
+    (a go-verb first, then nothing or a pronoun, reference or lane word, no sentence break), or filing/phase bookkeeping.
     A disposition is read from the ruling text alone: an option letter answering an owner call
     is a real ruling when the ruling states one."""
     if _DISPOSITION_RE.match(ruling):
@@ -102,6 +105,7 @@ def recognize(ruling, words):
     words = _DISPOSITION_RE.sub("", words or "", count=1)
     tokens = [t.strip(".,;:!?\"'()") for t in words.lower().split()]
     if (tokens and tokens[0] in GO_VERBS and len(tokens) <= 8
+            and (len(tokens) == 1 or tokens[1] in GO_TARGETS or _GO_REF_RE.fullmatch(tokens[1]))
             and not re.search(r"[;.]\s+\S", words)):
         kind = "merge" if tokens[0] in ("merge", "release", "cut", "publish") else "act"
         return kind, "a go-word (%r)" % words[:60]
@@ -154,7 +158,11 @@ def build_line(a, entry_id):
         mid.append("supersedes: " + _field("--supersedes", a.supersedes))
     mid.append('owner\'s words: "%s"' % _field("--owners-words", a.owners_words)
                if a.owners_words else "owner's words: none recorded")
-    return entry_line(entry_id, a.date, a.scope, ruling, SEP.join(mid), where)
+    line = entry_line(entry_id, a.date, a.scope, ruling, SEP.join(mid), where)
+    if not _entry_shape_ok(line):
+        raise Refusal("canon-bad-field", "the entry would not read back in the Canon shape; "
+                      "check --cedes, --supersedes and --owners-words for leading blanks")
+    return line
 
 
 _MID_RE = re.compile(r"(?:cedes: [^\x00\s][^\x00]*)?(?:\x00?supersedes: [^\x00\s][^\x00]*)?")
@@ -281,7 +289,16 @@ def _held_lines(text):
     if lines and lines[0].strip() != HELD_MARKER:
         raise Refusal("canon-held-not-marked", "the held comment's first line must be "
                       + HELD_MARKER)
-    return _entry_lines(lines[1:])
+    entries = _entry_lines(lines[1:])
+    for l in lines[1:]:  # a wrapped or stray line is refused, never silently dropped
+        if l.strip() and not _ID_RE.match(l):
+            raise Refusal("canon-bad-line", "the held comment has a line that is not a Canon "
+                          "entry (a wrapped entry?); repair it first: %r" % l[:80])
+    for l in entries:
+        if not _entry_shape_ok(l):
+            raise Refusal("canon-bad-line", "a held entry is not a whole Canon line; repair it "
+                          "first: %r" % l[:80])
+    return entries
 
 
 def _check_held_line(line):

@@ -767,11 +767,6 @@ def set_item(cwd, slug, value, root=None):
     return write_result
 
 
-_CANON_HEADER = (
-    "This file is the project's Canon, the record of the owner's decisions. Its rules live in the\n"
-    "superheroes plugin's `rubric/canon-contract.md`. Entries are appended one per line at the end\n"
-    "and are never edited or deleted."
-)
 _MIGRATION_COMMIT_MESSAGE = "docs: record configure item 13 in Canon as standing rulings"
 _MIGRATION_ORIGIN_PHRASE = "migrated from configure item 13"
 _SESSION_PATTERN = re.compile(r"^[0-9a-z]{8}$")
@@ -1165,7 +1160,7 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
                 working_text = fh.read()
         else:
             with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
+                fh.write(canon.HEADER)
 
         first = canon.next_seq(prefix, working_text, default_text)
         ids = ["%s%d" % (prefix, first + i) for i in range(len(rulings))]

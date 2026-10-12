@@ -262,7 +262,7 @@ copy, mints the id by the id rule, creates the file shape and the `.gitattribute
 appends one line. It prints the paths to commit; steps 1, 7 and 8 stay the session's.
 `canon.py append --lines-file <file>` appends held lines byte for byte, skipping a line Canon
 already holds byte for byte and refusing a line whose id Canon holds with different text. `append`
-also takes the held comment (`--held-file`), so a new entry's id counts held lines. A refusal is the contract working: put the record in the home it names, never in Canon.
+also takes the held comment (`--held-file`), so a new entry's id counts held lines. A bare go-word is a go-verb alone or followed by one of a closed set (a pronoun: it, this, that, them; a reference: `#<n>`, PR, a version like v0.43.0; a lane word: full, light, micro), so a sentence that merely begins with a go-verb is never refused. A refusal is the contract working: put the record in the home it names, never in Canon.
 
 1. Refresh the default branch, then run the lookup. Before the lookup, when an origin remote exists and
    the network is available, run `git fetch origin`, so a stale `origin/HEAD` does not hide a Canon

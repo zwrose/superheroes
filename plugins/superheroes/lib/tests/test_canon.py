@@ -100,7 +100,7 @@ def test_declared_stays_out_ground_refused_with_home(project, capsys, ground):
     ("The importer keeps old data.", "merge #1810", "merge"),
     ("The importer keeps old data.", "ship it", "act"),
     ("The importer keeps old data.", "tier full", "act"),
-    ("The importer keeps old data.", "force-push the branch", "act"),
+    ("The importer keeps old data.", "force-push it", "act"),
     ("The importer keeps old data; filed as #1820.", None, "board"),
     ("The importer keeps old data, scheduled for phase 2.", None, "board"),
 ])
@@ -117,6 +117,31 @@ def test_full_ruling_sentence_with_valid_ground_is_not_refused_accepted_gap(proj
     ruling = "Merge the stack once CI is green and the vet receipt is posted."
     code, out = _run(capsys, "append", *_fields(ruling=ruling, owners_words="none recorded"))
     assert code == 0 and out["appended"][0].split(canon.SEP)[3] == ruling
+
+
+# axis: a sentence that merely begins with a go-verb is a ruling, not a bare go-word.
+@pytest.mark.parametrize("words", ["Force-push is never permitted on shared branches.",
+                                   "Merge failures keep the previous branch unchanged."])
+def test_standing_sentence_starting_with_go_verb_is_not_refused(project, capsys, words):
+    code, out = _run(capsys, "append", *_fields(ruling=words, owners_words=words))
+    assert code == 0 and out["appended"][0].split(canon.SEP)[3] == words
+
+
+# axis: a generated entry the reader would refuse is refused before Canon is written.
+def test_leading_blank_cedes_refused_before_write(project, capsys):
+    before = open(project["path"]).read()
+    code, out = _run(capsys, "append", *_fields(ground="ceded-call", cedes=" naming",
+                                                example="fixture_old"))
+    assert code == 1 and out["reason"] == "canon-bad-field"
+    assert open(project["path"]).read() == before
+
+
+# axis: a held comment with a wrapped entry is refused, not returned with the tail dropped.
+def test_hold_refuses_wrapped_held_entry(project, capsys, tmp_path):
+    held = tmp_path / "held.md"
+    held.write_text(canon.HELD_MARKER + "\n" + _entry(7).replace(" · owner's", "\nowner's") + "\n")
+    code, out = _run(capsys, "hold", *_fields(), "--held-file", str(held))
+    assert code == 1 and out["reason"] == "canon-bad-line"
 
 
 # axis: recognition is narrow: no real entry in this repo's Canon reads as a stays-out record.
