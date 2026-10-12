@@ -205,6 +205,42 @@ def test_t2c_emit_orders_manifest_does_not_refuse_a_target_with_no_eligible_audi
         pass  # downstream render errors are fine; the unseatable guard did not refuse
 
 
+def test_a_target_with_no_eligible_auditor_gets_no_order_and_a_missing_envelope(tmp_path):
+    """The no-auditor target is recorded missing in the orders-emit commit and rendered no order,
+    so the roster is complete and the fold can disclose it unaudited without a manual record-missing."""
+    session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
+    target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    state["_auditTargets"] = [target_no_vendor]
+    state["config"]["vendors"] = ["claude"]
+    state["config"]["fixerVendor"] = "claude"
+    round_driver.save_state(session_dir, state)
+    round_driver._emit_orders_manifest(
+        session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
+        journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
+    manifest = round_driver.round_records.read_json(_orders_manifest_path(session_dir, 1, 0))[0]
+    assert manifest["seats"] == {}
+    spath = round_driver.round_records.store_path(
+        session_dir, 1, P_AUDITS, round_driver.round_records.storage_key(target_no_vendor["id"], 0), 0)
+    stored = round_driver.round_records.read_json(spath)[0]
+    assert stored["schema"] == round_driver.round_records.SEAT_MISSING_SCHEMA
+    assert stored["reason"] == round_driver.UNFILLED_SEAT_REASON
+
+
+def test_auditor_constraints_keep_every_maker_family_an_earlier_map_named():
+    state = {"seatMapReceipts": [
+        {"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "codex"}},
+                               "makerFamilies": ["anthropic", "openai"]}},
+        {"round": "2", "map": {"seats": {"code-reviewer": {"vendor": "claude"}},
+                               "makerFamilies": ["anthropic"]}}]}
+    makers, _pinned = receipt_disclosures.auditor_constraints(state)
+    # bites on: a later partial map releasing an earlier maker family from the independence check
+    assert makers == frozenset({"anthropic", "openai"})
+    config = {"fixerVendor": "claude", "vendors": ["claude", "codex"]}
+    vendor, _fam = receipt_disclosures.independent_auditor(
+        config, "claude", maker_families=makers, pinned_vendors=None)
+    assert vendor is None
+
+
 # T3 — edge 4: hand path bypasses auditor-unseatable refusal at emission
 
 

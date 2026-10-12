@@ -215,10 +215,23 @@ def pinned_auditor_vendors(seat_map):
     return vendors or None
 
 
+def accumulated_maker_families(state):
+    """Every maker family any submitted seat map named, plus the effective map's: a later, recomposed
+    map that omits an earlier maker does not release it — the receipt writer unions them, so the
+    decisions that read makers do too. Seat identities still come from the latest map alone."""
+    if not isinstance(state, dict):
+        return frozenset()
+    out = set(maker_families(seat_map_receipts.effective_seat_map(state)))
+    for entry in seat_map_receipts.receipts(state):
+        out |= maker_families(entry["map"])
+    return frozenset(out)
+
+
 def auditor_constraints(state):
-    """(maker_families, pinned_vendors) off the state's effective seat map, for `independent_auditor`."""
+    """(maker_families, pinned_vendors) for `independent_auditor`: makers accumulate over every
+    seat-map receipt; the pinned vendors come off the effective seat map."""
     seat_map = seat_map_receipts.effective_seat_map(state) if isinstance(state, dict) else {}
-    return maker_families(seat_map), pinned_auditor_vendors(seat_map)
+    return accumulated_maker_families(state), pinned_auditor_vendors(seat_map)
 
 
 def independent_auditor_available(config, maker_families=frozenset(), pinned_vendors=None):

@@ -222,7 +222,8 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         out.append(_reviewer(state, rnd, seat, stem, key in ran, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                              _text(r.get("citedHead")), bound.get(key)))
-    out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names]
+    out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
+            if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
 
 
@@ -315,7 +316,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
         makers.append({"family": fam, "source": "review loop fixer"})
-    for family in sorted(receipt_disclosures.maker_families(seat_map_receipts.effective_seat_map(state))):
+    for family in sorted(receipt_disclosures.accumulated_maker_families(state)):
         if not any(isinstance(m, dict) and m.get("family") == family for m in makers):
             makers.append({"family": family, "source": "seat map maker list"})
     last = decisions[-1] if decisions else {}

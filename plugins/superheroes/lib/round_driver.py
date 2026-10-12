@@ -8348,7 +8348,9 @@ def _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt, sea
         "manifestSha256": manifest_sha,
         "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "reason": UNFILLED_SEAT_REASON,
-        "evidence": "the seat map leaves this seat unfilled: no candidate outside the makers' families",
+        "evidence": ("no auditor outside the makers' families is available for this target"
+                     if phase == P_AUDITS else
+                     "the seat map leaves this seat unfilled: no candidate outside the makers' families"),
         "occurrence": occurrence,
     }
     return round_records.envelope_bind_cited_head_source(
@@ -8365,6 +8367,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    noauditor_ids = set()  # audit targets with no eligible auditor: no order, a missing envelope instead
     if phase == P_AUDITS and state.get("_advanceUsed"):
         targets = pending_payload.get("targets")
         if not isinstance(targets, list):
@@ -8380,7 +8383,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                     maker_families=maker_families, pinned_vendors=pinned_vendors)
                 if host_independent is None and not target.get("auditorVendor"):
                     # No eligible auditor exists at all: nothing to seat on any channel, so the
-                    # target folds as an audit that did not run rather than refusing the emission.
+                    # target folds as an audit that did not run rather than refusing the emission:
+                    # its slot is recorded missing below, in the orders-emit commit, with no order.
+                    if isinstance(target.get("id"), str):
+                        noauditor_ids.add(target["id"])
                     continue
                 if host_independent is not None:
                     detail = (
@@ -8400,7 +8406,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                         "session.")
                 raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
-    unfilled = receipt_disclosures.unfilled_seats(seat_map) if phase == P_PANEL else frozenset()
+    unfilled = receipt_disclosures.unfilled_seats(seat_map) if phase == P_PANEL else frozenset(noauditor_ids)
     seats = {}
     order_hashes = {}
     rendered = []

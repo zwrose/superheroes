@@ -269,6 +269,29 @@ def test_the_maps_maker_families_join_the_makers_once(tmp_path):
                                  {"family": "anthropic", "source": "seat map maker list"}]
 
 
+def test_a_later_map_omitting_an_earlier_maker_family_does_not_release_it(tmp_path):
+    first = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}}, "makerFamilies": ["anthropic", "openai"]}
+    later = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}}, "makerFamilies": ["anthropic"]}
+    s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": first}, {"round": "2", "map": later}])
+    s.seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras(), Fake().readers())
+    # bites on: the final record dropping a maker family an earlier receipt named
+    assert {m["family"] for m in account["makers"]} == {"anthropic", "openai"}
+
+
+def test_an_unfilled_seat_a_later_round_filled_is_recovered_not_left_missing(tmp_path):
+    unfilled = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}, "security-reviewer": dict(UNFILLED_SEAT)}}
+    filled = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
+                        "security-reviewer": {"vendor": "codex", "model": CODEX}}}
+    s = Session(tmp_path, rounds={"1": {}, "2": {}},
+                seatMapReceipts=[{"round": "1", "map": unfilled}, {"round": "2", "map": filled}])
+    s.seat("code-reviewer").seat("security-reviewer", rnd=2)
+    account = rs.account_from_session(s.save(), extras(), Fake().readers())
+    names = {v["name"] for v in account["reviewers"]}
+    # bites on: a round-1 unfilled row surviving a round-2 run of the same seat and keeping the record parked
+    assert "security-reviewer (round 2)" in names and "security-reviewer (round 1)" not in names
+
+
 def test_an_old_map_without_maker_families_or_source_changes_nothing(tmp_path):
     seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}}}
     s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
