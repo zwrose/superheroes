@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -284,12 +285,33 @@ def test_t12_intercept_drops_a_passed_run_and_keeps_failed_and_not_run(repo):
     assert all(k["breakItRun"]["role"] == break_it.ROLE for k in kept)
 
 
+def test_run_cap_matches_the_agent_statement():
+    text = open(os.path.join(_LIB, "..", "agents", "test-role.md"), encoding="utf-8").read()
+    words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+    m = re.search(r"Write at most (\w+) break-it tests per review", text)
+    assert m, "agents/test-role.md no longer states the break-it cap"
+    stated = words.get(m.group(1).lower(), m.group(1))
+    assert stated == break_it.MAX_RUNS or stated == str(break_it.MAX_RUNS)
+
+
+@pytest.mark.parametrize("run", [
+    "sh -c 'printf probe | wc -c'", "bash -c 'x'", "/bin/dash -c x", "zsh -c x", "ksh -c x",
+    "mksh -c x", "fish -c x", "busybox sh -c x", "env sh -c x", "env -i FOO=1 bash -c x",
+    "FOO=1 env /usr/bin/env zsh -c x"])
+def test_parse_command_refuses_shell_interpreters(run):
+    assert break_it.parse_command(run) == (None, None, "run-shell-interpreter")
+
+
+def test_parse_command_allows_non_shell_env_prefix():
+    assert break_it.parse_command("env FOO=1 python t.py") == (["env", "FOO=1", "python", "t.py"], {}, None)
+
+
 def test_t12_intercept_caps_the_runs_and_refuses_a_path_mismatch(repo):
     calls = []
     findings = [_finding("t/%d.py" % i) for i in range(4)]
     kept, runs, exempt = break_it.intercept(findings, str(repo), "H",
                                             runner=_fake("failed", calls))
-    assert calls == ["t/0.py", "t/1.py", "t/2.py"]
+    assert calls == ["t/%d.py" % i for i in range(break_it.MAX_RUNS)]
     assert len(kept) == 4 and len(exempt) == 4
     capped = kept[3]["breakItRun"]
     assert (capped["outcome"], capped["reason"], capped["head"]) == ("not-run", "run-cap", "H")

@@ -28,6 +28,7 @@ SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
+# The per-review run cap: the single home. agents/test-role.md states the same number for reviewer seats that cannot read the plugin; a drift test pins the two equal.
 MAX_RUNS = 3
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
@@ -39,6 +40,7 @@ _HEADER = "break-it-test v1"
 _GIT_TIMEOUT = 120
 _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
+_SHELL_PROGRAMS = frozenset(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "busybox"])
 _REGULAR_MODES = ("100644", "100755")
 _TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
 _DRAIN_JOIN = 5
@@ -113,7 +115,25 @@ def parse_command(run):
         tokens.pop(0)
     if not tokens:
         return None, None, "run-empty"
+    # axis: a shell interpreter, bare or behind an env prefix, is refused — its script argument is shell syntax — see bite-proof record wo_a_1800_break-it
+    if _selects_shell(tokens):
+        return None, None, "run-shell-interpreter"
     return tokens, env, None
+
+
+def _selects_shell(tokens):
+    """True when the command's program is a shell interpreter, directly or behind an ``env`` prefix."""
+    rest = list(tokens)
+    while rest:
+        name = os.path.basename(rest[0])
+        if name in _SHELL_PROGRAMS:
+            return True
+        if name != "env":
+            return False
+        rest.pop(0)
+        while rest and (rest[0].startswith("-") or _ENV_TOKEN.match(rest[0])):
+            rest.pop(0)
+    return False
 
 
 def _record(head, block, outcome, reason=None, exit_code=None, output=""):
