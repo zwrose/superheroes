@@ -71,7 +71,7 @@ each names the one owner and the register entry that binds the other child:
   judges whether a build needs the owner's machine) stay **C5**'s. C7s (#1791, added on the owner's
   word, walk item 41 = a, 2026-10-12) removes the stack rule from C5's routing step, so a stack
   layer is no longer judged to need the owner's machine and routes like any other build; its routing
-  test and live run on a two-issue fixture stack show FR-12 holding for stack layers. C7s owns no
+  test and live run on a three-issue fixture stack show FR-12 holding for stack layers. C7s owns no
   criterion of its own; R5 binds both.
 - **FR-22** (the advisor answers a cloud builder directly) is **C7r**'s (C7's until its second
   size split, 2026-10-12): its one acceptance is the answer reaching the builder with no owner

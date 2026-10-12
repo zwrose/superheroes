@@ -6,7 +6,7 @@
 - Do not merge. This child merges only with the whole cloud-builders unit, by one `gh stack merge` once every layer is vetted (R8). Do not cut a release or ask for one.
 - Branch from C7b's pushed head and open the PR with its base set to C7b's branch. Bring the layers below forward with a local `--no-ff` merge pushed plainly, never a rebase or a force-push, and link the stack as `rubric/native-stacks.md` § Each layer is a sub-issue says.
 - **Size discipline (advisor, 2026-10-12):** build only what the DoD rows need. A CLI, option or fail-closed branch no row needs is a candidate to cut.
-- Owner capability: the live run needs claude-two's environment `env_018Z3fRJ8xTmagd714DyNHrE` with setup text pinned to this layer's head, and two fixture issues the advisor files on the owner's word. Message the advisor first, and the advisor walks the owner through the re-paste.
+- Owner capability: the live run needs claude-two's environment `env_018Z3fRJ8xTmagd714DyNHrE` with setup text pinned to this layer's head, and three fixture issues the advisor files on the owner's word. Message the advisor first, and the advisor walks the owner through the re-paste.
 - This PR's own build and review follow the plugin version your session runs. Nothing this epic builds governs a build until the release.
 
 Anchor (ruling): 2026-10-12 · owner ruling, walk item 41 = a (collector #695 item 107). The owner's words: "the entire reason we're doing this is because of machine capacity … We can't ship this if we don't have a solve for stacks, and the proof issue should actually simulate a stack to confirm." This vetoes C5's craft call that every stack layer runs on the owner's machine (cloud C5 PR #1783, FU1), under the spec's Purpose ("An owner who runs several builds at once is limited by the compute on their own machines") and FR-12/FR-13 (cloud-builders-66a2e8, as-of amendment #5).
@@ -26,11 +26,11 @@ This layer:
 DoD:
 - A routing test: a launch carrying a `stack` premise, with the cloud ready and no other need, routes to the cloud. A stack launch that also needs the phone simulator still routes locally with that reason.
 - A census of the cloud builder's path (workhorse charter, its cloud reference, and the libraries it calls) shows no GraphQL call for stack work. The PR body lists each stack step and the channel it uses.
-- **A recorded live run on a two-issue fixture stack** (the owner's "the proof issue should actually simulate a stack"):
-  - the advisor files a lower fixture layer and an upper fixture layer (two issues, each a one-line change; the advisor files and closes them, PRs never merge);
-  - the lower layer builds (locally or in the cloud);
-  - the upper layer launches with the stack premise, routes to the cloud, branches from the lower layer's head, opens its PR with the lower branch as base, and hands back as a ready PR;
-  - the advisor links the two PRs as a stack from the owner's machine, and `stack_check list` shows both members in order.
+- **A recorded live run on a three-issue fixture stack** (the owner's "the proof issue should actually simulate a stack"). A stack exists on GitHub only once its first two PRs are linked, and the first upper layer launches without a stack premise (`rubric/native-stacks.md`), so the proof needs a third layer:
+  - the advisor files three fixture layers (three issues, each a one-line change; the advisor files and closes them, PRs never merge);
+  - layers 1 and 2 build (locally or in the cloud; layer 2 launches without a stack premise, as the doctrine says for a first pair), and the advisor links their two PRs as a stack from the owner's machine;
+  - layer 3 launches with the stack premise (`stack`, `layerPosition: 3`), passes the launcher's base gate, routes to the cloud, branches from layer 2's head, opens its PR with layer 2's branch as base, and hands back as a ready PR;
+  - the advisor links layer 3 into the stack, and `stack_check list` shows all three members in order.
 
   The run's output and links go in the PR body.
 - `plugins/superheroes/TRANSITION.md` carries a note in its unreleased section that stack layers now build in the cloud and the advisor links them (R8). A search of the changed shipped files for requirement numbers, Canon entry ids, issue numbers and project names returns nothing (R9).
@@ -49,3 +49,5 @@ DoD:
 **Consequence:** none for a consuming project until it adopts the release that carries the whole stack. After adoption, stack layers build in the cloud when it's ready, where today's stack would have kept them local.
 
 **Register check:** register entries stay quoted on the epic's body. This child's check runs on the epic's body with the token `C7s`. The entries that bind this child: R5, R6, R8, R9 and R11. Until the docs PR adding C7s merges, run the check with `--register-copy worktree` on that PR's branch (`advisor/cloud-c7-split`).
+
+
