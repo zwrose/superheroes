@@ -1633,3 +1633,21 @@ def test_a_broad_change_renders_under_the_cap_with_the_floor_full(tmp_path):
     assert basis["touched"] == [{"name": "Payments", "matched": matched[:10], "matchedCount": 3100}]
     assert basis["unmatchable"] == unmatched[:10] and basis["unmatchableCount"] == 3100
     assert len(rr.render(rec)) < rr.MAX_BODY_CHARS
+
+
+def test_many_risk_areas_with_long_paths_render_under_the_cap_with_the_floor_full(tmp_path):
+    # axis: the total lane-basis evidence (kept paths and reason lines across all areas) is bounded; many areas still publish
+    areas = [dict(PAYMENTS, name="Area%02d%s" % (n, "n" * 60), covers=["src/area%02d/*" % n]) for n in range(60)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake()
+    fake.changed = ["src/area%02d/%s%02d.py" % (n, "z" * 200, i) for n in range(60) for i in range(10)]
+    rec = build(account(repoRoot=repo), fake)
+    basis = rec["laneBasis"]
+    assert basis["floor"] == "full" and basis["source"] == FILES_SOURCE
+    assert len(basis["touched"]) == rr.BASIS_AREAS_MAX and basis["touchedCount"] == 60
+    assert sum(len(t["matched"]) for t in basis["touched"]) == rr.BASIS_PATHS_MAX
+    assert all(t["matchedCount"] == 10 for t in basis["touched"] if len(t["matched"]) < 10)
+    assert len(basis["why"]) <= rr.BASIS_WHY_MAX and basis["whyCount"] > rr.BASIS_WHY_MAX
+    assert any("more touches-risk-area lines omitted" in w for w in basis["why"])
+    assert basis["why"][0].startswith("touches-risk-area:")
+    assert len(rr.render(rec)) < rr.MAX_BODY_CHARS

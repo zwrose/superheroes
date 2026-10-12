@@ -320,21 +320,53 @@ def _lane(a, rd, meta):
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
 
 
-BASIS_EVIDENCE_MAX = 10
+BASIS_EVIDENCE_MAX = 10      # matched or unmatchable paths kept per list
+BASIS_AREAS_MAX = 20         # touched areas kept on the record
+BASIS_PATHS_MAX = 40         # matched paths kept across all touched areas together
+BASIS_WHY_MAX = 12           # reason lines kept; the touches-risk-area ones are the cut ones
+BASIS_TEXT_MAX = 300         # characters kept of any one path, area name or reason line
+_TOUCHES = "touches-risk-area:"
+
+
+def _clip(text):
+    text = str(text)
+    return text if len(text) <= BASIS_TEXT_MAX else text[:BASIS_TEXT_MAX - 1] + "\u2026"
 
 
 def _bound_basis(basis):
-    """The basis as it goes on the record: at most BASIS_EVIDENCE_MAX matched and unmatchable paths each,
-    with the full counts beside any list that was cut. The floor and its reasons are unchanged."""
-    cap = BASIS_EVIDENCE_MAX
-    touched = []
-    for hit in basis["touched"]:
-        if len(hit["matched"]) > cap:
-            hit = dict(hit, matched=hit["matched"][:cap], matchedCount=len(hit["matched"]))
-        touched.append(hit)
+    """The basis as it goes on the record, bounded in total: at most BASIS_AREAS_MAX touched areas,
+    BASIS_PATHS_MAX matched paths across all of them (BASIS_EVIDENCE_MAX each), BASIS_EVIDENCE_MAX unmatchable
+    paths, BASIS_WHY_MAX reason lines, and BASIS_TEXT_MAX characters of any one string. The counts of
+    everything cut sit beside it (matchedCount, touchedCount, unmatchableCount, whyCount). The floor, the
+    first reason and the lane-defining reasons are unchanged."""
+    cap, budget, touched = BASIS_EVIDENCE_MAX, BASIS_PATHS_MAX, []
+    for hit in basis["touched"][:BASIS_AREAS_MAX]:
+        keep = max(0, min(cap, budget, len(hit["matched"])))
+        budget -= keep
+        item = dict(hit, name=_clip(hit["name"]), matched=[_clip(m) for m in hit["matched"][:keep]])
+        if keep < len(hit["matched"]):
+            item["matchedCount"] = len(hit["matched"])
+        touched.append(item)
     out = dict(basis, touched=touched)
+    if len(basis["touched"]) > BASIS_AREAS_MAX:
+        out["touchedCount"] = len(basis["touched"])
     if len(basis["unmatchable"]) > cap:
-        out.update(unmatchable=basis["unmatchable"][:cap], unmatchableCount=len(basis["unmatchable"]))
+        out.update(unmatchable=[_clip(u) for u in basis["unmatchable"][:cap]],
+                   unmatchableCount=len(basis["unmatchable"]))
+    else:
+        out["unmatchable"] = [_clip(u) for u in basis["unmatchable"]]
+    why = list(basis["why"])
+    if len(why) > BASIS_WHY_MAX:
+        # Drop only touches-risk-area lines, from the end, so the verdict lines stay; say how many went.
+        drop = len(why) - BASIS_WHY_MAX + 1
+        idx = [i for i, w in enumerate(why) if i and w.startswith(_TOUCHES)][::-1][:drop]
+        if idx:
+            gone = set(sorted(idx)[-drop:])
+            at = min(gone)
+            why = [w for i, w in enumerate(why) if i not in gone]
+            why.insert(at, "%d more %s lines omitted" % (len(gone), _TOUCHES.rstrip(":")))
+            out["whyCount"] = len(basis["why"])
+    out["why"] = [_clip(w) for w in why]
     return out
 
 
