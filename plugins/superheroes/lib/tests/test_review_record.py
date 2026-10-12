@@ -1744,6 +1744,30 @@ def test_a_head_that_cannot_be_re_read_gives_the_could_not_be_re_read_reason_and
     assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
 
 
+def _unavailable_files_readers(heads):
+    readers = _head_moving_readers(heads)
+    return {**readers, "changed_paths": lambda pr, repo: None}
+
+
+def test_files_unavailable_and_head_moved_reads_not_reviewed_with_the_moved_head_line(tmp_path):
+    # axis: the head re-read on the unavailable-files path; a head that moved during a failed file read left unflagged
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _unavailable_files_readers([HEAD, "f" * 40]))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and basis["headMoved"] is True
+    assert rec["status"] == "not-reviewed"
+    assert "the PR head moved while the record was written; this record does not cover the new head" in rec["whatIsMissing"]
+
+
+def test_files_unavailable_and_head_stable_has_no_moved_head_line(tmp_path):
+    # axis: the moved-head line absent when the head is stable on the unavailable-files path
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _unavailable_files_readers([HEAD]))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and "headMoved" not in basis
+    assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
+
+
 def test_a_stable_head_gives_the_normal_basis(tmp_path):
     repo = risk_repo(tmp_path)
     rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD]))

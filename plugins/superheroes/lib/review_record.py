@@ -385,21 +385,26 @@ def _lane_basis(a, rd, lane_value, final_sha):
             proposed=lane_value), source="unavailable")
     paths = rd["changed_paths"](a["pr"], a["repo"])
     # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
-    after = rd["pr_meta"](a["pr"], a["repo"]) if isinstance(paths, list) else None
-    if isinstance(paths, list) and not (after and after.get("head")):
+    after = rd["pr_meta"](a["pr"], a["repo"])
+    head = after.get("head") if isinstance(after, dict) else None
+    moved = isinstance(head, str) and head != final_sha
+    if isinstance(paths, list) and not head:
         return dict(lane_call.unavailable(
             lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read",
             proposed=lane_value), source="unavailable")
-    if isinstance(paths, list) and after["head"] != final_sha:
+    if isinstance(paths, list) and moved:
         return dict(lane_call.unavailable(
             lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read",
             proposed=lane_value), source="unavailable", headMoved=True)
     if isinstance(paths, list):
         return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
                     source="lane rule over the PR's changed files")
-    return dict(lane_call.unavailable(
+    out = dict(lane_call.unavailable(
         lane_call.WHY_NO_PATHS + " the PR's changed files could not be read", proposed=lane_value),
         source="unavailable")
+    if moved:
+        out["headMoved"] = True
+    return out
 
 
 def _family(vendor, model):
