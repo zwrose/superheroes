@@ -126,6 +126,8 @@ export const register: Register = on => {
 
     // A subagent's answer is not the session's: its checkpoint block must never
     // replace the parent's notes (`$.session.id()` is the parent's there too).
+    let warning: string | null = null
+
     if (!e.agentId) {
       try {
         const block = extractCheckpointBlock(e.answer)
@@ -140,9 +142,11 @@ export const register: Register = on => {
             $.ui.toast('Checkpoint notes saved')
           } catch (error) {
             // The skill was told not to write the file (the presence signal is set),
-            // so a failed save must reach the owner; the answer itself goes on unchanged.
+            // so a failed save must reach the owner: by toast, and by a line shown beneath the
+            // answer (headless output emits no toast).
             note($, `turn.complete: ${String(error)}`)
-            $.ui.toast('Checkpoint notes NOT saved: the previous notes are still in place')
+            warning = 'Checkpoint notes NOT saved: the previous notes are still in place'
+            $.ui.toast(warning)
           }
         }
       } catch (error) {
@@ -150,6 +154,6 @@ export const register: Register = on => {
       }
     }
 
-    return result
+    return warning === null ? result : { ...result, text: `${result.text}\n\n${warning}` }
   }).catch(($, e, next) => next(e))
 }

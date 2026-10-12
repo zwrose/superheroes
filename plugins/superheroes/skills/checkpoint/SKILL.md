@@ -39,10 +39,14 @@ use the pin — never re-discover by newest file (`rubric/launch-doctrine.md` §
 transcript). Resolving a session transcript path is a Claude-host mechanical floor; on a
 host that does not name one, this step has no equivalent and the mode is `generic`.
 
-Then ask the plugin lib for the mode:
+Then ask the plugin lib for the mode. The lib's verbs and flags are defined in
+`lib/compaction_cli.json` — read it and use its names where `<VERB>` and `<FLAG>` stand below
+(`<VERB>` is the `verbs` key for the action — here `mode` — and `<FLAG>` is that entry's value
+for the input — here `transcript`):
 
 ```bash
-python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/compaction_directive.py" mode --transcript "<absolute path to this session's transcript>"
+cat "${CLAUDE_PLUGIN_ROOT}/lib/compaction_cli.json"
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/compaction_directive.py" <VERB> <FLAG> "<absolute path to this session's transcript>"
 ```
 
 It prints one JSON object: `{"ok": true, "mode": "<mode>"}` with `<mode>` one of
@@ -59,8 +63,11 @@ Claude Code, or the host's own session id where it names one (a host with a tran
 or session id has no other source here — never guess one):
 
 ```bash
-python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/compaction_directive.py" path --session-id "<session id>"
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/compaction_directive.py" <VERB> <FLAG> "<session id>"
 ```
+
+Here `<VERB>` is the `path` entry of `lib/compaction_cli.json` (read in step 1) and `<FLAG>` is that
+entry's `sessionId` value.
 
 It prints `{"ok": true, "path": "<notes file>", "markerPath": "<delivered marker>"}`. Read the
 notes file if it exists — it is what the last checkpoint saved. Do not invent a path or

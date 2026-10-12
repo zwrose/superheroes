@@ -401,14 +401,15 @@ for (const [name, cli, options] of [
   ['the session id throws', saveAnswer, { isIdBroken: true }],
   ['the vocabulary file is malformed', saveAnswer, { vocabulary: '{ not json' }],
 ] as [string, Cli, Options][]) {
-  test(`turn.complete fails open: ${name} — failure toast, answer unchanged`, async ($, on) => {
+  test(`turn.complete fails open: ${name} — failure toast and a warning line beneath the answer`, async ($, on) => {
     const r = rig(on, () => cli, options)
     const answer = block('notes')
 
     const res = await complete($, answer)
+    const warning = 'Checkpoint notes NOT saved: the previous notes are still in place'
 
-    expect(res).toEqual({ text: answer })
+    expect(res).toEqual({ text: `${answer}\n\n${warning}` })
     expect(r.writes).toHaveLength(0)
-    expect(r.toasts).toEqual(['Checkpoint notes NOT saved: the previous notes are still in place'])
+    expect(r.toasts).toEqual([warning])
   })
 }
