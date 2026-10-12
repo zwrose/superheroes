@@ -15,8 +15,8 @@ if _LIB not in sys.path:
 import break_it  # noqa: E402
 
 PY = shlex.quote(sys.executable)
-# The fixture repo's commits pass an inline identity: a CI runner has no configured one.
-_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+# The fixture repo's commits pass an inline identity (a CI runner has no configured one); the throwaway fixture repo also signs nothing.
+_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 
 
 def _git(repo, *args):
