@@ -435,6 +435,12 @@ def _pr_entry(found):
     return "%s — %s" % (_text(found["title"]), _text(found["detail"]))
 
 
+def _offered_verdicts(kind):
+    """The verdicts the schema's verdictsByKind lists for this kind of sheet, in button order: the page's own roster."""
+    with open(SCHEMA, encoding="utf-8") as handle:
+        return json.load(handle)["$defs"]["verdictsByKind"]["properties"][kind]["enum"]
+
+
 def _pr_body(sheet):
     """A PR or stack sheet's prose after its title line, in the order the page shows it; ends with a blank line."""
     prsheet, stack = sheet["prSheet"], sheet["kind"] == "stack"
@@ -456,8 +462,10 @@ def _pr_body(sheet):
                              (PR["prsHeading"], stacked)):
         if entries:
             lines += _pr_folded(heading, entries)
-    label = PR["mergeStackLabel"] if stack else PR["mergeLabel"]
-    return lines + ["**%s**" % PR["verdictHeading"], "", _fill(PR["verdictInChat"], merge=_fill(label, number=str(prsheet["number"]))), ""]
+    merge = _fill(PR["mergeStackLabel"] if stack else PR["mergeLabel"], number=str(prsheet["number"]))
+    labels = {"merge": merge, "not-yet": PR["notYetLabel"]}
+    choices = " or ".join(labels[verdict] for verdict in _offered_verdicts(sheet["kind"]))
+    return lines + ["**%s**" % PR["verdictHeading"], "", _fill(PR["verdictInChat"], choices=choices, merge=merge), ""]
 
 
 def render(sheet):

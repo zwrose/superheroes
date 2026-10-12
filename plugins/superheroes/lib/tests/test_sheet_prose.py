@@ -880,6 +880,13 @@ def _prose_of(tmp_path, sheet):
     return result.stdout
 
 
+def _chat_verdict(kind, merge, roster=None):
+    """The chat instruction, its choices read from the schema's verdictsByKind roster in button order."""
+    roster = roster or json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["$defs"]["verdictsByKind"]["properties"][kind]["enum"]
+    labels = {"merge": merge, "not-yet": PR_WORDS["notYetLabel"]}
+    return PR_WORDS["verdictInChat"].replace("{choices}", " or ".join(labels[v] for v in roster)).replace("{merge}", merge)
+
+
 def _reviewers_line(reviewers):
     named = []
     for reviewer in reviewers:
@@ -912,7 +919,7 @@ def _pr_markers(sheet):
         folded.append((PR_WORDS["prsHeading"], ["#%d %s · %s" % (p["number"], p["title"], p["commit"][:7]) for p in part["prs"]]))
     for heading, entries in folded:
         markers += ["**%s (%d)**" % (heading, len(entries))] + ["- " + entry for entry in entries]
-    markers += ["**%s**" % PR_WORDS["verdictHeading"], PR_WORDS["verdictInChat"].replace("{merge}", merge)]
+    markers += ["**%s**" % PR_WORDS["verdictHeading"], _chat_verdict(sheet["kind"], merge)]
     return markers
 
 
@@ -927,7 +934,21 @@ def test_prose_prints_a_pr_sheet_in_the_pages_order_with_the_data_files_facts(tm
         assert found >= 0, "%r is missing, or comes out of order, after position %d" % (marker, position)
         position = found + len(marker)
     assert out.count("**%s**" % PR_WORDS["verdictHeading"]) == 1
-    assert out.endswith(PR_WORDS["verdictInChat"].replace("{merge}", "Merge%s #%d" % (" stack" if kind == "stack" else "", sheet["prSheet"]["number"])) + "\n")
+    assert out.endswith(_chat_verdict(kind, "Merge%s #%d" % (" stack" if kind == "stack" else "", sheet["prSheet"]["number"])) + "\n")
+
+    assert "Answer Merge%s #%d or Not yet here" % (" stack" if kind == "stack" else "", sheet["prSheet"]["number"]) in out
+
+
+# Bites on: the chat instruction fixing its own pair of verdict choices instead of reading the schema's verdictsByKind roster.
+def test_prose_offers_the_chat_verdicts_the_schemas_roster_lists(tmp_path, monkeypatch, capsys):
+    schema = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    schema["$defs"]["verdictsByKind"]["properties"]["pr"]["enum"] = ["not-yet", "merge"]
+    planted = tmp_path / "planted.schema.json"
+    planted.write_text(json.dumps(schema), encoding="utf-8")
+    module = _load_prose_module()
+    monkeypatch.setattr(module, "SCHEMA", planted)
+    assert module.main(["render", "--sheet", str(SAMPLES["pr"])]) == 0
+    assert "Answer Not yet or Merge #" in capsys.readouterr().out
 
 
 def test_prose_verdict_line_is_the_words_file_line_with_the_merge_word_filled(tmp_path):
