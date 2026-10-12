@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -167,7 +168,7 @@ def test_malformed_stored_areas_read_malformed_with_no_effective_list(tmp_path):
 
 def test_behind_profile_reads_and_a_set_answers_behind(tmp_path):
     repo, store = _setup_repo(tmp_path, core=False)
-    _write_raw_core(repo, 3)
+    _write_raw_core(repo, CM.SCHEMA_VERSION + 1)
     assert PC.get_item(repo, "riskAndTrust", root=store)["behind"] is True
     res = PC.set_item(repo, "riskAndTrust", {"riskAreas": [PAYMENTS]}, root=store)
     assert res["action"] == "behind"
@@ -227,7 +228,7 @@ def test_set_risk_areas_writes_once_then_noops_and_leaves_the_threat_model_bytes
     assert block["projectConfiguration"]["riskAreas"] == [PAYMENTS]
     assert set(block) == set(json.loads(CM._JSON_BLOCK.search(before).group(1))) | {
         "projectConfiguration"}
-    assert block["schemaVersion"] == 2
+    assert block["schemaVersion"] == CM.SCHEMA_VERSION
     again = PC.set_item(repo, "riskAndTrust", {"riskAreas": [PAYMENTS]}, root=store)
     assert again["action"] == "noop"
     assert _core_text(repo, store) == after
@@ -475,11 +476,23 @@ def test_valid_empty_list_reads_empty_and_not_malformed(tmp_path):
 # --- the setup sitting, driven end to end --------------------------------------------------
 
 
-def _sitting_commands():
-    """The fenced bash blocks under set-up.md's `## 3.5` heading, up to the next `## ` heading."""
-    path = os.path.join(_REPO_ROOT, "plugins/superheroes/skills/configure/reference/set-up.md")
-    lines = open(path, encoding="utf-8").read().splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.startswith("## 3.5"))
+_REFERENCE = os.path.join(_REPO_ROOT, "plugins/superheroes/skills/configure/reference")
+
+
+def _menu_routing():
+    """Read the 'Set up Risk and trust' action in view-and-tune.md and return (run, skipped):
+    the set-up.md section numbers the action runs and the ones it says it does not."""
+    text = open(os.path.join(_REFERENCE, "view-and-tune.md"), encoding="utf-8").read()
+    action = next(ln for ln in text.splitlines() if ln.startswith("- **Set up Risk and trust**"))
+    skipped = set(re.findall(r"not\s+\u00a7\s*(\d+\.\d+)", action))
+    run = set(re.findall(r"\u00a7\s*(\d+\.\d+)", action)) - skipped
+    return run, skipped
+
+
+def _section_blocks(number):
+    """The fenced bash blocks under set-up.md's `## <number>` heading, up to the next `## `."""
+    lines = open(os.path.join(_REFERENCE, "set-up.md"), encoding="utf-8").read().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("## " + number))
     blocks, cur = [], None
     for ln in lines[start + 1:]:
         if cur is None and ln.startswith("## "):
@@ -494,44 +507,63 @@ def _sitting_commands():
     return blocks
 
 
+def _sitting_commands():
+    """The command blocks the menu action routes to, derived from the menu's own text."""
+    run, skipped = _menu_routing()
+    return [b for number in sorted(run) for b in _section_blocks(number)]
+
+
+def test_the_menu_action_routes_to_the_sitting_and_not_the_migration_step():
+    run, skipped = _menu_routing()
+    assert run == {"3.5"} and skipped == {"3.6"}
+    assert any("migrate-material-line" in b for n in skipped for b in _section_blocks(n))
+    assert not any("migrate-material-line" in b for b in _sitting_commands())
+
+
 @pytest.mark.parametrize("who_set", [True, False])
-def test_setup_sitting_commands_end_to_end(tmp_path, who_set):
+def test_menu_action_sitting_commands_end_to_end(tmp_path, who_set):
+    """Start from the menu entry on an already-configured project and run the commands it routes
+    to. Whether the who-it's-for question is skipped follows from what the sitting's own read
+    command returns, not from the fixture flag. (That the advisor then really declines to ask
+    the question aloud is conversational and not testable here.)"""
     repo, store = _setup_repo(tmp_path, threat="Outsiders only.")
     plugin = os.path.join(_REPO_ROOT, "plugins/superheroes")
     blocks = _sitting_commands()
-    assert blocks and not any("migrate-material-line" in b for b in blocks)
+    assert blocks
     who_text = "Clinics, to book visits."
     if who_set:
         assert PC.set_item(repo, "whoItsFor", who_text, root=store)["action"] == "written"
-    areas = json.dumps({"riskAreas": [PAYMENTS]})
     answers = {"whoItsFor": json.dumps("Owners of small shops, to take payments."),
-               "riskAndTrust": areas}
+               "riskAndTrust": json.dumps({"riskAreas": [PAYMENTS]})}
     env = dict(os.environ, CLAUDE_PLUGIN_ROOT=plugin)
     head_before = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD"],
                                  capture_output=True).returncode
-    ran = []
+    ran, who_read = [], None
     for block in blocks:
         if "project_config.py" not in block:
             continue
         item = "riskAndTrust" if "riskAndTrust" in block else "whoItsFor"
-        if " set " in block:
-            if item == "whoItsFor" and who_set:
-                continue  # item 14 already set: the sitting does not ask it again
+        is_set = " set " in block
+        if is_set:
+            if item == "whoItsFor" and who_read is not None and who_read["raw"]:
+                continue  # the read command returned a recorded answer: not asked again
             if item == "riskAndTrust" and '"threatModel"' in block:
                 continue  # the threat-model half is offered only on the owner's yes
-            body = answers[item]
             cmd = block.split("<<'SUPERHEROES_ANSWER'")[0].replace("--cwd .", "--cwd . --root " + store)
-            res = subprocess.run(["bash", "-c", cmd], input=body + "\n", env=env, cwd=repo,
-                                 capture_output=True, text=True)
+            res = subprocess.run(["bash", "-c", cmd], input=answers[item] + "\n", env=env,
+                                 cwd=repo, capture_output=True, text=True)
         else:
             cmd = block.replace("--cwd .", "--cwd . --root " + store)
             res = subprocess.run(["bash", "-c", cmd], env=env, cwd=repo,
                                  capture_output=True, text=True)
         assert res.returncode == 0, res.stderr
-        ran.append((item, " set " in block, json.loads(res.stdout)))
-    assert any(is_set and out["action"] == "written" and item == "riskAndTrust"
-               for item, is_set, out in ran)
-    assert any(item == "whoItsFor" and not is_set for item, is_set, out in ran)
+        out = json.loads(res.stdout)
+        if not is_set and item == "whoItsFor":
+            who_read = out
+        ran.append((item, is_set, out))
+    assert who_read is not None and bool(who_read["raw"]) is who_set
+    assert any(i == "whoItsFor" and s for i, s, o in ran) is (not who_set)
+    assert any(s and o["action"] == "written" and i == "riskAndTrust" for i, s, o in ran)
     who = PC.get_item(repo, "whoItsFor", root=store)
     assert who["raw"] == (who_text if who_set else "Owners of small shops, to take payments.")
     got = PC.get_item(repo, "riskAndTrust", root=store)
