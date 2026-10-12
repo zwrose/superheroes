@@ -28,7 +28,9 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The condition behind each reason, read back out of the readiness registry.
 _CONDITION_FOR = {reason: name for name, reason in cloud_ready.REASON_FOR.items()}
 # The reasons a condition this machine can read again clears.
-_REREAD_REASONS = ("no-setup", "pass-lapsed", "calibration")
+_REREAD_REASONS = tuple(cloud_ready.REASON_FOR[name] for name in ("setup", "passLive", "calibration"))
+# The reason whose fact the cloud reports as a plugin version.
+_VERSION_REASON = cloud_ready.REASON_FOR["version"]
 # Where each reason stands in the cloud check's order: the lower the number, the sooner it is shown.
 _RANK = {cloud_ready.REASON_FOR[name]: place for place, name in enumerate(cloud_ready.CONDITION_ORDER)}
 
@@ -197,7 +199,7 @@ def _fixed(candidate, now, cwd=None, root=None):
     conditions = now.get("conditions") or {}
     if reason in _REREAD_REASONS:
         return conditions.get(_CONDITION_FOR[reason]) is True
-    if reason == "version" and reported.get("pluginVersion") is None:
+    if reason == _VERSION_REASON and reported.get("pluginVersion") is None:
         return conditions.get(_CONDITION_FOR[reason]) is True
     checked = now.get("checkedAt")
     observed = candidate.get("observedOn")
