@@ -116,7 +116,8 @@ def send(tmp_path, session, fake, **over):
 
 def fix_session(tmp_path, nonces=True):
     """Specialists on an earlier commit, a fix audit on the final commit, the one finding fixed."""
-    s = Session(tmp_path, dispositionLedger=[ledger_row()])
+    s = Session(tmp_path, dispositionLedger=[ledger_row()], config={"maxRounds": 7, "fixerVendor": "claude"},
+                rounds={"1": {"fix": {"fixes": [{"title": "t", "file": "a.py"}]}}})
     s.seat("code-reviewer", nonce="n1" if nonces else None)
     s.seat("security-reviewer", nonce="n2" if nonces else None)
     s.seat(KEY, phase="dispatch-audits", rnd=2, head=HEAD, nonce="n3" if nonces else None)
