@@ -325,7 +325,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
     target = r["commit"] if named else head
     if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
-        out.update(ran=RAN_NOT_RUN, runNote="the run record is claimed by more than one reviewer")
+        out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
         if r["ran"]:
             dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     elif r.get("runDir"):
@@ -336,7 +336,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
         # A run is credited against exactly one commit: the one the row names, else the final commit.
         where = f"the commit this reviewer was listed for {_short(target)}" if named else "the final commit"
         if isinstance(seen, str) and seen and seen == target and graded and review:
-            out.update(ran=RAN_ENGINE_RECORD, observation=rec.get("observation"))
+            out.update(ran="engine-record", observation=rec.get("observation"))
         else:
             if not isinstance(rec, dict):
                 note = err if isinstance(err, str) and err else "no run record"
@@ -348,20 +348,20 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None):
                 note = f"the run on {where} did not complete a review (forfeit or failure)"
             else:
                 note = "the run record names no commit"
-            out.update(ran=RAN_NOT_RUN, runNote=note)
+            out.update(ran="not-run", runNote=note)
             if r["ran"]:
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     elif r["ran"] and (named or (reported_commit and reported_commit == head)):
-        out["ran"] = RAN_REPORTED_BY_SESSION
+        out["ran"] = "reported-by-session"
     elif r["ran"]:
         note = (f"the session reported a review of {_short(reported_commit)}, not the final commit {_short(head)}"
                 if reported_commit else "the session did not say which commit it reviewed")
-        out.update(ran=RAN_NOT_RUN, runNote=note)
+        out.update(ran="not-run", runNote=note)
         dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     else:
-        out["ran"] = RAN_NOT_RUN
+        out["ran"] = "not-run"
     out["commit"] = target if named else None
-    out["coversFinalCommit"] = bool(head) and out["ran"] != RAN_NOT_RUN and target == head
+    out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
     if isinstance(r.get("notIndependent"), bool):
         out["notIndependent"] = r["notIndependent"]
     if isinstance(r.get("ownerWord"), dict):
@@ -430,7 +430,7 @@ def _status(rec, unread=(), finding_lines=()):
               for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
         lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
-    ran = [v for v in rec["reviewers"] if v["planned"] and v["ran"] != RAN_NOT_RUN]
+    ran = [v for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run"]
     if not ran:
         lines.append("no planned reviewer ran")
     elif not any(v["coversFinalCommit"] for v in ran):
@@ -453,7 +453,7 @@ def build_record(account, readers):
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"]) for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
-        if v["planned"] and v["ran"] == RAN_NOT_RUN:
+        if v["planned"] and v["ran"] == "not-run":
             mine = [g for g in a["goAheads"] if g["reviewer"] == v["name"]]
             good = next((g for g in mine if _go_ahead_ok(g)), None)
             if mine and not good:
@@ -462,12 +462,12 @@ def build_record(account, readers):
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
-    walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == RAN_ENGINE_RECORD
+    walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
-    toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == RAN_ENGINE_RECORD
+    toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
-    ran_names = [v["name"] for v in reviewers if v["ran"] != RAN_NOT_RUN]
+    ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
         "finalCommit": fc,
@@ -477,7 +477,7 @@ def build_record(account, readers):
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
                  "tokens": sum(toks) if toks else None, "source": "engine records",
-                 "notCounted": [v["name"] for v in reviewers if v["ran"] != RAN_ENGINE_RECORD]},
+                 "notCounted": [v["name"] for v in reviewers if v["ran"] != "engine-record"]},
         "sessionDisagreements": dis,
         "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
                     "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
@@ -636,9 +636,9 @@ def render(record):
     r, lane, ci = record, record["lane"], record["ci"]
     who = []
     for v in r["reviewers"]:
-        label = {RAN_ENGINE_RECORD: "ran (engine record)", RAN_REPORTED_BY_SESSION: f"ran ({SESSION})"}.get(
+        label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
             v["ran"], "did not run")
-        if v["ran"] != RAN_NOT_RUN and v.get("commit") and v["commit"] != r["finalCommit"]["sha"]:
+        if v["ran"] != "not-run" and v.get("commit") and v["commit"] != r["finalCommit"]["sha"]:
             label += f" on {v['commit'][:7]}"
         word = v.get("ownerWord")
         who.append(f"- {v['name']}: {label}"
