@@ -113,7 +113,7 @@ These retirements ship in the same release as the review record, and never apart
 ### Showrunner: answering a cloud builder through the relay
 
 - `lib/cloud_relay.py` is new, with three verbs: `ensure` starts the relay, `compose` prepares an answer for it, and `check` reads whether the answer arrived.
-- The relay is a background Haiku session per account the builders run on, started from the repository root, so that account must trust the root once. A refusal with `relay-start-failed` names the untrusted workspace.
+- The relay is a background Haiku session per account the builders run on, started from the repository root. One-time setup for the owner: open Claude Code in the repository root once on each builders' account and accept the trust prompt. A refusal with `relay-start-failed` names the untrusted workspace.
 - Its state is `cloud-relay.json`, beside the launch ledger.
 - A message counts as delivered only when the text the relay sent matches the answer exactly, read from the relay's own session record; the relay's own report of what it sent is not the receipt.
 - The advisor runs `note-answered` only after a confirmed delivery, so an undelivered answer leaves the note firing on every arm.

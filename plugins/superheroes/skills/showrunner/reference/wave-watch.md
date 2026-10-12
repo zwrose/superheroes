@@ -425,6 +425,10 @@ Each note names the session to answer (`cloudSessionName`) and the account it ru
 Compare `configDir` with the account you run on, your resolved config directory (`CLAUDE_CONFIG_DIR`
 when set, otherwise `~/.claude`). Answer by message, never on the issue.
 
+**One-time setup.** Each Claude account the builders run on must have opened Claude Code in the
+repository root once and accepted its trust prompt. The owner does this once per account, before the
+relay on that account can start.
+
 **Same account.** Send the answer to the session by `SendMessage`. The gate is that call's result
 reading `success: true`.
 
@@ -444,7 +448,7 @@ reading `success: true`.
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
 owner the result's `say` sentence, or the refusal and its `detail`. Retry once from `ensure`; a second
 failure stays with the owner. A `relay-start-failed` naming an untrusted workspace means that account
-has never trusted the repository root; trusting it once is the owner's step.
+has not had the one-time setup step done.
 
 **Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
 --comment-id <id>` for that note, then re-arm.
