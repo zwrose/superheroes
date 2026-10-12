@@ -319,7 +319,7 @@ _REQUIRED_ROLES = {
     "path": ("sessionId",),
     "save": ("sessionId",),
     "mark": ("sessionId",),
-    "mode": ("transcript",),
+    "mode": ("transcriptPath",),
     "instructions": ("sessionId",),
 }
 

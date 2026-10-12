@@ -3,10 +3,10 @@
     "path": {"sessionId": "--session-id"},
     "save": {"sessionId": "--session-id"},
     "mark": {"sessionId": "--session-id"},
-    "mode": {"transcript": "--transcript"},
+    "mode": {"transcriptPath": "--transcript"},
     "instructions": {
       "sessionId": "--session-id",
-      "transcript": "--transcript",
+      "transcriptPath": "--transcript",
       "userInstructions": "--user-instructions"
     }
   }

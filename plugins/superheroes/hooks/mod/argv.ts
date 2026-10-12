@@ -11,7 +11,7 @@ export type CliVerb<Role extends string> = {
 }
 
 export type CliVocabulary = {
-  readonly instructions: CliVerb<'sessionId' | 'transcript' | 'userInstructions'>
+  readonly instructions: CliVerb<'sessionId' | 'transcriptPath' | 'userInstructions'>
   readonly mark: CliVerb<'sessionId'>
   readonly save: CliVerb<'sessionId'>
 }
@@ -54,7 +54,7 @@ export const parseVocabulary = (text: string): CliVocabulary => {
   }
 
   return {
-    instructions: pick(verbs, 'instructions', ['sessionId', 'transcript', 'userInstructions']),
+    instructions: pick(verbs, 'instructions', ['sessionId', 'transcriptPath', 'userInstructions']),
     mark: pick(verbs, 'mark', ['sessionId']),
     save: pick(verbs, 'save', ['sessionId']),
   }
@@ -78,7 +78,7 @@ export const instructionsArgv = (
   const argv = [...base(pluginRoot, verb), flags.sessionId, sessionId]
 
   if (transcript !== null) {
-    argv.push(flags.transcript, transcript)
+    argv.push(flags.transcriptPath, transcript)
   }
   if (owner !== null) {
     argv.push(flags.userInstructions, owner)

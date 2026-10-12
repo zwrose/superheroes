@@ -32,7 +32,7 @@ const saveAnswer = ok({ path: NOTES })
 // file; the real file's agreement with the real CLI is lib/tests/test_compaction_mod_argv_1814.py.
 const VOCABULARY = JSON.stringify({
   verbs: {
-    instructions: { sessionId: '--session-id', transcript: '--transcript', userInstructions: '--user-instructions' },
+    instructions: { sessionId: '--session-id', transcriptPath: '--transcript', userInstructions: '--user-instructions' },
     mark: { sessionId: '--session-id' },
     save: { sessionId: '--session-id' },
   },
