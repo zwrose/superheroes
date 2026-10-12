@@ -36,6 +36,7 @@ OTHER_ENV_ID = "env_09ZYXwvu"
 NONCE = "abcd1234efgh"
 ACCOUNT = "acct-fixture-one"
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc).timestamp()
+LATER = NOW + 60  # a judgment that starts after a marker stamped NOW may clear it
 TODAY = "2026-10-10"
 FAR = "2099-12-31"
 SOURCE = "https://github.com/acme/superheroes.git"
@@ -453,7 +454,7 @@ def test_judge_edge2_two_different_lines_with_the_nonce_are_unread(tmp_path):
     assert _first(result) == FIRST_UNREAD
     assert _record_state(local) == "none"
     # the same line twice is one report
-    assert _judge(local, "%s\n%s\n" % (one, one))["action"] == "passed"
+    assert _judge(local, "%s\n%s\n" % (one, one), now=LATER)["action"] == "passed"
 
 
 def test_judge_edge3_a_wrong_or_missing_environment_fails_on_environment(tmp_path):
@@ -600,7 +601,7 @@ def test_judge_edge8_a_refused_or_raising_record_write_fails_on_record(tmp_path)
         _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
                    "could not finish saving the result on this machine.")
         assert _record_state(local) == "none"
-    assert _judge(local, _ok_report(cloud))["action"] == "passed"
+    assert _judge(local, _ok_report(cloud), now=LATER)["action"] == "passed"
 
 
 def test_judge_a_repeat_passing_check_is_a_pass_and_keeps_an_on_setting(tmp_path):
@@ -790,7 +791,7 @@ def test_judge_accepts_an_absent_stamp_file_only_when_nothing_was_placed(tmp_pat
     wrongly_there = _judge(local, _cloud_report(cloud, stampFile=OTHER_STAMP))
     assert wrongly_there["failedParts"] == ["calibration"]
     assert _record_state(local) == "none"
-    assert _judge(local, absent)["action"] == "passed"
+    assert _judge(local, absent, now=LATER)["action"] == "passed"
     placed_local, placed_cloud = _pair(tmp_path / "out")
     missing = _judge(placed_local, _cloud_report(placed_cloud, stampFile=None))
     assert missing["failedParts"] == ["calibration"]
@@ -1063,7 +1064,7 @@ def test_a_passing_check_removes_the_marker_and_writes_the_record(tmp_path):
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
     assert os.path.exists(_marker_path(local))
-    result = _judge(local, _ok_report(cloud))
+    result = _judge(local, _ok_report(cloud), now=LATER)
     assert result["action"] == "passed" and result["markerWritten"] is False
     # detector: a pass that leaves the earlier failure's marker behind goes red here
     assert not os.path.exists(_marker_path(local))
@@ -1113,21 +1114,62 @@ def test_a_record_write_that_fails_leaves_an_existing_marker_in_place(tmp_path):
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
     before = open(_marker_path(local)).read()
+    seen = []
 
     def raising(*a, **k):
+        # detector: a marker cleared before the record writer is called goes red here
+        seen.append(os.path.exists(_marker_path(local)) and open(_marker_path(local)).read() == before)
         raise OSError("disk")
 
-    result = _judge(local, _ok_report(cloud), record_fn=raising)
-    # detector: a failed record write that clears the failure marker first goes red here
+    result = _judge(local, _ok_report(cloud), now=LATER, record_fn=raising)
+    # detector: a failed record write that clears the failure marker goes red here
+    assert seen == [True]
     assert result["action"] == "failed" and "record" in result["failedParts"]
     assert os.path.exists(_marker_path(local)) and before
+
+
+def _plant_marker(local, failed_at):
+    os.makedirs(os.path.dirname(_marker_path(local)), exist_ok=True)
+    with open(_marker_path(local), "w") as fh:
+        json.dump({"schema": CC.FAILED_CHECK_SCHEMA, "account": ACCOUNT, "environment": ENV_ID,
+                   "failedAt": failed_at, "failedParts": ["version"]}, fh)
+
+
+def test_a_marker_stamped_after_the_judgment_start_is_kept_and_fails_on_record(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _plant_marker(local, "2026-10-10T12:00:30Z")
+    result = _judge(local, _ok_report(cloud))
+    # detector: removing a marker written by an overlapping failed judgment goes red here
+    assert result["action"] == "failed" and "record" in result["failedParts"]
+    assert result["recordWritten"] is True
+    assert os.path.exists(_marker_path(local))
+
+
+def test_a_marker_stamped_before_the_judgment_start_is_removed_on_a_pass(tmp_path):
+    local, cloud = _pair(tmp_path)
+    _plant_marker(local, "2026-10-10T11:59:59Z")
+    result = _judge(local, _ok_report(cloud))
+    # detector: keeping an older marker (a stuck failure) goes red here
+    assert result["action"] == "passed"
+    assert not os.path.exists(_marker_path(local))
+
+
+def test_a_damaged_marker_is_removed_on_a_pass(tmp_path):
+    local, cloud = _pair(tmp_path)
+    os.makedirs(os.path.dirname(_marker_path(local)), exist_ok=True)
+    with open(_marker_path(local), "w") as fh:
+        fh.write("{not json")
+    result = _judge(local, _ok_report(cloud))
+    # detector: a damaged marker that survives a pass goes red here
+    assert result["action"] == "passed"
+    assert not os.path.exists(_marker_path(local))
 
 
 def test_a_record_that_is_written_before_the_marker_is_cleared(tmp_path):
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
     seen = []
-    result = _judge(local, _ok_report(cloud), record_fn=lambda *a, **k: seen.append(
+    result = _judge(local, _ok_report(cloud), now=LATER, record_fn=lambda *a, **k: seen.append(
         os.path.exists(_marker_path(local))) or {"action": "written"})
     # detector: clearing the marker before the record write goes red here
     assert seen == [True] and result["action"] == "passed"
@@ -1249,9 +1291,13 @@ def test_cli_judge_exit_codes(tmp_path, monkeypatch, capsys):
     shipped = json.loads(line.split(" ", 1)[1])
     shipped.pop("digest")
     bad_version = CC.report_line(dict(shipped, pluginVersion="0.0.1"))
+    clock = [NOW]
+    # pins the CLI's wall clock: same-second stamps would keep the failed marker and fail the pass
+    monkeypatch.setattr(CC.time, "time", lambda: clock[0])
     failed = CC.main(base + ["--nonce", NONCE, "--line", bad_version])
     assert failed == 1 and json.loads(capsys.readouterr().out)["action"] == "failed"
     assert _record_state(local) == "none"
+    clock[0] = LATER
     path = tmp_path / "comment.txt"
     path.write_text("Result:\n```\n%s```\n" % line)
     passed = CC.main(base + ["--nonce", NONCE, "--line-file", str(path)])
