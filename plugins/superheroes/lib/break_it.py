@@ -28,6 +28,7 @@ SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
+REDACTED_FIELD = "suggestionRedacted"
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
@@ -557,6 +558,9 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             kept.append(copy)
             continue
         block, refusal = parse_block(copy.get("suggestion"))
+        # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is refused, never run in altered form
+        if not refusal and copy.get(REDACTED_FIELD) is True:
+            block, refusal = None, "suggestion-redacted"
         if refusal:
             record = _not_run(head, block, refusal)
         elif block["path"] != copy.get("file"):

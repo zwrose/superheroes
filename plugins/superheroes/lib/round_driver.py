@@ -4246,6 +4246,11 @@ def _audit_targets(state, config, audit_targets_map):
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
         }
+        if break_it.is_break_it(f):
+            # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
+            for carried in ("suggestion", "body", break_it.RUN_FIELD):
+                if f.get(carried) is not None:
+                    row[carried] = f[carried]
         if auditor_vendor is not None:
             row["auditorVendor"] = auditor_vendor
         targets.append(row)

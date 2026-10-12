@@ -1544,6 +1544,7 @@ def _scrub_findings(findings, *, echo_nonce=None):
         if not _finding_is_substantive(f, echo_nonce=echo_nonce):
             rejected.append({"entry": _render_rejection_entry(f), "reason": FINDING_REJECT_NO_SUBSTANCE})
             continue
+        f0 = f
         pre_scrubbed = dict(f)
         for key, val in pre_scrubbed.items():
             if key in _FINDING_STRUCTURAL_KEYS:
@@ -1555,6 +1556,9 @@ def _scrub_findings(findings, *, echo_nonce=None):
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
             g[key] = _scrub_finding_value(val)
+        if g.get("taxonomy") == "break-it-test" and g.get("suggestion") != f0.get("suggestion"):
+            # the suggestion carries executable test bytes; flag that the scrub altered them
+            g["suggestionRedacted"] = True
         accepted.append(g)
     return accepted, rejected
 

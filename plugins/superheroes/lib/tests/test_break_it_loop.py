@@ -273,6 +273,29 @@ def test_a_deduplicated_proposal_binds_no_kept_check(world):
     assert row["outcome"] == "kept"
 
 
+def test_a_scrub_altered_suggestion_is_refused_not_run(world):
+    import engine_adapter as EA
+    content = "request = {'token': 'sk-live-EXAMPLEfakekey0'}\nassert False\n"
+    raw = _break_it_finding(content)
+    accepted, _ = EA._scrub_findings([raw])
+    assert accepted[0]["suggestion"] != raw["suggestion"]
+    assert accepted[0][break_it.REDACTED_FIELD] is True
+    world.fold_panel(accepted[0])
+    (run,) = world.round_record["breakItRuns"]
+    assert (run["outcome"], run["reason"]) == ("not-run", "suggestion-redacted")
+    clean, _ = EA._scrub_findings([_break_it_finding()])
+    assert break_it.REDACTED_FIELD not in clean[0]
+
+
+def test_a_requeued_break_it_audit_target_keeps_its_test_block():
+    f = _break_it_finding()
+    f[break_it.RUN_FIELD] = {"outcome": "failed", "sha256": "x"}
+    state = {"fixBatch": [f]}
+    (row,) = RD._audit_targets(state, {}, {})
+    assert row["suggestion"] == f["suggestion"] and row["body"] == f["body"]
+    assert row[break_it.RUN_FIELD] == f[break_it.RUN_FIELD]
+
+
 def test_a_failing_final_run_is_kept_in_the_row_and_the_park_reason(world):
     world.fold_panel(_break_it_finding())
     world.disposition("fixed")
