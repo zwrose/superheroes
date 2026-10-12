@@ -214,7 +214,7 @@ def _create_comment(pr, repo, body):
 
 
 def _readers(overrides):
-    cloud = os.environ.get(cloud_pass.CLOUD_ENV) == "true"
+    cloud = cloud_pass._is_cloud(os.environ)
     return {"pr_meta": _pr_meta_rest if cloud else _pr_meta, "issue_body": _issue_body_rest if cloud else _issue_body,
             "check_data": _check_data,
             "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
