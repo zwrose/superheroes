@@ -103,6 +103,13 @@ These retirements ship in the same release as the review record, and never apart
 - A cloud build hands back only with its review record written. When the writer refuses with `review-record-gh-failed`, or writes a record whose final commit the session reported instead of reading it from the PR, the builder posts a review receipt naming the head it reviewed, leaves the PR not ready, and parks naming the review record as missing.
 - `rubric/review-discipline.md` § Size names the builder note as how a cloud builder messages the advisor at the size tripwire.
 
+### Showrunner: builder notes in the wave watch
+
+- The watch reports a cloud builder's note as the event `builder-note`. It ends the `loop` without ending a lane, and it belongs to a third event class, `ATTENTION_EVENTS`, beside `LANE_ENDING_EVENTS` and `BENIGN_EVENTS`. A reader that matches on the two older classes must take the third into account.
+- A note keeps firing on every arm until the advisor runs `wave_watch.py note-answered --repo-root <root> --comment-id <id>`, which records it in `builder-notes-answered.json` beside the launch ledger.
+- While a batch has a live cloud lane, the watch makes one REST read of the repository's issue comments per tick, conditional on the stored ETag, so an unchanged list costs no rate limit.
+- A read that fails is disclosed as `builder-note-unavailable`.
+
 ## 0.42.0
 
 ### Before you upgrade

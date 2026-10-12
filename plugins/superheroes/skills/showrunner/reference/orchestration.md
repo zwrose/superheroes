@@ -150,7 +150,10 @@ lane's `started` record, and returns once the session exists. It does not wait f
 `reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
 the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`) and its URL
 (`cloudSessionUrl`). To reach a running cloud builder, message the session the lane record names. A
-message wakes an idle session. A `started` record that carries `cloudSessionUnconfirmed` in place of
+message wakes an idle session. A cloud builder asks the advisor through a builder note, an issue
+comment opening with the builder-note header; the wave watch reports it as `builder-note`
+(`skills/showrunner/reference/wave-watch.md`). Answer by message to the lane's session, then record
+it answered with the watch's `note-answered` verb. A `started` record that carries `cloudSessionUnconfirmed` in place of
 the id means a session may exist that was never confirmed. The lane stays live. Look in the host's
 session listing for a session of the recorded name; when there is none, record the lane's outcome as
 `died`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes: an older build reads the lane as a local one and reports `builder-exited` for a session still working.

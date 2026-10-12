@@ -7,7 +7,7 @@ Verbs:
 - run: one-shot evaluation tick — one ledger read, at most one open-PR poll, no sleep.
 - watch_arm: windowed watch — one arm until the first event or arm deadline.
 - loop: re-arms watch_arm internally, passes over benign events, and exits only
-  on lane-ending events, refusals, or its ceiling; refuses a second live loop on
+  on lane-ending events, attention events, refusals, or its ceiling; refuses a second live loop on
   the batch. loop owns one set of state
   cells (pr_state, stack_state, pr_sampled) threaded through every arm so
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
@@ -2539,7 +2539,7 @@ def loop(
     ignore_events=(),
     run_fn=None,
 ):
-    """Re-arm watch_arm until lane-ending exit, refusal, or ceiling."""
+    """Re-arm watch_arm until lane-ending or attention exit, refusal, or ceiling."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
     arms = 0
     loop_degraded = set()

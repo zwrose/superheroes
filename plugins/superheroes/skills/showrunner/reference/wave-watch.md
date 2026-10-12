@@ -18,7 +18,7 @@
 
 ## What it is
 
-`lib/wave_watch.py` is a ledger-driven watcher over one launch batch. It has two verbs:
+`lib/wave_watch.py` is a ledger-driven watcher over one launch batch. It has three verbs:
 
 - **`loop`** — the arming shape. Re-arms an internal arm (`watch_arm`) and exits on any successful
   event **not** in **`BENIGN_EVENTS`** in `lib/wave_watch.py` (every lane-ending token and any
@@ -84,7 +84,7 @@ The arming snippet above omits two flags you should **include on every arm**: `-
 (the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a
 message) and `--log PATH` (each timer arm and each passed-over benign event is recorded, so you can
 see the loop is alive and which batch it is watching). Without them, a mistyped or quiet batch under
-`loop` produces **no stdout at all** until something lane-ending happens — indistinguishable from a
+`loop` produces **no stdout at all** until something lane-ending happens or a builder note arrives — indistinguishable from a
 healthy quiet wave for as long as you leave it running.
 
 In an **interactive** session, a harness background task survives across turns and re-invokes the
@@ -188,7 +188,7 @@ A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 **Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
 benign, re-arm with `--ignore-event <launchId>:<event>` so that exact pair stops waking you **while
 that lane's other events still do**. Within a single `loop` invocation, the first unsuppressed
-**lane-ending** event exits the loop; persistence across invocations is **your** job — pass
+**lane-ending** or attention event exits the loop; persistence across invocations is **your** job — pass
 `--ignore-event` on re-arm. The tool does not dedupe suppressed pairs across invocations by itself.
 **Do not pre-arm `--ignore-event` for `lane-stale` as a matter of course**: an arm that ignores
 every lane's stale signal has quietly reduced the watcher's exits to `lane-terminal`,
@@ -292,7 +292,7 @@ terminates the loop; it discloses `log-unwritable`. `run` does not accept `--log
 
 The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on a refusal**.
 
-A `loop` exits on the first unsuppressed lane-ending event; a `run` returns the first due
+A `loop` exits on the first unsuppressed lane-ending or attention event; a `run` returns the first due
 unsuppressed event.
 
 **Events** (`ok=True`): see `EVENTS` in `lib/wave_watch.py`. `run` never reports `pr-set-changed`, and `run` returns `timer` when nothing else is due.
@@ -378,8 +378,9 @@ When **`builder-note`** fires, a cloud builder has posted an issue comment openi
 `NOTE_HEADER` (`lib/cloud_builder.py`) on a live lane's issue since that lane started, and no
 `note-answered` has recorded it. The payload carries `launchId` (the first note's lane) and `notes`,
 by comment id: `{"launchId", "issue", "commentId", "url", "createdAt", "cloudSessionName",
-"cloudSessionId", "configDir"}` — `configDir` names the Claude account the lane runs on, so pick
-your relay by it — plus `alsoObserved`. Answer on the issue, then run `note-answered`, or the note
+"cloudSessionId", "configDir"}` — `configDir` names the Claude account the lane runs on — plus
+`alsoObserved`. Answer the builder by message to the session the lane names, as the **Cloud lanes**
+paragraph of `orchestration.md` says, never on the issue; then run `note-answered`, or the note
 fires again on the next arm. A note posted while you were away fires when you are back. It reads
 the repository's issue comments once per tick, a `304` re-using the stored list.
 
@@ -439,7 +440,7 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 - **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
   `run` produces a calm `timer`, not a refusal. `loop` treats every `timer` as non-terminal and
   re-arms; with no `--max-total-seconds` bound it produces **nothing on stdout** until something
-  lane-ending happens, so a mistyped batch id under `loop` looks exactly like a healthy quiet wave for
+  lane-ending happens or a builder note arrives, so a mistyped batch id under `loop` looks exactly like a healthy quiet wave for
   as long as you leave it running.
 - **A started lane that has never stamped a heartbeat across the full watch window
   is reported as a `lane-never-stamped` degradation at the deadline** — but
@@ -454,7 +455,7 @@ local lane, pid positively live plus session transcript age against `LIVENESS_QU
 and for a [cloud lane](../../../rubric/glossary.md#cloud-lane), its activity on GitHub against the
 same window. The sweep reports a cloud lane `nonterminal` with reason `cloud-lane-no-heartbeat`,
 which says nothing about liveness. The watcher is a blocking arm (`loop` at wave launch, or a one-off `run`) — `loop` returns on the first arm its exit
-classifier does not pass over — a refusal, a lane-ending event, an unknown event, or a
+classifier does not pass over — a refusal, a lane-ending event, an attention event, an unknown event, or a
 `stack-state-changed` carrying the launchable idle-seat flag — or at its `--max-total-seconds`
 ceiling (see "What ends a loop and what it passes over"); `run` returns at once. Neither the sweep
 nor the watcher asserts a lane is dead.
