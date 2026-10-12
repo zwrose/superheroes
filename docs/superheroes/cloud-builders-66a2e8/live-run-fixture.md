@@ -1,1 +1,1 @@
-Cloud live run: answer pending.
+Cloud live run: the advisor answered.
