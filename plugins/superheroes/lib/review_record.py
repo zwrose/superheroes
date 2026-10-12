@@ -518,7 +518,8 @@ def _lane_lines(rec):
     lane, basis = rec["lane"]["value"], rec["laneBasis"]
     # axis: a lane below the risk floor is not-reviewed; an unknown lane counts as below — see bite-proof record wo_a_1795_lane-call
     if basis["floor"] is not None and lane_call.rank(lane) < lane_call.rank(basis["floor"]):
-        return [f"the lane ({lane}) is below the risk floor ({basis['floor']}): {basis['why'][0]}"]
+        # fixed prose: only the lane and floor tokens enter, never the basis's free-text reasons (the Risk floor line holds those)
+        return [f"the lane ({lane}) is below the risk floor ({basis['floor']}); the Risk floor line gives why"]
     return []
 
 
@@ -808,23 +809,22 @@ def render(record):
     waits_text = ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner."
 
     def compose(r):
-        summary = "\n".join([
+        floor_line = (f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".")
+        lines = [
             f"**Review record: {r['status'].replace('-', ' ')}.** Checked: " + "; ".join(r["checked"][:2])
             + ". Left: " + ("; ".join(r["whatIsMissing"]) or "nothing") + ".",
             waits_text,
             f"Lane: {lane['value']} ({lane['source']})" + (f", because {lane['reason']}" if lane.get("reason") else "")
             + (f" ({lane['reasonSource']})" if lane.get("reason") and lane.get("reasonSource") else "") + ".",
-            f"Risk floor: {r['laneBasis']['floor'] or 'none'} — " + "; ".join(r["laneBasis"]["why"]) + ".",
+            floor_line,
             *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
             f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
-            "Reviewers:", *who])
-        # The lane basis's reason lines hold literal data (area names, sampled changed paths), not prose this
-        # writer composes, so the claim guard checks the summary with each of them left out, as it does the
-        # JSON block. Every other word of the summary is still checked.
-        checked = summary
-        for reason in sorted(r["laneBasis"]["why"], key=len, reverse=True):
-            checked = checked.replace(reason, "")
-        _assert_no_bug_free_claim(checked)
+            "Reviewers:", *who]
+        summary = "\n".join(lines)
+        # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
+        # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
+        # block is. Every other line is still checked.
+        _assert_no_bug_free_claim("\n".join(l for l in lines if l is not floor_line))
         return (f"{MARKER}\n{summary}\n\n<details><summary>Full record</summary>\n\n```json\n"
                 f"{json.dumps(r, indent=2, sort_keys=True)}\n```\n</details>")
 

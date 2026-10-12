@@ -1450,7 +1450,7 @@ def test_e9_a_lane_below_the_floor_is_not_reviewed_with_that_line(tmp_path):
     fake.changed = ["src/payments/charge.py"]
     rec = build(account(repoRoot=repo), fake)
     assert rec["lane"]["value"] == "light" and rec["laneBasis"]["floor"] == "full"
-    line = f"the lane (light) is below the risk floor (full): {PAY_FLOOR}"
+    line = f"the lane (light) is below the risk floor (full); the Risk floor line gives why"
     assert rec["status"] == "not-reviewed" and line in rec["whatIsMissing"]
     assert line in rr.render(rec)
 
@@ -1481,7 +1481,7 @@ def test_a_lane_value_the_rule_does_not_know_counts_as_below_a_full_floor(tmp_pa
     fake.changed = ["src/payments/charge.py"]
     rec = build(account(lane=value, repoRoot=repo), fake)
     assert rec["status"] == "not-reviewed"
-    assert f"the lane ({value}) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]
+    assert f"the lane ({value}) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
 
 def test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavailable(tmp_path):
@@ -1495,7 +1495,7 @@ def test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavail
     assert basis["floor"] == "full" and basis["why"][0] == UNREAD
     assert [w.split(": ")[0] for w in basis["why"]].count("risk-unclear-no-paths") == 1
     assert rec["status"] == "not-reviewed"
-    assert f"the lane (light) is below the risk floor (full): {UNREAD}" in rec["whatIsMissing"]
+    assert f"the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
 
 def _refuse_any_read(monkeypatch):
@@ -1529,7 +1529,7 @@ def test_f4_an_unknown_lane_value_is_invalid_and_leaves_the_record_not_reviewed(
     assert [w.split(": ")[0] for w in basis["why"]] == ["risk-unclear-not-set", "proposal-invalid"]
     why0 = basis["why"][0]
     assert rec["status"] == "not-reviewed"
-    assert f"the lane (medium) is below the risk floor (full): {why0}" in rec["whatIsMissing"]
+    assert f"the lane (medium) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
 
 def test_f4_an_unknown_lane_value_over_a_read_basis_is_invalid_and_not_reviewed(tmp_path):
@@ -1541,7 +1541,7 @@ def test_f4_an_unknown_lane_value_over_a_read_basis_is_invalid_and_not_reviewed(
     assert rec["laneBasis"]["floor"] == "full" and rec["laneBasis"]["source"] == FILES_SOURCE
     assert "proposal-invalid" in [w.split(": ")[0] for w in rec["laneBasis"]["why"]]
     assert rec["status"] == "not-reviewed"
-    assert f"the lane (medium) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]
+    assert f"the lane (medium) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
 
 def test_the_basis_says_how_the_records_own_lane_compares_with_the_floor(tmp_path):
@@ -1617,7 +1617,7 @@ def test_e11_a_rename_out_of_a_risk_area_touches_it_through_the_previous_name(tm
     assert rec["laneBasis"]["floor"] == "full"
     assert rec["laneBasis"]["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
     assert rec["status"] == "not-reviewed"
-    assert f"the lane (light) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]
+    assert f"the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
 
 def test_a_broad_change_renders_under_the_cap_with_the_floor_full(tmp_path):
@@ -1732,6 +1732,36 @@ def test_composed_prose_claiming_no_bugs_is_still_refused_with_a_path_in_the_bas
     repo = risk_repo(tmp_path, areas=(DOCS_AREA,))
     rec = real_reader_record(repo, monkeypatch, gh_files({"filename": "docs/bug-free.md"}))
     rec["whatIsMissing"] = ["the change has no bugs"]
+    with pytest.raises(rr.Refusal) as e:
+        rr.render(rec)
+    assert e.value.reason == "review-record-forbidden-claim"
+
+
+def test_a_below_floor_oversized_record_with_a_bug_free_path_publishes_not_reviewed(tmp_path):
+    # axis: the below-floor warning carrying no basis free text; an oversized record's shed leaving a path in a claim-checked line
+    glyph = "\U0001F600"
+    areas = [dict(PAYMENTS, name="Area%d%s" % (n, glyph * 60), covers=["docs/area%d/*" % n]) for n in range(20)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["docs/area0/bug-free.md"] + [
+        "docs/area%d/%s%04d.md" % (n, glyph * 290, i) for n in range(20) for i in range(150)]
+    rec = build(account(repoRoot=repo), fake)
+    assert rec["lane"]["value"] == "light" and rec["laneBasis"]["floor"] == "full"
+    assert rec["status"] == "not-reviewed"
+    assert "docs/area0/bug-free.md" in "; ".join(rec["laneBasis"]["why"])
+    assert "the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
+    assert not any("bug-free" in line for line in rec["whatIsMissing"])
+    body = rr.render(rec)
+    assert len(body) <= rr.MAX_BODY_CHARS
+
+
+def test_composed_prose_claiming_no_bugs_is_refused_on_a_below_floor_record(tmp_path):
+    # axis: the claim guard excluding only the Risk floor line; every other summary line still checked
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(repoRoot=repo), fake)
+    rec["whatIsMissing"] = rec["whatIsMissing"] + ["the change is bug-free"]
     with pytest.raises(rr.Refusal) as e:
         rr.render(rec)
     assert e.value.reason == "review-record-forbidden-claim"
