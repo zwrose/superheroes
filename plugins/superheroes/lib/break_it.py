@@ -113,12 +113,28 @@ os._exit(code if code >= 0 else 128 - code)
 """
 
 
+_IMPORT_ROUTING_VARS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+                        "NODE_PATH", "RUBYLIB", "PERL5LIB", "CLASSPATH")
+
+
+def _names_root(value, root_real):
+    """True when any ``os.pathsep`` entry of ``value`` resolves to ``root_real`` or lies beneath it."""
+    for entry in value.split(os.pathsep):
+        if entry:
+            real = os.path.realpath(entry)
+            if real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+
 def _clean_env(extra=None, root=None):
-    """The ambient environment minus every git routing variable and, given ``root``, every variable
-    whose value names that path (an import path into the caller's checkout), plus ``extra``."""
-    named = {p for p in (os.path.abspath(root), os.path.realpath(root)) if len(p) > 1} if root else ()
+    """The ambient environment minus every git routing variable, the common import-routing variables
+    and, given ``root``, every variable with a path entry that resolves to or beneath that path (an
+    import path into the caller's checkout in any spelling), plus ``extra``."""
+    root_real = os.path.realpath(root) if root else None
     env = {k: v for k, v in os.environ.items()
-           if k not in GIT_ROUTING_VARS and not any(p in v for p in named)}
+           if k not in GIT_ROUTING_VARS and k not in _IMPORT_ROUTING_VARS
+           and not (root_real and _names_root(v, root_real))}
     env.update(extra or {})
     return env
 

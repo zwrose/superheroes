@@ -523,6 +523,26 @@ def test_inherited_import_path_into_the_caller_tree_is_dropped(repo, monkeypatch
     assert record["outcome"] == "passed", record
 
 
+def test_import_path_with_dot_segment_spelling_is_dropped(repo, monkeypatch):
+    _write(repo, "callermod.py", "VALUE = 'copy'\n")
+    head = _commit(repo, "add callermod")
+    _write(repo, "callermod.py", "VALUE = 'caller'\n")
+    monkeypatch.setenv("PYTHONPATH", os.path.join(str(repo.parent), ".", repo.name))
+    content = "import os, sys\nsys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'copy', callermod.VALUE\n"
+    record = break_it.run_one(str(repo), head, _block("tests/test_ipd.py", content))
+    assert record["outcome"] == "passed", record
+
+
+def test_clean_env_scrubs_aliased_root_entries_and_keeps_unrelated(repo, tmp_path, monkeypatch):
+    aliased = os.path.join(str(repo.parent), ".", repo.name, "sub")
+    monkeypatch.setenv("BI_ALIASED", "/nowhere" + os.pathsep + aliased)
+    monkeypatch.setenv("BI_UNRELATED", str(tmp_path / "elsewhere"))
+    env = break_it._clean_env({"BI_EXTRA": "1"}, str(repo))
+    assert "BI_ALIASED" not in env
+    assert env["BI_UNRELATED"] == str(tmp_path / "elsewhere")
+    assert env["BI_EXTRA"] == "1"
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper")
 def test_exception_after_launch_still_lets_the_reaper_collect_a_detached_worker(repo, tmp_path, monkeypatch):
     pidfile = tmp_path / "worker.pid"
