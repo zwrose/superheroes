@@ -359,6 +359,25 @@ def test_a_finished_cloud_build_before_a_local_fallback_does_not_hide_the_fallba
     assert _stored(repo, store)["reason"] == "unreachable"
 
 
+def test_overlapping_launches_are_ordered_by_when_they_started_not_when_they_reserved(world):
+    repo, store = world
+    premise = {"placeCall": _call(reason="unreachable")}
+    # the local fallback reserves first, the cloud lane reserves second and runs to the end, and
+    # only then does the fallback spawn: the fallback is the newer launch and its reminder stands
+    result = ll.reserve(repo, _reserved("a", BATCH, ["x"], repo, issue=22, premise=premise))
+    assert result["ok"], result
+    result = ll.reserve(repo, _reserved(
+        "b", BATCH, ["y"], repo, issue=11, place="cloud", cloudEnvironment="env_abc",
+        pluginVersion="1.2.3", premise={"placeCall": _call("cloud", reason=None)}))
+    assert result["ok"], result
+    _start(repo, "b", "cloud")
+    _finish(repo, "b")
+    _start(repo, "a")
+    _folds(repo)
+    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
+    assert _stored(repo, store)["reason"] == "unreachable"
+
+
 def test_an_earlier_cloud_launch_of_a_retried_issue_still_clears_the_old_reminder(world):
     repo, store = world
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))

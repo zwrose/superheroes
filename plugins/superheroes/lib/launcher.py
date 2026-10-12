@@ -3324,9 +3324,20 @@ def _launch_day(info):
         return None
 
 
-def _record_batch_still(repo_root, batch_id, launches, reserved):
-    """Apply the batch's started launches to the reminder state in launch order, so a build that
-    went to the cloud clears only what came before it and a later local fallback still writes.
+def _started_indexes(records):
+    """Each launch's ledger position of its latest started event. Launches reserve and spawn in
+    separate steps, so the position a launch started at, not the one it reserved at, is the order
+    in which the launches actually happened."""
+    return {
+        rec["launchId"]: idx for idx, rec in enumerate(records)
+        if isinstance(rec, dict) and rec.get("event") == "started"
+    }
+
+
+def _record_batch_still(repo_root, batch_id, launches, reserved, started_at):
+    """Apply the batch's started launches to the reminder state in the order they started, so a
+    build that went to the cloud clears only what came before it and a later local fallback still
+    writes, however the launches interleaved when they reserved.
 
     A batch whose last deciding launch is older than a deciding launch of another batch is left
     out: that newer launch already decided the state, and replaying the older one must not undo it."""
@@ -3338,10 +3349,11 @@ def _record_batch_still(repo_root, batch_id, launches, reserved):
         call = _report_place_call(reserved.get(launch_id), info["place"])
         if not _decides_still(call):
             continue
+        order = started_at.get(launch_id, info["reservedIndex"])
         if info.get("batchId") == batch_id:
-            decided.append((info["reservedIndex"], call, info))
+            decided.append((order, call, info))
         else:
-            newest_elsewhere = max(newest_elsewhere, info["reservedIndex"])
+            newest_elsewhere = max(newest_elsewhere, order)
     decided.sort(key=lambda entry: entry[0])
     if not decided:
         return launch_report.record_still(repo_root, [], root=None)
@@ -3406,7 +3418,8 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),
-        "still": _record_batch_still(repo_root, batch_id, folded["launches"], reserved),
+        "still": _record_batch_still(
+            repo_root, batch_id, folded["launches"], reserved, _started_indexes(read["records"])),
         "lanes": len(lanes),
     }
 
