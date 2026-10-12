@@ -98,7 +98,8 @@ _TOTAL_DEADLINE_SECONDS = ll.LAUNCH_DEADLINE_SECONDS
 _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 
-_WORKTREE_GIT_TIMEOUT = 180
+# Also bounds each step of the cloud base re-check, so the repair window reads the same number.
+_WORKTREE_GIT_TIMEOUT = ll.REMOTE_BASE_STEP_TIMEOUT_SECONDS
 _WORKTREE_TAG_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 _WORKTREE_COLLISION_REMEDY = (
@@ -117,8 +118,8 @@ _WORKHORSE_CMD = "/superheroes:workhorse"
 PLACE_LOCAL = ll.PLACE_LOCAL
 PLACE_CLOUD = ll.PLACE_CLOUD
 _CLOUD_SPAWN_TIMEOUT_SECONDS = ll.CLOUD_SPAWN_TIMEOUT_SECONDS
-_CLOUD_APPEND_TRIES = 3
-_CLOUD_APPEND_PAUSE_SECONDS = 0.2
+_CLOUD_APPEND_TRIES = ll.STARTED_APPEND_TRIES
+_CLOUD_APPEND_PAUSE_SECONDS = ll.STARTED_APPEND_PAUSE_SECONDS
 _CLOUD_CREATED_PREFIX = "Created cloud session: "
 # The two line patterns capture the whole token where the id sits; the id's grammar is decided
 # once, by the ledger's own pattern (`ll._CLOUD_SESSION_ID_RE`), when the receipt is read.

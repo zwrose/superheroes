@@ -189,12 +189,50 @@ def test_repair_restores_a_pending_started_inside_the_launch_window(tmp_path, mo
     assert result == {"ok": True, "repaired": "started", "launchId": launch_id}
 
 
-def test_the_launch_window_reads_the_launchers_own_timeouts():
+def test_the_launch_window_is_the_sum_of_every_bound_between_reserve_and_started():
     import launcher
-    assert ll.launch_window_seconds("cloud") == launcher._CLOUD_SPAWN_TIMEOUT_SECONDS
-    assert ll.launch_window_seconds("local") == (
-        launcher._TOTAL_DEADLINE_SECONDS + launcher._IPHONE_CEILING_SECONDS
+    append = (
+        launcher._CLOUD_APPEND_TRIES * ll._DEFAULT_LOCK_TIMEOUT
+        + (launcher._CLOUD_APPEND_TRIES - 1) * launcher._CLOUD_APPEND_PAUSE_SECONDS
     )
+    # The remote-base re-check runs two steps, each bounded by the launcher's own timeout.
+    assert ll.REMOTE_BASE_CHECK_STEPS == 2
+    assert ll.launch_window_seconds("cloud") == (
+        ll.REMOTE_BASE_CHECK_STEPS * launcher._WORKTREE_GIT_TIMEOUT
+        + launcher._CLOUD_SPAWN_TIMEOUT_SECONDS
+        + append
+    )
+    assert ll.launch_window_seconds("local") == (
+        launcher._TOTAL_DEADLINE_SECONDS + launcher._IPHONE_CEILING_SECONDS + append
+    )
+
+
+def test_raising_any_bound_raises_the_launch_window(monkeypatch):
+    base_cloud = ll.launch_window_seconds("cloud")
+    base_local = ll.launch_window_seconds("local")
+    for name in ("CLOUD_SPAWN_TIMEOUT_SECONDS", "REMOTE_BASE_STEP_TIMEOUT_SECONDS",
+                 "STARTED_APPEND_TRIES", "STARTED_APPEND_PAUSE_SECONDS", "_DEFAULT_LOCK_TIMEOUT"):
+        monkeypatch.setattr(ll, name, getattr(ll, name) + 10)
+        assert ll.launch_window_seconds("cloud") > base_cloud
+        base_cloud = ll.launch_window_seconds("cloud")
+    for name in ("LAUNCH_DEADLINE_SECONDS", "IPHONE_CEILING_SECONDS"):
+        monkeypatch.setattr(ll, name, getattr(ll, name) + 10)
+        assert ll.launch_window_seconds("local") > base_local
+        base_local = ll.launch_window_seconds("local")
+
+
+def test_a_cloud_reservation_older_than_the_spawn_timeout_but_inside_the_window_refuses(
+    tmp_path, monkeypatch,
+):
+    repo = _cloud_lane(tmp_path, monkeypatch)
+    before = ll.read(repo)["records"]
+    reserved_ts = _lane(repo, "c1")["reservedTs"]
+    # Past the spawn timeout alone, while a slow remote-base check can still be running.
+    now = reserved_ts + ll.CLOUD_SPAWN_TIMEOUT_SECONDS + 1
+    assert now - reserved_ts < ll.launch_window_seconds("cloud")
+    result = ll.repair_never_started(repo, "c1", evidence="never ran", now=now)
+    assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
+    assert ll.read(repo)["records"] == before
 
 
 # --- refusals ----------------------------------------------------------------------------------

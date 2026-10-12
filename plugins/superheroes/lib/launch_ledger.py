@@ -58,10 +58,17 @@ REPAIR_LANE_MAY_BE_LAUNCHING = "lane-may-be-launching"
 # The launcher's own timeouts, kept here so the repair's launch window and the launcher read one
 # home (the launcher aliases these). A cloud launch waits at most the spawn timeout for its
 # command; a local launch is bounded by the launch deadline, which the iPhone steps extend by
-# exactly the time they took, up to the iPhone ceiling.
+# exactly the time they took, up to the iPhone ceiling. Between the `reserved` record and the
+# `started` append a cloud launch also re-checks the base on the remote (two bounded steps: the
+# origin address, then the GitHub lookup) and the append is tried up to the append tries with a
+# pause between tries, each try waiting at most the ledger-lock timeout.
 CLOUD_SPAWN_TIMEOUT_SECONDS = 120
 LAUNCH_DEADLINE_SECONDS = 300
 IPHONE_CEILING_SECONDS = 90
+REMOTE_BASE_STEP_TIMEOUT_SECONDS = 180
+REMOTE_BASE_CHECK_STEPS = 2
+STARTED_APPEND_TRIES = 3
+STARTED_APPEND_PAUSE_SECONDS = 0.2
 VET_RULINGS = ("ready", "not-ready", "parked-blocker")
 _AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
@@ -2096,13 +2103,24 @@ def _repair_refusal(reason):
 def launch_window_seconds(place):
     """The longest a launch of this place can take from its `reserved` record to its `started` append.
 
-    Derived from the launcher's own timeouts, never a separate number: a cloud launch is bounded
-    by the cloud spawn timeout; a local launch by the launch deadline plus the iPhone ceiling
-    (the deadline is extended by the time the iPhone steps took).
+    The sum of the bounds of every step the launcher runs in that interval, each read from the
+    constant that already bounds it: for a cloud lane the remote-base re-check (each step's
+    timeout) and the cloud spawn timeout; for a local lane the launch deadline plus the iPhone
+    ceiling (the deadline is extended by the time the iPhone steps took); then, for both, the
+    `started` append's tries, each waiting at most the ledger-lock timeout, with the pause
+    between tries. Raising any bound raises the window.
     """
+    append = (
+        STARTED_APPEND_TRIES * _DEFAULT_LOCK_TIMEOUT
+        + (STARTED_APPEND_TRIES - 1) * STARTED_APPEND_PAUSE_SECONDS
+    )
     if place == PLACE_CLOUD:
-        return CLOUD_SPAWN_TIMEOUT_SECONDS
-    return LAUNCH_DEADLINE_SECONDS + IPHONE_CEILING_SECONDS
+        return (
+            REMOTE_BASE_CHECK_STEPS * REMOTE_BASE_STEP_TIMEOUT_SECONDS
+            + CLOUD_SPAWN_TIMEOUT_SECONDS
+            + append
+        )
+    return LAUNCH_DEADLINE_SECONDS + IPHONE_CEILING_SECONDS + append
 
 
 def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None, env=None,
