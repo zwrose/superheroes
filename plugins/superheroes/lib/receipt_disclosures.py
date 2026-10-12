@@ -3,6 +3,7 @@
 import model_registry
 import seat_map_receipts
 import session_contract
+from seat_map import is_unfilled as seat_is_unfilled
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -191,14 +192,15 @@ def unfilled_seats(seat_map):
     if not isinstance(seats, dict):
         return frozenset()
     return frozenset(name for name, entry in seats.items()
-                     if isinstance(entry, dict) and entry.get("source") == "unfilled")
+                     if seat_is_unfilled(entry))
 
 
 def maker_families(seat_map):
-    """The map's `makerFamilies` as a set of family strings; an old map without the key has none."""
+    """The map's `makerFamilies` as a set of family strings; an old map without the key names its maker through `authorFamily`."""
     raw = seat_map.get("makerFamilies") if isinstance(seat_map, dict) else None
     if not isinstance(raw, list):
-        return frozenset()
+        legacy = seat_map.get("authorFamily") if isinstance(seat_map, dict) else None
+        return frozenset([legacy]) if isinstance(legacy, str) and legacy else frozenset()
     return frozenset(f for f in raw if isinstance(f, str) and f)
 
 
@@ -208,7 +210,7 @@ def pinned_auditor_vendors(seat_map):
     if not isinstance(seats, dict):
         return None
     filled = [e for e in seats.values()
-              if isinstance(e, dict) and e.get("source") != "unfilled"]
+              if isinstance(e, dict) and not seat_is_unfilled(e)]
     if not filled or any(e.get("source") != "pinned" for e in filled):
         return None
     vendors = {e.get("vendor") for e in filled if isinstance(e.get("vendor"), str) and e.get("vendor")}
@@ -221,7 +223,10 @@ def accumulated_maker_families(state):
     decisions that read makers do too. Seat identities still come from the latest map alone."""
     if not isinstance(state, dict):
         return frozenset()
-    return (maker_families(seat_map_receipts.effective_seat_map(state))
+    legacy = frozenset(f for e in seat_map_receipts.receipts(state)
+                       if not isinstance(e["map"].get("makerFamilies"), list)
+                       for f in maker_families(e["map"]))
+    return (maker_families(seat_map_receipts.effective_seat_map(state)) | legacy
             | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
 
 

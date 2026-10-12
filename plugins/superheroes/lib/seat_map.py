@@ -333,7 +333,7 @@ def _alternative_family_live(seat_map: dict, seat: str, cfg: dict, author_family
     return _alternative_family_evidence(seat_map, seat, cfg, author_family) != ALT_NONE
 
 
-def _is_unfilled(cfg) -> bool:
+def is_unfilled(cfg) -> bool:
     """True for the record of a seat no non-maker reviewer could fill: a known not-run seat, carrying
     no vendor, model or family. A record that names a vendor is a seated reviewer whatever its
     `source` says, so it is checked as one."""
@@ -826,7 +826,7 @@ def build(
         elif not cfgs:
             fixed = _backfill(seat)
             fixed_seats[seat] = fixed
-            if _is_unfilled(fixed):
+            if is_unfilled(fixed):
                 _note_unfilled(seat)
             else:
                 degradations.append(
@@ -904,7 +904,7 @@ def build(
     if not all_assignments:
         seats_out = {s: _backfill(s) for s in roster}
         for s in roster:
-            if _is_unfilled(seats_out[s]):
+            if is_unfilled(seats_out[s]):
                 _note_unfilled(s)
     else:
         survivors = [
@@ -1238,7 +1238,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
     for seat in PANEL_ROSTER:
         if seat not in seats:
             violations.append({"seat": seat, "constraint": "missing-seat"})
-        elif _is_unfilled(seats[seat]):
+        elif is_unfilled(seats[seat]):
             # a known not-run seat, disclosed as a `seat-unfilled` degradation
             continue
         elif not isinstance(seats[seat], dict):
@@ -1249,7 +1249,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
             if seat not in seats:
                 continue
             cfg = seats[seat]
-            if not isinstance(cfg, dict) or _is_unfilled(cfg):
+            if not isinstance(cfg, dict) or is_unfilled(cfg):
                 continue
             seat_fam = _seat_family(seat, cfg)
             if seat_fam is None:

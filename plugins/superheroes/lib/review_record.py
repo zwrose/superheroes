@@ -1103,7 +1103,7 @@ def _move_up_blocker(seat_map, maker_families):
     if not isinstance(seats, dict) or not all(isinstance(seats.get(n), dict) for n in roster):
         return "the seat map has no entry for a roster seat"
     # axis: a roster seat that is unfilled, or whose family is a maker's, cannot be shown independent, so the lane is parked, never moved up — see bite-proof record wo_a_1796_reading-independence
-    if any(seats[n].get("source") == "unfilled" for n in roster):
+    if any(seat_map_module.is_unfilled(seats[n]) for n in roster):
         return "a roster seat in the seat map is unfilled"
     if not all(isinstance(seats[n].get("family"), str) and seats[n]["family"] for n in roster):
         return "a roster seat in the seat map names no family"
