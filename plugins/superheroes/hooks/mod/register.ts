@@ -26,9 +26,13 @@ async function directive(
   $: EngineInterface,
   verb: string,
   args: readonly string[],
+  stdin?: string,
 ): Promise<Record<string, unknown>> {
   const argv = ['python3', '-B', `${$.plugin.root}/lib/compaction_directive.py`, verb, ...args]
-  const { exitCode, stdout } = await $.process.run(argv, { timeoutMs: CLI_TIMEOUT_MS })
+  const { exitCode, stdout } = await $.process.run(
+    argv,
+    stdin === undefined ? { timeoutMs: CLI_TIMEOUT_MS } : { timeoutMs: CLI_TIMEOUT_MS, stdin },
+  )
 
   if (exitCode !== 0) {
     throw new Error(`${verb} exited ${exitCode}: ${stdout.slice(0, 200)}`)
@@ -106,22 +110,21 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
 
-    try {
-      const block = extractCheckpointBlock(e.answer)
+    // A subagent's answer is not the session's: its checkpoint block must never
+    // replace the parent's notes (`$.session.id()` is the parent's there too).
+    if (!e.agentId) {
+      try {
+        const block = extractCheckpointBlock(e.answer)
 
-      if (block !== null) {
-        const res = await directive($, 'path', ['--session-id', await $.session.id()])
-        const path = text(res.path)
-
-        if (path === null) {
-          throw new Error('path answer lacks path')
+        if (block !== null) {
+          // The CLI replaces the notes atomically (temp file + rename): a failed
+          // save leaves the last good notes in place.
+          await directive($, 'save', ['--session-id', await $.session.id()], block)
+          $.ui.toast('Checkpoint notes saved')
         }
-
-        await $.fs.write(path, block)
-        $.ui.toast('Checkpoint notes saved')
+      } catch (error) {
+        note($, `turn.complete: ${String(error)}`)
       }
-    } catch (error) {
-      note($, `turn.complete: ${String(error)}`)
     }
 
     return result

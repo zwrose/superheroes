@@ -54,7 +54,9 @@ say so in one line.
 
 The checkpoint notes live in one file per session. The session bootstrap's
 `Checkpoint file` line names it — use that path. If the bootstrap carries no such line, ask
-the lib for it, with the session id (the transcript file's name without its extension):
+the lib for it, with the session id: the transcript file's name without its extension on
+Claude Code, or the host's own session id where it names one (a host with a transcript path
+or session id has no other source here — never guess one):
 
 ```bash
 python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/compaction_directive.py" path --session-id "<session id>"
@@ -63,6 +65,11 @@ python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/compaction_directive.py" path --session-id
 It prints `{"ok": true, "path": "<notes file>", "markerPath": "<delivered marker>"}`. Read the
 notes file if it exists — it is what the last checkpoint saved. Do not invent a path or
 filename.
+
+**No resolvable notes path** (no bootstrap `Checkpoint file` line and no session id — a host
+without a transcript path or a SessionStart bootstrap): say so in one line, skip the save in
+step 4, and still end the reply with the checkpoint block and the `/compact` line so the
+notes live in the conversation itself; they are not persisted for automatic compaction.
 
 ## Step 3 — Freshen the live state (per mode)
 
@@ -124,7 +131,7 @@ printenv SUPERHEROES_COMPACT_MOD
   **not** write the file yourself.
 - **Unset** (prints nothing): no mod on this host. Write the **same block body** (without the
   fences) to the notes file from step 2 with the host's file-write action, creating its
-  directory if needed.
+  directory if needed (skip this when step 2 found no notes path).
 
 An example of the block, shown inside a longer fence so it stays inert here:
 

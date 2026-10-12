@@ -24,10 +24,11 @@ const steer = ok({
   notesFound: true,
   markerPath: MARKER,
 })
-const pathAnswer = ok({ path: NOTES, markerPath: MARKER })
+const saveAnswer = ok({ path: NOTES })
 
 type Rig = {
   argv: string[][]
+  stdins: (string | undefined)[]
   writes: { path: string; text: string }[]
   seen: SessionCompactInput[]
   envs: [string, string | undefined][]
@@ -44,13 +45,14 @@ function rig(
   cli: (argv: readonly string[]) => Cli,
   options: { isIdBroken?: boolean; isWriteBroken?: boolean; isEnvBroken?: boolean; isStateBroken?: boolean } = {},
 ): Rig {
-  const r: Rig = { argv: [], writes: [], seen: [], envs: [], states: [], toasts: [], order: [] }
+  const r: Rig = { argv: [], stdins: [], writes: [], seen: [], envs: [], states: [], toasts: [], order: [] }
 
   on('session.id', () =>
     options.isIdBroken ? { deny: 'no session id' } : { value: SESSION },
   )
   on('process.run', (_$, e) => {
     r.argv.push([...e.argv])
+    r.stdins.push(e.init?.stdin)
     const out = cli(e.argv)
 
     return out === null
@@ -288,27 +290,42 @@ test('classic.SessionStart still completes when the state write throws', async (
   expect(res).toEqual({})
 })
 
-const complete = ($: Engine, answer: string) =>
+const complete = ($: Engine, answer: string, e: { agentId?: string } = {}) =>
   $.turn.complete({
     answer,
     durationMs: 10,
     isAborted: false,
     turnId: 't1',
     reason: 'answer',
+    ...e,
   })
 
-test('turn.complete saves the checkpoint block to the CLI path, then toasts, and never alters the answer', async ($, on) => {
-  const r = rig(on, () => pathAnswer)
+test('turn.complete hands the checkpoint block to the CLI save verb on stdin, then toasts, and never alters the answer', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
   const answer = block('## Notes\n- one\n- two')
 
   const res = await complete($, answer)
 
   expect(res).toEqual({ text: answer })
   expect(r.argv).toHaveLength(1)
-  expect(nth(r.argv, 0)[3]).toBe('path')
+  expect(nth(r.argv, 0)[3]).toBe('save')
   expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
-  expect(r.writes).toEqual([{ path: NOTES, text: '## Notes\n- one\n- two' }])
+  expect(r.stdins).toEqual(['## Notes\n- one\n- two'])
+  // the CLI owns the (atomic) file write; the mod writes nothing itself
+  expect(r.writes).toHaveLength(0)
   expect(r.toasts).toEqual(['Checkpoint notes saved'])
+})
+
+test("turn.complete: a subagent's checkpoint block never reaches the parent's notes", async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+  const answer = block('subagent state')
+
+  const res = await complete($, answer, { agentId: 'agent-7' })
+
+  expect(res).toEqual({ text: answer })
+  expect(r.argv).toHaveLength(0)
+  expect(r.writes).toHaveLength(0)
+  expect(r.toasts).toHaveLength(0)
 })
 
 for (const [name, answer] of [
@@ -317,7 +334,7 @@ for (const [name, answer] of [
   ['an empty block', '```superheroes-checkpoint\n\n```\n'],
 ] as const) {
   test(`turn.complete with ${name}: no CLI call, no write, no toast`, async ($, on) => {
-    const r = rig(on, () => pathAnswer)
+    const r = rig(on, () => saveAnswer)
 
     const res = await complete($, answer)
 
@@ -329,11 +346,10 @@ for (const [name, answer] of [
 }
 
 for (const [name, cli, options] of [
-  ['the CLI exits 1', { exitCode: 1, stdout: '{"ok": false, "reason": "x"}' }, {}],
+  ['the CLI exits 1 (save refused)', { exitCode: 1, stdout: '{"ok": false, "reason": "empty-notes"}' }, {}],
   ['stdout is not JSON', { exitCode: 0, stdout: 'oops' }, {}],
   ['the CLI cannot run', null, {}],
-  ['the session id throws', pathAnswer, { isIdBroken: true }],
-  ['the notes write fails', pathAnswer, { isWriteBroken: true }],
+  ['the session id throws', saveAnswer, { isIdBroken: true }],
 ] as [string, Cli, Options][]) {
   test(`turn.complete fails open: ${name} — no toast, answer unchanged`, async ($, on) => {
     const r = rig(on, () => cli, options)

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -370,3 +371,87 @@ def test_cli_user_instructions_starting_with_dash_is_one_value(tmp_path):
 def test_cli_usage_error_exits_nonzero_without_json(tmp_path):
     code, out, r = _run(tmp_path, "path")
     assert code == 2 and out is None and r.stderr
+
+
+# ------------------------------------------- the mod's CLI + file handoff, for real (#1814)
+_PLUGIN_ROOT = os.path.dirname(_LIB)
+_MOD_SOURCE = os.path.join(_PLUGIN_ROOT, "hooks", "mod", "register.ts")
+_FALLBACK_HOOK = os.path.join(_PLUGIN_ROOT, "hooks", "compaction_context.py")
+
+
+def _run_stdin(tmp_path, stdin, *args):
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
+           "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")}
+    r = subprocess.run([sys.executable, "-B", _SCRIPT] + list(args), env=env, input=stdin,
+                       capture_output=True, text=True, timeout=20, cwd=str(tmp_path))
+    return r.returncode, (json.loads(r.stdout) if r.stdout.strip() else None)
+
+
+def test_mod_script_path_template_resolves_to_this_script():
+    # the mod builds `${$.plugin.root}/lib/compaction_directive.py`; the mod tests stub the
+    # process, so this is the check that the suffix lands on the real file under the plugin root
+    with open(_MOD_SOURCE, encoding="utf-8") as fh:
+        source = fh.read()
+    assert "`${$.plugin.root}/lib/compaction_directive.py`" in source
+    assert os.path.samefile(os.path.join(_PLUGIN_ROOT, "lib", "compaction_directive.py"), _SCRIPT)
+
+
+def test_mod_roundtrip_saved_notes_reach_compaction_then_fallback_defers(tmp_path):
+    env = _env(tmp_path)
+    notes = "## Checkpoint notes\nMode: workhorse\n- PR 12 is the record\n"
+    # turn.complete: the mod hands the block body to `save` on stdin
+    code, out = _run_stdin(tmp_path, notes, "save", "--session-id", SID)
+    assert code == 0 and out == {"ok": True, "path": cd.checkpoint_path(SID, env)}
+    with open(out["path"], encoding="utf-8") as fh:
+        assert fh.read() == notes
+    # session.compact: the mod asks for the instructions with the owner's text
+    code, out, _ = _run(tmp_path, "instructions", "--session-id", SID,
+                        "--user-instructions", "keep the API names")
+    assert code == 0 and out["notesFound"] is True
+    assert "PR 12 is the record" in out["instructions"]
+    assert "keep the API names" in out["instructions"]
+    # ... and writes the delivered marker the way the mod does
+    _touch(out["markerPath"], text=str(int(time.time() * 1000)))
+    # PreCompact fallback hook, same session: it consumes the marker and prints nothing
+    hook_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
+                "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")}
+    first = subprocess.run([sys.executable, "-B", _FALLBACK_HOOK], env=hook_env,
+                           input=json.dumps({"session_id": SID}), capture_output=True,
+                           text=True, timeout=20, cwd=str(tmp_path))
+    assert first.returncode == 0 and first.stdout == ""
+    assert not os.path.exists(out["markerPath"])
+    # the marker is single-use: a second compaction falls back to the hook's own text
+    second = subprocess.run([sys.executable, "-B", _FALLBACK_HOOK], env=hook_env,
+                            input=json.dumps({"session_id": SID}), capture_output=True,
+                            text=True, timeout=20, cwd=str(tmp_path))
+    assert second.returncode == 0 and "PR 12 is the record" in second.stdout
+
+
+def test_cli_save_refuses_empty_notes_and_keeps_the_last_good_ones(tmp_path):
+    env = _env(tmp_path)
+    assert _run_stdin(tmp_path, "good notes\n", "save", "--session-id", SID)[0] == 0
+    code, out = _run_stdin(tmp_path, "  \n", "save", "--session-id", SID)
+    assert (code, out) == (1, {"ok": False, "reason": "empty-notes"})
+    with open(cd.checkpoint_path(SID, env), encoding="utf-8") as fh:
+        assert fh.read() == "good notes\n"
+
+
+def test_cli_save_refuses_invalid_session_id(tmp_path):
+    code, out = _run_stdin(tmp_path, "notes", "save", "--session-id", "../x")
+    assert (code, out) == (1, {"ok": False, "reason": "session-id-invalid"})
+
+
+def test_save_notes_failure_leaves_the_previous_notes_and_no_temp_file(tmp_path, monkeypatch):
+    env = _env(tmp_path)
+    cd.save_notes(SID, "old notes\n", env)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cd.os, "replace", boom)
+    with pytest.raises(OSError):
+        cd.save_notes(SID, "new notes\n", env)
+    directory = os.path.dirname(cd.checkpoint_path(SID, env))
+    assert os.listdir(directory) == [SID + ".md"]
+    with open(cd.checkpoint_path(SID, env), encoding="utf-8") as fh:
+        assert fh.read() == "old notes\n"
