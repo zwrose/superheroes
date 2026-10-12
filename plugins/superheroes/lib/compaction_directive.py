@@ -38,6 +38,9 @@ DROP (recoverable from GitHub or the ledger — do not spend summary budget):
 - Verbatim tool output, file diffs, probe transcripts, and command stdout
 """
 
+# The post-compaction recap rule — one home; SessionStart recovery (session_context) reuses it.
+RECAP_INSTRUCTION = 'open your first reply with a short recap of "where we are and what you need from me".'
+
 DIRECTIVES = {
     "showrunner": """\
 Superheroes charter session — summarization directive for SHOWRUNNER.
@@ -92,9 +95,7 @@ PRESERVE (compact pointers and state, not raw artifacts):
 - Decisions made, and by whom
 - What is waiting on the owner
 
-""" + _DROP + """
-AFTER compaction, open your first reply with a short recap of "where we are and what you need from me".
-""",
+""" + _DROP + "\nAFTER compaction, " + RECAP_INSTRUCTION + "\n",
 }
 
 _NOTES_HEADER = ("Checkpoint notes for this session (written %s, file %s) "

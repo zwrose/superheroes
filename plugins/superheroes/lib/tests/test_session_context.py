@@ -517,7 +517,8 @@ def test_compact_no_charter_transcript_emits_generic_recovery_not_charter_recove
     out_default = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude")
     assert "### Charter recovery" not in out_compact
     assert "### Compaction recovery" in out_compact
-    assert "short recap of where we are and what you need from the owner" in out_compact
+    import compaction_directive
+    assert compaction_directive.RECAP_INSTRUCTION[1:] in out_compact
     assert "### Compaction recovery" not in out_default
 
 
@@ -535,7 +536,8 @@ def _cfg(tmp_path, monkeypatch):
     """Isolated config dir; returns this session's checkpoint notes path."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("HOME", str(tmp_path))
-    return os.path.join(str(tmp_path / "cfg"), "superheroes", "checkpoints", _SID + ".md")
+    import compaction_directive
+    return compaction_directive.checkpoint_path(_SID)
 
 
 @pytest.mark.parametrize("command", ["architect-discovery", "discovery"])

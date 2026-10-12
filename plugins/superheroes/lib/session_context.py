@@ -194,9 +194,9 @@ def _generic_recovery_parts(source, session_id):
             text += (
                 "The post-compaction summary is a paraphrase — if this session's checkpoint "
                 "notes file exists, re-read it: %s. " % notes_path)
-        text += (
-            "Open your first reply with a short recap of where we are and what you need "
-            "from the owner.")
+        import compaction_directive
+        instruction = compaction_directive.RECAP_INSTRUCTION
+        text += instruction[0].upper() + instruction[1:]
         return text, notes_path or ""
     except Exception as exc:
         _breadcrumb("Compaction recovery", type(exc).__name__)
