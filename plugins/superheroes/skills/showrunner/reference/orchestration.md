@@ -8,6 +8,7 @@
 - [The launcher provisions each build's worktree](#the-launcher-provisions-each-builds-worktree)
 - [iPhone lanes: launching and reaping their phones](#iphone-lanes-launching-and-reaping-their-phones)
 - [Liveness sweep and wave watch](#liveness-sweep-and-wave-watch)
+- [Lapsed-pass parks and the send-back](#lapsed-pass-parks-and-the-send-back)
 - [Adoption mechanics](#adoption-mechanics)
 
 # Orchestration — launcher, ledger, and wave mechanics
@@ -235,6 +236,55 @@ probe has three legs — `resultProduction`, `completionDetection`, `progressTel
 live-review failure rate. The canary strengthens what the `engine-auth` check must mean in a wave;
 it does not add a check to the preflight list. The walk and the owner's launch-without word live in
 `skills/showrunner/reference/dispatch-preflight.md`.
+
+## Lapsed-pass parks and the send-back
+
+A cloud build's PR is parked with the review not run when the reviewer pass lapsed mid-build. The
+builder's park comment opens "Parked: the review did not run." `lib/cloud_parked.py` tells that park
+from any other and keeps the record, in `cloud-parked.json` beside the launch ledger.
+
+**Tell the owner.** Run `python3 -B <plugin root>/lib/cloud_parked.py notice --repo-root <root> --repo
+<owner/name> --pr <n>` when a cloud lane ends parked, and whenever you read a cloud build's PR (a vet,
+a sweep, a builder's comment) and see the park. Running it once records the PR; running it again is
+harmless.
+
+- `kind: lapsed-pass`: put `text` in your next message to the owner, as it is. It names the PR, the
+  reason and the renewal.
+- `kind: not-lapsed-pass`: a review that did not run for any other reason is reported as
+  `rubric/review-discipline.md` says, with no advice to renew the pass.
+- A lapsed pass still shows up in the launch report and the "Still on your machine" line
+  (`skills/showrunner/reference/dispatch-preflight.md` § Where a build runs). The parked notice comes
+  on top of them, never in place of them.
+
+**Send it back.** Run `python3 -B <plugin root>/lib/cloud_parked.py send-back --repo-root <root>`
+after every `cloud_pass.py record-confirmation` that writes, after every passed setup check, and at
+each gardening pass while any parked PR is still recorded. The pass command alone renews nothing:
+until a cloud session confirms the new pass, `send-back` lists the PR under `notRenewed`. It marks
+nothing sent, so a listed PR stays listed until `sent` records it.
+
+For each item under `sendBack`, send `message` to the item's `cloudSessionName` as
+`skills/showrunner/reference/wave-watch.md` § Answering a builder note sends an answer. On the same
+account that is `SendMessage`. On another account (`configDir`) it is the relay's `ensure`,
+`compose`, `SendMessage`, `check`. Then record it:
+
+- After `delivered: true`, run `python3 -B <plugin root>/lib/cloud_parked.py sent --repo-root <root>
+  --repo <owner/name> --pr <n>`. A second call is `unchanged`.
+- After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed`, run `sent` too. The builder
+  may already hold the text, so never resend it automatically; tell the owner.
+- After an `ensure` refusal or `relay-send-failed`, do not run `sent`. Nothing reached the builder,
+  and the PR stays listed for the next `send-back`.
+
+No further word from the owner is needed for any of this. The message resumes the parked cloud
+session, which runs its review and hands back as usual (`skills/workhorse/reference/cloud.md` § Review
+has the builder's side).
+
+**The other lists.**
+
+- `skipped`: nothing to do. The PR closed before the renewal, or the owner already let it through.
+- `noLane`: the PR has no cloud lane session to send to. Tell the owner which PR it is and that its
+  review needs a fresh launch.
+- `unread`: a read failed. Run `send-back` again later, and tell the owner if it keeps failing.
+- `notRenewed`: wait for the confirmation.
 
 ## Adoption mechanics
 
