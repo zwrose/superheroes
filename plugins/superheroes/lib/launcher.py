@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import functools
 import json
 import os
 import platform
@@ -2389,6 +2390,32 @@ def _cloud_base_refusal(repo_root, stamped, env):
     return None
 
 
+def _holds_launch_ownership(func):
+    """Run `func` (a launch) holding its per-launch ownership lock from before it reserves.
+
+    The lock (`ll.acquire_launch_ownership`) is taken before any `reserved` record is written and
+    released only when the launch returns, on every path (success, refusal, exception), so a live
+    holder is positive evidence the launch is still running: the never-started repair refuses on
+    it. The decorator mints the launch id and hands it to `func` as `_launch_id`.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        launch_id = "launch-%s" % secrets.token_hex(8)
+        # repo_root and env are the first and seventh parameters of `launch_build`.
+        repo_root = args[0] if args else kwargs.get("repo_root")
+        env = args[6] if len(args) > 6 else kwargs.get("env")
+        ownership = ll.acquire_launch_ownership(repo_root, launch_id, env=env)
+        if not ownership["ok"]:
+            return _fail("launch-ownership-unavailable:%s" % ownership["reason"],
+                         launchId=launch_id)
+        try:
+            return func(*args, _launch_id=launch_id, **kwargs)
+        finally:
+            ll.release_launch_ownership(ownership["path"])
+    return wrapper
+
+
+@_holds_launch_ownership
 def launch_build(
     repo_root,
     issue,
@@ -2418,6 +2445,7 @@ def launch_build(
     cloud_environment=None,
     cloud_spawn_fn=None,
     cloud_spawn_timeout=None,
+    _launch_id=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry.
 
@@ -2443,7 +2471,7 @@ def launch_build(
         _DEVICE_HUB_POLL_SECONDS if device_hub_poll_seconds is None else device_hub_poll_seconds
     )
 
-    launch_id = "launch-%s" % secrets.token_hex(8)
+    launch_id = _launch_id or "launch-%s" % secrets.token_hex(8)
     deadline = time.monotonic() + total_deadline_seconds
 
     batch_id = premise.get("batchId") if isinstance(premise, dict) else None

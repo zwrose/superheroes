@@ -8,10 +8,15 @@ names a remedy: a lane whose record actually landed is a normal success.
 """
 import json
 import os
+import socket
+import subprocess
+import sys
 import time
 
 import pytest
 
+import file_lock
+import hostinfo
 import launch_ledger as ll
 
 from test_launch_ledger import _declare, _init_repo, _ledger_env, _reserved, _started  # noqa: E402
@@ -54,16 +59,28 @@ def _cloud_lane(tmp_path, monkeypatch, launch_id="c1"):
     return _setup_cloud_lane(tmp_path, monkeypatch, launch_id, started=False)
 
 
-def _aged(place):
-    """A clock reading past the launch window of a lane of this place, reserved just now."""
-    return time.time() + ll.launch_window_seconds(place) + 1
+def _owner_lock(repo, launch_id):
+    located = ll.launch_ownership_lock_path(repo, launch_id)
+    assert located["ok"], located
+    return located["path"]
 
 
-def _age_the_clock(monkeypatch, place):
-    """Move the ledger's clock past the launch window, for the CLI verb that takes no clock."""
-    aged_by = ll.launch_window_seconds(place) + 1
-    real_time = time.time
-    monkeypatch.setattr(ll.time, "time", lambda: real_time() + aged_by)
+def _dead_pid():
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _write_dead_owner(path):
+    """A holder record naming a pid that is not running, on this host and this boot."""
+    holder = {
+        "pid": _dead_pid(), "host": socket.gethostname(),
+        "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "bootId": hostinfo.boot_id(), "ttl": file_lock.DEFAULT_TTL,
+    }
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(holder, fh)
 
 
 def _lane(repo, launch_id):
@@ -135,9 +152,7 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
         else _local_lane(tmp_path, monkeypatch)
     )
     launch_id = "c1" if place == "cloud" else "l1"
-    result = ll.repair_never_started(
-        repo, launch_id, evidence="the launch command never ran", now=_aged(place),
-    )
+    result = ll.repair_never_started(repo, launch_id, evidence="the launch command never ran")
     assert result == {
         "ok": True, "repaired": "terminal", "launchId": launch_id, "kind": "refused",
     }
@@ -149,90 +164,158 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
     assert refused["evidence"] == "the launch command never ran"
 
 
-# --- the launch window: a fresh reservation is never terminalized ------------------------------
+# --- launcher ownership: only a stopped launcher's lane is terminalized --------------------------
+
+
+def _lock_is_held(path):
+    try:
+        file_lock.acquire(path)
+    except file_lock.LockHeld:
+        return True
+    file_lock.release(path)
+    return False
 
 
 @pytest.mark.parametrize("place", ["cloud", "local"])
-def test_repair_without_pending_refuses_a_lane_still_inside_its_launch_window(
+def test_repair_without_pending_refuses_a_lane_whose_launcher_holds_its_ownership_lock(
     tmp_path, monkeypatch, place,
 ):
-    # axis: lane-may-be-launching — the launcher may still spawn and append `started`.
+    # axis: lane-may-be-launching — a live owner may still spawn and append `started`.
     repo = (
         _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
         else _local_lane(tmp_path, monkeypatch)
     )
     launch_id = "c1" if place == "cloud" else "l1"
     before = ll.read(repo)["records"]
-    reserved_ts = _lane(repo, launch_id)["reservedTs"]
-    window = ll.launch_window_seconds(place)
-    just_inside = reserved_ts + window - 1
-    result = ll.repair_never_started(repo, launch_id, evidence="never ran", now=just_inside)
-    assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
-    assert result["reason"] == "lane-may-be-launching"
-    assert ll.read(repo)["records"] == before
-    # The aged side of the same lane repairs.
-    aged = ll.repair_never_started(
-        repo, launch_id, evidence="never ran", now=reserved_ts + window + 1,
-    )
-    assert aged["ok"] is True and aged["repaired"] == "terminal"
+    owner = _owner_lock(repo, launch_id)
+    file_lock.acquire(owner)
+    try:
+        result = ll.repair_never_started(repo, launch_id, evidence="never ran")
+        assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
+        assert result["reason"] == "lane-may-be-launching"
+        assert ll.read(repo)["records"] == before
+        assert _lock_is_held(owner), "a refused repair must leave the owner's lock alone"
+    finally:
+        file_lock.release(owner)
+    # Once the owner lets go, the same lane repairs.
+    released = ll.repair_never_started(repo, launch_id, evidence="never ran")
+    assert released["ok"] is True and released["repaired"] == "terminal"
 
 
 @pytest.mark.parametrize("place", ["cloud", "local"])
-def test_repair_restores_a_pending_started_inside_the_launch_window(tmp_path, monkeypatch, place):
+def test_repair_without_pending_proceeds_when_the_owner_is_dead(tmp_path, monkeypatch, place):
+    repo = (
+        _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
+        else _local_lane(tmp_path, monkeypatch)
+    )
+    launch_id = "c1" if place == "cloud" else "l1"
+    owner = _owner_lock(repo, launch_id)
+    _write_dead_owner(owner)
+    result = ll.repair_never_started(repo, launch_id, evidence="never ran")
+    assert result["ok"] is True and result["repaired"] == "terminal"
+    assert _lane(repo, launch_id)["terminal"] is True
+    assert not os.path.lexists(owner), "the repair releases the lock it took"
+
+
+@pytest.mark.parametrize("place", ["cloud", "local"])
+def test_repair_without_pending_proceeds_when_no_ownership_lock_exists(
+    tmp_path, monkeypatch, place,
+):
+    # A lane reserved by a launcher that never took the lock has no lock file to find.
+    repo = (
+        _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
+        else _local_lane(tmp_path, monkeypatch)
+    )
+    launch_id = "c1" if place == "cloud" else "l1"
+    owner = _owner_lock(repo, launch_id)
+    assert not os.path.lexists(owner)
+    result = ll.repair_never_started(repo, launch_id, evidence="never ran")
+    assert result["ok"] is True and result["repaired"] == "terminal"
+    assert not os.path.lexists(owner)
+
+
+def test_repair_without_pending_refuses_when_the_ownership_lock_cannot_be_settled(
+    tmp_path, monkeypatch,
+):
+    # Fail closed: an unreadable lock is neither confirmed dead nor absent.
+    repo = _cloud_lane(tmp_path, monkeypatch)
+    before = ll.read(repo)["records"]
+    monkeypatch.setattr(ll, "_launch_ownership_lock_path_or_none", lambda *a: None)
+    result = ll.repair_never_started(repo, "c1", evidence="never ran")
+    assert result == {"ok": False, "reason": "launch-ownership-lock-unavailable"}
+    assert ll.read(repo)["records"] == before
+
+
+def test_repair_holds_the_ownership_lock_across_its_terminal_write(tmp_path, monkeypatch):
+    repo = _cloud_lane(tmp_path, monkeypatch)
+    owner = _owner_lock(repo, "c1")
+    seen = []
+    real_terminalize = ll.terminalize
+
+    def watching(*a, **k):
+        seen.append(_lock_is_held(owner))
+        return real_terminalize(*a, **k)
+
+    monkeypatch.setattr(ll, "terminalize", watching)
+    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"] is True
+    assert seen == [True]
+
+
+@pytest.mark.parametrize("place", ["cloud", "local"])
+def test_repair_restores_a_pending_started_while_the_launcher_holds_its_lock(
+    tmp_path, monkeypatch, place,
+):
     repo = (
         _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
         else _local_lane(tmp_path, monkeypatch)
     )
     launch_id = "c1" if place == "cloud" else "l1"
     pending = _cloud_started(launch_id) if place == "cloud" else _started(launch_id)
-    result = ll.repair_never_started(repo, launch_id, pending_started=pending)
+    owner = _owner_lock(repo, launch_id)
+    file_lock.acquire(owner)
+    try:
+        result = ll.repair_never_started(repo, launch_id, pending_started=pending)
+    finally:
+        file_lock.release(owner)
     assert result == {"ok": True, "repaired": "started", "launchId": launch_id}
 
 
-def test_the_launch_window_is_the_sum_of_every_bound_between_reserve_and_started():
-    import launcher
-    append = (
-        launcher._CLOUD_APPEND_TRIES * ll._DEFAULT_LOCK_TIMEOUT
-        + (launcher._CLOUD_APPEND_TRIES - 1) * launcher._CLOUD_APPEND_PAUSE_SECONDS
-    )
-    # The remote-base re-check runs two steps, each bounded by the launcher's own timeout.
-    assert ll.REMOTE_BASE_CHECK_STEPS == 2
-    assert ll.launch_window_seconds("cloud") == (
-        ll.REMOTE_BASE_CHECK_STEPS * launcher._WORKTREE_GIT_TIMEOUT
-        + launcher._CLOUD_SPAWN_TIMEOUT_SECONDS
-        + append
-    )
-    assert ll.launch_window_seconds("local") == (
-        launcher._TOTAL_DEADLINE_SECONDS + launcher._IPHONE_CEILING_SECONDS + append
-    )
-
-
-def test_raising_any_bound_raises_the_launch_window(monkeypatch):
-    base_cloud = ll.launch_window_seconds("cloud")
-    base_local = ll.launch_window_seconds("local")
-    for name in ("CLOUD_SPAWN_TIMEOUT_SECONDS", "REMOTE_BASE_STEP_TIMEOUT_SECONDS",
-                 "STARTED_APPEND_TRIES", "STARTED_APPEND_PAUSE_SECONDS", "_DEFAULT_LOCK_TIMEOUT"):
-        monkeypatch.setattr(ll, name, getattr(ll, name) + 10)
-        assert ll.launch_window_seconds("cloud") > base_cloud
-        base_cloud = ll.launch_window_seconds("cloud")
-    for name in ("LAUNCH_DEADLINE_SECONDS", "IPHONE_CEILING_SECONDS"):
-        monkeypatch.setattr(ll, name, getattr(ll, name) + 10)
-        assert ll.launch_window_seconds("local") > base_local
-        base_local = ll.launch_window_seconds("local")
-
-
-def test_a_cloud_reservation_older_than_the_spawn_timeout_but_inside_the_window_refuses(
+def test_a_cloud_launch_holds_its_ownership_lock_while_spawning_and_leaves_none(
     tmp_path, monkeypatch,
 ):
-    repo = _cloud_lane(tmp_path, monkeypatch)
-    before = ll.read(repo)["records"]
-    reserved_ts = _lane(repo, "c1")["reservedTs"]
-    # Past the spawn timeout alone, while a slow remote-base check can still be running.
-    now = reserved_ts + ll.CLOUD_SPAWN_TIMEOUT_SECONDS + 1
-    assert now - reserved_ts < ll.launch_window_seconds("cloud")
-    result = ll.repair_never_started(repo, "c1", evidence="never ran", now=now)
-    assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
-    assert ll.read(repo)["records"] == before
+    repo = _cloud_repo(tmp_path)
+    observed = []
+    inner = _fake_spawn()
+
+    def spawn(argv, cwd, log_path, child_env, timeout):
+        # Inside the spawn the lane is reserved and the launcher is live: repair must refuse.
+        launch_id = next(iter(_lanes(repo)))
+        owner = _owner_lock(repo, launch_id)
+        observed.append((
+            os.path.lexists(owner),
+            ll.repair_never_started(repo, launch_id, evidence="never ran"),
+        ))
+        return inner(argv, cwd, log_path, child_env, timeout)
+
+    result = _launch(repo, tmp_path, spawn)
+    assert result["ok"] is True, result
+    assert observed == [(True, {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING})]
+    assert not os.path.lexists(_owner_lock(repo, result["launchId"]))
+
+
+def test_a_cloud_launch_that_raises_still_releases_its_ownership_lock(tmp_path, monkeypatch):
+    repo = _cloud_repo(tmp_path)
+    seen = []
+
+    def spawn(argv, cwd, log_path, child_env, timeout):
+        seen.append(_owner_lock(repo, next(iter(_lanes(repo)))))
+        raise RuntimeError("spawn blew up")
+
+    try:
+        _launch(repo, tmp_path, spawn)
+    except RuntimeError:
+        pass
+    assert seen and not os.path.lexists(seen[0])
 
 
 # --- refusals ----------------------------------------------------------------------------------
@@ -253,7 +336,7 @@ def test_repair_refuses_a_lane_that_already_has_started(tmp_path, monkeypatch):
 
 def test_repair_refuses_a_terminal_lane(tmp_path, monkeypatch):
     repo = _cloud_lane(tmp_path, monkeypatch)
-    assert ll.repair_never_started(repo, "c1", evidence="never ran", now=_aged("cloud"))["ok"]
+    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"]
     before = ll.read(repo)["records"]
     for kwargs in ({"pending_started": _cloud_started("c1")}, {"evidence": "again"}):
         result = ll.repair_never_started(repo, "c1", **kwargs)
@@ -361,9 +444,7 @@ def test_repair_refuses_when_the_lock_is_held_by_another_holder(tmp_path, monkey
         ll._release_lock(lock["path"])
     assert result == {"ok": False, "reason": "lock-unavailable"}
     assert ll.read(repo)["records"] == before
-    assert ll.repair_never_started(
-        repo, "c1", evidence="never ran", now=_aged("cloud"),
-    )["ok"] is True
+    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"] is True
 
 
 # --- the launcher reads the ledger before it names a remedy ------------------------------------
@@ -520,7 +601,6 @@ def test_cli_repair_lane_restores_started_from_a_pending_file(tmp_path, monkeypa
 
 def test_cli_repair_lane_records_the_terminal_event_from_evidence(tmp_path, monkeypatch, capsys):
     repo = _cloud_lane(tmp_path, monkeypatch)
-    _age_the_clock(monkeypatch, "cloud")
     code = L.main([
         "repair-lane", "--repo-root", repo, "--launch-id", "c1", "--evidence", "never ran",
     ])

@@ -55,18 +55,11 @@ AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
 CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
 REPAIR_PENDING_STARTED_INVALID = "pending-started-invalid"
 REPAIR_LANE_MAY_BE_LAUNCHING = "lane-may-be-launching"
-# The launcher's own timeouts, kept here so the repair's launch window and the launcher read one
-# home (the launcher aliases these). A cloud launch waits at most the spawn timeout for its
-# command; a local launch is bounded by the launch deadline, which the iPhone steps extend by
-# exactly the time they took, up to the iPhone ceiling. Between the `reserved` record and the
-# `started` append a cloud launch also re-checks the base on the remote (two bounded steps: the
-# origin address, then the GitHub lookup) and the append is tried up to the append tries with a
-# pause between tries, each try waiting at most the ledger-lock timeout.
+# The launcher's own timeouts, kept here as one home (the launcher aliases these).
 CLOUD_SPAWN_TIMEOUT_SECONDS = 120
 LAUNCH_DEADLINE_SECONDS = 300
 IPHONE_CEILING_SECONDS = 90
 REMOTE_BASE_STEP_TIMEOUT_SECONDS = 180
-REMOTE_BASE_CHECK_STEPS = 2
 STARTED_APPEND_TRIES = 3
 STARTED_APPEND_PAUSE_SECONDS = 0.2
 VET_RULINGS = ("ready", "not-ready", "parked-blocker")
@@ -2100,43 +2093,79 @@ def _repair_refusal(reason):
     return {"ok": False, "reason": reason}
 
 
-def launch_window_seconds(place):
-    """The longest a launch of this place can take from its `reserved` record to its `started` append.
+_OWNERSHIP_LOCK_PREFIX = "ownership-"
+_LAUNCH_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
-    The sum of the bounds of every step the launcher runs in that interval, each read from the
-    constant that already bounds it: for a cloud lane the remote-base re-check (each step's
-    timeout) and the cloud spawn timeout; for a local lane the launch deadline plus the iPhone
-    ceiling (the deadline is extended by the time the iPhone steps took); then, for both, the
-    `started` append's tries, each waiting at most the ledger-lock timeout, with the pause
-    between tries. Raising any bound raises the window.
+
+def launch_ownership_lock_path(repo_root, launch_id, env=None):
+    """The per-launch ownership lock's path, beside the ledger. The one home of the derivation.
+
+    A launcher holds this lock from before it writes its `reserved` record until `launch_build`
+    returns, so a live holder is positive evidence that the launch is still running. Never raises.
     """
-    append = (
-        STARTED_APPEND_TRIES * _DEFAULT_LOCK_TIMEOUT
-        + (STARTED_APPEND_TRIES - 1) * STARTED_APPEND_PAUSE_SECONDS
+    if not isinstance(launch_id, str) or _LAUNCH_ID_RE.fullmatch(launch_id) is None:
+        return {"ok": False, "path": None, "reason": "launch-id-invalid"}
+    located = ledger_path(repo_root, env=env)
+    if not located["ok"]:
+        return {"ok": False, "path": None, "reason": located["reason"]}
+    path = os.path.join(
+        os.path.dirname(located["path"]), _OWNERSHIP_LOCK_PREFIX + launch_id + _LOCK_SUFFIX,
     )
-    if place == PLACE_CLOUD:
-        return (
-            REMOTE_BASE_CHECK_STEPS * REMOTE_BASE_STEP_TIMEOUT_SECONDS
-            + CLOUD_SPAWN_TIMEOUT_SECONDS
-            + append
-        )
-    return LAUNCH_DEADLINE_SECONDS + IPHONE_CEILING_SECONDS + append
+    return {"ok": True, "path": path, "reason": None}
+
+
+def acquire_launch_ownership(repo_root, launch_id, env=None):
+    """Take the launch's ownership lock (no waiting). Never raises.
+
+    Returns `{"ok", "path", "reason"}`; the caller releases `path` with
+    `release_launch_ownership` once its launch has returned, on every path.
+    """
+    located = launch_ownership_lock_path(repo_root, launch_id, env=env)
+    if not located["ok"]:
+        return located
+    try:
+        # The ledger directory is made (and checked private) here, so the lock never creates it loose.
+        opened = _open_ledger_dirs(repo_root, env=env)
+        if not opened["ok"]:
+            return {"ok": False, "path": None, "reason": opened["reason"]}
+        _close_fd(opened["repo_fd"])
+        _close_fd(opened["root_fd"])
+        file_lock.acquire(located["path"])
+    except file_lock.LockHeld:
+        return {"ok": False, "path": None, "reason": "launch-ownership-held"}
+    except Exception:
+        return {"ok": False, "path": None, "reason": "launch-ownership-lock-unavailable"}
+    return {"ok": True, "path": located["path"], "reason": None}
+
+
+def release_launch_ownership(lock_path):
+    """Release a lock `acquire_launch_ownership` took. Never raises."""
+    if lock_path is not None:
+        _release_lock(lock_path)
+
+
+def _launch_ownership_lock_path_or_none(repo_root, launch_id, env):
+    located = launch_ownership_lock_path(repo_root, launch_id, env=env)
+    return located["path"] if located["ok"] else None
 
 
 def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None, env=None,
-                         lock_timeout=_DEFAULT_LOCK_TIMEOUT, now=None):
+                         lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Bring a never-started lane (reserved, no `started`, not terminal) to a readable state.
 
     One locked operation, and it refuses every lane that is not never-started: with
     `pending_started` it appends that `started` record; without it, it records the lane's terminal
-    event, and only once the lane's reservation is older than the launch window
-    (`launch_window_seconds`): within it the original launcher may still spawn and append
-    `started`, so the terminal repair refuses `lane-may-be-launching` (the pending-record restore
-    is allowed at any age). A lane that already has its `started` record is ended with
-    `record_outcome`, never repaired here. `now` is the clock, for tests. Never raises.
+    event, and only when the launch that reserved the lane has stopped: it takes that launch's
+    ownership lock (`acquire_launch_ownership`'s lock) with dead-holder reclaim and holds it across
+    its terminal write. A live holder means the launch is still running, so the terminal repair
+    refuses `lane-may-be-launching`; a holder confirmed dead, or no lock at all, lets it proceed;
+    any other lock failure refuses (fail closed). The pending-record restore never ends a lane and
+    needs no ownership. A lane that already has its `started` record is ended with
+    `record_outcome`, never repaired here. Never raises.
     """
     lock_path = None
     locked = False
+    owned = None
     try:
         lock_result = _ensure_lock_file(repo_root, env=env)
         if not lock_result["ok"]:
@@ -2183,14 +2212,17 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
 
         if not isinstance(evidence, str) or not evidence.strip():
             return _repair_refusal("outcome-evidence-empty")
-        # axis: a missing `started` does not prove the launcher stopped — within the launch window
-        # it may still spawn and append, and a terminal event written now would orphan its session.
-        reserved_ts = info.get("reservedTs")
-        clock = time.time() if now is None else now
-        if not _is_number(reserved_ts) or (
-            clock - reserved_ts < launch_window_seconds(info.get("place"))
-        ):
+        # axis: a missing `started` does not prove the launcher stopped — only its ownership lock
+        # does: a live holder may still spawn and append, and a terminal event written now would
+        # orphan its session.
+        owner = _launch_ownership_lock_path_or_none(repo_root, launch_id, env)
+        if owner is None:
+            return _repair_refusal("launch-ownership-lock-unavailable")
+        try:
+            file_lock.acquire(owner, reclaim_dead_holder=True)
+        except file_lock.LockHeld:
             return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
+        owned = owner
         terminal = terminalize(
             repo_root, launch_id, child_ever_spawned=False, reason="never-started",
             stage="never-started", evidence=evidence, env=env, _lock_held=True,
@@ -2203,6 +2235,8 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
     except Exception:
         return _repair_refusal("repair-never-started-failed")
     finally:
+        if owned is not None:
+            _release_lock(owned)
         if locked and lock_path is not None:
             _release_lock(lock_path)
 
