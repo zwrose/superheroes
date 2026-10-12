@@ -797,18 +797,29 @@ def test_B9_E3_an_unreadable_ledger_gives_the_refusal(world, how):
     assert LR.still_line(repo, readiness_fn=_fn(ready=False, reason="no-setup")) is None
 
 
-def test_still_check_never_raises_without_a_repository_or_with_a_reader_that_breaks(
-        tmp_path, monkeypatch):
+def test_still_check_never_raises_without_a_repository(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     plain = str(tmp_path / "not-a-repository")
     os.mkdir(plain)
     assert LR.still_line(plain, readiness_fn=_fn()) is None
 
+
+@pytest.mark.parametrize("error", [
+    FileNotFoundError("No usable temporary directory found"),
+    RecursionError("maximum recursion depth exceeded"),
+    RuntimeError("ledger reader exploded"),
+])
+def test_B9_a_ledger_reader_that_raises_gives_the_refusal(world, monkeypatch, error):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+
     def boom(*args, **kwargs):
-        raise RuntimeError("ledger reader exploded")
+        raise error
 
     monkeypatch.setattr(ll, "read", boom)
-    assert LR.still_check(plain, readiness_fn=_fn()) == {"line": None, "refused": None}
+    assert LR.still_check(repo, readiness_fn=_fn(ready=False, reason="no-setup")) == {
+        "line": None, "refused": "still-ledger-unreadable"}
+    assert LR.still_line(repo, readiness_fn=_fn(ready=False, reason="no-setup")) is None
 
 
 # ---------------------------------------------------------------- the CLI
@@ -850,5 +861,17 @@ def test_B9_cli_still_on_an_unreadable_ledger_refuses_and_exits_one(world, capsy
     repo, _store = world
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
     _spoil(repo, "corrupt")
+    assert launcher.main(["still", "--repo-root", repo]) == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "still-ledger-unreadable"}
+
+
+def test_B9_cli_still_on_a_ledger_reader_that_raises_refuses_and_exits_one(world, monkeypatch, capsys):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+
+    def boom(*args, **kwargs):
+        raise FileNotFoundError("No usable temporary directory found")
+
+    monkeypatch.setattr(ll, "read", boom)
     assert launcher.main(["still", "--repo-root", repo]) == 1
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "still-ledger-unreadable"}

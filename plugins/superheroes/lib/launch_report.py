@@ -270,7 +270,11 @@ def still_check(repo_root, *, root=None, readiness_fn=None):
     when the launch ledger could not be read. Nothing is saved: the line is worked out from the
     ledger and from the cloud's readiness now. Never raises."""
     try:
-        read = ll.read(repo_root)
+        try:
+            read = ll.read(repo_root)
+        except Exception:
+            # a reader that breaks leaves the ledger's state unknown: refuse, never read it as no reminder
+            return {"line": None, "refused": STILL_LEDGER_UNREADABLE}
         if read["state"] == "missing":
             return {"line": None, "refused": None}
         if read["state"] != "ok":
