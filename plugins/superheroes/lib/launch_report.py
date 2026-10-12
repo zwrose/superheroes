@@ -263,12 +263,12 @@ def _still_fixed(candidate, now, cwd, root):
         return False
 
 
-def still_check(cwd, *, root=None, readiness_fn=None):
+def still_check(repo_root, *, root=None, readiness_fn=None):
     """The line to repeat at the top of a later message (None when there is none), and the refusal
     when the launch ledger could not be read. Nothing is saved: the line is worked out from the
     ledger and from the cloud's readiness now. Never raises."""
     try:
-        read = ll.read(cwd)
+        read = ll.read(repo_root)
         if read["state"] == "missing":
             return {"line": None, "refused": None}
         if read["state"] != "ok":
@@ -280,11 +280,11 @@ def still_check(cwd, *, root=None, readiness_fn=None):
         if not candidates:
             return {"line": None, "refused": None}
         try:
-            now = (readiness_fn or cloud_ready.readiness)(cwd, reported=None, root=root)
+            now = (readiness_fn or cloud_ready.readiness)(repo_root, reported=None, root=root)
         except Exception:
             now = None
         # axis: a fixed candidate is skipped, so the next one still standing shows — see bite-proof record wo_a_launch_report
-        standing = [c for c in candidates if not _still_fixed(c, now, cwd, root)]
+        standing = [c for c in candidates if not _still_fixed(c, now, repo_root, root)]
         if not standing:
             return {"line": None, "refused": None}
         # the reason first in the cloud check's order; of equals, the one that carries the recheck
@@ -301,6 +301,6 @@ def still_check(cwd, *, root=None, readiness_fn=None):
         return {"line": None, "refused": None}
 
 
-def still_line(cwd, *, root=None, readiness_fn=None):
+def still_line(repo_root, *, root=None, readiness_fn=None):
     """The line to repeat at the top of a later message, or None. Never raises."""
-    return still_check(cwd, root=root, readiness_fn=readiness_fn)["line"]
+    return still_check(repo_root, root=root, readiness_fn=readiness_fn)["line"]
