@@ -95,6 +95,7 @@ def _payments_repo(tmp_path):
 
 
 def test_a_two_line_change_to_a_payments_file_gets_the_full_lane(tmp_path):
+    # axis: the touched floor; a change touching a risk area leaving the floor below full, or the lane below it, whatever its size
     # the paths are the only input about the change: there is no size, line count or diff parameter
     assert list(inspect.signature(L.call).parameters) == ["cwd", "paths", "proposed", "root"]
     repo, store = _payments_repo(tmp_path)
@@ -108,6 +109,7 @@ def test_a_two_line_change_to_a_payments_file_gets_the_full_lane(tmp_path):
 
 
 def test_a_model_that_judged_the_payments_change_trivial_still_gets_the_full_lane(tmp_path):
+    # axis: the touched floor over a light proposal; the proposal lowering the lane or being taken
     repo, store = _payments_repo(tmp_path)
     got = L.call(repo, ["src/payments/charge.py"], proposed="light", root=store)
     assert got["floor"] == "full" and got["lane"] == "full"
@@ -116,6 +118,7 @@ def test_a_model_that_judged_the_payments_change_trivial_still_gets_the_full_lan
 
 
 def test_a_change_outside_every_area_takes_a_proposal_at_or_above_no_floor(tmp_path):
+    # axis: the touched floor's other side; a floor raised with no area touched, or a valid proposal not taken
     repo, store = _payments_repo(tmp_path)
     full = L.call(repo, ["docs/readme.md"], proposed="full", root=store)
     assert full["floor"] is None and full["lane"] == "full" and full["proposalTaken"] is True
@@ -133,6 +136,7 @@ def test_a_change_outside_every_area_takes_a_proposal_at_or_above_no_floor(tmp_p
 
 
 def test_e1_risk_areas_not_set_for_any_reason_get_the_floor_full(tmp_path):
+    # axis: the not-set floor; missing, empty or unreadable risk areas leaving the floor open or the lane below full
     missing = tmp_path / "missing"
     empty = tmp_path / "empty"
     unreadable = tmp_path / "unreadable"
@@ -154,6 +158,7 @@ def test_e1_risk_areas_not_set_for_any_reason_get_the_floor_full(tmp_path):
 
 
 def test_e2_an_all_unmatchable_change_with_set_areas_gets_the_floor_full_never_light(tmp_path):
+    # axis: the unmatchable floor; a change of only unmatchable paths leaving the floor open or the lane below full
     repo, store = _payments_repo(tmp_path)
     paths = ["/etc/passwd", "../outside.py", "src/../../x.py", ""]
     got = L.call(repo, paths, proposed="light", root=store)
@@ -164,6 +169,7 @@ def test_e2_an_all_unmatchable_change_with_set_areas_gets_the_floor_full_never_l
 
 
 def test_e3_a_mixed_matchable_and_unmatchable_change_touching_nothing_gets_the_floor_full(tmp_path):
+    # axis: the unmatchable floor; an unmatchable path beside a matchable one that touches nothing leaving the floor open
     repo, store = _payments_repo(tmp_path)
     got = L.call(repo, ["docs/readme.md", "/abs/path.py"], proposed="micro", root=store)
     assert got["touched"] == [] and got["unmatchable"] == ["/abs/path.py"]
@@ -172,6 +178,7 @@ def test_e3_a_mixed_matchable_and_unmatchable_change_touching_nothing_gets_the_f
 
 
 def test_e4_an_empty_paths_list_gets_the_floor_full_even_with_set_areas(tmp_path):
+    # axis: the no-paths floor; an empty paths list leaving the floor open or the lane below full
     repo, store = _payments_repo(tmp_path)
     got = L.call(repo, [], proposed="light", root=store)
     assert got["riskAreas"]["state"] == "set"
@@ -181,6 +188,7 @@ def test_e4_an_empty_paths_list_gets_the_floor_full_even_with_set_areas(tmp_path
 
 @pytest.mark.parametrize("paths", [None, "src/payments/charge.py", ("a",), {"a": 1}, ["a", 3], [None]])
 def test_e5_a_paths_value_that_is_not_a_list_of_strings_gets_the_floor_full(tmp_path, paths):
+    # axis: the not-set floor; a paths value that is not a list of strings leaving the floor open or the lane below full
     repo, store = _payments_repo(tmp_path)
     got = L.call(repo, paths, proposed="light", root=store)
     assert got["riskAreas"]["state"] == "not-set"
@@ -190,6 +198,7 @@ def test_e5_a_paths_value_that_is_not_a_list_of_strings_gets_the_floor_full(tmp_
 
 @pytest.mark.parametrize("proposed", ["light", "micro"])
 def test_e6_a_proposal_below_the_floor_gets_full_and_is_not_taken(tmp_path, proposed):
+    # axis: never-lower; a proposal below the floor being taken or lowering the lane
     repo, store = _payments_repo(tmp_path)
     got = L.call(repo, ["src/db/schema.sql"], proposed=proposed, root=store)
     assert got["floor"] == "full" and got["lane"] == "full"
@@ -199,6 +208,7 @@ def test_e6_a_proposal_below_the_floor_gets_full_and_is_not_taken(tmp_path, prop
 
 @pytest.mark.parametrize("proposed", ["medium", 3, "", "FULL", ["full"], {"lane": "light"}, True, 0])
 def test_e7_an_invalid_proposal_never_lowers_the_lane(tmp_path, proposed):
+    # axis: an invalid proposal; one that lowers the lane, is taken, or goes unmarked proposal-invalid
     repo, store = _payments_repo(tmp_path)
     for paths in (["src/payments/charge.py"], ["docs/readme.md"], [], None):
         got = L.call(repo, paths, proposed=proposed, root=store)
@@ -211,6 +221,7 @@ def test_e7_an_invalid_proposal_never_lowers_the_lane(tmp_path, proposed):
 
 
 def test_a_project_with_no_risk_areas_gives_a_money_change_the_full_lane(tmp_path):
+    # axis: the not-set floor; a project with no risk areas lowering the lane for a money change
     repo, store = _repo(tmp_path, with_key=False)
     got = L.call(repo, ["src/billing/refund.py"], proposed="light", root=store)
     assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
@@ -222,6 +233,7 @@ def test_a_project_with_no_risk_areas_gives_a_money_change_the_full_lane(tmp_pat
 
 
 def test_census_every_routed_change_lands_in_the_three_lanes_at_or_above_its_floor(tmp_path):
+    # axis: the three-lane census; a routed change landing outside micro, light and full, or below its floor
     assert L.LANES == ("micro", "light", "full") and len(L.LANES) == 3 and L.FLOOR_FULL == "full"
     assert [L.rank(lane) for lane in L.LANES] == [0, 1, 2] and L.rank("medium") < 0 and L.rank(None) < 0
     (tmp_path / "set").mkdir()
@@ -272,6 +284,7 @@ def _snapshot(root):
 
 
 def test_call_makes_no_model_call_and_writes_nothing(tmp_path, monkeypatch):
+    # axis: the no-process check; call starting a process, a shell or a connection, or writing a file
     repo, store = _payments_repo(tmp_path)
     real_run, real_popen = subprocess.run, subprocess.Popen
     passed_through = []
@@ -326,6 +339,7 @@ def test_call_asks_the_one_reader_exactly_once_and_matches_no_path_itself(tmp_pa
 
 
 def test_lane_call_module_imports_no_process_network_or_engine_module():
+    # axis: the no-process check; lane_call importing a process, network or engine module
     with open(os.path.join(_LIB, "lane_call.py"), encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
     imported = set()
@@ -341,10 +355,10 @@ def test_lane_call_module_imports_no_process_network_or_engine_module():
 
 
 def test_unavailable_carries_exactly_the_call_keys_and_the_full_floor(tmp_path):
+    # axis: a basis that was never read gets the floor full; an unread basis leaving no floor or a lower lane
     repo, store = _payments_repo(tmp_path)
     got = L.unavailable("risk-unclear-not-set: nothing was read")
     assert set(got) == RESULT_KEYS == set(L.call(repo, ["docs/readme.md"], root=store))
-    # axis: a basis that was never read gets the floor full; an unread basis leaving no floor or a lower lane
     assert got["floor"] == "full" and got["lane"] == "full"
     assert got["why"] == ["risk-unclear-not-set: nothing was read"]
     assert got["riskAreas"] == {"state": "not-set", "reason": "unreadable", "detail": "not-read"}
@@ -363,6 +377,7 @@ def test_unavailable_carries_exactly_the_call_keys_and_the_full_floor(tmp_path):
     (None, ["risk-unclear-no-paths"], False),
 ])
 def test_unavailable_records_the_proposal_and_never_lowers_the_lane(proposed, tokens, taken):
+    # axis: unavailable with a proposal; a proposal below full being taken or lowering the lane
     got = L.unavailable("risk-unclear-no-paths: the changed files could not be read", proposed=proposed)
     assert got["floor"] == "full" and got["lane"] == "full"
     assert got["proposed"] == proposed and got["proposalTaken"] is taken
@@ -372,6 +387,7 @@ def test_unavailable_records_the_proposal_and_never_lowers_the_lane(proposed, to
 
 
 def test_unavailable_starts_no_process_reads_no_store_and_writes_nothing(tmp_path, monkeypatch):
+    # axis: the no-process check on unavailable; it starting a process, reading the store or writing a file
     def _refuse(*args, **kwargs):
         raise AssertionError("a process, a shell, a connection or a store read was started")
 

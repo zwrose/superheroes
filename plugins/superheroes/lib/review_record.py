@@ -350,6 +350,7 @@ def _bound_basis(basis):
     out = dict(basis, touched=touched)
     if len(basis["touched"]) > BASIS_AREAS_MAX:
         out["touchedCount"] = len(basis["touched"])
+        out["matchedTotal"] = sum(len(t["matched"]) for t in basis["touched"])
     if len(basis["unmatchable"]) > cap:
         out.update(unmatchable=[_clip(u) for u in basis["unmatchable"][:cap]],
                    unmatchableCount=len(basis["unmatchable"]))
@@ -777,7 +778,8 @@ def _shed_to_floor(basis):
     out = {k: basis[k] for k in ("floor", "lane", "proposalTaken", "source") if k in basis}
     out.update(why=basis["why"][:1], whyCount=basis.get("whyCount", len(basis["why"])),
                touchedCount=basis.get("touchedCount", len(basis["touched"])),
-               matchedCount=sum(t.get("matchedCount", len(t["matched"])) for t in basis["touched"]),
+               matchedCount=basis["matchedTotal"] if "matchedTotal" in basis
+               else sum(t.get("matchedCount", len(t["matched"])) for t in basis["touched"]),
                unmatchableCount=basis.get("unmatchableCount", len(basis["unmatchable"])),
                basisShed="floor-only")
     return out

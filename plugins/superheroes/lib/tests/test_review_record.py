@@ -1689,6 +1689,20 @@ def test_a_shed_that_reaches_the_last_resort_still_fits(tmp_path, monkeypatch):
     assert shed["touchedCount"] == 20 and shed["matchedCount"] == 40 and len(shed["why"]) == 1
 
 
+def test_a_floor_only_basis_counts_the_matched_paths_of_the_areas_the_area_cap_cut(tmp_path):
+    # axis: the floor-only basis's matchedCount counts every matched path in every touched area, cut areas included
+    glyph = "\U0001F600"
+    areas = [dict(PAYMENTS, name="Area%02d%s" % (n, glyph * 290), covers=["src/area%02d/*" % n])
+             for n in range(60)]
+    repo = risk_repo(tmp_path, areas=areas)
+    fake = Fake()
+    fake.changed = ["src/area%02d/f%d.py" % (n, i) for n in range(60) for i in range(2)]
+    body = rr.render(build(account(repoRoot=repo), fake))
+    assert len(body) <= rr.MAX_BODY_CHARS
+    shed = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])["laneBasis"]
+    assert shed["basisShed"] == "floor-only" and shed["touchedCount"] == 60 and shed["matchedCount"] == 120
+
+
 def _head_moving_readers(heads):
     """Readers whose pr_meta returns the given heads in turn (the last one repeats)."""
     fake, seen = Fake(), []
