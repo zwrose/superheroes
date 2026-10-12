@@ -46,6 +46,18 @@ def test_detects_detective(tmp_path):
     assert cd.detect_charter(str(path)) == "detective"
 
 
+def test_detects_discovery_via_architect_discovery_command(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("architect-discovery")])
+    assert cd.detect_charter(str(path)) == "discovery"
+
+
+def test_detects_discovery_via_skill_alias_command(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("discovery")])
+    assert cd.detect_charter(str(path)) == "discovery"
+
+
 def test_detects_showrunner_resume_as_showrunner(tmp_path):
     """A seat started by /superheroes:showrunner-resume runs the showrunner charter."""
     path = tmp_path / "transcript.jsonl"
@@ -62,7 +74,8 @@ def test_detects_showrunner_handoff_as_showrunner(tmp_path):
 
 def test_non_charter_commands_do_not_detect(tmp_path):
     """Other superheroes commands, and near-miss names, never map to a charter."""
-    for command in ("review-code", "showrunnerx", "showrunner-resumex", "checkpoint"):
+    for command in ("review-code", "showrunnerx", "showrunner-resumex", "checkpoint",
+                    "architect-discoveryx", "architect-spec"):
         path = tmp_path / ("%s.jsonl" % command)
         _write_transcript(path, [_user_charter(command)])
         assert cd.detect_charter(str(path)) is None, command
@@ -77,7 +90,8 @@ def test_command_table_maps_only_onto_charter_names():
 def test_charter_names_matches_detection_regex():
     """CHARTER_NAMES is the single roster; reverting detective drops it here first."""
     assert "detective" in cd.CHARTER_NAMES
-    assert len(cd.CHARTER_NAMES) == 3
+    assert "discovery" in cd.CHARTER_NAMES
+    assert len(cd.CHARTER_NAMES) == 4
 
 
 def test_no_charter_transcript_returns_none(tmp_path):
