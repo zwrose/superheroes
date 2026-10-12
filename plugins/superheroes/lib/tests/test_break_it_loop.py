@@ -283,8 +283,23 @@ def test_a_scrub_altered_suggestion_is_refused_not_run(world):
     world.fold_panel(accepted[0])
     (run,) = world.round_record["breakItRuns"]
     assert (run["outcome"], run["reason"]) == ("not-run", "suggestion-redacted")
+    assert run["sha256"] is None
+    assert len(world.state["_toVerify"]) == 1 and _drop_reasons(world.state) == []
     clean, _ = EA._scrub_findings([_break_it_finding()])
     assert break_it.REDACTED_FIELD not in clean[0]
+
+
+def test_an_unaltered_suggestion_under_the_change_alias_is_not_flagged_redacted():
+    import engine_adapter as EA
+    raw = _break_it_finding()
+    raw["change"] = raw.pop("suggestion")
+    accepted, _ = EA._scrub_findings([raw])
+    assert break_it.REDACTED_FIELD not in accepted[0]
+
+
+def test_run_output_is_scrubbed_before_a_record_carries_it():
+    record = break_it._record("h", None, break_it.OUTCOME_FAILED, output="Authorization: Bearer sk-live-EXAMPLEfakekey0\n")
+    assert "sk-live-EXAMPLEfakekey0" not in record["output"]
 
 
 def test_a_requeued_break_it_audit_target_keeps_its_test_block():

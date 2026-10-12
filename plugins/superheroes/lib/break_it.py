@@ -23,6 +23,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from git_routing import GIT_ROUTING_VARS  # noqa: E402
+import readout  # noqa: E402  (the band's fail-closed scrub seam)
 
 SCHEMA = "break-it-run/1"
 ROLE = "test-role"
@@ -238,6 +239,8 @@ def parse_command(run):
 
 def _record(head, block, outcome, reason=None, exit_code=None, output=""):
     block = block if isinstance(block, dict) else {}
+    # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
+    output = readout.scrub(output)[0] if output else ""
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output}
@@ -558,11 +561,12 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             kept.append(copy)
             continue
         block, refusal = parse_block(copy.get("suggestion"))
-        # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is refused, never run in altered form
-        if not refusal and copy.get(REDACTED_FIELD) is True:
-            block, refusal = None, "suggestion-redacted"
+        # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so the finding still earns the scope exemption and reaches the verifier
+        redacted = not refusal and copy.get(REDACTED_FIELD) is True
+        if redacted:
+            refusal = "suggestion-redacted"
         if refusal:
-            record = _not_run(head, block, refusal)
+            record = _not_run(head, None if redacted else block, refusal)
         elif block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
@@ -574,7 +578,7 @@ def intercept(findings, repo_root, head, *, runner=run_one):
         copy[RUN_FIELD] = record
         kept.append(copy)
         # axis: only a well-formed block on its own file at line 1 buys the scope exemption; a malformed one keeps ordinary scope checking
-        if not refusal and block["path"] == copy.get("file") and copy.get("line") == 1:
+        if block and block["path"] == copy.get("file") and copy.get("line") == 1:
             exempt_ids.add(id(copy))
     return kept, runs, exempt_ids
 
