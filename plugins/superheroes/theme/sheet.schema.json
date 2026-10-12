@@ -232,9 +232,9 @@
                     "minLength": 1
                   },
                   "ran": {
-                    "description": "Where the fact that the reviewer ran comes from: engine-record when the engine recorded it, or reported-by-session when only the session said so.",
+                    "description": "Where the fact that the reviewer ran comes from, as the review record writer states it (its ran vocabulary has one home, review_record.RAN_STATES, which the sheet builder validates against).",
                     "type": "string",
-                    "enum": ["engine-record", "reported-by-session"]
+                    "minLength": 1
                   },
                   "notIndependent": {
                     "description": "True when the reviewer is from a maker's model family, so its review was not independent. Absent when the review record did not say.",

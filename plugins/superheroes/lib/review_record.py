@@ -47,8 +47,8 @@ FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
 MAX_BODY_CHARS = 65000
 GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
-# The reviewer ran-state vocabulary, its one home: the sheet builder reads RAN_STATES, and a test holds the
-# sheet schema's completed-run enum to RAN_STATES less RAN_NOT_RUN.
+# The reviewer ran-state vocabulary, its one home: the sheet builder validates against RAN_STATES; the sheet
+# schema holds no copy of it (a test pins that).
 RAN_ENGINE_RECORD = "engine-record"
 RAN_REPORTED_BY_SESSION = "reported-by-session"
 RAN_NOT_RUN = "not-run"
