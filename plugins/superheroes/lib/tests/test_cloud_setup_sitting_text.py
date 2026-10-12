@@ -58,10 +58,12 @@ def test_section_never_asks_for_a_typed_or_pasted_id():
     assert section, "section 6 of set-up.md was not found"
     ask = re.compile(r"\b(type|typed|paste|pasted|copy|copied)\b", re.IGNORECASE)
     ident = re.compile(r"\bids?\b", re.IGNORECASE)
+    split = re.compile(r",\s*(?:and|but|or)\s+|;\s*|\s+—\s+")
     for sentence in _sentences(section):
-        if ask.search(sentence) and ident.search(sentence) and "never" not in sentence.lower():
-            raise AssertionError("sentence asks for a typed, copied or pasted id without "
-                                 "'never': %r" % sentence.strip())
+        for clause in split.split(sentence):
+            if ask.search(clause) and ident.search(clause) and "never" not in clause.lower():
+                raise AssertionError("clause asks for a typed, copied or pasted id without "
+                                     "'never': %r" % clause.strip())
 
 
 def test_every_check_command_names_the_picked_id():
@@ -82,14 +84,31 @@ def test_every_check_command_names_the_picked_id():
 def test_the_pick_is_read_before_and_after_and_before_the_check():
     section = _section_six()
     assert section, "section 6 of set-up.md was not found"
-    order = ['cloud_environment.py" snapshot', 'cloud_check.py" setup-message',
-             'cloud_environment.py" pick --cwd . --before', 'cloud_pass.py" make',
-             'cloud_check.py" start']
-    found = [(needle, _first(section, needle)) for needle in order]
+    plain_end = 'pick --cwd . --before <the value step 1 kept>'
+    plain_label = 'a plain after-read line ending %r' % plain_end
+    plain = next((i for i, line in enumerate(section) if line.strip().endswith(plain_end)), None)
+    found = [('cloud_environment.py" snapshot', _first(section, 'cloud_environment.py" snapshot')),
+             ('cloud_check.py" setup-message', _first(section, 'cloud_check.py" setup-message')),
+             (plain_label, plain),
+             ('cloud_pass.py" make', _first(section, 'cloud_pass.py" make')),
+             ('cloud_check.py" start', _first(section, 'cloud_check.py" start'))]
     for needle, index in found:
         assert index is not None, "section 6 has no line containing %r" % needle
     for (earlier, i), (later, j) in zip(found, found[1:]):
         assert i < j, "line %r (%d) does not come before line %r (%d)" % (earlier, i, later, j)
+    confirm_needle = '--before <the value step 1 kept> --confirmed <the value step 1 kept>'
+    confirm = _first(section, confirm_needle)
+    assert confirm is not None, "section 6 has no line containing %r" % confirm_needle
+    assert plain < confirm, "the plain after-read (%d) does not come before the confirm-by-name line (%d)" % (
+        plain, confirm)
+    recovery_needle = ('cloud_environment.py" pick --cwd . --before <the snapshot value> '
+                       '--confirmed <the environment now in use>')
+    recovery = _first(section, recovery_needle)
+    assert recovery is not None, "section 6 has no line containing %r" % recovery_needle
+    judge = _first(section, 'cloud_check.py" judge')
+    assert judge is not None, "section 6 has no line containing 'cloud_check.py\" judge'"
+    assert judge < recovery, "the recovery pick line (%d) does not come after the judge line (%d)" % (
+        recovery, judge)
     sign_in = _first(section, 'cloud_check.py" sign-in')
     assert sign_in is not None, "section 6 has no line containing 'cloud_check.py\" sign-in'"
     make = _first(section, 'cloud_pass.py" make')
@@ -106,3 +125,16 @@ def test_showrunner_has_one_pointer_to_section_six():
     hits = [line for line in _read(SHOWRUNNER_SKILL).splitlines() if POINTER in line]
     assert len(hits) == 1, "showrunner/SKILL.md has %d lines pointing to set-up.md § 6: %r" % (
         len(hits), hits)
+
+
+def test_first_pick_unchanged_is_confirmed_by_name_in_step_three():
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    needle = ('cloud_environment.py" pick --cwd . --before <the value step 1 kept> '
+              '--confirmed <the value step 1 kept>')
+    confirm = _first(section, needle)
+    assert confirm is not None, "section 6 has no line containing %r" % needle
+    make = _first(section, 'cloud_pass.py" make')
+    assert make is not None, "section 6 has no line containing 'cloud_pass.py\" make'"
+    assert confirm < make, "the confirm-by-name line (%d) does not come before the pass command (%d)" % (
+        confirm, make)

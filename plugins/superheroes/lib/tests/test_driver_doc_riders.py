@@ -36,7 +36,7 @@ _HOME = "rubric/review-discipline.md"
 _ROUND_DRIVER = "skills/review-code/reference/round-driver.md"
 
 _DRIVER_MANDATE_SECTION = (
-    "## The driver mandate — the certified loop, its skips, and the flip"
+    "## The driver mandate — the review record"
 )
 _JOURNAL_SECTION = "## Journal and receipt"
 _EMITTED_ORDERS_SECTION = "## Emitted orders"

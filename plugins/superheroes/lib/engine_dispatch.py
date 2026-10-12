@@ -7196,6 +7196,10 @@ def run_execution_record(run_dir):
         }
         if isinstance(attempt_prompt_path, str) and attempt_prompt_path:
             record["attemptPromptPath"] = attempt_prompt_path
+        folded = state.get("folded")
+        # graded: the run's persisted fold is a success (not a forfeit such as a vacuous review).
+        record["graded"] = (isinstance(folded, dict) and folded.get("ok") is True
+                            and not folded.get("forfeited") and not folded.get("forfeit"))
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest
             record["resultKind"] = result_kind

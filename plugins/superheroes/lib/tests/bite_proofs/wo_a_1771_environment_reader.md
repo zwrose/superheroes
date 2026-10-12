@@ -167,3 +167,82 @@ FAILED plugins/superheroes/lib/tests/test_cloud_environment.py::test_pick_missin
 ```
 
 A final search of `cloud_environment.py` for `len(value) > 0`, `"environment": before` and a bare `return {"action": "picked"` without the `value` id found only the real `"environment": value` return, the `if value == before:` comparison and the `fullmatch` check: no neutralization remains.
+
+## WO-C / WO-C2: an unchanged first pick asks to confirm by name
+
+Declared guarded-element set: R6 and D5. Each was re-run on the finished tree (WO-C2, round 2), after the one authorized test change: in `test_pick_unchanged_setting_asks_again_with_no_id` the last assertion became `assert result["message"] == CE._ALREADY_PICKED`.
+
+### R6: an unchanged first pick asks to confirm by name. Axis: refusal (the message that asks for the name)
+
+- **Neutralization applied.** In `pick`, `_ALREADY_PICKED if confirmed is None else _ASK_AGAIN` changed to `_ASK_AGAIN if confirmed is None else _ASK_AGAIN`, so the no-`confirmed` branch gives the generic ask-again message.
+- **Node.** `plugins/superheroes/lib/tests/test_cloud_environment.py::test_first_pick_unchanged_asks_to_confirm_by_name`
+- **Red.**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_first_pick_unchanged_asks_to_confirm_by_name _______________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1260/test_first_pick_unchanged_asks0')
+
+    def test_first_pick_unchanged_asks_to_confirm_by_name(tmp_path):
+        env = _env(tmp_path)
+        _write(env, _with_value(ENV_ID))
+        result = CE.pick(before=ENV_ID, env=env)
+        assert result["action"] == "not-picked"
+        assert result["reason"] == "pick-unchanged"
+        assert result["environment"] is None
+>       assert result["message"] == CE._ALREADY_PICKED
+E       assert "I can't see ...en it's done." == 'Claude Code ... and tell me.'
+E         
+E         - Claude Code already had an environment picked, and it's still the same one. If the environment shown as picked in /remote-env is the one you made for this project, say it's that one and I'll use it. Otherwise pick this project's environment and tell me.
+E         + I can't see a new pick yet. In Claude Code on this account, run /remote-env, choose the environment you made for this project by its name, and tell me when it's done.
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:50: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_environment.py::test_first_pick_unchanged_asks_to_confirm_by_name
+1 failed in 9.72s
+```
+
+- **Restore.** The inverse Edit; quoted from `cloud_environment.py:125`: `                    "message": _ALREADY_PICKED if confirmed is None else _ASK_AGAIN}`.
+- **Green.**
+
+```
+.                                                                        [100%]
+1 passed in 0.27s
+```
+
+### D5: step 3 carries the confirm-by-name re-read. Axis: instruction (the command line the skill gives)
+
+- **Neutralization applied.** In `set-up.md` § 6 step 3, the second command line (the re-read, line 449) lost ` --confirmed <the value step 1 kept>`, leaving `pick --cwd . --before <the value step 1 kept>`. The first command line (line 440) never carried it and was not touched.
+- **Node.** `plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_first_pick_unchanged_is_confirmed_by_name_in_step_three`
+- **Red.**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_first_pick_unchanged_is_confirmed_by_name_in_step_three _________
+
+    def test_first_pick_unchanged_is_confirmed_by_name_in_step_three():
+        section = _section_six()
+        assert section, "section 6 of set-up.md was not found"
+        needle = ('cloud_environment.py" pick --cwd . --before <the value step 1 kept> '
+                  '--confirmed <the value step 1 kept>')
+        confirm = _first(section, needle)
+>       assert confirm is not None, "section 6 has no line containing %r" % needle
+E       AssertionError: section 6 has no line containing 'cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>'
+E       assert None is not None
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:120: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_first_pick_unchanged_is_confirmed_by_name_in_step_three
+1 failed in 0.28s
+```
+
+- **Restore.** The inverse Edit (the first try matched both command lines and was refused; the second was anchored on the line above, so only line 449 changed); quoted from `set-up.md:449`: `   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>`. A later `git diff --stat` listed only `test_cloud_environment.py`, so `set-up.md` and `cloud_environment.py` are byte-identical to the commit.
+- **Green.**
+
+```
+.                                                                        [100%]
+1 passed in 0.56s
+```

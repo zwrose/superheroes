@@ -679,12 +679,67 @@ def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
     monkeypatch.setattr(L, "_git_scrubbed", spy)
     assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
     assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
-    scratch = calls[1][0]
-    assert calls[1][1] == ("init", "-q", "--bare", scratch)
-    assert calls[2][0] == scratch
-    assert calls[2][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-                           local_remote.remote.as_uri(), local_remote.pushed)
+    assert calls[1][1] == ("rev-parse", "--git-common-dir")
+    scratch = calls[2][0]
+    assert calls[2][1] == ("init", "-q", "--bare", scratch)
+    assert calls[3][0] == scratch
+    assert calls[3][1][:2] == ("config", "include.path")
+    assert calls[4][0] == scratch
+    assert calls[4][1] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
+                           "origin", local_remote.pushed)
     assert all(c[2]["timeout"] == L._WORKTREE_GIT_TIMEOUT for c in calls)
+
+
+def test_a_fetch_that_fails_for_any_reason_but_an_absent_commit_is_unchecked(
+    local_remote, monkeypatch,
+):
+    # axis: only the server saying it lacks the commit is "not on the remote"; an unreachable or
+    # refusing remote leaves the question open
+    real = L._git_scrubbed
+
+    def fails(said):
+        def run(repo_root, *args, **kwargs):
+            if "fetch" in args:
+                return subprocess.CompletedProcess(args, 128, stdout="", stderr=said)
+            return real(repo_root, *args, **kwargs)
+        return run
+
+    for said in ("fatal: Could not resolve host: github.com",
+                 "fatal: Authentication failed for 'https://github.com/x/y.git/'"):
+        monkeypatch.setattr(L, "_git_scrubbed", fails(said))
+        assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    monkeypatch.setattr(L, "_git_scrubbed", fails("fatal: remote error: upload-pack: not our ref abc"))
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is False
+
+
+def test_the_probe_finds_a_base_through_a_setting_only_the_launching_repo_holds(
+    local_remote, tmp_path,
+):
+    # axis: origin is an alias that only a repo-local insteadOf rewrite makes reachable
+    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
+         "alias://private/origin")
+    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
+    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
+
+
+def test_the_probe_finds_a_base_from_a_linked_worktree(local_remote, tmp_path):
+    # axis: the config included is the common dir's, not the linked worktree's private gitdir
+    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
+         "alias://private/origin")
+    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
+    linked = tmp_path / "linked"
+    _git(local_remote.repo, "worktree", "add", "-q", "--detach", str(linked), local_remote.pushed)
+    assert L._base_on_remote(str(linked), local_remote.pushed, None) is True
+
+
+def test_a_transport_failure_is_unchecked_not_absent(local_remote, tmp_path):
+    # axis: a remote that cannot be reached says nothing about the commit
+    _git(local_remote.repo, "remote", "set-url", "origin", str(tmp_path / "no-such-remote.git"))
+    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
+    assert L._cloud_base_refusal(
+        local_remote.repo, {"baseCommit": local_remote.pushed}, None
+    ) == "launch-cloud-base-remote-unchecked"
 
 
 def test_E5_no_origin_is_unchecked(tmp_path):
@@ -1558,43 +1613,41 @@ def test_pending_started_is_returned_when_the_unconfirmed_path_append_fails(
     assert "pendingStarted" in result["remedy"]
 
 
-def _signal_once_running(marker, signum):
-    """A watcher that sends this process `signum` once the command has said it is running.
+def _signal_after_hello_is_read(monkeypatch, signum):
+    """Send this process `signum` from inside the launcher's own read, once `hello` has come back.
 
-    The command creates `marker` as its first act after it has started, so the signal never
-    depends on how long the command took to start.
+    The wrapper returns the bytes it read, so the launcher has captured them before it sees the
+    cancellation; the signal never races the capture.
     """
     import os as _os
-    import threading
 
-    def watch():
-        deadline = time.monotonic() + 20
-        while not _os.path.exists(marker):
-            if time.monotonic() >= deadline:
-                return
-            time.sleep(0.02)
-        _os.kill(_os.getpid(), signum)
+    real_read = _os.read
+    seen = []
+    sent = []
 
-    watcher = threading.Thread(target=watch, daemon=True)
-    watcher.start()
-    return watcher
+    def read_then_signal(fd, length):
+        data = real_read(fd, length)
+        seen.append(data)
+        if not sent and b"hello" in b"".join(seen):
+            sent.append(fd)
+            _os.kill(_os.getpid(), signum)
+        return data
+
+    monkeypatch.setattr(L.os, "read", read_then_signal)
+    return sent
 
 
-def _assert_a_launcher_signal_ends_the_group(tmp_path, signum):
+def _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, signum):
     import os as _os
     import signal as _signal
 
     log = tmp_path / "signalled.stdout"
-    marker = tmp_path / "running"
     before = _signal.getsignal(signum)
-    watcher = _signal_once_running(str(marker), signum)
-    try:
-        result = L._default_cloud_spawn(
-            ["sh", "-c", "echo hello; touch %s; sleep 30" % marker], str(tmp_path), str(log),
-            dict(_os.environ), 20,
-        )
-    finally:
-        watcher.join(timeout=25)
+    sent = _signal_after_hello_is_read(monkeypatch, signum)
+    result = L._default_cloud_spawn(
+        ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
+    )
+    assert sent
     assert result["readError"] == "_LauncherTerminated"
     assert "hello" in result["output"]
     assert "hello" in log.read_text()
@@ -1603,20 +1656,20 @@ def _assert_a_launcher_signal_ends_the_group(tmp_path, signum):
 
 
 def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(
-    tmp_path, terminal,
+    tmp_path, monkeypatch, terminal,
 ):
     import signal as _signal
 
-    _assert_a_launcher_signal_ends_the_group(tmp_path, _signal.SIGTERM)
+    _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGTERM)
 
 
 def test_a_sigint_to_the_launcher_ends_the_command_group_and_keeps_the_output(
-    tmp_path, terminal,
+    tmp_path, monkeypatch, terminal,
 ):
     # axis: Ctrl-C is a cancellation like SIGTERM — the same outcome, never a KeyboardInterrupt
     import signal as _signal
 
-    _assert_a_launcher_signal_ends_the_group(tmp_path, _signal.SIGINT)
+    _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGINT)
 
 
 def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(

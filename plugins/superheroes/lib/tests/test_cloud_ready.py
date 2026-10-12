@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import sys
+import types
 
 import pytest
 
@@ -222,11 +223,22 @@ def test_pass_that_lapses_today_is_still_live(tmp_path):
     _only_false(_read(repo, store, today=TODAY + datetime.timedelta(days=1)), "passLive")
 
 
-def test_today_defaults_to_the_utc_date(tmp_path):
-    repo, store = _ready(tmp_path, pass_lapses="2000-01-01")
+def test_today_defaults_to_the_utc_date(tmp_path, monkeypatch):
+    # The clock is frozen just after UTC midnight; the stand-in refuses any zone but UTC.
+    next_day = TODAY + datetime.timedelta(days=1)
+
+    class FrozenDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is datetime.timezone.utc
+            return cls(next_day.year, next_day.month, next_day.day, 0, 0, 30, tzinfo=tz)
+
+    monkeypatch.setattr(CR, "datetime", types.SimpleNamespace(
+        datetime=FrozenDatetime, date=datetime.date, timezone=datetime.timezone))
+    repo, store = _ready(tmp_path, pass_lapses=TODAY.isoformat())
     _only_false(_read(repo, store, today=None), "passLive")
     (tmp_path / "second").mkdir()
-    repo2, store2 = _ready(tmp_path / "second", pass_lapses="2999-01-01")
+    repo2, store2 = _ready(tmp_path / "second", pass_lapses=next_day.isoformat())
     assert _read(repo2, store2, today=None)["ready"] is True
 
 
@@ -438,6 +450,18 @@ def test_a_named_part_forces_its_own_condition_false(tmp_path, part, condition):
     got = _read(repo, store)
     _only_false(got, condition)
     assert got["failedCheck"] == [part]
+
+
+def test_a_failed_version_check_leaves_no_cloud_version_unless_the_cloud_reported_one(tmp_path):
+    # axis: a failed version check leaves the old record in place, so its version is not the cloud's current one — see bite-proof record wo_d_place_call
+    repo, store = _ready(tmp_path, plugin_version="1.2.2")
+    _mark(repo, store, ["version"])
+    got = _read(repo, store)
+    _only_false(got, "version")
+    assert got["cloudVersion"] is None and got["failedCheck"] == ["version"]
+    reported = _read(repo, store, reported={"pluginVersion": "0.41.0"})
+    _only_false(reported, "version")
+    assert reported["cloudVersion"] == "0.41.0"
 
 
 def test_several_named_parts_apply_together_and_the_order_picks_the_reason(tmp_path):

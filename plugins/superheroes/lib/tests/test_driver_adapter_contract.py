@@ -79,9 +79,6 @@ _ADAPTER_SHAPE_PREFIXES = (
     "envelope-not-an-object:",
     "envelope-has-no-seat:",
     "envelope-bad-occurrence:",
-    "canary-not-a-list:",
-    "canary-entry-not-an-object:",
-    "canary-entry-has-no-engine:",
     "dispatch-manifest-not-a-dict:",
 )
 
@@ -122,21 +119,9 @@ def _record_all_panel_seats(session_dir):
         _ADV._land_and_record(session_dir, seat)
 
 
-def _write_canary_probes(session_dir, rnd, attempt, vendors):
-    probes = []
-    for vendor in vendors:
-        probe = {"engine": vendor, "engaged": True, "evidence": {"probe": "seat_canary"}}
-        path = round_records.canary_path(session_dir, rnd, vendor, attempt)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        round_records.atomic_write_json(path, probe)
-        probes.append(probe)
-    return probes
-
-
 @pytest.fixture
 def panel_ready(tmp_path):
     d = _session(tmp_path)
-    _write_canary_probes(d, 1, 0, ["codex"])
     _record_all_panel_seats(d)
     return d
 
@@ -153,14 +138,12 @@ def _driver_boundary_values(session_dir):
     envelopes = [env for _seat, _occurrence, env in slots]
     manifest, _merr = round_records.read_json(
         round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt))
-    canary = round_driver._canary_landings(session_dir, state, rnd, attempt)
     return {
         "phase": phase,
         "envelopes": envelopes,
         "state": state,
         "config": state.get("config") or {},
         "dispatch_manifest": manifest if _merr is None else None,
-        "canary": canary,
         "roster": roster,
         "anchor": anchor,
         "rnd": rnd,
@@ -172,7 +155,7 @@ def test_driver_adapter_assemble_boundary_is_shape_clean(panel_ready):
     vals = _driver_boundary_values(panel_ready)
     artifact, reason = round_adapters.assemble(
         vals["phase"], vals["envelopes"], vals["state"], vals["config"],
-        dispatch_manifest=vals["dispatch_manifest"], canary=vals["canary"])
+        dispatch_manifest=vals["dispatch_manifest"])
     assert not _adapter_shape_refusal(reason), reason
     assert isinstance(artifact, dict), reason
 
@@ -208,16 +191,6 @@ def test_driver_records_ingest_boundary_accepts_driver_landings(panel_ready):
             seat_result_schema=round_records.seat_result_schema_for_state_version(
                 vals["state"].get("schemaVersion")))
         assert out.get("ok") or out.get("reason") == "store-exists", out
-
-
-def test_driver_canary_landings_matches_adapter_probe_list(panel_ready):
-    vals = _driver_boundary_values(panel_ready)
-    canary = vals["canary"]
-    assert canary is None or isinstance(canary, list), type(canary)
-    if isinstance(canary, list):
-        assert all(isinstance(probe, dict) and probe.get("engine") for probe in canary)
-    probes, fault = round_adapters._normalize_canary(canary)
-    assert fault is None, fault
 
 
 def test_driver_envelopes_are_a_list_not_a_seat_map(panel_ready):
@@ -277,7 +250,7 @@ def test_effective_seat_map_resolution_through_one_home_adapter(panel_ready, mon
     vals = _driver_boundary_values(panel_ready)
     artifact, reason = round_adapters.assemble(
         vals["phase"], vals["envelopes"], vals["state"], vals["config"],
-        dispatch_manifest=vals["dispatch_manifest"], canary=vals["canary"])
+        dispatch_manifest=vals["dispatch_manifest"])
     assert reason is None, reason
     assert artifact["seatMap"] == _EFFECTIVE_SEAT_MAP_SENTINEL
 

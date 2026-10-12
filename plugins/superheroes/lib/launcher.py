@@ -2280,18 +2280,34 @@ def _place_refusal(
     return None
 
 
+# What a failed fetch prints when the server answered and does not have the commit. Any other
+# failure (an unresolved host, a refused login, a dropped connection) leaves the question open.
+_BASE_ABSENT_MARKERS = ("not our ref", "couldn't find remote ref", "no such remote ref")
+
+
 def _base_on_remote(repo_root, base, env):
     """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
     None when the remote could not be asked.
 
     The commit is fetched into an empty repository, because a fetch in the working repository
     never asks the server for an object it already has, and a local tracking ref can be stale.
+    The empty repository includes the launching repository's own config file and fetches from
+    the remote name ``origin``, so the remote's settings, ``core.sshCommand``, ``credential.*``
+    and ``http.*`` apply as they do for the launching repository. A conditional include keyed on
+    the launching repository's gitdir does not apply inside the empty repository.
     """
     url = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
     if url is None or url.returncode != 0 or not url.stdout.strip():
         return None
+    common = _git_scrubbed(
+        repo_root, "rev-parse", "--git-common-dir", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if common is None or common.returncode != 0 or not common.stdout.strip():
+        return None
+    config_path = os.path.join(
+        os.path.abspath(repo_root), common.stdout.strip(), "config")
     try:
         scratch = tempfile.mkdtemp()
     except OSError:
@@ -2302,13 +2318,26 @@ def _base_on_remote(repo_root, base, env):
         )
         if made is None or made.returncode != 0:
             return None
+        included = _git_scrubbed(
+            scratch, "config", "include.path", config_path,
+            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if included is None or included.returncode != 0:
+            return None
         fetched = _git_scrubbed(
             scratch, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-            url.stdout.strip(), base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+            "origin", base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
         )
         if fetched is None:
             return None
-        return fetched.returncode == 0
+        if fetched.returncode == 0:
+            return True
+        # Only the server saying it lacks the commit is an answer; a failure to reach it or to
+        # sign in is not, and says nothing about the commit.
+        said = (fetched.stderr or "").lower()
+        if any(marker in said for marker in _BASE_ABSENT_MARKERS):
+            return False
+        return None
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -3367,6 +3396,19 @@ def _cli_compose(args):
 _CLOUD_NEVER_STARTED_REASONS = ("spawn-oserror", "log-open-failed")
 
 
+def _premise_with_resolved_base(repo_root, premise):
+    """A copy of ``premise`` whose ``baseCommit`` is the one commit it names now, or ``premise``
+    itself when it names no commit that resolves (``validate_premise`` then refuses it)."""
+    base = premise.get("baseCommit") if isinstance(premise, dict) else None
+    if not isinstance(base, str) or not base.strip():
+        return premise
+    proc = _git_scrubbed(repo_root, "rev-parse", "--verify", "%s^{commit}" % base.strip())
+    resolved = (proc.stdout or "").strip() if proc is not None and proc.returncode == 0 else ""
+    if not _HEX40.match(resolved):
+        return premise
+    return dict(premise, baseCommit=resolved)
+
+
 def _cli_launch(args):
     checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
     if dup_reason:
@@ -3398,6 +3440,9 @@ def _cli_launch(args):
     # axis: the cloud environment comes from the setup record the routing step read — see bite-proof record wo_b_place_call
     if getattr(args, "cloud_environment", None) is not None:
         return _fail("launch-cloud-environment-routed")
+
+    # axis: a premise's base names one commit for the cloud attempt and the local fallback alike, so a ref that moves between the two never changes what the fallback builds — see bite-proof record wo_d_place_call
+    premise = _premise_with_resolved_base(args.repo_root, premise)
 
     # axis: every launch is routed once, before it starts — see bite-proof record wo_b_place_call
     place_call = launch_place.route(
@@ -3511,7 +3556,12 @@ def main(argv=None):
     la = sub.add_parser("launch")
     la.add_argument("--repo-root", required=True)
     la.add_argument("--issue", type=int, required=True)
-    la.add_argument("--premise", required=True)
+    la.add_argument(
+        "--premise", required=True,
+        help=("the build premise as JSON; its `needs` list names everything only the owner's "
+              "machine has (a locally seeded browser context, a slot, a local-only file), and a "
+              "build with no `needs` is free to be placed in the cloud"),
+    )
     la.add_argument("--checks", required=True)
     la.add_argument("--log-dir", required=True)
     la.add_argument("--model", default=None)

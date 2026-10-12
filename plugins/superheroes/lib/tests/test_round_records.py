@@ -197,8 +197,6 @@ def test_path_builders_place_files_where_the_contract_says(tmp_path):
         sd, "round-2", "seats", PHASE, skey + ".a3.json")
     assert RR.dispatch_manifest_path(sd, 2, PHASE, 3) == os.path.join(
         sd, "round-2", "landing", PHASE, "_dispatch.a3.json")
-    assert RR.canary_path(sd, 2, "codex", 3) == os.path.join(
-        sd, "round-2", "landing", "dispatch-panel", "_canary", "codex.a3.json")
 
 
 def test_path_builders_reject_a_traversal_phase(tmp_path):
@@ -225,12 +223,6 @@ def test_path_builders_reject_a_traversal_seat_key(tmp_path):
         RR.store_path(sd, 1, PHASE, "../../escape", 1)
     # ...and a seat key containing traversal text can never BECOME one: it slugifies.
     assert ".." not in RR.storage_key("../../escape")
-
-
-def test_canary_path_rejects_an_unknown_vendor(tmp_path):
-    sd = _session(tmp_path)
-    with pytest.raises(ValueError):
-        RR.canary_path(sd, 1, "acme", 1)
 
 
 def test_path_builders_reject_bad_round_or_attempt(tmp_path):

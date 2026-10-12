@@ -35,6 +35,7 @@ from test_launcher_cloud import (  # noqa: E402
     ENV_ID,
     _cloud_repo,
     _fake_spawn,
+    _git,
     _spawned,
 )
 
@@ -337,6 +338,49 @@ def test_a_cloud_spawn_failure_runs_the_build_locally_and_says_unreachable(
     assert counted["lanes"]["resolved"] == 1
     assert counted["attempts"]["total"] == 2 and counted["attempts"]["extra"] == 1
     assert counted["laneDetail"][0]["attempts"] == 2
+
+
+def test_a_base_ref_that_moves_between_the_cloud_attempt_and_the_fallback_builds_the_first_commit(
+    tmp_path, monkeypatch, capsys, machine,
+):
+    # axis: a premise's base names one commit for the cloud attempt and the local fallback alike — see bite-proof record wo_d_place_call
+    world = _world(tmp_path, monkeypatch)
+    _git(world.repo, "branch", "moving")
+    first = _git(world.repo, "rev-parse", "moving").strip()
+    cloud_calls = []
+
+    def spawn_that_moves_the_ref_then_fails(argv, cwd, log_path, child_env, timeout):
+        cloud_calls.append(argv)
+        tree = _git(world.repo, "rev-parse", "moving^{tree}").strip()
+        second = _git(
+            world.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+            "commit-tree", tree, "-p", first, "-m", "the ref moved").strip()
+        _git(world.repo, "update-ref", "refs/heads/moving", second)
+        raise OSError("no platform")
+
+    monkeypatch.setattr(L, "_default_cloud_spawn", spawn_that_moves_the_ref_then_fails)
+    code, result = _launch(world, capsys, 232, baseCommit="moving")
+
+    assert code == 0, result
+    assert result["ok"] is True and result["fellBack"] is True
+    assert len(cloud_calls) == 1 and len(machine.calls) == 1
+    assert _git(world.repo, "rev-parse", "moving").strip() != first
+    attempt = result["cloudAttempt"]
+    assert _reserved(world.repo, attempt["launchId"])["premise"]["baseCommit"] == first
+    assert _reserved(world.repo, result["launchId"])["premise"]["baseCommit"] == first
+
+
+def test_a_base_that_does_not_resolve_is_left_alone_and_refused_downstream(
+    tmp_path, monkeypatch, capsys, machine,
+):
+    world = _world(tmp_path, monkeypatch)
+    cloud_calls = _cloud(monkeypatch)
+    code, result = _launch(world, capsys, 233, baseCommit="no-such-ref")
+
+    assert code == 1
+    assert result["ok"] is False and result["reason"] == "premise-base-commit-unresolved"
+    assert world.routed[0]["premise"]["baseCommit"] == "no-such-ref"
+    assert cloud_calls == [] and machine.calls == []
 
 
 def test_a_log_that_cannot_be_opened_runs_the_build_locally_the_same_way(

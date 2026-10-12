@@ -80,7 +80,10 @@ reap the stale checkout, then relaunch. Never force it.
 [cloud session](../../../rubric/glossary.md#cloud-builder). On `launch`, `--place` is the owner's
 launch word (`local` or `cloud`), and the launcher's routing step decides every launch's place; a
 launch routed to the cloud takes its environment from the project's setup record, so `launch`
-refuses `--cloud-environment` (`launch-cloud-environment-routed`). `compose` takes
+refuses `--cloud-environment` (`launch-cloud-environment-routed`). The routing step reads the premise's `needs` list (non-empty strings) as everything only the
+owner's machine has, such as a locally seeded browser context for an authenticated wave; declare
+each such dependency in `needs` before you launch, because a premise with none is free to be
+placed in the cloud, where those resources do not reach. `compose` takes
 `--place cloud --cloud-environment <id>` and `preflight` takes `--place`, as given. A cloud launch runs every gate a local launch runs:
 preflight, premise, the stack and dependency gates, compose, and reservation. It then runs the
 platform's command once, reads the session's identity from what the command prints, writes the

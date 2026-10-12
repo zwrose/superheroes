@@ -218,10 +218,10 @@ def _route(repo, store, env, premise=None, word=None, **kw):
 
 
 def test_the_eight_reasons_are_the_boards_words():
-    assert LP.REASON_CODES == ("local-word", "needs", "pass-lapsed", "no-pass", "no-setup",
-                               "version", "calibration", "unreachable")
-    assert LP.NOT_READY_CODES == ("pass-lapsed", "no-pass", "no-setup", "version", "calibration",
-                                  "unreachable")
+    assert LP.REASON_CODES[:2] == ("local-word", "needs")
+    # the not-ready reasons are exactly the ones the readiness check can give
+    assert set(LP.NOT_READY_CODES) == set(CR.REASON_FOR.values())
+    assert set(LP.REASON_CODES[2:]) == set(LP.NOT_READY_CODES)
     assert set(LP.REASONS) == set(LP.REASON_CODES)
     assert (LP.LOCAL_WORD, LP.CLOUD_WORD) == ("local", "cloud")
     fix_pass = ('To fix it, run the pass command on your machine, paste the %spass into the '

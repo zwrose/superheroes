@@ -113,7 +113,7 @@ def test_t5_library_run_loop_parks_cannot_certify_without_fixing():
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
         fix_step=fix_step, io={"judgment_gate": judgment_gate}), _cfg_cert())
-    assert refusal["loopTerminal"] == "cannot-certify"
+    assert refusal["verdict"] == "cannot-certify"
     reason = (receipt["certification"] or {}).get("reason") or ""
     assert "gate-guidance-oversize: %s (2001 bytes; cap 2000)" % _TRADEOFF_ID in reason
     assert fixes == []
@@ -213,7 +213,7 @@ def test_t11_library_run_loop_parks_aggregate_without_fixing():
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": _tradeoff_findings(5)} if rnd == 1 and dim == "code-reviewer" else []),
         fix_step=fix_step, io={"judgment_gate": judgment_gate}), _cfg_cert(diff=diff))
-    assert refusal["loopTerminal"] == "cannot-certify"
+    assert refusal["verdict"] == "cannot-certify"
     reason = (receipt["certification"] or {}).get("reason") or ""
     assert _AGGREGATE_REASON % 5 in reason
     assert fixes == []

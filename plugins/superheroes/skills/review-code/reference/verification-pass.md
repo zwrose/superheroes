@@ -150,7 +150,7 @@ print(json.dumps(verification.merge_and_rank(survivors, grouping)))
 The grouping must account for **every** staged survivor id **exactly once** under a **coverage
 guarantee**. When a **non-empty** grouping is submitted, each survivor id must appear in exactly
 one group's `member_ids`; a grouping that omits any staged id is **refused** with
-`staged-id-unresolvable` naming the omitted id — re-emit the grouping with the missing ids as
+`staged-id-unresolvable` naming the omitted id — submit the grouping again with the missing ids as
 singleton groups. A submit with no `grouping` key is **refused** at submit. **`grouping: null`**
 or an **empty-list** grouping carries no coverage obligation:
 `verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;

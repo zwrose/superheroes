@@ -426,6 +426,7 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    in one fenced block for them to copy.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-message --cwd .
    ```
 
@@ -437,12 +438,22 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    kept (leave `--before` out when that value was null):
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept>
    ```
 
    On `picked`, say its `message` and keep its `environment`: that is the id every later step names.
-   On `not-picked`, say its `message`, wait for the owner, and run the same command again. On a
-   machine where several Claude accounts share one settings file, read right after the owner says
+   On `not-picked` with reason `pick-unchanged`, say its `message`. When the owner says the
+   environment shown as picked is this project's, read once more with the value step 1 kept as both
+   values, and keep the `environment` it returns:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>
+   ```
+
+   On any other `not-picked`, say its `message`, wait for the owner, and run the first command again.
+   On a machine where several Claude accounts share one settings file, read right after the owner says
    the pick is done: another account's pick in between would be read as this one.
 4. **Walk the reviewer sign-in, and confirm it is done.** Run `sign-in`. When `signedIn` is false,
    say its `message`, wait for the owner, and run it again until `signedIn` is true; then say its
@@ -450,14 +461,17 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    and it comes before the pass command, which cannot work without it.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" sign-in
    ```
 5. **Give the pass command, naming the id.** Tell the owner to run it on their own machine. It puts
    the [reviewer pass](../../../rubric/glossary.md#reviewer-pass) block on their clipboard, and they
    paste the block into the environment's variables. Never run it for them, and never ask to see
-   what it copied.
+   what it copied. The owner's terminal does not hold `ROOT_DIR`, so give them the command with
+   the plugin root's absolute path written out in the quoted script path.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_pass.py" make --environment <id>
    ```
 6. **Run the check when the owner says the steps are done.** Start one check session naming the
@@ -466,15 +480,17 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    repository, and the line holds versions, stamps and a date, never the pass.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" start --cwd . --environment <id> [--issue <n>]
    ```
 
    Keep the `nonce` it returns. A refusal starts nothing: say its `message`.
-7. **Read the result line and judge it.** Read the line that starts with `SUPERHEROES-CLOUD-CHECK`
-   from the session's final message, with the host's run-log reader, or from the issue comment. Save
-   the text you read to a file and run:
+7. **Read the result and judge it.** Read the session's final message, with the host's run-log
+   reader, or the issue comment. Save its full text to a file, without picking a line out of it, and
+   run:
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --cwd . --environment <id> --nonce <nonce> --line-file <file>
    ```
 
@@ -482,12 +498,24 @@ or paste the id, and never use an id from anywhere but a `picked` result.
    setting. A failed check, or a result that could not be read, has written nothing; when cloud
    builds were on, it has switched them off and the message says so. Never write the setup record
    any other way, and never tell the owner a check passed without a `passed` result.
-8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the id step 3 returned.
-   When the failed part was the environment, run steps 1 and 3 again first; the new check then names
-   the id that new pick returned. **"Setup text"** at any time writes new setup text: run
+8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the environment now in use (the id step 3
+   returned, or the one the latest recovery pick returned).
+   When the failed part was the environment, run `snapshot` (step 1's command) before relaying the
+   failure message, so the baseline is the value as the owner leaves it. When the owner says the
+   repair is done, read the pick with both the new baseline and the environment now in use, and use the
+   `environment` it returns for steps 5 to 7; it becomes the environment now in use for every later
+   retry. A repair that kept the same environment returns that same id.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the snapshot value> --confirmed <the environment now in use>
+   ```
+
+   **"Setup text"** at any time writes new setup text: run
    `setup-text`, and give its `message` and its `setupText` in one fenced block.
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text --cwd .
    ```
 
