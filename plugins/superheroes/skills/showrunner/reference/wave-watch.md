@@ -28,6 +28,10 @@
   exits. Arm as **one harness background task per batch** at wave launch.
 - **`run`** — a true one-shot. One ledger read (and at most one open-PR read, for stack state), no
   waiting, then prints one JSON line on stdout and exits. It does **not** re-arm.
+- **`note-answered`** — not a watch: `--repo-root` and `--comment-id N` record a builder note's
+  comment as answered, so `builder-note` stops surfacing it. It prints one JSON line on stdout and
+  exits 1 on a refusal: `comment-id-invalid`, `note-answers-unreadable` (the record is never
+  overwritten), or `store-unresolvable`.
 
 **The re-arm lives inside `loop`** — there is no daemon, so there is nothing to orphan. It replaces
 hand-rolled per-session watch loops that kept failing quietly: a double-backgrounded loop that
@@ -112,11 +116,13 @@ cause — it never arms without knowing it is alone.
 
 ## What ends a loop and what it passes over
 
-The authoritative closed sets **`LANE_ENDING_EVENTS`** and **`BENIGN_EVENTS`** live in
-`lib/wave_watch.py` (they partition **`EVENTS`**). Read the member tokens there — do not re-copy
-them into this reference.
+The authoritative closed sets **`LANE_ENDING_EVENTS`**, **`BENIGN_EVENTS`** and
+**`ATTENTION_EVENTS`** live in `lib/wave_watch.py` (they partition **`EVENTS`**). Read the member
+tokens there — do not re-copy them into this reference.
 
 - **`LANE_ENDING_EVENTS`** — membership ends the `loop` invocation (after printing one JSON line).
+- **`ATTENTION_EVENTS`** — membership also ends the `loop`, but ends no lane: a builder is waiting
+  on you. Not suppressible.
 - **`BENIGN_EVENTS`** — membership never ends the loop. Each benign **non-timer** event is passed
   over: the loop re-arms, appends a `--log` line in the same `{"arm", "elapsedSeconds", "result"}`
   shape as a timer arm (the `result` carries that event), and accumulates **`passedOver`** /
@@ -368,6 +374,15 @@ For a [cloud lane](../../../rubric/glossary.md#cloud-lane) the watcher never rep
 reaches you through its PR and its issue. While a batch has a live cloud lane, every result carries
 `cloudLanes`, which lists them.
 
+When **`builder-note`** fires, a cloud builder has posted an issue comment opening with
+`NOTE_HEADER` (`lib/cloud_builder.py`) on a live lane's issue since that lane started, and no
+`note-answered` has recorded it. The payload carries `launchId` (the first note's lane) and `notes`,
+by comment id: `{"launchId", "issue", "commentId", "url", "createdAt", "cloudSessionName",
+"cloudSessionId", "configDir"}` — `configDir` names the Claude account the lane runs on, so pick
+your relay by it — plus `alsoObserved`. Answer on the issue, then run `note-answered`, or the note
+fires again on the next arm. A note posted while you were away fires when you are back. It reads
+the repository's issue comments once per tick, a `304` re-using the stored list.
+
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
 on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
 watcher does not act on either — read them when a lane you are watching hits a conflict at landing:
@@ -398,6 +413,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.

@@ -1614,6 +1614,7 @@ def test_event_precedence_order():
         ww.EVENT_LANE_TERMINAL,
         ww.EVENT_LANE_BLOCKED,
         ww.EVENT_BUILDER_EXITED,
+        ww.EVENT_BUILDER_NOTE,
         ww.EVENT_STACK_STATE_CHANGED,
         ww.EVENT_PR_SET_CHANGED,
         ww.EVENT_LANE_STALE,
@@ -3900,8 +3901,10 @@ def test_cli_run_max_seconds_exits_two():
 
 
 def test_lane_and_benign_event_partition():
-    assert ww.LANE_ENDING_EVENTS | ww.BENIGN_EVENTS == ww.EVENTS
+    assert ww.LANE_ENDING_EVENTS | ww.BENIGN_EVENTS | ww.ATTENTION_EVENTS == ww.EVENTS
     assert not ww.LANE_ENDING_EVENTS & ww.BENIGN_EVENTS
+    assert not ww.LANE_ENDING_EVENTS & ww.ATTENTION_EVENTS
+    assert not ww.BENIGN_EVENTS & ww.ATTENTION_EVENTS
 
 
 def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch, capsys):

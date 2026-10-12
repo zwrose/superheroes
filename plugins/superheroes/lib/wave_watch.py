@@ -12,6 +12,7 @@ Verbs:
   cells (pr_state, stack_state, pr_sampled) threaded through every arm so
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
   a prior arm's successful PR poll is not forgotten on the next arm's timer.
+- note-answered: record a builder-note comment id as answered (the only writer here).
 
 Contract:
 - Refusals (ok=False): the REFUSALS constant.
@@ -61,8 +62,8 @@ Contract:
   an already-handled lane that cannot be terminalized does not re-fire.
 - ignore-events: caller-supplied (launchId, event) pairs suppress that event
   for that lane only — lane-terminal, lane-blocked, builder-exited, and
-  lane-stale are suppressible; stack-state-changed, pr-set-changed, and timer
-  are not. Suppression
+  lane-stale are suppressible; builder-note, stack-state-changed, pr-set-changed,
+  and timer are not. Suppression
   affects actionability only.
 - Pid liveness: probes ONLY the recorded leader pid (never the process group).
   launch_ledger._child_group_is_live biases uncertain toward ALIVE because a
@@ -91,9 +92,16 @@ Contract:
   is lane-stale, as is a future-dated reference. A read that could not be made records
   cloud-activity-unavailable and the lane is neither stale nor clean. Every non-refusal
   tick/timer result carries cloudLanes while the batch has a live cloud lane.
+- Builder notes: a cloud builder cannot message the advisor, so it posts an issue comment
+  that opens with cloud_builder.NOTE_HEADER. One REST read of the repository's issue
+  comments per tick (a 304 re-uses the stored list) surfaces an unanswered note on a live
+  started cloud lane's issue, created at or after that lane's start, as builder-note. It
+  keeps surfacing until `note-answered` records its comment id; a read that could not be
+  made records builder-note-unavailable and the lane is neither noted nor clean.
 - Standing guarantees: the watcher never writes ledger or heartbeat state; under
   the store its only write is its own loop-lock sidecar (`wave-watch-locks/`);
-  `--log` writes the caller-selected log. It never signals any process (pid
+  `--log` writes the caller-selected log. The `note-answered` verb alone writes
+  builder-notes-answered.json beside the ledger. It never signals any process (pid
   liveness is os.kill(pid, 0) probing only).
 """
 import argparse
@@ -114,9 +122,11 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cloud_builder as cb  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import stack_check as sc  # noqa: E402
+import store_core  # noqa: E402
 
 _GH_PR_LIST_ARGV = [
     "gh", "pr", "list", "--state", "open", "--json", "number", "--limit", "1000",
@@ -131,6 +141,10 @@ _CLOUD_ACTIVITY_QUERY_HEAD = (
     "{ repository(owner: $owner, name: $name) { "
 )
 _CLOUD_ACTIVITY_QUERY_TAIL = "} }"
+
+BUILDER_NOTES_ANSWERED_NAME = "builder-notes-answered.json"
+_NOTE_COMMENTS_MAX_PAGES = 10
+_NOTE_LINK_NEXT = re.compile(r'<[^>]*>\s*;\s*rel="next"')
 
 # --- session-transcript liveness oracle (#1023) -------------------------------
 #
@@ -197,6 +211,8 @@ REFUSAL_LEDGER_UNREADABLE = "ledger-unreadable"
 REFUSAL_INTERNAL_ERROR = "internal-error"
 REFUSAL_LOOP_ALREADY_LIVE = "loop-already-live"
 REFUSAL_LOOP_LOCK_UNAVAILABLE = "loop-lock-unavailable"
+REFUSAL_COMMENT_ID_INVALID = "comment-id-invalid"
+REFUSAL_NOTE_ANSWERS_UNREADABLE = "note-answers-unreadable"
 
 REFUSALS = frozenset({
     REFUSAL_BATCH_INVALID,
@@ -210,11 +226,14 @@ REFUSALS = frozenset({
     REFUSAL_INTERNAL_ERROR,
     REFUSAL_LOOP_ALREADY_LIVE,
     REFUSAL_LOOP_LOCK_UNAVAILABLE,
+    REFUSAL_COMMENT_ID_INVALID,
+    REFUSAL_NOTE_ANSWERS_UNREADABLE,
 })
 
 EVENT_LANE_TERMINAL = "lane-terminal"
 EVENT_LANE_BLOCKED = "lane-blocked"
 EVENT_BUILDER_EXITED = "builder-exited"
+EVENT_BUILDER_NOTE = "builder-note"
 EVENT_STACK_STATE_CHANGED = "stack-state-changed"
 EVENT_PR_SET_CHANGED = "pr-set-changed"
 EVENT_LANE_STALE = "lane-stale"
@@ -224,6 +243,7 @@ EVENTS = frozenset({
     EVENT_LANE_TERMINAL,
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
+    EVENT_BUILDER_NOTE,
     EVENT_STACK_STATE_CHANGED,
     EVENT_PR_SET_CHANGED,
     EVENT_LANE_STALE,
@@ -242,8 +262,15 @@ BENIGN_EVENTS = frozenset({
     EVENT_TIMER,
 })
 
-assert LANE_ENDING_EVENTS | BENIGN_EVENTS == EVENTS
+# Ends the loop without ending a lane: the advisor is asked something and a builder waits.
+ATTENTION_EVENTS = frozenset({
+    EVENT_BUILDER_NOTE,
+})
+
+assert LANE_ENDING_EVENTS | BENIGN_EVENTS | ATTENTION_EVENTS == EVENTS
 assert not LANE_ENDING_EVENTS & BENIGN_EVENTS
+assert not LANE_ENDING_EVENTS & ATTENTION_EVENTS
+assert not BENIGN_EVENTS & ATTENTION_EVENTS
 
 DEGRADATION_LEDGER_TORN_TAIL = "ledger-torn-tail"
 DEGRADATION_LEDGER_UNREADABLE = "ledger-unreadable"
@@ -257,6 +284,7 @@ DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
 DEGRADATION_TRANSCRIPT_UNRESOLVED = "transcript-unresolved"
 DEGRADATION_STACK_SIGNAL_UNAVAILABLE = "stack-signal-unavailable"
 DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE = "cloud-activity-unavailable"
+DEGRADATION_BUILDER_NOTE_UNAVAILABLE = "builder-note-unavailable"
 
 STACK_STATE_COMPLETE = "stack-complete"
 STACK_STATE_INCOMPLETE = "stack-incomplete"
@@ -278,12 +306,14 @@ DEGRADATIONS = frozenset({
     DEGRADATION_TRANSCRIPT_UNRESOLVED,
     DEGRADATION_STACK_SIGNAL_UNAVAILABLE,
     DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE,
+    DEGRADATION_BUILDER_NOTE_UNAVAILABLE,
 })
 
 EVENT_PRECEDENCE = (
     EVENT_LANE_TERMINAL,
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
+    EVENT_BUILDER_NOTE,
     # Above pr-set-changed so a completion wins on a tick where both hold; the
     # PR-set evaluator does not run that tick and so never advances pr_state.
     EVENT_STACK_STATE_CHANGED,
@@ -1153,6 +1183,227 @@ def _evaluate_cloud_activity(
     return stale
 
 
+def _answered_notes_path(repo_root, env):
+    resolved = ll.ledger_path(repo_root, env=env)
+    if not resolved["ok"]:
+        return None
+    return os.path.join(
+        os.path.dirname(resolved["path"]), BUILDER_NOTES_ANSWERED_NAME,
+    )
+
+
+def _load_answered_notes(path):
+    """(answered comment ids, readable). A missing file is readable and empty."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            parsed = json.load(handle)
+    except FileNotFoundError:
+        return set(), True
+    except (OSError, ValueError):
+        return set(), False
+    ids = parsed.get("answered") if isinstance(parsed, dict) else None
+    if not isinstance(ids, list) or not all(_valid_positive_int(i) for i in ids):
+        return set(), False
+    return set(ids), True
+
+
+def _parse_http_response(stdout):
+    """(status, lower-cased headers, body) from `gh api -i` stdout, else None."""
+    if not isinstance(stdout, str):
+        return None
+    parts = re.split(r"\r?\n\r?\n", stdout, maxsplit=1)
+    lines = parts[0].splitlines()
+    status = re.match(r"HTTP/\S+\s+(\d{3})\b", lines[0]) if lines else None
+    if status is None:
+        return None
+    headers = {}
+    for line in lines[1:]:
+        name, colon, value = line.partition(":")
+        if colon:
+            headers[name.strip().lower()] = value.strip()
+    return int(status.group(1)), headers, parts[1] if len(parts) > 1 else ""
+
+
+def _read_issue_comments(
+    repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state,
+):
+    """(state, comments): state True read, False unreadable, None no request made. Never raises."""
+    if deadline - monotonic() <= 0:
+        return None, []
+    slug = known_slug
+    if slug is None:
+        slug, _refusal_result = _resolve_repo_slug(
+            repo_root, deadline, monotonic, gh_run, env, granted=True,
+        )
+    if slug is None:
+        return False, []
+    url = "repos/%s/issues/comments?since=%s&per_page=100" % (slug, since)
+    stored = note_state[0]
+    # A stored read answers only for the same URL: another `since` is another list.
+    if stored is not None and stored[0] != url:
+        stored = None
+    try:
+        comments = []
+        for page in range(1, _NOTE_COMMENTS_MAX_PAGES + 1):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return (None if page == 1 else False), []
+            argv = ["gh", "api", "-i"]
+            # bite-axis: VALIDATOR — the stored ETag rides the first page's request.
+            if page == 1 and stored is not None and stored[1]:
+                argv += ["-H", "If-None-Match: %s" % stored[1]]
+            argv.append(url if page == 1 else "%s&page=%d" % (url, page))
+            proc = gh_run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)),
+                cwd=repo_root,
+                env=_gh_scrub_env(env),
+            )
+            # The exit code is not read: gh exits 1 on a 304, which is no failure.
+            response = _parse_http_response(proc.stdout)
+            if response is None:
+                return False, []
+            status, headers, body = response
+            if status == 304 and page == 1:
+                return (True, stored[2]) if stored is not None else (False, [])
+            if status != 200:
+                return False, []
+            parsed = json.loads(body)
+            if not isinstance(parsed, list):
+                return False, []
+            comments.extend(parsed)
+            if not _NOTE_LINK_NEXT.search(headers.get("link", "")):
+                # One page's ETag cannot vouch for later pages, so only a one-page read
+                # is conditional next time.
+                etag = headers.get("etag") if page == 1 else None
+                note_state[0] = (url, etag, comments)
+                return True, comments
+        return False, []
+    except Exception:
+        return False, []
+
+
+def _builder_note(comment, watched, answered):
+    """The note a comment is for one watched lane, else None. A malformed element is skipped."""
+    if not isinstance(comment, dict):
+        return None
+    comment_id = comment.get("id")
+    issue_url, body = comment.get("issue_url"), comment.get("body")
+    created = _parse_activity_time(comment.get("created_at"))
+    if not _valid_positive_int(comment_id) or created is None:
+        return None
+    if not isinstance(issue_url, str) or not isinstance(body, str):
+        return None
+    # bite-axis: HEADER — only a body opening with the builder-note header is a note.
+    if not body.lstrip().startswith(cb.NOTE_HEADER):
+        return None
+    # bite-axis: ANSWERED — a note the advisor recorded answered stops surfacing.
+    if comment_id in answered:
+        return None
+    match = re.search(r"/issues/(\d+)$", issue_url)
+    number = int(match.group(1)) if match else None
+    # bite-axis: WATCHED ISSUE — a comment on an issue no watched lane has is no note.
+    on_issue = [lid for lid in watched if watched[lid]["issue"] == number]
+    # bite-axis: STARTED — an earlier lane's note on the same issue is not this lane's.
+    lanes = [lid for lid in on_issue if created >= watched[lid]["startedTs"]]
+    if not lanes:
+        return None
+    lid = max(lanes, key=lambda lane: (watched[lane]["startedTs"], lane))
+    info = watched[lid]
+    return {
+        "launchId": lid,
+        "issue": number,
+        "commentId": comment_id,
+        "url": comment.get("html_url"),
+        "createdAt": comment["created_at"],
+        "cloudSessionName": info.get("cloudSessionName"),
+        "cloudSessionId": info.get("cloudSessionId"),
+        "configDir": info.get("configDir"),
+    }
+
+
+def _evaluate_builder_notes(
+    repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
+    note_state, known_slug=None,
+):
+    """Unanswered builder notes on live started cloud lanes' issues, by comment id."""
+    watched = {
+        lid: info for lid, info in live_lanes.items()
+        if _is_cloud_lane(info) and info.get("started")
+        and _valid_issue_number(info.get("issue"))
+        and isinstance(info.get("startedTs"), (int, float))
+        and not isinstance(info.get("startedTs"), bool)
+        and math.isfinite(info["startedTs"])
+    }
+    if not watched:
+        return []
+    if note_state is None:
+        note_state = [None]
+    try:
+        since = datetime.fromtimestamp(
+            min(info["startedTs"] for info in watched.values()), tz=timezone.utc,
+        ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
+    except (ValueError, OverflowError, OSError):
+        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+        return []
+    state, comments = _read_issue_comments(
+        repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state,
+    )
+    if state is None:
+        return []
+    if not state:
+        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+        return []
+    path = _answered_notes_path(repo_root, env)
+    answered = _load_answered_notes(path)[0] if path is not None else set()
+    notes = [_builder_note(comment, watched, answered) for comment in comments]
+    return sorted(
+        (note for note in notes if note is not None),
+        key=lambda note: note["commentId"],
+    )
+
+
+def _parse_comment_id(value):
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        value = int(value)
+    return value if _valid_positive_int(value) else None
+
+
+def note_answered(repo_root, comment_id, *, env=None):
+    """Record a builder-note comment id as answered. Never raises.
+
+    Two concurrent calls can lose one id; that note surfaces again, which fails toward
+    the advisor seeing it.
+    """
+    try:
+        if env is None:
+            env = os.environ
+        number = _parse_comment_id(comment_id)
+        if number is None:
+            return {"ok": False, "reason": REFUSAL_COMMENT_ID_INVALID}
+        if not _valid_repo_root(repo_root):
+            return {"ok": False, "reason": REFUSAL_REPO_ROOT_INVALID}
+        path = _answered_notes_path(repo_root, env)
+        if path is None:
+            return {"ok": False, "reason": REFUSAL_STORE_UNRESOLVABLE}
+        answered, readable = _load_answered_notes(path)
+        if not readable:
+            return {"ok": False, "reason": REFUSAL_NOTE_ANSWERS_UNREADABLE}
+        answered.add(number)
+        store_core.atomic_write(
+            path, json.dumps({"answered": sorted(answered)}, sort_keys=True) + "\n",
+        )
+        return {"ok": True, "commentId": number, "path": path}
+    except OSError:
+        return {"ok": False, "reason": REFUSAL_STORE_UNRESOLVABLE}
+    except Exception as exc:
+        return {
+            "ok": False, "reason": REFUSAL_INTERNAL_ERROR, "detail": type(exc).__name__,
+        }
+
+
 def _cloud_lanes_payload(live_lanes):
     """The `cloudLanes` result key for a batch's live cloud lanes; {} when there are none."""
     entries = [
@@ -1493,6 +1744,23 @@ def _payload_builder_exited(ctx):
     return payload
 
 
+def _payload_builder_note(ctx):
+    notes = ctx["builder_notes"]
+    if not notes:
+        return None
+    payload = {"launchId": notes[0]["launchId"], "notes": notes}
+    also = _build_also_observed(
+        EVENT_BUILDER_NOTE,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
+    )
+    if also is not None:
+        payload["alsoObserved"] = also
+    return payload
+
+
 def _payload_pr_set_changed(ctx):
     pr_change = _evaluate_pr_set_changed(
         ctx.get("open_pr_numbers"),
@@ -1547,6 +1815,7 @@ _EVENT_PAYLOAD_BUILDERS = {
     EVENT_LANE_TERMINAL: _payload_lane_terminal,
     EVENT_LANE_BLOCKED: _payload_lane_blocked,
     EVENT_BUILDER_EXITED: _payload_builder_exited,
+    EVENT_BUILDER_NOTE: _payload_builder_note,
     EVENT_STACK_STATE_CHANGED: _payload_stack_state_changed,
     EVENT_PR_SET_CHANGED: _payload_pr_set_changed,
     EVENT_LANE_STALE: _payload_lane_stale,
@@ -1826,6 +2095,7 @@ def _evaluate_tick(
     ignore_set,
     cloud_state=None,
     cloud_payload_out=None,
+    note_state=None,
 ):
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
@@ -1857,6 +2127,7 @@ def _evaluate_tick(
         ignore_set,
     )
     stale_cloud_launches = []
+    builder_notes = []
     if lane_event_due:
         open_pr_numbers = None
         repo_slug = None
@@ -1908,6 +2179,11 @@ def _evaluate_tick(
             known_slug=repo_slug,
         )
         stale_live_launches = stale_live_launches + stale_cloud_launches
+        builder_notes = _evaluate_builder_notes(
+            repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
+            monotonic=monotonic, degraded=degraded, note_state=note_state,
+            known_slug=repo_slug,
+        )
 
     cloud_payload = _cloud_lanes_payload(live_lanes)
     if cloud_payload_out is not None:
@@ -1934,6 +2210,7 @@ def _evaluate_tick(
         "env": env,
         "membership_reader": membership_reader,
         "repo_slug": repo_slug,
+        "builder_notes": builder_notes,
     }
 
     for event in EVENT_PRECEDENCE:
@@ -2053,6 +2330,7 @@ def watch_arm(
     stack_state=None,
     pr_sampled=None,
     cloud_state=None,
+    note_state=None,
 ):
     """Windowed watch — one arm until the first event or arm deadline."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -2097,6 +2375,8 @@ def watch_arm(
             pr_sampled = [False]
         if cloud_state is None:
             cloud_state = [None]
+        if note_state is None:
+            note_state = [None]
 
         start = monotonic()
         deadline = start + max_seconds
@@ -2122,6 +2402,7 @@ def watch_arm(
                 first_tick=first_tick,
                 ignore_set=ignore_set,
                 cloud_state=cloud_state,
+                note_state=note_state,
             )
             if tick_result is not None:
                 return _with_ledger_path(tick_result, resolved_ledger_path)
@@ -2220,6 +2501,7 @@ def run(
             ignore_set=ignore_set,
             cloud_state=cloud_state,
             cloud_payload_out=cloud_payload,
+            note_state=[None],
         )
         if tick_result is not None:
             return _with_ledger_path(tick_result, resolved_ledger_path)
@@ -2320,6 +2602,7 @@ def loop(
         stack_state = [None]
         pr_sampled = [False]
         cloud_state = [None]
+        note_state = [None]
         last_cloud_lanes = [None]
         total_start = monotonic()
         total_deadline = (
@@ -2377,6 +2660,7 @@ def loop(
                 stack_state=stack_state,
                 pr_sampled=pr_sampled,
                 cloud_state=cloud_state,
+                note_state=note_state,
             )
 
             result_degraded = set(result.get("degraded", []))
@@ -2514,10 +2798,14 @@ def main(argv):
         help="suppress one event for one lane (repeatable)",
     )
 
+    answered_parser = sub.add_parser("note-answered")
+    answered_parser.add_argument("--repo-root", required=True)
+    answered_parser.add_argument("--comment-id", required=True)
+
     args = ap.parse_args(argv[1:])
 
     ignore_events = []
-    for raw in args.ignore_event_raw:
+    for raw in getattr(args, "ignore_event_raw", ()):
         parsed = _parse_ignore_event_cli(raw)
         if parsed is None:
             ignore_events.append((None, None))
@@ -2542,6 +2830,8 @@ def main(argv):
             ignore_launch_ids=tuple(args.ignore_launch_ids),
             ignore_events=tuple(ignore_events),
         )
+    elif args.cmd == "note-answered":
+        result = note_answered(args.repo_root, args.comment_id)
     else:
         return 1
 
