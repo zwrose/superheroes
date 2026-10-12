@@ -138,16 +138,21 @@ _CLOUD_UNCONFIRMED_APPEND_REMEDY = (
     "The launch command may have created a cloud session that this launcher could not read the "
     "identity of, and the `started` record could not be written (`startedAppend` holds why). The "
     "lane is live on its `reserved` record alone. Look for a session with the name in "
-    "`cloudSessionName` in the host's session listing. `record-outcome` refuses a lane with no "
-    "`started` record, so it cannot end this lane. The result carries the record a later repair "
-    "needs in `pendingStarted`."
+    "`cloudSessionName` in the host's session listing. A reported write failure does not prove the "
+    "record is absent. Read the ledger first: when the lane already has its `started` record, end "
+    "it normally with `record-outcome`; when it does not, restore it with `launcher.py "
+    "repair-lane --pending-file <a file holding pendingStarted>`. The result carries the record "
+    "a later repair needs in `pendingStarted`."
 )
 _CLOUD_STARTED_APPEND_REMEDY = (
     "A cloud session exists and is working: its identity is in `cloudSessionId`. The `started` "
     "record could not be written, and `startedAppend` holds why. The lane is left live on its "
-    "`reserved` record alone. `record-outcome` refuses a lane with no `started` record, so keep "
-    "the session's identity from this result and reach the session by it. The result carries the "
-    "record a later repair needs in `pendingStarted`."
+    "`reserved` record alone. A reported write failure does not prove the record is absent. Read "
+    "the ledger first: when the lane already has its `started` record, end it normally with "
+    "`record-outcome`; when it does not, restore it with `launcher.py repair-lane "
+    "--pending-file <a file holding pendingStarted>`. Keep the session's identity from this "
+    "result and reach the session by it. The result carries the record a later repair needs in "
+    "`pendingStarted`."
 )
 
 # What a reader of a `started` record sees when its lane launched over a recorded surface
@@ -165,8 +170,8 @@ _SLOT_REMEDY = (
     "self-provisions), then give every lane named in `missing` its own reservation. "
     "The literal `this-launch` in `missing` names the launch being attempted — relaunch "
     "it with `--slot` and `--generation` on the command below. Any other id in `missing` "
-    "is a live unslotted lane that must reach a terminal outcome before relaunch — there "
-    "is no CLI transition today for a reserved-but-never-started lane. "
+    "is a live unslotted lane that must reach a terminal outcome before relaunch — "
+    "a reserved-but-never-started lane reaches one with `launcher.py repair-lane`. "
     "Relaunch each lane with: "
     "`launcher.py launch --repo-root <repo-root> --issue <n> --premise <FILE PATH> "
     "--checks <FILE PATH> --log-dir <dir> --slot <slot-id> --generation <int> "
@@ -1588,16 +1593,41 @@ def _pause_between_appends():
     time.sleep(_CLOUD_APPEND_PAUSE_SECONDS)
 
 
+def _started_already_landed(repo_root, launch_id, env):
+    """True when the ledger, read afresh, already holds the lane's `started` record.
+
+    A reported write failure does not prove the record is absent (the line can land and its sync
+    fail). A read that fails, or a ledger that does not fold, proves nothing, so it answers False.
+    """
+    read_result = ll.read(repo_root, env=env)
+    if read_result["state"] not in ("ok", "missing"):
+        return False
+    folded = ll.fold(read_result["records"])
+    if not folded["ok"]:
+        return False
+    lane = folded["launches"].get(launch_id)
+    return bool(lane and lane.get("started"))
+
+
 def _append_started(repo_root, record, env):
     """Append a cloud lane's `started` record, trying up to three times; the last result.
 
     The append takes a lock, and a brief contention for it is the ordinary cause of a failure, so
-    one failure must not strand a lane whose command has already run.
+    one failure must not strand a lane whose command has already run. After each failure the
+    ledger is read again: a lane whose `started` record landed is a success, and is never
+    appended a second time.
     """
     for attempt in range(_CLOUD_APPEND_TRIES):
         result = _append_under_lock(repo_root, record, env=env)
         if result["ok"]:
             return result
+        # axis: a failed append is not taken as proof the record is absent — the ledger is re-read.
+        if _started_already_landed(repo_root, record.get("launchId"), env):
+            lp = ll.ledger_path(repo_root, env=env)
+            return {
+                "ok": True, "reason": None, "path": lp["path"] if lp["ok"] else None,
+                "recoveredAfter": result["reason"],
+            }
         if attempt + 1 < _CLOUD_APPEND_TRIES:
             _pause_between_appends()
     return result
@@ -3526,6 +3556,19 @@ def _cli_record_outcome(args):
     )
 
 
+def _cli_repair_lane(args):
+    pending = None
+    if args.pending_file is not None:
+        try:
+            with open(args.pending_file, encoding="utf-8") as fh:
+                pending = json.load(fh)
+        except (OSError, ValueError):
+            return _fail("pending-file-unreadable")
+    return ll.repair_never_started(
+        args.repo_root, args.launch_id, pending_started=pending, evidence=args.evidence,
+    )
+
+
 def _cli_amend(args):
     if args.kind not in ll.CALLER_WRITABLE_AMENDMENT_KINDS:
         return _fail("amend-kind-not-caller-writable:%s" % args.kind)
@@ -3625,6 +3668,17 @@ def main(argv=None):
              "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
     )
     ro.set_defaults(func=_cli_record_outcome)
+
+    rl = sub.add_parser("repair-lane")
+    rl.add_argument("--repo-root", required=True)
+    rl.add_argument("--launch-id", required=True)
+    rl.add_argument(
+        "--pending-file", default=None,
+        help="a file holding the `pendingStarted` record of a lane whose `started` was not written; "
+             "without it the lane's terminal event is recorded from --evidence",
+    )
+    rl.add_argument("--evidence", default=None)
+    rl.set_defaults(func=_cli_repair_lane)
 
     am = sub.add_parser("amend")
     am.add_argument("--repo-root", required=True)
