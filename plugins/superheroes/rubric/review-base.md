@@ -1,4 +1,4 @@
-<!-- rubric-version: 12 -->
+<!-- rubric-version: 13 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
