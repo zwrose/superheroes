@@ -14,6 +14,7 @@ import sys
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _ARGV_TS = os.path.join(_PLUGIN_ROOT, "hooks", "mod", "argv.ts")
+_VOCABULARY = os.path.join(_PLUGIN_ROOT, "lib", "compaction_cli.json")
 _HOOK = os.path.join(_PLUGIN_ROOT, "hooks", "compaction_context.py")
 
 SID = "sess-argv_1"
@@ -37,14 +38,16 @@ def _mod_argvs(tmp_path, transcript):
     assert built.returncode == 0, built.stdout + built.stderr
     (out / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     (out / "run.mjs").write_text(
-        "import { instructionsArgv, markArgv, saveArgv } from './argv.js'\n"
-        "const [root, sid, transcript, owner] = process.argv.slice(2)\n"
+        "import { readFileSync } from 'node:fs'\n"
+        "import { instructionsArgv, markArgv, parseVocabulary, saveArgv } from './argv.js'\n"
+        "const [root, sid, transcript, owner, vocabularyFile] = process.argv.slice(2)\n"
+        "const cli = parseVocabulary(readFileSync(vocabularyFile, 'utf8'))\n"
         "console.log(JSON.stringify({\n"
-        "  instructions: instructionsArgv(root, sid, transcript, owner),\n"
-        "  mark: markArgv(root, sid),\n"
-        "  save: saveArgv(root, sid),\n"
+        "  instructions: instructionsArgv(cli, root, sid, transcript, owner),\n"
+        "  mark: markArgv(cli, root, sid),\n"
+        "  save: saveArgv(cli, root, sid),\n"
         "}))\n", encoding="utf-8")
-    r = subprocess.run([node, str(out / "run.mjs"), _PLUGIN_ROOT, SID, str(transcript), OWNER],
+    r = subprocess.run([node, str(out / "run.mjs"), _PLUGIN_ROOT, SID, str(transcript), OWNER, _VOCABULARY],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)

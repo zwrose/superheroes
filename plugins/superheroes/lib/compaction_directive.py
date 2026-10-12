@@ -311,21 +311,28 @@ def _glue_user_instructions(argv):
     return out
 
 
+# The CLI vocabulary (verb names and flag names) lives in compaction_cli.json, the one
+# definition the Claude Code mod (hooks/mod/argv.ts) reads too. Whether a flag is
+# required is this parser's own semantics and stays here, keyed by the JSON's role names.
+_CLI_VOCABULARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compaction_cli.json")
+_REQUIRED_ROLES = {
+    "path": ("sessionId",),
+    "save": ("sessionId",),
+    "mark": ("sessionId",),
+    "mode": ("transcript",),
+    "instructions": ("sessionId",),
+}
+
+
 def _build_parser():
+    with open(_CLI_VOCABULARY, encoding="utf-8") as fh:
+        verbs = json.load(fh)["verbs"]
     ap = argparse.ArgumentParser(prog="compaction_directive.py")
     sub = ap.add_subparsers(dest="verb", required=True)
-    p = sub.add_parser("path")
-    p.add_argument("--session-id", required=True)
-    sv = sub.add_parser("save")
-    sv.add_argument("--session-id", required=True)
-    mk = sub.add_parser("mark")
-    mk.add_argument("--session-id", required=True)
-    m = sub.add_parser("mode")
-    m.add_argument("--transcript", required=True)
-    i = sub.add_parser("instructions")
-    i.add_argument("--session-id", required=True)
-    i.add_argument("--transcript")
-    i.add_argument("--user-instructions")
+    for verb, flags in verbs.items():
+        vp = sub.add_parser(verb)
+        for role, flag in flags.items():
+            vp.add_argument(flag, required=role in _REQUIRED_ROLES[verb])
     return ap
 
 

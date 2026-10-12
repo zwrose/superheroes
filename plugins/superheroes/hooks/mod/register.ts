@@ -6,7 +6,8 @@
 
 import type { EngineInterface, Register } from 'claude-code'
 
-import { instructionsArgv, markArgv, saveArgv } from './argv'
+import { instructionsArgv, markArgv, parseVocabulary, saveArgv } from './argv'
+import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
 
 const CLI_TIMEOUT_MS = 15000
@@ -46,6 +47,11 @@ async function directive(
 
   return res as Record<string, unknown>
 }
+
+// The CLI's vocabulary, read from the file the CLI's own parser is built from. Read per
+// hook call; a missing or malformed file throws, which each caller fails open on.
+const vocabulary = async ($: EngineInterface): Promise<CliVocabulary> =>
+  parseVocabulary(await $.fs.read(`${$.plugin.root}/lib/compaction_cli.json`))
 
 const text = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null
@@ -87,9 +93,10 @@ export const register: Register = on => {
         const transcript = text(known)
         const owner = e.instructions?.trim() ? e.instructions : null
 
+        const cli = await vocabulary($)
         const res = await directive(
           $,
-          instructionsArgv($.plugin.root, sessionId, transcript, owner),
+          instructionsArgv(cli, $.plugin.root, sessionId, transcript, owner),
         )
         const instructions = text(res.instructions)
         const markerPath = text(res.markerPath)
@@ -105,7 +112,7 @@ export const register: Register = on => {
 
         // The CLI publishes the marker atomically (temp file + rename): a failed
         // write leaves no marker, so the PreCompact fallback steers as well.
-        await directive($, markArgv($.plugin.root, sessionId))
+        await directive($, markArgv(cli, $.plugin.root, sessionId))
       } catch (error) {
         note($, `session.compact: ${String(error)}`)
       }
@@ -127,7 +134,9 @@ export const register: Register = on => {
           try {
             // The CLI replaces the notes atomically (temp file + rename): a failed
             // save leaves the last good notes in place.
-            await directive($, saveArgv($.plugin.root, await $.session.id()), block)
+            const cli = await vocabulary($)
+
+            await directive($, saveArgv(cli, $.plugin.root, await $.session.id()), block)
             $.ui.toast('Checkpoint notes saved')
           } catch (error) {
             // The skill was told not to write the file (the presence signal is set),

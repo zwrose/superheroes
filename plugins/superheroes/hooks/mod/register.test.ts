@@ -28,10 +28,21 @@ const steer = ok({
 })
 const saveAnswer = ok({ path: NOTES })
 
+// What the stubbed lib/compaction_cli.json reads as. The mod takes its vocabulary from that
+// file; the real file's agreement with the real CLI is lib/tests/test_compaction_mod_argv_1814.py.
+const VOCABULARY = JSON.stringify({
+  verbs: {
+    instructions: { sessionId: '--session-id', transcript: '--transcript', userInstructions: '--user-instructions' },
+    mark: { sessionId: '--session-id' },
+    save: { sessionId: '--session-id' },
+  },
+})
+
 type Rig = {
   argv: string[][]
   stdins: (string | undefined)[]
   writes: { path: string; text: string }[]
+  reads: string[]
   seen: SessionCompactInput[]
   envs: [string, string | undefined][]
   states: unknown[]
@@ -45,9 +56,14 @@ type Rig = {
 function rig(
   on: On,
   cli: (argv: readonly string[]) => Cli,
-  options: { isIdBroken?: boolean; isEnvBroken?: boolean; isStateBroken?: boolean } = {},
+  options: {
+    isIdBroken?: boolean
+    isEnvBroken?: boolean
+    isStateBroken?: boolean
+    vocabulary?: string | null
+  } = {},
 ): Rig {
-  const r: Rig = { argv: [], stdins: [], writes: [], seen: [], envs: [], states: [], toasts: [], order: [] }
+  const r: Rig = { argv: [], stdins: [], writes: [], reads: [], seen: [], envs: [], states: [], toasts: [], order: [] }
 
   on('session.id', () =>
     options.isIdBroken ? { deny: 'no session id' } : { value: SESSION },
@@ -69,6 +85,13 @@ function rig(
             isStderrTruncated: false,
           },
         }
+  })
+  on('fs.read', (_$, e) => {
+    r.reads.push(e.path)
+
+    return options.vocabulary === null
+      ? { deny: 'no such file' }
+      : { value: options.vocabulary ?? VOCABULARY }
   })
   on('fs.write', (_$, e) => {
     r.writes.push({ path: e.path, text: e.text })
@@ -144,6 +167,7 @@ for (const trigger of ['manual', 'auto'] as const) {
     expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
     expect(nth(r.seen, 0).trigger).toBe(trigger)
     expect(r.argv).toHaveLength(2)
+    expect(nth(r.reads, 0).endsWith('/lib/compaction_cli.json')).toBe(true)
     expect(nth(r.argv, 0)[0]).toBe('python3')
     expect(nth(r.argv, 0)[1]).toBe('-B')
     expect(nth(r.argv, 0)[2]?.endsWith('/lib/compaction_directive.py')).toBe(true)
@@ -232,6 +256,9 @@ const failures: [string, Cli, Options][] = [
   ['markerPath is missing', ok({ instructions: DIRECTIVE }), {}],
   ['the CLI cannot run (missing or timed out)', null, {}],
   ['the session id throws', steer, { isIdBroken: true }],
+  ['the vocabulary file cannot be read', steer, { vocabulary: null }],
+  ['the vocabulary file is not JSON', steer, { vocabulary: '{ not json' }],
+  ['the vocabulary file lacks a verb', steer, { vocabulary: JSON.stringify({ verbs: { mark: { sessionId: '--session-id' } } }) }],
 ]
 
 for (const [name, cli, options] of failures) {
@@ -372,6 +399,7 @@ for (const [name, cli, options] of [
   ['stdout is not JSON', { exitCode: 0, stdout: 'oops' }, {}],
   ['the CLI cannot run', null, {}],
   ['the session id throws', saveAnswer, { isIdBroken: true }],
+  ['the vocabulary file is malformed', saveAnswer, { vocabulary: '{ not json' }],
 ] as [string, Cli, Options][]) {
   test(`turn.complete fails open: ${name} — failure toast, answer unchanged`, async ($, on) => {
     const r = rig(on, () => cli, options)

@@ -1,0 +1,13 @@
+{
+  "verbs": {
+    "path": {"sessionId": "--session-id"},
+    "save": {"sessionId": "--session-id"},
+    "mark": {"sessionId": "--session-id"},
+    "mode": {"transcript": "--transcript"},
+    "instructions": {
+      "sessionId": "--session-id",
+      "transcript": "--transcript",
+      "userInstructions": "--user-instructions"
+    }
+  }
+}
