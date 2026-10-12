@@ -561,6 +561,9 @@ class DispositionLedgerOwnerRefusal(ValueError):
         self.value = value
 
 
+UNFILLED_SEAT_REASON = "unfilled"
+
+
 class AuditorUnseatable(ValueError):
     """Refusal when a durable-path audit target seats a non-runner-channel auditor."""
 
@@ -1005,29 +1008,20 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _auditor_vendor(config, fixer_vendor, runner_only=False):
-    """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
-    on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
-    models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
-    cursor-grok auditor is NOT independent of a cursor-composer fix. When no family-independent
-    vendor is live the audit still RUNS but is stamped degraded — never silently counted as
-    independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
-    rider 4a); see test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry."""
+def _auditor_vendor(config, fixer_vendor, runner_only=False, maker_families=frozenset(),
+                    pinned_vendors=None):
+    """The auditor of a fix is never the fixer's model FAMILY, nor any maker's family (CONVENTIONS
+    §7.5 — independence keys on family, not the dispatch CLI). Independence is NEVER satisfied between
+    two cursor first-party models (#651, owner-ratified 2026-07-26): composer and grok share the `xai`
+    family, so a cursor-grok auditor is NOT independent of a cursor-composer fix. When no eligible
+    vendor is live there is no auditor at all: `(None, "unseatable")`, the audit counts as not run,
+    and no vendor stands in. `runner_only` narrows the pool to runner-channel vendors."""
     vendor, _fam = receipt_disclosures.independent_auditor(
-        config, fixer_vendor, runner_only=runner_only)
+        config, fixer_vendor, runner_only=runner_only, maker_families=maker_families,
+        pinned_vendors=pinned_vendors)
     if vendor is not None:
         return vendor, "independent"
-    live = _live_vendors(config)
-    if runner_only:
-        host_independent, _fam = receipt_disclosures.independent_auditor(
-            config, fixer_vendor, runner_only=False)
-        if host_independent is not None:
-            return None, "unseatable"
-        for v in live:
-            if session_contract.runner_channel_vendor(v):
-                return v, "degraded"
-        return None, "unseatable"
-    return (live[0] if live else fixer_vendor), "degraded"
+    return None, "unseatable"
 
 
 # Seat-map receipt projections (#681) — leaf module ``seat_map_receipts``; thin aliases for in-module
@@ -1201,7 +1195,8 @@ def new_state(config=None):
         # declared fixer; duplicate vendor entries never count twice toward the two-vendor pool.
         "independenceDegraded": (
             len(_live_vendors(cfg)) < 2
-            and not receipt_disclosures.independent_auditor_available(cfg)[0]
+            and not receipt_disclosures.independent_auditor_available(
+                cfg, *receipt_disclosures.auditor_constraints({"config": cfg}))[0]
         ),
         # Seeded from `--seat-map` when one was supplied (#723) as receipt round "0".
         "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
@@ -2325,6 +2320,12 @@ def _fold_panel(state, config, artifact):
             receipts = []
             state["seatMapReceipts"] = receipts
         receipts.append({"round": str(state["round"]), "map": dict(seat_map)})
+    # A seat the governing map leaves unfilled never ran, whatever payload was submitted for it:
+    # drop it so the dimension folds `missing` and none of its findings are credited.
+    unfilled = receipt_disclosures.unfilled_seats(
+        seat_map_receipts.round_governing_map(state, state["round"]))
+    if unfilled and isinstance(seats, dict):
+        seats = {dim: seat for dim, seat in seats.items() if dim not in unfilled}
     raw = []
     seat_status = {}
     unverified = []
@@ -4136,9 +4137,11 @@ def _audit_targets(state, config, audit_targets_map):
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
     runner_only = bool(state.get("_advanceUsed"))
+    maker_families, pinned_vendors = receipt_disclosures.auditor_constraints(state)
     auditor_vendor, independence = _auditor_vendor(
-        config, fixer_vendor, runner_only=runner_only)
-    if independence in ("degraded", "unseatable"):
+        config, fixer_vendor, runner_only=runner_only, maker_families=maker_families,
+        pinned_vendors=pinned_vendors)
+    if independence != "independent":
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
@@ -4248,6 +4251,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
     collection_manifest = artifact.get("collectionManifest")
     if not isinstance(collection_manifest, dict):
         collection_manifest = None
+    # A target with no eligible auditor was never audited: any result submitted for it is ignored, so
+    # it folds exactly like silence — `unaudited`, not-discharged, never credited as audited.
+    no_auditor_ids = {tid for tid, vendor in expected_auditors.items() if not vendor}
+    if no_auditor_ids:
+        results = [r for r in results
+                   if not (isinstance(r, dict) and r.get("id") in no_auditor_ids)]
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
                                          collection_manifest=collection_manifest,
                                          carry_fields=(session_contract.FINDING_KEY_FIELD,))
@@ -8315,6 +8324,33 @@ def _seat_dispatch_row(state, seat_key, seat_map=None):
             "engine": entry.get("engine")}
 
 
+def _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
+                                    manifest_sha, seat_map):
+    """The stored `seat-missing/1` envelope for a roster slot the seat map leaves unfilled — same
+    shape `_cmd_record_missing_locked` builds, with reason `unfilled`. It cites the orders manifest
+    but no order (none was emitted for the slot)."""
+    row = _seat_dispatch_row(state, seat_key, seat_map=seat_map)
+    envelope = {
+        "schema": round_records.SEAT_MISSING_SCHEMA,
+        "session": _meta_session_id(session_dir),
+        "round": rnd,
+        "phase": phase,
+        "seat": seat_key,
+        "attempt": attempt,
+        "vendor": row["vendor"],
+        "model": row["model"],
+        "dispatchRef": manifest_sha,
+        "orderSha256": round_records.NOT_EMITTED,
+        "manifestSha256": manifest_sha,
+        "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "reason": UNFILLED_SEAT_REASON,
+        "evidence": "the seat map leaves this seat unfilled: no candidate outside the makers' families",
+        "occurrence": occurrence,
+    }
+    return round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
+
+
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
                           pending_payload=None, seat_map=None, extra_journal_entries=()):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
@@ -8334,8 +8370,14 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             if not isinstance(target, dict):
                 continue
             if not session_contract.runner_channel_vendor(target.get("auditorVendor")):
+                maker_families, pinned_vendors = receipt_disclosures.auditor_constraints(state)
                 host_independent, _fam = receipt_disclosures.independent_auditor(
-                    cfg, cfg.get("fixerVendor"), runner_only=False)
+                    cfg, cfg.get("fixerVendor"), runner_only=False,
+                    maker_families=maker_families, pinned_vendors=pinned_vendors)
+                if host_independent is None and not target.get("auditorVendor"):
+                    # No eligible auditor exists at all: nothing to seat on any channel, so the
+                    # target folds as an audit that did not run rather than refusing the emission.
+                    continue
                 if host_independent is not None:
                     detail = (
                         "The durable-record path requires a fix auditor dispatched through the "
@@ -8354,11 +8396,18 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                         "session.")
                 raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
+    unfilled = receipt_disclosures.unfilled_seats(seat_map) if phase == P_PANEL else frozenset()
     seats = {}
     order_hashes = {}
     rendered = []
+    unfilled_slots = []
     vendor_gaps = []
     for seat_key, occurrence in round_records.roster_slots(roster):
+        if seat_key in unfilled:
+            # No candidate outside the makers' families: nothing is dispatched for this slot and no
+            # vendor stands in. The driver records it missing itself, in the orders-emit commit.
+            unfilled_slots.append((seat_key, occurrence))
+            continue
         pending = pending_payload if isinstance(pending_payload, dict) else {}
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
@@ -8464,6 +8513,12 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         c.add_replace_file(path, round_records.canonical(manifest).encode("utf-8"))
         for sidecar_path, sidecar_bytes in sidecar_writes:
             c.add_replace_file(sidecar_path, sidecar_bytes)
+        for seat_key, occurrence in unfilled_slots:
+            missing = _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt,
+                                                      seat_key, occurrence, manifest_sha, seat_map)
+            skey = round_records.storage_key(seat_key, occurrence)
+            c.add_replace_file(round_records.store_path(session_dir, rnd, phase, skey, attempt),
+                               round_records.canonical(missing).encode("utf-8"))
         for order_path, order_bytes, stub_path, order_sha, row, occurrence, seat_key in rendered:
             c.add_replace_file(order_path, order_bytes)
             # Projection of the anchor, never the authority — ingestion validates the mirrored hash.
@@ -8543,8 +8598,21 @@ def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
             found.append(_slot_label(seat_key, occurrence))
             continue
         if _store_file_exists(spath):
+            if _is_unfilled_missing_record(spath):
+                # the driver's own record for an unfilled seat — not a durable result a hand submit
+                # would discard, so it never trips the interleave fence
+                continue
             found.append(_slot_label(seat_key, occurrence))
     return sorted(found)
+
+
+def _is_unfilled_missing_record(spath):
+    """True only for a readable `seat-missing/1` envelope whose reason is `unfilled`; any other
+    outcome (unreadable, other schema, other reason) is a record the fence must count."""
+    obj, err = round_records.read_json(spath)
+    return (err is None and isinstance(obj, dict)
+            and obj.get("schema") == round_records.SEAT_MISSING_SCHEMA
+            and obj.get("reason") == UNFILLED_SEAT_REASON)
 
 
 def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
