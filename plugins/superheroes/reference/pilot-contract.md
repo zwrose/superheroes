@@ -1388,9 +1388,9 @@ cannot be determined (`cannot-tell`, including resolver failure), the gate refus
 check plus a post-reserve re-check, not a predicate inside
 `launch_ledger.reserve`'s lock, so two launches racing on an *undeclared* batch can both pass
 preflight — the post-reserve re-check then refuses at least one of them before any spawn.
-A reserved-but-never-started lane has no CLI transition today — it is resolved when that
-launch itself reaches a terminal outcome; `record-outcome` cannot clear it
-(`outcome-without-started`).
+`record-outcome` cannot clear a reserved-but-never-started lane (`outcome-without-started`);
+`launcher.py repair-lane` records its terminal event from the `reserved` record, or restores its
+`started` record from a pending one.
 
 **Parallel-gate calibration policy** (`lib/pilot_calibration.py` causes →
 `lib/launcher.py` `_SLOT_CALIBRATION_POLICY`). Each cause belongs to exactly one probe
