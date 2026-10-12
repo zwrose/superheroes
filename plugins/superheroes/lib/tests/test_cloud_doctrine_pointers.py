@@ -35,10 +35,18 @@ def test_each_cloud_section_points_at_the_cloud_reference(number):
         "charter section %s has no pointer to %s" % (number, _CLOUD_REF))
 
 
-def test_every_cloud_builder_verb_the_reference_names_exists():
-    named = set(re.findall(r"cloud_builder\.py\s+([a-z][a-z-]*)", _read_plugin(_CLOUD_REF)))
+def _named_verbs(text):
+    return set(re.findall(r"cloud_builder\.py\s+([^\s`]+)", text))
+
+
+def _parser_verbs():
     parser = cloud_builder._build_parser()
-    verbs = next(a for a in parser._actions if getattr(a, "choices", None)).choices
+    return next(a for a in parser._actions if getattr(a, "choices", None)).choices
+
+
+def test_every_cloud_builder_verb_the_reference_names_exists():
+    named = _named_verbs(_read_plugin(_CLOUD_REF))
+    verbs = _parser_verbs()
     assert named, "%s names no cloud_builder.py verb" % _CLOUD_REF
     assert sorted(named - set(verbs)) == [], "verbs the CLI lacks: %s" % sorted(named - set(verbs))
     required = {"intake", "note", "review-lapsed", "pr-json", "repo-json", "github-channel"}
@@ -51,3 +59,9 @@ def test_size_names_the_builder_note():
     assert match, "review-discipline.md has no ### Size section"
     assert "builder note" in match.group(0)
     assert _CLOUD_REF in match.group(0)
+
+
+def test_verb_census_reads_whole_tokens():
+    named = _named_verbs("cloud_builder.py intake2 --repo-root /repo --launch-file /launch")
+    assert named == {"intake2"}
+    assert named - set(_parser_verbs()) == {"intake2"}

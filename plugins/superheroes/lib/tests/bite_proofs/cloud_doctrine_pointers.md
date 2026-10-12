@@ -8,6 +8,7 @@
 |---|---|---|---|---|
 | P-missing | charter section 11 pointer line | a cloud section with no pointer to the cloud reference | `test_each_cloud_section_points_at_the_cloud_reference[11]` | proven |
 | V-unknown | `intake` verb in `cloud.md` | a verb the reference names that the CLI lacks | `test_every_cloud_builder_verb_the_reference_names_exists` | proven |
+| V-token | the verb capture in `_named_verbs` | a misspelled verb that merely starts with a real one reads as the whole token | `test_verb_census_reads_whole_tokens` | proven |
 
 Unproven (no neutralization run, inside the order's four-run budget): the pointer lines of sections
 1, 2, 3, 10 and 12 (same failure mode as section 11, one parametrized node each); the empty-set leg and
@@ -72,4 +73,36 @@ EXIT=1
 .                                                                        [100%]
 1 passed in 0.34s
 EXIT=0
+```
+
+## V-token — a verb read as a whole token
+
+**guarded element:** the capture group of the regex in `_named_verbs`. **axis:** the captured verb is
+the whole whitespace- or backtick-delimited token after `cloud_builder.py`, so `intake2` is not read
+as `intake`.
+
+**neutralization:** in `_named_verbs`, the regex `cloud_builder\.py\s+([^\s`]+)` became the old
+`cloud_builder\.py\s+([a-z][a-z-]*)`.
+
+**raw red:**
+```
+>       assert named == {"intake2"}
+E       AssertionError: assert {'intake'} == {'intake2'}
+E         Extra items in the left set:
+E         'intake'
+E         Extra items in the right set:
+E         'intake2'
+FAILED plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py::test_verb_census_reads_whole_tokens
+1 failed in 0.22s
+```
+
+**restore:** the inverse edit, the old regex back to `cloud_builder\.py\s+([^\s`]+)`.
+
+**restore receipt:** after the restore `_named_verbs` reads
+`return set(re.findall(r"cloud_builder\.py\s+([^\s`]+)", text))`.
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.21s
 ```
