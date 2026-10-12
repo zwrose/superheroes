@@ -446,9 +446,10 @@ reading `success: true`.
    what it sent are never the receipt.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
-owner the result's `say` sentence, or the refusal and its `detail`. Retry once from `ensure`; a second
-failure stays with the owner. A `relay-start-failed` naming an untrusted workspace means that account
-has not had the one-time setup step done.
+owner the `say` sentence, or the refusal and its `detail`. Retry once from `ensure` only when nothing can
+have reached the builder: an `ensure` refusal, `relay-silent` or `relay-send-failed`. After
+`relay-text-mismatch` or `relay-send-unconfirmed` the builder may hold text: never resend automatically.
+A `relay-start-failed` naming an untrusted workspace means that account lacks the one-time setup step.
 
 **Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
 --comment-id <id>` for that note, then re-arm.
