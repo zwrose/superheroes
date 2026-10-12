@@ -174,7 +174,7 @@ def test_repair_refuses_a_pending_record_for_another_launch(tmp_path, monkeypatc
     assert ll.append(repo, _cloud_reserved("c2", "b-two", repo))
     before = ll.read(repo)["records"]
     result = ll.repair_never_started(repo, "c1", pending_started=_cloud_started("c2"))
-    assert result == {"ok": False, "reason": "pending-started-invalid"}
+    assert result == {"ok": False, "reason": ll.REPAIR_PENDING_STARTED_INVALID}
     assert ll.read(repo)["records"] == before
 
 
@@ -196,7 +196,7 @@ def test_repair_refuses_a_malformed_pending_record(tmp_path, monkeypatch, mutate
     mutate(pending)
     before = ll.read(repo)["records"]
     result = ll.repair_never_started(repo, "c1", pending_started=pending)
-    assert result == {"ok": False, "reason": "pending-started-invalid"}
+    assert result == {"ok": False, "reason": ll.REPAIR_PENDING_STARTED_INVALID}
     assert ll.read(repo)["records"] == before
 
 
@@ -204,7 +204,7 @@ def test_repair_refuses_a_malformed_pending_record(tmp_path, monkeypatch, mutate
 def test_repair_refuses_a_pending_record_that_is_not_an_object(tmp_path, monkeypatch, pending):
     repo = _cloud_lane(tmp_path, monkeypatch)
     result = ll.repair_never_started(repo, "c1", pending_started=pending)
-    assert result == {"ok": False, "reason": "pending-started-invalid"}
+    assert result == {"ok": False, "reason": ll.REPAIR_PENDING_STARTED_INVALID}
 
 
 def test_repair_refuses_a_pending_record_that_fails_the_fold_and_writes_nothing(
@@ -471,7 +471,7 @@ def test_cli_repair_lane_refuses_a_null_pending_file_without_closing_the_lane(
     ])
     out = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert out == {"ok": False, "reason": "pending-started-invalid"}
+    assert out == {"ok": False, "reason": ll.REPAIR_PENDING_STARTED_INVALID}
     assert ll.read(repo)["records"] == before
     assert _lane(repo, "c1")["terminal"] is False
 

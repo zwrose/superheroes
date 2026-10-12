@@ -4664,7 +4664,7 @@ _BATCH_REFUSAL_TOKEN_ADJUDICATION = {
 _GUARDED_DOOR_REFUSAL_TOKENS = {
     "append_under_lock": "append-batch-declared-must-use-declare-batch",
     "reserve": "reserve-batch-declared-must-use-declare-batch",
-    "repair_never_started": "pending-started-invalid",
+    "repair_never_started": ll.REPAIR_PENDING_STARTED_INVALID,
 }
 
 

@@ -3555,7 +3555,7 @@ def _cli_repair_lane(args):
         if pending is None:
             # A file holding JSON `null` decodes to the same None as an omitted file; an
             # explicit file that carries no record must refuse, not fall to terminalization.
-            return _fail("pending-started-invalid")
+            return _fail(ll.REPAIR_PENDING_STARTED_INVALID)
     return ll.repair_never_started(
         args.repo_root, args.launch_id, pending_started=pending, evidence=args.evidence,
     )

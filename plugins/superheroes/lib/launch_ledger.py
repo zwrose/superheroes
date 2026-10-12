@@ -53,6 +53,7 @@ AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
 # What a caller may write by hand. `reoutcome` is a recorded consequence of a real second
 # record_outcome call, never a hand-written claim.
 CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
+REPAIR_PENDING_STARTED_INVALID = "pending-started-invalid"
 VET_RULINGS = ("ready", "not-ready", "parked-blocker")
 _AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
@@ -2131,7 +2132,7 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
                 or not _validate_started_repair(pending_started)
                 or _validate_started_cloud_fields(pending_started)
             ):
-                return _repair_refusal("pending-started-invalid")
+                return _repair_refusal(REPAIR_PENDING_STARTED_INVALID)
             folded_repair = fold(records + [pending_started])
             if not folded_repair["ok"]:
                 return _repair_refusal(folded_repair["reason"])
