@@ -376,3 +376,7 @@ The owner's word that the spec may go to the advisor's vet. It is not approval, 
 ### Review record
 
 The plain account of one PR's review, written when the review ends on any lane. It holds what was checked, which reviewers ran, every finding and what happened to it, CI on the final commit, and what is left. Each review session adds its own record comment to the PR and never edits an earlier one; each reviewer's raw output is kept in its own comment that the record links. The rule for writing it is in [the review record reference](../skills/review-code/reference/review-record.md).
+
+### Maker
+
+Any model that built or fixed the product's code under review. A fixer's family joins the makers for every later round. A reviewer that only writes break-it tests for a change is not a maker of it.

@@ -40,6 +40,16 @@ These retirements ship in the same release as the review record, and never apart
 - A session or model may raise a change's lane. It may never lower it below that floor.
 - A review record whose lane sits below the floor reads not reviewed.
 
+### Review: every reviewer independent of every maker
+
+- A reviewer from a maker's family no longer runs without the owner's word for that change. When the owner gives it, the review record names that reviewer and says "not independent". The light lane's host-model stand-in after a forfeit is gone, and nothing stands in on either single-reviewer lane.
+- A panel seat that no reviewer outside the makers' families can fill is recorded `unfilled` and counts as not run. Nothing stands in for it.
+- The review loop never seats a fix auditor from a maker's family on its own. With none available, the audit counts as not run. The owner's word for a change admits a same-family reviewer through the review record, not through the loop's auditor seating.
+- A light or micro review counts only when the engine's record of the run shows `observation.read == "engaged"`. Otherwise the reviewer runs once more, and a second miss moves the change up to the full lane when an independent full panel can be composed, or parks it.
+- A review record that names no maker reads not reviewed.
+- A full-lane builder opens its PR as a draft before the review, and marks it ready at handback.
+- The seat-map receipt gains `makerFamilies` and `roster`, `seat_map.py compose` gains `--maker-family`, and `review_record.py` gains `reading-next`.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
