@@ -52,8 +52,7 @@ _ID_RE = re.compile(r"^- \*\*(\d{4}-\d{2}-\d{2})-([0-9a-z]{8})-([1-9]\d*)\*\*")
 _DISPOSITION_RE = re.compile(r"^\s*(?:@?\d+(?:-\d+)?\s*[-–:=]\s*)?\(?[a-h]\)?\s*(?:[-–:,]|$)",
                              re.I)
 _BOOKKEEPING_RE = re.compile(
-    r"\bfiled as #\d+|\btracked (?:by|in|on) #\d+|"
-    r"\b(?:scheduled|slotted|moved|queued) (?:for|into|to|in) (?:the )?(?:phase|milestone)\b", re.I)
+    r"\bfiled as #\d+|\btracked (?:by|in|on) #\d+", re.I)
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCOPE_RE = re.compile(r"standing|piece [a-z0-9][a-z0-9-]*")
 HEADER = ("# Canon\n\nThis file is the project's Canon, the record of the owner's decisions. Its "
@@ -100,7 +99,7 @@ def _refuse_stays_out(kind, why):
 def recognize(ruling, words):
     """The stays-out kind a ruling or the owner's words read as, or None. A narrow backstop with
     fixed shapes: a ruling that is a collector disposition, owner's words that are a bare go-word
-    (a go-verb first, then only tokens of the closed GO_TARGETS / GO_FILLER / reference vocabulary), or filing/phase bookkeeping.
+    (a go-verb first, then only tokens of the closed GO_TARGETS / GO_FILLER / reference vocabulary), or an explicit issue-reference filing note.
     A disposition is read from the ruling text alone: an option letter answering an owner call
     is a real ruling when the ruling states one."""
     if _DISPOSITION_RE.match(ruling):
@@ -113,12 +112,12 @@ def recognize(ruling, words):
         return kind, "a go-word (%r)" % words[:60]
     hit = _BOOKKEEPING_RE.search(ruling)
     if hit:
-        return "board", "filing or phase bookkeeping (%r)" % hit.group(0)
+        return "board", "issue-reference bookkeeping (%r)" % hit.group(0)
     return None
 
 
 def _field(name, value):
-    if "\n" in value or "\r" in value or SEP in value or not value.strip():
+    if len(("|" + value + "|").splitlines()) > 1 or SEP in value or not value.strip():
         raise Refusal("canon-bad-field", "%s must be one non-empty line with no ' · '" % name)
     return value
 
@@ -199,6 +198,9 @@ def _locate(root):
         raise Refusal("canon-lookup-failed", str(exc))
     if _git(loc["gitRoot"], "rev-parse", "--git-dir").returncode != 0:
         raise Refusal("canon-not-git", "gitRoot %s is not a git repository" % loc["gitRoot"])
+    top = _git(loc["gitRoot"], "rev-parse", "--show-toplevel").stdout.strip()
+    if not top or os.path.realpath(top) != os.path.realpath(loc["gitRoot"]):
+        raise Refusal("canon-not-git", "gitRoot %s is not its own git repository" % loc["gitRoot"])
     default_text = ""
     if loc["home"] == "repo" and loc["defaultRef"]:
         rel = os.path.relpath(loc["path"], loc["gitRoot"]).replace(os.sep, "/")
@@ -215,8 +217,12 @@ def _locate(root):
         with open(loc["path"], encoding="utf-8") as fh:
             working = fh.read()
     cut = working.rsplit("\n", 1)[-1]  # the unterminated tail: a write that stopped mid-entry
+    body = False
     for l in working.splitlines():  # a failed append can leave a cut entry: fence further writes
-        if l.startswith("- **") and (l == cut or not _entry_shape_ok(l)):
+        body = body or l == "## Entries"
+        torn = l.startswith("- **") or (body and (l.startswith("- *") or (
+            l == cut and l.strip() and "- **".startswith(l))))
+        if torn and (l == cut or not _entry_shape_ok(l)):
             raise Refusal("canon-partial-entry", "Canon ends in an incomplete entry (%r), likely "
                           "from a failed write; repair it by hand before any further write"
                           % l[:80])

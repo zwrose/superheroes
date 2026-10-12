@@ -103,13 +103,19 @@ def test_declared_stays_out_ground_refused_with_home(project, capsys, ground):
     ("The importer keeps old data.", "force-push it", "act"),
     ("The importer keeps old data.", "release v0.43.0 please.", "merge"),
     ("The importer keeps old data; filed as #1820.", None, "board"),
-    ("The importer keeps old data, scheduled for phase 2.", None, "board"),
 ])
 def test_recognized_stays_out_refused_with_home(project, capsys, ruling, words, kind):
     extra = {"owners_words": words} if words else {}
     code, out = _run(capsys, "append", *_fields(ruling=ruling, **extra))
     assert code == 1 and out["reason"] == "canon-stays-out" and out["kind"] == kind
     assert out["home"] == _contract_homes()[kind]
+
+
+# axis: recognition is closed to free text: a standing scheduling principle is a real ruling.
+def test_standing_scheduling_principle_is_appended(project, capsys):
+    ruling = "Every issue is moved to the milestone only after its dependencies land."
+    code, out = _run(capsys, "append", *_fields(ruling=ruling))
+    assert code == 0 and out["appended"][0].split(canon.SEP)[3] == ruling
 
 
 # axis: accepted gap, pinned so nobody widens recognition: a full ruling sentence under a valid
@@ -480,3 +486,32 @@ def test_entry_cut_inside_final_field_fences_further_writes(project, capsys):
     code, out = _run(capsys, "append", *_fields())
     assert code == 1 and out["reason"] == "canon-partial-entry"
     assert open(project["path"], "rb").read() == before
+
+
+# axis: a write torn inside the entry marker (after `-`, `- ` or `- *`) still fences further writes.
+@pytest.mark.parametrize("tail", ["-", "- ", "- *"])
+def test_entry_torn_inside_the_marker_fences_further_writes(project, capsys, tail):
+    with open(project["path"], "a", encoding="utf-8") as fh:
+        fh.write(tail)
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-partial-entry"
+    assert open(project["path"], "rb").read() == before
+
+
+# axis: any character str.splitlines() splits on is refused in every field, so a written entry
+# always reads back whole.
+@pytest.mark.parametrize("sep", ["\u2028", "\u2029", "\x0b", "\x0c", "\x1c", "\x85"])
+def test_unicode_line_separator_in_field_refused(project, capsys, sep):
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", *_fields(owners_words="Keep data." + sep + "Never clear."))
+    assert code == 1 and out["reason"] == "canon-bad-field"
+    assert open(project["path"], "rb").read() == before
+
+
+# axis: a project store nested in another checkout (no repository of its own) is refused.
+def test_store_nested_in_another_repository_refused(project, capsys, monkeypatch):
+    monkeypatch.setattr(canon, "_git", lambda cwd, *a: subprocess.CompletedProcess(
+        a, 0, stdout=os.path.dirname(cwd) + "\n", stderr=""))
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-not-git"
