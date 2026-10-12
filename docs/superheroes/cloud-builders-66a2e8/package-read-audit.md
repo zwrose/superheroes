@@ -1268,3 +1268,67 @@ No State line calls any of them open. Result: verified.
  "round": 1
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv8",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "R11's TRANSITION clause now gives C7 and C7b each their own note (C7 builder notes, C7b cloud recovery); epic quote equal; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv8",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C7",
+   "result": "pass"
+  },
+  {
+   "child": "C7b",
+   "result": "pass"
+  },
+  {
+   "child": "C8",
+   "result": "pass"
+  }
+ ]
+}
+```
