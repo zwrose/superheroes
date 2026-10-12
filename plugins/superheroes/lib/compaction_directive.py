@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import charter_detect
 import config_dir
 
-MODES = ("showrunner", "workhorse", "detective", "discovery", "generic")
+MODES = tuple(charter_detect.CHARTER_NAMES) + ("generic",)
 
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
@@ -221,6 +221,22 @@ def delivered_recently(session_id, env=None, window_seconds=120, now=None):
         mtime = os.stat(marker).st_mtime
         current = time.time() if now is None else now
         return abs(current - mtime) <= window_seconds
+    except Exception:
+        return False
+
+
+def consume_delivered(session_id, env=None, window_seconds=120, now=None):
+    """One-shot read of this session's delivery marker: True when it was fresh, and the marker
+    is deleted so a retry of the same compaction cannot reuse this attempt's evidence."""
+    try:
+        if not delivered_recently(session_id, env, window_seconds, now):
+            return False
+        marker = delivered_marker_path(session_id, env)
+        try:
+            os.remove(marker)
+        except FileNotFoundError:
+            pass
+        return True
     except Exception:
         return False
 

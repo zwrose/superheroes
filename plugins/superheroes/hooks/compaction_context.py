@@ -6,7 +6,7 @@ Claude Code appends this hook's raw stdout to the compaction instructions; it ig
 checkpoint-file path both come from ``lib/compaction_directive.py`` — this hook holds neither.
 
 The compaction mod is the primary path. When it has already delivered for this session (a
-fresh ``<session_id>.delivered`` marker) this hook prints nothing; otherwise it prints the
+fresh ``<session_id>.delivered`` marker, consumed here so a retry cannot reuse it) this hook prints nothing; otherwise it prints the
 directive for the detected mode plus this session's checkpoint notes. The owner's own
 ``custom_instructions`` are deliberately NOT repeated — the harness already carries them.
 
@@ -30,7 +30,7 @@ def main():
         return 0
 
     session_id = payload.get("session_id")
-    if compaction_directive.delivered_recently(session_id):
+    if compaction_directive.consume_delivered(session_id):
         return 0
 
     mode = compaction_directive.detect_mode(payload.get("transcript_path"))

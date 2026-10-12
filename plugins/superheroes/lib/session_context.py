@@ -209,7 +209,7 @@ def checkpoint_file_record(session_id):
     if not path:
         return ""
     return ("This session's checkpoint notes file: %s "
-            "(write it there with /superheroes:checkpoint)" % path)
+            "(if it exists, it holds this session's checkpoint notes)" % path)
 
 
 # ----------------------------------------------------------------- cache hygiene nudge

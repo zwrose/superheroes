@@ -244,6 +244,15 @@ def test_delivered_recently_true_for_fresh_marker(tmp_path):
     assert cd.delivered_recently(SID, env, now=1060) is True
 
 
+def test_consume_delivered_is_one_shot(tmp_path):
+    env = _env(tmp_path)
+    marker = cd.delivered_marker_path(SID, env)
+    _touch(marker, mtime=1000)
+    assert cd.consume_delivered(SID, env, now=1060) is True
+    assert not os.path.exists(marker)
+    assert cd.consume_delivered(SID, env, now=1061) is False
+
+
 def test_delivered_recently_false_without_marker(tmp_path):
     assert cd.delivered_recently(SID, _env(tmp_path), now=1000) is False
 
