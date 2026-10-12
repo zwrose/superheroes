@@ -2373,6 +2373,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
             state["seatMapReceipts"] = receipts
         receipts.append({"round": str(state["round"]), "map": dict(seat_map)})
     raw = []
+    break_it_raw = []
     seat_status = {}
     unverified = []
     missing_dims = []
@@ -2409,6 +2410,9 @@ def _fold_panel(state, config, artifact, session_dir=None):
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
+            # axis: only the test role's own seat can trigger a run; the trust is the roster seat key, never the finding's own dimension or taxonomy
+            if dim == break_it.ROLE:
+                break_it_raw.append(g)
     if vacuous_dims:
         _record_round(state, "vacuousSeats", list(vacuous_dims))
         _decision(state, "seat-vacuous",
@@ -2425,7 +2429,17 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
-    kept, runs, exempt = break_it.intercept(raw, repo_root, head)
+    intercepted, runs, exempt = break_it.intercept(break_it_raw, repo_root, head)
+    # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
+    # test role's first finding, so the original order holds.
+    break_it_ids = {id(g) for g in break_it_raw}
+    kept, placed = [], False
+    for g in raw:
+        if id(g) not in break_it_ids:
+            kept.append(g)
+        elif not placed:
+            kept.extend(intercepted)
+            placed = True
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt)
     if runs:
         runs = _break_it_run_keys(runs, compiled)
@@ -4944,6 +4958,15 @@ def _break_it_kept_step(state, config):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
     parked (certification withheld). A finding with any other disposition owes no check."""
+    for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        for run in (state["rounds"][rkey].get("breakItRuns") or []):
+            # axis: a failed or not-run break-it run that compile dropped never reaches verification, so it withholds certification
+            if (isinstance(run, dict) and run.get("droppedAtCompile") is True
+                    and run.get("outcome") != break_it.OUTCOME_PASSED):
+                _park_cannot_certify(
+                    state, "break-it run dropped at compile: %s (%s)"
+                    % (run.get("path"), run.get("outcome")))
+                return True
     latest = {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
@@ -7485,6 +7508,15 @@ def _risk_areas_text(seat_key, repo_root, base, head):
         return _risk_areas_unreadable("%s: %s" % (type(exc).__name__, exc))
 
 
+def _break_it_grammar_text(seat_key):
+    """The test role's break-it block grammar: the fenced `break_it.BLOCK_TEMPLATE` and the rules for
+    its `run` line, built only from the two `break_it` constants. Empty for any other seat."""
+    # axis: only the test role's order carries the grammar; every other seat's order stays free of it
+    if seat_key != "test-role":
+        return ""
+    return "```\n%s\n```\n\n%s" % (break_it.BLOCK_TEMPLATE, break_it.RUN_RULES)
+
+
 def _normalize_focus_notes(value):
     if value is None:
         return ""
@@ -7858,6 +7890,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "FOCUS_CONTEXT_LINE",
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
+    "BREAK_IT_GRAMMAR_BLOCK",
     "MODE",
     "MODE_EVIDENCE",
     "REPO",
@@ -8202,6 +8235,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RISK_AREAS_TEXT": _risk_areas_text(
                 seat_key, repo_root, cfg.get("baseRef") or meta.get("baseRef"),
                 _session_certified_head(session_dir, state)),
+            "BREAK_IT_GRAMMAR_TEXT": _break_it_grammar_text(seat_key),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,

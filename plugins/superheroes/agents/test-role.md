@@ -177,17 +177,7 @@ Shape the finding exactly as follows, because the loop parses it:
 - `body`: the risk area, the scenario, and why the change could fail it.
 - `consequence`: what goes wrong for the user or owner if the change does fail it.
 - `confidence`: `High` or `Low`.
-- `suggestion`: exactly this block and nothing else:
-
-```
-break-it-test v1
-path: <the same repo-relative path as `file`>
-run: <one command, run from the repository root, that runs only this test file>
----
-<the complete file content>
-```
-
-The loop runs `run` without a shell, from a copy of the repository that holds its tracked files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, `;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run.
+- `suggestion`: exactly the `break-it-test v1` block your dispatch spells out, and nothing else. The loop parses it, so keep its lines as given and replace only the bracketed parts.
 
 ## Do NOT Flag
 

@@ -546,13 +546,14 @@ _DERIVED_PLACEHOLDER_NAMES = frozenset({
     "FOCUS_CONTEXT_LINE",
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
+    "BREAK_IT_GRAMMAR_BLOCK",
     "PR_CHECKOUT_INSTRUCTION_BLOCK",
 })
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.
 _FIXTURE_AUX_INPUTS = {
     RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH", "PRIOR_COMMENTS_PATH",
-                           "ROLE_BRIEF_PATH", "RISK_AREAS_TEXT"}),
+                           "ROLE_BRIEF_PATH", "RISK_AREAS_TEXT", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
     RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),

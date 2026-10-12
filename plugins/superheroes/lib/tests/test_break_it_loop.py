@@ -213,6 +213,30 @@ def test_l11_a_stamped_finding_compile_still_drops_is_recorded_as_dropped(world)
     (entry,) = world.round_record["breakItRuns"]
     assert entry["outcome"] == "failed"
     assert entry["findingKey"] is None and entry["droppedAtCompile"] is True
+    RD._terminal_converged(world.state, world.state["config"], full_panel=True)
+    assert world.state["terminal"] == "cannot-certify"
+    assert world.state["certification"]["reason"] == (
+        "break-it run dropped at compile: %s (failed)" % TEST_PATH)
+
+
+def test_b2_only_the_test_roles_seat_can_trigger_a_break_it_run(world, monkeypatch):
+    seen = []
+    real = break_it.intercept
+
+    def counting(findings, *args, **kwargs):
+        seen.extend(f.get("title") for f in findings)
+        return real(findings, *args, **kwargs)
+
+    monkeypatch.setattr(break_it, "intercept", counting)
+    impostor = _break_it_finding(title="Break-it: from the code reviewer", dimension="Code")
+    seats = {d: {"findings": []} for d in RD.DIMENSIONS}
+    seats["code-reviewer"] = {"findings": [impostor]}
+    RD._fold(world.state, world.state["config"], RD.P_PANEL, {"seats": seats},
+             session_dir=str(world.session))
+    assert seen == []
+    assert "breakItRuns" not in world.round_record
+    assert world.state["_toVerify"] == []
+    assert _drop_reasons(world.state) == ["outside the round diff scope"]
 
 
 def test_l4_merge_and_rank_never_merges_a_break_it_finding():

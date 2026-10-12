@@ -20,6 +20,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 - CLAUDE.md (project conventions): CLAUDE.md
 {{ROLE_BRIEF_LINE}}
 {{RISK_AREAS_LINE}}
+{{BREAK_IT_GRAMMAR_BLOCK}}
 {{PR_CHECKOUT_CONTEXT_LINE}}
 {{PRIOR_COMMENTS_CONTEXT_LINE}}
 {{FOCUS_CONTEXT_LINE}}

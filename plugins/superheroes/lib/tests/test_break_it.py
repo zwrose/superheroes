@@ -1,7 +1,6 @@
 import copy
 import hashlib
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -51,15 +50,9 @@ def repo(tmp_path):
     return root
 
 
-_ROLE_FILE = os.path.join(os.path.dirname(_LIB), "agents", "test-role.md")
-
-
 def _template():
-    """The block specification's lines, read from the one home of the grammar (the test role file)."""
-    with open(_ROLE_FILE, encoding="utf-8") as fh:
-        found = re.findall(r"```\n(break-it-test v1\n.*?)\n```", fh.read(), re.DOTALL)
-    assert len(found) == 1
-    lines = found[0].split("\n")
+    """The block grammar's lines, read from the one home of the grammar (`break_it.BLOCK_TEMPLATE`)."""
+    lines = break_it.BLOCK_TEMPLATE.split("\n")
     assert len(lines) == 5 and lines[3] == "---"
     return lines
 
@@ -130,7 +123,7 @@ def test_t1_parse_block_round_trips_and_refuses():
     assert break_it.parse_block(good)[1] is None
 
 
-def test_parse_block_follows_the_specification_in_the_test_role_file():
+def test_parse_block_follows_block_template():
     good = _wire("tests/test_x.py", "python tests/test_x.py", "z\n")
     block, refusal = break_it.parse_block(good)
     assert refusal is None and block["path"] == "tests/test_x.py" and block["content"] == "z\n"

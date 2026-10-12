@@ -11,6 +11,7 @@ import subprocess
 
 import pytest
 
+import break_it
 import core_md
 import engine_pref
 import model_registry
@@ -382,3 +383,28 @@ def test_r7_other_seats_order_carries_no_risk_areas_line(tmp_path):
     lines = _risk_lines(tmp_path, lambda r: _write(r, "src/payments/charge.py"),
                         seat_key="code-reviewer")
     assert lines == []
+
+
+# --- Invariant: the test role's panel order renders the break-it block grammar -----------------
+
+_GRAMMAR_MARK = "- The break-it block (a break-it finding's suggestion is exactly this; the loop parses it):"
+
+
+def test_test_role_order_renders_the_break_it_grammar_and_it_parses(tmp_path):
+    # bites on: the grammar's render dropping, the test-role-only gate, or a render that does not parse
+    text = _render_panel(tmp_path, NEW)
+    assert "{{" not in text
+    marker = text.index(_GRAMMAR_MARK)
+    rendered = "%s\n\n```\n%s\n```\n\n%s\n" % (
+        _GRAMMAR_MARK, break_it.BLOCK_TEMPLATE, break_it.RUN_RULES)
+    assert text[marker:].startswith(rendered)
+    fenced = text[marker:].split("```\n")[1].split("\n```")[0]
+    lines = fenced.split("\n")
+    assert lines[0] == "break-it-test v1" and lines[3] == "---"
+    assert lines[1].startswith("path: <") and lines[2].startswith("run: <")
+    lines[1], lines[2] = "path: tests/test_x.py", "run: python tests/test_x.py"
+    block, refusal = break_it.parse_block("\n".join(lines[:4]) + "\nassert True\n")
+    assert refusal is None
+    assert (block["path"], block["run"], block["content"]) == (
+        "tests/test_x.py", "python tests/test_x.py", "assert True\n")
+    assert "break-it-test v1" not in _render_panel(tmp_path, "code-reviewer")

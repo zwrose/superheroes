@@ -1,8 +1,8 @@
 """Drift guard for the test role's agent file and the code reviewer's break-it reading duty.
 
-Bites on: the exact line shape of the ``break-it-test v1`` block in ``agents/test-role.md``, which
-the review loop parses; the ``break-it-test`` taxonomy token in ``agents/code-reviewer.md``; and
-the absence of the retired ``agents/test-reviewer.md``.
+Bites on: a second copy of the ``break-it-test v1`` block's lines in ``agents/test-role.md`` (the
+grammar's one home is ``break_it.BLOCK_TEMPLATE``); the ``break-it-test`` taxonomy token in
+``agents/code-reviewer.md``; and the absence of the retired ``agents/test-reviewer.md``.
 
 Pins structure only, never a prose sentence.
 """
@@ -23,12 +23,8 @@ def _text(path):
 def test_test_role_agent_pins_the_break_it_block_shape():
     raw = TEST_ROLE.read_text(encoding="utf-8")
     reviewer = _text(CODE_REVIEWER)
-    # Bites on: the break-it block's header line, which the review loop parses.
-    assert "```\nbreak-it-test v1\npath:" in raw
-    # Bites on: the block's path and run lines, which the review loop parses.
-    assert "path: <the same repo-relative path as `file`>\nrun: <one command, run from the repository root, that runs only this test file>\n" in raw
-    # Bites on: the block's separator line between the header lines and the file content.
-    assert "that runs only this test file>\n---\n<the complete file content>" in raw
+    # Bites on: a second copy of the block's lines in the agent file, which the dispatch renders from the code.
+    assert not re.search(r"^break-it-test v1\npath:", raw, re.MULTILINE)
     # Bites on: the code reviewer's taxonomy token for the break-it tests a change keeps.
     assert "break-it-test" in reviewer
 

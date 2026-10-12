@@ -34,7 +34,25 @@ OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
 KEPT, KEPT_MISSING, KEPT_CHANGED, KEPT_NOT_REGULAR, KEPT_FAILING, KEPT_UNRESOLVED = (
     "kept", "missing", "changed", "not-regular", "failing", "unresolved")
 
-_HEADER = "break-it-test v1"
+# The one hand-kept home of the block grammar. The test role's panel order renders it; parse_block
+# reads its header, field prefixes and separator from it.
+BLOCK_TEMPLATE = "\n".join([
+    "break-it-test v1",
+    "path: <the same repo-relative path as `file`>",
+    "run: <one command, run from the repository root, that runs only this test file>",
+    "---",
+    "<the complete file content>",
+])
+RUN_RULES = (
+    "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
+    "files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
+    "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run.")
+
+_TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
+_HEADER = _TEMPLATE_LINES[0]
+_PATH_PREFIX = _TEMPLATE_LINES[1].partition(" ")[0]
+_RUN_PREFIX = _TEMPLATE_LINES[2].partition(" ")[0]
+_SEPARATOR = _TEMPLATE_LINES[3]
 _GIT_TIMEOUT = 120
 _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
@@ -151,21 +169,24 @@ def _path_unsafe(path):
 
 def parse_block(text):
     """``({"path", "run", "content", "sha256"}, None)`` for a well-formed ``break-it-test v1``
-    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact. This
-    implements the block specification in ``agents/test-role.md`` (Break-it tests), which is the
-    one home of the grammar; nothing else restates it."""
+    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact. The
+    grammar's one home is ``BLOCK_TEMPLATE``; the test role's panel order renders it and nothing
+    else restates it."""
     if not isinstance(text, str):
         return None, "block-not-a-string"
     parts = text.split("\n", 4)
+    # axis: the header is read from BLOCK_TEMPLATE, so the parser and the rendered grammar cannot drift apart
     if parts[0] != _HEADER:
         return None, "block-header-missing"
-    path = parts[1][len("path:"):].strip() if len(parts) > 1 and parts[1].startswith("path:") else ""
+    path = (parts[1][len(_PATH_PREFIX):].strip()
+            if len(parts) > 1 and parts[1].startswith(_PATH_PREFIX) else "")
     if not path:
         return None, "block-path-missing"
-    run = parts[2][len("run:"):].strip() if len(parts) > 2 and parts[2].startswith("run:") else ""
+    run = (parts[2][len(_RUN_PREFIX):].strip()
+           if len(parts) > 2 and parts[2].startswith(_RUN_PREFIX) else "")
     if not run:
         return None, "block-run-missing"
-    if len(parts) < 4 or parts[3] != "---":
+    if len(parts) < 4 or parts[3] != _SEPARATOR:
         return None, "block-separator-missing"
     # axis: an absolute, backslashed or dot-segment path is refused before anything is written — see bite-proof record wo_a_1800_break-it
     if _path_unsafe(path):
