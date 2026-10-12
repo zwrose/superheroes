@@ -6,8 +6,9 @@ declare module 'claude-code' {
       isInteractive: boolean
       // true from turn.start to the main loop's turn.complete
       isTurnActive: boolean
-      // set while an automatic or Now checkpoint runs; the notes as they stood before it
-      checkpoint: { startedAt: number; notesBefore: string | null } | null
+      // set while an automatic or Now checkpoint runs (and through the compaction it ends in,
+      // `compacting`); the notes as they stood before it: null = no file, absent = unreadable
+      checkpoint: { startedAt: number; notesBefore?: string | null; compacting?: boolean } | null
       // the fill below which a Snooze holds the automatic run back
       snoozeUntilTokens: number | null
       // the last decision's showBand: the band draws from this

@@ -6,12 +6,6 @@ export type Mode = 'auto' | 'click-only' | 'off'
 
 export type Settings = { thresholdTokens: number; allowanceTokens: number; mode: Mode }
 
-export const DEFAULT_SETTINGS: Settings = {
-  thresholdTokens: 500000,
-  allowanceTokens: 120000,
-  mode: 'auto',
-}
-
 // How far below the trigger the heads-up band appears, and how far past the
 // current fill a Snooze pushes the next automatic run.
 export const HEADS_UP_TOKENS = 50000
@@ -21,29 +15,39 @@ export const SNOOZE_STEP_TOKENS = 100000
 // window must not fire a checkpoint on every turn.
 export const MIN_TRIGGER_TOKENS = 50000
 
-// The ranges the manifest's `userConfig` declares; a value outside one counts as unset.
-const THRESHOLD_RANGE = [50000, 2000000] as const
-const ALLOWANCE_RANGE = [0, 1000000] as const
+type Spec = { default?: unknown; min?: unknown; max?: unknown; options?: unknown }
 
-const MODES: readonly Mode[] = ['auto', 'click-only', 'off']
+const asRecord = (value: unknown): Record<string, unknown> =>
+  typeof value === 'object' && value !== null ? { ...value } : {}
 
-const inRange = (value: unknown, [min, max]: readonly [number, number]): value is number =>
-  typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+const specOf = (schema: unknown, key: string): Spec => asRecord(asRecord(schema)[key])
 
-// Coerces the plugin's options to settings: anything missing, malformed or out of
-// range takes its default; the allowance is clamped into [0, threshold).
-export const settingsFrom = (options: unknown): Settings => {
-  const raw: Record<string, unknown> =
-    typeof options === 'object' && options !== null ? { ...options } : {}
-  const thresholdTokens = inRange(raw.autoCheckpointTokens, THRESHOLD_RANGE)
-    ? raw.autoCheckpointTokens
-    : DEFAULT_SETTINGS.thresholdTokens
-  const allowance = inRange(raw.autoCheckpointAllowance, ALLOWANCE_RANGE)
-    ? raw.autoCheckpointAllowance
-    : DEFAULT_SETTINGS.allowanceTokens
-  const mode = MODES.find(m => m === raw.autoCheckpointMode) ?? DEFAULT_SETTINGS.mode
+// The setting's number: the raw value when it lies in the spec's [min, max], else the
+// spec's default; null when the spec itself is no usable number setting.
+const numberSetting = (raw: unknown, { default: dflt, min, max }: Spec): number | null => {
+  const fits = (v: unknown): v is number =>
+    typeof v === 'number' && typeof min === 'number' && typeof max === 'number' && v >= min && v <= max
 
-  return { thresholdTokens, allowanceTokens: Math.min(allowance, thresholdTokens - 1), mode }
+  return fits(raw) ? raw : fits(dflt) ? dflt : null
+}
+
+// Coerces the plugin's options to settings. The manifest's `userConfig` (the parsed
+// object, passed as `schema`) is the one home of defaults, bounds and modes: anything
+// missing, malformed or out of range takes its default; the allowance is clamped into
+// [0, threshold). Null when the schema cannot answer: the caller then runs nothing.
+export const settingsFrom = (options: unknown, schema: unknown): Settings | null => {
+  const raw = asRecord(options)
+  const thresholdTokens = numberSetting(raw.autoCheckpointTokens, specOf(schema, 'autoCheckpointTokens'))
+  const allowance = numberSetting(raw.autoCheckpointAllowance, specOf(schema, 'autoCheckpointAllowance'))
+  const { default: dflt, options: modes } = specOf(schema, 'autoCheckpointMode')
+  const known = Array.isArray(modes) ? (modes as unknown[]) : []
+  const mode = known.includes(raw.autoCheckpointMode) ? raw.autoCheckpointMode : dflt
+
+  if (thresholdTokens === null || allowance === null || !known.includes(mode)) {
+    return null
+  }
+
+  return { thresholdTokens, allowanceTokens: Math.min(allowance, thresholdTokens - 1), mode: mode as Mode }
 }
 
 // The fill at which the checkpoint runs. With the harness's own auto-compaction on

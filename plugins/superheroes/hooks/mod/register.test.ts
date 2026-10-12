@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
 import { CHECKPOINT_INFO } from './checkpoint-block'
+import { USER_CONFIG } from './user-config.fixture'
 
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
@@ -98,6 +99,7 @@ function rig(
     isStateBroken?: boolean
     vocabulary?: string | null
     isCommandBroken?: boolean
+    manifest?: string | null
     compactFailures?: number
   } = {},
 ): Rig {
@@ -145,6 +147,12 @@ function rig(
 
     if (e.path === NOTES) {
       return r.notes === null ? { deny: 'no such file' } : { value: r.notes }
+    }
+
+    if (e.path.endsWith('/.claude-plugin/plugin.json')) {
+      return options.manifest === null
+        ? { deny: 'no such file' }
+        : { value: options.manifest ?? JSON.stringify({ userConfig: USER_CONFIG }) }
     }
 
     return options.vocabulary === null
@@ -612,12 +620,14 @@ test('a checkpoint that changed the notes compacts after the turn and toasts', a
 
   await complete($, 'Done.')
 
-  expect(r.toasts).toEqual([SUCCESS])
-  // not inside the turn that ended: only once the clock has moved on
+  // not inside the turn that ended: only once the clock has moved on, and the toast
+  // only once the compaction resolved
+  expect(r.toasts).toEqual([])
   expect(r.seen).toHaveLength(0)
 
   await r.clock.advance(1000)
 
+  expect(r.toasts).toEqual([SUCCESS])
   expect(r.seen).toHaveLength(1)
   // The mod passes no instructions: the real engine runs the mod's own `session.compact` hook
   // for the compaction it starts, and that hook steers it (measured on #1814, comment
@@ -625,6 +635,77 @@ test('a checkpoint that changed the notes compacts after the turn and toasts', a
   expect(nth(r.seen, 0).instructions).toBeUndefined()
   // and the mod itself composed nothing and marked nothing
   expect(r.argv.filter(argv => argv[3] === 'instructions' || argv[3] === 'mark')).toEqual([])
+})
+
+test('a measurement after the turn, before the compaction runs, starts no second checkpoint', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  await complete($, 'Done.')
+  // the engine measures ~4 ms after the turn, at the same high fill, before the timer
+  await measure($, r, PAST)
+  await r.clock.advance(1000)
+
+  expect(r.commands).toEqual([COMMAND])
+  expect(r.seen).toHaveLength(1)
+
+  // a late second turn.complete does not finish the held checkpoint again
+  await complete($, 'Done.')
+  await r.clock.advance(5000)
+
+  expect(r.seen).toHaveLength(1)
+  expect(r.toasts).toEqual([SUCCESS])
+
+  // resolved: the checkpoint is cleared and a later one may run
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('a failed save never compacts, even when the notes file changed', async ($, on) => {
+  const r = rig(on, argv => (argv[3] === 'save' ? { exitCode: 1, stdout: 'no' } : saveAnswer))
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  await complete($, block('notes'))
+  await r.clock.advance(5000)
+
+  expect(r.toasts).toContain('Auto-checkpoint skipped: the notes could not be saved')
+  expect(r.seen).toHaveLength(0)
+})
+
+test('an unreadable baseline never compacts and says why', async ($, on) => {
+  const r = rig(on, argv => (argv[3] === 'path' ? { exitCode: 1, stdout: 'no' } : saveAnswer))
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  await complete($, 'Done.')
+  await r.clock.advance(5000)
+
+  expect(r.toasts).toEqual(['Auto-checkpoint skipped: the notes could not be read before the checkpoint'])
+  expect(r.seen).toHaveLength(0)
+})
+
+test('a missing or malformed manifest schema runs nothing and draws no band', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { manifest: '{"userConfig": 3}' })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+  expect(r.sets.filter(([key]) => key === 'band').every(([, value]) => value === false)).toBe(true)
 })
 
 test('a checkpoint that left the notes unchanged does not compact, and a later one may run', async ($, on) => {
@@ -722,11 +803,11 @@ test('compaction that rejects is retried once, then the owner is told, with no l
 
   await r.clock.advance(1000)
   expect(r.compactAttempts).toBe(1)
-  expect(r.toasts).toEqual([SUCCESS])
+  expect(r.toasts).toEqual([])
 
   await r.clock.advance(1000)
   expect(r.compactAttempts).toBe(2)
-  expect(r.toasts).toEqual([SUCCESS, COMPACT_FAILED])
+  expect(r.toasts).toEqual([COMPACT_FAILED])
 
   await r.clock.advance(60000)
   expect(r.compactAttempts).toBe(2)

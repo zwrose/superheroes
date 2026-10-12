@@ -22,6 +22,8 @@ import { extractCheckpointBlock } from './checkpoint-block'
 import { decide, effectiveTrigger, notesChanged, settingsFrom, snooze } from './decide'
 import type { Settings } from './decide'
 
+const MANIFEST = '.claude-plugin/plugin.json'
+
 const CLI_TIMEOUT_MS = 15000
 
 // The compaction waits until the turn has ended.
@@ -82,14 +84,34 @@ const vocabulary = async ($: EngineInterface): Promise<CliVocabulary> =>
 const text = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null
 
-// The session's checkpoint notes as they stand, or null: a missing file, an unresolvable
-// path and a failed read all read as no notes.
-async function readNotes($: EngineInterface): Promise<string | null> {
+// The settings: the options coerced against the manifest's `userConfig`, read per call
+// like the vocabulary. Null (fail safe: no band, no automatic run) when the manifest
+// cannot answer.
+async function loadSettings($: EngineInterface, options: unknown): Promise<Settings | null> {
+  try {
+    const manifest: { userConfig?: unknown } = JSON.parse(await $.fs.read(`${$.plugin.root}/${MANIFEST}`))
+
+    return settingsFrom(options, manifest.userConfig)
+  } catch (error) {
+    note($, `settings: ${String(error)}`)
+
+    return null
+  }
+}
+
+// The session's checkpoint notes as they stand: null when there is no file (the path
+// resolves but the read finds nothing), undefined when the path could not be resolved.
+async function readNotes($: EngineInterface): Promise<string | null | undefined> {
+  let path: string | null
+
   try {
     const cli = await vocabulary($)
-    const res = await directive($, pathArgv(cli, $.plugin.root, await $.session.id()))
-    const path = text(res.path)
 
+    path = text((await directive($, pathArgv(cli, $.plugin.root, await $.session.id()))).path)
+  } catch {
+    return undefined
+  }
+  try {
     return path === null ? null : await $.fs.read(path)
   } catch {
     return null
@@ -128,7 +150,10 @@ async function startCheckpoint($: EngineInterface): Promise<void> {
 
     const notesBefore = await readNotes($)
 
-    await $.state.set(checkpoint, { startedAt: await $.clock.now(), notesBefore })
+    await $.state.set(
+      checkpoint,
+      notesBefore === undefined ? { startedAt: await $.clock.now() } : { startedAt: await $.clock.now(), notesBefore },
+    )
     await $.state.set(band, false)
     // not awaited: the call settles with the checkpoint turn, which must not hold a hook
     $.command.run({ command: 'superheroes:checkpoint', args: 'auto' }).catch(error =>
@@ -143,7 +168,15 @@ async function startCheckpoint($: EngineInterface): Promise<void> {
 
 // Reads the fill, decides, and draws the band from state; starts a checkpoint on `fire`.
 // A failed usage read changes nothing.
-async function evaluate($: EngineInterface, settings: Settings): Promise<void> {
+async function evaluate($: EngineInterface, options: unknown): Promise<void> {
+  const settings = await loadSettings($, options)
+
+  if (settings === null) {
+    await $.state.set(band, false)
+
+    return
+  }
+
   const { context } = await $.session.usage({ breakdown: 'summary' })
 
   if (context.tokens === undefined) {
@@ -221,11 +254,14 @@ async function forgetFill($: EngineInterface): Promise<void> {
 
 // Compacts after the turn that ended the checkpoint; `$.session.compact` rejects while a
 // turn runs, so it waits, and a rejection is tried once more before the owner is told.
-// No instructions here: the `session.compact` hook steers this compaction too.
+// No instructions here: the `session.compact` hook steers this compaction too. The
+// checkpoint stays set (`compacting`) until this resolves, so a measurement taken at the
+// still-high fill starts no second one; the toast waits for the compaction itself.
 function compactSoon($: EngineInterface, isRetry = false): void {
   $.clock.after(COMPACT_DELAY_MS, async () => {
     try {
       await $.session.compact()
+      $.ui.toast('Checkpointed and compacted')
     } catch (error) {
       if (!isRetry) {
         compactSoon($, true)
@@ -235,34 +271,42 @@ function compactSoon($: EngineInterface, isRetry = false): void {
       note($, `compact: ${String(error)}`)
       $.ui.toast('Auto-checkpoint saved the notes but could not compact')
     }
+    try {
+      await $.state.set(checkpoint, null)
+    } catch (error) {
+      note($, `compact state: ${String(error)}`)
+    }
   })
 }
 
 // Ends the checkpoint the finished main-loop turn belonged to: compacts once the notes
-// file changed, otherwise says why not.
+// file changed, otherwise says why not. A failed save or an unreadable baseline never compacts.
 async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promise<void> {
   const { value } = await $.state.get(checkpoint)
 
-  if (!value) {
+  if (!value || value.compacting) {
     return
   }
 
-  const notesAfter = await readNotes($)
+  const notesAfter = saveFailed ? null : await readNotes($)
+  const why = saveFailed
+    ? 'the notes could not be saved'
+    : value.notesBefore === undefined
+      ? 'the notes could not be read before the checkpoint'
+      : notesChanged(value.notesBefore, notesAfter ?? null)
+        ? null
+        : 'the notes file did not change'
 
-  await $.state.set(checkpoint, null)
-  if (notesChanged(value.notesBefore, notesAfter)) {
+  if (why === null) {
+    await $.state.set(checkpoint, { ...value, compacting: true })
     compactSoon($)
-    $.ui.toast('Checkpointed and compacted')
   } else {
-    $.ui.toast(
-      `Auto-checkpoint skipped: ${saveFailed ? 'the notes could not be saved' : 'the notes file did not change'}`,
-    )
+    await $.state.set(checkpoint, null)
+    $.ui.toast(`Auto-checkpoint skipped: ${why}`)
   }
 }
 
 export const register: Register = (on, options) => {
-  const settings = settingsFrom(options)
-
   on('session.start', async ($, e, next) => {
     try {
       await $.state.set(isInteractive, e.isInteractive)
@@ -309,7 +353,7 @@ export const register: Register = (on, options) => {
 
   on('session.measure', async ($, e, next) => {
     try {
-      await evaluate($, settings)
+      await evaluate($, options)
     } catch (error) {
       note($, `session.measure: ${String(error)}`)
     }
@@ -334,7 +378,7 @@ export const register: Register = (on, options) => {
       if (!e.props.hasSurvey && (await $.state.get(band)).value === true) {
         const { Box, Button, Text } = $.ui.resolve(e)
         const headsUp =
-          settings.mode === 'click-only'
+          (await loadSettings($, options))?.mode === 'click-only'
             ? 'Context is near the checkpoint threshold'
             : 'Auto-checkpoint soon'
 

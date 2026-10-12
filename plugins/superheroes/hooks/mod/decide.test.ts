@@ -1,7 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  DEFAULT_SETTINGS,
   HEADS_UP_TOKENS,
   MIN_TRIGGER_TOKENS,
   SNOOZE_STEP_TOKENS,
@@ -11,8 +10,15 @@ import {
   settingsFrom,
   snooze,
 } from './decide'
-import type { DecideInput } from './decide'
+import type { DecideInput, Settings } from './decide'
+import { USER_CONFIG } from './user-config.fixture'
 
+type Spec = { default: number; min: number; max: number }
+
+// The manifest's `userConfig` (a fixture kept equal to it) is the one home of the settings'
+// defaults and bounds.
+const schemaOf = (): Record<string, any> => USER_CONFIG
+const settingsOf = (schema: unknown, options: unknown): Settings => settingsFrom(options, schema)!
 const TRIGGER = 500000
 
 // Every gate open: at the trigger, auto, idle, interactive, nothing running, no snooze.
@@ -84,6 +90,8 @@ test('snooze: one below the trigger is not rescued by an old snooze below it', (
 const AUTO_COMPACT = 967000
 
 test('window clamp: auto-compact on pulls the trigger to threshold minus the allowance', () => {
+  const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
+
   const settings = { ...DEFAULT_SETTINGS, thresholdTokens: 900000 }
 
   // 967000 - 120000 = 847000, earlier than the owner's 900000
@@ -91,10 +99,14 @@ test('window clamp: auto-compact on pulls the trigger to threshold minus the all
 })
 
 test('window clamp: a threshold earlier than the window keeps the threshold', () => {
+  const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
+
   expect(effectiveTrigger(DEFAULT_SETTINGS, AUTO_COMPACT, true)).toBe(500000)
 })
 
 test('window clamp: auto-compact off, or its threshold unknown, leaves the threshold alone', () => {
+  const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
+
   const settings = { ...DEFAULT_SETTINGS, thresholdTokens: 900000 }
 
   expect(effectiveTrigger(settings, AUTO_COMPACT, false)).toBe(900000)
@@ -103,48 +115,76 @@ test('window clamp: auto-compact off, or its threshold unknown, leaves the thres
 })
 
 test('window clamp: a bigger allowance fires earlier', () => {
+  const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
+
   const settings = { ...DEFAULT_SETTINGS, thresholdTokens: 900000, allowanceTokens: 300000 }
 
   expect(effectiveTrigger(settings, AUTO_COMPACT, true)).toBe(667000)
 })
 
 test('window clamp: the trigger never falls below the floor, so a tiny window cannot fire every turn', () => {
+  const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
+
   expect(MIN_TRIGGER_TOKENS).toBe(50000)
   expect(effectiveTrigger(DEFAULT_SETTINGS, 100000, true)).toBe(MIN_TRIGGER_TOKENS)
   expect(effectiveTrigger(DEFAULT_SETTINGS, 10000, true)).toBe(MIN_TRIGGER_TOKENS)
 })
 
-test('settingsFrom: a missing or empty options object is the defaults', () => {
-  expect(settingsFrom({})).toEqual(DEFAULT_SETTINGS)
-  expect(settingsFrom(undefined)).toEqual(DEFAULT_SETTINGS)
-  expect(settingsFrom(null)).toEqual(DEFAULT_SETTINGS)
-  expect(settingsFrom('auto')).toEqual(DEFAULT_SETTINGS)
+test('settingsFrom: a missing or empty options object is the manifest defaults', () => {
+  const schema = schemaOf()
+  const defaults = {
+    thresholdTokens: schema.autoCheckpointTokens.default,
+    allowanceTokens: schema.autoCheckpointAllowance.default,
+    mode: schema.autoCheckpointMode.default,
+  }
+
+  for (const options of [{}, undefined, null, 'auto']) {
+    expect(settingsFrom(options, schema)).toEqual(defaults)
+  }
 })
 
 test('settingsFrom: valid values are kept', () => {
+  const schema = schemaOf()
+
   expect(
-    settingsFrom({ autoCheckpointTokens: 300000, autoCheckpointAllowance: 50000, autoCheckpointMode: 'click-only' }),
+    settingsOf(schema, { autoCheckpointTokens: 300000, autoCheckpointAllowance: 50000, autoCheckpointMode: 'click-only' }),
   ).toEqual({ thresholdTokens: 300000, allowanceTokens: 50000, mode: 'click-only' })
-  expect(settingsFrom({ autoCheckpointMode: 'off' }).mode).toBe('off')
+  expect(settingsOf(schema, { autoCheckpointMode: 'off' }).mode).toBe('off')
 })
 
 test('settingsFrom: malformed or out-of-range values take their defaults', () => {
-  expect(settingsFrom({ autoCheckpointTokens: 49999 }).thresholdTokens).toBe(500000)
-  expect(settingsFrom({ autoCheckpointTokens: 2000001 }).thresholdTokens).toBe(500000)
-  expect(settingsFrom({ autoCheckpointTokens: '300000' }).thresholdTokens).toBe(500000)
-  expect(settingsFrom({ autoCheckpointTokens: Number.NaN }).thresholdTokens).toBe(500000)
-  expect(settingsFrom({ autoCheckpointAllowance: -1 }).allowanceTokens).toBe(120000)
-  expect(settingsFrom({ autoCheckpointAllowance: 1000001 }).allowanceTokens).toBe(120000)
-  expect(settingsFrom({ autoCheckpointMode: 'sometimes' }).mode).toBe('auto')
-  expect(settingsFrom({ autoCheckpointMode: 3 }).mode).toBe('auto')
+  const schema = schemaOf()
+  const tokens: Spec = schema.autoCheckpointTokens
+  const allowance: Spec = schema.autoCheckpointAllowance
+  const defaults = settingsOf(schema, {})
+
+  for (const bad of [tokens.min - 1, tokens.max + 1, '300000', Number.NaN]) {
+    expect(settingsOf(schema, { autoCheckpointTokens: bad }).thresholdTokens).toBe(tokens.default)
+  }
+  for (const bad of [allowance.min - 1, allowance.max + 1]) {
+    expect(settingsOf(schema, { autoCheckpointAllowance: bad }).allowanceTokens).toBe(allowance.default)
+  }
+  expect(settingsOf(schema, { autoCheckpointMode: 'sometimes' }).mode).toBe(defaults.mode)
+  expect(settingsOf(schema, { autoCheckpointMode: 3 }).mode).toBe(defaults.mode)
 })
 
 test('settingsFrom: the allowance is clamped below the threshold', () => {
-  const settings = settingsFrom({ autoCheckpointTokens: 100000, autoCheckpointAllowance: 900000 })
+  const schema = schemaOf()
+  const settings = settingsOf(schema, { autoCheckpointTokens: 100000, autoCheckpointAllowance: 900000 })
 
   expect(settings.allowanceTokens).toBe(99999)
   expect(settings.allowanceTokens).toBeLessThan(settings.thresholdTokens)
-  expect(settingsFrom({ autoCheckpointAllowance: 0 }).allowanceTokens).toBe(0)
+  expect(settingsOf(schema, { autoCheckpointAllowance: 0 }).allowanceTokens).toBe(0)
+})
+
+test('settingsFrom: a missing or malformed schema answers null', () => {
+  const schema = schemaOf()
+
+  expect(settingsFrom({}, undefined)).toBeNull()
+  expect(settingsFrom({}, 3)).toBeNull()
+  expect(settingsFrom({}, {})).toBeNull()
+  expect(settingsFrom({}, { ...schema, autoCheckpointMode: { default: 'auto' } })).toBeNull()
+  expect(settingsFrom({}, { ...schema, autoCheckpointTokens: { default: 'x', min: 1, max: 2 } })).toBeNull()
 })
 
 test('notesChanged: true only for non-empty text that differs from before', () => {
