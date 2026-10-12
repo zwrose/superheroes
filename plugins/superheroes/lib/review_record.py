@@ -1074,7 +1074,10 @@ def read(pr, repo=None, readers=None):
 
 def _shows_reading(run):
     obs = run.get("observation") if isinstance(run, dict) else None
-    return isinstance(obs, dict) and obs.get("read") == "engaged"
+    # the record writer credits a run only when it is a graded review: hold the reading to the same rule
+    return (isinstance(run, dict) and run.get("graded") is True
+            and run.get("runKind") == session_contract.RUN_KIND_REVIEW
+            and isinstance(obs, dict) and obs.get("read") == "engaged")
 
 
 def _move_up_blocker(seat_map, maker_families):

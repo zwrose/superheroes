@@ -2195,7 +2195,7 @@ def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
 
 SEAT_MAP = {"roster": ["a", "b"], "seats": {"a": {"source": "live", "family": "openai"},
                                             "b": {"source": "live", "family": "google"}}}
-ENGAGED_RUN = {"observation": {"read": "engaged"}}
+ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
 NO_READING = {"observation": {"read": "unknown"}}
 
 
@@ -2211,6 +2211,14 @@ def test_reading_next_with_one_run_and_no_reading_reruns():
 def test_reading_next_accepts_when_any_run_shows_a_reading():
     assert rr.reading_next([NO_READING, ENGAGED_RUN], None, [])["next"] == "accept"
     assert rr.reading_next([ENGAGED_RUN], None, [])["next"] == "accept"
+
+
+def test_reading_next_does_not_accept_an_engaged_run_the_record_writer_would_not_credit():
+    forfeited = dict(ENGAGED_RUN, graded=False)
+    wrote = dict(ENGAGED_RUN, runKind="write")
+    # bites on: a forfeited or non-review run that merely engaged ending the retry
+    assert rr.reading_next([forfeited], None, ["anthropic"])["next"] == "rerun"
+    assert rr.reading_next([wrote], None, ["anthropic"])["next"] == "rerun"
 
 
 def test_reading_next_counts_only_the_first_two_runs():

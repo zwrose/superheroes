@@ -836,3 +836,32 @@ def test_a_superseded_attempt_of_an_older_journal_is_no_reviewer(tmp_path):
     account = rs.account_from_session(s.save(), extras())
     # bites on: _slots keeping an attempt the older version's re-emit superseded when no replacement was recorded
     assert account["reviewers"] == []
+
+
+def _verifier_and_synthesis_session(tmp_path):
+    s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"}, rounds={"1": {"fix": {"fixes": []}}})
+    s.seat("code-reviewer", nonce="n1")
+    s.seat("verifier", phase="dispatch-verifiers", nonce="n2")
+    s.seat("synthesis", phase="dispatch-synthesis", nonce="n3")
+    runs = {f"/run/{n}": (dict(GOOD_RUN, runnerNonce=n, viewHeadSha=EARLIER), None) for n in ("n1", "n2", "n3")}
+    return s.save(), runs
+
+
+def test_a_verifier_sits_before_the_rounds_fix_and_synthesis_is_not_listed_as_a_reviewer(tmp_path):
+    session, runs = _verifier_and_synthesis_session(tmp_path)
+    account = rs.account_from_session(session, extras(runDirs=sorted(runs)), Fake(runs=runs).readers())
+    steps = {v["name"]: v.get("step") for v in account["reviewers"]}
+    # bites on: verification placed after the fix (step 3), or the synthesis judge listed among the reviewers
+    assert steps == {"code-reviewer (round 1)": 2, "verifiers verifier (round 1)": 2}
+
+
+def test_a_claude_synthesis_of_an_anthropic_made_change_leaves_no_synthesis_row_and_no_park(tmp_path):
+    session, runs = _verifier_and_synthesis_session(tmp_path)
+    fake = Fake(runs=runs)
+    account = rs.account_from_session(session, extras(runDirs=sorted(runs), makers=[{"family": "anthropic", "source": "author"}]),
+                                      fake.readers())
+    rec = rr.build_record(account, fake.readers())
+    # bites on: the synthesis step, always seated on claude, being judged against an anthropic maker and parking the record
+    assert not any("synthesis" in v["name"] for v in rec["reviewers"])
+    assert not any("synthesis" in str(m) for m in rec["missingReviews"])
+    assert rec["missingReviews"] == [] and not rec.get("parked")

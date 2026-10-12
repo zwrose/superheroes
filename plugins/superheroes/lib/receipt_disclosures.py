@@ -221,10 +221,8 @@ def accumulated_maker_families(state):
     decisions that read makers do too. Seat identities still come from the latest map alone."""
     if not isinstance(state, dict):
         return frozenset()
-    out = set(maker_families(seat_map_receipts.effective_seat_map(state)))
-    for entry in seat_map_receipts.receipts(state):
-        out |= maker_families(entry["map"])
-    return frozenset(out)
+    return (maker_families(seat_map_receipts.effective_seat_map(state))
+            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
 
 
 def auditor_constraints(state):

@@ -237,6 +237,18 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     return [{"round": selected_round_label, "basis": basis}]
 
 
+def maker_family_union(receipt_list):
+    """The one maker-history rule: every family any receipt's `makerFamilies` list named, or None when no
+    receipt carried the list. Receipt emission and the decisions that read makers both go through here."""
+    out, saw = set(), False
+    for entry in receipt_list:
+        raw = entry["map"].get("makerFamilies")
+        if isinstance(raw, list):
+            saw = True
+            out.update(fam for fam in raw if isinstance(fam, str) and fam)
+    return frozenset(out) if saw else None
+
+
 def emit_receipt_seat_map(state, driver_author_family=None):
     """Derived read-time union for ``build_receipt`` — latest seats, merged evidence, last-wins scalars."""
     receipt_list = receipts(state)
@@ -316,14 +328,8 @@ def emit_receipt_seat_map(state, driver_author_family=None):
     else:
         base.pop("authorFamily", None)
     # every maker family any receipt named stays named: the union, never the last receipt's list
-    maker_families: set[str] = set()
-    saw_maker_families = False
-    for entry in receipt_list:
-        raw_makers = entry["map"].get("makerFamilies")
-        if isinstance(raw_makers, list):
-            saw_maker_families = True
-            maker_families.update(fam for fam in raw_makers if isinstance(fam, str) and fam)
-    if saw_maker_families:
+    maker_families = maker_family_union(receipt_list)
+    if maker_families is not None:
         base["makerFamilies"] = sorted(maker_families)
     else:
         base.pop("makerFamilies", None)

@@ -46,6 +46,10 @@ STILL_OPEN = "still open when the review loop ended"
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
+_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS)
+# synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
+# nothing, so it is not a reviewer of the change and the account does not list it
+_UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
 
@@ -163,9 +167,9 @@ def _bind(ran, run_dirs, engine_run):
 
 
 def _step(rnd, phase):
-    """Where in the loop a reviewer sat: two steps a round, a panel or gap-sweep read before the round's
-    fix (even), every other review phase after it (odd)."""
-    return 2 * rnd + (0 if phase in (round_phases.P_PANEL, round_phases.P_GAPSWEEP) else 1)
+    """Where in the loop a reviewer sat: two steps a round, a panel, gap-sweep or verifier read before the
+    round's fix (even), every other review phase after it (odd)."""
+    return 2 * rnd + (0 if phase in _PRE_FIX_PHASES else 1)
 
 
 def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None, phase=None):
@@ -200,7 +204,8 @@ def _slot_ran(state, key, row, env):
 
 
 def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
-    slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS}
+    slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS
+             and k[0] not in _UNLISTED_PHASES}
     envs = {k: _envelope(_path(session_dir, k, v[0])) for k, v in slots.items()}
     ran = {k: v for k, v in slots.items() if _slot_ran(state, k, v[1], envs[k])}
     bound = _bind(ran, run_dirs, engine_run)
