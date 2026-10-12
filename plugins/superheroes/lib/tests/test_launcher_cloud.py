@@ -1613,43 +1613,41 @@ def test_pending_started_is_returned_when_the_unconfirmed_path_append_fails(
     assert "pendingStarted" in result["remedy"]
 
 
-def _signal_once_running(marker, signum):
-    """A watcher that sends this process `signum` once the command has said it is running.
+def _signal_after_hello_is_read(monkeypatch, signum):
+    """Send this process `signum` from inside the launcher's own read, once `hello` has come back.
 
-    The command creates `marker` as its first act after it has started, so the signal never
-    depends on how long the command took to start.
+    The wrapper returns the bytes it read, so the launcher has captured them before it sees the
+    cancellation; the signal never races the capture.
     """
     import os as _os
-    import threading
 
-    def watch():
-        deadline = time.monotonic() + 20
-        while not _os.path.exists(marker):
-            if time.monotonic() >= deadline:
-                return
-            time.sleep(0.02)
-        _os.kill(_os.getpid(), signum)
+    real_read = _os.read
+    seen = []
+    sent = []
 
-    watcher = threading.Thread(target=watch, daemon=True)
-    watcher.start()
-    return watcher
+    def read_then_signal(fd, length):
+        data = real_read(fd, length)
+        seen.append(data)
+        if not sent and b"hello" in b"".join(seen):
+            sent.append(fd)
+            _os.kill(_os.getpid(), signum)
+        return data
+
+    monkeypatch.setattr(L.os, "read", read_then_signal)
+    return sent
 
 
-def _assert_a_launcher_signal_ends_the_group(tmp_path, signum):
+def _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, signum):
     import os as _os
     import signal as _signal
 
     log = tmp_path / "signalled.stdout"
-    marker = tmp_path / "running"
     before = _signal.getsignal(signum)
-    watcher = _signal_once_running(str(marker), signum)
-    try:
-        result = L._default_cloud_spawn(
-            ["sh", "-c", "echo hello; touch %s; sleep 30" % marker], str(tmp_path), str(log),
-            dict(_os.environ), 20,
-        )
-    finally:
-        watcher.join(timeout=25)
+    sent = _signal_after_hello_is_read(monkeypatch, signum)
+    result = L._default_cloud_spawn(
+        ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
+    )
+    assert sent
     assert result["readError"] == "_LauncherTerminated"
     assert "hello" in result["output"]
     assert "hello" in log.read_text()
@@ -1658,20 +1656,20 @@ def _assert_a_launcher_signal_ends_the_group(tmp_path, signum):
 
 
 def test_a_sigterm_to_the_launcher_ends_the_command_group_and_keeps_the_output(
-    tmp_path, terminal,
+    tmp_path, monkeypatch, terminal,
 ):
     import signal as _signal
 
-    _assert_a_launcher_signal_ends_the_group(tmp_path, _signal.SIGTERM)
+    _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGTERM)
 
 
 def test_a_sigint_to_the_launcher_ends_the_command_group_and_keeps_the_output(
-    tmp_path, terminal,
+    tmp_path, monkeypatch, terminal,
 ):
     # axis: Ctrl-C is a cancellation like SIGTERM — the same outcome, never a KeyboardInterrupt
     import signal as _signal
 
-    _assert_a_launcher_signal_ends_the_group(tmp_path, _signal.SIGINT)
+    _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGINT)
 
 
 def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(

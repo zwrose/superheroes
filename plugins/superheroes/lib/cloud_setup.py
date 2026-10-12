@@ -40,6 +40,7 @@ REASON_SECRET_SHAPED = "secret-shaped-value"
 REASON_STORE_LOCKED = "store-locked"
 REASON_WRITE_FAILED = "write-failed"
 REASON_ENVIRONMENT_MISMATCH = "environment-mismatch"
+REASON_CHECK_FAILED = "cloud-check-failed"
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:-]*$")
 _VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
@@ -67,11 +68,16 @@ _MESSAGES = {
         "Cloud builds can't be switched on yet. This project has no cloud setup on this "
         'Claude account. Say "set up cloud builds" and I\'ll walk you through it.'
     ),
+    "check-failed": (
+        "Cloud builds can't be switched on yet: the last check of this project's cloud setup "
+        'failed. Fix what it named, then say "check again".'
+    ),
 }
 
 
 def switch_message(kind, project_name):
-    """The approved words for switching cloud builds ``on``, ``off``, or the ``refused`` switch-on."""
+    """The approved words for switching cloud builds ``on``, ``off``, the ``refused`` switch-on, or the
+    ``check-failed`` switch-on refused because the last check of the setup failed."""
     if kind not in _MESSAGES:
         raise ValueError("unknown message kind: %r" % (kind,))
     return _MESSAGES[kind].format(project=project_name)

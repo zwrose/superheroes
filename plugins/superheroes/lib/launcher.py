@@ -3311,6 +3311,19 @@ def _cli_compose(args):
 _CLOUD_NEVER_STARTED_REASONS = ("spawn-oserror", "log-open-failed")
 
 
+def _premise_with_resolved_base(repo_root, premise):
+    """A copy of ``premise`` whose ``baseCommit`` is the one commit it names now, or ``premise``
+    itself when it names no commit that resolves (``validate_premise`` then refuses it)."""
+    base = premise.get("baseCommit") if isinstance(premise, dict) else None
+    if not isinstance(base, str) or not base.strip():
+        return premise
+    proc = _git_scrubbed(repo_root, "rev-parse", "--verify", "%s^{commit}" % base.strip())
+    resolved = (proc.stdout or "").strip() if proc is not None and proc.returncode == 0 else ""
+    if not _HEX40.match(resolved):
+        return premise
+    return dict(premise, baseCommit=resolved)
+
+
 def _cli_launch(args):
     checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
     if dup_reason:
@@ -3342,6 +3355,9 @@ def _cli_launch(args):
     # axis: the cloud environment comes from the setup record the routing step read — see bite-proof record wo_b_place_call
     if getattr(args, "cloud_environment", None) is not None:
         return _fail("launch-cloud-environment-routed")
+
+    # axis: a premise's base names one commit for the cloud attempt and the local fallback alike, so a ref that moves between the two never changes what the fallback builds — see bite-proof record wo_d_place_call
+    premise = _premise_with_resolved_base(args.repo_root, premise)
 
     # axis: every launch is routed once, before it starts — see bite-proof record wo_b_place_call
     place_call = launch_place.route(

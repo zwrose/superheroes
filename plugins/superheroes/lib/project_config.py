@@ -687,6 +687,20 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
                     "reason": cloud_setup.REASON_MISSING,
                     "message": cloud_setup.switch_message("refused", project_name),
                 }
+            try:
+                import cloud_check
+
+                # axis: a failed-check marker that is present, or damaged, or cannot be read keeps cloud builds from switching on — see bite-proof record wo_d_place_call
+                check_failed = cloud_check.read_failed_check(cwd, account, root=root) is not None
+            except Exception:
+                # axis: a marker read that raises refuses the switch-on, never proceeds — see bite-proof record wo_d_place_call
+                check_failed = True
+            if check_failed:
+                return {
+                    "action": "refused",
+                    "reason": cloud_setup.REASON_CHECK_FAILED,
+                    "message": cloud_setup.switch_message("check-failed", project_name),
+                }
 
     if item["home"] == HOME_THREAT_MODEL:
         write_result = core_md.write_threat_model(cwd, value, root=root)

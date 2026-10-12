@@ -34,7 +34,6 @@ FAILED_PART_CONDITION = {
 }
 
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def valid_reported(reported):
@@ -56,15 +55,6 @@ def valid_reported(reported):
 
 def _placed_stamp(cwd, root):
     return cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(cwd, root))
-
-
-def _lapses_ok(lapses, today):
-    if not (isinstance(lapses, str) and _DATE_RE.fullmatch(lapses)):
-        return False
-    try:
-        return datetime.date.fromisoformat(lapses) >= today
-    except ValueError:
-        return False
 
 
 def _result(conditions, *, setting=False, account=None, environment=None, cloud_version=None,
@@ -153,7 +143,7 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
     conditions["setup"] = setup
     conditions["passPresent"] = reported.get("noPass") is not True
     # axis: the pass is live only while its recorded lapse date is not before today — see bite-proof record wo_a_place_call
-    conditions["passLive"] = _lapses_ok(record.get("passLapses"), _today(today))
+    conditions["passLive"] = cloud_check._lapses_ok(record.get("passLapses"), _today(today))
     # axis: a version the cloud reported stands in place of the record's — see bite-proof record wo_a_place_call
     if reported.get("pluginVersion") is not None:
         cloud_version = reported["pluginVersion"]
@@ -162,6 +152,9 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
         cloud_version = record.get("pluginVersion")
         conditions["version"] = advisor is not None and (
             cloud_version == advisor or record.get("picksUpVersion") is True)
+        # axis: a failed version check leaves the old record in place, so its version is not the cloud's current one — see bite-proof record wo_d_place_call
+        if failed is not None and "version" in failed:
+            cloud_version = None
     try:
         # axis: the calibration matches only when the placed stamp equals the recorded one — see bite-proof record wo_a_place_call
         conditions["calibration"] = (stamp_fn or _placed_stamp)(cwd, root) == record.get(
