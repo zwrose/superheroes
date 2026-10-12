@@ -118,9 +118,9 @@ _IMPORT_ROUTING_VARS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSER
 
 
 def _names_root(value, root_real):
-    """True when any ``os.pathsep`` entry of ``value`` resolves to ``root_real`` or lies beneath it."""
+    """True when any absolute ``os.pathsep`` entry of ``value`` resolves to ``root_real`` or lies beneath it."""
     for entry in value.split(os.pathsep):
-        if entry:
+        if entry and os.path.isabs(entry):
             real = os.path.realpath(entry)
             if real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep):
                 return True

@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -502,6 +503,43 @@ def test_t15_run_one_bounds_stored_output(repo, monkeypatch):
     assert len(record["output"].encode("utf-8")) <= 256
 
 
+def test_tail_drain_never_retains_more_than_the_cap(monkeypatch):
+    monkeypatch.setattr(break_it, "OUTPUT_TAIL_BYTES", 256)
+    rfd, wfd = os.pipe()
+
+    def writer():
+        with os.fdopen(wfd, "wb") as out:
+            for i in range(5000):
+                out.write(b"x" * 100 + b" line%d\n" % i)
+            out.write(b"LAST-MARKER\n")
+
+    with os.fdopen(rfd, "rb") as stream:
+        drain = break_it._TailDrain(stream)
+        drain.start()
+        feeder = threading.Thread(target=writer)
+        feeder.start()
+        feeder.join(30)
+        drain.join(30)
+        assert not drain.is_alive()
+    assert len(drain.buf) <= 256
+    assert drain.buf.endswith(b"LAST-MARKER\n")
+
+
+def test_clean_env_keeps_scalar_settings_and_drops_absolute_root_aliases(tmp_path, monkeypatch):
+    root = tmp_path / "caller"
+    root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root)
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("TEST_MODE", "offline")
+    monkeypatch.setenv("SERVICE_TOKEN", "x")
+    monkeypatch.setenv("ROOT_ALIAS_VAR", str(alias))
+    env = break_it._clean_env(root=str(root))
+    assert env["TEST_MODE"] == "offline"
+    assert env["SERVICE_TOKEN"] == "x"
+    assert "ROOT_ALIAS_VAR" not in env
+
+
 def test_reaper_without_proc_still_propagates_the_child_exit_status(repo, monkeypatch):
     # A host with no /proc (macOS): the reaper's descendant sweep is a no-op and the exit status survives.
     assert 'PROC_ROOT = "/proc"' in break_it._REAPER
@@ -595,7 +633,9 @@ def test_git_setup_timeout_kills_the_helper_descendants(repo, tmp_path, monkeypa
         return found
 
     try:
+        started = time.monotonic()
         record = break_it.run_one(str(repo), head, _block("tests/test_g.py", "assert True\n"))
+        assert time.monotonic() - started < 30, "setup waited for the helper instead of killing it"
         assert (record["outcome"], record["reason"]) == ("not-run", "copy-failed")
         deadline = time.monotonic() + 5
         while helpers() and time.monotonic() < deadline:
