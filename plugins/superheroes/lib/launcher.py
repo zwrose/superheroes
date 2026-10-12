@@ -16,12 +16,10 @@ import pty
 import re
 import secrets
 import select
-import shutil
 import signal
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -2280,88 +2278,63 @@ def _place_refusal(
     return None
 
 
-# What a failed fetch prints when the server answered and does not have the commit. Any other
-# failure (an unresolved host, a refused login, a dropped connection) leaves the question open.
-_BASE_ABSENT_MARKERS = ("not our ref", "couldn't find remote ref", "no such remote ref")
+# GitHub's answer when the repository has no such commit: HTTP 422 with this message. Any other
+# failure (a missing or private repository, a refused login, a dropped connection) leaves the
+# question open.
+_BASE_ABSENT_MARKER = "no commit found for sha"
 
-
-# The settings that decide how a fetch reaches and signs in to a remote. Matched on the
-# lower-cased key, which keeps a section and variable name case-blind and a subsection as typed.
-_TRANSPORT_KEY_RE = re.compile(
-    r"^(?:url\..+\.(?:insteadof|pushinsteadof)|core\.(?:sshcommand|gitproxy)"
-    r"|(?:ssh|http|credential|protocol)\..+)$",
-    re.DOTALL,
+# The forms of a GitHub remote address: scp-like ssh, ssh URL, https URL; ``.git`` optional.
+_GITHUB_REMOTE_RE = re.compile(
+    r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
+    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
 
-def _transport_options(repo_root, env):
-    """The transport settings as the launching checkout itself sees them, as ``-c key=value``
-    arguments for a fetch run somewhere else; None when they could not be read.
-
-    ``git config --list`` run in the checkout applies every layer, conditional includes keyed on
-    its gitdir or branch among them, and the worktree's own config.
-    """
-    listed = _git_scrubbed(
-        repo_root, "config", "--list", "-z", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    if listed is None or listed.returncode != 0:
+def _gh_commit_lookup(owner, repo, sha, env, timeout):
+    """Ask GitHub's commits endpoint for ``sha`` with ``gh``; the completed process, or None when
+    ``gh`` could not run or timed out. Tests replace it."""
+    try:
+        return subprocess.run(
+            ["gh", "api", "repos/%s/%s/commits/%s" % (owner, repo, sha), "--jq", ".sha"],
+            capture_output=True,
+            text=True,
+            env=ll.scrub_env(env),
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
         return None
-    options = []
-    for entry in listed.stdout.split("\0"):
-        if not entry:
-            continue
-        key, sep, value = entry.partition("\n")
-        if _TRANSPORT_KEY_RE.match(key.lower()):
-            options += ["-c", key + "=" + value if sep else key]
-    return options
 
 
 def _base_on_remote(repo_root, base, env):
-    """Whether the commit ``base`` is on the remote, asked of the server afresh: True, False, or
+    """Whether the commit ``base`` is on the remote, asked of GitHub afresh: True, False, or
     None when the remote could not be asked.
 
-    The commit is fetched into an empty repository, because a fetch in the working repository
-    never asks the server for an object it already has, and a local tracking ref can be stale.
-    The fetch runs against the remote's address as the launching checkout resolves it, with the
-    checkout's own transport settings (``insteadOf`` rewrites, ``core.sshCommand``,
-    ``credential.*``, ``http.*``) handed over as options, so a setting that reaches the checkout
-    only through a conditional include applies as well. The empty repository stays empty.
+    The launching checkout's ``origin`` address names the owner and repository, and the launcher
+    asks GitHub's commits endpoint through ``gh`` whether that commit exists there: the host the
+    cloud session clones from, and no local tracking ref can be stale. True only when the call
+    succeeds and answers with the same commit; False only when GitHub says it has no such commit
+    (HTTP 422). Everything else is None: an origin that is not on github.com or is missing, no
+    ``gh``, a timeout, a missing or private repository, a refused login, a dropped connection.
     """
     url = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
-    if url is None or url.returncode != 0 or not url.stdout.strip():
+    if url is None or url.returncode != 0:
         return None
-    address = url.stdout.strip()
-    options = _transport_options(repo_root, env)
-    if options is None:
+    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
+    if matched is None:
         return None
-    try:
-        scratch = tempfile.mkdtemp()
-    except OSError:
+    asked = _gh_commit_lookup(
+        matched.group("owner"), matched.group("repo"), base, env, _WORKTREE_GIT_TIMEOUT,
+    )
+    if asked is None:
         return None
-    try:
-        made = _git_scrubbed(
-            scratch, "init", "-q", "--bare", scratch, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        if made is None or made.returncode != 0:
-            return None
-        fetched = _git_scrubbed(
-            scratch, *options, "fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-            address, base, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-        )
-        if fetched is None:
-            return None
-        if fetched.returncode == 0:
-            return True
-        # Only the server saying it lacks the commit is an answer; a failure to reach it or to
-        # sign in is not, and says nothing about the commit.
-        said = (fetched.stderr or "").lower()
-        if any(marker in said for marker in _BASE_ABSENT_MARKERS):
-            return False
-        return None
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    if asked.returncode == 0:
+        return True if (asked.stdout or "").strip() == base else None
+    said = (asked.stderr or "").lower()
+    if _BASE_ABSENT_MARKER in said and "http 422" in said:
+        return False
+    return None
 
 
 # The round-trip to the remote; tests replace it.
@@ -3306,20 +3279,6 @@ def _issue_title(repo_root, issue):
     return None
 
 
-def _report_place_call(raw_reserved, folded_place):
-    """The lane's place call: the reserved record's own when it agrees with the ledger's folded
-    place, otherwise one synthesized from that place with no reason."""
-    premise = raw_reserved.get("premise") if isinstance(raw_reserved, dict) else None
-    call = premise.get("placeCall") if isinstance(premise, dict) else None
-    if (
-        isinstance(call, dict)
-        and call.get("place") == folded_place
-        and isinstance(call.get("pointedAtCloud"), bool)
-    ):
-        return call
-    return {"place": folded_place, "pointedAtCloud": folded_place == PLACE_CLOUD, "reason": None}
-
-
 def _report_title(title_fn, repo_root, issue):
     try:
         title = title_fn(repo_root, issue)
@@ -3328,73 +3287,11 @@ def _report_title(title_fn, repo_root, issue):
     return title if isinstance(title, str) and title else None
 
 
-def _decides_still(call):
-    """True when the place call moves the "Still on your machine" state: a build in the cloud, or
-    one the cloud was meant for that ran locally because it was not ready."""
-    return call.get("place") == PLACE_CLOUD or bool(
-        call.get("place") == PLACE_LOCAL and call.get("pointedAtCloud")
-        and call.get("reason") in launch_place.NOT_READY_CODES)
-
-
-def _launch_day(info):
-    """The UTC date the launch started, so a replayed report keeps the day it first observed; None
-    when the ledger carries no usable time (the reminder then takes today's date)."""
-    stamp = info.get("startedTs", info.get("reservedTs"))
-    try:
-        return datetime.fromtimestamp(stamp, timezone.utc).date()
-    except (TypeError, ValueError, OverflowError, OSError):
-        return None
-
-
-def _started_indexes(records):
-    """Each launch's ledger position of its latest started event. Launches reserve and spawn in
-    separate steps, so the position a launch started at, not the one it reserved at, is the order
-    in which the launches actually happened."""
-    return {
-        rec["launchId"]: idx for idx, rec in enumerate(records)
-        if isinstance(rec, dict) and rec.get("event") == "started"
-    }
-
-
-def _record_batch_still(repo_root, launches, reserved, started_at):
-    """Replay every confirmed, started launch in the ledger that decides the reminder, whichever
-    batch it belongs to, in the order they started: the last cloud launch clears everything before
-    it, and the deciding local fallbacks after it are recorded together, dated by the latest of
-    their start days. The reminder is the same whichever batch is reported."""
-    decided = []
-    for launch_id, info in launches.items():
-        if not info["started"] or info.get("cloudSessionUnconfirmed"):
-            continue
-        call = _report_place_call(reserved.get(launch_id), info["place"])
-        if _decides_still(call):
-            decided.append((started_at.get(launch_id, info["reservedIndex"]), call, info))
-    decided.sort(key=lambda entry: entry[0])
-    if not decided:
-        return launch_report.record_still(repo_root, [], root=None)
-    last_cloud = max(
-        (pos for pos, (_idx, call, _info) in enumerate(decided) if call.get("place") == PLACE_CLOUD),
-        default=None,
-    )
-    result = {"action": "unchanged", "reason": None}
-    if last_cloud is not None:
-        _idx, cloud_call, cloud_info = decided[last_cloud]
-        result = launch_report.record_still(
-            repo_root, [cloud_call], root=None, today=_launch_day(cloud_info))
-    later = decided[last_cloud + 1 if last_cloud is not None else 0:]
-    if later:
-        days = [day for day in (_launch_day(info) for _idx, _call, info in later) if day is not None]
-        result = launch_report.record_still(
-            repo_root, [call for _idx, call, _info in later], root=None,
-            today=max(days) if days else None)
-    return result
-
-
 def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
-    """The launch report for one batch, built from the ledger's started launches, and the
-    "Still on your machine" state updated from the same place calls."""
+    """The launch report for one batch, built from the ledger's started launches."""
     read = ll.read(repo_root, env=env)
     if read["state"] == "missing":
-        return {"ok": True, "report": None, "still": None, "lanes": 0}
+        return {"ok": True, "report": None, "lanes": 0}
     if read["state"] != "ok":
         return _fail("report-ledger-%s" % read["state"])
     folded = ll.fold(read["records"])
@@ -3425,13 +3322,11 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
         lanes.append({
             "issue": issue,
             "title": _report_title(lookup, repo_root, issue),
-            "placeCall": _report_place_call(reserved.get(launch_id), info["place"]),
+            "placeCall": launch_report.report_place_call(reserved.get(launch_id), info["place"]),
         })
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),
-        "still": _record_batch_still(
-            repo_root, folded["launches"], reserved, _started_indexes(read["records"])),
         "lanes": len(lanes),
     }
 

@@ -1,12 +1,12 @@
 # plugins/superheroes/lib/tests/test_launch_report.py
-"""Conformance: the launch report and the "Still on your machine" line. Every store, account file,
+"""Conformance: the launch report, and the rules the "Still on your machine" line shares with it (the line
+itself is tested from a ledger in test_launch_report_verbs.py). Every store, account file,
 repository and record is built under tmp_path; no test touches the real home directory, clock,
 clipboard or network. Requirement numbers in the test names are for the reader."""
 import datetime
 import functools
 import json
 import os
-import subprocess
 import sys
 
 import pytest
@@ -20,7 +20,6 @@ import cloud_setup as CS  # noqa: E402
 import core_md as CM  # noqa: E402
 import launch_place as LP  # noqa: E402
 import launch_report as LR  # noqa: E402
-import mode_registry  # noqa: E402
 import project_config as PC  # noqa: E402
 
 _CORE_FACTS = {
@@ -79,26 +78,10 @@ def _lane(issue, call, title="auto"):
 # ---------------------------------------------------------------- fixtures: stores and worlds
 
 
-def _gitdir(tmp_path):
-    repo = str(tmp_path / "repo")
-    subprocess.run(["git", "init", "-q", repo], check=True)
-    return repo, str(tmp_path / "store")
-
-
-def _store_dir(repo, store):
-    return mode_registry.project_store_dir(repo, store)
-
-
 def _put(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
-    return path
-
-
-def _sub(tmp_path, name):
-    path = tmp_path / name
-    path.mkdir()
     return path
 
 
@@ -166,10 +149,6 @@ BOARD_LIST = "\n".join([
     '- #418 Speed up the orders list. You said "this one local".',
 ])
 
-BOARD_STILL = ("Still on your machine\n"
-               "The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.")
-
-
 def _board_lanes():
     cloud = _call("cloud", environment=ENVIRONMENT)
     return [
@@ -186,15 +165,6 @@ def test_R_board_the_two_launch_reports_are_byte_exact():
     four = [_lane(400 + i, version) for i in range(4)]
     assert LR.render_report(four) == BOARD_SUMMARY
     assert LR.render_report(_board_lanes()) == BOARD_LIST
-
-
-def test_R_board_the_still_line_is_byte_exact(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    LR.record_still(repo, [_call(reason="version", cloud="0.41.0", advisor="0.42.0")],
-                    root=store, today=TODAY)
-    line = LR.still_line(repo, root=store, today=TODAY,
-                         readiness_fn=_fn(ready=False, reason="version"))
-    assert line == BOARD_STILL
 
 
 def test_a_report_is_given_only_when_cloud_builds_are_on_or_a_launch_went_to_the_cloud():
@@ -289,10 +259,9 @@ def _fragments(code, cloud="0.41.0", advisor="0.42.0", need=PHONE):
             for key, text in LP.REASONS[code].items()}
 
 
-def _every_output(tmp_path):
-    """(code, shape, text) for every string reason_text, render_report and still_line can make."""
+def _every_output():
+    """(code, shape, text) for every string reason_text and render_report can make."""
     outputs = []
-    repo, store = _gitdir(tmp_path)
     for code in LP.REASON_CODES:
         call = _call(reason=code, cloud="0.41.0", advisor="0.42.0",
                      need=PHONE if code == "needs" else None)
@@ -301,22 +270,18 @@ def _every_output(tmp_path):
         outputs.append((code, "mixed", LR.render_report([_lane(1, call), _lane(2, _call(
             reason="local-word"))])))
         outputs.append((code, "summary", LR.render_report([_lane(1, call), _lane(2, call)])))
-        if code in LP.NOT_READY_CODES:
-            LR.record_still(repo, [call], root=store, today=TODAY)
-            outputs.append((code, "still", LR.still_line(
-                repo, root=store, today=TODAY, readiness_fn=_fn(ready=False, reason=code))))
     return outputs
 
 
-def test_R_eight_every_string_is_drawn_from_the_table(tmp_path):
+def test_R_eight_every_string_is_drawn_from_the_table():
     seen = set()
-    for code, shape, text in _every_output(tmp_path):
+    for code, shape, text in _every_output():
         assert isinstance(text, str), (code, shape)
         parts = _fragments(code)
         others = [_fragments(other) for other in LP.REASON_CODES if other != code]
         if shape == "mixed":
             assert parts["words"] in text and LP.REASONS["local-word"]["words"] in text
-        if shape in ("text", "list", "still"):
+        if shape in ("text", "list"):
             assert text.count(parts["words"]) >= 1, (code, shape, text)
             for other in others:
                 assert other["words"] not in text, (code, shape, other["words"])
@@ -326,15 +291,13 @@ def test_R_eight_every_string_is_drawn_from_the_table(tmp_path):
             for other in others:
                 assert other["wasnt"] is None or other["wasnt"] not in text
                 assert other["words"] not in text
-        if shape == "still":
-            assert text == "Still on your machine\n%s %s" % (parts["words"], parts["short"])
         if shape == "list" and code in LP.NOT_READY_CODES:
             assert parts["fix"] in text.split("\n")
         if shape == "text":
             assert text == parts["words"]
         seen.add((code, shape))
     assert {code for code, _ in seen} == set(LP.REASON_CODES)
-    assert {shape for _, shape in seen} == {"text", "list", "mixed", "summary", "still"}
+    assert {shape for _, shape in seen} == {"text", "list", "mixed", "summary"}
 
 
 def test_R_eight_every_line_of_a_report_is_scaffolding_or_a_table_fragment(tmp_path):
@@ -350,62 +313,17 @@ def test_R_eight_every_line_of_a_report_is_scaffolding_or_a_table_fragment(tmp_p
                     or line == "- #1 Build 1. " + words), (code, line)
 
 
-# ---------------------------------------------------------------- the line at the top of later messages
+# ---------------------------------------------------------------- the recheck step in the report
 
 
-def _still_path(repo, store):
-    return LR._still_path(repo, store)
-
-
-def _stored(repo, store):
-    with open(_still_path(repo, store), encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-def test_record_still_writes_the_first_reason_in_condition_order(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    calls = [
-        _call(reason="local-word"), _call(reason="needs", need=PHONE),
-        _call(pointed=False, by=None, reason="no-pass"),
-        _call(reason="unreachable", by="word"),
-        _call(reason="version", cloud="0.41.0", advisor="0.42.0", reported={"pluginVersion": "0.41.0"}),
-        _call(reason="calibration"),
-    ]
-    got = LR.record_still(repo, calls, root=store, today=TODAY)
-    assert got == {"action": "written", "reason": "version"}
-    assert _stored(repo, store) == {
-        "schema": LR._STILL_SCHEMA, "reason": "version", "by": "setting",
-        "cloudVersion": "0.41.0", "advisorVersion": "0.42.0",
-        "reported": {"pluginVersion": "0.41.0"}, "observedOn": "2026-10-11"}
-    again = LR.record_still(repo, [_call(reason="no-pass", reported={"noPass": True})],
-                            root=store, today=TODAY + datetime.timedelta(days=1))
-    assert again == {"action": "written", "reason": "no-pass"}
-    state = _stored(repo, store)
-    assert state["reason"] == "no-pass" and state["observedOn"] == "2026-10-12"
-    assert state["reported"] == {"noPass": True} and state["cloudVersion"] is None
-
-
-def test_record_still_writes_the_word_as_the_pointing(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    LR.record_still(repo, [_call(reason="unreachable", by="word")], root=store, today=TODAY)
-    assert _stored(repo, store)["by"] == "word"
-
-
-def test_a_failed_check_keeps_its_recheck_step_in_the_report_and_the_still_line(tmp_path):
-    repo, store = _gitdir(tmp_path)
+def test_a_failed_check_keeps_its_recheck_step_in_the_report():
     call = dict(_call(reason="calibration"), failedCheck=["calibration"])
     assert LR.render_report([_lane(1, call)]).endswith(SETUP_TEXT_FIX + ' Then say "check again".')
     assert LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]).endswith(
         SETUP_TEXT_FIX + ' Then say "check again".')
-    LR.record_still(repo, [call], root=store, today=TODAY)
-    assert _stored(repo, store)["failedCheck"] == ["calibration"]
-    line = LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
-        ready=False, reason="calibration"))
-    assert line.endswith(SETUP_TEXT_FIX + ' Then say "check again".')
 
 
-def test_a_failed_check_after_an_ordinary_fallback_keeps_its_recheck_step(tmp_path):
-    repo, store = _gitdir(tmp_path)
+def test_a_failed_check_after_an_ordinary_fallback_keeps_its_recheck_step():
     plain = _call(reason="calibration")
     failed = dict(_call(reason="calibration", by="word"), failedCheck=["calibration"])
     recheck = SETUP_TEXT_FIX + ' Then say "check again".'
@@ -416,315 +334,19 @@ def test_a_failed_check_after_an_ordinary_fallback_keeps_its_recheck_step(tmp_pa
     same = _call(reason="calibration")
     assert LR.render_report([_lane(1, same), _lane(2, dict(same, failedCheck=["calibration"]))]
                             ).endswith(recheck)
-    LR.record_still(repo, [plain, failed], root=store, today=TODAY)
-    assert _stored(repo, store)["failedCheck"] == ["calibration"]
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
-        ready=False, reason="calibration")).endswith(recheck)
 
 
-def test_a_word_directed_fallback_beside_a_setting_directed_one_stays_word_directed(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    calls = [_call(reason="calibration", by="setting"), _call(reason="calibration", by="word")]
-    LR.record_still(repo, calls, root=store, today=TODAY)
-    assert _stored(repo, store)["by"] == "word"
-    line = _line(repo, store, ready=False, reason="calibration", setting=False)
-    assert line is not None and line.startswith("Still on your machine\n")
-    assert os.path.exists(_still_path(repo, store))
-
-
-@pytest.mark.parametrize("reported_first", [True, False])
-def test_a_reported_version_beside_a_setup_record_fallback_still_needs_a_later_check(
-        tmp_path, reported_first):
-    repo, store = _gitdir(tmp_path)
-    plain = _call(reason="version", cloud="0.41.0", advisor="0.42.0")
-    reported = _call(reason="version", cloud="0.41.0", advisor="0.42.0",
-                     reported={"pluginVersion": "0.41.0"})
-    LR.record_still(repo, [reported, plain] if reported_first else [plain, reported],
-                    root=store, today=TODAY)
-    assert _stored(repo, store)["reported"] == {"pluginVersion": "0.41.0"}
-    same_day = _now(ready=True, checked=TODAY.isoformat())
-    assert LR.still_line(repo, root=store, today=TODAY,
-                         readiness_fn=lambda *a, **k: dict(same_day)) is not None
-    assert os.path.exists(_still_path(repo, store))
-    later = _now(ready=True, checked="2026-10-12")
-    assert LR.still_line(repo, root=store, today=TODAY,
-                         readiness_fn=lambda *a, **k: dict(later)) is None
-
-
-def test_record_still_clears_when_a_build_went_to_the_cloud(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
-    got = LR.record_still(repo, [_call("cloud"), _call(reason="needs", need=PHONE)],
-                          root=store, today=TODAY)
-    assert got == {"action": "cleared", "reason": None}
-    assert not os.path.exists(_still_path(repo, store))
-    assert LR.record_still(repo, [_call("cloud")], root=store, today=TODAY) == {
-        "action": "unchanged", "reason": None}
-
-
-def test_record_still_leaves_the_file_alone_when_nothing_decides(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
-    before = open(_still_path(repo, store), "rb").read()
-    for calls in ([], [_call(reason="local-word")], [_call(reason="needs", need=PHONE)],
-                  [_call(pointed=False, by=None, reason=None)]):
-        assert LR.record_still(repo, calls, root=store, today=TODAY) == {
-            "action": "unchanged", "reason": None}
-    assert open(_still_path(repo, store), "rb").read() == before
-
-
-def test_E17_a_write_that_fails_is_refused_and_leaves_no_file(tmp_path, monkeypatch):
-    repo, store = _gitdir(tmp_path)
-
-    def boom(src, dst):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(os, "replace", boom)
-    got = LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
-    assert got["action"] == "refused"
-    state_dir = os.path.dirname(_still_path(repo, store))
-    assert os.listdir(state_dir) == [] if os.path.isdir(state_dir) else True
-
-
-def test_a_write_into_a_blocked_folder_is_refused(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    _put(os.path.join(_store_dir(repo, store), "state"), "a file where the folder belongs")
-    got = LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
-    assert got["action"] == "refused"
-    assert LR.clear_still(repo, root=store)["action"] in ("unchanged", "refused")
-
-
-def _still_with(tmp_path, call, observed=TODAY):
-    repo, store = _gitdir(tmp_path)
-    assert LR.record_still(repo, [call], root=store, today=observed)["action"] == "written"
-    return repo, store
-
-
-def _line(repo, store, **kw):
-    return LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(**kw))
-
-
-def test_R_still_no_state_means_no_line(tmp_path):
-    repo, store = _gitdir(tmp_path)
-
-    asked = []
-
-    def record_the_ask(*args, **kwargs):
-        asked.append((args, kwargs))
-        return _now()
-
-    # still_line swallows an exception from the readiness read, so the callback records, not raises
-    assert LR.still_line(repo, root=store, readiness_fn=record_the_ask) is None
-    assert asked == []
-
-
-def test_R_still_leg_a_the_setting_switched_off_clears_it(tmp_path):
-    repo, store = _still_with(tmp_path, _call(reason="unreachable", by="setting"))
-    assert _line(repo, store, ready=False, reason="unreachable", setting=True) is not None
-    assert _line(repo, store, ready=False, reason="unreachable", setting=False) is None
-    assert not os.path.exists(_still_path(repo, store))
-    word_repo, word_store = _still_with(
-        _sub(tmp_path, "word"), _call(reason="unreachable", by="word"))
-    assert _line(word_repo, word_store, ready=False, reason="unreachable", setting=False) is not None
-
-
-def test_R_still_leg_a_an_unreadable_setting_does_not_clear_it(tmp_path, monkeypatch):
-    repo, store = _still_with(tmp_path, _call(reason="no-setup", by="setting"))
-
-    def unreadable(*args, **kwargs):
-        raise OSError("config unreadable")
-
-    monkeypatch.setattr(PC, "get_item", unreadable)
-    assert _line(repo, store, ready=False, reason="no-setup", setting=False) is not None
-    assert os.path.exists(_still_path(repo, store))
-
-
-@pytest.mark.parametrize("damage", ["corrupt", "directory"])
-def test_R_still_leg_a_a_profile_the_reader_could_not_read_does_not_clear_it(tmp_path, damage):
-    repo, store = _still_with(tmp_path, _call(reason="no-setup", by="setting"))
-    path = CM.core_path(repo, store)
-    if damage == "corrupt":
-        _put(path, "not a profile\n")
-    else:
-        os.makedirs(path)
-    assert PC.get_item(repo, PC.CLOUD_BUILDS_SLUG, root=store)["effective"] is False
-    assert _line(repo, store, ready=False, reason="no-setup", setting=False) is not None
-    assert os.path.exists(_still_path(repo, store))
-
-
-@pytest.mark.parametrize("code,condition", [("no-setup", "setup"), ("pass-lapsed", "passLive"),
-                                            ("calibration", "calibration")])
-def test_R_still_leg_b_the_matching_condition_holding_again_clears_it(tmp_path, code, condition):
-    repo, store = _still_with(tmp_path, _call(reason=code))
-    stands = _now(ready=False, reason=code)
-    assert stands["conditions"][condition] is False
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=lambda *a, **k: stands)
-    other = {name: (name != condition) for name in CR.CONDITION_ORDER}
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
-        ready=False, reason=code, conditions=other)) is not None
-    fixed = dict(stands, conditions=dict(stands["conditions"], **{condition: True}))
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=lambda *a, **k: fixed) is None
-    assert not os.path.exists(_still_path(repo, store))
-
-
-def test_R_still_leg_c_a_version_that_agrees_again_clears_it(tmp_path):
-    repo, store = _still_with(tmp_path, _call(reason="version", cloud="1.0.0", advisor="2.0.0"))
-    assert _line(repo, store, ready=False, reason="version") is not None
-    assert _line(repo, store, ready=True) is None
-    assert not os.path.exists(_still_path(repo, store))
-
-
-def test_R_still_leg_d_a_reported_fact_clears_only_on_a_strictly_later_check(tmp_path):
-    cases = [("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
-             ("version", {"pluginVersion": "0.41.0"})]
-    for index, (code, reported) in enumerate(cases):
-        repo, store = _still_with(_sub(tmp_path, str(index)), _call(reason=code, cloud="0.41.0", advisor="0.42.0",
-                                              reported=reported))
-        ready = _now(ready=True)
-        for checked in (None, "2026-10-10", "2026-10-11", "garbage"):
-            assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=lambda *a, **k: dict(
-                ready, checkedAt=checked)) is not None, (code, checked)
-        assert os.path.exists(_still_path(repo, store))
-        assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=lambda *a, **k: dict(
-            ready, checkedAt="2026-10-12")) is None, code
-        assert not os.path.exists(_still_path(repo, store))
-
-
-def test_R_still_a_report_then_a_same_day_passed_check_leaves_the_line_standing(tmp_path):
-    repo, store, env = _on(tmp_path, checked_at=TODAY.isoformat())
-    premise = {"reportedCloud": {"noPass": True}}
-    call = _route(repo, store, env, premise=premise)
-    assert call["reason"] == "no-pass"
-    assert LR.record_still(repo, [call], root=store, today=TODAY)["action"] == "written"
-    real = functools.partial(CR.readiness, advisor_version=ADVISOR, today=TODAY,
-                             stamp_fn=lambda cwd, root: STAMP, env=env)
-    line = LR.still_line(repo, root=store, today=TODAY, readiness_fn=real)
-    assert line == ("Still on your machine\nThere is no reviewer pass in the cloud environment. "
-                    'Paste a pass into the environment and say "check again" to fix it.')
-    _record(repo, store, checked_at="2026-10-12")
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=real) is None
-
-
-def test_R_still_write_then_fix_then_clear_with_real_readiness(tmp_path):
-    repo, store, env = _on(tmp_path, pass_lapses=PAST)
-    call = _route(repo, store, env)
-    assert call["reason"] == "pass-lapsed"
-    LR.record_still(repo, [call], root=store, today=TODAY)
-    real = functools.partial(CR.readiness, advisor_version=ADVISOR, today=TODAY,
-                             stamp_fn=lambda cwd, root: STAMP, env=env)
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=real) == (
-        'Still on your machine\nThe reviewer pass has lapsed. Paste a fresh pass and say '
-        '"check again" to fix it.')
-    assert CS.confirm_pass(repo, ACCOUNT, FUTURE, root=store)["action"] == "written"
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=real) is None
-    assert not os.path.exists(_still_path(repo, store))
-
-
-def test_R_still_clear_still_removes_the_line(tmp_path):
-    repo, store = _still_with(tmp_path, _call(reason="no-setup"))
-    assert LR.clear_still(repo, root=store) == {"action": "cleared"}
-    assert not os.path.exists(_still_path(repo, store))
-    assert LR.clear_still(repo, root=store) == {"action": "unchanged"}
-    assert _line(repo, store, ready=False, reason="no-setup") is None
-
-
-def test_clear_still_that_cannot_delete_is_refused(tmp_path, monkeypatch):
-    repo, store = _still_with(tmp_path, _call(reason="no-setup"))
-
-    def boom(path):
-        raise PermissionError("not yours")
-
-    monkeypatch.setattr(os, "unlink", boom)
-    assert LR.clear_still(repo, root=store) == {"action": "refused"}
-
-
-_GOOD = {"schema": LR._STILL_SCHEMA, "reason": "no-setup", "by": "setting", "cloudVersion": None,
-         "advisorVersion": None, "reported": None, "observedOn": "2026-10-11"}
-
-
-@pytest.mark.parametrize("text", [
-    "", "{not json", "[]", "null", "42",
-    json.dumps(dict(_GOOD, schema=LR._STILL_SCHEMA + "-other")),
-    json.dumps({k: v for k, v in _GOOD.items() if k != "schema"}),
-    json.dumps(dict(_GOOD, reason="needs")),
-    json.dumps(dict(_GOOD, reason="local-word")),
-    json.dumps(dict(_GOOD, reason=None)),
-    json.dumps(dict(_GOOD, by="nobody")),
-    json.dumps(dict(_GOOD, by=None)),
-    json.dumps(dict(_GOOD, cloudVersion=41)),
-    json.dumps(dict(_GOOD, advisorVersion=[])),
-    json.dumps(dict(_GOOD, reported={"other": True})),
-    json.dumps(dict(_GOOD, reported="x")),
-    json.dumps(dict(_GOOD, observedOn="yesterday")),
-    json.dumps(dict(_GOOD, observedOn="2026-13-40")),
-    json.dumps(dict(_GOOD, observedOn=None)),
+@pytest.mark.parametrize("reason,reported", [
+    ("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
+    ("version", {"pluginVersion": "0.41.0"}),
 ])
-def test_E16_a_state_file_in_the_wrong_shape_is_deleted_and_gives_no_line(tmp_path, text):
-    repo, store = _gitdir(tmp_path)
-    path = _put(_still_path(repo, store), text)
-    assert _line(repo, store, ready=False, reason="no-setup") is None
-    assert not os.path.exists(path)
-
-
-def test_a_state_file_that_cannot_be_read_is_kept_and_named_not_deleted(tmp_path, monkeypatch):
-    repo, store = _still_with(tmp_path, _call(reason="no-setup"))
-    path = _still_path(repo, store)
-    real_open = open
-
-    def deny(file, *args, **kwargs):
-        if str(file) == path:
-            raise PermissionError("not readable")
-        return real_open(file, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.open", deny)
-    got = LR.still_check(repo, root=store, today=TODAY, readiness_fn=_fn(
-        ready=False, reason="no-setup"))
-    assert got == {"line": None, "refused": LR.STILL_UNREADABLE}
-    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
-        ready=False, reason="no-setup")) is None
-    monkeypatch.undo()
-    assert os.path.exists(path)
-    assert _line(repo, store, ready=False, reason="no-setup").startswith("Still on your machine")
-
-
-def test_a_good_state_file_written_by_hand_gives_its_line(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    _put(_still_path(repo, store), json.dumps(_GOOD))
-    assert _line(repo, store, ready=False, reason="no-setup") == (
-        'Still on your machine\nThis project has no cloud setup on this Claude account. '
-        'Say "set up cloud builds" to fix it.')
-
-
-def test_a_readiness_that_raises_leaves_the_line_standing(tmp_path):
-    repo, store = _still_with(tmp_path, _call(reason="no-setup"))
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("readiness exploded")
-
-    line = LR.still_line(repo, root=store, today=TODAY, readiness_fn=boom)
-    assert line.startswith("Still on your machine\nThis project has no cloud setup")
-    assert os.path.exists(_still_path(repo, store))
-
-
-def test_the_line_for_an_unreproduced_version_uses_the_stored_versions(tmp_path):
-    repo, store = _still_with(tmp_path, _call(reason="version", cloud=None, advisor="0.42.0"))
-    line = _line(repo, store, ready=False, reason="version", cloud="9.9.9", advisor="8.8.8")
-    assert line == ("Still on your machine\nThe cloud's plugin is unknown and mine is 0.42.0. "
-                    "Paste the new setup text to fix it.")
-
-
-def test_still_line_and_clear_still_never_raise_without_a_repository(tmp_path):
-    plain = str(tmp_path / "not-a-repository")
-    os.mkdir(plain)
-    store = str(tmp_path / "store")
-    assert LR.still_line(plain, root=store) is None or isinstance(
-        LR.still_line(plain, root=store), str)
-    assert LR.clear_still(plain, root=store)["action"] in ("cleared", "unchanged", "refused")
-    assert LR.record_still(plain, [_call(reason="no-setup")], root=store)["action"] in (
-        "written", "refused")
-
-
-# ---------------------------------------------------------------- the launcher's report verb feeds these
+def test_E4_a_fallback_with_no_start_date_is_never_fixed_by_the_later_day_leg(reason, reported):
+    candidate = {"reason": reason, "by": "setting", "cloudVersion": None, "advisorVersion": None,
+                 "reported": reported, "failedCheck": None, "observedOn": None}
+    for checked in (None, "2026-10-10", "2026-10-11", "2026-12-01", "garbage"):
+        assert LR._fixed(candidate, _now(ready=True, checked=checked)) is False, checked
+    dated = dict(candidate, observedOn="2026-10-11")
+    assert LR._fixed(dated, _now(ready=True, checked="2026-10-12")) is True
 
 
 def test_a_report_renders_the_need_a_routing_result_carries():
@@ -735,29 +357,3 @@ def test_a_report_renders_the_need_a_routing_result_carries():
     assert "- #415 Phone checkout layout. It needs the phone simulator, which only your machine has." in lines
     assert ("- #416 Build 416. It needs this project's Canon and specs, "
             "which only your machine has.") in lines
-
-
-def test_record_still_clears_when_a_cloud_build_sits_beside_a_local_not_ready_fallback(tmp_path):
-    repo, store = _gitdir(tmp_path)
-    mixed = [_call(reason="version", cloud="0.41.0", advisor="0.42.0"), _call("cloud")]
-    LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
-    assert LR.record_still(repo, mixed, root=store, today=TODAY) == {
-        "action": "cleared", "reason": None}
-    assert not os.path.exists(_still_path(repo, store))
-    assert LR.record_still(repo, mixed, root=store, today=TODAY) == {
-        "action": "unchanged", "reason": None}
-    assert not os.path.exists(_still_path(repo, store))
-
-
-def test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check(tmp_path):
-    repo, store = _still_with(tmp_path, _call(reason="version", cloud="0.41.0", advisor="0.42.0",
-                                              reported={"pluginVersion": "0.41.0"}))
-    not_ready = _now(ready=False, reason="version", checked="2026-10-12")
-    assert not_ready["conditions"]["version"] is False
-    assert LR.still_line(repo, root=store, today=TODAY,
-                         readiness_fn=lambda *a, **k: dict(not_ready)) is not None
-    assert os.path.exists(_still_path(repo, store))
-    ready = _now(ready=True, checked="2026-10-12")
-    assert LR.still_line(repo, root=store, today=TODAY,
-                         readiness_fn=lambda *a, **k: dict(ready)) is None
-    assert not os.path.exists(_still_path(repo, store))

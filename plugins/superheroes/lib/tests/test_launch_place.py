@@ -418,11 +418,7 @@ _SPECS_LEGS = [
     ("E13-location-not-a-string", dict(policy=dict(POLICY_OK, location=7)), [SPECS]),
     ("E13-location-absent",
      dict(policy={k: v for k, v in POLICY_OK.items() if k != "location"}), [SPECS]),
-    ("E14-mode-global", dict(mode=mode_registry.GLOBAL), [SPECS]),
-    ("E14-mode-absent", dict(mode=None), [SPECS]),
-    ("E14-mode-too-new",
-     dict(mode=None, registry_text=json.dumps({"schemaVersion": 99, "storageMode": "in-repo"})),
-     [SPECS]),
+    ("E14-mode-global-with-store-spec", dict(mode=mode_registry.GLOBAL, spec=True), [SPECS]),
     ("E15-spec-in-the-store", dict(spec=True), [SPECS]),
 ]
 
@@ -443,9 +439,20 @@ def test_specs_leg_visibility_must_be_committed(tmp_path):
         assert LP.machine_needs(repo, {}, root=store) == [SPECS], visibility
 
 
-def test_specs_leg_mode_must_be_in_repo(tmp_path):
-    repo, store = _world(tmp_path, mode=mode_registry.GLOBAL)
-    assert LP.machine_needs(repo, {}, root=store) == [SPECS]
+def test_specs_in_the_repository_whatever_the_storage_mode(tmp_path):
+    # axis: the storage mode does not decide where the specs are; a global, absent or too-new mode
+    # with a committed policy and no store spec is in the repository
+    worlds = (
+        dict(mode=mode_registry.GLOBAL),
+        dict(mode=None),
+        dict(mode=None,
+             registry_text=json.dumps({"schemaVersion": 99, "storageMode": "in-repo"})),
+    )
+    for index, world in enumerate(worlds):
+        repo, store = _world(_sub(tmp_path, str(index)), **world)
+        before = _tree(store)
+        assert LP.machine_needs(repo, {}, root=store) == [], world
+        assert _tree(store) == before, world
 
 
 def test_specs_leg_store_must_hold_no_spec(tmp_path):
@@ -737,6 +744,17 @@ def test_R_FR37_a_cloud_that_picks_up_the_version_goes_to_the_cloud(tmp_path):
     call = _route(repo, store, env)
     assert call["place"] == "cloud" and call["reason"] is None
     assert call["cloudVersion"] == "1.2.2" and call["advisorVersion"] == ADVISOR
+
+
+def test_R_FR37_a_cloud_that_does_not_pick_up_the_version_gets_the_setup_text_fix(tmp_path):
+    repo, store, env = _on(tmp_path, plugin_version="1.2.2", picks_up_version=False)
+    place_call = _route(repo, store, env)
+    assert place_call["place"] == "local" and place_call["reason"] == "version"
+    assert place_call["cloudVersion"] == "1.2.2" and place_call["advisorVersion"] == ADVISOR
+    reason = LP.reason_text(place_call)
+    assert "1.2.2" in reason and ADVISOR in reason
+    assert LP.fix_text(place_call) == LP.REASONS["version"]["fix"]
+    assert "paste the new setup text" in LP.REASONS["version"]["fix"]
 
 
 def test_R_FU1_a_record_that_goes_bad_after_the_switch_reads_as_no_setup(tmp_path):
