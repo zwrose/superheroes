@@ -1282,12 +1282,36 @@ def _read_issue_comments(
             if not _NOTE_LINK_NEXT.search(headers.get("link", "")):
                 # One page's ETag cannot vouch for later pages, so only a one-page read
                 # is conditional next time.
-                etag = headers.get("etag") if page == 1 else None
+                # A full first page may have a page two a later note lands on, so only a
+                # short one-page read is conditional next time.
+                etag = (
+                    headers.get("etag") if page == 1 and len(comments) < 100 else None
+                )
                 note_state[0] = (url, etag, comments)
                 return True, comments
         return False, comments
     except Exception:
         return False, comments
+
+
+def _finite_number(value):
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _note_cutoff(info):
+    """When the lane's attempt began for note purposes, else None.
+
+    The reserved record is written before the launch command runs; the started record only
+    after it returns, so a session can post its question in between. The started time is
+    the fallback when the reserved time is not a finite number.
+    """
+    for key in ("reservedTs", "startedTs"):
+        if _finite_number(info.get(key)):
+            return info[key]
+    return None
 
 
 def _builder_note(comment, watched, answered):
@@ -1312,10 +1336,10 @@ def _builder_note(comment, watched, answered):
     # bite-axis: WATCHED ISSUE — a comment on an issue no watched lane has is no note.
     on_issue = [lid for lid in watched if watched[lid]["issue"] == number]
     # bite-axis: STARTED — an earlier lane's note on the same issue is not this lane's.
-    lanes = [lid for lid in on_issue if created >= watched[lid]["startedTs"]]
+    lanes = [lid for lid in on_issue if created >= _note_cutoff(watched[lid])]
     if not lanes:
         return None
-    lid = max(lanes, key=lambda lane: (watched[lane]["startedTs"], lane))
+    lid = max(lanes, key=lambda lane: (_note_cutoff(watched[lane]), lane))
     info = watched[lid]
     return {
         "launchId": lid,
@@ -1338,9 +1362,7 @@ def _evaluate_builder_notes(
         lid: info for lid, info in live_lanes.items()
         if _is_cloud_lane(info) and info.get("started")
         and _valid_issue_number(info.get("issue"))
-        and isinstance(info.get("startedTs"), (int, float))
-        and not isinstance(info.get("startedTs"), bool)
-        and math.isfinite(info["startedTs"])
+        and _note_cutoff(info) is not None
     }
     if not watched:
         return []
@@ -1348,7 +1370,7 @@ def _evaluate_builder_notes(
         note_state = [None]
     try:
         since = datetime.fromtimestamp(
-            min(info["startedTs"] for info in watched.values()), tz=timezone.utc,
+            min(_note_cutoff(info) for info in watched.values()), tz=timezone.utc,
         ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
     except (ValueError, OverflowError, OSError):
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)

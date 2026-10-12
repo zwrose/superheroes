@@ -22,12 +22,17 @@ _NOTE_BODY = "%s\n\nShould the migration keep the old column?\n\n%s" % (
 _CONFIG_DIR = "/home/advisor/.claude-two"
 
 
-def _cloud_lane(repo_root, launch_id, issue, *, start_age=_QUIET, config_dir=_CONFIG_DIR):
-    """A started cloud lane whose recorded start is `start_age` seconds ago."""
+def _cloud_lane(
+    repo_root, launch_id, issue, *, start_age=_QUIET, config_dir=_CONFIG_DIR, reserve_lead=1,
+):
+    """A started cloud lane whose recorded start is `start_age` seconds ago.
+
+    The reserved record precedes the started one by `reserve_lead` seconds.
+    """
     ll.append(repo_root, _reserved(
         launch_id, issue, "plugins/cloud-%d" % issue, repo_root,
         place=ll.PLACE_CLOUD, cloudEnvironment="env-1", pluginVersion="1.2.3",
-        configDir=config_dir,
+        configDir=config_dir, ts=time.time() - start_age - reserve_lead,
     ))
     ll.append(repo_root, {
         "event": "started",
@@ -136,7 +141,7 @@ def test_a_builder_note_on_a_watched_lanes_issue_ends_the_arm(repo):
     gh = _NoteGh([_comment(7, 101)])
     result = _arm(repo, gh)
     assert result["ok"] is True
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert result["launchId"] == "cloud-a"
     [note] = result["notes"]
     assert note["url"] == "https://github.com/%s/issues/101#issuecomment-7" % _SLUG
@@ -153,33 +158,33 @@ def test_a_comment_that_is_not_a_note_raises_no_event(repo):
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 101, "Looks good to me.")])
     result = _arm(repo, gh)
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
 
 
 def test_a_note_header_after_other_text_is_not_a_note(repo):
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 101, "Quoting: " + _NOTE_BODY)])
-    assert _arm(repo, gh)["event"] == "timer"
+    assert _arm(repo, gh)["event"] == ww.EVENT_TIMER
 
 
 def test_leading_whitespace_before_the_header_still_makes_a_note(repo):
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 101, "\n  " + _NOTE_BODY)])
-    assert _arm(repo, gh)["event"] == "builder-note"
+    assert _arm(repo, gh)["event"] == ww.EVENT_BUILDER_NOTE
 
 
 def test_a_note_on_an_issue_no_watched_lane_has_raises_no_event(repo):
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 999)])
     result = _arm(repo, gh)
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
 
 
 def test_a_note_created_before_the_lane_started_raises_no_event(repo):
     _cloud_lane(repo, "cloud-a", 101, start_age=600)
     gh = _NoteGh([_comment(7, 101, age=3000)])
     result = _arm(repo, gh)
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
 
 
 def test_a_note_recorded_answered_raises_no_event(repo):
@@ -187,7 +192,7 @@ def test_a_note_recorded_answered_raises_no_event(repo):
     assert _note_answered(repo, 7)["ok"] is True
     gh = _NoteGh([_comment(7, 101)])
     result = _arm(repo, gh)
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
 
 
 def test_notes_are_ordered_by_comment_id_and_name_the_first_notes_lane(repo):
@@ -195,7 +200,7 @@ def test_notes_are_ordered_by_comment_id_and_name_the_first_notes_lane(repo):
     _cloud_lane(repo, "cloud-b", 202)
     gh = _NoteGh([_comment(9, 101), _comment(5, 202)])
     result = ww.run(repo, _BATCH, gh_run=gh)
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert [note["commentId"] for note in result["notes"]] == [5, 9]
     assert result["launchId"] == "cloud-b"
 
@@ -212,7 +217,7 @@ def test_a_malformed_comment_element_is_skipped_and_the_rest_still_count(repo):
     ]
     gh = _NoteGh(broken + [_comment(8, 101)])
     result = _arm(repo, gh)
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert [note["commentId"] for note in result["notes"]] == [8]
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
 
@@ -238,7 +243,7 @@ def test_a_lane_that_is_not_a_started_cloud_lane_causes_no_request(repo):
     gh = _NoteGh([_comment(7, 55)])
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert gh.note_calls() == []
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
 
 
 # --- the read: validator, 304, pages ---------------------------------------------
@@ -251,7 +256,7 @@ def test_the_request_is_the_issue_comments_list_since_the_earliest_start(repo):
     ww.run(repo, _BATCH, gh_run=gh)
     [argv] = gh.note_calls()
     folded = ll.fold(ll.read(repo)["records"])["launches"]
-    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(folded["cloud-a"]["startedTs"]))
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(folded["cloud-a"]["reservedTs"]))
     assert argv[:3] == ["gh", "api", "-i"]
     assert argv[3] == "repos/%s/issues/comments?since=%s&per_page=100" % (_SLUG, since)
     assert len(argv) == 4
@@ -263,13 +268,39 @@ def test_the_repeat_read_within_one_loop_sends_the_stored_validator(repo):
     result = ww.loop(
         repo, _BATCH, max_seconds=1, interval_seconds=1, max_total_seconds=3, gh_run=gh,
     )
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
     calls = gh.note_calls()
     assert len(calls) >= 3
     assert "-H" not in calls[0]
     for argv in calls[1:]:
         assert "-H" in argv, "repeat read sent no validator: %r" % (argv,)
         assert argv[argv.index("-H") + 1] == "If-None-Match: %s" % _ETAG
+
+
+def test_a_note_posted_between_reserved_and_started_is_surfaced(repo):
+    # The launch command is still running when the session posts; started is stamped after.
+    _cloud_lane(repo, "cloud-a", 101, start_age=60, reserve_lead=120)
+    gh = _NoteGh([_comment(7, 101, age=90)])
+    result = _arm(repo, gh)
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [n["commentId"] for n in result["notes"]] == [7]
+    [argv] = gh.note_calls()[:1]
+    folded = ll.fold(ll.read(repo)["records"])["launches"]
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(folded["cloud-a"]["reservedTs"]))
+    assert "since=%s&" % since in argv[3]
+
+
+def test_a_full_first_page_is_never_read_conditionally(repo):
+    _cloud_lane(repo, "cloud-a", 101)
+    full = [_comment(n, 202, "chatter") for n in range(1, 101)]
+    gh = _NoteGh(full)
+    ww.loop(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, max_total_seconds=3, gh_run=gh,
+    )
+    calls = gh.note_calls()
+    assert len(calls) >= 3
+    for argv in calls:
+        assert "-H" not in argv, "a full first page sent a validator: %r" % (argv,)
 
 
 def test_a_304_after_a_new_lane_joins_re_evaluates_the_stored_list(repo, clock):
@@ -282,7 +313,7 @@ def test_a_304_after_a_new_lane_joins_re_evaluates_the_stored_list(repo, clock):
         clock.sleep(duration)
 
     result = _arm(repo, gh, sleep=join_then_sleep)
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert result["launchId"] == "cloud-b"
     assert [note["commentId"] for note in result["notes"]] == [7]
     first, second = gh.note_calls()
@@ -310,7 +341,7 @@ def test_later_pages_are_fetched_without_a_validator(repo):
         lambda argv: _ok(argv, [_comment(3, 101)]),
     ])
     result = ww.run(repo, _BATCH, gh_run=gh)
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert [note["commentId"] for note in result["notes"]] == [3]
     calls = gh.note_calls()
     assert [argv[-1].rpartition("&page=")[2] for argv in calls[1:]] == ["2", "3"]
@@ -323,7 +354,7 @@ def test_later_pages_are_fetched_without_a_validator(repo):
 def _degraded_without_a_note(repo_root, gh):
     result = ww.run(repo_root, _BATCH, gh_run=gh)
     assert result["ok"] is True
-    assert result["event"] == "timer"
+    assert result["event"] == ww.EVENT_TIMER
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
     return result
 
@@ -379,7 +410,7 @@ def test_a_later_page_failure_keeps_a_note_read_on_an_earlier_page(repo):
         (lambda argv: _ok(argv, [_comment(7, 101)], link=True)), bad,
     ])
     result = ww.run(repo, _BATCH, gh_run=gh)
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
 
 
@@ -388,7 +419,7 @@ def test_e7_an_unreadable_answered_file_leaves_the_note_surfacing(repo):
     with open(_answered_path(repo), "w") as handle:
         handle.write("not json{")
     result = _arm(repo, _NoteGh([_comment(7, 101)]))
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
 
 
 def test_e7_an_answered_file_of_the_wrong_shape_leaves_the_note_surfacing(repo):
@@ -396,7 +427,7 @@ def test_e7_an_answered_file_of_the_wrong_shape_leaves_the_note_surfacing(repo):
     with open(_answered_path(repo), "w") as handle:
         json.dump({"answered": [7, "8"]}, handle)
     result = _arm(repo, _NoteGh([_comment(7, 101)]))
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
 
 
 def test_e7_note_answered_refuses_on_an_unreadable_file_and_never_overwrites_it(repo):
@@ -404,7 +435,7 @@ def test_e7_note_answered_refuses_on_an_unreadable_file_and_never_overwrites_it(
     with open(path, "w") as handle:
         handle.write("not json{")
     result = _note_answered(repo, 7)
-    assert result == {"ok": False, "reason": "note-answers-unreadable"}
+    assert result == {"ok": False, "reason": ww.REFUSAL_NOTE_ANSWERS_UNREADABLE}
     with open(path) as handle:
         assert handle.read() == "not json{"
 
@@ -412,7 +443,7 @@ def test_e7_note_answered_refuses_on_an_unreadable_file_and_never_overwrites_it(
 @pytest.mark.parametrize("bad", [0, -3, "0", "-3", "abc", "1.5", "", 1.5, True, None])
 def test_e8_note_answered_refuses_an_invalid_comment_id(repo, bad):
     result = _note_answered(repo, bad)
-    assert result == {"ok": False, "reason": "comment-id-invalid"}
+    assert result == {"ok": False, "reason": ww.REFUSAL_COMMENT_ID_INVALID}
     assert not os.path.exists(_answered_path(repo))
 
 
@@ -420,7 +451,7 @@ def test_e8_note_answered_refuses_when_the_ledger_path_is_unresolvable(tmp_path)
     bare = tmp_path / "no-git"
     bare.mkdir()
     result = _note_answered(str(bare), 7)
-    assert result == {"ok": False, "reason": "store-unresolvable"}
+    assert result == {"ok": False, "reason": ww.REFUSAL_STORE_UNRESOLVABLE}
 
 
 def test_e10_a_spent_time_budget_makes_no_request_and_discloses_it():
@@ -448,7 +479,7 @@ def test_the_loop_exits_on_the_event_instead_of_passing_it_over(repo):
     result = ww.loop(
         repo, _BATCH, max_seconds=1, interval_seconds=1, max_total_seconds=30, gh_run=gh,
     )
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert result["arms"] == 1
     assert result["passedOverCount"] == 0
     assert result["notes"][0]["commentId"] == 7
@@ -458,7 +489,7 @@ def test_run_makes_an_unconditional_read(repo):
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh([_comment(7, 101)])
     result = ww.run(repo, _BATCH, gh_run=gh)
-    assert result["event"] == "builder-note"
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
     [argv] = gh.note_calls()
     assert "-H" not in argv
 
@@ -482,7 +513,7 @@ def test_note_answered_round_trip_through_the_cli_stops_the_note(repo, capsys):
     assert [note["commentId"] for note in again["notes"]] == [8]
     ww.main(["wave_watch.py", "note-answered", "--repo-root", repo, "--comment-id", "8"])
     capsys.readouterr()
-    assert _arm(repo, gh)["event"] == "timer"
+    assert _arm(repo, gh)["event"] == ww.EVENT_TIMER
     with open(_answered_path(repo)) as handle:
         assert json.load(handle) == {"answered": [7, 8]}
 
@@ -490,4 +521,4 @@ def test_note_answered_round_trip_through_the_cli_stops_the_note(repo, capsys):
 def test_note_answered_cli_exits_1_on_a_refusal(repo, capsys):
     code = ww.main(["wave_watch.py", "note-answered", "--repo-root", repo, "--comment-id", "-4"])
     assert code == 1
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "comment-id-invalid"}
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": ww.REFUSAL_COMMENT_ID_INVALID}
