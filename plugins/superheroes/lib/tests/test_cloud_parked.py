@@ -241,7 +241,7 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     _park(w, 10, issue=101)
     _renew(w)
     out = _send(w)
-    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "uncertain": [], "sendBack": [{
+    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
         "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
     assert _entries(w)[0]["outcome"] is None
