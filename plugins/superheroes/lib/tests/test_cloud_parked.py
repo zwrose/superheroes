@@ -160,10 +160,10 @@ def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None
     rec = _reserved(launch_id, BATCH, [surface], w.repo, issue=issue, place="cloud",
                     cloudEnvironment=ENVIRONMENT, pluginVersion="1.2.3", **extra)
     assert ll.reserve(w.repo, rec, env=w.env)["ok"]
-    started = _started(launch_id)
     if session is not None:
+        started = _started(launch_id)
         started.update(cloudSessionName=session, cloudSessionId="session_01AbCdEf123")
-    assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+        assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
     if finished:
         assert ll.terminalize(w.repo, launch_id, child_ever_spawned=True, outcome="park", evidence="x",
                               env=w.env)["ok"]

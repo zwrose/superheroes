@@ -168,6 +168,10 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     bad, pr, _ = _check_args(repo, pr, today)
     if bad:
         return bad
+    if repo is None:
+        return _refusal("repo-invalid")
+    if pr is None:
+        return _refusal("pr-invalid")
     path, entries = _load(repo_root, env)
     if entries is None:
         return path
