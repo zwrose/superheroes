@@ -212,17 +212,23 @@ def test_assistant_quoting_marker_returns_none(tmp_path):
     assert cd.detect_charter(str(path)) is None
 
 
-def test_unreadable_transcript_emits_breadcrumb(tmp_path, capsys):
+def test_unreadable_transcript_emits_breadcrumb(tmp_path, capsys, monkeypatch):
+    import builtins
+
     path = tmp_path / "transcript.jsonl"
     path.write_text('{"type":"user"}\n', encoding="utf-8")
-    path.chmod(0o000)
-    try:
-        assert cd.detect_charter(str(path)) is None
-        err = capsys.readouterr().err
-        assert "superheroes charter_detect:" in err
-        assert str(path) in err
-    finally:
-        path.chmod(0o644)
+    real_open = builtins.open
+
+    def fake_open(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and os.fspath(file) == str(path):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    assert cd.detect_charter(str(path)) is None
+    err = capsys.readouterr().err
+    assert "superheroes charter_detect:" in err
+    assert str(path) in err
 
 
 def test_unreadable_parent_directory_emits_breadcrumb(tmp_path, capsys):
