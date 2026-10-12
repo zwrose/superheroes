@@ -25,8 +25,15 @@ PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 # absent from the review-code code roster.
 SPEC_ONLY = {"grounding-reviewer"}
 
+# The test role is the one panel seat not named `-reviewer`; it is the exception to the
+# `*-reviewer` roster discovery and to the slug-minus-suffix findings-stem derivation.
+TEST_ROLE_SEAT = "test-role"
+TEST_ROLE_STEM = "test"
+# A panel seat slug: a `*-reviewer` agent, or the test role's agent.
+_SEAT_SLUG = r"(?:[a-z][a-z-]*-reviewer|%s)" % TEST_ROLE_SEAT
+
 ROW_RE = re.compile(
-    r"^\|\s*([a-z][a-z-]*-reviewer)\s*\|\s*([a-z-]+)\s*\|\s*([A-Za-z-]+)\s*\|",
+    r"^\|\s*(%s)\s*\|\s*([a-z-]+)\s*\|\s*([A-Za-z-]+)\s*\|" % _SEAT_SLUG,
     re.M)
 
 
@@ -37,10 +44,19 @@ def _read(rel):
 
 def _agent_slugs():
     # The review dispatch tables/prose enumerate the review SPECIALISTS — the panel of
-    # `*-reviewer` agents. Internal non-reviewer leaf agents (e.g. `courier`) live in agents/
-    # too but are never a review dimension, so scope this to the `-reviewer` panel.
+    # `*-reviewer` agents plus the test role. Internal non-reviewer leaf agents (e.g. `courier`)
+    # live in agents/ too but are never a review dimension, so scope this to the panel.
     adir = os.path.join(PLUGIN, "agents")
-    return {fn[:-3] for fn in os.listdir(adir) if fn.endswith(".md") and fn[:-3].endswith("-reviewer")}
+    return {fn[:-3] for fn in os.listdir(adir)
+            if fn.endswith(".md") and (fn[:-3].endswith("-reviewer") or fn[:-3] == TEST_ROLE_SEAT)}
+
+
+def _findings_stem(slug):
+    """The findings filename stem for a panel seat slug."""
+    if slug == TEST_ROLE_SEAT:
+        return TEST_ROLE_STEM
+    assert slug.endswith(_REVIEWER_SUFFIX), "unexpected seat slug %r" % slug
+    return slug[:-len(_REVIEWER_SUFFIX)]
 
 
 def _table_rows(rel):
@@ -140,19 +156,18 @@ def test_agent_suffix_values_are_derivable_and_match_skill_tables():
     """
     import round_driver
     for slug, suffix in round_driver.AGENT_SUFFIX.items():
-        assert slug.endswith(_REVIEWER_SUFFIX), "round_driver: unexpected key %r" % slug
-        assert suffix == slug[:-len(_REVIEWER_SUFFIX)], (
-            "round_driver.AGENT_SUFFIX[%r] = %r is not the derivable slug-minus-'-reviewer'"
-            % (slug, suffix))
+        assert suffix == _findings_stem(slug), (
+            "round_driver.AGENT_SUFFIX[%r] = %r is not the derivable slug-minus-'-reviewer' "
+            "(the test role maps to %r)" % (slug, suffix, TEST_ROLE_STEM))
 
     # The SKILL.md dispatch tables' middle column (the findings filename stem) is the
     # same derived suffix — guard the doc copy too (test_full_crew_table already pins the
     # slug column; this pins the previously-unasserted findings column).
     for skill in ["review-code"]:
         for slug, findings_stem, _dim in _table_rows(os.path.join("skills", skill, "SKILL.md")):
-            assert findings_stem == slug[:-len(_REVIEWER_SUFFIX)], (
+            assert findings_stem == _findings_stem(slug), (
                 "%s: findings-column %r != %r (slug minus '-reviewer')"
-                % (skill, findings_stem, slug[:-len(_REVIEWER_SUFFIX)]))
+                % (skill, findings_stem, _findings_stem(slug)))
 
 
 def _rubric_dimensions():
@@ -177,7 +192,7 @@ def test_specialists_to_dispatch_prose_enumeration(skill, expected_slugs):
     text = _read(os.path.join("skills", skill, "SKILL.md"))
     # review-code enumerates the 5-seat CODE_ROSTER.
     want = {"CODE": _agent_slugs() - SPEC_ONLY}[expected_slugs]
-    enumerated = set(re.findall(r"^\s*-\s*`([a-z][a-z-]*-reviewer)`\s*→", text, re.M))
+    enumerated = set(re.findall(r"^\s*-\s*`(%s)`\s*→" % _SEAT_SLUG, text, re.M))
     assert enumerated == want
 
 

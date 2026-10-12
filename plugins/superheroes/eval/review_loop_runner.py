@@ -473,7 +473,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
         if not batch:
             return {}
         # Attribute the fix-batch findings to a reviewer dim for recurrence tracking.
-        dim_name = reviewer_set[0] if reviewer_set else "test-reviewer"
+        dim_name = reviewer_set[0] if reviewer_set else "test-role"
         first = batch[0] if isinstance(batch[0], dict) else {}
         prefix = str(first.get("dimension") or "").split()[0].lower()
         for r in reviewer_set:

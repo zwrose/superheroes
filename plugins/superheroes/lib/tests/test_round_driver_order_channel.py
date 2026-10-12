@@ -544,12 +544,14 @@ _DERIVED_PLACEHOLDER_NAMES = frozenset({
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
+    "ROLE_BRIEF_LINE",
     "PR_CHECKOUT_INSTRUCTION_BLOCK",
 })
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.
 _FIXTURE_AUX_INPUTS = {
-    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH", "PRIOR_COMMENTS_PATH"}),
+    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH", "PRIOR_COMMENTS_PATH",
+                           "ROLE_BRIEF_PATH"}),
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
     RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
@@ -567,6 +569,7 @@ _KNOWN_REALISTIC_VALUES = {
         "TARGET": "t",
         "DIFF_PATH": _DIFF,
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "ROLE_BRIEF_PATH": "/plugin/agents/code-reviewer.md",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
         "PR_CHECKOUT_PATH": "",

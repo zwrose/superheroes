@@ -18,6 +18,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - CLAUDE.md (project conventions): CLAUDE.md
+
 - PR branch checkout: /tmp/superheroes-session-wo4-golden/repo
 - Prior comments + author justifications: /tmp/superheroes-session-wo4-golden/prior-comments.json
 - Focus: touch auth paths carefully

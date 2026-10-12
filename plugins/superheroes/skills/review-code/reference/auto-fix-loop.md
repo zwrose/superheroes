@@ -696,7 +696,7 @@ carries `{vendor, model, effort, tier, family, source}`:
   carry the `xai` independence-accounting key. A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
-  (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,
+  (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-role`,
   `premortem-reviewer`) **and** the `grounding-seat`, not
   merely from strong-tier, critical, and grounding. An owner pin can still seat the maker family;
   `verify()` flags a `maker-family` violation and records `pin-breaks-constraint` for that seat.
