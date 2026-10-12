@@ -310,7 +310,12 @@ def _kill_group(pid, sig=signal.SIGKILL):
 
 
 def _tagged_pids(token):
-    """Pids of processes whose environment carries ``token`` (inherited through any session)."""
+    """Pids of processes whose environment carries ``token`` (inherited through any session).
+
+    On macOS, ``ps -E`` cannot read the environment of Apple's system programs (such as
+    ``/bin/sleep``). So a detached worker running one, after it has left the copy's directory,
+    escapes this net. The session kill and the in-copy working-directory net still apply.
+    """
     needle = (_TOKEN_ENV + "=" + token).encode()
     found = []
     if os.path.isdir("/proc/self"):

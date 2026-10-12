@@ -286,14 +286,14 @@ def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, m
 
 
 def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, monkeypatch):
-    # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the copy's directory but kept its environment, so only the environment-tag net can catch it.
+    # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the copy's directory but kept its environment, so only the environment-tag net can catch it; the worker is a Python child because macOS hides a system program's environment from `ps -E`.
     marker = 'PROC_ROOT = "/proc"'
     assert marker in break_it._REAPER
     monkeypatch.setattr(break_it, "_REAPER", break_it._REAPER.replace(marker, 'PROC_ROOT = "/nonexistent"'))
     pidfile = tmp_path / "worker.pid"
     content = ("import os, subprocess\n"
-               "p = subprocess.Popen([%r, '60'], start_new_session=True, cwd='/')\n"
-               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % shutil.which("sleep")
+               "p = subprocess.Popen([%r, '-c', 'import time; time.sleep(60)'], start_new_session=True, cwd='/')\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % sys.executable
     block = _block("tests/test_w.py", content,
                    run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
     assert break_it.run_one(str(repo), _head(repo), block)["outcome"] == "passed"
