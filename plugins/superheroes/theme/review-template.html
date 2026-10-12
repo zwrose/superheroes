@@ -44,8 +44,15 @@
   .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
   .sheet-page #sheet-final > * + * { margin-top: 16px; }
   .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
+  .sheet-page .sheet-folded { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-folded ul { padding-left: 20px; }
+  .sheet-page .sheet-folded .sh-button { justify-self: start; max-width: 100%; text-align: left; white-space: normal; }
+  .sheet-page :is(.sheet-walk-list, .sheet-caught) { padding-left: 20px; }
   @media (min-width: 900px) {
     .sheet-page { max-width: 1200px; }
+    .sheet-page.is-pr { max-width: 720px; }
+    .sheet-page.is-pr .sheet-layout { grid-template-columns: minmax(0, 1fr); }
+    .sheet-page.is-pr .sheet-main { grid-column: 1; }
     .sheet-layout { grid-template-columns: 340px minmax(0, 1fr); }
     .sheet-side { grid-column: 1; grid-row: 1; }
     .sheet-main { grid-column: 2; grid-row: 1; }
@@ -480,8 +487,12 @@
     // { labels, withOptions, withoutOptions }. labels gives the words on the answer buttons by the value a stored
     // answer takes (the option value takes its words from the card); withOptions is what a card with options
     // offers after its option buttons, withoutOptions what a card without options offers. A value the schema lists
-    // that has no words there leaves the answer controls off. Null until that file was read.
+    // that has no words in either kind's block leaves the answer controls off. A pr sheet or a stack sheet offers the
+    // block under prAnswers; every other kind offers the one under answers. Null until that file was read.
     let answerWords = null;
+    // The words of both blocks by value, so a schema value only the other kind's block labels (accept on a discovery
+    // sheet, aligned on a pr sheet) is known, not unlabelled. What a card offers is still decided from answerWords alone.
+    let knownLabels = {};
     let reloading = false;
 
     // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
@@ -519,7 +530,7 @@
       });
       if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
-      if (kinds.some(function (kind) { return !kind.carriesOption && typeof answerWords.labels[kind.value] !== "string"; })) return null;
+      if (kinds.some(function (kind) { return !kind.carriesOption && typeof knownLabels[kind.value] !== "string"; })) return null;
       if (answerWords.withOptions.concat(answerWords.withoutOptions).some(function (value) { return !values.includes(value); })) return null;
       return { root: schema, rule: rule, kinds: kinds };
     }
@@ -540,11 +551,15 @@
       return fitsRule(answerShape.root, answerShape.rule, data);
     }
 
-    // The words on the final sheet's verdict buttons, by the value a stored verdict takes.
+    // The words on the final sheet's verdict buttons, by the value a stored verdict takes. A pr sheet or a stack
+    // sheet takes its verdict words from sheet-words.json instead.
     const VERDICT_LABELS = { approve: "Approve", "not-yet": "Not yet" };
+    // The verdicts each kind offers and restores, in button order. A stored verdict outside its kind's set
+    // restores only its note.
+    const VERDICTS_BY_KIND = { final: ["approve", "not-yet"], pr: ["merge", "not-yet"], stack: ["merge", "not-yet"] };
 
     // What the sheet's schema says a verdict is (its $defs.verdict): { root, rule, values }, where values lists
-    // the non-null verdicts in the order the schema gives them. Null until the schema was read, and left null
+    // the sheet kind's verdicts the schema gives, in the kind's order. Null until the schema was read, and left null
     // when it is not in that shape: the last card's controls stay off.
     let verdictShape = null;
 
@@ -553,15 +568,18 @@
     // when the browser can't compute it.
     let sheetDigest = null;
 
-    function readVerdictShape(schema) {
+    function readVerdictShape(schema, kind) {
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const offered = VERDICTS_BY_KIND[kind];
       const rule = isObject(schema.$defs) ? schema.$defs.verdict : undefined;
-      if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.verdict)) return null;
+      if (offered === undefined || !isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.verdict)) return null;
       const listed = rule.properties.verdict.enum;
       if (!Array.isArray(listed)) return null;
       const values = listed.filter(function (item) { return item !== null; });
-      if (values.length === 0 || values.some(function (item) { return typeof item !== "string" || typeof VERDICT_LABELS[item] !== "string"; })) return null;
-      return { root: schema, rule: rule, values: values };
+      const known = Object.keys(VERDICTS_BY_KIND).flatMap(function (name) { return VERDICTS_BY_KIND[name]; });
+      if (values.length === 0 || values.some(function (item) { return typeof item !== "string" || !known.includes(item); })) return null;
+      if (offered.some(function (value) { return !values.includes(value); })) return null;
+      return { root: schema, rule: rule, values: offered };
     }
 
     const SAY = {
@@ -1339,21 +1357,29 @@
       }, article);
     }
 
-    // The final sheet's last card: the verdict's buttons and note, written whole at verdict/<digest> as the owner
-    // taps, like an answer. The one document of this revision is the verdict, and it never counts as approval on
-    // its own.
+    // The words on a verdict button: the final sheet's own, or a pr sheet's or a stack sheet's from sheet-words.json
+    // (Merge names the PR or the stack by its number).
+    function verdictLabel(value) {
+      if (sheetKind === "final") return VERDICT_LABELS[value];
+      if (value === "not-yet") return prWords.notYetLabel;
+      return fill(sheetKind === "stack" ? prWords.mergeStackLabel : prWords.mergeLabel, { number: prNumber });
+    }
+
+    // The last card: the verdict's buttons and note, written whole at verdict/<digest> as the owner
+    // taps, like an answer. The one document of this revision is the verdict, and it never counts as approval or
+    // as a merge on its own.
     function addVerdictParts(article) {
       addSaver({
         choices: verdictShape === null ? [] : verdictShape.values.map(function (value) {
-          return { label: VERDICT_LABELS[value], answer: value, optionId: null };
+          return { label: verdictLabel(value), answer: value, optionId: null };
         }),
         rowLabel: "Your verdict",
         noteId: "verdict-note",
         path: "verdict/" + sheetDigest,
         live: function () { return canEdit() && verdictShape !== null && sheetDigest !== null; },
         document: function (body) { return { verdict: body.answer, note: body.note, sheet: sheetDigest }; },
-        // A stored document restores a pick only when it fits the schema's verdict rule and answers this
-        // revision; one that does not fit restores only its note, and only when that is text.
+        // A stored document restores a pick only when it fits the schema's verdict rule and the sheet's kind offers
+        // that verdict; one that does not restores only its note, and only when that is text.
         state: function (data) {
           const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
           if (verdictShape !== null && fitsRule(verdictShape.root, verdictShape.rule, data) && verdictShape.values.includes(data.verdict)) {
@@ -1406,14 +1432,20 @@
     // The plain answers carry only their presentation class here; their words come from sheet-words.json.
     const PICK_PILLS = {
       aligned: ["sh-pill sh-pill--aligned"],
+      accept: ["sh-pill sh-pill--aligned"],
       discuss: ["sh-pill sh-pill--discuss"],
       "something-else": ["sh-pill sh-pill--discuss"],
       picked: ["sh-pill sh-pill--aligned", "Picked"],
       open: ["sh-pill sh-pill--open", "Open"],
     };
-    // One entry per card, in card order: { id, question, article, row }.
+    // One entry per card, in card order: { id, question, options, article, row }.
     let items = [];
     let sheetKind = "plain";
+    // A pr sheet or a stack sheet is one scrolling page: every card shown, no stepper and no item rows.
+    let onePage = false;
+    // The PR's number (the stack's on a stack sheet) and the words under "pr" in sheet-words.json, for those two kinds.
+    let prNumber = 0;
+    let prWords = null;
     let openIndex = 0;
     let expanded = false;
 
@@ -1522,12 +1554,25 @@
       const answered = states.filter(function (state) { return state.answer !== null; });
       const chatting = answered.filter(openForChat);
 
+      // A card is accepted by the pick of Accept, or of an option that does not send the PR back.
+      const accepted = states.filter(function (state, index) {
+        if (state.answer === "accept") return true;
+        const option = state.optionId === null ? undefined : items[index].options.find(function (item) { return item.id === state.optionId; });
+        return option !== undefined && option.sendsBack === false;
+      }).length;
+      const notLoaded = total + (total === 1 ? " item" : " items") + " · answers not loaded";
       // A final sheet may have no cards: there is then nothing to count, step through or list.
-      countHost.textContent = total === 0
-        ? "Nothing left to answer"
-        : ready
-          ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
-          : total + (total === 1 ? " item" : " items") + " · answers not loaded";
+      if (onePage) {
+        countHost.textContent = total === 0
+          ? prWords.nothingToAcceptCount
+          : ready ? fill(prWords.acceptedCount, { accepted: accepted, total: total }) : notLoaded;
+      } else {
+        countHost.textContent = total === 0
+          ? "Nothing left to answer"
+          : ready
+            ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
+            : notLoaded;
+      }
       countHost.hidden = false;
 
       // A card folds away only when it is answered, is not the open card and has nothing unsaved.
@@ -1538,7 +1583,7 @@
       items.forEach(function (item, index) {
         const state = states[index];
         const current = index === openIndex;
-        item.article.hidden = !current;
+        item.article.hidden = !onePage && !current;
         item.row.className = "sh-button" + (current ? " sh-button--main sheet-row is-current" : " sheet-row") + (folded[index] ? " is-folded" : "");
         item.row.setAttribute("aria-current", current ? "true" : "false");
         const parts = [textElement("span", "sheet-row-text", (index + 1) + " · " + item.question)];
@@ -1571,14 +1616,15 @@
         pair.next.disabled = openIndex === total - 1;
       });
 
-      footerHost.hidden = false;
-      stepperHost.hidden = total === 0;
-      bottomStepperHost.hidden = total === 0;
-      itemsHost.hidden = total === 0;
-      cardsHost.hidden = total === 0;
+      footerHost.hidden = onePage;
+      stepperHost.hidden = onePage || total === 0;
+      bottomStepperHost.hidden = onePage || total === 0;
+      itemsHost.hidden = onePage || total === 0;
+      // A pr sheet's cards host also holds the parts around the cards, so it is shown with no cards too.
+      cardsHost.hidden = !onePage && total === 0;
       whyBox.hidden = sheetKind !== "remainder";
       historyBox.hidden = sheetKind !== "final";
-      finalHost.hidden = sheetKind !== "final";
+      finalHost.hidden = sheetKind !== "final" && !onePage;
       // The no-digest caption shows only once the sheet is ready, the schema says what a verdict is and this
       // browser can't work out which revision the sheet is: the last card's controls are then off, and this says why.
       if (digestCaption !== null) digestCaption.hidden = !(ready && verdictShape !== null && sheetDigest === null);
@@ -1588,6 +1634,13 @@
     // which both read; the page fetches it before drawing any sheet (the answers every card offers are in it
     // too). Nothing here retypes them.
     let finalWords = null;
+    function onePageKind(kind) {
+      return kind === "pr" || kind === "stack";
+    }
+    // The kinds that save a verdict at verdict/<digest>, and so need the wording file and the sheet's digest.
+    function verdictKind(kind) {
+      return kind === "final" || onePageKind(kind);
+    }
     function plural(count, noun) {
       return count + " " + noun + (count === 1 ? "" : "s");
     }
@@ -1659,6 +1712,151 @@
       finalHost.replaceChildren(article, textElement("p", "sh-caption", finalWords.doneStep), next);
     }
 
+    // The words under "pr" in sheet-words.json that a pr sheet or a stack sheet is drawn from. A wording file without
+    // one of them cannot draw the sheet.
+    const PR_WORD_KEYS = [
+      "nothingToAccept", "historyCap", "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark",
+      "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
+      "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
+      "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
+      "acceptedCount", "nothingToAcceptCount",
+    ];
+
+    function hasPrWords(words) {
+      return words !== null && typeof words === "object" && typeof words.roundNoun === "string" && words.pr !== null
+        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; });
+    }
+
+    // The first seven characters of a commit, as every line of a pr sheet names one.
+    function shortCommit(commit) {
+      return commit.slice(0, 7);
+    }
+
+    function prSection(tag, id, className) {
+      const section = document.createElement(tag);
+      section.id = id;
+      section.className = className;
+      return section;
+    }
+
+    // What changed: only the facts of prSheet.whatChanged and the commit the sheet describes.
+    function buildWhatChanged(prSheet) {
+      const facts = prSheet.whatChanged;
+      const box = prSection("section", "pr-what-changed", "sh-box");
+      box.appendChild(textElement("h2", "", prWords.whatChangedHeading));
+      box.appendChild(linkedElement("p", "", facts.summary));
+      if (facts.reviewers.length > 0) {
+        const named = facts.reviewers.map(function (reviewer) {
+          const notes = [reviewer.family === null ? prWords.familyUnknown : reviewer.family];
+          if (reviewer.notIndependent === true) notes.push(prWords.notIndependentMark);
+          return reviewer.name + " (" + notes.join(", ") + ")";
+        });
+        box.appendChild(linkedElement("p", "", fill(prWords.reviewedBy, { reviewers: named.join("; ") })));
+      }
+      if (facts.caught.length > 0) {
+        const list = document.createElement("ul");
+        list.className = "sheet-caught";
+        facts.caught.forEach(function (line) { list.appendChild(linkedElement("li", "", line)); });
+        box.appendChild(textElement("h3", "sh-label", prWords.caughtHeading));
+        box.appendChild(list);
+      }
+      box.appendChild(textElement("p", "", fill(prWords.roundsLine, { rounds: plural(facts.rounds, finalWords.roundNoun) })));
+      if (facts.stoppedAtCap) box.appendChild(textElement("p", "", prWords.historyCap));
+      // Checks that ran on no commit have no sentence of their own: the state is shown as it came.
+      box.appendChild(textElement("p", "", facts.ci.commit === null
+        ? facts.ci.state
+        : fill(prWords.ciLine, { state: facts.ci.state, commit: shortCommit(facts.ci.commit) })));
+      if (facts.lane !== null) {
+        const line = fill(prWords.laneLine, { lane: facts.lane, reason: facts.laneReason === null ? "" : facts.laneReason });
+        box.appendChild(linkedElement("p", "", facts.laneReason === null ? line.replace(/:\s*$/, "") : line));
+      }
+      box.appendChild(textElement("p", "sh-caption", fill(prWords.describesCommit, { commit: shortCommit(prSheet.commit) })));
+      return box;
+    }
+
+    // The box under What changed on a sheet that replaced one made for an earlier commit.
+    function buildChanged(previousCommit) {
+      const box = prSection("section", "pr-changed", "sh-box");
+      box.appendChild(textElement("h2", "", prWords.changedHeading));
+      box.appendChild(textElement("p", "", fill(prWords.changed, { previous: shortCommit(previousCommit) })));
+      return box;
+    }
+
+    // The walk: the stops' titles in order; on a stack each stop also names its PR. It has no answer controls.
+    function buildWalk(walk) {
+      const section = prSection("section", "pr-walk", "sh-box");
+      const list = document.createElement("ol");
+      list.className = "sheet-walk-list";
+      walk.forEach(function (stop) {
+        const prefix = sheetKind === "stack" ? fill(prWords.walkStopPr, { pr: stop.pr }) + " " : "";
+        list.appendChild(linkedElement("li", "", prefix + stop.title));
+      });
+      section.appendChild(textElement("h2", "", prWords.walkHeading));
+      section.appendChild(list);
+      return section;
+    }
+
+    // A part that is folded away at load and opens its lines on a tap.
+    function buildFolded(id, heading, lines) {
+      const wrap = prSection("div", id, "sheet-folded");
+      const list = document.createElement("ul");
+      list.hidden = true;
+      lines.forEach(function (line) { list.appendChild(linkedElement("li", "", line)); });
+      const cue = cueElement();
+      const toggle = actionButton("", function () {
+        list.hidden = !list.hidden;
+        showOpenState(toggle, cue, !list.hidden);
+      });
+      toggle.replaceChildren(cue, textElement("span", "", heading + " (" + lines.length + ")"));
+      showOpenState(toggle, cue, !list.hidden);
+      wrap.replaceChildren(toggle, list);
+      return wrap;
+    }
+
+    function buildVerdict() {
+      const article = prSection("article", "sheet-verdict", "sh-card");
+      article.appendChild(textElement("h2", "", prWords.verdictHeading));
+      addVerdictParts(article);
+      digestCaption = textElement("p", "sh-caption", SAY.verdictNoDigest);
+      digestCaption.hidden = true;
+      article.appendChild(digestCaption);
+      article.appendChild(textElement("p", "sh-caption", prWords.verdictCaption));
+      return article;
+    }
+
+    // The parts above the cards, in the order the owner reads them: What changed, the box that says the PR moved
+    // (when it did), the walk, and the heading of What you're accepting with its line when there are no cards.
+    function prHead(prSheet, hasCards) {
+      const parts = [buildWhatChanged(prSheet)];
+      if (prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
+      if (prSheet.walk.length > 0) parts.push(buildWalk(prSheet.walk));
+      const accepting = textElement("h2", "", prWords.acceptingHeading);
+      accepting.id = "pr-accepting";
+      parts.push(accepting);
+      if (!hasCards) {
+        const nothing = textElement("p", "", prWords.nothingToAccept);
+        nothing.id = "pr-nothing";
+        parts.push(nothing);
+      }
+      return parts;
+    }
+
+    // The parts below the cards: the folded parts that have something in them, then the merge verdict.
+    function prTail(prSheet) {
+      const entryLine = function (entry) { return entry.title + " — " + entry.detail; };
+      const parts = [];
+      if (prSheet.craft.length > 0) parts.push(buildFolded("pr-craft", prWords.craftHeading, prSheet.craft.map(entryLine)));
+      if (prSheet.alreadyDecided.length > 0) parts.push(buildFolded("pr-decided", prWords.decidedHeading, prSheet.alreadyDecided.map(entryLine)));
+      if (prSheet.history.length > 0) parts.push(buildFolded("pr-review", prWords.reviewHeading, prSheet.history));
+      if (sheetKind === "stack") {
+        parts.push(buildFolded("pr-prs", prWords.prsHeading, prSheet.prs.map(function (pr) {
+          return fill(prWords.walkStopPr, { pr: pr.number }) + " " + pr.title + " · " + shortCommit(pr.commit);
+        })));
+      }
+      parts.push(buildVerdict());
+      return parts;
+    }
+
     function render(sheet) {
       const fragment = document.createDocumentFragment();
       controllers.clear();
@@ -1669,19 +1867,23 @@
       items = sheet.cards.map(function (card, index) {
         const article = buildCard(card);
         fragment.appendChild(article);
-        return { id: card.id, question: card.question, article: article, row: actionButton("", function () { openAt(index); }) };
+        return { id: card.id, question: card.question, options: card.options, article: article, row: actionButton("", function () { openAt(index); }) };
       });
       sheetKind = sheet.kind;
-      footerHost.replaceChildren(savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption]));
+      onePage = onePageKind(sheetKind);
+      sheetPage.className = onePage ? "sheet-page is-pr" : "sheet-page";
+      prNumber = onePage ? sheet.prSheet.number : 0;
+      footerHost.replaceChildren(...(onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
       openIndex = 0;
       expanded = false;
       whyHeading.textContent = "Why only these " + sheet.cards.length;
       whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
       if (sheetKind === "final") buildFinal(sheet.final);
+      if (onePage) finalHost.replaceChildren(...prTail(sheet.prSheet));
       itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
-      cardsHost.replaceChildren(fragment);
+      cardsHost.replaceChildren(...(onePage ? prHead(sheet.prSheet, sheet.cards.length > 0) : []), fragment);
       status.hidden = true;
       refreshSheet();
     }
@@ -1740,9 +1942,9 @@
         say(SAY.readFailed, restore);
       }, STALL_MS);
       try {
-        // A final sheet also reads its verdict; a failed or stalled read of either is a failed read. The verdict
+        // A final sheet, a pr sheet and a stack sheet also read their verdict; a failed or stalled read of either is a failed read. The verdict
         // lives under this revision's digest, so without a digest there is nothing of this revision to read.
-        const names = sheetKind === "final" && sheetDigest !== null ? ["answers", "verdict"] : ["answers"];
+        const names = verdictKind(sheetKind) && sheetDigest !== null ? ["answers", "verdict"] : ["answers"];
         const [saved, verdicts] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
         if (ready) return;
         saved.docs.forEach(applyDocument);
@@ -1877,17 +2079,28 @@
         words = await withDeadline(function () { return fetchJson("sheet-words.json", "The sheet's wording file"); });
       } catch (problems) {
         wordsProblem = Array.isArray(problems) ? problems.join(" ") : problems === DEADLINE ? "The sheet's wording file did not answer in time." : "The sheet's wording file could not be loaded.";
-        // A final sheet can't be drawn without its words; any other sheet is drawn with its answer controls off.
-        if (sheet.kind === "final") {
+        // A final sheet, a pr sheet and a stack sheet can't be drawn without their words; any other sheet is drawn with its answer controls off.
+        if (verdictKind(sheet.kind)) {
           showErrors([wordsProblem]);
           return;
         }
       }
-      if (sheet.kind === "final") finalWords = words;
-      answerWords = words !== null && typeof words === "object" ? words.answers : null;
-      sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.bytes) : null;
+      if (onePageKind(sheet.kind) && !hasPrWords(words)) {
+        showErrors(["The sheet's wording file lacks words this sheet needs."]);
+        return;
+      }
+      if (verdictKind(sheet.kind)) finalWords = words;
+      prWords = onePageKind(sheet.kind) ? words.pr : null;
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const wordsFile = isObject(words) ? words : {};
+      // A pr sheet and a stack sheet offer the prAnswers block; every other kind offers the answers block.
+      answerWords = (onePageKind(sheet.kind) ? wordsFile.prAnswers : wordsFile.answers) || null;
+      knownLabels = Object.assign({}, ...[wordsFile.answers, wordsFile.prAnswers].map(function (block) {
+        return isObject(block) && isObject(block.labels) ? block.labels : {};
+      }));
+      sheetDigest = verdictKind(sheet.kind) ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
-      verdictShape = readVerdictShape(schema);
+      verdictShape = readVerdictShape(schema, sheet.kind);
       render(sheet);
       if (wordsProblem !== null) {
         // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.

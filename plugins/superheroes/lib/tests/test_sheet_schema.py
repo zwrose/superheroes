@@ -570,3 +570,21 @@ def test_answer_and_verdict_definitions_are_unchanged_from_the_base(name):
     base = subprocess.run(["git", "show", "%s:%s" % (BASE_COMMIT, SCHEMA_IN_REPO)], cwd=THEME,
                           capture_output=True, text=True, check=True).stdout
     assert canonical(load_schema()["$defs"][name]) == canonical(json.loads(base)["$defs"][name])
+
+
+def test_accept_answer_document_names_no_option():
+    # Axis: a pr sheet or a stack sheet card with no options may store accept, and then it names no option.
+    assert document_errors("answer", {"answer": "accept", "optionId": None, "note": ""}) == []
+    assert document_errors("answer", {"answer": "accept", "optionId": None, "note": "kept"}) == []
+
+
+def test_accept_answer_with_an_option_is_refused():
+    # Axis: accept is an answer other than option, so a document that pairs it with an option id is refused.
+    assert document_errors("answer", {"answer": "accept", "optionId": "keep-it", "note": ""}) != []
+
+
+def test_merge_is_a_valid_verdict():
+    # Axis: a pr sheet or a stack sheet stores merge at verdict/<digest> like the final sheet stores approve, and the verdict list is approve, merge, not-yet, null.
+    digest = "a" * 64
+    assert document_errors("verdict", {"verdict": "merge", "note": "", "sheet": digest}) == []
+    assert load_schema()["$defs"]["verdict"]["properties"]["verdict"]["enum"] == ["approve", "merge", "not-yet", None]

@@ -6,6 +6,11 @@
     "withOptions": ["something-else"],
     "withoutOptions": ["aligned", "discuss"]
   },
+  "prAnswers": {
+    "labels": {"accept": "Accept", "discuss": "Discuss", "something-else": "Something else"},
+    "withOptions": ["something-else"],
+    "withoutOptions": ["accept", "discuss"]
+  },
   "roundNoun": "round",
   "thingNoun": "thing",
   "declinedHeading": "Declined findings",
@@ -42,6 +47,31 @@
     "historyNotIndependent": "{name} is from a maker's model family, so its review was not independent.",
     "historyIncomplete": "The review record is incomplete: {what}.",
     "historyEarlierCommit": "{name} reviewed an earlier commit ({commit}), not the final one.",
-    "historyChecks": "Checks were {state}, run on {commit}."
+    "historyChecks": "Checks were {state}, run on {commit}.",
+    "whatChangedHeading": "What changed",
+    "reviewedBy": "Reviewed by {reviewers}.",
+    "familyUnknown": "family unknown",
+    "notIndependentMark": "not independent",
+    "caughtHeading": "What the review caught",
+    "roundsLine": "{rounds} ran.",
+    "ciLine": "CI {state} on {commit}.",
+    "laneLine": "{lane} lane: {reason}",
+    "describesCommit": "Describes commit {commit}.",
+    "changedHeading": "This PR changed",
+    "changed": "The PR moved past commit {previous} since the last sheet was made. Your answers to unchanged items are kept; the merge verdict starts over on this sheet.",
+    "walkHeading": "Walk it",
+    "walkStopPr": "#{pr}",
+    "acceptingHeading": "What you're accepting",
+    "craftHeading": "Decided as craft, for your veto",
+    "decidedHeading": "Already decided",
+    "reviewHeading": "How the review went",
+    "prsHeading": "The PRs in this stack",
+    "verdictHeading": "Merge verdict",
+    "mergeLabel": "Merge #{number}",
+    "mergeStackLabel": "Merge stack #{number}",
+    "notYetLabel": "Not yet",
+    "verdictCaption": "Saved as you tap. Your merge word is this verdict plus \"done\" in the chat.",
+    "acceptedCount": "{accepted} of {total} accepted",
+    "nothingToAcceptCount": "Nothing to accept"
   }
 }
