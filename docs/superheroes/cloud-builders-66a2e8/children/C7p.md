@@ -16,7 +16,7 @@ What: A PR parked because the lapsed reviewer pass stopped its review, split fro
 - the notice of a PR parked because the lapsed pass stopped its review, in the board's words, naming the PR, the reason and the renewal; a review that did not run for any other reason is reported as the review rules already say, with no renewal advice (UFR-8; R7);
 - after the pass is renewed — meaning a cloud session has confirmed the reviewer answers with the new pass and the setup record's lapse date has moved (R3; the pass command alone is not a renewal) — each PR parked that way and still open is sent back for its review, sent through C7r's relay, with no further word from the owner. The exceptions are one closed before the renewal and one the owner already let through by the review rules (FR-36);
 - with a lapsed pass, the launch report's reason, the "Still on your machine" line (both C5b's) and the parked notice all still appear (FR-35, its second sentence);
-- its doctrine, as pointer lines (R11).
+- its doctrine: duty-9 pointer lines, with the detail in a section of `skills/showrunner/reference/orchestration.md` on the lapsed-pass parked notice and the send-back (R11).
 
 DoD:
 - Recorded dry runs:
