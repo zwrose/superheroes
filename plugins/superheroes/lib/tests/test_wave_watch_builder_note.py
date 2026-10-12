@@ -264,7 +264,6 @@ def test_the_repeat_read_within_one_loop_sends_the_stored_validator(repo):
         repo, _BATCH, max_seconds=1, interval_seconds=1, max_total_seconds=3, gh_run=gh,
     )
     assert result["event"] == "timer"
-    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
     calls = gh.note_calls()
     assert len(calls) >= 3
     assert "-H" not in calls[0]
@@ -367,10 +366,21 @@ def test_e3_a_304_with_no_stored_list_degrades_and_is_never_no_notes(repo):
 def test_e4_more_than_ten_pages_degrades(repo):
     _cloud_lane(repo, "cloud-a", 101)
     gh = _NoteGh(script=[
-        (lambda argv: _ok(argv, [_comment(3, 101)], link=True)) for _ in range(12)
+        (lambda argv: _ok(argv, [_comment(3, 101, "chatter")], link=True)) for _ in range(12)
     ])
     _degraded_without_a_note(repo, gh)
     assert len(gh.note_calls()) == 10
+
+
+def test_a_later_page_failure_keeps_a_note_read_on_an_earlier_page(repo):
+    _cloud_lane(repo, "cloud-a", 101)
+    bad = _raw([], "HTTP/2.0 502 Bad Gateway\r\n\r\n", 1)
+    gh = _NoteGh(script=[
+        (lambda argv: _ok(argv, [_comment(7, 101)], link=True)), bad,
+    ])
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert result["event"] == "builder-note"
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
 
 
 def test_e7_an_unreadable_answered_file_leaves_the_note_surfacing(repo):
@@ -413,7 +423,7 @@ def test_e8_note_answered_refuses_when_the_ledger_path_is_unresolvable(tmp_path)
     assert result == {"ok": False, "reason": "store-unresolvable"}
 
 
-def test_e10_a_spent_time_budget_makes_no_request_and_no_degradation():
+def test_e10_a_spent_time_budget_makes_no_request_and_discloses_it():
     gh = _NoteGh([_comment(7, 5)])
     lanes = {"cloud-x": {
         "place": ll.PLACE_CLOUD, "started": True, "issue": 5, "startedTs": time.time() - 60,
@@ -425,7 +435,7 @@ def test_e10_a_spent_time_budget_makes_no_request_and_no_degradation():
     )
     assert notes == []
     assert gh.calls == []
-    assert degraded == set()
+    assert degraded == {ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE}
 
 
 # --- loop, run, and the verb ----------------------------------------------------

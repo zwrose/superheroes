@@ -1227,7 +1227,12 @@ def _parse_http_response(stdout):
 def _read_issue_comments(
     repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state,
 ):
-    """(state, comments): state True read, False unreadable, None no request made. Never raises."""
+    """(state, comments): state True read, False unreadable, None no request made. Never raises.
+
+    A False after page one still carries the comments already read: a note seen on an
+    earlier page stays observed while the incomplete read is disclosed. Only a complete
+    read is cached.
+    """
     if deadline - monotonic() <= 0:
         return None, []
     slug = known_slug
@@ -1242,12 +1247,12 @@ def _read_issue_comments(
     # A stored read answers only for the same URL: another `since` is another list.
     if stored is not None and stored[0] != url:
         stored = None
+    comments = []
     try:
-        comments = []
         for page in range(1, _NOTE_COMMENTS_MAX_PAGES + 1):
             remaining = deadline - monotonic()
             if remaining <= 0:
-                return (None if page == 1 else False), []
+                return (None, []) if page == 1 else (False, comments)
             argv = ["gh", "api", "-i"]
             # bite-axis: VALIDATOR — the stored ETag rides the first page's request.
             if page == 1 and stored is not None and stored[1]:
@@ -1264,15 +1269,15 @@ def _read_issue_comments(
             # The exit code is not read: gh exits 1 on a 304, which is no failure.
             response = _parse_http_response(proc.stdout)
             if response is None:
-                return False, []
+                return False, comments
             status, headers, body = response
             if status == 304 and page == 1:
                 return (True, stored[2]) if stored is not None else (False, [])
             if status != 200:
-                return False, []
+                return False, comments
             parsed = json.loads(body)
             if not isinstance(parsed, list):
-                return False, []
+                return False, comments
             comments.extend(parsed)
             if not _NOTE_LINK_NEXT.search(headers.get("link", "")):
                 # One page's ETag cannot vouch for later pages, so only a one-page read
@@ -1280,9 +1285,9 @@ def _read_issue_comments(
                 etag = headers.get("etag") if page == 1 else None
                 note_state[0] = (url, etag, comments)
                 return True, comments
-        return False, []
+        return False, comments
     except Exception:
-        return False, []
+        return False, comments
 
 
 def _builder_note(comment, watched, answered):
@@ -1352,10 +1357,12 @@ def _evaluate_builder_notes(
         repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state,
     )
     if state is None:
-        return []
-    if not state:
+        # A watched channel that was never sampled for lack of budget is disclosed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
         return []
+    if not state:
+        # Disclose the incomplete read, but still evaluate whatever was observed.
+        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
     path = _answered_notes_path(repo_root, env)
     answered = _load_answered_notes(path)[0] if path is not None else set()
     notes = [_builder_note(comment, watched, answered) for comment in comments]
