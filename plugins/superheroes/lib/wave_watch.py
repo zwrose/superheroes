@@ -2194,22 +2194,37 @@ def _evaluate_tick(
         # (an overrun of that minimum is the loop's documented overrun).
         # The skip-or-start decision (any arm time left) is made here, once; the
         # grant handed to the reader is then a budget the reader cannot disagree with.
+        # The cloud share is split in two: the activity read takes its first half and the
+        # builder-note read its own second half, so an activity request that consumes its
+        # whole grant cannot starve the comments request.
         cloud_now = monotonic()
         arm_remaining = deadline - monotonic()
         if arm_remaining <= 0:
             cloud_deadline = cloud_now
+            activity_deadline = cloud_now
         else:
             cloud_deadline = cloud_now + max(
                 arm_remaining / 2, _MIN_PR_POLL_SECONDS,
             )
+            activity_deadline = cloud_now + max(
+                (cloud_deadline - cloud_now) / 2, _MIN_PR_POLL_SECONDS,
+            )
         stale_cloud_launches = _evaluate_cloud_activity(
-            repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
+            repo_root, live_lanes, deadline=activity_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
             known_slug=repo_slug,
         )
         stale_live_launches = stale_live_launches + stale_cloud_launches
+        # No fresh clock read: the notes window is fixed from the activity grant, so it
+        # still holds one request's minimum after an activity request spends its grant.
+        if arm_remaining <= 0:
+            notes_deadline = activity_deadline
+        else:
+            notes_deadline = max(
+                cloud_deadline, activity_deadline + _MIN_PR_POLL_SECONDS,
+            )
         builder_notes = _evaluate_builder_notes(
-            repo_root, live_lanes, deadline=cloud_deadline, env=env, gh_run=gh_run,
+            repo_root, live_lanes, deadline=notes_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, note_state=note_state,
             known_slug=repo_slug,
         )

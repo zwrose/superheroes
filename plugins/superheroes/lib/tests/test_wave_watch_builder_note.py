@@ -494,6 +494,23 @@ def test_run_makes_an_unconditional_read(repo):
     assert "-H" not in argv
 
 
+def test_an_activity_request_that_spends_its_grant_does_not_starve_the_notes_read(repo):
+    _cloud_lane(repo, "cloud-a", 101)
+    now = [1000.0]
+    inner = _NoteGh([_comment(7, 101)])
+
+    def gh(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "graphql"]:
+            inner.calls.append(list(argv))
+            now[0] += kwargs["timeout"]
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return inner(argv, **kwargs)
+
+    result = ww.run(repo, _BATCH, gh_run=gh, monotonic=lambda: now[0])
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert len(inner.note_calls()) == 1
+
+
 def test_the_note_event_is_not_suppressible_and_ranks_below_builder_exited():
     assert ww.EVENT_BUILDER_NOTE not in ww._SUPPRESSIBLE_EVENTS
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in ww.DEGRADATIONS
