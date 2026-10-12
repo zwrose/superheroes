@@ -69,7 +69,11 @@
       ]
     },
     "leftForOwner": [],
-    "makers": [],
+    "makers": [
+      {
+        "family": "anthropic"
+      }
+    ],
     "missingReviews": [],
     "parked": false,
     "pr": 7,
@@ -84,6 +88,7 @@
         "model": "gpt-5.6-sol",
         "name": "code-reviewer",
         "observation": {
+          "read": "engaged",
           "tokens": 100,
           "wallSeconds": 120
         },

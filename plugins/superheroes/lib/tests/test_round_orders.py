@@ -677,7 +677,8 @@ def test_seat_transport_classifies_vendors_from_compose_output():
     composed = SM.build(
         roster=("code-reviewer", "security-reviewer", "architecture-reviewer"),
         live_vendors=["codex", "cursor", "claude"],
-        author_family="anthropic",
+        # transport classification, not maker exclusion: with a maker named, a pin to its family leaves the seat unfilled (test_seat_map.py)
+        author_family=None,
         narrative_family="openai",
         seed=723,
         pins={
