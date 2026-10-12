@@ -3306,20 +3306,6 @@ def _issue_title(repo_root, issue):
     return None
 
 
-def _report_place_call(raw_reserved, folded_place):
-    """The lane's place call: the reserved record's own when it agrees with the ledger's folded
-    place, otherwise one synthesized from that place with no reason."""
-    premise = raw_reserved.get("premise") if isinstance(raw_reserved, dict) else None
-    call = premise.get("placeCall") if isinstance(premise, dict) else None
-    if (
-        isinstance(call, dict)
-        and call.get("place") == folded_place
-        and isinstance(call.get("pointedAtCloud"), bool)
-    ):
-        return call
-    return {"place": folded_place, "pointedAtCloud": folded_place == PLACE_CLOUD, "reason": None}
-
-
 def _report_title(title_fn, repo_root, issue):
     try:
         title = title_fn(repo_root, issue)
@@ -3328,85 +3314,11 @@ def _report_title(title_fn, repo_root, issue):
     return title if isinstance(title, str) and title else None
 
 
-def _decides_still(call):
-    """True when the place call moves the "Still on your machine" state: a build in the cloud, or
-    one the cloud was meant for that ran locally because it was not ready."""
-    return call.get("place") == PLACE_CLOUD or bool(
-        call.get("place") == PLACE_LOCAL and call.get("pointedAtCloud")
-        and call.get("reason") in launch_place.NOT_READY_CODES)
-
-
-def _launch_day(info):
-    """The UTC date the launch started, so a replayed report keeps the day it first observed; None
-    when the ledger carries no usable time (the reminder then takes today's date)."""
-    stamp = info.get("startedTs", info.get("reservedTs"))
-    try:
-        return datetime.fromtimestamp(stamp, timezone.utc).date()
-    except (TypeError, ValueError, OverflowError, OSError):
-        return None
-
-
-def _started_indexes(records):
-    """Each launch's ledger position of its latest started event. Launches reserve and spawn in
-    separate steps, so the position a launch started at, not the one it reserved at, is the order
-    in which the launches actually happened."""
-    return {
-        rec["launchId"]: idx for idx, rec in enumerate(records)
-        if isinstance(rec, dict) and rec.get("event") == "started"
-    }
-
-
-def _record_batch_still(repo_root, launches, reserved, started_at, record_count):
-    """Apply each confirmed, started launch that decides the reminder once, in the order they
-    started, whichever batch it belongs to. A cursor holds the ledger position of the last launch
-    applied, so a report applies only the launches after it and replaying any report changes
-    nothing. A report writes once: the local fallbacks after the last new cloud launch are recorded
-    together, dated by the latest of their start days, and never displace a stored reminder that
-    ranks higher; a new cloud launch last clears once. A cursor that cannot be read refuses, and
-    one past the ledger's end (the ledger was cleared) starts over."""
-    applied = launch_report.read_still_cursor(repo_root, root=None)
-    if applied is None:
-        return {"action": "refused", "reason": "still-cursor-unreadable"}
-    if applied >= record_count:
-        applied = -1
-    decided = []
-    for launch_id, info in launches.items():
-        if not info["started"] or info.get("cloudSessionUnconfirmed"):
-            continue
-        position = started_at.get(launch_id, info["reservedIndex"])
-        if position <= applied:
-            continue
-        call = _report_place_call(reserved.get(launch_id), info["place"])
-        if _decides_still(call):
-            decided.append((position, call, info))
-    if not decided:
-        return {"action": "unchanged", "reason": None}
-    decided.sort(key=lambda entry: entry[0])
-    last_cloud = max(
-        (pos for pos, (_idx, call, _info) in enumerate(decided) if call.get("place") == PLACE_CLOUD),
-        default=None,
-    )
-    later = decided[last_cloud + 1 if last_cloud is not None else 0:]
-    if later:
-        days = [day for day in (_launch_day(info) for _idx, _call, info in later) if day is not None]
-        result = launch_report.record_still(
-            repo_root, [call for _idx, call, _info in later], root=None,
-            today=max(days) if days else None, keep_higher_stored=True)
-    else:
-        _idx, cloud_call, cloud_info = decided[last_cloud]
-        result = launch_report.record_still(
-            repo_root, [cloud_call], root=None, today=_launch_day(cloud_info))
-    if result["action"] != "refused":
-        launch_report.write_still_cursor(repo_root, decided[-1][0], root=None)
-    return result
-
-
 def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
-    """The launch report for one batch, built from the ledger's started launches, and the
-    "Still on your machine" state updated from the same place calls."""
+    """The launch report for one batch, built from the ledger's started launches."""
     read = ll.read(repo_root, env=env)
     if read["state"] == "missing":
-        return {"ok": True, "report": None, "still": None, "lanes": 0}
+        return {"ok": True, "report": None, "lanes": 0}
     if read["state"] != "ok":
         return _fail("report-ledger-%s" % read["state"])
     folded = ll.fold(read["records"])
@@ -3437,14 +3349,11 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
         lanes.append({
             "issue": issue,
             "title": _report_title(lookup, repo_root, issue),
-            "placeCall": _report_place_call(reserved.get(launch_id), info["place"]),
+            "placeCall": launch_report.report_place_call(reserved.get(launch_id), info["place"]),
         })
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),
-        "still": _record_batch_still(
-            repo_root, folded["launches"], reserved, _started_indexes(read["records"]),
-            len(read["records"])),
         "lanes": len(lanes),
     }
 

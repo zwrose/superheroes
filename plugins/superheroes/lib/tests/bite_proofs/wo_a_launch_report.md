@@ -1,154 +1,120 @@
-# Launch report WO-A bite-proof: the "Still on your machine" state's clearing legs
+# Launch report WO-A bite-proof: the "Still on your machine" line, read from the launch ledger
 
-Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G14, G15, G16, G17, G18, G19, G20), detectors in `plugins/superheroes/lib/tests/test_launch_report.py` (`TLR`) and `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`); G15, G17, G18 and G19 neutralize `plugins/superheroes/lib/launcher.py`. Every red, restore and green below was run in this dispatch on the worktree head, against `launch_report.py` and `test_launch_report.py`.
+Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G21, G22, G23, G24) and `plugins/superheroes/lib/launcher.py` (G15), detectors in `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`). Every red, restore and green below was run in the WO-8 dispatch on the worktree head `f0f362f37` plus that dispatch's changes, each as one pytest node.
 
-- **Run command.** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-wo1 -m pytest -p no:cacheprovider -q "<T>::<node>"`.
-- **Pinned condition.** `TLR` builds its stores, repositories, account files and records under `tmp_path`; the clock is a fixed `today` (`2026-10-11`) and readiness is injected. The pin makes unobservable: the real home directory, the process environment, the network and the real wall clock.
+- **Run command.** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-wo8 -m pytest -p no:cacheprovider -q "<node>"`.
+- **Pinned condition.** `TLV` builds its repository, ledger root and project store under `tmp_path`, and readiness is injected (`_fn`, or a lambda) and never read from a real home directory. The fixed start day `2026-10-11` (`DAY`) is written into the ledger's `ts` fields. The pin makes unobservable: the real home directory, the process environment, the network and the real wall clock.
 
 ## Declared guarded-element set
 
-G12 the still state's reported-fact clearing leg is a strictly later day.
-G13 the still state's reported-fact clearing leg also requires the reader to read `ready` now.
-G14 a build that went to the cloud clears the stored reason even when a local not-ready fallback sits beside it in the same batch.
+G12 the reported-fact clearing leg is a strictly later day than the launch's start day.
+G13 the reported-fact clearing leg also requires the reader to read `ready` now.
 G15 the launch report orders issues by their first reservation, not their last.
-G16 with no stored still state, the readiness function is never called.
-G17 the reminder replays every batch's launches.
-G18 each deciding launch is applied once: the cursor is read and honoured.
-G19 a report with a cloud launch among the new ones and a later local fallback writes once and never removes first.
-G20 a new fallback never displaces a higher-ranked stored reminder.
+G21 one store: `report` and `still` write nothing and read no saved reminder.
+G22 only the local fallbacks after the last confirmed cloud launch count.
+G23 a fallback that reads fixed is skipped, so the next one still standing shows.
+G24 an unconfirmed cloud launch does not clear the line.
 
 ## Per-element receipts
 
-### G12: the reported-fact leg clears only on a strictly later day. Axis: boundary (>)
+### G12: the reported-fact leg is a strictly later day. Axis: boundary (>)
 
-- **Neutralization applied.** In `launch_report._fixed`, `datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(state["observedOn"])` replaced with `>=`.
-- **Node.** `TLR::test_R_still_leg_d_a_reported_fact_clears_only_on_a_strictly_later_check`
+- **Neutralization applied.** In `launch_report._fixed`, `datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(observed)` replaced with `>=`.
+- **Node.** `TLV::test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0]` (B6's same-day case).
 - **Red:**
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-___ test_R_still_leg_d_a_reported_fact_clears_only_on_a_strictly_later_check ___
+_ test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0] _
 
-tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1213/test_R_still_leg_d_a_reported_0')
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1371/test_B6_a_reported_fact_clears0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1371/test_B6_a_reported_fact_clears0/store')
+code = 'no-pass', reported = {'noPass': True}
 
-    def test_R_still_leg_d_a_reported_fact_clears_only_on_a_strictly_later_check(tmp_path):
-        cases = [("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
-                 ("version", {"pluginVersion": "0.41.0"})]
-        for index, (code, reported) in enumerate(cases):
-            repo, store = _still_with(_sub(tmp_path, str(index)), _call(reason=code, cloud="0.41.0", advisor="0.42.0",
-                                                  reported=reported))
-            ready = _now(ready=True)
-            for checked in (None, "2026-10-10", "2026-10-11", "garbage"):
->               assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=lambda *a, **k: dict(
-                    ready, checkedAt=checked)) is not None, (code, checked)
-E               AssertionError: ('no-pass', '2026-10-11')
-E               assert None is not None
-E                +  where None = <function still_line at 0x1077b6c00>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1213/test_R_still_leg_d_a_reported_0/0/repo', root='/private/tmp/claude-501/pytest-of-zwrose/pytest-1213/test_R_still_leg_d_a_reported_0/0/store', today=datetime.date(2026, 10, 11), readiness_fn=<function test_R_still_leg_d_a_reported_fact_clears_only_on_a_strictly_later_check.<locals>.<lambda> at 0x10774f880>)
-E                +    where <function still_line at 0x1077b6c00> = LR.still_line
+    @pytest.mark.parametrize("code,reported", [
+        ("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
+        ("version", {"pluginVersion": "0.41.0"}),
+    ])
+    def test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready(
+            world, code, reported):
+        repo, _store = world
+        _day_launch(repo, "a", 11, DAY, _call(reason=code, cloud="0.41.0", advisor="0.42.0",
+                                              reported=reported))
+        ready = _now(ready=True)
+        for checked in (None, "garbage", "2026-10-10", "2026-10-11"):
+>           assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(ready, checkedAt=checked)
+                                 ) is not None, (code, checked)
+E           AssertionError: ('no-pass', '2026-10-11')
+E           assert None is not None
+E            +  where None = <function still_line at 0x10b3dd760>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1371/test_B6_a_reported_fact_clears0/repo', readiness_fn=<function test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready.<locals>.<lambda> at 0x10b797a60>)
+E            +    where <function still_line at 0x10b3dd760> = LR.still_line
 
-/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1775-73b0797ad1a5d29e/ba0c6594-07fc-485e-832d-f24f80bb0f89/scratchpad/wo1/plugins/superheroes/lib/tests/test_launch_report.py:496: AssertionError
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:616: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_R_still_leg_d_a_reported_fact_clears_only_on_a_strictly_later_check
-1 failed in 13.92s
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0]
+1 failed in 4.46s
 ```
 
-- **Restore.** The inverse Edit; quoted from `launch_report.py:217`: `        later = datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(state["observedOn"])`.
+- **Restore.** The inverse Edit; quoted from `launch_report.py:193`: `        later = datetime.date.fromisoformat(checked) > datetime.date.fromisoformat(observed)`.
 - **Green:**
 
 ```
 .                                                                        [100%]
-1 passed in 7.15s
+1 passed in 5.75s
 ```
 
-### G13: the reported-fact leg clears only when the reader reads ready now. Axis: conjunct (ready)
+### G13: the reported-fact leg requires the reader to read ready now. Axis: conjunct (ready)
 
 - **Neutralization applied.** In `launch_report._fixed`, `return later and now.get("ready") is True` replaced with `return later and True`.
-- **Node.** `TLR::test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check`
+- **Node.** `TLV::test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0]` (B6's later-day, not-ready case).
 - **Red:**
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_ test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check _
+_ test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0] _
 
-tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1215/test_R_still_a_reported_fact_n0')
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1373/test_B6_a_reported_fact_clears0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1373/test_B6_a_reported_fact_clears0/store')
+code = 'no-pass', reported = {'noPass': True}
 
-    def test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check(tmp_path):
-        repo, store = _still_with(tmp_path, _call(reason="version", cloud="0.41.0", advisor="0.42.0",
-                                                  reported={"pluginVersion": "0.41.0"}))
-        not_ready = _now(ready=False, reason="version", checked="2026-10-12")
-        assert not_ready["conditions"]["version"] is False
->       assert LR.still_line(repo, root=store, today=TODAY,
-                             readiness_fn=lambda *a, **k: dict(not_ready)) is not None
+    @pytest.mark.parametrize("code,reported", [
+        ("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
+        ("version", {"pluginVersion": "0.41.0"}),
+    ])
+    def test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready(
+            world, code, reported):
+        repo, _store = world
+        _day_launch(repo, "a", 11, DAY, _call(reason=code, cloud="0.41.0", advisor="0.42.0",
+                                              reported=reported))
+        ready = _now(ready=True)
+        for checked in (None, "garbage", "2026-10-10", "2026-10-11"):
+            assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(ready, checkedAt=checked)
+                                 ) is not None, (code, checked)
+        after = "2026-10-12"
+        assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(ready, checkedAt=after)) is None
+        not_ready = _now(ready=False, reason=code, checked=after)
+>       assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(not_ready)) is not None
 E       AssertionError: assert None is not None
-E        +  where None = <function still_line at 0x10906ec00>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1215/test_R_still_a_reported_fact_n0/repo', root='/private/tmp/claude-501/pytest-of-zwrose/pytest-1215/test_R_still_a_reported_fact_n0/store', today=datetime.date(2026, 10, 11), readiness_fn=<function test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check.<locals>.<lambda> at 0x108fff880>)
-E        +    where <function still_line at 0x10906ec00> = LR.still_line
+E        +  where None = <function still_line at 0x109a5d760>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1373/test_B6_a_reported_fact_clears0/repo', readiness_fn=<function test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready.<locals>.<lambda> at 0x10957ba60>)
+E        +    where <function still_line at 0x109a5d760> = LR.still_line
 
-/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1775-73b0797ad1a5d29e/ba0c6594-07fc-485e-832d-f24f80bb0f89/scratchpad/wo1/plugins/superheroes/lib/tests/test_launch_report.py:647: AssertionError
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:621: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check
-1 failed in 2.54s
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0]
+1 failed in 5.53s
 ```
 
-- **Restore.** The inverse Edit; quoted from `launch_report.py:219`: `        return later and now.get("ready") is True`.
+- **Restore.** The inverse Edit; quoted from `launch_report.py:195`: `        return later and now.get("ready") is True`.
 - **Green:**
 
 ```
 .                                                                        [100%]
-1 passed in 3.85s
+1 passed in 4.63s
 ```
 
-### G14: a cloud build clears the stored reason even beside a local not-ready fallback. Axis: ordering (cloud check before the stuck/write branch)
+### G15: the report orders issues by their first reservation. Axis: ordering key
 
-- **Neutralization applied.** In `launch_report.record_still`, the `if any(c.get("place") == "cloud" ...)` clear branch moved after the `if stuck:` write branch (the old order).
-- **Node.** `TLR::test_record_still_clears_when_a_cloud_build_sits_beside_a_local_not_ready_fallback`
-- **Red:**
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_ test_record_still_clears_when_a_cloud_build_sits_beside_a_local_not_ready_fallback _
-
-tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1217/test_record_still_clears_when_0')
-
-    def test_record_still_clears_when_a_cloud_build_sits_beside_a_local_not_ready_fallback(tmp_path):
-        repo, store = _gitdir(tmp_path)
-        mixed = [_call(reason="version", cloud="0.41.0", advisor="0.42.0"), _call("cloud")]
-        LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
->       assert LR.record_still(repo, mixed, root=store, today=TODAY) == {
-            "action": "cleared", "reason": None}
-E       AssertionError: assert {'action': 'w...n': 'version'} == {'action': 'c...reason': None}
-E         
-E         Differing items:
-E         {'reason': 'version'} != {'reason': None}
-E         {'action': 'written'} != {'action': 'cleared'}
-E         Use -v to get more diff
-
-/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1775-73b0797ad1a5d29e/ba0c6594-07fc-485e-832d-f24f80bb0f89/scratchpad/wo1/plugins/superheroes/lib/tests/test_launch_report.py:634: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_record_still_clears_when_a_cloud_build_sits_beside_a_local_not_ready_fallback
-1 failed in 3.09s
-```
-
-- **Restore.** The inverse Edit; the cloud branch is back first in `record_still`, quoted from `launch_report.py:153-155`:
-
-```
-        if any(c.get("place") == "cloud" for c in place_calls):
-            # axis: a build that went to the cloud clears the stored reason even beside a local not-ready fallback — see bite-proof record wo_a_launch_report
-            return {"action": _remove(path)["action"], "reason": None}
-```
-
-- **Green:**
-
-```
-.                                                                        [100%]
-1 passed in 3.47s
-```
-
-### G15: issues are ordered by first reservation. Axis: ordering (sort key)
-
-- **Neutralization applied.** In `launcher.launch_report_for_batch`, the sort key `first_index[i]` replaced with `last_started[i][1]["reservedIndex"]`.
+- **Neutralization applied.** In `launcher.launch_report_for_batch`, the sort key in `sorted(last_started, key=lambda i: first_index[i])` replaced with `last_started[i][1]["reservedIndex"]`.
 - **Node.** `TLV::test_I1_the_issue_order_is_its_first_reservation_not_its_last`
 - **Red:**
 
@@ -157,7 +123,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ________ test_I1_the_issue_order_is_its_first_reservation_not_its_last _________
 
-world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1312/test_I1_the_issue_order_is_its0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1312/test_I1_the_issue_order_is_its0/store')
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1375/test_I1_the_issue_order_is_its0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1375/test_I1_the_issue_order_is_its0/store')
 
     def test_I1_the_issue_order_is_its_first_reservation_not_its_last(world):
         repo, _store = world
@@ -174,250 +140,183 @@ world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1312/test_I1_the_issue
         assert lines[1] == "On your machine:"
 >       assert lines[2].startswith("- #44 ") and lines[3].startswith("- #55 ")
 E       AssertionError: assert (False)
-E        +  where False = <built-in method startswith of str object at 0x105ce4130>('- #44 ')
-E        +    where <built-in method startswith of str object at 0x105ce4130> = '- #55 Title 55. It needs the phone simulator, which only your machine has.'.startswith
+E        +  where False = <built-in method startswith of str object at 0x10d3f3530>('- #44 ')
+E        +    where <built-in method startswith of str object at 0x10d3f3530> = '- #55 Title 55. It needs the phone simulator, which only your machine has.'.startswith
 
-plugins/superheroes/lib/tests/test_launch_report_verbs.py:168: AssertionError
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:218: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_I1_the_issue_order_is_its_first_reservation_not_its_last
+1 failed in 6.53s
+```
+
+- **Restore.** The inverse Edit; quoted from `launcher.py:3347`: `    for issue in sorted(last_started, key=lambda i: first_index[i]):`.
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 6.21s
+```
+
+### G21: one store. Axis: persistence (no write)
+
+- **Neutralization applied.** In `launch_report.still_check`, as the first line inside the `try:`, added `open(os.path.join(__import__("mode_registry").project_store_dir(cwd, root), "state", "scratch.json"), "w").write("x")`.
+- **Node.** `TLV::test_B10_one_store_report_and_still_write_nothing`
+- **Red** (the capture was passed through `cut -c1-600`; no line in it is cut):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_B10_one_store_report_and_still_write_nothing _______________
+
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1377/test_B10_one_store_report_and_0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1377/test_B10_one_store_report_and_0/store')
+
+    def test_B10_one_store_report_and_still_write_nothing(world):
+        repo, _store = world
+        state = os.path.join(mode_registry.project_store_dir(repo, None), "state")
+        os.makedirs(state)
+        with open(os.path.join(state, "stale-reminder.json"), "wb") as fh:
+            fh.write(b"left behind by an older build")
+        _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+        _launch(repo, "b", 22, "local", _call(reason="unreachable"))
+        before = _snapshot(mode_registry.project_store_dir(repo, None), repo)
+        assert _report(repo)["report"] is not None
+        got = LR.still_check(repo, readiness_fn=_fn(ready=False, reason="no-setup"))
+        assert got["line"].startswith("Still on your machine\n") and got["refused"] is None
+>       assert _snapshot(mode_registry.project_store_dir(repo, None), repo) == before
+E       AssertionError: assert {'/private/tm...t': None, ...} == {'/private/tm...: b'x\n', ...}
+E         
+E         Omitting 44 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'/private/tmp/claude-501/pytest-of-zwrose/pytest-1377/test_B10_one_store_report_and_0/store/projects/150aa8a113e50614/state/scratch.json': b'x'}
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:408: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B10_one_store_report_and_still_write_nothing
+1 failed in 5.60s
+```
+
+- **Restore.** The inverse Edit; quoted from `launch_report.py:254-255`: `    try:` then `        read = ll.read(cwd)`. A grep for `scratch` and `__import__` in the file found nothing after the restore.
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 5.02s
+```
+
+### G22: only the fallbacks after the last confirmed cloud launch count. Axis: ordering (cut at the last cloud launch)
+
+- **Neutralization applied.** In `launch_report._fallbacks`, `deciding[last_cloud + 1:]` replaced with `deciding if call.get("place") != ll.PLACE_CLOUD`, so the cloud launch is ignored and every fallback counts.
+- **Node.** `TLV::test_B3_a_confirmed_cloud_launch_after_a_fallback_clears_the_line`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_B3_a_confirmed_cloud_launch_after_a_fallback_clears_the_line _______
+
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1379/test_B3_a_confirmed_cloud_laun0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1379/test_B3_a_confirmed_cloud_laun0/store')
+
+    def test_B3_a_confirmed_cloud_launch_after_a_fallback_clears_the_line(world):
+        repo, _store = world
+        _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+        assert _line(repo, ready=False, reason="no-setup") is not None
+        _launch(repo, "b", 22, "cloud")
+>       assert _line(repo, ready=False, reason="no-setup") is None
+E       assert 'Still on your machine\nThis project has no cloud setup on this Claude account. Say "set up cloud builds" to fix it.' is None
+E        +  where 'Still on your machine\nThis project has no cloud setup on this Claude account. Say "set up cloud builds" to fix it.' = _line('/private/tmp/claude-501/pytest-of-zwrose/pytest-1379/test_B3_a_confirmed_cloud_laun0/repo', ready=False, reason='no-setup')
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:479: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B3_a_confirmed_cloud_launch_after_a_fallback_clears_the_line
+1 failed in 7.03s
+```
+
+- **Restore.** The inverse Edit; quoted from `launch_report.py:237`: `    return [_candidate(call, info) for _pos, call, info in deciding[last_cloud + 1:]]`.
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 5.85s
+```
+
+### G23: a fixed candidate is skipped. Axis: filter (the `_fixed` test)
+
+- **Neutralization applied.** In `launch_report.still_check`, `standing = [c for c in candidates if not _still_fixed(c, now, cwd, root)]` replaced with `standing = list(candidates)`, so the best-ranked candidate shows even when fixed.
+- **Node.** `TLV::test_B7_a_higher_ranked_fallback_that_is_fixed_is_skipped` (B7's second case).
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_B7_a_higher_ranked_fallback_that_is_fixed_is_skipped ___________
+
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1381/test_B7_a_higher_ranked_fallba0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1381/test_B7_a_higher_ranked_fallba0/store')
+
+    def test_B7_a_higher_ranked_fallback_that_is_fixed_is_skipped(world):
+        repo, _store = world
+        _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+        _launch(repo, "b", 22, "local", _call(reason="version", cloud="0.41.0", advisor="0.42.0"))
+        got = _line(repo, ready=False, reason="version")
+>       assert got == ("Still on your machine\n"
+                       "The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.")
+E       assert 'Still on you...s" to fix it.' == 'Still on you...xt to fix it.'
+E         
+E           Still on your machine
+E         - The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.
+E         + This project has no cloud setup on this Claude account. Say "set up cloud builds" to fix it.
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:677: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B7_a_higher_ranked_fallback_that_is_fixed_is_skipped
 1 failed in 5.81s
 ```
 
-- **Restore.** The inverse Edit; quoted from `launcher.py:3311`: `    for issue in sorted(last_started, key=lambda i: first_index[i]):`.
+- **Restore.** The inverse Edit; quoted from `launch_report.py:271`: `        standing = [c for c in candidates if not _still_fixed(c, now, cwd, root)]`.
 - **Green:**
 
 ```
 .                                                                        [100%]
-1 passed in 12.75s
+1 passed in 5.48s
 ```
 
-### G16: with no stored still state, the readiness function is never called. Axis: ordering (readiness read before the no-state return)
+### G24: an unconfirmed cloud launch does not clear. Axis: filter (`cloudSessionUnconfirmed`)
 
-- **Neutralization applied.** In `launch_report.still_line`, a call `(readiness_fn or cloud_ready.readiness)(cwd, reported=None, root=root)` inserted before the `if state is None:` line.
-- **Node.** `TLR::test_R_still_no_state_means_no_line`
-- **Red:**
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_____________________ test_R_still_no_state_means_no_line ______________________
-
-tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1314/test_R_still_no_state_means_no0')
-
-    def test_R_still_no_state_means_no_line(tmp_path):
-        repo, store = _gitdir(tmp_path)
-    
-        asked = []
-    
-        def record_the_ask(*args, **kwargs):
-            asked.append((args, kwargs))
-            return _now()
-    
-        # still_line swallows an exception from the readiness read, so the callback records, not raises
-        assert LR.still_line(repo, root=store, readiness_fn=record_the_ask) is None
->       assert asked == []
-E       AssertionError: assert [(('/private/..._no0/store'})] == []
-E         
-E         Left contains one more item: (('/private/tmp/claude-501/pytest-of-zwrose/pytest-1314/test_R_still_no_state_means_no0/repo',), {'reported': None, 'root': '/private/tmp/claude-501/pytest-of-zwrose/pytest-1314/test_R_still_no_state_means_no0/store'})
-E         Use -v to get more diff
-
-plugins/superheroes/lib/tests/test_launch_report.py:471: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report.py::test_R_still_no_state_means_no_line
-1 failed in 2.90s
-```
-
-- **Restore.** The inverse Edit; quoted from `launch_report.py:256-258`:
-
-```
-        state = _read_still(path)
-        if state is None:
-            return None
-```
-
-- **Green:**
-
-```
-.                                                                        [100%]
-1 passed in 1.75s
-```
-
-### G17: the reminder replays every batch's launches. Axis: scope (all launches in the ledger, not the reported batch's)
-
-- **Neutralization applied.** At the one call site in `launch_report_for_batch`, `_record_batch_still` was passed `{lid: info for lid, info in folded["launches"].items() if info.get("batchId") == batch_id}` instead of `folded["launches"]`.
-- **Node.** `TLV::test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch`
-- **Red:**
+- **Neutralization applied.** In `launch_report._fallbacks`, `if not info["started"] or info.get("cloudSessionUnconfirmed"):` replaced with `if not info["started"]:`.
+- **Node.** `TLV::test_B3_an_unconfirmed_cloud_launch_after_a_fallback_leaves_the_line`
+- **Red** (the line went missing, so the test's `.startswith` ran on `None`):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-___ test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch ____
+_____ test_B3_an_unconfirmed_cloud_launch_after_a_fallback_leaves_the_line _____
 
-world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1350/test_reporting_an_older_batch_0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1350/test_reporting_an_older_batch_0/store')
+world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1383/test_B3_an_unconfirmed_cloud_l0/repo', '/private/tmp/claude-501/pytest-of-zwrose/pytest-1383/test_B3_an_unconfirmed_cloud_l0/store')
 
-    def test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch(world):
-        repo, store = world
-        assert _declare(repo, "b-newer", 4)["ok"]
-        _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-        _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="no-setup")}, batch="b-newer")
-        _start(repo, "b")
-        # the newer batch has not reported; "no-setup" outranks "unreachable", so only its launch can supply it
->       assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-E       AssertionError: assert {'action': 'w...'unreachable'} == {'action': 'w...': 'no-setup'}
-E         
-E         Omitting 1 identical items, use -vv to show
-E         Differing items:
-E         {'reason': 'unreachable'} != {'reason': 'no-setup'}
-E         Use -v to get more diff
-
-plugins/superheroes/lib/tests/test_launch_report_verbs.py:412: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch
-1 failed in 7.42s
-```
-
-- **Restore.** The inverse Edit; quoted from `launcher.py:3423-3425` (the call now also passes the record count for the cursor):
-
-```
-        "still": _record_batch_still(
-            repo_root, folded["launches"], reserved, _started_indexes(read["records"]),
-            len(read["records"])),
-```
-
-- **Green:**
-
-```
-.                                                                        [100%]
-1 passed in 8.60s
-```
-
-G17 was re-run against the cursor design in this dispatch with the same neutralization at the new call shape. It still goes red (the stored reason was `unreachable`, not `no-setup`: `{'reason': 'unreachable'} != {'reason': 'no-setup'}`, `1 failed in 1.87s`), and the restore above gives `1 passed in 1.83s`. Its entry stays.
-
-### G18: each deciding launch is applied once. Axis: state (the cursor is honoured)
-
-- **Neutralization applied.** In `launcher._record_batch_still`, `if applied >= record_count:` became `if True:`, so the cursor is treated as `-1` always.
-- **Node.** `TLV::test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again`
-- **Red:**
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-___ test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again ____
-
-    def test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again(world):
-        repo, store = world
-        assert _declare(repo, "b-other", 4)["ok"]
+    def test_B3_an_unconfirmed_cloud_launch_after_a_fallback_leaves_the_line(world):
+        repo, _store = world
         _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-        _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-other")
-        _start(repo, "b")
-        assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-        _clear_as_fixed(repo)
-        for batch in (BATCH, "b-other", BATCH):
-            got = launcher.launch_report_for_batch(repo, batch, title_fn=_titles)
->           assert got["still"] == {"action": "unchanged", "reason": None}
-E           AssertionError: assert {'action': 'w...': 'no-setup'} == {'action': 'u...reason': None}
-E             
-E             Differing items:
-E             {'action': 'written'} != {'action': 'unchanged'}
-E             {'reason': 'no-setup'} != {'reason': None}
-E             Use -v to get more diff
+        _reserve(repo, "b", 22, "cloud", {"placeCall": _call("cloud", reason=None)})
+        rec = _started("b")
+        rec.update(cloudSessionName="lane-b", cloudSessionUnconfirmed=True)
+        assert ll.append_under_lock(repo, rec)["ok"]
+        _folds(repo)
+        got = _report(repo)
+        assert got["lanes"] == 1 and "#22" not in got["report"]
+>       assert _line(repo, ready=False, reason="no-setup").startswith("Still on your machine\nThis project")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'NoneType' object has no attribute 'startswith'
 
-test_launch_report_verbs.py:506: AssertionError
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:492: AttributeError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again
-1 failed in 2.48s
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B3_an_unconfirmed_cloud_launch_after_a_fallback_leaves_the_line
+1 failed in 6.02s
 ```
 
-- **Restore.** The inverse Edit; quoted from `launcher.py:3348-3349`:
-
-```
-    if applied >= record_count:
-        applied = -1
-```
-
+- **Restore.** The inverse Edit; quoted from `launch_report.py:228`: `        if not info["started"] or info.get("cloudSessionUnconfirmed"):`.
 - **Green:**
 
 ```
 .                                                                        [100%]
-1 passed in 3.96s
-```
-
-### G19: a cloud launch among the new ones does not remove before a later fallback writes. Axis: ordering (one write, no prior delete)
-
-- **Neutralization applied.** In `launcher._record_batch_still`, before `if later:`, added `if last_cloud is not None: launch_report.clear_still(repo_root, root=None)`.
-- **Node.** `TLV::test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first`
-- **Red:**
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_ test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first _
-
-    monkeypatch.setattr(LR, "_remove", count_remove)
-    monkeypatch.setattr(LR, "_write_still", count_write)
-    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
->   assert removed == []
-E   AssertionError: assert ['/private/tm...d-still.json'] == []
-E     
-E     Left contains one more item: '/private/tmp/claude-501/pytest-of-zwrose/pytest-1356/test_T3_a_cloud_launch_then_a_0/store/projects/cf7ef1919ddba627/state/cloud-still.json'
-E     Use -v to get more diff
-
-test_launch_report_verbs.py:540: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first
-1 failed in 3.11s
-```
-
-- **Restore.** The inverse Edit (the two added lines removed); quoted from `launcher.py:3367-3368`:
-
-```
-    later = decided[last_cloud + 1 if last_cloud is not None else 0:]
-    if later:
-```
-
-- **Green:**
-
-```
-.                                                                        [100%]
-1 passed in 2.05s
-```
-
-### G20: a new fallback never displaces a higher-ranked stored reminder. Axis: conjunct (keep_higher_stored)
-
-- **Neutralization applied.** In `launch_report.record_still`, `if keep_higher_stored:` became `if False:`, so the keyword is ignored.
-- **Node.** `TLV::test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder`
-- **Red:**
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_ test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder _
-
-    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
->   assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-E   AssertionError: assert {'action': 'w...'unreachable'} == {'action': 'u...reason': None}
-E     
-E     Differing items:
-E     {'reason': 'unreachable'} != {'reason': None}
-E     {'action': 'written'} != {'action': 'unchanged'}
-E     Use -v to get more diff
-
-test_launch_report_verbs.py:569: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder
-1 failed in 2.34s
-```
-
-- **Restore.** The inverse Edit; quoted from `launch_report.py:210-211`:
-
-```
-            if keep_higher_stored:
-                stored = _read_still(path)
-```
-
-- **Green:**
-
-```
-.                                                                        [100%]
-1 passed in 2.16s
+1 passed in 4.67s
 ```

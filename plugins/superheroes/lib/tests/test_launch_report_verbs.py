@@ -1,6 +1,9 @@
 # plugins/superheroes/lib/tests/test_launch_report_verbs.py
 """Conformance: the launcher's `report` and `still` verbs. Every ledger, store and repository is built
-under tmp_path; `_issue_title` is never run for real (tests pass `title_fn`, or patch `subprocess.run`)."""
+under tmp_path; `_issue_title` is never run for real (tests pass `title_fn`, or patch `subprocess.run`),
+and readiness is always injected, never read from a real home directory."""
+import datetime
+import functools
 import json
 import os
 import subprocess
@@ -12,10 +15,16 @@ _LIB = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import cloud_ready as CR  # noqa: E402
+import cloud_setup as CS  # noqa: E402
 import control_plane  # noqa: E402
+import core_md as CM  # noqa: E402
 import launch_ledger as ll  # noqa: E402
+import launch_place as LP  # noqa: E402
 import launch_report as LR  # noqa: E402
 import launcher  # noqa: E402
+import mode_registry  # noqa: E402
+import project_config as PC  # noqa: E402
 
 from test_launch_ledger import (  # noqa: E402
     _declare,
@@ -24,14 +33,37 @@ from test_launch_ledger import (  # noqa: E402
     _reserved,
     _started,
 )
+from test_launch_report import (  # noqa: E402
+    _CORE_FACTS,
+    ACCOUNT,
+    ADVISOR,
+    FUTURE,
+    PAST,
+    SETUP_TEXT_FIX,
+    STAMP,
+    _account_env,
+    _fn,
+    _now,
+    _put,
+    _record,
+    _route,
+)
 
 BATCH = "b-report"
 PHONE = "the phone simulator"
+DAY = datetime.date(2026, 10, 11)
 
 
-def _call(place="local", pointed=True, reason=None, by="setting", need=None):
+def _ts(day):
+    """Noon UTC on that day, as the ledger writes its times."""
+    return datetime.datetime(day.year, day.month, day.day, 12, tzinfo=datetime.timezone.utc).timestamp()
+
+
+def _call(place="local", pointed=True, reason=None, by="setting", need=None, cloud=None,
+          advisor=None, reported=None):
     return {"place": place, "pointedAtCloud": pointed, "by": by, "reason": reason, "need": need,
-            "cloudVersion": None, "advisorVersion": None, "environment": None, "reported": None}
+            "cloudVersion": cloud, "advisorVersion": advisor, "environment": None,
+            "reported": reported}
 
 
 def _titles(repo_root, issue):
@@ -40,7 +72,7 @@ def _titles(repo_root, issue):
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    """A repository, a ledger root and a still-state store root, all under tmp_path."""
+    """A repository, a ledger root and a project store root, all under tmp_path."""
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     store = str(tmp_path / "store")
@@ -51,8 +83,10 @@ def world(tmp_path, monkeypatch):
 
 # Unmeasured — verify before use: the reserved/started record shapes below follow
 # test_launch_ledger_cloud.py; every writer here is checked by `ll.fold` accepting the result.
-def _reserve(repo, launch_id, issue, place="local", premise=None, batch=BATCH):
+def _reserve(repo, launch_id, issue, place="local", premise=None, batch=BATCH, ts=None):
     fields = {"issue": issue}
+    if ts is not None:
+        fields["ts"] = ts
     if place == "cloud":
         fields.update(place="cloud", cloudEnvironment="env_abc", pluginVersion="1.2.3")
     if premise is not None:
@@ -61,8 +95,10 @@ def _reserve(repo, launch_id, issue, place="local", premise=None, batch=BATCH):
     assert result["ok"], result
 
 
-def _start(repo, launch_id, place="local"):
+def _start(repo, launch_id, place="local", ts=None):
     rec = _started(launch_id)
+    if ts is not None:
+        rec["ts"] = ts
     if place == "cloud":
         rec["cloudSessionName"] = "lane-%s" % launch_id
         rec["cloudSessionId"] = "session_01AbCdEf123"
@@ -78,12 +114,12 @@ def _finish(repo, launch_id):
                           evidence="x")["ok"]
 
 
-def _launch(repo, launch_id, issue, place="local", call="auto"):
+def _launch(repo, launch_id, issue, place="local", call="auto", ts=None):
     if call == "auto":
         call = _call(place, pointed=True, reason=None if place == "cloud" else "no-setup")
     premise = None if call is None else {"placeCall": call}
-    _reserve(repo, launch_id, issue, place, premise)
-    _start(repo, launch_id, place)
+    _reserve(repo, launch_id, issue, place, premise, ts=ts)
+    _start(repo, launch_id, place, ts=ts)
 
 
 def _report(repo, **kw):
@@ -94,13 +130,29 @@ def _folds(repo):
     assert ll.fold(ll.read(repo)["records"])["ok"]
 
 
-def _stored(repo, store):
-    name = os.path.basename(LR._still_path(repo, store))
-    for dirpath, _dirs, files in os.walk(store):
-        if name in files:
-            with open(os.path.join(dirpath, name), encoding="utf-8") as fh:
-                return json.load(fh)
-    return None
+def _snapshot(*roots):
+    """Every folder and file under these roots, with each file's bytes."""
+    seen = {}
+    for root in roots:
+        for dirpath, dirs, files in os.walk(root):
+            for name in dirs:
+                seen[os.path.join(dirpath, name)] = None
+            for name in files:
+                with open(os.path.join(dirpath, name), "rb") as fh:
+                    seen[os.path.join(dirpath, name)] = fh.read()
+    return seen
+
+
+def _real_world(tmp_path, monkeypatch, **over):
+    """A repository whose cloud is set up and switched on, with the real readiness reader's inputs."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    store = str(tmp_path / "store")
+    assert _declare(repo, BATCH, 4)["ok"]
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    _record(repo, store, **over)
+    assert PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT)["action"] == "written"
+    return repo, store, _account_env(tmp_path)
 
 
 # ---------------------------------------------------------------- I1: exactly the builds that launched
@@ -119,13 +171,11 @@ def test_I1_one_line_per_started_issue_in_first_reservation_order(world):
 
 
 def test_I1_a_refused_launch_is_never_listed_E5(world):
-    repo, store = world
+    repo, _store = world
     _reserve(repo, "r", 33, premise={"placeCall": _call()})
     _refuse(repo, "r")
     _folds(repo)
-    assert _report(repo) == {"ok": True, "report": None, "still": {"action": "unchanged", "reason": None},
-                             "lanes": 0}
-    assert _stored(repo, store) is None
+    assert _report(repo) == {"ok": True, "report": None, "lanes": 0}
 
 
 def test_I1_a_refused_launch_beside_a_started_one_is_not_counted(world):
@@ -210,7 +260,7 @@ def test_I2_a_matching_place_call_prints_its_reason(world):
 ], ids=["no-premise", "premise-not-dict", "no-placeCall", "placeCall-not-dict", "place-disagrees",
         "pointed-not-bool"])
 def test_I2_E7_E8_an_unusable_place_call_is_synthesized_without_a_reason(world, premise):
-    repo, store = world
+    repo, _store = world
     _reserve(repo, "a", 11, premise=premise)
     _start(repo, "a")
     _reserve(repo, "b", 22, "cloud", premise)
@@ -218,12 +268,10 @@ def test_I2_E7_E8_an_unusable_place_call_is_synthesized_without_a_reason(world, 
     _folds(repo)
     got = _report(repo)
     # The local lane is synthesized pointed at nothing and the cloud lane as a cloud build: neither
-    # carries a reason, so the report names none and the still state records none.
+    # carries a reason, so the report names none.
     assert got["lanes"] == 2
     assert got["report"] == ("Launched 2 builds.\nIn the cloud: #22 Title 22.\nOn your machine:\n"
                              "- #11 Title 11.")
-    assert got["still"] == {"action": "unchanged", "reason": None}
-    assert _stored(repo, store) is None
 
 
 def test_I2_a_synthesized_local_call_alone_prints_no_report(world):
@@ -231,8 +279,7 @@ def test_I2_a_synthesized_local_call_alone_prints_no_report(world):
     _reserve(repo, "a", 11, premise={})
     _start(repo, "a")
     got = _report(repo)
-    assert got == {"ok": True, "report": None, "still": {"action": "unchanged", "reason": None},
-                   "lanes": 1}
+    assert got == {"ok": True, "report": None, "lanes": 1}
 
 
 # ---------------------------------------------------------------- the ledger edges
@@ -242,7 +289,7 @@ def test_E1_a_missing_ledger_is_an_ok_empty_report(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     assert launcher.launch_report_for_batch(repo, BATCH, title_fn=_titles) == {
-        "ok": True, "report": None, "still": None, "lanes": 0}
+        "ok": True, "report": None, "lanes": 0}
 
 
 def test_E2_a_torn_ledger_is_refused(world):
@@ -279,8 +326,7 @@ def test_E4_a_batch_with_no_launches_is_an_ok_empty_report(world):
     repo, _store = world
     for batch in (BATCH, "never-seen"):
         assert launcher.launch_report_for_batch(repo, batch, title_fn=_titles) == {
-            "ok": True, "report": None, "still": {"action": "unchanged", "reason": None},
-            "lanes": 0}
+            "ok": True, "report": None, "lanes": 0}
 
 
 # ---------------------------------------------------------------- titles
@@ -335,35 +381,148 @@ def test_the_default_title_reader_is_issue_title(world, monkeypatch):
         "Launched 1 build.\nIn the cloud: #415 Phone checkout layout.")
 
 
-# ---------------------------------------------------------------- the still state follows the report
+# ---------------------------------------------------------------- the report has no stored state
 
 
-def test_E11_a_cloud_build_beside_a_local_not_ready_fallback_clears_the_still_state(world):
-    repo, store = world
+def test_B11_the_report_result_has_no_still_key(world):
+    repo, _store = world
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    got = _report(repo)
-    assert got["still"] == {"action": "written", "reason": "no-setup"}
-    assert _stored(repo, store)["reason"] == "no-setup"
     _launch(repo, "b", 22, "cloud")
     got = _report(repo)
-    assert got["still"] == {"action": "cleared", "reason": None}
-    assert _stored(repo, store) is None
+    assert set(got) == {"ok", "report", "lanes"}
+    assert got["lanes"] == 2
 
 
-def test_a_finished_cloud_build_before_a_local_fallback_does_not_hide_the_fallback(world):
-    repo, store = world
+def test_B10_one_store_report_and_still_write_nothing(world):
+    repo, _store = world
+    state = os.path.join(mode_registry.project_store_dir(repo, None), "state")
+    os.makedirs(state)
+    with open(os.path.join(state, "stale-reminder.json"), "wb") as fh:
+        fh.write(b"left behind by an older build")
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
+    before = _snapshot(mode_registry.project_store_dir(repo, None), repo)
+    assert _report(repo)["report"] is not None
+    got = LR.still_check(repo, readiness_fn=_fn(ready=False, reason="no-setup"))
+    assert got["line"].startswith("Still on your machine\n") and got["refused"] is None
+    assert _snapshot(mode_registry.project_store_dir(repo, None), repo) == before
+
+
+# ---------------------------------------------------------------- the line comes from the ledger
+
+
+def _line(repo, **kw):
+    return LR.still_line(repo, readiness_fn=_fn(**kw))
+
+
+def _day_launch(repo, launch_id, issue, day, call):
+    _launch(repo, launch_id, issue, "local", call, ts=_ts(day))
+
+
+def test_B1_no_deciding_launch_means_no_line_and_readiness_is_not_read(world):
+    repo, _store = world
+    asked = []
+
+    def readiness(cwd, reported=None, root=None, env=None):
+        asked.append(cwd)
+        return _now()
+
+    assert LR.still_check(repo, readiness_fn=readiness) == {"line": None, "refused": None}
+    _launch(repo, "a", 11, "local", _call(pointed=False, reason=None))
+    _launch(repo, "b", 22, "local", _call(reason="local-word"))
+    _launch(repo, "c", 33, "local", _call(reason="needs", need=PHONE))
+    _launch(repo, "d", 44, "local", None)
+    _reserve(repo, "r", 55, premise={"placeCall": _call(reason="no-setup")})
+    _refuse(repo, "r")
+    _reserve(repo, "n", 66, premise={"placeCall": _call(reason="no-setup")})
+    assert LR.still_check(repo, readiness_fn=readiness) == {"line": None, "refused": None}
+    assert asked == []
+
+
+def test_B1_readiness_is_read_once_however_many_fallbacks_stand(world):
+    repo, _store = world
+    asked = []
+
+    def readiness(cwd, reported=None, root=None, env=None):
+        asked.append(cwd)
+        return _now(ready=False, reason="no-setup")
+
+    for index, reason in enumerate(("no-setup", "unreachable", "version")):
+        _launch(repo, "l%d" % index, 10 + index, "local", _call(reason=reason))
+    assert LR.still_line(repo, readiness_fn=readiness) is not None
+    assert len(asked) == 1
+
+
+def test_R_board_the_still_line_is_byte_exact(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="version", cloud="0.41.0", advisor="0.42.0"))
+    assert _line(repo, ready=False, reason="version") == (
+        "Still on your machine\n"
+        "The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.")
+
+
+@pytest.mark.parametrize("code", LP.NOT_READY_CODES)
+def test_R_eight_every_still_line_is_drawn_from_the_table(world, code):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason=code, cloud="0.41.0", advisor="0.42.0"))
+    parts = {key: (None if text is None else LP._fill(text, "0.41.0", "0.42.0"))
+             for key, text in LP.REASONS[code].items()}
+    assert _line(repo, ready=False, reason=code) == (
+        "Still on your machine\n%s %s" % (parts["words"], parts["short"]))
+
+
+def test_B3_a_confirmed_cloud_launch_after_a_fallback_clears_the_line(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _line(repo, ready=False, reason="no-setup") is not None
+    _launch(repo, "b", 22, "cloud")
+    assert _line(repo, ready=False, reason="no-setup") is None
+
+
+def test_B3_an_unconfirmed_cloud_launch_after_a_fallback_leaves_the_line(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _reserve(repo, "b", 22, "cloud", {"placeCall": _call("cloud", reason=None)})
+    rec = _started("b")
+    rec.update(cloudSessionName="lane-b", cloudSessionUnconfirmed=True)
+    assert ll.append_under_lock(repo, rec)["ok"]
+    _folds(repo)
+    got = _report(repo)
+    assert got["lanes"] == 1 and "#22" not in got["report"]
+    assert _line(repo, ready=False, reason="no-setup").startswith("Still on your machine\nThis project")
+
+
+def test_B3_a_fallback_after_a_cloud_launch_shows_its_line(world):
+    repo, _store = world
     _launch(repo, "a", 11, "cloud")
     _finish(repo, "a")
     _launch(repo, "b", 22, "local", _call(reason="unreachable"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
-    assert _stored(repo, store)["reason"] == "unreachable"
+    assert _line(repo, ready=False, reason="unreachable").startswith("Still on your machine\n")
+
+
+def test_B3_only_the_fallbacks_after_the_last_cloud_launch_count(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _launch(repo, "b", 22, "cloud")
+    _launch(repo, "c", 33, "local", _call(reason="unreachable"))
+    line = _line(repo, ready=False, reason="no-setup")
+    assert "couldn't be reached" in line and "no cloud setup" not in line
+
+
+def test_an_earlier_cloud_launch_of_a_retried_issue_still_clears_the_old_line(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _launch(repo, "b", 22, "cloud")
+    _finish(repo, "b")
+    _launch(repo, "c", 22, "local", _call(reason=None, pointed=False))
+    assert _line(repo, ready=False, reason="no-setup") is None
 
 
 def test_overlapping_launches_are_ordered_by_when_they_started_not_when_they_reserved(world):
-    repo, store = world
+    repo, _store = world
     premise = {"placeCall": _call(reason="unreachable")}
     # the local fallback reserves first, the cloud lane reserves second and runs to the end, and
-    # only then does the fallback spawn: the fallback is the newer launch and its reminder stands
+    # only then does the fallback spawn: the fallback is the newer launch and its line stands
     result = ll.reserve(repo, _reserved("a", BATCH, ["x"], repo, issue=22, premise=premise))
     assert result["ok"], result
     result = ll.reserve(repo, _reserved(
@@ -374,314 +533,271 @@ def test_overlapping_launches_are_ordered_by_when_they_started_not_when_they_res
     _finish(repo, "b")
     _start(repo, "a")
     _folds(repo)
-    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
-    assert _stored(repo, store)["reason"] == "unreachable"
+    assert _line(repo, ready=False, reason="unreachable").startswith("Still on your machine\n")
 
 
-def test_an_earlier_cloud_launch_of_a_retried_issue_still_clears_the_old_reminder(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    _launch(repo, "b", 22, "cloud")
-    _finish(repo, "b")
-    _launch(repo, "c", 22, "local", _call(reason=None, pointed=False))
-    assert _report(repo)["still"] == {"action": "cleared", "reason": None}
-    assert _stored(repo, store) is None
-
-
-def test_replaying_an_older_batch_report_does_not_undo_a_newer_batchs_reminder(world):
-    repo, store = world
+def test_the_line_is_the_same_whichever_batch_a_fallback_launched_in(world):
+    repo, _store = world
     assert _declare(repo, "b-newer", 4)["ok"]
     _launch(repo, "a", 11, "cloud")
-    _finish(repo, "a")
     _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-newer")
     _start(repo, "b")
-    newer = launcher.launch_report_for_batch(repo, "b-newer", title_fn=_titles)
-    assert newer["still"] == {"action": "written", "reason": "unreachable"}
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _stored(repo, store)["reason"] == "unreachable"
-
-
-def test_reporting_an_older_batch_first_still_records_a_newer_batchs_launch(world):
-    repo, store = world
-    assert _declare(repo, "b-newer", 4)["ok"]
-    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="no-setup")}, batch="b-newer")
-    _start(repo, "b")
-    # the newer batch has not reported; "no-setup" outranks "unreachable", so only its launch can supply it
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    assert _stored(repo, store)["reason"] == "no-setup"
-
-
-@pytest.mark.parametrize("order", [
-    ("x", "y", "z"), ("x", "z", "y"), ("y", "x", "z"), ("y", "z", "x"), ("z", "x", "y"), ("z", "y", "x"),
-])
-def test_the_reminder_is_the_same_whichever_order_the_batches_report(world, order):
-    repo, store = world
-    for batch in ("x", "y", "z"):
-        assert _declare(repo, "b-" + batch, 4)["ok"]
-    _reserve(repo, "lx", 11, "cloud", {"placeCall": _call("cloud", reason=None)}, batch="b-x")
-    _start(repo, "lx", "cloud")
-    _reserve(repo, "ly", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-y")
-    _start(repo, "ly")
-    _reserve(repo, "lz", 33, "local", {"placeCall": _call(reason="no-setup")}, batch="b-z")
-    _start(repo, "lz")
-    for batch in order:
-        assert launcher.launch_report_for_batch(repo, "b-" + batch, title_fn=_titles)["ok"] is True
-    # the cloud launch clears what came before it; the two fallbacks after it keep the one that ranks first
-    day = launcher._launch_day(ll.fold(ll.read(repo)["records"])["launches"]["lz"])
-    assert _stored(repo, store) == {
-        "schema": LR._STILL_SCHEMA, "reason": "no-setup", "by": "setting", "cloudVersion": None,
-        "advisorVersion": None, "reported": None, "observedOn": day.isoformat()}
-
-
-def test_replaying_the_same_batch_report_keeps_the_day_it_first_observed(world, monkeypatch):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    first = _report(repo)
-    assert first["still"] == {"action": "written", "reason": "no-setup"}
-    observed = _stored(repo, store)["observedOn"]
-    monkeypatch.setattr(LR, "_today", lambda given: given or LR.datetime.date(2001, 1, 1))
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _stored(repo, store)["observedOn"] == observed
-
-
-def test_an_unconfirmed_cloud_session_is_not_reported_and_leaves_the_still_state(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    _reserve(repo, "b", 22, "cloud", {"placeCall": _call("cloud", reason=None)})
-    rec = _started("b")
-    rec.update(cloudSessionName="lane-b", cloudSessionUnconfirmed=True)
-    assert ll.append_under_lock(repo, rec)["ok"]
-    _folds(repo)
-    got = _report(repo)
-    assert got["lanes"] == 1
-    assert "#22" not in got["report"] and "In the cloud" not in got["report"]
-    assert got["still"] == {"action": "unchanged", "reason": None}
-    assert _stored(repo, store)["reason"] == "no-setup"
-
-
-# ---------------------------------------------------------------- each launch is applied once, through a cursor
-
-
-def _still_bytes(repo):
-    try:
-        with open(LR._still_path(repo, None), "rb") as fh:
-            return fh.read()
-    except FileNotFoundError:
-        return None
-
-
-def _cursor_bytes(repo):
-    try:
-        with open(LR._cursor_path(repo, None), "rb") as fh:
-            return fh.read()
-    except FileNotFoundError:
-        return None
-
-
-def _started_at(repo, launch_id):
-    return launcher._started_indexes(ll.read(repo)["records"])[launch_id]
-
-
-def _clear_as_fixed(repo):
-    """What `still` does once the condition behind the stored reason is fixed."""
-    fixed = {"ready": True, "setting": True, "checkedAt": None,
-             "conditions": {name: True for name in LR.cloud_ready.CONDITION_ORDER}}
-    assert LR.still_check(repo, readiness_fn=lambda *a, **k: fixed) == {"line": None, "refused": None}
-    assert _still_bytes(repo) is None
-
-
-def test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again(world):
-    repo, store = world
-    assert _declare(repo, "b-other", 4)["ok"]
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-other")
-    _start(repo, "b")
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    _clear_as_fixed(repo)
-    for batch in (BATCH, "b-other", BATCH):
-        got = launcher.launch_report_for_batch(repo, batch, title_fn=_titles)
-        assert got["still"] == {"action": "unchanged", "reason": None}
-        assert _stored(repo, store) is None
-
-
-def test_T2_a_newer_launchs_fallback_is_written_and_the_cleared_reason_does_not_return(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    _clear_as_fixed(repo)
-    _launch(repo, "b", 22, "local", _call(reason="version"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "version"}
-    assert _stored(repo, store)["reason"] == "version"
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _stored(repo, store)["reason"] == "version"
-
-
-def test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first(world, monkeypatch):
-    repo, store = world
-    _launch(repo, "a", 11, "cloud")
-    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
-    removed, written = [], []
-    real_remove, real_write = LR._remove, LR._write_still
-
-    def count_remove(path):
-        removed.append(path)
-        return real_remove(path)
-
-    def count_write(path, state):
-        written.append(path)
-        return real_write(path, state)
-
-    monkeypatch.setattr(LR, "_remove", count_remove)
-    monkeypatch.setattr(LR, "_write_still", count_write)
-    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
-    assert removed == []
-    assert len(written) == 1
-    assert _stored(repo, store)["reason"] == "unreachable"
-
-
-def test_T3b_a_cloud_launch_after_the_fallbacks_clears_once_and_writes_nothing(world, monkeypatch):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    _launch(repo, "b", 22, "cloud")
-    removed, written = [], []
-    real_remove = LR._remove
-
-    def count_remove(path):
-        removed.append(path)
-        return real_remove(path)
-
-    monkeypatch.setattr(LR, "_remove", count_remove)
-    monkeypatch.setattr(LR, "_write_still", lambda path, state: written.append(path))
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert len(removed) == 1
-    assert written == []
-
-
-def test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    before = _still_bytes(repo)
-    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _still_bytes(repo) == before
-    assert LR.read_still_cursor(repo) == _started_at(repo, "b")
-
-
-def test_T4b_a_new_higher_ranked_fallback_replaces_a_stored_lower_ranked_reminder(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
-    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    assert _stored(repo, store)["reason"] == "no-setup"
-
-
-@pytest.mark.parametrize("text", [
-    "not json", "[]", '{"schema": "cloud-still-cursor/1"}',
-    '{"schema": "cloud-still-cursor/1", "applied": "1"}',
-    '{"schema": "cloud-still-cursor/1", "applied": -5}',
-])
-def test_T5_an_unreadable_cursor_refuses_and_touches_neither_file_E3(world, text):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    assert _report(repo)["still"]["action"] == "written"
-    with open(LR._cursor_path(repo, None), "w", encoding="utf-8") as fh:
-        fh.write(text)
-    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
-    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "refused", "reason": "still-cursor-unreadable"}
-    assert _still_bytes(repo) == still_before
-    assert _cursor_bytes(repo) == cursor_before
-
-
-def test_T5_a_cursor_that_cannot_be_read_refuses_and_leaves_the_reminder(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    assert _report(repo)["still"]["action"] == "written"
-    still_before = _still_bytes(repo)
-    os.remove(LR._cursor_path(repo, None))
-    os.mkdir(LR._cursor_path(repo, None))
-    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "refused", "reason": "still-cursor-unreadable"}
-    assert _still_bytes(repo) == still_before
-
-
-@pytest.mark.parametrize("beyond", [0, 1, 50])
-def test_T5_a_cursor_at_or_beyond_the_record_count_resets_and_applies_from_the_start_E4(world, beyond):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert LR.write_still_cursor(repo, len(ll.read(repo)["records"]) + beyond) is True
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    assert LR.read_still_cursor(repo) == _started_at(repo, "a")
-
-
-def test_T6_replaying_a_report_applies_nothing(world):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    _launch(repo, "b", 22, "cloud")
     _launch(repo, "c", 33, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
-    for _ in range(2):
-        assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _still_bytes(repo) == still_before
-    assert _cursor_bytes(repo) == cursor_before
+    for batch in (BATCH, "b-newer"):
+        assert launcher.launch_report_for_batch(repo, batch, title_fn=_titles)["ok"] is True
+    assert "no cloud setup" in _line(repo, ready=False, reason="no-setup")
 
 
-def test_E1_E2_a_report_with_no_deciding_launch_after_the_cursor_changes_neither_file(world):
-    repo, store = world
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _cursor_bytes(repo) is None and _still_bytes(repo) is None
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"]["action"] == "written"
-    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
-    _launch(repo, "b", 22, "local", _call(reason=None, pointed=False))
-    _launch(repo, "c", 33, "local", _call(reason="local-word"))
-    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
-    assert _still_bytes(repo) == still_before
-    assert _cursor_bytes(repo) == cursor_before
+# ---------------------------------------------------------------- the clearing legs
 
 
-def test_E5_a_refused_reminder_write_does_not_advance_the_cursor(world, monkeypatch):
-    repo, store = world
-    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-
-    def boom(path, state):
-        raise OSError("disk full")
-
-    with monkeypatch.context() as patched:
-        patched.setattr(LR, "_write_still", boom)
-        assert _report(repo)["still"] == {"action": "refused", "reason": "write-failed"}
-    assert _cursor_bytes(repo) is None
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
-    assert LR.read_still_cursor(repo) == _started_at(repo, "a")
+def test_B4_a_setting_directed_fallback_clears_once_the_setting_reads_off(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable", by="setting"))
+    assert _line(repo, ready=False, reason="unreachable", setting=True) is not None
+    assert _line(repo, ready=False, reason="unreachable", setting=False) is None
 
 
-def test_E6_an_unreadable_stored_reminder_is_neither_replaced_nor_removed_and_the_cursor_waits(
-        world, monkeypatch):
-    repo, store = world
+def test_B4_a_setting_directed_fallback_stays_when_the_setting_is_unreadable(world, monkeypatch):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup", by="setting"))
+
+    def unreadable(*args, **kwargs):
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(PC, "get_item", unreadable)
+    assert _line(repo, ready=False, reason="no-setup", setting=False) is not None
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "directory"])
+def test_B4_a_profile_the_reader_could_not_read_does_not_clear_the_line(world, damage):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup", by="setting"))
+    path = CM.core_path(repo, None)
+    if damage == "corrupt":
+        _put(path, "not a profile\n")
+    else:
+        os.makedirs(path)
+    assert PC.get_item(repo, PC.CLOUD_BUILDS_SLUG, root=None)["effective"] is False
+    assert _line(repo, ready=False, reason="no-setup", setting=False) is not None
+
+
+def test_B4_a_word_directed_fallback_stays_when_the_setting_is_off(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable", by="word"))
+    assert _line(repo, ready=False, reason="unreachable", setting=False) is not None
+
+
+@pytest.mark.parametrize("code,condition", [("no-setup", "setup"), ("pass-lapsed", "passLive"),
+                                            ("calibration", "calibration"), ("version", "version")])
+def test_B5_a_condition_this_machine_can_read_clears_the_line_once_it_holds(world, code, condition):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason=code, cloud="1.0.0", advisor="2.0.0"))
+    stands = _now(ready=False, reason=code)
+    assert stands["conditions"][condition] is False
+    assert LR.still_line(repo, readiness_fn=lambda *a, **k: stands) is not None
+    other = {name: (name != condition) for name in CR.CONDITION_ORDER}
+    assert _line(repo, ready=False, reason=code, conditions=other) is not None
+    fixed = dict(stands, conditions=dict(stands["conditions"], **{condition: True}))
+    assert LR.still_line(repo, readiness_fn=lambda *a, **k: fixed) is None
+
+
+@pytest.mark.parametrize("code,reported", [
+    ("no-pass", {"noPass": True}), ("unreachable", {"unreachable": True}),
+    ("version", {"pluginVersion": "0.41.0"}),
+])
+def test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready(
+        world, code, reported):
+    repo, _store = world
+    _day_launch(repo, "a", 11, DAY, _call(reason=code, cloud="0.41.0", advisor="0.42.0",
+                                          reported=reported))
+    ready = _now(ready=True)
+    for checked in (None, "garbage", "2026-10-10", "2026-10-11"):
+        assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(ready, checkedAt=checked)
+                             ) is not None, (code, checked)
+    after = "2026-10-12"
+    assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(ready, checkedAt=after)) is None
+    not_ready = _now(ready=False, reason=code, checked=after)
+    assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(not_ready)) is not None
+
+
+def test_E4_a_fallback_with_no_start_time_is_never_fixed_by_a_later_check(world):
+    repo, _store = world
+    # a timestamp no calendar holds: the ledger takes it, and the launch has no start day
+    _launch(repo, "a", 11, "local", _call(reason="no-pass", reported={"noPass": True}), ts=1e30)
+    assert LR.launch_day(ll.fold(ll.read(repo)["records"])["launches"]["a"]) is None
+    for checked in ("2026-10-12", "2099-01-01"):
+        assert LR.still_line(repo, readiness_fn=_fn(ready=True, checked=checked)) is not None
+
+
+def test_B6_a_report_then_a_same_day_passed_check_leaves_the_line_standing(tmp_path, monkeypatch):
+    repo, store, env = _real_world(tmp_path, monkeypatch, checked_at=DAY.isoformat())
+    call = _route(repo, store, env, premise={"reportedCloud": {"noPass": True}})
+    assert call["reason"] == "no-pass"
+    _day_launch(repo, "a", 11, DAY, call)
+    real = functools.partial(CR.readiness, advisor_version=ADVISOR, today=DAY,
+                             stamp_fn=lambda cwd, root: STAMP, env=env)
+    assert LR.still_line(repo, root=store, readiness_fn=real) == (
+        "Still on your machine\nThere is no reviewer pass in the cloud environment. "
+        'Paste a pass into the environment and say "check again" to fix it.')
+    _record(repo, store, checked_at="2026-10-12")
+    assert LR.still_line(repo, root=store, readiness_fn=real) is None
+
+
+def test_B5_a_lapsed_pass_is_fixed_by_a_fresh_one_with_real_readiness(tmp_path, monkeypatch):
+    repo, store, env = _real_world(tmp_path, monkeypatch, pass_lapses=PAST)
+    call = _route(repo, store, env)
+    assert call["reason"] == "pass-lapsed"
+    _day_launch(repo, "a", 11, DAY, call)
+    real = functools.partial(CR.readiness, advisor_version=ADVISOR, today=DAY,
+                             stamp_fn=lambda cwd, root: STAMP, env=env)
+    assert LR.still_line(repo, root=store, readiness_fn=real) == (
+        'Still on your machine\nThe reviewer pass has lapsed. Paste a fresh pass and say '
+        '"check again" to fix it.')
+    assert CS.confirm_pass(repo, ACCOUNT, FUTURE, root=store)["action"] == "written"
+    assert LR.still_line(repo, root=store, readiness_fn=real) is None
+
+
+# ---------------------------------------------------------------- which fallback shows
+
+
+def test_B7_two_unfixed_fallbacks_show_the_higher_ranked_reason(world):
+    repo, _store = world
     _launch(repo, "a", 11, "local", _call(reason="unreachable"))
-    assert _report(repo)["still"]["action"] == "written"
-    path = LR._still_path(repo, None)
-    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
     _launch(repo, "b", 22, "local", _call(reason="no-setup"))
-    real_open = open
+    line = _line(repo, ready=False, reason="no-setup")
+    assert line.startswith("Still on your machine\nThis project has no cloud setup")
 
-    def deny(file, *args, **kwargs):
-        if str(file) == path:
-            raise PermissionError("not readable")
-        return real_open(file, *args, **kwargs)
 
-    with monkeypatch.context() as patched:
-        patched.setattr("builtins.open", deny)
-        got = _report(repo)
-    assert got["still"] == {"action": "refused", "reason": LR.STILL_UNREADABLE}
-    assert _still_bytes(repo) == still_before
-    assert _cursor_bytes(repo) == cursor_before
+def test_B7_a_higher_ranked_fallback_that_is_fixed_is_skipped(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _launch(repo, "b", 22, "local", _call(reason="version", cloud="0.41.0", advisor="0.42.0"))
+    got = _line(repo, ready=False, reason="version")
+    assert got == ("Still on your machine\n"
+                   "The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.")
+
+
+def test_B7_every_fallback_fixed_means_no_line(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _launch(repo, "b", 22, "local", _call(reason="version", cloud="0.41.0", advisor="0.42.0"))
+    assert _line(repo, ready=True) is None
+
+
+def test_B8_a_failed_check_fallback_carries_the_recheck_step(world):
+    repo, _store = world
+    recheck = SETUP_TEXT_FIX + ' Then say "check again".'
+    _launch(repo, "a", 11, "local", dict(_call(reason="calibration"), failedCheck=["calibration"]))
+    assert _line(repo, ready=False, reason="calibration").endswith(recheck)
+
+
+@pytest.mark.parametrize("failed_first", [True, False])
+def test_B8_E6_of_two_fallbacks_with_one_reason_the_failed_check_one_shows(world, failed_first):
+    repo, _store = world
+    plain = _call(reason="calibration")
+    failed = dict(_call(reason="calibration", by="word"), failedCheck=["calibration"])
+    for index, call in enumerate([failed, plain] if failed_first else [plain, failed]):
+        _launch(repo, "l%d" % index, 10 + index, "local", call)
+    assert _line(repo, ready=False, reason="calibration").endswith(
+        SETUP_TEXT_FIX + ' Then say "check again".')
+
+
+def test_E6_of_two_fallbacks_with_one_reason_the_latest_started_shows(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="version", cloud="0.40.0", advisor="0.42.0"))
+    _launch(repo, "b", 22, "local", _call(reason="version", cloud="0.41.0", advisor="0.42.0"))
+    assert "The cloud's plugin is 0.41.0 and mine is 0.42.0." in _line(repo, ready=False, reason="version")
+
+
+def test_E6_a_word_directed_fallback_beside_a_setting_directed_one_stays_when_the_setting_is_off(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="calibration", by="setting"))
+    _launch(repo, "b", 22, "local", _call(reason="calibration", by="word"))
+    assert _line(repo, ready=False, reason="calibration", setting=False) is not None
+
+
+def test_E6_a_reported_version_beside_a_setup_record_fallback_still_needs_a_later_check(world):
+    repo, _store = world
+    _day_launch(repo, "a", 11, DAY, _call(reason="version", cloud="0.41.0", advisor="0.42.0"))
+    _day_launch(repo, "b", 22, DAY, _call(reason="version", cloud="0.41.0", advisor="0.42.0",
+                                          reported={"pluginVersion": "0.41.0"}))
+    same_day = _now(ready=True, checked=DAY.isoformat())
+    assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(same_day)) is not None
+    later = _now(ready=True, checked="2026-10-12")
+    assert LR.still_line(repo, readiness_fn=lambda *a, **k: dict(later)) is None
+
+
+def test_the_line_for_an_unreproduced_version_uses_the_launchs_own_versions(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="version", cloud=None, advisor="0.42.0"))
+    assert _line(repo, ready=False, reason="version", cloud="9.9.9", advisor="8.8.8") == (
+        "Still on your machine\nThe cloud's plugin is unknown and mine is 0.42.0. "
+        "Paste the new setup text to fix it.")
+
+
+def test_E5_a_readiness_that_raises_leaves_the_line_standing(world):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("readiness exploded")
+
+    assert LR.still_line(repo, readiness_fn=boom).startswith(
+        "Still on your machine\nThis project has no cloud setup")
+
+
+# ---------------------------------------------------------------- the ledger edges
+
+
+def test_E1_an_empty_ledger_gives_no_line(world):
+    repo, _store = world
+    open(ll.ledger_path(repo)["path"], "wb").close()
+    assert LR.still_check(repo, readiness_fn=_fn()) == {"line": None, "refused": None}
+
+
+def test_E2_a_missing_ledger_gives_no_line(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    assert ll.read(repo)["state"] == "missing"
+    assert LR.still_check(repo, readiness_fn=_fn()) == {"line": None, "refused": None}
+
+
+def _spoil(repo, how):
+    path = ll.ledger_path(repo)["path"]
+    with open(path, "ab") as fh:
+        if how == "torn":
+            fh.write(b'{"event": "reserved", "launchId"')
+        elif how == "corrupt":
+            fh.write(b"not json\n")
+        else:
+            fh.write((json.dumps({"event": "started", "launchId": "ghost", "ts": 1.0,
+                                  "schema": ll.SCHEMA, "attempt": 1, "pid": 999999, "logPath": "l",
+                                  "errPath": "e"}) + "\n").encode("utf-8"))
+
+
+@pytest.mark.parametrize("how", ["torn", "corrupt", "fold"])
+def test_B9_E3_an_unreadable_ledger_gives_the_refusal(world, how):
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _spoil(repo, how)
+    assert LR.still_check(repo, readiness_fn=_fn(ready=False, reason="no-setup")) == {
+        "line": None, "refused": "still-ledger-unreadable"}
+    assert LR.still_line(repo, readiness_fn=_fn(ready=False, reason="no-setup")) is None
+
+
+def test_still_check_never_raises_without_a_repository_or_with_a_reader_that_breaks(
+        tmp_path, monkeypatch):
+    _ledger_env(tmp_path, monkeypatch)
+    plain = str(tmp_path / "not-a-repository")
+    os.mkdir(plain)
+    assert LR.still_line(plain, readiness_fn=_fn()) is None
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("ledger reader exploded")
+
+    monkeypatch.setattr(ll, "read", boom)
+    assert LR.still_check(plain, readiness_fn=_fn()) == {"line": None, "refused": None}
 
 
 # ---------------------------------------------------------------- the CLI
@@ -693,8 +809,8 @@ def test_cli_report_prints_the_json_and_exits_zero(world, monkeypatch, capsys):
     monkeypatch.setattr(launcher, "_issue_title", lambda repo_root, issue: "Phone checkout layout")
     assert launcher.main(["report", "--repo-root", repo, "--batch", BATCH]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is True and out["lanes"] == 1
-    assert out["report"] == "Launched 1 build.\nIn the cloud: #11 Phone checkout layout."
+    assert out == {"ok": True, "report": "Launched 1 build.\nIn the cloud: #11 Phone checkout layout.",
+                   "lanes": 1}
 
 
 def test_cli_report_on_a_refused_ledger_exits_one(world, capsys):
@@ -711,8 +827,7 @@ def test_cli_still_prints_the_line_or_null_and_exits_zero(world, monkeypatch, ca
     assert launcher.main(["still", "--repo-root", repo]) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "line": None}
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"]["action"] == "written"
-    monkeypatch.setattr(LR.cloud_ready, "readiness", lambda *a, **k: {
+    monkeypatch.setattr(CR, "readiness", lambda *a, **k: {
         "ready": False, "setting": True, "conditions": {"setup": False}, "checkedAt": None})
     assert launcher.main(["still", "--repo-root", repo]) == 0
     out = json.loads(capsys.readouterr().out)
@@ -720,20 +835,9 @@ def test_cli_still_prints_the_line_or_null_and_exits_zero(world, monkeypatch, ca
     assert out["line"].startswith("Still on your machine\n")
 
 
-def test_cli_still_names_a_state_file_it_cannot_read_and_keeps_it(world, monkeypatch, capsys):
+def test_B9_cli_still_on_an_unreadable_ledger_refuses_and_exits_one(world, capsys):
     repo, _store = world
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
-    assert _report(repo)["still"]["action"] == "written"
-    path = LR._still_path(repo, None)
-    real_open = open
-
-    def deny(file, *args, **kwargs):
-        if str(file) == path:
-            raise PermissionError("not readable")
-        return real_open(file, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.open", deny)
+    _spoil(repo, "corrupt")
     assert launcher.main(["still", "--repo-root", repo]) == 1
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": LR.STILL_UNREADABLE}
-    monkeypatch.undo()
-    assert os.path.exists(path)
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "still-ledger-unreadable"}
