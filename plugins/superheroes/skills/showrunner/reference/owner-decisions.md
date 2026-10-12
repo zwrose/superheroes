@@ -639,7 +639,8 @@ carry them forward unchanged.
 
 **Three batches, always in this order.** **Batch 1 holds what blocks work**: only what blocks the
 advisor's own next action, and **never a new-issue filing, which never blocks**. **Batch 2 holds the
-decisions not tied to one PR.** **Batch 3 holds one sheet per PR.**
+decisions not tied to one PR.** **Batch 3 holds one sheet per PR.** **Batch 1 goes first and alone:
+the advisor stops for its rulings before it delivers batch 2.**
 
 **Batch 1 goes in the chat and at the top of the index**, and the chat message links to the index.
 The index and the PR sheets are published on the plugin's shared review template. Their data shape,
@@ -657,7 +658,7 @@ the same batch-1 question and they disagree, it acts on neither and asks the own
 If it already acted on the first answer it read before the second arrived, it stops what that answer
 unblocked, says what it already did, and asks.
 
-**Batch 2 comes in the chat**, as soon as the batch-1 rulings land. The advisor **executes what batch
+**Batch 2 comes in the chat**, and only once the batch-1 rulings land, as soon as they do. The advisor **executes what batch
 1 unblocked alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split
 exists at all, bounded by the section below. **No batch-2 item concerns one specific PR.** An item
 about one PR goes on that PR's sheet, or into batch 1 when it blocks work.
@@ -699,8 +700,12 @@ chat answer in its place.
   verdict and the commit the sheet described.
 - An answer that sets a rule for later work, such as a permanent acceptance, an approved calibration
   change, or a ceded call, is recorded in Canon by Canon's write procedure
-  ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)). Every other answer stays
-  on the sheet and the PR's receipt.
+  ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)). Such a ruling is handled
+  as a ruling the advisor receives outside an open pull request it is working on: it is committed to
+  the branch of the next pull request the advisor opens, and never to the PR whose sheet carried it
+  before that PR merges, because a commit there moves the PR's head and starts its verdict over. A
+  ruling from a sheet whose PR was sent back still holds, and is written the same way. Every other
+  answer stays on the sheet and the PR's receipt.
 
 **Every sitting opens or closes with the "what I decided for you" recap.** One line per craft call
 the advisor has decided under the standing order since the last sitting — **what it was, what was
@@ -791,7 +796,7 @@ still appends.
 item.
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
-(1 - a, 2 - b); batch 1 = what blocks work (never new-issue filings), in the chat and at the top
+(1 - a, 2 - b); batch 1 = what blocks work (never new-issue filings), alone, first, in the chat and at the top
 of the index with a link, the first answer the advisor reads, in either place, counts at once (the
 index keeps only the last tap, so read it each time you read the chat), a disagreement → act on
 neither and ask; as soon as batch-1 rulings land, deliver batch 2 in the chat, with no item about
