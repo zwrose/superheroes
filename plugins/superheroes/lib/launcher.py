@@ -1573,13 +1573,34 @@ def _started_already_landed(repo_root, launch_id, env):
     return bool(lane and lane.get("started"))
 
 
+def _ledger_synced(repo_root, env):
+    """True only when an fsync of the ledger file succeeds now; any failure answers False.
+
+    A re-read can serve cached bytes, so it proves the record is visible, not that it is durable.
+    """
+    opened = ll.open_ledger(repo_root, "a", env=env)
+    if not opened["ok"]:
+        return False
+    fh = opened["fh"]
+    try:
+        os.fsync(fh.fileno())
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            fh.close()
+        except OSError:
+            pass
+
+
 def _append_started(repo_root, record, env):
     """Append a cloud lane's `started` record, trying up to three times; the last result.
 
     The append takes a lock, and a brief contention for it is the ordinary cause of a failure, so
     one failure must not strand a lane whose command has already run. After each failure the
-    ledger is read again: a lane whose `started` record landed is a success, and is never
-    appended a second time.
+    ledger is read again: a lane whose `started` record landed and is confirmed durable is a
+    success, and is never appended a second time; one that cannot be confirmed durable stays a failure.
     """
     for attempt in range(_CLOUD_APPEND_TRIES):
         result = _append_under_lock(repo_root, record, env=env)
@@ -1587,6 +1608,9 @@ def _append_started(repo_root, record, env):
             return result
         # axis: a failed append is not taken as proof the record is absent — the ledger is re-read.
         if _started_already_landed(repo_root, record.get("launchId"), env):
+            # axis: visible is not durable — without a confirmed sync the failure and the pending repair stand, and no second append is made.
+            if not _ledger_synced(repo_root, env):
+                return result
             lp = ll.ledger_path(repo_root, env=env)
             return {
                 "ok": True, "reason": None, "path": lp["path"] if lp["ok"] else None,

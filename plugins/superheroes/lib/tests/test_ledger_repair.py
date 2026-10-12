@@ -312,6 +312,33 @@ def test_a_started_that_landed_before_its_sync_failed_is_a_normal_success(tmp_pa
     assert _lanes(repo)[launch_id]["terminal"] is True
 
 
+def test_a_started_whose_sync_stays_failed_is_not_reported_as_a_success(tmp_path, monkeypatch):
+    # axis: visible is not durable — a re-read that finds the record is no proof it reached storage.
+    repo = _cloud_repo(tmp_path)
+    real_fsync = ll.os.fsync
+    ledger = ll.ledger_path(repo)["path"]
+    real_append_under_lock = L._append_under_lock
+    state = {"broken": False}
+
+    def failing_fsync(fd):
+        if state["broken"] and os.fstat(fd).st_ino == os.stat(ledger).st_ino:
+            raise OSError(5, "sync failed")
+        return real_fsync(fd)
+
+    def scoped(repo_root, record, env=None):
+        if record.get("event") == "started":
+            state["broken"] = True
+        return real_append_under_lock(repo_root, record, env=env)
+
+    monkeypatch.setattr(ll.os, "fsync", failing_fsync)
+    monkeypatch.setattr(L.os, "fsync", failing_fsync)
+    monkeypatch.setattr(L, "_append_under_lock", scoped)
+    result = _launch(repo, tmp_path, _fake_spawn())
+    assert result["ok"] is False, result
+    assert "pendingStarted" in result and "startedAppend" in result
+    assert len(_records(repo, result["launchId"], "started")) == 1
+
+
 def test_a_started_that_landed_is_recovered_by_the_append_helper(tmp_path, monkeypatch):
     repo = _setup_cloud_lane(tmp_path, monkeypatch, "c1", started=True)
     calls = []
