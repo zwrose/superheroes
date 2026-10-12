@@ -167,15 +167,18 @@ def test_host_flag_reaches_bootstrap(monkeypatch, capsys):
 
     seen = []
 
-    def capture(_cwd, _transcript, _root, host, source=None):
+    def capture(_cwd, _transcript, _root, host, source=None, session_id=None):
         seen.append(host)
+        sids.append(session_id)
         return "## stub context"
 
+    sids = []
     monkeypatch.setattr(session_context, "assemble", capture)
     monkeypatch.setattr(sys, "argv", ["session_start.py", "--host", "codex"])
-    _stdin(monkeypatch, {"source": "startup", "cwd": "/tmp"})
+    _stdin(monkeypatch, {"source": "startup", "cwd": "/tmp", "session_id": "sid-1"})
     assert mod.main() == 0
     assert seen == ["codex"]
+    assert sids == ["sid-1"]
 
 
 def _write_charter_transcript(path, charter):

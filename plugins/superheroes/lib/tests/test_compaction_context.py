@@ -178,10 +178,15 @@ def test_fresh_marker_for_same_session_is_silent(monkeypatch, capsys, tmp_path):
     mod = _load_hook("cc_marker_fresh")
     path = tmp_path / "transcript.jsonl"
     _write_transcript(path, [_user_charter("workhorse")])
-    _marker("sess-test", age_seconds=5)
+    marker = _marker("sess-test", age_seconds=5)
     _stdin(monkeypatch, _precompact_payload(str(path)))
     assert mod.main() == 0
     assert _stdout_lines(capsys) == []
+    # One-shot: the hook consumed the marker, so a retry within the window prints.
+    assert not os.path.exists(marker)
+    _stdin(monkeypatch, _precompact_payload(str(path)))
+    assert mod.main() == 0
+    assert _plain_stdout(capsys) == _expected("workhorse")
 
 
 def test_marker_for_a_different_session_still_prints(monkeypatch, capsys, tmp_path):
