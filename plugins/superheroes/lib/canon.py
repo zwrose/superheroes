@@ -42,8 +42,11 @@ STAY_OUT_GROUNDS = {
 }
 GO_VERBS = ("launch", "merge", "release", "cut", "ship", "publish", "file", "force-push", "tier",
             "go")
-# What may follow the go-verb in a bare go-word: a pronoun, a reference, or a lane/tier word.
+# The closed vocabulary a bare go-word may use after its go-verb: a pronoun, a reference or lane/tier
+# word, and the filler a bare instruction carries. Any other token means it is not a bare go-word.
 GO_TARGETS = ("it", "this", "that", "them", "pr", "full", "light", "micro")
+GO_FILLER = ("now", "today", "tonight", "please", "in", "on", "the", "cloud", "local", "locally",
+             "ahead")
 _GO_REF_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
 _ID_RE = re.compile(r"^- \*\*(\d{4}-\d{2}-\d{2})-([0-9a-z]{8})-([1-9]\d*)\*\*")
 _DISPOSITION_RE = re.compile(r"^\s*(?:@?\d+(?:-\d+)?\s*[-–:=]\s*)?\(?[a-h]\)?\s*(?:[-–:,]|$)",
@@ -97,16 +100,15 @@ def _refuse_stays_out(kind, why):
 def recognize(ruling, words):
     """The stays-out kind a ruling or the owner's words read as, or None. A narrow backstop with
     fixed shapes: a ruling that is a collector disposition, owner's words that are a bare go-word
-    (a go-verb first, then nothing or a pronoun, reference or lane word, no sentence break), or filing/phase bookkeeping.
+    (a go-verb first, then only tokens of the closed GO_TARGETS / GO_FILLER / reference vocabulary), or filing/phase bookkeeping.
     A disposition is read from the ruling text alone: an option letter answering an owner call
     is a real ruling when the ruling states one."""
     if _DISPOSITION_RE.match(ruling):
         return "disposition", "a collector disposition (%r)" % ruling[:60]
     words = _DISPOSITION_RE.sub("", words or "", count=1)
     tokens = [t.strip(".,;:!?\"'()") for t in words.lower().split()]
-    if (tokens and tokens[0] in GO_VERBS and len(tokens) <= 8
-            and (len(tokens) == 1 or tokens[1] in GO_TARGETS or _GO_REF_RE.fullmatch(tokens[1]))
-            and not re.search(r"[;.]\s+\S", words)):
+    if (tokens and tokens[0] in GO_VERBS and all(
+            t in GO_TARGETS or t in GO_FILLER or _GO_REF_RE.fullmatch(t) for t in tokens[1:])):
         kind = "merge" if tokens[0] in ("merge", "release", "cut", "publish") else "act"
         return kind, "a go-word (%r)" % words[:60]
     hit = _BOOKKEEPING_RE.search(ruling)
@@ -212,8 +214,9 @@ def _locate(root):
     if os.path.isfile(loc["path"]):
         with open(loc["path"], encoding="utf-8") as fh:
             working = fh.read()
+    cut = working.rsplit("\n", 1)[-1]  # the unterminated tail: a write that stopped mid-entry
     for l in working.splitlines():  # a failed append can leave a cut entry: fence further writes
-        if l.startswith("- **") and not _entry_shape_ok(l):
+        if l.startswith("- **") and (l == cut or not _entry_shape_ok(l)):
             raise Refusal("canon-partial-entry", "Canon ends in an incomplete entry (%r), likely "
                           "from a failed write; repair it by hand before any further write"
                           % l[:80])
@@ -289,14 +292,20 @@ def _held_lines(text):
     if lines and lines[0].strip() != HELD_MARKER:
         raise Refusal("canon-held-not-marked", "the held comment's first line must be "
                       + HELD_MARKER)
-    entries = _entry_lines(lines[1:])
-    for l in lines[1:]:  # a wrapped or stray line is refused, never silently dropped
-        if l.strip() and not _ID_RE.match(l):
-            raise Refusal("canon-bad-line", "the held comment has a line that is not a Canon "
-                          "entry (a wrapped entry?); repair it first: %r" % l[:80])
+    return _whole_entries(lines[1:])
+
+
+def _whole_entries(lines):
+    """The entry lines of a batch, every one whole; a wrapped, indented or stray line is refused
+    (the marker and blank lines excepted), never silently dropped."""
+    entries = _entry_lines(lines)
+    for l in lines:
+        if l.strip() and l.strip() != HELD_MARKER and not _ID_RE.match(l):
+            raise Refusal("canon-bad-line", "the batch has a line that is not a Canon entry (a "
+                          "wrapped or indented entry?); repair it first: %r" % l[:80])
     for l in entries:
         if not _entry_shape_ok(l):
-            raise Refusal("canon-bad-line", "a held entry is not a whole Canon line; repair it "
+            raise Refusal("canon-bad-line", "an entry is not a whole Canon line; repair it "
                           "first: %r" % l[:80])
     return entries
 
@@ -364,7 +373,7 @@ def _append_locked(a):
     held = _read_held(a.held_file)
     if a.lines_file:
         with open(a.lines_file, encoding="utf-8") as fh:
-            lines = _entry_lines([l.rstrip("\n") for l in fh])
+            lines = _whole_entries([l.rstrip("\n") for l in fh])
         if not lines:
             raise Refusal("canon-bad-line", "no Canon entry lines in %s" % a.lines_file)
         for line in lines:

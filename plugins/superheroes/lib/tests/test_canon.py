@@ -101,6 +101,7 @@ def test_declared_stays_out_ground_refused_with_home(project, capsys, ground):
     ("The importer keeps old data.", "ship it", "act"),
     ("The importer keeps old data.", "tier full", "act"),
     ("The importer keeps old data.", "force-push it", "act"),
+    ("The importer keeps old data.", "release v0.43.0 please.", "merge"),
     ("The importer keeps old data; filed as #1820.", None, "board"),
     ("The importer keeps old data, scheduled for phase 2.", None, "board"),
 ])
@@ -121,7 +122,8 @@ def test_full_ruling_sentence_with_valid_ground_is_not_refused_accepted_gap(proj
 
 # axis: a sentence that merely begins with a go-verb is a ruling, not a bare go-word.
 @pytest.mark.parametrize("words", ["Force-push is never permitted on shared branches.",
-                                   "Merge failures keep the previous branch unchanged."])
+                                   "Merge failures keep the previous branch unchanged.",
+                                   "Merge PR branches only after CI passes."])
 def test_standing_sentence_starting_with_go_verb_is_not_refused(project, capsys, words):
     code, out = _run(capsys, "append", *_fields(ruling=words, owners_words=words))
     assert code == 0 and out["appended"][0].split(canon.SEP)[3] == words
@@ -452,6 +454,28 @@ def test_malformed_held_line_refused_before_writing(project, capsys, tmp_path, d
 def test_partial_entry_cut_inside_the_id_fences_further_writes(project, capsys):
     with open(project["path"], "a", encoding="utf-8") as fh:
         fh.write("- **2026-10-12-abcd")
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-partial-entry"
+    assert open(project["path"], "rb").read() == before
+
+
+# axis: a drained batch is checked whole: a wrapped or indented entry is refused, not dropped.
+@pytest.mark.parametrize("damage", [lambda l: l.replace("s, time", "s,\ntime"),
+                                    lambda l: "  " + l])
+def test_lines_file_with_damaged_entry_refused_before_writing(project, capsys, tmp_path, damage):
+    batch = tmp_path / "batch.md"
+    batch.write_text(_entry(8) + "\n" + damage(_entry(9)) + "\n")
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(batch))
+    assert code == 1 and out["reason"] == "canon-bad-line"
+    assert open(project["path"], "rb").read() == before
+
+
+# axis: an unterminated final entry, even one cut inside its last field, fences further writes.
+def test_entry_cut_inside_final_field_fences_further_writes(project, capsys):
+    with open(project["path"], "a", encoding="utf-8") as fh:
+        fh.write(_entry(5)[:-5])
     before = open(project["path"], "rb").read()
     code, out = _run(capsys, "append", *_fields())
     assert code == 1 and out["reason"] == "canon-partial-entry"
