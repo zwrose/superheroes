@@ -122,7 +122,7 @@ def test_registry_has_thirteen_items_in_order():
         "conditionWindows",
         "stackingTool",
         "keepOrRetireReporting",
-        "threatModel",
+        "riskAndTrust",
         "whoItsFor",
         "guardianStaleness",
         "keepList",
@@ -196,7 +196,7 @@ def test_set_threat_model_leaves_json_block_untouched(tmp_path):
     repo, store = _setup_repo(tmp_path)
     before_text = open(CM.core_path(repo, store), encoding="utf-8").read()
     before_block = json.loads(CM._JSON_BLOCK.search(before_text).group(1))
-    res = PC.set_item(repo, "threatModel", "multi-tenant", root=store)
+    res = PC.set_item(repo, "riskAndTrust", {"threatModel": "multi-tenant"}, root=store)
     assert res["action"] == "written"
     after_text = open(CM.core_path(repo, store), encoding="utf-8").read()
     after_block = json.loads(CM._JSON_BLOCK.search(after_text).group(1))
