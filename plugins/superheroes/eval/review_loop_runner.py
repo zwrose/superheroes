@@ -560,8 +560,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     # After each full panel fold, persist round records (panel path may certify with no fix).
     _orig_fold_panel = RD._fold_panel
 
-    def _fold_panel_persist(state, config, artifact):
-        _orig_fold_panel(state, config, artifact)
+    def _fold_panel_persist(state, config, artifact, **kwargs):
+        _orig_fold_panel(state, config, artifact, **kwargs)
         rnd = state["round"]
         kind = "baseline" if rnd <= 1 else (
             "confirmation" if (state.get("rounds") or {}).get(str(rnd), {}).get("roundKind")
