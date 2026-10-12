@@ -49,11 +49,14 @@
     ],
     "history": [
       "#5: 2 rounds ran.",
+      "#5: Checks were green, run on 1111111aaaaaaa1111111aaaaaaa1111111aaaaa.",
       "#6: 4 rounds ran.",
       "#6: The loop stopped at its round cap.",
       "#6: security-reviewer did not run. Go-ahead to merge without it: \"Merge without the security read\" (the chat on 2026-03-02).",
+      "#6: Checks were green, run on 2222222bbbbbbb2222222bbbbbbb2222222bbbbb.",
       "#6: design-reviewer is from a maker's model family, so its review was not independent.",
-      "#7: 1 rounds ran."
+      "#7: 1 rounds ran.",
+      "#7: Checks were green, run on 3333333ccccccc3333333ccccccc3333333ccccc."
     ],
     "walk": [
       {

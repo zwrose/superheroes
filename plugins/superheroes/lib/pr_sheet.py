@@ -20,8 +20,8 @@ The advisor's input is one JSON object; any key not listed is refused.
   title, summary Non-empty strings: the sheet's title, and what changed in one line.
   previousCommit Optional. Null, or a commit id (7 to 40 lowercase hex) when this sheet replaces an earlier one.
   prs            Required on a stack, refused on a pr: at least 2 {number, title}, bottom PR first.
-  leftovers      Optional object. A key names a left-for-owner finding by its id ("<pr number>:<id>" on a
-                 stack). A value is {"options": ..., "recommendation": ...}: options is "leftover" (the
+  leftovers      Optional object. A key names a left-for-owner finding by its findingKey, or by its id when
+                 no other left-for-owner finding shares it ("<pr number>:<key>" on a stack). A value is {"options": ..., "recommendation": ...}: options is "leftover" (the
                  default, the words' three options), "none", or a list of options.
   items          Optional list. Each is {id, kind, title, ifLeft, options, recommendation?} with options
                  "none" or a list; id matches ^[a-z0-9][a-z0-9-]*$ and is unique among the items.
@@ -53,7 +53,13 @@ import review_record  # noqa: E402
 WORDS_PATH = os.path.join(_LIB_DIR, os.pardir, "theme", "sheet-words.json")
 _FIXED, _SHOWN_WRONG, _CRAFT, _, _RULING = rfs.OUTCOMES
 _LEFT = rfs.LEFT_FOR_OWNER
-_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+SCHEMA_PATH = os.path.join(_LIB_DIR, os.pardir, "theme", "sheet.schema.json")
+with open(SCHEMA_PATH, encoding="utf-8") as _fh:
+    _SCHEMA = json.load(_fh)
+# The identifier and commit patterns and the lane values are read from the sheet schema, their one home.
+_ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
+_COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
+_LANES = tuple(_SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["lane"]["enum"])
 _RAN = ("engine-record", "reported-by-session", "not-run")
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
                  ("missingReviews", list), ("rounds", dict))
@@ -74,7 +80,7 @@ def _num(v):
 
 
 def _commit(v):
-    return isinstance(v, str) and re.fullmatch(r"[0-9a-f]{7,40}", v) is not None
+    return isinstance(v, str) and _COMMIT.search(v) is not None
 
 
 def _fill(text, **slots):
@@ -131,7 +137,7 @@ def _record(raw, n, problems):
     if not _commit(rec["finalCommit"].get("sha")):
         problems.append(f"{where}: finalCommit.sha is null or not a commit id")
     if not (_text(ci.get("state")) and (ci.get("sha") is None or _commit(ci["sha"]))
-            and lane.get("value") in ("full", "light", "micro", None) and isinstance(lane.get("reason"), (str, type(None)))
+            and lane.get("value") in _LANES and isinstance(lane.get("reason"), (str, type(None)))
             and isinstance(rounds.get("count"), int) and rounds["count"] >= 0 and isinstance(rounds.get("stoppedAtCap"), bool)
             and all(isinstance(v, dict) and v.get("ran") in _RAN and _text(v.get("name"))
                     and (v["ran"] == "not-run" or _text(v.get("family"))) for v in rec["reviewers"])
@@ -240,8 +246,14 @@ def _check_input(adv, words, problems):
     return allowed
 
 
-def _lookup(kind, pr, finding):
-    return str(finding.get("id")) if kind == "pr" else f"{pr}:{finding.get('id')}"
+def _lookups(kind, pr, finding):
+    """The leftovers keys that can name a finding: its findingKey first, then its reviewer id."""
+    names = [finding.get("findingKey"), finding.get("id")]
+    return [n if kind == "pr" else f"{pr}:{n}" for n in dict.fromkeys(str(n) for n in names if n)]
+
+
+def _leftover_call(kind, pr, finding, leftovers):
+    return next((leftovers[k] for k in _lookups(kind, pr, finding) if k in leftovers), {})
 
 
 def _section(title, block, text):
@@ -274,9 +286,16 @@ def build(records, advisor, words):
             if set(have) != set(allowed):
                 problems.append(f"the records are for PRs {sorted(set(have))}, but the stack lists PRs {sorted(allowed)}")
     leftovers = advisor.get("leftovers", {})
-    named = {_lookup(kind, r["pr"], f) for r in recs for f in r["findings"] if isinstance(f, dict) and f.get("outcome") == _LEFT}
+    named = {}
+    for r in recs:
+        for f in r["findings"]:
+            if isinstance(f, dict) and f.get("outcome") == _LEFT:
+                for k in _lookups(kind, r["pr"], f):
+                    named[k] = named.get(k, 0) + 1
     if isinstance(leftovers, dict):
         problems.extend(f"leftovers key {k!r} names no left-for-owner finding" for k in leftovers if k not in named)
+        problems.extend(f"leftovers key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
+                        for k in leftovers if named.get(k, 0) > 1)
     if problems:
         raise Refusal(problems)
     stack = kind == "stack"
@@ -286,7 +305,7 @@ def build(records, advisor, words):
     cards = []
     for r in recs:
         for f in (f for f in r["findings"] if f["outcome"] == _LEFT):
-            call = leftovers.get(_lookup(kind, r["pr"], f), {})
+            call = _leftover_call(kind, r["pr"], f, leftovers)
             options = _options(call.get("options", "leftover"), words, True)
             cards.append(_card("f-", r["pr"], f.get("findingKey") or f["id"],
                                words["leftoverKind"] + (f" · #{r['pr']}" if stack else ""), _title(f),
@@ -319,7 +338,13 @@ def build(records, advisor, words):
             said = _go_ahead(m.get("goAhead"))
             lines.append(_fill(words["historyMissing"], name=m["name"],
                                goAhead=_fill(words["historyGoAhead"], goAhead=said) if said else words["historyNoGoAhead"]))
+        for m in (r.get("whatIsMissing") or []) if r.get("status") == "not-reviewed" else []:
+            lines.append(_fill(words["historyIncomplete"], what=m))
+        if stack:
+            lines.append(_fill(words["historyChecks"], state=r["ci"]["state"], commit=r["ci"].get("sha") or "no commit"))
         for v in r["reviewers"]:
+            if v["ran"] != "not-run" and v.get("coversFinalCommit") is False:
+                lines.append(_fill(words["historyEarlierCommit"], name=v["name"], commit=v.get("commit") or "unknown"))
             shown = {"name": v["name"], "family": v["family"], "ran": v["ran"], "notIndependent": bool(v.get("notIndependent"))}
             if v["ran"] != "not-run" and shown not in reviewers:
                 reviewers.append(shown)

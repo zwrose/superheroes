@@ -217,9 +217,39 @@ def test_a_stack_gets_one_sheet_from_all_its_records():
     assert part["whatChanged"]["caught"] == ["#5: A gift card could be created with a negative balance"]
     assert [v["name"] for v in part["whatChanged"]["reviewers"]] == ["code-reviewer", "design-reviewer"]
     assert [e["pr"] for e in part["craft"] + part["alreadyDecided"]] == [7, 7]
-    assert part["history"][:2] == ["#5: 2 rounds ran.", "#6: 4 rounds ran."]
+    assert "#5: 2 rounds ran." in part["history"] and "#6: 4 rounds ran." in part["history"]
     assert "#6: The loop stopped at its round cap." in part["history"]
     assert '#6: security-reviewer did not run. Go-ahead to merge without it: "Merge without the security read" (the chat on 2026-03-02).' in part["history"]
+
+
+def test_a_lower_pr_check_result_is_kept_in_the_stack_history():
+    # Axis: a red check on a lower PR of a stack shows in the history though the top PR is green.
+    records, advisor = bundle(STACK)
+    records[0]["ci"]["state"] = "red"
+    history = build(records, advisor)["prSheet"]["history"]
+    assert any(line.startswith("#5: Checks were red") for line in history)
+
+
+def test_incomplete_review_evidence_is_kept_in_the_history():
+    # Axis: a record's own warnings and a reviewer's earlier-commit coverage are carried into the history.
+    records, advisor = bundle(BIG)
+    records[0].update(status="not-reviewed", whatIsMissing=["no planned reviewer's run covers the final commit bbbbbbb"])
+    records[0]["reviewers"][0].update(coversFinalCommit=False, commit="aaaaaaa")
+    history = build(records, advisor)["prSheet"]["history"]
+    assert "The review record is incomplete: no planned reviewer's run covers the final commit bbbbbbb." in history
+    assert any("reviewed an earlier commit (aaaaaaa)" in line for line in history)
+
+
+def test_leftover_overrides_are_keyed_by_finding_key_and_an_ambiguous_id_is_refused():
+    # Axis: two left-for-owner findings sharing a reviewer id take separate overrides by findingKey; the shared id is refused.
+    records, advisor = bundle(BIG)
+    left = [f for f in records[0]["findings"] if f["outcome"] == "left-for-owner"]
+    left[1]["id"] = left[0]["id"]
+    advisor["leftovers"] = {left[0]["findingKey"]: {"options": "none", "recommendation": {"text": "A", "reason": "a"}}}
+    cards = [c for c in build(records, advisor)["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]
+    assert [c.get("recommendation", {}).get("text") for c in cards] == ["A", None]
+    advisor["leftovers"] = {left[0]["id"]: {"options": "none"}}
+    assert any("names 2 left-for-owner findings" in p for p in problems_of(records, advisor))
 
 
 def test_a_stack_is_built_in_prs_order_whatever_the_record_order():
