@@ -107,6 +107,13 @@ jobs:
           claude plugin validate . --strict
           claude plugin validate plugins/superheroes --strict
 
+      - name: Run mod tests against host CLI
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/claude-config
+        run: |
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          claude plugin test plugins/superheroes
+
       - name: Release-PR install smoke test
         if: github.event_name == 'pull_request' && github.head_ref == 'release-please--branches--main--components--superheroes'
         env:
