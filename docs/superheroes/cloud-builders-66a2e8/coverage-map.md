@@ -25,10 +25,11 @@ way the decomposition doctrine's worked example splits one:
   it is a launch-report reason. Register entries R3 (the record says whether the cloud picks the
   version up by itself) and R5 (the reason and its fix) bind both.
 - **UFR-12** (a question waits on the issue while the advisor is away) is split at its one bullet's
-  conjunction. "Then the builder parks with its work pushed" is **C6**'s, because the builder's
-  wait and park are the builder's path. "And the advisor answers and resumes the lane when it is
+  conjunction. "Then the builder parks with its work pushed" is **C6b**'s (moved from C6 at the
+  2026-10-11 size split), because the builder's wait and park are the builder's path and C6b's
+  recorded live run grades them. "And the advisor answers and resumes the lane when it is
   back" is **C7**'s, because answering and resuming are the advisor's. The statement (the question
-  waits on the issue) is C6's: the builder posts it there. Register entry R6 binds both.
+  waits on the issue) is C6b's: the builder posts it there. Register entry R6 binds both.
 - **FR-35** (no warning between gardening passes) is split at its one bullet's two sentences.
   "Between passes, nothing tells the owner the pass is about to lapse" is **C8**'s, with the
   statement, because the gardening pass's duty is C8's. "Once it has lapsed, the launch report's
@@ -47,10 +48,11 @@ each names the one owner and the register entry that binds the other child:
 - **FR-17** (a cloud build follows the same order, review, vet and merge rules) is **C1b**'s (moved from C1 at the 2026-10-10 size split): the
   launch carries the same composed order, and nothing in the vet or the merge rules changes with
   the place (R2). The PR's half of its bullet, the same review record and receipts, is produced by
-  C6's builder path and bound by R7.
-- **FR-25** (every review seat runs through the reviewer pass) is **C6**'s. The step that writes the
-  pass into the reviewer's sign-in at the start of a cloud session is C3's, bound by
-  R4.
+  the builder's cloud path (C6 and C6b) and bound by R7.
+- **FR-25** (every review seat runs through the reviewer pass) is **C6b**'s (moved from C6 at the
+  2026-10-11 size split), graded by its recorded live run. The step that writes the pass into the
+  reviewer's sign-in at the start of a cloud session is C3's, and C6's runner keeps the pass out of
+  the processes it spawns; both are bound by R4.
 - **FR-30** (nothing left behind after a merge: no branch, no checkout or worktree on the owner's
   machine) is **C8**'s. That a cloud launch makes no local worktree and pushes no launch branch is
   C1's, bound by R1.
@@ -76,7 +78,7 @@ are the epic's **closure validation run** (`skills/showrunner/reference/closure.
 run). Because the whole epic is one native stack, closure follows that file's stacked-feature case
 (§ When closure fires): the receipt rides the top layer's vet, C8's, the last vet before the stack's
 one merge, when every other layer already has a green vet. So the validation run runs **before the
-merge**, against the stack's head, meaning the plugin as the whole stack has it: the plugin's automated conformance checks run on that head, and the children's recorded runs are collected and graded against the spec's success bullets as far as they reach: a project set up in one sitting and its check session (C4), cloud builds switched on and builds routed (C5), cloud builds launched, listed and answered (C1, C7), a cloud build reaching a ready PR with its independent review run through the pass (C6), and cleanup (C8). No real wave and no full-size build is required before the merge: the spec's Definition of done says the work ships once the build has tested what it can, with nothing shown in a real wave first (Canon 2026-10-10-ca3e7e0d-15), so what the recorded runs do not reach, a real multi-build wave and a full-size cloud build among them, is recorded in the closure receipt as left to be learned in use. The run also collects the children's recorded runs for the spec's other five tested cases (several cloud builders at once: C1; a project that
+merge**, against the stack's head, meaning the plugin as the whole stack has it: the plugin's automated conformance checks run on that head, and the children's recorded runs are collected and graded against the spec's success bullets as far as they reach: a project set up in one sitting and its check session (C4), cloud builds switched on and builds routed (C5), cloud builds launched, listed and answered (C1, C7), a cloud build reaching a ready PR with its independent review run through the pass (C6b), and cleanup (C8). No real wave and no full-size build is required before the merge: the spec's Definition of done says the work ships once the build has tested what it can, with nothing shown in a real wave first (Canon 2026-10-10-ca3e7e0d-15), so what the recorded runs do not reach, a real multi-build wave and a full-size cloud build among them, is recorded in the closure receipt as left to be learned in use. The run also collects the children's recorded runs for the spec's other five tested cases (several cloud builders at once: C1; a project that
 keeps its calibration outside the repository: C4; a lapsed pass sending builds to the owner's
 machine: C5; a builder's question answered mid-build and a stopped builder recovered: C7). Its
 result goes with C8's handback, in the closure receipt, presented to the owner with the delivery
@@ -108,7 +110,7 @@ once C1, C2 and C3 have handed back; C5 once C1 and C2 have; C6 once C1 and C3 h
 #1708's #1716 and #1718 are on main. Wave 2: C7, once C5 and C6 have handed back. The stack merges with
 one `gh stack merge` when every layer is vetted.
 
-**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 12 · C5b 3 (FR-15, FR-16 and UFR-6, moved from C5 at the 2026-10-11 size split) · C6 13 · C7 14 ·
+**Per child.** C1 1 row · C1b 3 (FR-17, FR-23 and FR-26 moved from C1 at the 2026-10-10 size split) · C2 4 · C3 2 · C4 6 · C4b 1 (FR-1's Given-When-Then, moved from C4 at the 2026-10-11 size split) · C5 12 · C5b 3 (FR-15, FR-16 and UFR-6, moved from C5 at the 2026-10-11 size split) · C6 5 · C6b 8 (FR-18, FR-20, FR-21, FR-24, FR-25 and UFR-12's builder's half, moved from C6 at the 2026-10-11 size split) · C7 14 ·
 C8 9 · closure validation run 5. Total 73 rows: 68 bullet rows (66 bullets, two of them split in
 two) and 5 Definition of done rows.
 
@@ -133,16 +135,16 @@ two) and 5 Definition of done rows.
 | FR-15 | 1 | rule | The launch report names every launched build under one of the two places. | **C5b** |
 | FR-16 | 1 | rule | The reason is one of the eight on the board's list of reasons. | **C5b** |
 | FR-17 | 1 | GWT | Given a build-ready issue, when it is built in the cloud, then its PR carries the same review record and… | **C1b** |
-| FR-18 | 1 | GWT | Given the cloud is ready, when a build that needs no owner decision is launched in the cloud, then it reaches… | **C6** |
+| FR-18 | 1 | GWT | Given the cloud is ready, when a build that needs no owner decision is launched in the cloud, then it reaches… | **C6b** |
 | FR-19 | 1 | rule | Wherever the advisor lists lanes, a cloud lane appears with the word "cloud" beside it. | **C1** |
-| FR-20 | 1 | rule | The intake comment carries those three facts. | **C6** |
-| FR-21 | 1 | rule | The comment is headed as a builder note for the advisor and says the builder is waiting. | **C6** |
-| FR-21 | 2 | rule | On a public repository the comment is public, as builder comments already are. | **C6** |
+| FR-20 | 1 | rule | The intake comment carries those three facts. | **C6b** |
+| FR-21 | 1 | rule | The comment is headed as a builder note for the advisor and says the builder is waiting. | **C6b** |
+| FR-21 | 2 | rule | On a public repository the comment is public, as builder comments already are. | **C6b** |
 | FR-22 | 1 | GWT | Given the advisor is watching the wave, when a cloud builder posts a builder note, then the advisor's answer… | **C7** |
 | FR-23 | 1 | GWT | Given a cloud build in progress, when the owner's machine sleeps, then the build carries on to its next point… | **C1b** |
-| FR-24 | 1 | rule | A builder that stops mid-build has pushed work for the advisor to recover the lane from. | **C6** |
-| FR-24 | 2 | rule | At handback, the review record and the receipts are on the PR, and nothing the vet needs exists only on the… | **C6** |
-| FR-25 | 1 | rule | The plugin does not drop the review of a cloud build and does not treat it as second class. | **C6** |
+| FR-24 | 1 | rule | A builder that stops mid-build has pushed work for the advisor to recover the lane from. | **C6b** |
+| FR-24 | 2 | rule | At handback, the review record and the receipts are on the PR, and nothing the vet needs exists only on the… | **C6b** |
+| FR-25 | 1 | rule | The plugin does not drop the review of a cloud build and does not treat it as second class. | **C6b** |
 | FR-26 | 1 | rule | A cloud build's PR merges only on the owner's merge word, as any build's does. | **C1b** |
 | FR-27 | 1 | rule | Nothing a cloud builder does alters the calibration on the owner's machine. | **C6** |
 | FR-28 | 1 | GWT | Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the… | **C8** |
@@ -177,7 +179,7 @@ two) and 5 Definition of done rows.
 | UFR-9 | 2 | rule | A recovery never leaves two builders working one issue. | **C7** |
 | UFR-10 | 1 | rule | The work redone is the work since the builder's last push that could not be saved. | **C7** |
 | UFR-11 | 1 | rule | The plugin sends no reminder about an unanswered archive prompt. | **C8** |
-| UFR-12 | 1a | GWT | then the builder parks with its work pushed | **C6** |
+| UFR-12 | 1a | GWT | then the builder parks with its work pushed | **C6b** |
 | UFR-12 | 1b | GWT | and the advisor answers and resumes the lane when it is back | **C7** |
 | UFR-13 | 1 | GWT | Given a stalled cloud builder that still answers, when the advisor recovers the lane, then the advisor asks… | **C7** |
 | UFR-13 | 2 | rule | Work that cannot be saved is redone, and the advisor says how much. | **C7** |
@@ -203,3 +205,5 @@ the spec lacks, each Definition of done bullet appears once, and every row names
 **Coverage re-check after ruling 37 b (advisor, 2026-10-11).** Amendment 4 now records rulings "35 a" and "37 b" together: the owner picks the environment in Claude Code's picker and the plugin reads its id. FR-1's statement, its Given-When-Then (C4b) and its rule (C4) changed wording; no acceptance criterion was added or removed, and every criterion is still owned exactly once. Register R3 records the new source and names C4b as a consumer (C4b holds the reader).
 
 **Coverage re-check after the C5 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C5 split into C5 (where a build runs: the readiness reader, the routing step, the launcher wiring, #1746) and C5b (the launch report, the still line and the doctrine, #1775). FR-15, FR-16 and UFR-6 moved to C5b; C5 keeps FR-10 to FR-14, FR-37's second acceptance, UFR-3, UFR-4 and UFR-5, its routing result carrying each reason and fix that C5b renders. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C5b in the stack's order; R2, R3, R5, R8, R9, R10 and R11 name it as a consumer.
+
+**Coverage re-check after the C6 size split (advisor, 2026-10-11, at the 600 bar; craft, owner veto open).** Cloud C6 split into C6 (the builder's cloud path, machine side: the cloud builder module, the calibration guard, the runner's pass scrub, the history fetch, the GitHub probe over REST and the bootstrap's marker fix, #1747) and C6b (the builder's cloud doctrine and live run, #1777). The criteria the recorded live run grades moved to C6b: FR-18, FR-20, both of FR-21's acceptances, both of FR-24's, FR-25 and UFR-12's builder's half (with UFR-12's statement). C6 keeps FR-27 and UFR-7's four acceptances, which its tests grade, and the version-mismatch refusal that UFR-5's note names. No criterion was added or removed, and every criterion is still owned exactly once. Register R8 names C6b in the stack's order; R4, R6, R7, R8, R9 and R11 name it as a consumer, and R11 gives it the workhorse charter and the review-discipline line.
