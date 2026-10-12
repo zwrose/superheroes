@@ -18,7 +18,8 @@ lose) and it prints the **ready-to-paste `/compact` line**.
   from this reply and applies the session's directive plus those notes on **every**
   compaction, manual or automatic — no paste needed.
 - **Where it is not**, the floor is: **run checkpoint, paste the emitted command once.** The
-  PreCompact hook still adds a charter skeleton, and after compaction the SessionStart
+  PreCompact hook still prints the session's directive (charter or generic) plus the
+  checkpoint notes, unless the mod already delivered, and after compaction the SessionStart
   recovery hook re-injects a pointer to re-read the charter skill from disk, so the owner
   does **not** need to re-invoke `/superheroes:showrunner`, `/superheroes:workhorse`, or
   `/superheroes:detective` by hand.
@@ -196,7 +197,8 @@ automatically on every compaction, so pasting is only needed on hosts without mo
 Where the mod is present, the next compaction (manual or automatic) is steered by the
 session's directive plus the notes file this skill saved; the owner pastes nothing. On a
 host without mods, compaction runs when the owner pastes the `/compact` line; the PreCompact
-hook adds the charter skeleton, and on the next SessionStart with `source: compact` the
+hook prints the session's directive (charter or generic) plus the checkpoint notes, unless
+the mod already delivered, and on the next SessionStart with `source: compact` the
 recovery hook re-injects a pointer to re-read the charter skill from disk. Nothing in this
 skill triggers compaction programmatically.
 

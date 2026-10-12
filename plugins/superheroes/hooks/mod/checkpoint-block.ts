@@ -18,25 +18,26 @@ export function extractCheckpointBlock(text: string): string | null {
   let last: { body: string[]; isClosed: boolean } | null = null
 
   for (let i = 0; i < lines.length; i += 1) {
-    const open = OPEN.exec(lines[i])
+    const open = OPEN.exec(lines[i] ?? '')
     if (open === null) {
       continue
     }
 
-    const width = open[1].length
+    const width = (open[1] ?? '').length
     const body: string[] = []
     let isClosed = false
 
     for (i += 1; i < lines.length; i += 1) {
-      const close = CLOSE.exec(lines[i])
-      if (close !== null && close[1].length >= width) {
+      const line = lines[i] ?? ''
+      const close = CLOSE.exec(line)
+      if (close !== null && (close[1] ?? '').length >= width) {
         isClosed = true
         break
       }
-      body.push(lines[i])
+      body.push(line)
     }
 
-    if (open[2].trim() === INFO) {
+    if ((open[2] ?? '').trim() === INFO) {
       last = { body, isClosed }
     }
   }

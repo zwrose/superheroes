@@ -118,6 +118,17 @@ const flag = (argv: readonly string[], name: string) => {
   return at === -1 ? undefined : argv[at + 1]
 }
 
+// The i-th recorded item, narrowed: a missing one fails the test where it is read.
+const nth = <T>(items: readonly T[], i: number): T => {
+  const item = items[i]
+  expect(item).toBeDefined()
+  if (item === undefined) {
+    throw new Error(`no recorded item at ${i}`)
+  }
+
+  return item
+}
+
 const block = (body: string) => `Here you go.\n\n\`\`\`superheroes-checkpoint\n${body}\n\`\`\`\n`
 
 for (const trigger of ['manual', 'auto'] as const) {
@@ -128,18 +139,18 @@ for (const trigger of ['manual', 'auto'] as const) {
 
     expect(res).toEqual({ messages: SUMMARY })
     expect(r.seen).toHaveLength(1)
-    expect(r.seen[0].instructions).toBe(DIRECTIVE)
-    expect(r.seen[0].trigger).toBe(trigger)
+    expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
+    expect(nth(r.seen, 0).trigger).toBe(trigger)
     expect(r.argv).toHaveLength(1)
-    expect(r.argv[0][0]).toBe('python3')
-    expect(r.argv[0][1]).toBe('-B')
-    expect(r.argv[0][2].endsWith('/lib/compaction_directive.py')).toBe(true)
-    expect(r.argv[0][3]).toBe('instructions')
-    expect(flag(r.argv[0], '--session-id')).toBe(SESSION)
-    expect(r.argv[0]).not.toContain('--user-instructions')
+    expect(nth(r.argv, 0)[0]).toBe('python3')
+    expect(nth(r.argv, 0)[1]).toBe('-B')
+    expect(nth(r.argv, 0)[2]?.endsWith('/lib/compaction_directive.py')).toBe(true)
+    expect(nth(r.argv, 0)[3]).toBe('instructions')
+    expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
+    expect(nth(r.argv, 0)).not.toContain('--user-instructions')
     expect(r.writes).toHaveLength(1)
-    expect(r.writes[0].path).toBe(MARKER)
-    expect(/^\d+$/.test(r.writes[0].text)).toBe(true)
+    expect(nth(r.writes, 0).path).toBe(MARKER)
+    expect(/^\d+$/.test(nth(r.writes, 0).text)).toBe(true)
     expect(r.order).toEqual([`write:${MARKER}`, 'compact'])
   })
 }
@@ -149,8 +160,8 @@ test("session.compact: the owner's /compact text is forwarded as --user-instruct
 
   await compact($, { instructions: 'keep the PR number' })
 
-  expect(flag(r.argv[0], '--user-instructions')).toBe('keep the PR number')
-  expect(r.seen[0].instructions).toBe(DIRECTIVE)
+  expect(flag(nth(r.argv, 0), '--user-instructions')).toBe('keep the PR number')
+  expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
 })
 
 test('session.compact: blank owner text is not forwarded', async ($, on) => {
@@ -158,7 +169,7 @@ test('session.compact: blank owner text is not forwarded', async ($, on) => {
 
   await compact($, { instructions: '  \n ' })
 
-  expect(r.argv[0]).not.toContain('--user-instructions')
+  expect(nth(r.argv, 0)).not.toContain('--user-instructions')
 })
 
 test('session.compact: the transcript the session started with is forwarded', async ($, on) => {
@@ -167,7 +178,7 @@ test('session.compact: the transcript the session started with is forwarded', as
   await $.classic.SessionStart({ source: 'startup', transcript_path: '/t/s.jsonl' })
   await compact($)
 
-  expect(flag(r.argv[0], '--transcript')).toBe('/t/s.jsonl')
+  expect(flag(nth(r.argv, 0), '--transcript')).toBe('/t/s.jsonl')
 })
 
 test('session.compact: no --transcript while the transcript is unknown', async ($, on) => {
@@ -176,8 +187,8 @@ test('session.compact: no --transcript while the transcript is unknown', async (
   await $.classic.SessionStart({ source: 'startup', transcript_path: '' })
   await compact($)
 
-  expect(r.argv[0]).not.toContain('--transcript')
-  expect(r.seen[0].instructions).toBe(DIRECTIVE)
+  expect(nth(r.argv, 0)).not.toContain('--transcript')
+  expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
 })
 
 test("session.compact: a subagent's own compaction is untouched", async ($, on) => {
@@ -188,8 +199,8 @@ test("session.compact: a subagent's own compaction is untouched", async ($, on) 
   expect(r.argv).toHaveLength(0)
   expect(r.writes).toHaveLength(0)
   expect(r.seen).toHaveLength(1)
-  expect(r.seen[0].instructions).toBe('subagent text')
-  expect(r.seen[0].agentId).toBe('agent-7')
+  expect(nth(r.seen, 0).instructions).toBe('subagent text')
+  expect(nth(r.seen, 0).agentId).toBe('agent-7')
 })
 
 type Options = NonNullable<Parameters<typeof rig>[2]>
@@ -229,7 +240,7 @@ for (const [name, cli, options] of failures) {
 
     expect(res).toEqual({ messages: SUMMARY })
     expect(r.seen).toHaveLength(1)
-    expect(r.seen[0].instructions).toBe('keep this')
+    expect(nth(r.seen, 0).instructions).toBe('keep this')
     expect(r.writes).toHaveLength(0)
   })
 }
@@ -239,7 +250,7 @@ test('session.compact fails open with no owner text: instructions stay absent', 
 
   await compact($)
 
-  expect(r.seen[0].instructions).toBeUndefined()
+  expect(nth(r.seen, 0).instructions).toBeUndefined()
   expect(r.writes).toHaveLength(0)
 })
 
@@ -294,8 +305,8 @@ test('turn.complete saves the checkpoint block to the CLI path, then toasts, and
 
   expect(res).toEqual({ text: answer })
   expect(r.argv).toHaveLength(1)
-  expect(r.argv[0][3]).toBe('path')
-  expect(flag(r.argv[0], '--session-id')).toBe(SESSION)
+  expect(nth(r.argv, 0)[3]).toBe('path')
+  expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
   expect(r.writes).toEqual([{ path: NOTES, text: '## Notes\n- one\n- two' }])
   expect(r.toasts).toEqual(['Checkpoint notes saved'])
 })
