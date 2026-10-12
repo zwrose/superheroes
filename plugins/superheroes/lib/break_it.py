@@ -132,7 +132,9 @@ def _path_unsafe(path):
 
 def parse_block(text):
     """``({"path", "run", "content", "sha256"}, None)`` for a well-formed ``break-it-test v1``
-    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact."""
+    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact. This
+    implements the block specification in ``agents/test-role.md`` (Break-it tests), which is the
+    one home of the grammar; nothing else restates it."""
     if not isinstance(text, str):
         return None, "block-not-a-string"
     parts = text.split("\n", 4)
@@ -292,6 +294,33 @@ def _kill_tagged(token):
                 pass
 
 
+def _kill_in_dir(copy):
+    """Third net, independent of session and environment: kill any process whose working directory
+    lies inside ``copy`` (``/proc/<pid>/cwd`` on Linux, ``lsof`` elsewhere when it is installed)."""
+    root = os.path.realpath(copy)
+    pids = []
+    if os.path.isdir("/proc/self"):
+        for name in os.listdir("/proc"):
+            try:
+                cwd = os.readlink("/proc/%s/cwd" % name) if name.isdigit() else ""
+            except OSError:
+                continue
+            if cwd == root or cwd.startswith(root + os.sep):
+                pids.append(int(name))
+    elif shutil.which("lsof"):
+        try:
+            out = subprocess.run(["lsof", "-t", "+D", root], capture_output=True, timeout=30).stdout
+            pids = [int(w) for w in out.split() if w.isdigit()]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for pid in pids:
+        if pid != os.getpid():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
 def _write_confined(copy, rel, content):
     """Create ``rel`` inside ``copy`` and nowhere else. None on success, else the not-run reason."""
     parts = rel.split("/")
@@ -352,7 +381,7 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     token = uuid.uuid4().hex
     status_r, status_w = os.pipe()
     try:
-        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep below is the second net and the only one on other hosts, where a descendant that both leaves the session and clears its environment is not contained.
+        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
         proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=copy,
                                 env=_clean_env(dict(env, **{_TOKEN_ENV: token})),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -364,9 +393,9 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         return rec(OUTCOME_NOT_RUN, "command-not-found")
     os.close(status_w)
     drain = _TailDrain(proc.stdout)
-    drain.start()
     timed_out = False
     try:
+        drain.start()
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
@@ -379,10 +408,12 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
         _kill_group(proc.pid)
         _kill_tagged(token)
+        _kill_in_dir(copy)
         proc.wait()
         launch_failed = os.read(status_r, 1) == b"E"
         os.close(status_r)
-        drain.join(_DRAIN_JOIN)
+        if drain.is_alive():
+            drain.join(_DRAIN_JOIN)
         try:
             proc.stdout.close()
         except OSError:

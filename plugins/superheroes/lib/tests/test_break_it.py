@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -49,10 +50,29 @@ def repo(tmp_path):
     return root
 
 
+_ROLE_FILE = os.path.join(os.path.dirname(_LIB), "agents", "test-role.md")
+
+
+def _template():
+    """The block specification's lines, read from the one home of the grammar (the test role file)."""
+    with open(_ROLE_FILE, encoding="utf-8") as fh:
+        found = re.findall(r"```\n(break-it-test v1\n.*?)\n```", fh.read(), re.DOTALL)
+    assert len(found) == 1
+    lines = found[0].split("\n")
+    assert len(lines) == 5 and lines[3] == "---"
+    return lines
+
+
+def _wire(path, run, content):
+    """A block built from exactly the specification's template: header, path:, run:, ---, content."""
+    head, path_line, run_line, sep, _ = _template()
+    assert path_line.startswith("path: <") and run_line.startswith("run: <")
+    return "\n".join([head, "path: " + path, "run: " + run, sep]) + "\n" + content
+
+
 def _block(path, content, run=None):
     run = run if run is not None else "%s %s" % (PY, shlex.quote(path))
-    block, refusal = break_it.parse_block(
-        "break-it-test v1\npath: %s\nrun: %s\n---\n%s" % (path, run, content))
+    block, refusal = break_it.parse_block(_wire(path, run, content))
     assert refusal is None
     return block
 
@@ -70,7 +90,7 @@ def _fake(outcome, calls=None):
 
 
 def _finding(path, **extra):
-    block = "break-it-test v1\npath: %s\nrun: %s %s\n---\nassert True\n" % (path, PY, path)
+    block = _wire(path, "%s %s" % (PY, path), "assert True\n")
     out = {"title": "Break-it: %s" % path, "file": path, "taxonomy": break_it.TAXONOMY,
            "suggestion": block}
     out.update(extra)
@@ -107,6 +127,15 @@ def test_t1_parse_block_round_trips_and_refuses():
     for given, expected in cases:
         assert break_it.parse_block(given) == (None, expected), given
     assert break_it.parse_block(good)[1] is None
+
+
+def test_parse_block_follows_the_specification_in_the_test_role_file():
+    good = _wire("tests/test_x.py", "python tests/test_x.py", "z\n")
+    block, refusal = break_it.parse_block(good)
+    assert refusal is None and block["path"] == "tests/test_x.py" and block["content"] == "z\n"
+    header = _template()[0]
+    assert break_it.parse_block(good.replace(header, header + "x", 1)) == (
+        None, "block-header-missing")
 
 
 # T2
@@ -222,6 +251,54 @@ def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env
     finally:
         if not _gone(pid):
             os.kill(pid, 9)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc to disable the reaper")
+def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, monkeypatch):
+    # The reaper cannot scan (no /proc for it), the worker has its own session and no environment: only the working-directory net can catch it.
+    marker = 'PROC_ROOT = "/proc"'
+    assert marker in break_it._REAPER
+    monkeypatch.setattr(break_it, "_REAPER", break_it._REAPER.replace(marker, 'PROC_ROOT = "/nonexistent"'))
+    pidfile = tmp_path / "worker.pid"
+    content = ("import os, subprocess\n"
+               "p = subprocess.Popen([%r, '60'], start_new_session=True, env={})\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % shutil.which("sleep")
+    block = _block("tests/test_w.py", content,
+                   run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
+    assert break_it.run_one(str(repo), _head(repo), block)["outcome"] == "passed"
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the detached worker outlived run_one"
+    finally:
+        if not _gone(pid):
+            os.kill(pid, 9)
+
+
+def test_t9_drain_start_failure_still_reaps_the_launched_process(repo, monkeypatch):
+    launched = []
+    real = subprocess.Popen
+
+    def spy(args, *a, **kw):
+        proc = real(args, *a, **kw)
+        if "-I" in args[:2]:
+            launched.append(proc.pid)
+        return proc
+
+    def boom(self):
+        time.sleep(1)  # let the launched test start, so a leak is a live process
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(break_it._TailDrain, "start", boom)
+    monkeypatch.setattr(break_it.subprocess, "Popen", spy)
+    block = _block("tests/test_d.py", "import time\ntime.sleep(60)\n")
+    record = break_it.run_one(str(repo), _head(repo), block)
+    assert (record["outcome"], record["reason"]) == ("not-run", "run-error")
+    assert len(launched) == 1
+    try:
+        assert _gone(launched[0]), "the launched process outlived the failed run"
+    finally:
+        if not _gone(launched[0]):
+            os.kill(launched[0], 9)
 
 
 # T10
