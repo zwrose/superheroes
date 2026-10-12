@@ -53,6 +53,8 @@ _BOOKKEEPING_RE = re.compile(
 _OBJECT_WORDS = frozenset(("the", "a", "an", "it", "this", "that", "them", "now", "pr", "full",
                            "light", "micro", "to", "into", "once", "when", "after"))
 _OBJECT_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
+# A recurrence word makes the sentence a rule for later work, not a one-time authorization.
+_RECURRING_RE = re.compile(r"\b(?:every|each|always|never|whenever|all|any)\b")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCOPE_RE = re.compile(r"standing|piece [a-z0-9][a-z0-9-]*")
 HEADER = ("# Canon\n\nThis file is the project's Canon, the record of the owner's decisions. Its "
@@ -100,7 +102,8 @@ def _go_word(text, limit):
     """The go-verb a short imperative starts with, or None: the verb leads and stands alone or is
     followed by an object or qualifier, so a noun usage ("Release notes ...") is not read as one."""
     tokens = [t.strip(".,;:!?\"'()") for t in text.lower().split()]
-    if not tokens or tokens[0] not in GO_VERBS or len(tokens) > limit:
+    if not tokens or tokens[0] not in GO_VERBS or len(tokens) > limit or _RECURRING_RE.search(
+            " ".join(tokens)):
         return None
     if len(tokens) == 1 or tokens[1] in _OBJECT_WORDS or _OBJECT_RE.fullmatch(tokens[1]):
         return tokens[0]
@@ -114,7 +117,10 @@ def recognize(ruling, words):
     letter is a real ruling, so a disposition is read from the ruling text alone."""
     if _DISPOSITION_RE.match(ruling):
         return "disposition", "a collector disposition (%r)" % ruling[:60]
-    for text, limit in ((_DISPOSITION_RE.sub("", words or "", count=1), 8), (ruling, 16)):
+    words = _DISPOSITION_RE.sub("", words or "", count=1)
+    if re.search(r"[;.]\s*\S", words):  # mixed words: the ruling is the rule extracted from them
+        words = ""
+    for text, limit in ((words, 8), (ruling, 16)):
         verb = _go_word(text, limit)
         if verb:
             kind = "merge" if verb in ("merge", "release", "cut", "publish") else "act"
@@ -129,6 +135,12 @@ def _field(name, value):
     if "\n" in value or "\r" in value or SEP in value or not value.strip():
         raise Refusal("canon-bad-field", "%s must be one non-empty line with no ' · '" % name)
     return value
+
+
+def entry_line(entry_id, date, scope, ruling, words_part, where):
+    """The one entry-line format, in the contract's field order; `words_part` is the whole
+    owner's-words field (or the cedes/supersedes fields joined before it by the caller)."""
+    return SEP.join(["- **%s**" % entry_id, date, scope, ruling, words_part, "where: " + where])
 
 
 def build_line(a, entry_id):
@@ -153,16 +165,16 @@ def build_line(a, entry_id):
     if (a.cedes or a.example) and a.ground != "ceded-call":
         raise Refusal("canon-bad-field", "--cedes and --example belong to a ceded call only")
     where = _field("--where", a.where)
-    parts = ["- **%s**" % entry_id, a.date, a.scope, _field("--ruling", a.ruling)]
+    ruling = _field("--ruling", a.ruling)
+    mid = []
     if a.cedes:
-        parts.append("cedes: %s; example: %s" % (_field("--cedes", a.cedes),
-                                                 _field("--example", a.example)))
+        mid.append("cedes: %s; example: %s" % (_field("--cedes", a.cedes),
+                                               _field("--example", a.example)))
     if a.supersedes:
-        parts.append("supersedes: " + _field("--supersedes", a.supersedes))
-    parts.append('owner\'s words: "%s"' % _field("--owners-words", a.owners_words)
-                 if a.owners_words else "owner's words: none recorded")
-    parts.append("where: " + where)
-    return SEP.join(parts)
+        mid.append("supersedes: " + _field("--supersedes", a.supersedes))
+    mid.append('owner\'s words: "%s"' % _field("--owners-words", a.owners_words)
+               if a.owners_words else "owner's words: none recorded")
+    return entry_line(entry_id, a.date, a.scope, ruling, SEP.join(mid), where)
 
 
 def _git(cwd, *args):
@@ -200,32 +212,51 @@ def ids_in(*texts):
     return {m.group(0)[4:-2] for t in texts for m in map(_ID_RE.match, t.splitlines()) if m}
 
 
+def next_seq(id_prefix, *texts):
+    """The next n after the highest one `id_prefix` ('<date>-<session>-') used in the texts."""
+    used = [int(i.rsplit("-", 1)[1]) for i in ids_in(*texts) if i.startswith(id_prefix)]
+    return max(used, default=0) + 1
+
+
 def mint_id(written, session_id, *texts):
     """§ The id rule: continue from the highest n this session prefix used on that date."""
     prefix = (session_id or "")[:8].lower()
     if not re.fullmatch(r"[0-9a-z]{8}", prefix):
         raise Refusal("canon-bad-field", "--session-id needs 8 leading [0-9a-z] characters")
-    used = [int(i.rsplit("-", 1)[1]) for i in ids_in(*texts)
-            if i.startswith("%s-%s-" % (written, prefix))]
-    return "%s-%s-%d" % (written, prefix, max(used, default=0) + 1)
+    id_prefix = "%s-%s-" % (written, prefix)
+    return "%s%d" % (id_prefix, next_seq(id_prefix, *texts))
+
+
+ATTRIBUTES_LINE = "canon.md merge=union"
+
+
+def ensure_attributes(path):
+    """Add the union-merge attribute to the .gitattributes at `path`, creating it if absent."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            have = fh.read()
+    except FileNotFoundError:
+        have = None
+    if have is not None and ATTRIBUTES_LINE in [ln.strip() for ln in have.splitlines()]:
+        return
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        if have and not have.endswith("\n"):
+            fh.write("\n")
+        fh.write(ATTRIBUTES_LINE + "\n")
 
 
 def _write(loc, working, lines):
     """Append whole lines at the end, creating the file shape and the union-merge attribute."""
     path = loc["path"]
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    text = working or HEADER
-    if not text.endswith("\n"):
-        text += "\n"
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(text + "".join(l + "\n" for l in lines))
+    # an existing Canon is only ever appended to, never reopened for writing from the start
+    lead = HEADER if not working else ("" if working.endswith("\n") else "\n")
+    with open(path, "a" if working else "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(lead + "".join(l + "\n" for l in lines))
     paths = [path]
     if loc["home"] == "repo":
         attrs = os.path.join(os.path.dirname(path), ".gitattributes")
-        have = open(attrs, encoding="utf-8").read() if os.path.isfile(attrs) else ""
-        if "canon.md merge=union" not in have.splitlines():
-            with open(attrs, "a", encoding="utf-8") as fh:
-                fh.write(("" if not have or have.endswith("\n") else "\n") + "canon.md merge=union\n")
+        ensure_attributes(attrs)
         paths.append(attrs)
     return paths
 
@@ -287,6 +318,16 @@ def _check_conflicts(lines, working, default_text):
 
 
 def cmd_append(a):
+    import mode_registry
+    # one writer at a time from the baseline read to the write: the project store's config lock
+    with mode_registry.config_lock(a.root) as got:
+        if not got:
+            raise Refusal("canon-lock-contended", "another writer holds the project store's "
+                          "configuration lock; run the append again")
+        return _append_locked(a)
+
+
+def _append_locked(a):
     loc, working, default_text = _locate(a.root)
     held = _read_held(a.held_file)
     if a.lines_file:
@@ -387,6 +428,10 @@ def main(argv):
         out = {"append": cmd_append, "hold": cmd_hold, "ruling-record": cmd_ruling_record}[a.cmd](a)
     except Refusal as exc:
         out = exc.payload
+    except OSError as exc:
+        out = {"ok": False, "reason": "canon-write-failed", "detail": "%s: %s; Canon's entries "
+               "are untouched (an existing Canon is only appended to); check `git status`, then "
+               "run it again" % (type(exc).__name__, exc)}
     sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0 if out["ok"] else 1
 

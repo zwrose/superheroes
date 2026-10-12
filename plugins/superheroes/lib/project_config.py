@@ -17,6 +17,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import canon  # noqa: E402
 import core_md  # noqa: E402
 import guardian_sweep  # noqa: E402
 
@@ -771,7 +772,6 @@ _CANON_HEADER = (
     "superheroes plugin's `rubric/canon-contract.md`. Entries are appended one per line at the end\n"
     "and are never edited or deleted."
 )
-_GITATTRIBUTES_LINE = "canon.md merge=union"
 _MIGRATION_COMMIT_MESSAGE = "docs: record configure item 13 in Canon as standing rulings"
 _MIGRATION_ORIGIN_PHRASE = "migrated from configure item 13"
 _SESSION_PATTERN = re.compile(r"^[0-9a-z]{8}$")
@@ -996,21 +996,7 @@ def _refuse_recorded_in_canon_for_no_rulings(cwd, root, result):
 
 
 def _ensure_gitattributes(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except FileNotFoundError:
-        text = None
-    if text is None:
-        with open(path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(_GITATTRIBUTES_LINE + "\n")
-        return
-    if _GITATTRIBUTES_LINE in [ln.strip() for ln in text.splitlines()]:
-        return
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        if text and not text.endswith("\n"):
-            fh.write("\n")
-        fh.write(_GITATTRIBUTES_LINE + "\n")
+    canon.ensure_attributes(path)
 
 
 def _left_as_they_are(detail):
@@ -1181,13 +1167,13 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
             with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
 
-        used = re.compile(r"^- \*\*%s(\d+)\*\*" % re.escape(prefix), re.MULTILINE)
-        highest = max([int(n) for n in used.findall(working_text + "\n" + default_text)] or [0])
-        ids = ["%s%d" % (prefix, highest + 1 + i) for i in range(len(rulings))]
+        first = canon.next_seq(prefix, working_text, default_text)
+        ids = ["%s%d" % (prefix, first + i) for i in range(len(rulings))]
         lines = [
-            "- **%s** · %s · standing · %s · owner's words: none recorded · where: "
-            "%s on %s (original session unknown), time not recorded"
-            % (entry_id, date, ruling, _MIGRATION_ORIGIN_PHRASE, date)
+            canon.entry_line(
+                entry_id, date, "standing", ruling, "owner's words: none recorded",
+                "%s on %s (original session unknown), time not recorded"
+                % (_MIGRATION_ORIGIN_PHRASE, date))
             for entry_id, ruling in zip(ids, rulings)
         ]
         with open(canon_path, "a", encoding="utf-8", newline="\n") as fh:

@@ -313,3 +313,69 @@ def test_ruling_record_needs_a_utc_time(capsys, tmp_path):
     code, out = _run(capsys, "ruling-record", "--date", WRITTEN, "--time", "2pm",
                      "--words-file", str(words), "--context", "c")
     assert code == 1 and out["reason"] == "canon-bad-field"
+
+
+def _bare_project(path):
+    os.makedirs(os.path.join(path, "docs", "superheroes"))
+    subprocess.run(["git", "init", "-q", "-b", "main", path], check=True)
+    _git(path, "config", "user.email", "t@t")
+    _git(path, "config", "user.name", "t")
+    canon_path = os.path.join(path, "docs", "superheroes", "canon.md")
+    with open(canon_path, "w") as fh:
+        fh.write(canon.HEADER + _entry(1) + "\n")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "canon")
+    return canon_path
+
+
+# axis: the write goes to the Canon of the project --root names, through the real lookup.
+def test_append_uses_the_real_lookup_for_the_named_root(tmp_path):
+    a_canon, b_canon = _bare_project(str(tmp_path / "a")), _bare_project(str(tmp_path / "b"))
+    before_a = open(a_canon).read()
+    env = dict(os.environ, SUPERHEROES_STORE_ROOT=str(tmp_path / "store"))
+    got = subprocess.run(
+        [sys.executable, os.path.join(_LIB, "canon.py"), "append", "--root", str(tmp_path / "b"),
+         *_fields()[2:]], cwd=str(tmp_path / "a"), env=env, capture_output=True, text=True)
+    out = json.loads(got.stdout)
+    assert got.returncode == 0 and os.path.realpath(out["path"]) == os.path.realpath(b_canon)
+    assert os.path.realpath(out["gitRoot"]) == os.path.realpath(str(tmp_path / "b"))
+    assert out["appended"][0] in open(b_canon).read().splitlines()
+    assert open(a_canon).read() == before_a
+
+
+# axis: an existing Canon is appended to, never reopened from the start, so its entries survive.
+def test_existing_canon_is_opened_for_append_only(project, capsys, monkeypatch):
+    modes = []
+    real_open = open
+
+    def spy(path, mode="r", *args, **kwargs):
+        if os.path.abspath(str(path)) == project["path"]:
+            modes.append(mode)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", spy)
+    before = real_open(project["path"]).read()
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 0 and "w" not in modes and "a" in modes
+    assert real_open(project["path"]).read() == before + out["appended"][0] + "\n"
+
+
+def test_write_failure_is_a_structured_refusal(project, capsys, monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(canon, "_write", boom)
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-write-failed" and "untouched" in out["detail"]
+
+
+# axis: a standing rule or an extracted rule is not read as a one-time go-word.
+@pytest.mark.parametrize("ground,ruling,words", [
+    ("principle", "Release the notes alongside every version.", None),
+    ("owner-call", "A failed import keeps the previous data.",
+     "Launch it; failed imports keep previous data."),
+])
+def test_standing_rule_is_not_a_go_word(project, capsys, ground, ruling, words):
+    extra = {"owners_words": words} if words else {}
+    code, out = _run(capsys, "append", *_fields(ground=ground, ruling=ruling, **extra))
+    assert code == 0 and out["appended"][0].split(canon.SEP)[3] == ruling
