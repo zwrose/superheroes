@@ -454,3 +454,15 @@ def test_a_broad_change_keeps_every_path_in_touched_but_bounds_the_why_lines(tmp
     assert "3000 changed path(s)" in unmatchable_why and repr(unmatched[2]) in unmatchable_why
     assert repr(unmatched[3]) not in unmatchable_why
     assert sum(len(w) for w in got["why"]) < 2000
+
+
+def test_review_record_repeats_no_lane_reason_token_literal():
+    """lane_call owns the reason tokens and the path-stripping format; review_record imports them."""
+    import lane_call as lc
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "review_record.py"),
+               encoding="utf-8").read()
+    tokens = [getattr(lc, n) for n in dir(lc) if n.startswith("WHY_") and isinstance(getattr(lc, n), str)
+              and n != "WHY_SAMPLE"]
+    assert len(tokens) >= 9
+    for token in tokens + [lc._AGAINST_AREA.strip(), lc.WHY_TOUCHES.rstrip(":")]:
+        assert token not in src, token

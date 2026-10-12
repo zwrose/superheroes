@@ -29,11 +29,46 @@ LANES = ("micro", "light", "full")
 FLOOR_FULL = "full"
 WHY_SAMPLE = 3
 
+# The reason-line tokens: each reason line this module authors starts with one of them. Every other module
+# that reads, selects or bounds reason lines imports these (and the helpers below); none repeats a literal.
+WHY_TOUCHES = "touches-risk-area:"
+WHY_NOT_SET = "risk-unclear-not-set:"
+WHY_UNMATCHABLE = "risk-unclear-unmatchable:"
+WHY_NO_PATHS = "risk-unclear-no-paths:"
+WHY_NO_FLOOR = "no-floor:"
+WHY_NO_PROPOSAL = "no-proposal-defaults-full:"
+WHY_PROPOSAL_INVALID = "proposal-invalid:"
+WHY_PROPOSAL_BELOW = "proposal-below-floor:"
+WHY_PROPOSAL_TAKEN = "proposal-taken:"
+_AGAINST_AREA = " against an area"
+
 
 def _sample(items, render=str):
     """The why-line form of a list: all of it when short, else the count and the first few."""
     shown = ", ".join(render(i) for i in items[:WHY_SAMPLE])
     return shown if len(items) <= WHY_SAMPLE else "%d paths: %s, ..." % (len(items), shown)
+
+
+def is_touches_line(line):
+    """Whether ``line`` is a touches-risk-area reason line."""
+    return isinstance(line, str) and line.startswith(WHY_TOUCHES)
+
+
+def touches_omitted_line(count):
+    """The line that stands for ``count`` touches-risk-area lines cut from the reasons."""
+    return "%d more %s lines omitted" % (count, WHY_TOUCHES.rstrip(":"))
+
+
+def why_line_paths_stripped(line, names=()):
+    """``line`` without its sample paths: a touches-risk-area line keeps the area name (one of ``names``
+    when its prefix matches, else the text before the first `` (``); an unmatchable line keeps its count
+    and loses the sample; any other line is returned unchanged."""
+    if line.startswith(WHY_TOUCHES):
+        name = next((n for n in names if line.startswith("%s %s (" % (WHY_TOUCHES, n))), None)
+        return "%s %s" % (WHY_TOUCHES, name) if name is not None else line.split(" (", 1)[0]
+    if line.startswith(WHY_UNMATCHABLE) and _AGAINST_AREA + " (" in line:
+        return line.split(_AGAINST_AREA + " (", 1)[0] + _AGAINST_AREA
+    return line
 
 
 def rank(lane):
@@ -52,39 +87,39 @@ def call(cwd, paths, proposed=None, root=None):
     # axis: a change that touches a risk area gets the floor full — see bite-proof record wo_a_1795_lane-call
     for hit in hits:
         floor = FLOOR_FULL
-        why.append("touches-risk-area: %s (%s)" % (hit["name"], _sample(hit["matched"])))
+        why.append("%s %s (%s)" % (WHY_TOUCHES, hit["name"], _sample(hit["matched"])))
     # axis: risk areas that are not set (missing, empty or unreadable) get the floor full — see bite-proof record wo_a_1795_lane-call
     if state != "set":
         floor = FLOOR_FULL
         detail = "" if not got["detail"] else ": %s" % got["detail"]
-        why.append("risk-unclear-not-set: the project's risk areas are not set (%s%s)" % (got["reason"], detail))
+        why.append("%s the project's risk areas are not set (%s%s)" % (WHY_NOT_SET, got["reason"], detail))
     # axis: a path no area can be matched against gets the floor full — see bite-proof record wo_a_1795_lane-call
     if unmatchable:
         floor = FLOOR_FULL
-        why.append("risk-unclear-unmatchable: %d changed path(s) cannot be matched against an area (%s)"
-                   % (len(unmatchable), _sample(unmatchable, repr)))
+        why.append("%s %d changed path(s) cannot be matched%s (%s)"
+                   % (WHY_UNMATCHABLE, len(unmatchable), _AGAINST_AREA, _sample(unmatchable, repr)))
     # axis: a change with no changed paths gets the floor full — see bite-proof record wo_a_1795_lane-call
     if isinstance(paths, list) and not paths:
         floor = FLOOR_FULL
-        why.append("risk-unclear-no-paths: no changed paths were given")
+        why.append(WHY_NO_PATHS + " no changed paths were given")
     if floor is None:
-        why.append("no-floor: the risk is clear and no risk area is touched")
+        why.append(WHY_NO_FLOOR + " the risk is clear and no risk area is touched")
 
     taken = False
     if proposed is None:
         lane = FLOOR_FULL
-        why.append("no-proposal-defaults-full: no lane was proposed, so the lane is full")
+        why.append(WHY_NO_PROPOSAL + " no lane was proposed, so the lane is full")
     elif rank(proposed) < 0:
         lane = floor or FLOOR_FULL
-        why.append("proposal-invalid: %r is not one of %s, so the lane is %s"
-                   % (proposed, ", ".join(LANES), lane))
+        why.append("%s %r is not one of %s, so the lane is %s"
+                   % (WHY_PROPOSAL_INVALID, proposed, ", ".join(LANES), lane))
     # axis: a proposal below the floor never lowers the lane — see bite-proof record wo_a_1795_lane-call
     elif floor is not None and rank(proposed) < rank(floor):
         lane = floor
-        why.append("proposal-below-floor: %s is below the floor %s, so the lane is %s" % (proposed, floor, lane))
+        why.append("%s %s is below the floor %s, so the lane is %s" % (WHY_PROPOSAL_BELOW, proposed, floor, lane))
     else:
         lane, taken = proposed, True
-        why.append("proposal-taken: %s is at or above the floor" % proposed)
+        why.append("%s %s is at or above the floor" % (WHY_PROPOSAL_TAKEN, proposed))
 
     return {
         "floor": floor,
@@ -104,10 +139,10 @@ def unavailable(why, proposed=None):
     reasons = [why]
     if proposed is not None and rank(proposed) < 0:
         lane_names = ", ".join(LANES)
-        reasons.append("proposal-invalid: %r is not one of %s, so the lane is %s" % (proposed, lane_names, FLOOR_FULL))
+        reasons.append("%s %r is not one of %s, so the lane is %s" % (WHY_PROPOSAL_INVALID, proposed, lane_names, FLOOR_FULL))
     elif proposed is not None and rank(proposed) < rank(FLOOR_FULL):
-        reasons.append("proposal-below-floor: %s is below the floor %s, so the lane is %s"
-                       % (proposed, FLOOR_FULL, FLOOR_FULL))
+        reasons.append("%s %s is below the floor %s, so the lane is %s"
+                       % (WHY_PROPOSAL_BELOW, proposed, FLOOR_FULL, FLOOR_FULL))
     return {
         # axis: a basis that was never read gets the floor full — see bite-proof record wo_c_1795_lane-basis
         "floor": FLOOR_FULL,

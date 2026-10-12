@@ -323,9 +323,8 @@ def _lane(a, rd, meta):
 BASIS_EVIDENCE_MAX = 10      # matched or unmatchable paths kept per list
 BASIS_AREAS_MAX = 20         # touched areas kept on the record
 BASIS_PATHS_MAX = 40         # matched paths kept across all touched areas together
-BASIS_WHY_MAX = 12           # reason lines kept; the touches-risk-area ones are the cut ones
+BASIS_WHY_MAX = 12           # reason lines kept; the touches ones are the cut ones
 BASIS_TEXT_MAX = 300         # characters kept of any one path, area name or reason line
-_TOUCHES = "touches-risk-area:"
 
 
 def _clip(text):
@@ -358,14 +357,14 @@ def _bound_basis(basis):
         out["unmatchable"] = [_clip(u) for u in basis["unmatchable"]]
     why = list(basis["why"])
     if len(why) > BASIS_WHY_MAX:
-        # Drop only touches-risk-area lines, from the end, so the verdict lines stay; say how many went.
+        # Drop only the touches lines, from the end, so the verdict lines stay; say how many went.
         drop = len(why) - BASIS_WHY_MAX + 1
-        idx = [i for i, w in enumerate(why) if i and w.startswith(_TOUCHES)][::-1][:drop]
+        idx = [i for i, w in enumerate(why) if i and lane_call.is_touches_line(w)][::-1][:drop]
         if idx:
             gone = set(sorted(idx)[-drop:])
             at = min(gone)
             why = [w for i, w in enumerate(why) if i not in gone]
-            why.insert(at, "%d more %s lines omitted" % (len(gone), _TOUCHES.rstrip(":")))
+            why.insert(at, lane_call.touches_omitted_line(len(gone)))
             out["whyCount"] = len(basis["why"])
     out["why"] = [_clip(w) for w in why]
     return out
@@ -380,20 +379,20 @@ def _lane_basis(a, rd, lane_value, final_sha):
     # axis: an account that names no repository reads nothing, so no other project's store is read — see bite-proof record wo_c_1795_lane-basis
     if not repo_root:
         return dict(lane_call.unavailable(
-            "risk-unclear-not-set: the account names no repository, so its risk areas were not read",
+            lane_call.WHY_NOT_SET + " the account names no repository, so its risk areas were not read",
             proposed=lane_value), source="unavailable")
     paths = rd["changed_paths"](a["pr"], a["repo"])
     # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
     after = rd["pr_meta"](a["pr"], a["repo"]) if isinstance(paths, list) else None
     if isinstance(paths, list) and not (after and after.get("head") == final_sha):
         return dict(lane_call.unavailable(
-            "risk-unclear-no-paths: the PR head moved while its changed files were read",
+            lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read",
             proposed=lane_value), source="unavailable")
     if isinstance(paths, list):
         return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
                     source="lane rule over the PR's changed files")
     return dict(lane_call.unavailable(
-        "risk-unclear-no-paths: the PR's changed files could not be read", proposed=lane_value),
+        lane_call.WHY_NO_PATHS + " the PR's changed files could not be read", proposed=lane_value),
         source="unavailable")
 
 
@@ -742,20 +741,10 @@ def _scrubbed(value):
     return value
 
 
-_SHED_PATHS = ("touches-risk-area:", "risk-unclear-unmatchable:")
-
-
 def _shed_why_paths(basis):
     """Step 1: the sampled paths leave the reason lines (``name (a, b, c)`` becomes ``name``)."""
     names = [t["name"] for t in basis["touched"]]
-    why = []
-    for w in basis["why"]:
-        if w.startswith(_TOUCHES):
-            name = next((n for n in names if w.startswith("%s %s (" % (_TOUCHES, n))), None)
-            w = "%s %s" % (_TOUCHES, name) if name is not None else w.split(" (", 1)[0]
-        elif w.startswith("risk-unclear-unmatchable:") and " against an area (" in w:
-            w = w.split(" against an area (", 1)[0] + " against an area"
-        why.append(w)
+    why = [lane_call.why_line_paths_stripped(w, names) for w in basis["why"]]
     return dict(basis, why=why, whyCount=basis.get("whyCount", len(basis["why"])), basisShed="why-paths")
 
 
