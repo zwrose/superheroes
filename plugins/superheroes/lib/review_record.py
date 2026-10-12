@@ -55,7 +55,10 @@ RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
-_LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(full|light|micro)\b[.:]?[ \t]*(.*)$")
+# The review lane vocabulary, its one home: the lane matcher below is built from it and the sheet builder
+# validates against it; the sheet schema holds no copy of it (a test pins that).
+LANES = ("full", "light", "micro")
+_LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(LANES) + r")\b[.:]?[ \t]*(.*)$")
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}

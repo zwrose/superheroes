@@ -276,9 +276,8 @@
               }
             },
             "lane": {
-              "description": "The review lane the PR went through, or null when there is none.",
-              "type": ["string", "null"],
-              "enum": ["full", "light", "micro", null]
+              "description": "The review lane the PR went through, or null when there is none (the lane vocabulary has one home, review_record.LANES, which the sheet builder validates against).",
+              "type": ["string", "null"]
             },
             "laneReason": {
               "description": "Why the PR went through that lane, or null when no reason was given.",

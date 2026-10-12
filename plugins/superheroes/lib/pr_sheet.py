@@ -56,10 +56,10 @@ _LEFT = rfs.LEFT_FOR_OWNER
 SCHEMA_PATH = os.path.join(_LIB_DIR, os.pardir, "theme", "sheet.schema.json")
 with open(SCHEMA_PATH, encoding="utf-8") as _fh:
     _SCHEMA = json.load(_fh)
-# The identifier and commit patterns and the lane values are read from the sheet schema, their one home.
+# The identifier and commit patterns are read from the sheet schema, their one home.
 _ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
 _COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
-_LANES = tuple(_SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["lane"]["enum"])
+_LANES = review_record.LANES
 _RAN = review_record.RAN_STATES
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
                  ("missingReviews", list), ("rounds", dict))
@@ -137,7 +137,7 @@ def _record(raw, n, problems):
     if not _commit(rec["finalCommit"].get("sha")):
         problems.append(f"{where}: finalCommit.sha is null or not a commit id")
     if not (_text(ci.get("state")) and (ci.get("sha") is None or _commit(ci["sha"]))
-            and lane.get("value") in _LANES and isinstance(lane.get("reason"), (str, type(None)))
+            and lane.get("value") in (*_LANES, None) and isinstance(lane.get("reason"), (str, type(None)))
             and isinstance(rounds.get("count"), int) and rounds["count"] >= 0 and isinstance(rounds.get("stoppedAtCap"), bool)
             and all(isinstance(v, dict) and v.get("ran") in _RAN and _text(v.get("name"))
                     and ("family" in v and (v["family"] is None or _text(v["family"]))) for v in rec["reviewers"])

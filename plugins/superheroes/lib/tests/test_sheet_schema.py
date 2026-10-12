@@ -518,7 +518,6 @@ PR_RED_FIXTURES = [
     ("pr-carrying-final", pr_sheet, pr_with_final),
     ("option-missing-sends-back", pr_sheet, lambda s: s["cards"][0]["options"][0].pop("sendsBack")),
     ("commit-not-hex", pr_sheet, lambda s: s["prSheet"].__setitem__("commit", "XYZ")),
-    ("lane-unknown", pr_sheet, lambda s: s["prSheet"]["whatChanged"].__setitem__("lane", "medium")),
     ("unknown-pr-sheet-field", pr_sheet, lambda s: s["prSheet"].__setitem__("extra", 1)),
     ("ci-commit-not-hex", pr_sheet, lambda s: s["prSheet"]["whatChanged"]["ci"].__setitem__("commit", "XYZ")),
 ]

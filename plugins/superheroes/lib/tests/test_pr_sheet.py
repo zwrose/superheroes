@@ -10,6 +10,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 import pr_sheet
+import review_record
 from provenance_patterns import PROVENANCE_PATTERNS
 from test_sheet_schema import check_sheet_problems
 
@@ -369,3 +370,18 @@ def test_the_schema_holds_no_copy_of_the_ran_vocabulary():
     # Axis: the ran vocabulary has one home (review_record.RAN_STATES); the schema carries no enum of it.
     ran = SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["reviewers"]["items"]["properties"]["ran"]
     assert "enum" not in ran and ran["type"] == "string"
+
+
+def test_the_schema_holds_no_copy_of_the_lane_vocabulary():
+    # Axis: the lane vocabulary has one home (review_record.LANES); the schema carries no enum of it.
+    lane = SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["lane"]
+    assert "enum" not in lane
+    assert pr_sheet._LANES is review_record.LANES
+
+
+def test_a_record_lane_outside_the_vocabulary_is_refused_by_the_builder():
+    # Axis: with no enum in the schema, the builder is what refuses a lane that review_record.LANES does not name.
+    records, advisor = bundle(SMALL)
+    records[0]["lane"] = {"value": "medium", "reason": None}
+    with pytest.raises(pr_sheet.Refusal):
+        build(records, advisor)
