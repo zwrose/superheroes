@@ -31,6 +31,8 @@ every reviewer's findings coverage: the code holds no reviewer's findings, only 
 Write a JSON file with `"schema": "review-account/1"` and these keys:
 
 - `pr`: the PR number. `sessionId`: this review session. `lane` and `laneReason`: the lane and why.
+  The record carries `laneBasis`, the lane rule run over the PR's changed files (`rubric/review-discipline.md` § The lane floor says when its floor is full).
+  A lane below that floor makes the record read not reviewed.
 - `finalCommit`: the commit the review ended on. `ci`: CI on it, as you saw it.
 - `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool),
   `ownerWord` (`{words, where}`), `commit` (the commit that reviewer reviewed, when it is not the final commit; a row that names none is judged against the final commit). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.

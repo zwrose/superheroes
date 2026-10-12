@@ -34,6 +34,12 @@ These retirements ship in the same release as the review record, and never apart
 - A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
 - A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
 
+### Review: the lane follows Risk and trust
+
+- A change that touches a risk area always gets the full lane. So does any change while a project has set no risk areas, so the micro lane is unavailable for it until the project sets them. The rule's home is `rubric/review-discipline.md` § The lane floor.
+- A session or model may raise a change's lane. It may never lower it below that floor.
+- A review record whose lane sits below the floor reads not reviewed.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
