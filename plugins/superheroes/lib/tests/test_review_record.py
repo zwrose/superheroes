@@ -1687,3 +1687,29 @@ def test_a_shed_that_reaches_the_last_resort_still_fits(tmp_path, monkeypatch):
     assert set(shed) == {"floor", "lane", "proposalTaken", "source", "why", "whyCount", "touchedCount",
                          "matchedCount", "unmatchableCount", "basisShed"}
     assert shed["touchedCount"] == 20 and shed["matchedCount"] == 40 and len(shed["why"]) == 1
+
+
+def _head_moving_readers(heads):
+    """Readers whose pr_meta returns the given heads in turn (the last one repeats)."""
+    fake, seen = Fake(), []
+
+    def meta(pr, repo):
+        seen.append(1)
+        return {"head": heads[min(len(seen), len(heads)) - 1], "body": "", "issues": []}
+    return {**fake.readers(), "pr_meta": meta}
+
+
+def test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_unavailable_basis(tmp_path):
+    # axis: the changed-file evidence bound to the recorded commit; files of a newer head judged against the earlier one
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD, "f" * 40]))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and basis["floor"] == "full"
+    assert basis["why"][0] == "risk-unclear-no-paths: the PR head moved while its changed files were read"
+    assert rec["finalCommit"]["sha"] == HEAD
+
+
+def test_a_stable_head_gives_the_normal_basis(tmp_path):
+    repo = risk_repo(tmp_path)
+    rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD]))
+    assert rec["laneBasis"]["source"] == FILES_SOURCE

@@ -370,9 +370,10 @@ def _bound_basis(basis):
     return out
 
 
-def _lane_basis(a, rd, lane_value):
+def _lane_basis(a, rd, lane_value, final_sha):
     """The risk floor for the PR's changed files, from lane_call.call, with the record's own lane as the
-    proposal. An account that names no repository, or files that cannot be read, give the floor full,
+    proposal. An account that names no repository, files that cannot be read, or a PR head that moved
+    from the recorded final commit while they were read, give the floor full,
     marked unavailable, never a basis from the ambient project or from a partial list."""
     repo_root = a.get("repoRoot")
     # axis: an account that names no repository reads nothing, so no other project's store is read — see bite-proof record wo_c_1795_lane-basis
@@ -381,6 +382,12 @@ def _lane_basis(a, rd, lane_value):
             "risk-unclear-not-set: the account names no repository, so its risk areas were not read",
             proposed=lane_value), source="unavailable")
     paths = rd["changed_paths"](a["pr"], a["repo"])
+    # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
+    after = rd["pr_meta"](a["pr"], a["repo"]) if isinstance(paths, list) else None
+    if isinstance(paths, list) and not (after and after.get("head") == final_sha):
+        return dict(lane_call.unavailable(
+            "risk-unclear-no-paths: the PR head moved while its changed files were read",
+            proposed=lane_value), source="unavailable")
     if isinstance(paths, list):
         return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
                     source="lane rule over the PR's changed files")
@@ -572,7 +579,7 @@ def build_record(account, readers):
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
-        "laneBasis": _lane_basis(a, rd, lane["value"]), "finalCommit": fc,
+        "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
