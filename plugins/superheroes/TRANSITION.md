@@ -52,6 +52,13 @@ These retirements ship in the same release as the review record, and never apart
 - A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
 - A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
 
+### The test role
+
+- The review panel's test seat is now the test role. Its agent is `test-role`, and its findings file and the `Test` dimension are unchanged. The `test-reviewer` agent is gone.
+- A `seatPins` entry under `test-reviewer` is read as the test role's pin, with nothing to rewrite. An explicit `test-role` pin wins.
+- The test role asks for no test coverage outside the project's risk areas and raises no test-style findings.
+- For a change that touches a risk area, the test role writes break-it tests. The review loop runs them in a throwaway copy of the change and keeps each one with the change once its finding is fixed.
+
 ### Configure: Risk and trust
 
 - Item 10 is renamed "Risk and trust", and its slug `threatModel` is replaced by `riskAndTrust`. Callers of `project_config.py get --item threatModel` or `set --item threatModel` now get `unknown-slug`.
