@@ -257,8 +257,9 @@ goes](#what-stays-out-and-where-it-goes) keeps out, and its refusal names that r
 section's table and paragraphs give it. It runs steps 2 to 6 below: it probes the default-branch
 copy, mints the id by the id rule, creates the file shape and the `.gitattributes` line, and
 appends one line. It prints the paths to commit; steps 1, 7 and 8 stay the session's.
-`canon.py append --lines-file <file>` appends held lines byte for byte, skipping an id Canon already
-holds. A refusal is the contract working: put the record in the home it names, never in Canon.
+`canon.py append --lines-file <file>` appends held lines byte for byte, skipping a line Canon
+already holds byte for byte and refusing a line whose id Canon holds with different text. `append`
+also takes the held comment (`--held-file`), so a new entry's id counts held lines. A refusal is the contract working: put the record in the home it names, never in Canon.
 
 1. Refresh the default branch, then run the lookup. Before the lookup, when an origin remote exists and
    the network is available, run `git fetch origin`, so a stale `origin/HEAD` does not hide a Canon

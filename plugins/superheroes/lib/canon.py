@@ -6,7 +6,7 @@ an entry that the contract's § What stays out, and where it goes keeps out of C
 record's home as that section says it, mints the id by § The id rule, and keeps the file shape.
 
 CLI (one JSON object on stdout; exit 0 on success, 1 on a refusal or failure):
-  canon.py append --root R --session-id S <entry fields>      # write one new entry to Canon
+  canon.py append --root R --session-id S [--held-file F] <entry fields>   # write one new entry
   canon.py append --root R --lines-file F                     # append held lines byte for byte
   canon.py hold   --root R --session-id S [--held-file F] <entry fields>
   canon.py ruling-record --date D --time T --words-file F --context C
@@ -48,8 +48,11 @@ _DISPOSITION_RE = re.compile(r"^\s*(?:@?\d+(?:-\d+)?\s*[-–:=]\s*)?\(?[a-h]\)?\
 _BOOKKEEPING_RE = re.compile(
     r"\bfiled as #\d+|\btracked (?:by|in|on) #\d+|"
     r"\b(?:scheduled|slotted|moved|queued) (?:for|into|to|in) (?:the )?(?:phase|milestone)\b", re.I)
-_TARGET_RE = re.compile(r"#\d+|\bPR\b|\bpull request\b|\bv?\d+\.\d+\.\d+\b|\b(?:it|this|that|now)\b",
-                        re.I)
+# What may follow a go-verb for it to be an instruction, not a noun: an article, a pronoun, a
+# target (#n, PR, a version), a lane or tier word, or the preposition or conjunction that opens one.
+_OBJECT_WORDS = frozenset(("the", "a", "an", "it", "this", "that", "them", "now", "pr", "full",
+                           "light", "micro", "to", "into", "once", "when", "after"))
+_OBJECT_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCOPE_RE = re.compile(r"standing|piece [a-z0-9][a-z0-9-]*")
 HEADER = ("# Canon\n\nThis file is the project's Canon, the record of the owner's decisions. Its "
@@ -94,11 +97,12 @@ def _refuse_stays_out(kind, why):
 
 
 def _go_word(text, limit):
-    """The go-verb a short imperative aimed at one target starts with, or None."""
-    tokens = re.findall(r"[a-z][a-z-]*", text.lower())
-    if not tokens or tokens[0] not in GO_VERBS or len(text.split()) > limit:
+    """The go-verb a short imperative starts with, or None: the verb leads and stands alone or is
+    followed by an object or qualifier, so a noun usage ("Release notes ...") is not read as one."""
+    tokens = [t.strip(".,;:!?\"'()") for t in text.lower().split()]
+    if not tokens or tokens[0] not in GO_VERBS or len(tokens) > limit:
         return None
-    if len(tokens) == 1 or _TARGET_RE.search(text):
+    if len(tokens) == 1 or tokens[1] in _OBJECT_WORDS or _OBJECT_RE.fullmatch(tokens[1]):
         return tokens[0]
     return None
 
@@ -110,7 +114,7 @@ def recognize(ruling, words):
     letter is a real ruling, so a disposition is read from the ruling text alone."""
     if _DISPOSITION_RE.match(ruling):
         return "disposition", "a collector disposition (%r)" % ruling[:60]
-    for text, limit in ((_DISPOSITION_RE.sub("", words or "", count=1), 6), (ruling, 12)):
+    for text, limit in ((_DISPOSITION_RE.sub("", words or "", count=1), 8), (ruling, 16)):
         verb = _go_word(text, limit)
         if verb:
             kind = "merge" if verb in ("merge", "release", "cut", "publish") else "act"
@@ -246,8 +250,45 @@ def _check_held_line(line):
         _refuse_stays_out(*hit)
 
 
+def _read_held(path):
+    """The held comment's entry lines ([] when no file is given); the marker rule is `hold`'s."""
+    if not path:
+        return []
+    with open(path, encoding="utf-8") as fh:
+        held = fh.read()
+    return _held_lines(held) if held.strip() else []
+
+
+def _lines_by_id(text):
+    by_id = {}
+    for line in text.splitlines():
+        if _ID_RE.match(line):
+            by_id.setdefault(_ID_RE.match(line).group(0)[4:-2], set()).add(line)
+    return by_id
+
+
+def _check_conflicts(lines, working, default_text):
+    """Refuse the batch when an id is already held, or repeated in the batch, with other text:
+    two entries sharing one id resolve for no reader, so the owner decides which stands."""
+    in_working, in_default, in_batch = _lines_by_id(working), _lines_by_id(default_text), {}
+    conflicts = []
+    for line in lines:
+        entry_id = _ID_RE.match(line).group(0)[4:-2]
+        clash = (any(line != t for t in in_working.get(entry_id, ()))
+                 or any(line != t for t in in_default.get(entry_id, ()))
+                 or in_batch.setdefault(entry_id, line) != line)
+        if clash and entry_id not in conflicts:
+            conflicts.append(entry_id)
+    if conflicts:
+        raise Refusal("canon-id-conflict", "Canon already holds, or this batch repeats, %s with "
+                      "different text; two entries sharing one id resolve for no reader, so the "
+                      "owner decides which stands (rubric/canon-contract.md § Append only, and "
+                      "supersession)" % ", ".join(conflicts), ids=conflicts)
+
+
 def cmd_append(a):
     loc, working, default_text = _locate(a.root)
+    held = _read_held(a.held_file)
     if a.lines_file:
         with open(a.lines_file, encoding="utf-8") as fh:
             lines = [l.rstrip("\n") for l in fh if _ID_RE.match(l)]
@@ -255,12 +296,18 @@ def cmd_append(a):
             raise Refusal("canon-bad-line", "no Canon entry lines in %s" % a.lines_file)
         for line in lines:
             _check_held_line(line)
-        present = ids_in(working, default_text)
-        skipped = [l for l in lines if _ID_RE.match(l).group(0)[4:-2] in present]
-        lines = [l for l in lines if l not in skipped]
+        _check_conflicts(lines, working, default_text)
+        present, skipped, fresh = ids_in(working, default_text), [], []
+        for line in lines:
+            if _ID_RE.match(line).group(0)[4:-2] in present or line in fresh:
+                skipped.append(line)
+            else:
+                fresh.append(line)
+        lines = fresh
     else:
         written = a.written or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-        lines, skipped = [build_line(a, mint_id(written, a.session_id, working, default_text))], []
+        entry_id = mint_id(written, a.session_id, working, default_text, "\n".join(held))
+        lines, skipped = [build_line(a, entry_id)], []
     paths = _write(loc, working, lines) if lines else []
     return {"ok": True, "appended": lines, "skipped": skipped, "path": loc["path"],
             "home": loc["home"], "gitRoot": loc["gitRoot"], "commitPaths": paths}
@@ -271,11 +318,7 @@ def cmd_hold(a):
     if loc["home"] != "repo":
         raise Refusal("canon-store-never-held", "project-store Canon is committed at once: "
                       "use append, never hold")
-    held = ""
-    if a.held_file:
-        with open(a.held_file, encoding="utf-8") as fh:
-            held = fh.read()
-    lines = _held_lines(held) if held.strip() else []
+    lines = _read_held(a.held_file)
     written = a.written or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     entry_id = mint_id(written, a.session_id, working, default_text, "\n".join(lines))
     line = build_line(a, entry_id)
@@ -320,10 +363,9 @@ def _parser():
         for f in ("ground", "date", "scope", "ruling", "cedes", "example", "supersedes",
                   "owners-words", "where"):
             s.add_argument("--" + f)
+        s.add_argument("--held-file", help="the current held comment's body")
         if name == "append":
             s.add_argument("--lines-file", help="held lines to append byte for byte")
-        else:
-            s.add_argument("--held-file", help="the current held comment's body")
     r = sub.add_parser("ruling-record")
     for f in ("date", "time", "words-file", "context"):
         r.add_argument("--" + f, required=True)

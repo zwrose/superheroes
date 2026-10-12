@@ -98,6 +98,11 @@ def test_declared_stays_out_ground_refused_with_home(project, capsys, ground):
     ("Merge #1810 once CI is green.", None, "merge"),
     ("Launch it now in the cloud.", None, "act"),
     ("The importer keeps old data.", "a - launch it now in the cloud", "act"),
+    ("Tier full.", None, "act"),
+    ("File a follow-up for the importer.", None, "act"),
+    ("Force-push the feature branch.", None, "act"),
+    ("Release v0.43.0 tonight.", None, "merge"),
+    ("Merge the stack once CI is green and the vet receipt is posted.", None, "merge"),
     ("116 - a", None, "disposition"),
     ("The importer keeps old data; filed as #1820.", None, "board"),
     ("The importer keeps old data, scheduled for phase 2.", None, "board"),
@@ -107,6 +112,19 @@ def test_recognized_stays_out_refused_with_home(project, capsys, ruling, words, 
     code, out = _run(capsys, "append", *_fields(ruling=ruling, **extra))
     assert code == 1 and out["reason"] == "canon-stays-out" and out["kind"] == kind
     assert out["home"] == _contract_homes()[kind]
+
+
+# axis: recognition is narrow: a ruling that uses a go-word as a noun is a real ruling.
+@pytest.mark.parametrize("ruling", [
+    "Release notes name each breaking change in plain words.",
+    "File names in the spec folder use the work-item slug.",
+    "Merge conflicts in canon.md are resolved by keeping both lines.",
+    "Launch prompts carry only the workhorse command and the issue pointer.",
+    "Tier labels on the board are informational only.",
+])
+def test_go_word_used_as_a_noun_is_appended(project, capsys, ruling):
+    code, out = _run(capsys, "append", *_fields(ruling=ruling))
+    assert code == 0 and out["appended"][0].split(canon.SEP)[3] == ruling
 
 
 # axis: recognition is narrow: no real entry in this repo's Canon reads as a stays-out record.
@@ -167,6 +185,30 @@ def test_id_counts_held_lines(project, capsys, tmp_path):
     assert out["comment"] == canon.HELD_MARKER + "\n" + _entry(7) + "\n" + out["line"] + "\n"
 
 
+# axis: a hold followed by an append of a new entry never mints the held id twice.
+def test_append_new_entry_counts_held_lines(project, capsys, tmp_path):
+    code, held = _run(capsys, "hold", *_fields(ruling="The first ruling."))
+    assert code == 0 and held["id"] == "%s-abcd1234-4" % WRITTEN
+    comment = tmp_path / "held.md"
+    comment.write_text(held["comment"])
+    code, out = _run(capsys, "append", *_fields(ruling="The second ruling."),
+                     "--held-file", str(comment))
+    assert code == 0 and out["appended"][0].startswith("- **%s-abcd1234-5**" % WRITTEN)
+    code, drained = _run(capsys, "append", "--root", ".", "--lines-file", str(comment))
+    assert code == 0 and drained["appended"] == [held["line"]] and drained["skipped"] == []
+    text = open(project["path"]).read()
+    assert out["appended"][0] in text.splitlines() and held["line"] in text.splitlines()
+
+
+def test_append_held_file_without_marker_refused(project, capsys, tmp_path):
+    held = tmp_path / "held.md"
+    held.write_text("some other comment\n" + _entry(7) + "\n")
+    before = open(project["path"]).read()
+    code, out = _run(capsys, "append", *_fields(), "--held-file", str(held))
+    assert code == 1 and out["reason"] == "canon-held-not-marked"
+    assert open(project["path"]).read() == before
+
+
 def test_held_comment_without_marker_refused(project, capsys, tmp_path):
     held = tmp_path / "held.md"
     held.write_text("some other comment\n" + _entry(7) + "\n")
@@ -180,6 +222,50 @@ def test_held_go_word_refused_at_append(project, capsys, tmp_path):
     (tmp_path / "held.md").write_text(canon.HELD_MARKER + "\n" + bad + "\n")
     code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(tmp_path / "held.md"))
     assert code == 1 and out["reason"] == "canon-stays-out"
+
+
+def _conflict(capsys, project, tmp_path, *lines):
+    """Append the lines as a held batch; the Canon file and .gitattributes must stay as they were."""
+    attrs = os.path.join(os.path.dirname(project["path"]), ".gitattributes")
+
+    def snap():
+        return (open(project["path"], "rb").read(),
+                os.path.exists(attrs) and open(attrs, "rb").read())
+
+    before = snap()
+    batch = tmp_path / "held.md"
+    batch.write_text(canon.HELD_MARKER + "\n" + "".join(l + "\n" for l in lines))
+    code, out = _run(capsys, "append", "--root", ".", "--lines-file", str(batch))
+    assert snap() == before
+    return code, out
+
+
+# axis: a same-id line with different text refuses the whole batch and writes nothing.
+def test_conflict_against_working_copy_refused(project, capsys, tmp_path):
+    other = _entry(1).replace("A ruling.", "A different ruling.")
+    code, out = _conflict(capsys, project, tmp_path, _entry(8), other)
+    assert code == 1 and out["reason"] == "canon-id-conflict"
+    assert "%s-abcd1234-1" % WRITTEN in out["detail"] and "owner decides" in out["detail"]
+
+
+def test_conflict_against_default_copy_refused(project, capsys, tmp_path):
+    other = _entry(3).replace("A ruling.", "A different ruling.")
+    assert _entry(3) not in open(project["path"]).read()
+    code, out = _conflict(capsys, project, tmp_path, other)
+    assert code == 1 and out["reason"] == "canon-id-conflict"
+    assert "%s-abcd1234-3" % WRITTEN in out["detail"]
+
+
+def test_conflict_within_one_batch_refused(project, capsys, tmp_path):
+    other = _entry(8).replace("A ruling.", "A different ruling.")
+    code, out = _conflict(capsys, project, tmp_path, _entry(8), other)
+    assert code == 1 and out["reason"] == "canon-id-conflict"
+    assert "%s-abcd1234-8" % WRITTEN in out["detail"]
+
+
+def test_identical_repeat_of_a_default_copy_line_is_skipped(project, capsys, tmp_path):
+    code, out = _conflict(capsys, project, tmp_path, _entry(3))
+    assert code == 0 and out["appended"] == [] and out["skipped"] == [_entry(3)]
 
 
 # axis: the file shape and the union-merge attribute are created with the first entry.
@@ -217,7 +303,8 @@ def test_ruling_record_quotes_the_owner_and_posts(capsys, tmp_path, monkeypatch)
     assert out["body"].startswith(canon.RULING_MARKER + "\n")
     assert "2026-10-12 14:05 UTC" in out["body"]
     assert "> a - launch it now\n> in the cloud" in out["body"]
-    assert seen["cmd"][:3] == ["gh", "api", "repos/o/r/issues/695/comments"]
+    assert seen["cmd"] == ["gh", "api", "repos/o/r/issues/695/comments", "-f",
+                           "body=" + out["body"], "--jq", ".html_url"]
 
 
 def test_ruling_record_needs_a_utc_time(capsys, tmp_path):
