@@ -36,7 +36,6 @@ _START_TIMEOUT = 120
 _WINDOW = 20
 STATE_NAME = "cloud-relay.json"
 NAME_PREFIX = "superheroes-relay-"
-DEAD_STATES = ("done", "stopped")
 RELAY_PROMPT = """\
 You are the superheroes relay. You forward messages and do nothing else.
 First load your tools: ToolSearch with `select:ListAgents,SendMessage`.
@@ -68,15 +67,26 @@ def relay_name(config_dir):
 
 
 def _call(run, argv, env, timeout, cwd=None):
-    """(exit code, stdout) of one command; (None, "") when it could not run at all."""
+    """(exit code, stdout, stderr) of one command; (None, "", "") when it could not run at all."""
     runner = subprocess.run if run is None else run
     try:
         proc = runner(list(argv), capture_output=True, text=True, timeout=timeout, env=env,
                       cwd=cwd)
     except Exception:
-        return None, ""
-    code, out = getattr(proc, "returncode", None), getattr(proc, "stdout", "")
-    return (code if isinstance(code, int) else None), (out if isinstance(out, str) else "")
+        return None, "", ""
+    code = getattr(proc, "returncode", None)
+    out, err = getattr(proc, "stdout", ""), getattr(proc, "stderr", "")
+    return ((code if isinstance(code, int) else None), (out if isinstance(out, str) else ""),
+            (err if isinstance(err, str) else ""))
+
+
+def _first_line(*streams):
+    """The first non-empty line of the streams in order, cut to 200 characters; "" when none."""
+    for stream in streams:
+        for line in stream.splitlines():
+            if line.strip():
+                return line.strip()[:200]
+    return ""
 
 
 def _refuse(reason, **more):
@@ -130,23 +140,21 @@ def _now_iso():
 
 
 def _listing(run, env, config_dir, name):
-    """(alive entries, None) for the relay's name, or (None, refusal reason)."""
+    """(listed entries, None) for the relay's name, or (None, refusal extras). An entry the default
+    listing shows is alive whatever its `state`: a finished turn is `done`, not dead."""
+    built = _sibling("engine_adapter").claude_agents_list_argv()
+    if built["reason"]:
+        return None, {"reason": "relay-listing-failed", "detail": built.get("detail")}
     child = dict(env, CLAUDE_CONFIG_DIR=config_dir)
-    code, out = _call(run, ["claude", "agents", "--json"], child, _LIST_TIMEOUT)
+    code, out, _ = _call(run, built["argv"], child, _LIST_TIMEOUT)
     try:
         entries = json.loads(out) if code == 0 else None
     except ValueError:
         entries = None
     if not isinstance(entries, list):
-        return None, "relay-listing-failed"
-    alive = []
-    for e in entries:
-        if isinstance(e, dict) and e.get("kind") == "background" and e.get("name") == name:
-            if "state" not in e:
-                return None, "relay-listing-failed"
-            if e["state"] not in DEAD_STATES:
-                alive.append(e)
-    return alive, None
+        return None, {"reason": "relay-listing-failed"}
+    return [e for e in entries if isinstance(e, dict) and e.get("kind") == "background"
+            and e.get("name") == name], None
 
 
 def ensure(repo_root, config_dir, *, env=None, run=None):
@@ -158,18 +166,21 @@ def ensure(repo_root, config_dir, *, env=None, run=None):
     if refusal:
         return refusal
     env, started = _env(env), False
-    alive, why = _listing(run, env, config_dir, name)
-    if why:
-        return _refuse(why, name=name)
+    alive, failure = _listing(run, env, config_dir, name)
+    if failure:
+        return _refuse(name=name, **failure)
     if not alive:
-        cwd = os.path.join(os.path.dirname(path), "relay-" + name)
-        os.makedirs(cwd, exist_ok=True)
-        argv = ["claude", "--bg", "-n", name, "--model", "haiku", "--effort", "low", RELAY_PROMPT]
-        code, _ = _call(run, argv, dict(env, CLAUDE_CONFIG_DIR=config_dir), _START_TIMEOUT, cwd)
+        built = _sibling("engine_adapter").claude_relay_argv(name, RELAY_PROMPT)
+        if built["reason"]:
+            return _refuse("relay-start-failed", name=name, detail=built.get("detail"))
+        # The account trusts a repository it has been run in; a fresh directory is refused.
+        cwd = os.path.realpath(repo_root)
+        code, out, err = _call(run, built["argv"], dict(env, CLAUDE_CONFIG_DIR=config_dir),
+                               _START_TIMEOUT, cwd)
         if code != 0:
-            return _refuse("relay-start-failed", name=name)
-        alive, why = _listing(run, env, config_dir, name)
-        if why or not alive:
+            return _refuse("relay-start-failed", name=name, detail=_first_line(err, out))
+        alive, failure = _listing(run, env, config_dir, name)
+        if failure or not alive:
             return _refuse("relay-start-failed", name=name)
         started = True
     if len(alive) > 1:
@@ -244,11 +255,16 @@ def _blocks(rec):
 
 def _sends(records, session, after):
     """[(sent text, tool_use id)] of SendMessage calls to `session` stamped at or after `after`,
-    and {tool_use id: result success} for the results that read as a JSON object."""
+    and {tool_use id: (success, message)} for the results that read as a JSON object. A call
+    counts only with a non-empty string `id`, a result only with a non-empty string `tool_use_id`,
+    and a result confirms only the call with that id."""
     sends, results = [], {}
     for rec in records:
         for b in _blocks(rec):
             if b.get("type") == "tool_result":
+                call_id = b.get("tool_use_id")
+                if not (isinstance(call_id, str) and call_id):
+                    continue
                 parts = b.get("content")
                 parts = [{"text": parts}] if isinstance(parts, str) else parts
                 for part in parts if isinstance(parts, list) else []:
@@ -257,13 +273,14 @@ def _sends(records, session, after):
                     except (ValueError, TypeError, AttributeError):
                         continue
                     if isinstance(body, dict) and isinstance(body.get("success"), bool):
-                        results[b.get("tool_use_id")] = (body["success"], body.get("message"))
+                        results[call_id] = (body["success"], body.get("message"))
             elif b.get("type") == "tool_use" and b.get("name") == "SendMessage":
                 args = b.get("input")
                 when = _time(rec.get("timestamp"))
-                if (isinstance(args, dict) and isinstance(args.get("message"), str)
+                if (isinstance(b.get("id"), str) and b["id"] and isinstance(args, dict)
+                        and isinstance(args.get("message"), str)
                         and args.get("to") == session and when is not None and when >= after):
-                    sends.append((args["message"], b.get("id")))
+                    sends.append((args["message"], b["id"]))
     return sends, results
 
 
@@ -273,25 +290,34 @@ def _first_difference(expected, sent):
     return {"index": i, "expected": expected[i:i + _WINDOW], "sent": sent[i:i + _WINDOW]}
 
 
-def _decide(msg, relay_id, final):
-    """(verdict, detail) from the relay's record now; verdict None means keep waiting."""
+def _marker(msg_id):
+    return "(id %s)" % msg_id
+
+
+def _decide(msg, relay_id, final, pending_ids):
+    """(verdict, detail) from the relay's record now; verdict None means keep waiting.
+
+    A send belongs to this message when its text carries this message's id marker, or carries no
+    id marker of any pending message; a send carrying another pending message's id is that
+    message's send."""
     paths, records = _records(msg["configDir"], relay_id)
     after = _time(msg.get("sentAfter"))
     sends, results = _sends(records, msg["session"], after) if after else ([], {})
+    mine = _marker(msg["msgId"])
+    sends = [(t, i) for t, i in sends
+             if mine in t or not any(_marker(p) in t for p in pending_ids)]
+    other = [t for t, _ in sends if t != msg["forward"]]
+    if other:
+        return "relay-text-mismatch", {"firstDifference": _first_difference(msg["forward"], other[0])}
     exact = [results.get(i) for t, i in sends if t == msg["forward"]]
     if any(r and r[0] for r in exact):
         return "delivered", None
     failed = [r for r in exact if r and not r[0]]
     if failed:
         return "relay-send-failed", {"result": failed[0][1]}
-    other = [t for t, _ in sends if t != msg["forward"]]
-    if other:
-        return "relay-text-mismatch", {"firstDifference": _first_difference(msg["forward"], other[0])}
     if not final:
         return None, None
-    if exact:
-        return "relay-send-unconfirmed", None
-    return ("relay-silent" if paths else "relay-record-missing"), None
+    return ("relay-send-unconfirmed" if exact else "relay-silent"), None
 
 
 def _say(verdict, msg_id, wait, detail):
@@ -299,8 +325,6 @@ def _say(verdict, msg_id, wait, detail):
         return "Message %s was delivered to the cloud session." % msg_id
     why = {
         "relay-silent": "The relay did not send message %s within %s seconds",
-        "relay-record-missing": "The relay's session record for message %s did not appear within "
-                                "%s seconds",
         "relay-send-unconfirmed": "The relay sent message %s but no result for the send appeared "
                                   "within %s seconds",
         "relay-send-failed": "The relay's send of message %s failed (%s)",
@@ -311,6 +335,24 @@ def _say(verdict, msg_id, wait, detail):
            "relay-text-mismatch": ((detail or {}).get("firstDifference") or {}).get("index")
            }.get(verdict, wait)
     return (why % (msg_id, arg)) + "; it was not delivered."
+
+
+_REFUSAL_WORDS = {
+    "wait-invalid": "the wait must be a number of seconds from 0 and the interval above 0",
+    "relay-state-unreadable": "the relay's state file could not be read",
+    "message-unknown": "no message with that id is recorded",
+    "relay-unknown": "no relay session is recorded for it",
+    "relay-state-unwritable": "the relay's state file could not be written",
+}
+
+
+def _check_refusal(msg_id, refusal):
+    """A refusal of `check`, saying in plain words that the message was not delivered."""
+    reason = refusal.get("reason")
+    words = _REFUSAL_WORDS.get(reason) or "the check was refused (%s)" % reason
+    out = dict(refusal, delivered=False, msgId=msg_id)
+    out["say"] = "Message %s could not be checked: %s; it was not delivered." % (msg_id, words)
+    return out
 
 
 def _number(value, low_open):
@@ -327,33 +369,35 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
     session record, equals the forward text exactly and the send succeeded."""
     wait_s, step = _number(wait, False), _number(interval, True)
     if wait_s is None or step is None:
-        return _refuse("wait-invalid")
+        return _check_refusal(msg_id, _refuse("wait-invalid"))
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
-        return refusal
+        return _check_refusal(msg_id, refusal)
     msg = state["pending"].get(msg_id)
     if not isinstance(msg, dict):
-        return _refuse("message-unknown")
+        return _check_refusal(msg_id, _refuse("message-unknown"))
     relay = state["relays"].get(msg.get("relay"))
     relay_id = relay.get("sessionId") if isinstance(relay, dict) else None
     if not (isinstance(relay_id, str) and relay_id and isinstance(msg.get("configDir"), str)):
-        return _refuse("relay-unknown")
+        return _check_refusal(msg_id, _refuse("relay-unknown"))
     clock, sleep = clock or time.monotonic, sleep or time.sleep
     end = clock() + wait_s
     while True:
-        verdict, detail = _decide(msg, relay_id, clock() >= end)
+        latest = _load(path)  # a message composed meanwhile owns the sends that carry its id
+        pending_ids = list((latest or state)["pending"])
+        verdict, detail = _decide(dict(msg, msgId=msg_id), relay_id, clock() >= end, pending_ids)
         if verdict:
             break
         sleep(max(0, min(step, end - clock())))
     delivered = verdict == "delivered"
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
-        return refusal
+        return _check_refusal(msg_id, refusal)
     if isinstance(state["pending"].get(msg_id), dict):
         state["pending"][msg_id]["decision"] = {"delivered": delivered, "reason": verdict,
                                                 "at": _now_iso()}
         if not _save(path, state):
-            return _refuse("relay-state-unwritable")
+            return _check_refusal(msg_id, _refuse("relay-state-unwritable"))
     wait_text = "%g" % wait_s
     out = {"ok": delivered, "delivered": delivered, "reason": None if delivered else verdict,
            "msgId": msg_id, "say": _say(verdict, msg_id, wait_text, detail)}

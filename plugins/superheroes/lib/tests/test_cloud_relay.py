@@ -19,6 +19,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_relay as cr  # noqa: E402
+import engine_adapter  # noqa: E402
 import launch_ledger  # noqa: E402
 
 SESSION = "builder-1748"
@@ -30,13 +31,16 @@ TEXT = "Use the narrow fix.\nSecond line ✓ \"quoted\" & <angle>\n"
 
 class FakeRun:
     """Scripted answers: `lists` is consumed one per `agents --json`; `start` is the exit code of
-    `claude --bg`. Every call's argv, env and cwd are recorded."""
+    `claude --bg`, with `start_out` and `start_err` as what it printed. Every call's argv, env and
+    cwd are recorded."""
 
-    def __init__(self, lists=(), start=0, list_code=0):
+    def __init__(self, lists=(), start=0, list_code=0, start_out="backgrounded", start_err=""):
         self.calls = []
         self.lists = list(lists)
         self.start = start
         self.list_code = list_code
+        self.start_out = start_out
+        self.start_err = start_err
 
     def __call__(self, argv, **kwargs):
         self.calls.append(SimpleNamespace(argv=list(argv), env=kwargs.get("env"),
@@ -46,7 +50,8 @@ class FakeRun:
             if isinstance(out, BaseException):
                 raise out
             return SimpleNamespace(returncode=self.list_code, stdout=out)
-        return SimpleNamespace(returncode=self.start, stdout="backgrounded")
+        return SimpleNamespace(returncode=self.start, stdout=self.start_out,
+                               stderr=self.start_err)
 
     def starts(self):
         return [c for c in self.calls if c.argv[:2] == ["claude", "--bg"]]
@@ -200,10 +205,11 @@ def test_silent_relay_is_reported_after_the_wait(world):
     assert clock.t >= 10
 
 
-def test_missing_record_is_reported_after_the_wait(world):
+def test_missing_record_is_reported_as_silent_after_the_wait(world):
     msg = _composed(world)
     out, _ = _check(world, msg["msgId"], wait=4, interval=2)
-    assert out["reason"] == "relay-record-missing" and out["delivered"] is False
+    assert out["reason"] == "relay-silent" and out["delivered"] is False
+    assert "within 4 seconds" in out["say"] and "not delivered" in out["say"]
 
 
 def test_exact_text_refused_by_the_session_is_send_failed(world):
@@ -254,6 +260,107 @@ def test_send_stamped_before_sent_after_is_ignored(world):
     assert out["reason"] == "relay-silent" and out["delivered"] is False
 
 
+def test_altered_send_beats_an_exact_send_for_the_same_message(world):
+    # E6: one successful altered send plus one successful exact send is a mismatch, not delivered.
+    msg = _composed(world)
+    sent = msg["forward"]
+    cut = sent.index("narrow")
+    altered = sent[:cut] + sent[cut + 1:]
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, altered, "2026-10-12T10:00:00.000Z"),
+                  _send_lines("toolu_2", SESSION, sent, "2026-10-12T10:00:01.000Z"))
+    out, clock = _check(world, msg["msgId"])
+    assert out["ok"] is False and out["delivered"] is False
+    assert out["reason"] == "relay-text-mismatch" and out["firstDifference"]["index"] == cut
+    assert clock.t == 0
+
+
+def test_another_pending_messages_send_is_not_this_messages_mismatch(world):
+    # E7: a send carrying another pending message's id is that message's, even when altered.
+    _ensure_alive(world)
+    first = _compose(world, text="first body")
+    second = _compose(world, text="second body")
+    for msg in (first, second):
+        _backdate(world, msg["msgId"], BEFORE)
+    other = second["forward"]
+    altered_other = other.replace("second", "secnd")
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, other, "2026-10-12T10:00:00.000Z"),
+                  _send_lines("toolu_2", SESSION, altered_other, "2026-10-12T10:00:01.000Z"),
+                  _send_lines("toolu_3", SESSION, first["forward"], "2026-10-12T10:00:02.000Z"))
+    out, _ = _check(world, first["msgId"])
+    assert out["delivered"] is True and out["reason"] is None
+    out, _ = _check(world, second["msgId"])
+    assert out["reason"] == "relay-text-mismatch"  # its own altered send still counts against it
+
+
+def test_send_with_no_id_marker_is_attributed_to_the_message(world):
+    # E8: a send to the session carrying no id marker at all is this message's send.
+    msg = _composed(world)
+    _write_record(world,
+                  _send_lines("toolu_1", SESSION, "Use the narrow fix.", "2026-10-12T10:00:00.000Z"),
+                  _send_lines("toolu_2", SESSION, msg["forward"], "2026-10-12T10:00:01.000Z"))
+    out, _ = _check(world, msg["msgId"])
+    assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False
+    assert out["firstDifference"]["index"] == 0
+
+
+def test_results_and_calls_need_their_ids(world):
+    # E9: a call without an id, or a result without its call's id, confirms nothing.
+    msg = _composed(world)
+    stamp = "2026-10-12T10:00:00.000Z"
+    cases = []
+    for call_id in (None, ""):
+        lines = _send_lines("toolu_1", SESSION, msg["forward"], stamp)
+        lines[0]["message"]["content"][0]["id"] = call_id
+        lines[1]["message"]["content"][0]["tool_use_id"] = call_id
+        cases.append(lines)
+    unbound = _send_lines("toolu_1", SESSION, msg["forward"], stamp)
+    del unbound[0]["message"]["content"][0]["id"]
+    del unbound[1]["message"]["content"][0]["tool_use_id"]
+    cases.append(unbound)
+    for lines in cases:
+        _write_record(world, lines)
+        out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+        assert out["delivered"] is False and out["reason"] == "relay-silent"
+    # a result for another call's id does not confirm this call
+    _write_record(world, _send_lines("toolu_1", SESSION, msg["forward"], stamp, result=False),
+                  _send_lines("toolu_2", SESSION, "unrelated", stamp)[1:])
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    assert out["delivered"] is False and out["reason"] == "relay-send-unconfirmed"
+
+
+def test_every_check_refusal_says_it_was_not_delivered(world, monkeypatch, tmp_path):
+    # E13: delivered false, and a sentence that names the message and ends "; it was not delivered."
+    msg = _composed(world)
+    mid = msg["msgId"]
+    refusals = [_check(world, mid, wait="-1")[0], _check(world, "nope")[0]]
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    refusals.append(cr.check(str(plain), mid, env=world.env))
+    path = _state_file(world)
+    good = open(path).read()
+    state = json.loads(good)
+    state["relays"][msg["relay"]]["sessionId"] = None
+    json.dump(state, open(path, "w"))
+    refusals.append(_check(world, mid)[0])
+    open(path, "w").write("{not json")
+    refusals.append(_check(world, mid)[0])
+    open(path, "w").write(good)
+    monkeypatch.setattr(cr, "_save", lambda p, s: False)
+    _write_record(world, _send_lines("toolu_1", SESSION, msg["forward"], "2026-10-12T10:00:00.000Z"))
+    refusals.append(_check(world, mid)[0])
+    assert [r["reason"] for r in refusals] == [
+        "wait-invalid", "message-unknown", "ledger-repo-identity-unavailable", "relay-unknown",
+        "relay-state-unreadable", "relay-state-unwritable"]
+    for r in refusals:
+        assert r["ok"] is False and r["delivered"] is False
+        assert r["say"].endswith("; it was not delivered.")
+    for r in refusals[:1] + refusals[2:]:
+        assert mid in r["say"]
+    assert "nope" in refusals[1]["say"]
+
+
 def test_record_noise_is_skipped(world):
     msg = _composed(world)
     noise = [
@@ -301,16 +408,13 @@ def test_alive_relay_is_found_by_name_and_account_without_a_start(world):
 
 def test_none_alive_starts_the_relay_with_the_exact_argv(world):
     name = cr.relay_name(world.config)
-    run = FakeRun(lists=[json.dumps([_entry(name, state="done")]),
-                         json.dumps([_entry(name, state="done"), _entry(name, startedAt=5)])])
+    run = FakeRun(lists=["[]", json.dumps([_entry(name, startedAt=5)])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["ok"] is True and out["started"] is True and out["sessionId"] == RELAY_ID
     (start,) = run.starts()
     assert start.argv == ["claude", "--bg", "-n", name, "--model", "haiku", "--effort", "low",
                           cr.RELAY_PROMPT]
     assert start.env["CLAUDE_CONFIG_DIR"] == world.config
-    assert start.cwd == os.path.join(os.path.dirname(_state_file(world)), "relay-" + name)
-    assert os.path.isdir(start.cwd)
     assert len(cr.RELAY_PROMPT.splitlines()) < 25
     state = json.load(open(_state_file(world)))
     assert state["relays"][name]["sessionId"] == RELAY_ID and state["relays"][name]["startedAt"] == 5
@@ -329,12 +433,66 @@ def test_another_accounts_relay_is_not_taken_as_alive(world):
     FakeRun(lists=[FileNotFoundError("claude")]),
     FakeRun(lists=['{"not": "an array"}']),
     FakeRun(lists=["garbage"]),
-    FakeRun(lists=[json.dumps([_entry("superheroes-relay-claude-two", state=None)])]),
 ])
 def test_unreadable_listing_refuses_and_never_starts(world, run):
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["ok"] is False and out["reason"] == "relay-listing-failed"
     assert run.starts() == []
+
+
+def test_relay_starts_in_the_repository_root(world, tmp_path):
+    # The account trusts a repository it has been run in and refuses a fresh directory, so the
+    # start runs at the real path of the repository root and creates no directory of its own.
+    link = tmp_path / "repo-link"
+    link.symlink_to(world.repo)
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=["[]", json.dumps([_entry(name)])])
+    out = cr.ensure(str(link), world.config, env=world.env, run=run)
+    assert out["ok"] is True and out["started"] is True
+    (start,) = run.starts()
+    assert start.cwd == os.path.realpath(world.repo) != str(link)
+    assert [n for n in os.listdir(os.path.dirname(_state_file(world))) if n.startswith("relay-")] == []
+
+
+def test_untrusted_workspace_start_failure_carries_the_first_line(world):
+    # E1: the start exits non-zero; the first non-empty line of what it printed reaches the advisor.
+    said = "Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry."
+    run = FakeRun(lists=["[]"], start=1, start_err="\n" + said + "\nsecond line\n")
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is False and out["reason"] == "relay-start-failed"
+    assert out["detail"] == said and out["name"] == cr.relay_name(world.config)
+    run = FakeRun(lists=["[]"], start=1, start_out="x" * 300, start_err="")
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["detail"] == "x" * 200
+    run = FakeRun(lists=["[]"], start=1, start_out="", start_err="")
+    assert cr.ensure(world.repo, world.config, env=world.env, run=run)["detail"] == ""
+
+
+def test_listed_entry_is_alive_whatever_its_state(world):
+    # E5: `done` with a pid is a session waiting for its next message, not a dead one.
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_entry(name, state="done", pid=50504, status="idle")])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out == {"ok": True, "reason": None, "name": name, "sessionId": RELAY_ID, "started": False}
+    assert run.starts() == []
+    run = FakeRun(lists=[json.dumps([_entry(name, state=None)])])
+    assert cr.ensure(world.repo, world.config, env=world.env, run=run)["started"] is False
+    assert run.starts() == []
+
+
+def test_a_refusing_argv_builder_refuses_the_verb(world, monkeypatch):
+    # E14: the start refuses a relay name the builder will not take; the listing refuses when its
+    # builder does. Neither runs a command.
+    odd = os.path.join(os.path.dirname(world.config), ".claude two")
+    run = FakeRun(lists=["[]"])
+    out = cr.ensure(world.repo, odd, env=world.env, run=run)
+    assert out["ok"] is False and out["reason"] == "relay-start-failed" and out["detail"]
+    assert run.starts() == [] and len(run.calls) == 1
+    monkeypatch.setattr(engine_adapter, "claude_agents_list_argv",
+                        lambda: {"argv": [], "reason": "cloud-session-name-invalid", "detail": "d"})
+    run = FakeRun(lists=["[]"])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["reason"] == "relay-listing-failed" and out["detail"] == "d" and run.calls == []
 
 
 def test_failed_start_and_no_entry_after_start_refuse(world):

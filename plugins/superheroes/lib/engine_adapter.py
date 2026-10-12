@@ -786,6 +786,30 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
     return _ok(argv)
 
 
+def claude_agents_list_argv():
+    """Build the argv that lists the account's background sessions as JSON. Never raises."""
+    return _ok([CLAUDE_EXECUTABLE, "agents", "--json"])
+
+
+def claude_relay_argv(session_name, prompt):
+    """Build the argv that starts the advisor's relay: a standing, named background session on
+    the small model at low effort. Never raises. This is the one ruled use of `--bg`; claude's
+    background dispatch mode stays retired."""
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _refuse(
+            REFUSAL_BUILDER_PROMPT_MISSING,
+            detail="relay prompt must be a non-empty string",
+        )
+    if not isinstance(session_name, str) or not _CLOUD_SESSION_NAME_RE.fullmatch(session_name):
+        return {
+            "argv": [],
+            "reason": REFUSAL_CLOUD_SESSION_NAME_INVALID,
+            "detail": "1 to 64 characters from letters, digits, '.', '_' and '-'",
+        }
+    return _ok([CLAUDE_EXECUTABLE, "--bg", "-n", session_name, "--model", "haiku",
+                "--effort", "low", prompt])
+
+
 def build_argv(seat, role_kind, opts):
     """Return the argv list to dispatch the validated ``seat`` bundle for ``role_kind``.
 
