@@ -47,6 +47,11 @@ These retirements ship in the same release as the review record, and never apart
 - Heartbeat sweep entries gain `place`.
 - An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
 
+### Launcher: repairing a never-started lane
+
+- New verb `repair-lane --repo-root <root> --launch-id <id> [--pending-file <file>] [--evidence <text>]`. Under the ledger lock it restores a never-started lane's `started` record from a pending record that fits the lane, or, without one, records the lane's terminal event from its `reserved` record. It refuses `lane-already-started`, `outcome-already-terminal`, `terminal-unknown-launch`, `pending-started-invalid` and `outcome-evidence-empty`.
+- When the launcher's write of a cloud lane's `started` record reports failure, it re-reads the ledger first: a `started` record that landed (the write succeeded and its sync failed) reads as a normal launch. The `cloud-started-append-failed` and unconfirmed-append remedies now say to read the ledger and name `repair-lane`.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).

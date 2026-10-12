@@ -4625,7 +4625,7 @@ _DECLARATION_DOOR_ADJUDICATION = {
         "refusalTest": "test_reserve_refuses_batch_declared_with_launch_id",
     },
     "declare_batch": {"kind": "the-door"},
-    "_terminalize_locked": {"kind": "constructs-own-event"},
+    "terminalize": {"kind": "constructs-own-event"},
     "amend": {"kind": "constructs-own-event"},
     "repair_never_started": {
         "kind": "guarded-caller-record",
