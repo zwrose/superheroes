@@ -337,6 +337,54 @@ def test_lane_call_module_imports_no_process_network_or_engine_module():
     assert not imported & {"subprocess", "socket", "urllib", "http", "engine_dispatch"}
 
 
+# --- the unavailable basis: fail-closed, nothing read -----------------------------------------
+
+
+def test_unavailable_carries_exactly_the_call_keys_and_the_full_floor(tmp_path):
+    repo, store = _payments_repo(tmp_path)
+    got = L.unavailable("risk-unclear-not-set: nothing was read")
+    assert set(got) == RESULT_KEYS == set(L.call(repo, ["docs/readme.md"], root=store))
+    # axis: a basis that was never read gets the floor full; an unread basis leaving no floor or a lower lane
+    assert got["floor"] == "full" and got["lane"] == "full"
+    assert got["why"] == ["risk-unclear-not-set: nothing was read"]
+    assert got["riskAreas"] == {"state": "not-set", "reason": "unreadable", "detail": "not-read"}
+    assert got["touched"] == [] and got["unmatchable"] == []
+    assert got["proposed"] is None and got["proposalTaken"] is False
+    assert list(inspect.signature(L.unavailable).parameters) == ["why", "proposed"]
+    json.dumps(got)
+
+
+@pytest.mark.parametrize("proposed,tokens,taken", [
+    ("light", ["risk-unclear-no-paths", "proposal-below-floor"], False),
+    ("micro", ["risk-unclear-no-paths", "proposal-below-floor"], False),
+    ("full", ["risk-unclear-no-paths"], True),
+    ("medium", ["risk-unclear-no-paths", "proposal-invalid"], False),
+    (3, ["risk-unclear-no-paths", "proposal-invalid"], False),
+    (None, ["risk-unclear-no-paths"], False),
+])
+def test_unavailable_records_the_proposal_and_never_lowers_the_lane(proposed, tokens, taken):
+    got = L.unavailable("risk-unclear-no-paths: the changed files could not be read", proposed=proposed)
+    assert got["floor"] == "full" and got["lane"] == "full"
+    assert got["proposed"] == proposed and got["proposalTaken"] is taken
+    assert _tokens(got) == tokens
+    assert got["why"][0] == "risk-unclear-no-paths: the changed files could not be read"
+    assert "proposal-taken" not in _tokens(got) and "no-proposal-defaults-full" not in _tokens(got)
+
+
+def test_unavailable_starts_no_process_reads_no_store_and_writes_nothing(tmp_path, monkeypatch):
+    def _refuse(*args, **kwargs):
+        raise AssertionError("a process, a shell, a connection or a store read was started")
+
+    monkeypatch.setattr(subprocess, "run", _refuse)
+    monkeypatch.setattr(subprocess, "Popen", _refuse)
+    monkeypatch.setattr(os, "system", _refuse)
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+    monkeypatch.setattr(L.risk_areas, "touched", _refuse)
+    before = _snapshot(tmp_path)
+    got = L.unavailable("risk-unclear-not-set: nothing was read", proposed="light")
+    assert got["floor"] == "full" and _snapshot(tmp_path) == before
+
+
 # --- the command line -------------------------------------------------------------------------
 
 

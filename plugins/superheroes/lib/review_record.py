@@ -320,16 +320,23 @@ def _lane(a, rd, meta):
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
 
 
-def _lane_basis(a, rd):
-    """The risk floor for the PR's changed files, from lane_call.call. Files that cannot be read give
-    the floor full, marked unavailable, never a basis from a partial list."""
-    root, paths = a.get("repoRoot") or ".", rd["changed_paths"](a["pr"], a["repo"])
+def _lane_basis(a, rd, lane_value):
+    """The risk floor for the PR's changed files, from lane_call.call, with the record's own lane as the
+    proposal. An account that names no repository, or files that cannot be read, give the floor full,
+    marked unavailable, never a basis from the ambient project or from a partial list."""
+    repo_root = a.get("repoRoot")
+    # axis: an account that names no repository reads nothing, so no other project's store is read — see bite-proof record wo_c_1795_lane-basis
+    if not repo_root:
+        return dict(lane_call.unavailable(
+            "risk-unclear-not-set: the account names no repository, so its risk areas were not read",
+            proposed=lane_value), source="unavailable")
+    paths = rd["changed_paths"](a["pr"], a["repo"])
     if isinstance(paths, list):
-        return dict(lane_call.call(root, paths), source="lane rule over the PR's changed files")
-    basis = dict(lane_call.call(root, []), source="unavailable")
-    unread = "risk-unclear-no-paths: the PR's changed files could not be read"
-    basis["why"] = [unread] + [w for w in basis["why"] if not w.startswith("risk-unclear-no-paths: ")]
-    return basis
+        return dict(lane_call.call(repo_root, paths, proposed=lane_value),
+                    source="lane rule over the PR's changed files")
+    return dict(lane_call.unavailable(
+        "risk-unclear-no-paths: the PR's changed files could not be read", proposed=lane_value),
+        source="unavailable")
 
 
 def _family(vendor, model):
@@ -515,7 +522,7 @@ def build_record(account, readers):
     ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
-        "laneBasis": _lane_basis(a, rd), "finalCommit": fc,
+        "laneBasis": _lane_basis(a, rd, lane["value"]), "finalCommit": fc,
         "ci": ci, "reviewers": reviewers, "findings": findings, "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),

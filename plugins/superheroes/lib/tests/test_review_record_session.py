@@ -46,6 +46,7 @@ class Fake:
             "repo_name": lambda root: "o/r",
             "list_comments": lambda pr, repo: list(self.comments),
             "create_comment": self._create,
+            "changed_paths": lambda pr, repo: ["README.md"],
         }
 
     def _create(self, pr, repo, body):
@@ -180,6 +181,17 @@ def test_a_specialist_that_did_not_run_parks_unless_the_owner_went_ahead(tmp_pat
     assert [m["name"] for m in rec["missingReviews"]] == [gone]
     assert out["parked"] is (go_ahead is None)
     assert (rec["missingReviews"][0]["goAhead"] or {}).get("kind") == (go_ahead or {}).get("kind")
+
+
+def test_a_record_written_through_this_files_fake_never_reaches_the_real_changed_paths_reader(tmp_path, monkeypatch):
+    def boom(pr, repo):
+        raise AssertionError("the real changed_paths reader (gh api) was reached")
+    monkeypatch.setattr(rr, "changed_paths", boom)
+    fake = Fake()
+    out = send(tmp_path, Session(tmp_path).seat("code-reviewer").save(), fake)
+    # bites on: a record written through the Fake reading the PR's changed files from GitHub
+    assert out["ok"], out
+    assert rr.read(7, readers=fake.readers())["laneBasis"]["source"] == "lane rule over the PR's changed files"
 
 
 def test_a_missing_slot_recovered_by_a_later_round_is_not_a_missing_review(tmp_path):

@@ -91,6 +91,29 @@ def call(cwd, paths, proposed=None, root=None):
     }
 
 
+def unavailable(why, proposed=None):
+    """The fail-closed basis for a change whose risk areas or paths were never read: the same keys as
+    ``call``, floor and lane ``full``, nothing read. Pure: it reads no store and starts no process."""
+    reasons = [why]
+    if proposed is not None and rank(proposed) < 0:
+        lane_names = ", ".join(LANES)
+        reasons.append("proposal-invalid: %r is not one of %s, so the lane is %s" % (proposed, lane_names, FLOOR_FULL))
+    elif proposed is not None and rank(proposed) < rank(FLOOR_FULL):
+        reasons.append("proposal-below-floor: %s is below the floor %s, so the lane is %s"
+                       % (proposed, FLOOR_FULL, FLOOR_FULL))
+    return {
+        # axis: a basis that was never read gets the floor full — see bite-proof record wo_c_1795_lane-basis
+        "floor": FLOOR_FULL,
+        "lane": FLOOR_FULL,
+        "why": reasons,
+        "riskAreas": {"state": "not-set", "reason": "unreadable", "detail": "not-read"},
+        "touched": [],
+        "unmatchable": [],
+        "proposed": proposed,
+        "proposalTaken": proposed == FLOOR_FULL,
+    }
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="lane_call")
     sub = ap.add_subparsers(dest="cmd", required=True)

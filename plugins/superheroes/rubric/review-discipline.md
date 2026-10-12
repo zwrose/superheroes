@@ -154,8 +154,7 @@ and if the record still does not show a reading, **resolve upward to the full la
 record that does not show a reading is **never** a pass, and exiting zero is not evidence of a
 reading. The **investigation-record floor** (an empty external review seat must prove it actually
 investigated, or forfeit as vacuous) applies automatically to **every external review seat**,
-single-seat lanes included; it is a standing safeguard, not something these lanes add. This is
-doctrine in prose only; lane assignment has no mechanical check.
+single-seat lanes included; it is a standing safeguard, not something these lanes add. This reading rule is doctrine in prose; the lane itself is checked against [the lane floor](#the-lane-floor).
 
 ### The spine
 

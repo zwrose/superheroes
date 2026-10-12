@@ -1498,6 +1498,71 @@ def test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavail
     assert f"the lane (light) is below the risk floor (full): {UNREAD}" in rec["whatIsMissing"]
 
 
+def _refuse_any_read(monkeypatch):
+    """Make the store reader and the changed-files reader raise, and return readers wired to the latter."""
+    def boom(*args, **kwargs):
+        raise AssertionError("the basis read a store or the PR's changed files")
+    monkeypatch.setattr(rr.lane_call.risk_areas, "touched", boom)
+    return {**Fake().readers(), "changed_paths": boom}
+
+
+@pytest.mark.parametrize("over", [{}, {"repoRoot": None}, {"repoRoot": ""}])
+def test_f1_f2_an_account_naming_no_repository_reads_no_store_and_no_changed_files(monkeypatch, over):
+    # axis: the no-repoRoot leg of the basis; an account naming no repository falling back to the ambient project
+    readers = _refuse_any_read(monkeypatch)
+    rec = rr.build_record(account(**over), readers)
+    basis = rec["laneBasis"]
+    assert set(basis) == BASIS_KEYS and basis["source"] == "unavailable"
+    assert basis["floor"] == "full" and basis["lane"] == "full"
+    assert basis["why"][0].startswith("risk-unclear-not-set: the account names no repository")
+    assert basis["riskAreas"]["state"] == "not-set" and basis["touched"] == [] and basis["unmatchable"] == []
+    assert basis["proposed"] == "full" and basis["proposalTaken"] is True
+    assert rec["lane"]["value"] == "full" and rec["status"] == "reviewed"
+
+
+def test_f4_an_unknown_lane_value_is_invalid_and_leaves_the_record_not_reviewed(monkeypatch):
+    # axis: the invalid proposal; an unknown lane value read as a proposal that lowers the lane
+    rec = rr.build_record(account(lane="medium"), _refuse_any_read(monkeypatch))
+    basis = rec["laneBasis"]
+    assert basis["source"] == "unavailable" and basis["floor"] == "full" and basis["lane"] == "full"
+    assert basis["proposed"] == "medium" and basis["proposalTaken"] is False
+    assert [w.split(": ")[0] for w in basis["why"]] == ["risk-unclear-not-set", "proposal-invalid"]
+    why0 = basis["why"][0]
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (medium) is below the risk floor (full): {why0}" in rec["whatIsMissing"]
+
+
+def test_f4_an_unknown_lane_value_over_a_read_basis_is_invalid_and_not_reviewed(tmp_path):
+    # axis: the invalid proposal on the read path; an unknown lane value read as a proposal that lowers the lane
+    repo = risk_repo(tmp_path)
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    rec = build(account(lane="medium", repoRoot=repo), fake)
+    assert rec["laneBasis"]["floor"] == "full" and rec["laneBasis"]["source"] == FILES_SOURCE
+    assert "proposal-invalid" in [w.split(": ")[0] for w in rec["laneBasis"]["why"]]
+    assert rec["status"] == "not-reviewed"
+    assert f"the lane (medium) is below the risk floor (full): {PAY_FLOOR}" in rec["whatIsMissing"]
+
+
+def test_the_basis_says_how_the_records_own_lane_compares_with_the_floor(tmp_path):
+    # axis: the lane threaded in as the proposal; the basis reading no proposal whatever lane the record holds
+    repo = risk_repo(tmp_path)
+    fake = Fake(meta=LIGHT_PR)
+    fake.changed = ["src/payments/charge.py"]
+    below = build(account(repoRoot=repo), fake)["laneBasis"]
+    assert below["proposed"] == "light" and below["proposalTaken"] is False and below["lane"] == "full"
+    assert "proposal-below-floor" in [w.split(": ")[0] for w in below["why"]]
+    fake = Fake()
+    fake.changed = ["src/payments/charge.py"]
+    taken = build(account(repoRoot=repo), fake)["laneBasis"]
+    assert taken["proposed"] == "full" and taken["proposalTaken"] is True
+    assert "proposal-taken" in [w.split(": ")[0] for w in taken["why"]]
+    assert "no-proposal-defaults-full" not in [w.split(": ")[0] for w in taken["why"]]
+    fake.changed = None
+    gone = build(account(repoRoot=repo), fake)["laneBasis"]
+    assert gone["source"] == "unavailable" and gone["proposed"] == "full" and gone["proposalTaken"] is True
+
+
 def test_e10_an_entry_with_no_string_filename_makes_the_files_unavailable(monkeypatch):
     # axis: the complete-or-absent list; a file entry with no filename read as a complete list
     for bad in ({"status": "added"}, {"filename": 7}, {"filename": None}, "src/a.py", 5):
