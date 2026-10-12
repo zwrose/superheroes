@@ -1075,6 +1075,22 @@ def _cross_check_preflight(premise_checks, preflight_checks):
     return None
 
 
+_ADOPTS_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+
+
+def valid_adopts_branch(value):
+    """Whether `value` is a branch name a successor launch may adopt: a string of at most 200
+    characters starting with a letter or digit, with no `..` or `//`, ending in none of `/`, `.`
+    or `.lock`."""
+    return (
+        isinstance(value, str)
+        and _ADOPTS_BRANCH_RE.fullmatch(value) is not None
+        and ".." not in value
+        and "//" not in value
+        and not value.endswith(("/", ".", ".lock"))
+    )
+
+
 def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=None):
     """Validate premise stamp per contract C7. Never raises.
 
@@ -1206,6 +1222,11 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not cloud_ready.valid_reported(premise["reportedCloud"]):
             return _fail("premise-reported-cloud-invalid")
 
+    if "adoptsBranch" in premise:
+        # axis: adoptsBranch names the pushed branch a successor launch adopts — a string in the branch-name shape, else the builder would be told to check out a name git reads as an option or a path — see bite-proof record adopt_branch
+        if not valid_adopts_branch(premise["adoptsBranch"]):
+            return _fail("premise-adopts-branch-invalid")
+
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
@@ -1249,6 +1270,11 @@ def compose_launch(
     if not own_line:
         return _fail("compose-ruling-zero-absent")
 
+    adopts = None
+    if isinstance(premise, dict) and "adoptsBranch" in premise:
+        adopts = premise["adoptsBranch"]
+        if not valid_adopts_branch(adopts):
+            return _fail("premise-adopts-branch-invalid")
     version = None
     if cloud:
         version = plugin_version()
@@ -1261,8 +1287,18 @@ def compose_launch(
         environment_line = "Cloud environment: %s" % cloud_environment
         # axis: the cloud prompt names the base commit on its own line — see bite-proof record wo_c_place_call
         base_line = "Base commit: %s" % base
+        if adopts is not None:
+            # axis: the cloud prompt names the adopted branch on its own line right after the base commit — see bite-proof record adopt_branch
+            base_line += "\nAdopts branch: %s" % adopts
         prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n%s\n%s\n\n%s" % (
             _WORKHORSE_CMD, issue, version, environment_line, base_line, rulings_block,
+        )
+    elif adopts is not None:
+        local_base = premise.get("baseCommit")
+        if not isinstance(local_base, str) or not local_base.strip():
+            return _fail("premise-missing-field:baseCommit")
+        prompt = "%s\n\nIssue: #%s\n\nAdopts branch: %s\nBase commit: %s\n\n%s" % (
+            _WORKHORSE_CMD, issue, adopts, local_base, rulings_block,
         )
     else:
         prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)

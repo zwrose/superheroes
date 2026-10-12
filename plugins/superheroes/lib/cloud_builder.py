@@ -5,6 +5,7 @@ preflight, review and park.
 
   cloud_builder.py intake --repo-root D --launch-file F
                           check the launch against this session, then start from its base commit
+                          (or, when the launch names a branch to adopt, on that branch at that head)
   cloud_builder.py ensure-history --repo-root D [--main-branch B]
                           make the clone's history complete and fetch origin/<B>
   cloud_builder.py github-channel --gh-probe-file F --tools-write {ok,failed,not-tried}
@@ -19,6 +20,8 @@ preflight, review and park.
                           the builder note for the advisor, as comment text
   cloud_builder.py review-lapsed
                           the park comment for a lapsed reviewer pass
+  cloud_builder.py handover --head SHA
+                          the handover comment for work pushed and handed on, naming the head
   cloud_builder.py pass-state
                           the placed reviewer sign-in's state, and whether this is a cloud session
 
@@ -46,12 +49,20 @@ _REPO_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}\Z)[A-Za-z0-9_.-]
 _VERSION_LINE = re.compile(r"^Advisor plugin version: (.+)$")
 _ENVIRONMENT_LINE = re.compile(r"^Cloud environment: (.+)$")
 _BASE_LINE = re.compile(r"^Base commit: (.+)$")
+_ADOPTS_LINE = re.compile(r"^Adopts branch: (.+)$")
+_ADOPTS_PREFIX = "Adopts branch:"
 
 INTAKE_TEXT = (
     "Builder intake (cloud build). Plugin {v}. Commits from this build carry the cloud's own "
     "author name; the PR will be under the owner's name.\n\n"
     "Started from {sha}, the base commit the launch named."
 )
+INTAKE_ADOPT_TEXT = (
+    "Builder intake (cloud build). Plugin {v}. Commits from this build carry the cloud's own "
+    "author name; the PR will be under the owner's name.\n\n"
+    "Continuing branch {branch} from {sha}, the pushed head the launch named."
+)
+HANDOVER_HEADER = "Builder handover (cloud build)."
 REFUSAL_HEADER = "Builder refusal (cloud build)."
 REFUSAL_TEXT = {
     "plugin-version-mismatch": (
@@ -118,9 +129,32 @@ def _unique_line_value(lines, pattern):
     return found.pop() if len(found) == 1 else None
 
 
+def _adopts_branch(lines):
+    """(branch, invalid) from the `Adopts branch:` lines. An absent line is (None, False); a line
+    that is malformed, fails the branch-name shape, or is stated twice with different values is
+    (None, True)."""
+    found = set()
+    for line in lines:
+        if not line.startswith(_ADOPTS_PREFIX):
+            continue
+        match = _ADOPTS_LINE.match(line)
+        if match is None:
+            return None, True
+        found.add(match.group(1).strip())
+    if not found:
+        return None, False
+    if len(found) > 1:
+        return None, True
+    branch = found.pop()
+    if not _sibling("launcher").valid_adopts_branch(branch):
+        return None, True
+    return branch, False
+
+
 def parse_launch(text):
-    """advisorVersion, environment and baseCommit from the launch prompt text; None for a line
-    that is missing, malformed, or stated twice with different values."""
+    """advisorVersion, environment, baseCommit and adoptsBranch from the launch prompt text; None
+    for a line that is missing, malformed, or stated twice with different values. A malformed or
+    conflicting `Adopts branch:` line is not read as missing: it adds `adoptsBranchInvalid: True`."""
     lines = [line.strip() for line in text.splitlines()] if isinstance(text, str) else []
     engine_adapter = _sibling("engine_adapter")
     environment = _unique_line_value(lines, _ENVIRONMENT_LINE)
@@ -129,8 +163,12 @@ def parse_launch(text):
     base = _unique_line_value(lines, _BASE_LINE)
     if base is not None and not _SHA_RE.match(base):
         base = None
-    return {"advisorVersion": _unique_line_value(lines, _VERSION_LINE),
-            "environment": environment, "baseCommit": base}
+    adopts, adopts_invalid = _adopts_branch(lines)
+    parsed = {"advisorVersion": _unique_line_value(lines, _VERSION_LINE),
+              "environment": environment, "baseCommit": base, "adoptsBranch": adopts}
+    if adopts_invalid:
+        parsed["adoptsBranchInvalid"] = True
+    return parsed
 
 
 def _refusal_comment(reason, running=None, launched=None, actual=None, expected=None):
@@ -190,11 +228,37 @@ def intake(repo_root, launch_text, *, env=None, run=None, running_version=None):
     code, _ = _git(run, repo_root, ["cat-file", "-e", sha + "^{commit}"], genv)
     if code != 0:
         return _refused("base-commit-unfetchable")
-    code, _ = _git(run, repo_root, ["checkout", "--detach", sha], genv)
+
+    # axis: a launch whose adopt line is malformed or conflicting is refused before any checkout, never read as a launch with no adopt line
+    if launch.get("adoptsBranchInvalid"):
+        return _refused("adopts-branch-invalid")
+    branch = launch["adoptsBranch"]
+    if branch is None:
+        code, _ = _git(run, repo_root, ["checkout", "--detach", sha], genv)
+        if code != 0:
+            return _refused("base-checkout-failed")
+        return {"ok": True, "outcome": None, "reason": None, "startedFrom": sha, "branch": None,
+                "comment": INTAKE_TEXT.format(v=running, sha=sha), "pluginVersion": running}
+
+    tracking = "refs/remotes/origin/%s" % branch
+    code, _ = _git(run, repo_root, ["fetch", "origin", "+refs/heads/%s:%s" % (branch, tracking)],
+                   genv)
+    if code != 0:
+        return _refused("adopted-branch-unfetchable")
+    code, tip = _git(run, repo_root, ["rev-parse", "--verify", tracking], genv)
+    # axis: the adopted branch's remote tip must equal the launch's base commit — a branch that moved since the launch was composed is refused, never continued — see bite-proof record adopt_branch
+    if code != 0 or tip.strip() != sha:
+        return _refused("adopted-branch-moved")
+    code, _ = _git(run, repo_root, ["checkout", "-B", branch, sha], genv)
     if code != 0:
         return _refused("base-checkout-failed")
-    return {"ok": True, "outcome": None, "reason": None, "startedFrom": sha,
-            "comment": INTAKE_TEXT.format(v=running, sha=sha), "pluginVersion": running}
+    code, _ = _git(run, repo_root, ["branch", "--set-upstream-to=origin/%s" % branch, branch],
+                   genv)
+    if code != 0:
+        return _refused("adopted-branch-upstream-failed")
+    return {"ok": True, "outcome": None, "reason": None, "startedFrom": sha, "branch": branch,
+            "comment": INTAKE_ADOPT_TEXT.format(v=running, sha=sha, branch=branch),
+            "pluginVersion": running}
 
 
 def _shallow_answer(git):
@@ -338,6 +402,14 @@ def review_lapsed_text():
     return {"comment": REVIEW_LAPSED_TEXT}
 
 
+def handover_text(sha):
+    """The handover comment naming the pushed head; None when `sha` is not 40 lowercase hex."""
+    if not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):
+        return None
+    return (HANDOVER_HEADER + "\n\nI pushed my work and stopped working on this issue. "
+            "My pushed head is " + sha + ".")
+
+
 def pass_state(env=None, now=None):
     """The placed reviewer sign-in's state and lapse date, and whether this is a cloud session."""
     env = _env(env)
@@ -387,6 +459,7 @@ def _build_parser():
     verb("post", "--repo", "--number", "--body-file", **{"--number": {"type": int}})
     verb("note", "--question-file")
     verb("review-lapsed")
+    verb("handover", "--head")
     verb("pass-state")
     return parser
 
@@ -417,6 +490,11 @@ def _dispatch(args):
         return note_text(question)
     if args.verb == "review-lapsed":
         return review_lapsed_text()
+    if args.verb == "handover":
+        comment = handover_text(args.head)
+        if comment is None:
+            return {"ok": False, "reason": "head-invalid"}
+        return {"ok": True, "comment": comment}
     return pass_state()
 
 
