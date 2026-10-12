@@ -58,7 +58,7 @@ Before a launch, judge from the build's order whether it needs anything only the
 ### How each check reads for a cloud launch
 
 - `engine-auth`: unchanged. It probes this machine's engines. Whether the cloud can run the reviewer is the launcher's readiness check, not this one.
-- `base-state`: unchanged. A cloud launch also needs its start commit to be the premise's base and to be on a remote-tracking branch. The launcher's refusals `launch-cloud-head-not-base` and `launch-cloud-head-not-on-remote` are launch refusals, a no-go you clear like any other launcher refusal. They are not a place decision, and the place call's never-held, never-dropped rule covers only where a launched build runs.
+- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. The launcher's refusals `launch-cloud-base-not-on-remote` and `launch-cloud-base-remote-unchecked` are launch refusals, a no-go you clear like any other launcher refusal. They are not a place decision, and the place call's never-held, never-dropped rule covers only where a launched build runs.
 - `disjoint-surfaces`: unchanged. A cloud lane takes no slot.
 - `workspace-isolation`: a cloud launch makes no worktree on this machine. The cloud session works in its own copy of the repository, so the check passes with that reason.
 - `standing-rulings`: unchanged. The launcher establishes them.
@@ -78,7 +78,7 @@ Once every launch in the batch has returned, run `lib/launcher.py report --repo-
 
 How it knows the reason is fixed:
 
-- The line always stops once the cloud builds setting is off.
+- A reason that came from the cloud builds setting stops once the setting reads switched off. A reason that came from a launch word follows the rules below.
 - A reason this machine can read again stops once that condition reads true again. These are no cloud setup, a lapsed reviewer pass, a calibration mismatch, and a version mismatch read from the setup record.
 - Any other reason stops only once a check made on a later day has passed and the cloud reads ready. These are no reviewer pass, an unreachable cloud, and a version a builder reported.
 - It also clears once any build in a later launch goes to the cloud.

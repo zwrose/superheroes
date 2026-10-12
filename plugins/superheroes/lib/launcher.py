@@ -38,8 +38,8 @@ import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
-import launch_report  # noqa: E402
 import launch_place  # noqa: E402
+import launch_report  # noqa: E402
 import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
@@ -3306,6 +3306,67 @@ def _report_title(title_fn, repo_root, issue):
     return title if isinstance(title, str) and title else None
 
 
+def _decides_still(call):
+    """True when the place call moves the "Still on your machine" state: a build in the cloud, or
+    one the cloud was meant for that ran locally because it was not ready."""
+    return call.get("place") == PLACE_CLOUD or bool(
+        call.get("place") == PLACE_LOCAL and call.get("pointedAtCloud")
+        and call.get("reason") in launch_place.NOT_READY_CODES)
+
+
+def _launch_day(info):
+    """The UTC date the launch started, so a replayed report keeps the day it first observed; None
+    when the ledger carries no usable time (the reminder then takes today's date)."""
+    stamp = info.get("startedTs", info.get("reservedTs"))
+    try:
+        return datetime.fromtimestamp(stamp, timezone.utc).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _started_indexes(records):
+    """Each launch's ledger position of its latest started event. Launches reserve and spawn in
+    separate steps, so the position a launch started at, not the one it reserved at, is the order
+    in which the launches actually happened."""
+    return {
+        rec["launchId"]: idx for idx, rec in enumerate(records)
+        if isinstance(rec, dict) and rec.get("event") == "started"
+    }
+
+
+def _record_batch_still(repo_root, launches, reserved, started_at):
+    """Replay every confirmed, started launch in the ledger that decides the reminder, whichever
+    batch it belongs to, in the order they started: the last cloud launch clears everything before
+    it, and the deciding local fallbacks after it are recorded together, dated by the latest of
+    their start days. The reminder is the same whichever batch is reported."""
+    decided = []
+    for launch_id, info in launches.items():
+        if not info["started"] or info.get("cloudSessionUnconfirmed"):
+            continue
+        call = _report_place_call(reserved.get(launch_id), info["place"])
+        if _decides_still(call):
+            decided.append((started_at.get(launch_id, info["reservedIndex"]), call, info))
+    decided.sort(key=lambda entry: entry[0])
+    if not decided:
+        return launch_report.record_still(repo_root, [], root=None)
+    last_cloud = max(
+        (pos for pos, (_idx, call, _info) in enumerate(decided) if call.get("place") == PLACE_CLOUD),
+        default=None,
+    )
+    result = {"action": "unchanged", "reason": None}
+    if last_cloud is not None:
+        _idx, cloud_call, cloud_info = decided[last_cloud]
+        result = launch_report.record_still(
+            repo_root, [cloud_call], root=None, today=_launch_day(cloud_info))
+    later = decided[last_cloud + 1 if last_cloud is not None else 0:]
+    if later:
+        days = [day for day in (_launch_day(info) for _idx, _call, info in later) if day is not None]
+        result = launch_report.record_still(
+            repo_root, [call for _idx, call, _info in later], root=None,
+            today=max(days) if days else None)
+    return result
+
+
 def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     """The launch report for one batch, built from the ledger's started launches, and the
     "Still on your machine" state updated from the same place calls."""
@@ -3326,7 +3387,8 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     for launch_id, info in batch:
         issue = info["issue"]
         first_index[issue] = min(first_index.get(issue, info["reservedIndex"]), info["reservedIndex"])
-        if info["started"] and (
+        # an unconfirmed cloud session may not exist, so it is neither reported nor a cloud build
+        if info["started"] and not info.get("cloudSessionUnconfirmed") and (
             issue not in last_started or info["reservedIndex"] > last_started[issue][1]["reservedIndex"]
         ):
             last_started[issue] = (launch_id, info)
@@ -3346,8 +3408,8 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),
-        "still": launch_report.record_still(
-            repo_root, [lane["placeCall"] for lane in lanes], root=None),
+        "still": _record_batch_still(
+            repo_root, folded["launches"], reserved, _started_indexes(read["records"])),
         "lanes": len(lanes),
     }
 
@@ -3525,7 +3587,10 @@ def _cli_report(args):
 
 
 def _cli_still(args):
-    return {"ok": True, "line": launch_report.still_line(args.repo_root)}
+    got = launch_report.still_check(args.repo_root)
+    if got["refused"] is not None:
+        return _fail(got["refused"])
+    return {"ok": True, "line": got["line"]}
 
 
 def main(argv=None):

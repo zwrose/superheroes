@@ -78,12 +78,6 @@ These retirements ship in the same release as the review record, and never apart
 - In a cloud session the session-start hook writes the pass into the reviewer's default sign-in file before anything else runs, and adds a `### Reviewer pass` section to the session's bootstrap saying whether the pass is in place. Outside a cloud session the hook is unchanged.
 - `cloud_pass.py confirm`, run in a cloud session, prints one line saying whether the reviewer answers with the pass in that environment and the date the pass lapses. `cloud_pass.py record-confirmation`, run on the owner's machine with that line, moves the setup record's lapse date; nothing else moves it.
 
-### Showrunner: where builds run
-
-- Once cloud builds are switched on, the launcher decides where each build runs: the setting gives the default, and a launch word overrides it for one build.
-- A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
-- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message.
-- A new state file, `cloud-still.json`, sits in the project store's `state` folder.
 ### Cloud builds: the setup sitting
 
 - A project is set up for cloud builds by asking the advisor to set up cloud builds. The advisor lists four hand steps: make a cloud environment and pick it by name with Claude Code's `/remote-env` picker on the account the builds run on, paste the setup text into it, sign in once to the separate reviewer sign-in, and paste the reviewer pass. It then runs one check session in that environment and reports three results: the cloud's plugin version, its calibration, and whether the reviewer answered.
@@ -91,6 +85,13 @@ These retirements ship in the same release as the review record, and never apart
 - New `lib/cloud_check.py` holds the sitting: `setup-message`, `sign-in`, `start`, `report`, `judge` and `setup-text`. `start` and `judge` take `--environment <id>`. A passed check writes the setup record and leaves the cloud-builds setting as it was. A failed check writes nothing and switches cloud builds off when they were on.
 - `cloud_pass.py make` takes `--environment <id>` and then adds a fifth line to its block, `SUPERHEROES_CLOUD_ENVIRONMENT`, naming the environment. The check passes only when the session reports that same id, because a cloud launch naming an id that matches no environment lands in the account's default environment without an error. A pass block made without `--environment` fails the check.
 - The setup text ends with its tool-steps marker line, a log line and `exit 0`. A project's own install steps go directly under the marker line.
+
+### Showrunner: where builds run
+
+- Once cloud builds are switched on, the launcher decides where each build runs: the setting gives the default, and a launch word overrides it for one build.
+- A build that needs something only the owner's machine has runs there. So does every build when the cloud is not ready.
+- `launcher.py` gains `report --repo-root <path> --batch <id>`, which prints the launch report as JSON field `report`, and `still --repo-root <path>`, which prints JSON field `line`. The advisor runs `report` after each launch and `still` before each later message. `still` refuses with `still-state-unreadable` (exit 1) when the stored state cannot be read, and it keeps the file. The reminder `report` records comes from every launch in the ledger, in the order they started, whichever batch is reported.
+- A new state file, `cloud-still.json`, sits in the project store's `state` folder.
 
 ## 0.42.0
 

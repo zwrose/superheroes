@@ -354,7 +354,7 @@ def test_R_eight_every_line_of_a_report_is_scaffolding_or_a_table_fragment(tmp_p
 
 
 def _still_path(repo, store):
-    return os.path.join(_store_dir(repo, store), "state", "cloud-still.json")
+    return LR._still_path(repo, store)
 
 
 def _stored(repo, store):
@@ -374,7 +374,7 @@ def test_record_still_writes_the_first_reason_in_condition_order(tmp_path):
     got = LR.record_still(repo, calls, root=store, today=TODAY)
     assert got == {"action": "written", "reason": "version"}
     assert _stored(repo, store) == {
-        "schema": "cloud-still/1", "reason": "version", "by": "setting",
+        "schema": LR._STILL_SCHEMA, "reason": "version", "by": "setting",
         "cloudVersion": "0.41.0", "advisorVersion": "0.42.0",
         "reported": {"pluginVersion": "0.41.0"}, "observedOn": "2026-10-11"}
     again = LR.record_still(repo, [_call(reason="no-pass", reported={"noPass": True})],
@@ -389,6 +389,66 @@ def test_record_still_writes_the_word_as_the_pointing(tmp_path):
     repo, store = _gitdir(tmp_path)
     LR.record_still(repo, [_call(reason="unreachable", by="word")], root=store, today=TODAY)
     assert _stored(repo, store)["by"] == "word"
+
+
+def test_a_failed_check_keeps_its_recheck_step_in_the_report_and_the_still_line(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    call = dict(_call(reason="calibration"), failedCheck=["calibration"])
+    assert LR.render_report([_lane(1, call)]).endswith(SETUP_TEXT_FIX + ' Then say "check again".')
+    assert LR.render_report([_lane(1, call), _lane(2, _call("cloud"))]).endswith(
+        SETUP_TEXT_FIX + ' Then say "check again".')
+    LR.record_still(repo, [call], root=store, today=TODAY)
+    assert _stored(repo, store)["failedCheck"] == ["calibration"]
+    line = LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="calibration"))
+    assert line.endswith(SETUP_TEXT_FIX + ' Then say "check again".')
+
+
+def test_a_failed_check_after_an_ordinary_fallback_keeps_its_recheck_step(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    plain = _call(reason="calibration")
+    failed = dict(_call(reason="calibration", by="word"), failedCheck=["calibration"])
+    recheck = SETUP_TEXT_FIX + ' Then say "check again".'
+    assert LR.render_report([_lane(1, plain), _lane(2, failed)]).endswith(recheck)
+    assert LR.render_report([_lane(1, plain), _lane(2, plain)]).endswith(SETUP_TEXT_FIX)
+    third = _call(reason="no-setup", pointed=True)
+    assert LR.render_report([_lane(1, plain), _lane(2, third), _lane(3, failed)]).endswith(recheck)
+    same = _call(reason="calibration")
+    assert LR.render_report([_lane(1, same), _lane(2, dict(same, failedCheck=["calibration"]))]
+                            ).endswith(recheck)
+    LR.record_still(repo, [plain, failed], root=store, today=TODAY)
+    assert _stored(repo, store)["failedCheck"] == ["calibration"]
+    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="calibration")).endswith(recheck)
+
+
+def test_a_word_directed_fallback_beside_a_setting_directed_one_stays_word_directed(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    calls = [_call(reason="calibration", by="setting"), _call(reason="calibration", by="word")]
+    LR.record_still(repo, calls, root=store, today=TODAY)
+    assert _stored(repo, store)["by"] == "word"
+    line = _line(repo, store, ready=False, reason="calibration", setting=False)
+    assert line is not None and line.startswith("Still on your machine\n")
+    assert os.path.exists(_still_path(repo, store))
+
+
+@pytest.mark.parametrize("reported_first", [True, False])
+def test_a_reported_version_beside_a_setup_record_fallback_still_needs_a_later_check(
+        tmp_path, reported_first):
+    repo, store = _gitdir(tmp_path)
+    plain = _call(reason="version", cloud="0.41.0", advisor="0.42.0")
+    reported = _call(reason="version", cloud="0.41.0", advisor="0.42.0",
+                     reported={"pluginVersion": "0.41.0"})
+    LR.record_still(repo, [reported, plain] if reported_first else [plain, reported],
+                    root=store, today=TODAY)
+    assert _stored(repo, store)["reported"] == {"pluginVersion": "0.41.0"}
+    same_day = _now(ready=True, checked=TODAY.isoformat())
+    assert LR.still_line(repo, root=store, today=TODAY,
+                         readiness_fn=lambda *a, **k: dict(same_day)) is not None
+    assert os.path.exists(_still_path(repo, store))
+    later = _now(ready=True, checked="2026-10-12")
+    assert LR.still_line(repo, root=store, today=TODAY,
+                         readiness_fn=lambda *a, **k: dict(later)) is None
 
 
 def test_record_still_clears_when_a_build_went_to_the_cloud(tmp_path):
@@ -447,10 +507,15 @@ def _line(repo, store, **kw):
 def test_R_still_no_state_means_no_line(tmp_path):
     repo, store = _gitdir(tmp_path)
 
-    def must_not_be_asked(*args, **kwargs):
-        raise AssertionError("readiness read for no state")
+    asked = []
 
-    assert LR.still_line(repo, root=store, readiness_fn=must_not_be_asked) is None
+    def record_the_ask(*args, **kwargs):
+        asked.append((args, kwargs))
+        return _now()
+
+    # still_line swallows an exception from the readiness read, so the callback records, not raises
+    assert LR.still_line(repo, root=store, readiness_fn=record_the_ask) is None
+    assert asked == []
 
 
 def test_R_still_leg_a_the_setting_switched_off_clears_it(tmp_path):
@@ -461,6 +526,30 @@ def test_R_still_leg_a_the_setting_switched_off_clears_it(tmp_path):
     word_repo, word_store = _still_with(
         _sub(tmp_path, "word"), _call(reason="unreachable", by="word"))
     assert _line(word_repo, word_store, ready=False, reason="unreachable", setting=False) is not None
+
+
+def test_R_still_leg_a_an_unreadable_setting_does_not_clear_it(tmp_path, monkeypatch):
+    repo, store = _still_with(tmp_path, _call(reason="no-setup", by="setting"))
+
+    def unreadable(*args, **kwargs):
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(PC, "get_item", unreadable)
+    assert _line(repo, store, ready=False, reason="no-setup", setting=False) is not None
+    assert os.path.exists(_still_path(repo, store))
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "directory"])
+def test_R_still_leg_a_a_profile_the_reader_could_not_read_does_not_clear_it(tmp_path, damage):
+    repo, store = _still_with(tmp_path, _call(reason="no-setup", by="setting"))
+    path = CM.core_path(repo, store)
+    if damage == "corrupt":
+        _put(path, "not a profile\n")
+    else:
+        os.makedirs(path)
+    assert PC.get_item(repo, PC.CLOUD_BUILDS_SLUG, root=store)["effective"] is False
+    assert _line(repo, store, ready=False, reason="no-setup", setting=False) is not None
+    assert os.path.exists(_still_path(repo, store))
 
 
 @pytest.mark.parametrize("code,condition", [("no-setup", "setup"), ("pass-lapsed", "passLive"),
@@ -549,13 +638,13 @@ def test_clear_still_that_cannot_delete_is_refused(tmp_path, monkeypatch):
     assert LR.clear_still(repo, root=store) == {"action": "refused"}
 
 
-_GOOD = {"schema": "cloud-still/1", "reason": "no-setup", "by": "setting", "cloudVersion": None,
+_GOOD = {"schema": LR._STILL_SCHEMA, "reason": "no-setup", "by": "setting", "cloudVersion": None,
          "advisorVersion": None, "reported": None, "observedOn": "2026-10-11"}
 
 
 @pytest.mark.parametrize("text", [
     "", "{not json", "[]", "null", "42",
-    json.dumps(dict(_GOOD, schema="cloud-still/2")),
+    json.dumps(dict(_GOOD, schema=LR._STILL_SCHEMA + "-other")),
     json.dumps({k: v for k, v in _GOOD.items() if k != "schema"}),
     json.dumps(dict(_GOOD, reason="needs")),
     json.dumps(dict(_GOOD, reason="local-word")),
@@ -575,6 +664,27 @@ def test_E16_a_state_file_in_the_wrong_shape_is_deleted_and_gives_no_line(tmp_pa
     path = _put(_still_path(repo, store), text)
     assert _line(repo, store, ready=False, reason="no-setup") is None
     assert not os.path.exists(path)
+
+
+def test_a_state_file_that_cannot_be_read_is_kept_and_named_not_deleted(tmp_path, monkeypatch):
+    repo, store = _still_with(tmp_path, _call(reason="no-setup"))
+    path = _still_path(repo, store)
+    real_open = open
+
+    def deny(file, *args, **kwargs):
+        if str(file) == path:
+            raise PermissionError("not readable")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", deny)
+    got = LR.still_check(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="no-setup"))
+    assert got == {"line": None, "refused": LR.STILL_UNREADABLE}
+    assert LR.still_line(repo, root=store, today=TODAY, readiness_fn=_fn(
+        ready=False, reason="no-setup")) is None
+    monkeypatch.undo()
+    assert os.path.exists(path)
+    assert _line(repo, store, ready=False, reason="no-setup").startswith("Still on your machine")
 
 
 def test_a_good_state_file_written_by_hand_gives_its_line(tmp_path):
