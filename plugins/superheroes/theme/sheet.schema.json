@@ -219,7 +219,7 @@
                 "description": "One reviewer, with where the fact that it ran comes from and whether it was independent of the maker.",
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["name", "family", "ran", "notIndependent"],
+                "required": ["name", "family", "ran"],
                 "properties": {
                   "name": {
                     "description": "The reviewer's name.",
@@ -237,7 +237,7 @@
                     "enum": ["engine-record", "reported-by-session"]
                   },
                   "notIndependent": {
-                    "description": "True when the reviewer is from a maker's model family, so its review was not independent.",
+                    "description": "True when the reviewer is from a maker's model family, so its review was not independent. Absent when the review record did not say.",
                     "type": "boolean"
                   }
                 }
@@ -271,7 +271,7 @@
                 "commit": {
                   "description": "The commit the checks ran on, or null when they ran on none.",
                   "type": ["string", "null"],
-                  "pattern": "^[0-9a-f]{7,40}$"
+                  "anyOf": [{"$ref": "#/$defs/commit"}, {"type": "null"}]
                 }
               }
             },

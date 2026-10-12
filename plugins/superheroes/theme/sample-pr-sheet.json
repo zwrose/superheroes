@@ -11,14 +11,12 @@
         {
           "name": "code-reviewer",
           "family": "codex",
-          "ran": "engine-record",
-          "notIndependent": false
+          "ran": "engine-record"
         },
         {
           "name": "test-reviewer",
           "family": "cursor",
-          "ran": "reported-by-session",
-          "notIndependent": false
+          "ran": "reported-by-session"
         },
         {
           "name": "design-reviewer",

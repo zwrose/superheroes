@@ -11,8 +11,7 @@
         {
           "name": "code-reviewer",
           "family": "codex",
-          "ran": "engine-record",
-          "notIndependent": false
+          "ran": "engine-record"
         },
         {
           "name": "design-reviewer",

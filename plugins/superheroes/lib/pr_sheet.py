@@ -60,7 +60,7 @@ with open(SCHEMA_PATH, encoding="utf-8") as _fh:
 _ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
 _COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
 _LANES = tuple(_SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["lane"]["enum"])
-_RAN = ("engine-record", "reported-by-session", "not-run")
+_RAN = review_record.RAN_STATES
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
                  ("missingReviews", list), ("rounds", dict))
 
@@ -140,7 +140,7 @@ def _record(raw, n, problems):
             and lane.get("value") in _LANES and isinstance(lane.get("reason"), (str, type(None)))
             and isinstance(rounds.get("count"), int) and rounds["count"] >= 0 and isinstance(rounds.get("stoppedAtCap"), bool)
             and all(isinstance(v, dict) and v.get("ran") in _RAN and _text(v.get("name"))
-                    and (v["ran"] == "not-run" or _text(v.get("family"))) for v in rec["reviewers"])
+                    and (v["ran"] == review_record.RAN_NOT_RUN or _text(v.get("family"))) for v in rec["reviewers"])
             and all(isinstance(m, dict) and _text(m.get("name")) and (m.get("goAhead") is None or _go_ahead(m["goAhead"]))
                     for m in rec["missingReviews"])):
         problems.append(f"{where}: its ci, lane, rounds, reviewers or missing reviews are malformed")
@@ -343,10 +343,13 @@ def build(records, advisor, words):
         if stack:
             lines.append(_fill(words["historyChecks"], state=r["ci"]["state"], commit=r["ci"].get("sha") or "no commit"))
         for v in r["reviewers"]:
-            if v["ran"] != "not-run" and v.get("coversFinalCommit") is False:
+            if v["ran"] != review_record.RAN_NOT_RUN and v.get("coversFinalCommit") is False:
                 lines.append(_fill(words["historyEarlierCommit"], name=v["name"], commit=v.get("commit") or "unknown"))
-            shown = {"name": v["name"], "family": v["family"], "ran": v["ran"], "notIndependent": bool(v.get("notIndependent"))}
-            if v["ran"] != "not-run" and shown not in reviewers:
+            shown = {"name": v["name"], "family": v["family"], "ran": v["ran"]}
+            # The record's independence fact is carried as it stands: absent stays absent, never read as false.
+            if isinstance(v.get("notIndependent"), bool):
+                shown["notIndependent"] = v["notIndependent"]
+            if v["ran"] != review_record.RAN_NOT_RUN and shown not in reviewers:
                 reviewers.append(shown)
             if v.get("notIndependent"):
                 lines.append(_fill(words["historyNotIndependent"], name=v["name"]))

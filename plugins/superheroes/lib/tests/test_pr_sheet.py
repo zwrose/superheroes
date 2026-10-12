@@ -78,7 +78,7 @@ def test_every_fact_matches_the_record():
     assert (changed["lane"], changed["laneReason"]) == (rec["lane"]["value"], rec["lane"]["reason"])
     assert sheet["commit"] == rec["finalCommit"]["sha"] and sheet["number"] == 214
     assert changed["reviewers"] == [
-        {"name": v["name"], "family": v["family"], "ran": v["ran"], "notIndependent": bool(v.get("notIndependent"))}
+        {k: v[k] for k in ("name", "family", "ran", "notIndependent") if k in v}
         for v in rec["reviewers"] if v["ran"] != "not-run"]
     assert [v["name"] for v in changed["reviewers"]] == ["code-reviewer", "test-reviewer", "design-reviewer"]
     assert changed["caught"] == [f["title"] for f in rec["findings"] if f["outcome"] == "fixed"]
@@ -340,3 +340,18 @@ def test_shipped_files_carry_no_provenance(path):
     text = path.read_text(encoding="utf-8")
     for pattern in PROVENANCE_PATTERNS:
         assert re.search(pattern, text) is None, f"{path.name} matches {pattern}"
+
+
+def test_an_unstated_independence_stays_unstated():
+    # Axis: a reviewer whose record omits notIndependent is carried without it, never as false.
+    rec = load("record-small.json")
+    assert all("notIndependent" not in v for v in rec["reviewers"])
+    shown = built(SMALL)["prSheet"]["whatChanged"]["reviewers"]
+    assert shown and all("notIndependent" not in v for v in shown)
+
+
+def test_the_schema_ran_enum_is_the_record_writers_completed_states():
+    # Axis: the sheet schema's ran enum equals the review record's ran states less not-run.
+    import review_record
+    enum = SCHEMA["$defs"]["prSheet"]["properties"]["whatChanged"]["properties"]["reviewers"]["items"]["properties"]["ran"]["enum"]
+    assert tuple(enum) == tuple(x for x in review_record.RAN_STATES if x != review_record.RAN_NOT_RUN)
