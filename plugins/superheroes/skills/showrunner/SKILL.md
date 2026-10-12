@@ -612,7 +612,7 @@ above).
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
    as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
    within minutes, and the word and the act sit in one thread. There is no separate list of
-   executed merges. The chat reports and the owner halves are the record.
+   executed merges. The chat reports and each PR's receipt are the record.
    **The red train.** When a lane goes red on the union or on `main`'s post-merge run, you may
    prepare and push a craft fix without asking, but the fix moves a head or opens a PR, so the merge
    it needs asks again through that PR's sheet. Recipe:

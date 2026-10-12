@@ -175,7 +175,7 @@ caller must handle, never "probably fine."
 
 **Paginate `entries` to exhaustion** — follow `pageInfo.hasNextPage` with `after` until every page
 is collected. The collected node count **must equal `size`**; any missing page or count mismatch
-**refuses** before owner enumeration or merge. Each entry carries its position and its pull
+**refuses** before the stack's sheet is built or the stack is merged. Each entry carries its position and its pull
 request's number, state, draft status, head branch, head sha, and base branch. Together with the
 queried pull request's own `position`, `headRefOid`, and the stack's `number`, `size`, and
 `baseRefName`, these fields are the whole membership claim, read from GitHub.
