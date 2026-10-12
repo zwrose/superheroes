@@ -507,6 +507,19 @@ def _section_blocks(number):
     return blocks
 
 
+def _setup_headings():
+    lines = open(os.path.join(_REFERENCE, "set-up.md"), encoding="utf-8").read().splitlines()
+    return [m.groups() for m in (re.match(r"## (\d+\.\d+)\b(.*)", ln) for ln in lines) if m]
+
+
+def _setup_section_numbers():
+    return [number for number, _ in _setup_headings()]
+
+
+def _setup_heading(number):
+    return dict(_setup_headings())[number]
+
+
 def _sitting_commands():
     """The command blocks the menu action routes to, derived from the menu's own text."""
     run, skipped = _menu_routing()
@@ -515,8 +528,12 @@ def _sitting_commands():
 
 def test_the_menu_action_routes_to_the_sitting_and_not_the_migration_step():
     run, skipped = _menu_routing()
-    assert run == {"3.5"} and skipped == {"3.6"}
-    assert any("migrate-material-line" in b for n in skipped for b in _section_blocks(n))
+    # Both expected sections are identified from set-up.md's own content, not by number.
+    sitting = {n for n in _setup_section_numbers() if "Risk and trust" in _setup_heading(n)}
+    migration = {n for n in _setup_section_numbers()
+                 if any("migrate-material-line" in b for b in _section_blocks(n))}
+    assert len(sitting) == 1 and len(migration) == 1 and not (sitting & migration)
+    assert run == sitting and skipped == migration
     assert not any("migrate-material-line" in b for b in _sitting_commands())
 
 
