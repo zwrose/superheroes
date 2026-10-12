@@ -40,10 +40,11 @@ review record shows. It does not reclassify the PR. The containing lane keeps it
 its advisor vet.
 
 A red on the train is a per-lane green that goes red on the union or on `main`'s post-merge run.
-Whether its fix rides the word already given is duty 6's red-train exception, which turns on the
-fix being craft with no material consequence (`rubric/glossary.md#material-consequence`); when it
-rides, land it as the disclosed integration commit on the last open PR, or as the disclosed
-follow-up PR once the last lane has merged, and report it in the thread like any merge.
+Land its fix as the disclosed integration commit on the last open PR, or as the disclosed
+follow-up PR once the last lane has merged. Either way the merge it needs asks again: a moved head
+starts that PR's sheet over, and a new PR gets its own sheet, so the fix merges only on a saved
+"Merge" verdict on its current sheet together with "done" (duty 6). Report it in the thread like
+any merge.
 
 **The post-merge-only red.** A test green on the identical tree pre-merge can go
 **deterministically** red post-merge in CI only — coverage-instrumented runners, for one, can lose

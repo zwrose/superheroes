@@ -646,14 +646,15 @@ The index and the PR sheets are published on the plugin's shared review template
 and the shape of the advisor's input to a sheet, are the template's, in
 [the review template](../../../theme/review-template.md); this file restates none of it.
 
-**The first answer counts.** The first answer the owner gives to a batch-1 question, in the chat or
-on the index, is the answer, and it counts at once. A batch-1 answer on the index is read as soon as
-it is saved and never waits for "done". This is the one exemption from the "done" gate stated in
-"Reading a PR sheet" below.
+**The first answer the advisor reads counts.** The first answer the advisor reads to a batch-1
+question, in the chat or on the index, is the answer, and it counts at once. A batch-1 answer on the
+index is read as soon as it is saved and never waits for "done". The index keeps only the owner's
+last tap, so the advisor reads the index each time it reads the chat for a ruling. This is the one
+exemption from the "done" gate stated in "Reading a PR sheet" below.
 
 **When the two disagree.** When the advisor reads an answer in the chat and an answer on the index to
 the same batch-1 question and they disagree, it acts on neither and asks the owner which one stands.
-If it already acted on the first answer before the second arrived, it stops what that answer
+If it already acted on the first answer it read before the second arrived, it stops what that answer
 unblocked, says what it already did, and asks.
 
 **Batch 2 comes in the chat**, as soon as the batch-1 rulings land. The advisor **executes what batch
@@ -682,9 +683,10 @@ the PR is not merged, and the advisor asks the owner which one stands.
 
 **The merge verdict.** The owner's word to merge a PR is a saved "Merge" verdict on that PR's current
 sheet together with "done" in the chat. Duty 6 in `skills/showrunner/SKILL.md` ("Coordinate releases
-and drive the merge train") is the one full statement of it. Where the host cannot show a sheet, no
-verdict can be saved, so there is no word: the merge waits, and the advisor tells the owner so rather
-than taking a chat answer in its place.
+and drive the merge train") is the one full statement of it. Where no "Merge" verdict can be saved on
+the PR's current sheet, because the host cannot show the sheet or the template does not offer a merge
+verdict, there is no word: the merge waits, and the advisor tells the owner why rather than taking a
+chat answer in its place.
 
 **What the answers commit, after "done".**
 
@@ -790,7 +792,8 @@ item.
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
 (1 - a, 2 - b); batch 1 = what blocks work (never new-issue filings), in the chat and at the top
-of the index with a link, the first answer in either place counts at once, a disagreement → act on
+of the index with a link, the first answer the advisor reads, in either place, counts at once (the
+index keeps only the last tap, so read it each time you read the chat), a disagreement → act on
 neither and ask; as soon as batch-1 rulings land, deliver batch 2 in the chat, with no item about
 one PR, while executing what batch 1 unblocked; batch 3 = one sheet per PR, built only after the
 batch-1 and batch-2 rulings are carried out; a PR sheet is read only after "done"; the merge word

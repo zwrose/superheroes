@@ -578,7 +578,9 @@ above).
    [owner-decisions.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md)
    § Delivery mechanics). Neither alone is the word: a saved "Merge" with no "done" is not, and
    "done" alone is not. A saved "Not yet", or no saved verdict, together with "done" is not the word.
-   Where no verdict can be saved (a host that cannot show the sheet), there is no word. A stack that
+   Where no "Merge" verdict can be saved on the PR's current sheet (the host cannot show the sheet,
+   or the template does not offer a merge verdict), there is no word: the merge waits, and you tell
+   the owner why. A stack that
    merges whole has one sheet and one verdict, which covers exactly the PRs the sheet lists. A spec
    PR's sheet carries its breakdown, and one verdict covers both (duty 1);
    [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § Merging a
