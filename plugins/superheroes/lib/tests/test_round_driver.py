@@ -3216,6 +3216,9 @@ _ALL_CHANNELS = {
                               "disposition": "fix-with-guidance",
                               "userGuidance": "keep narrow"}],
     "gateGuidanceRowCarried": [{"index": 0, "title": "orphan row"}],
+    "breakItRuns": [{"role": "test-role", "path": "tests/test_x.py", "outcome": "failed",
+                     "findingKey": "k"}],
+    "breakItKept": [{"findingKey": "k", "path": "tests/test_x.py", "outcome": "kept"}],
 }
 
 
@@ -3700,6 +3703,7 @@ def test_panel_round_channels_are_all_accounted_for():
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     judgment_fold = set(RD.JUDGMENT_FOLD_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
+    terminal_gate = set(RD.TERMINAL_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
     restorable = set(RD.CARRIED_DISCLOSURE_CHANNELS)
@@ -3707,6 +3711,9 @@ def test_panel_round_channels_are_all_accounted_for():
     assert fold_provenance <= restorable, (
         "fold provenance channels must be restorable: %s"
         % sorted(fold_provenance - restorable))
+    assert terminal_gate <= restorable, (
+        "terminal-gate disclosure channels must be restorable: %s"
+        % sorted(terminal_gate - restorable))
     assert submit_disclosure <= restorable, (
         "submit disclosure channels must be restorable: %s"
         % sorted(submit_disclosure - restorable))
@@ -3723,7 +3730,7 @@ def test_panel_round_channels_are_all_accounted_for():
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
     all_recorded = (recorded | fold_provenance | judgment_fold | submit_disclosure | order_emission
-                    | verifier_recorded | verifier_appended | verifier_fold)
+                    | terminal_gate | verifier_recorded | verifier_appended | verifier_fold)
     assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
