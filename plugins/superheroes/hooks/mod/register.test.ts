@@ -236,7 +236,8 @@ const failures: [string, Cli, Options][] = [
 
 for (const [name, cli, options] of failures) {
   test(`session.compact fails open: ${name}`, async ($, on) => {
-    const r = rig(on, () => cli, options)
+    // the failure is the instructions verb's; `mark` would succeed if anything issued it
+    const r = rig(on, argv => (argv[3] === 'mark' ? ok({ path: MARKER }) : cli), options)
 
     const res = await compact($, { instructions: 'keep this' })
 
@@ -244,6 +245,8 @@ for (const [name, cli, options] of failures) {
     expect(r.seen).toHaveLength(1)
     expect(nth(r.seen, 0).instructions).toBe('keep this')
     expect(r.writes).toHaveLength(0)
+    // no marker is published, or the PreCompact fallback would be suppressed with nothing steering
+    expect(r.argv.filter(argv => argv[3] === 'mark')).toHaveLength(0)
   })
 }
 

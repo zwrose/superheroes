@@ -6,6 +6,7 @@
 
 import type { EngineInterface, Register } from 'claude-code'
 
+import { instructionsArgv, markArgv, saveArgv } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
 
 const CLI_TIMEOUT_MS = 15000
@@ -20,15 +21,14 @@ const note = ($: EngineInterface, text: string): void => {
   }
 }
 
-// Runs one verb of lib/compaction_directive.py; resolves its JSON object only
-// for exit 0 with `ok: true`, otherwise rejects.
+// Runs one argv built by ./argv (the one home of the CLI's command lines); resolves
+// its JSON object only for exit 0 with `ok: true`, otherwise rejects.
 async function directive(
   $: EngineInterface,
-  verb: string,
-  args: readonly string[],
+  argv: readonly string[],
   stdin?: string,
 ): Promise<Record<string, unknown>> {
-  const argv = ['python3', '-B', `${$.plugin.root}/lib/compaction_directive.py`, verb, ...args]
+  const verb = argv[3] ?? '?'
   const { exitCode, stdout } = await $.process.run(
     argv,
     stdin === undefined ? { timeoutMs: CLI_TIMEOUT_MS } : { timeoutMs: CLI_TIMEOUT_MS, stdin },
@@ -82,19 +82,15 @@ export const register: Register = on => {
     // A subagent's own compaction is not the session's: leave it untouched.
     if (!e.agentId) {
       try {
-        const args = ['--session-id', await $.session.id()]
+        const sessionId = await $.session.id()
         const { value: known } = await $.state.get(transcriptPath)
         const transcript = text(known)
         const owner = e.instructions?.trim() ? e.instructions : null
 
-        if (transcript !== null) {
-          args.push('--transcript', transcript)
-        }
-        if (owner !== null) {
-          args.push('--user-instructions', owner)
-        }
-
-        const res = await directive($, 'instructions', args)
+        const res = await directive(
+          $,
+          instructionsArgv($.plugin.root, sessionId, transcript, owner),
+        )
         const instructions = text(res.instructions)
         const markerPath = text(res.markerPath)
 
@@ -109,7 +105,7 @@ export const register: Register = on => {
 
         // The CLI publishes the marker atomically (temp file + rename): a failed
         // write leaves no marker, so the PreCompact fallback steers as well.
-        await directive($, 'mark', ['--session-id', await $.session.id()])
+        await directive($, markArgv($.plugin.root, sessionId))
       } catch (error) {
         note($, `session.compact: ${String(error)}`)
       }
@@ -131,7 +127,7 @@ export const register: Register = on => {
           try {
             // The CLI replaces the notes atomically (temp file + rename): a failed
             // save leaves the last good notes in place.
-            await directive($, 'save', ['--session-id', await $.session.id()], block)
+            await directive($, saveArgv($.plugin.root, await $.session.id()), block)
             $.ui.toast('Checkpoint notes saved')
           } catch (error) {
             // The skill was told not to write the file (the presence signal is set),
