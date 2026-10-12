@@ -53,10 +53,6 @@ def valid_reported(reported):
     return True
 
 
-def _placed_stamp(cwd, root):
-    return cloud_setup.calibration_stamp(cloud_setup_text.stamped_files(cwd, root))
-
-
 def _result(conditions, *, setting=False, account=None, environment=None, cloud_version=None,
             advisor_version=None, picks_up=None, checked_at=None, failed_check=None):
     # axis: the reason is the first false condition in the fixed order — see bite-proof record wo_a_place_call
@@ -157,7 +153,7 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
             cloud_version = None
     try:
         # axis: the calibration matches only when the placed stamp equals the recorded one — see bite-proof record wo_a_place_call
-        conditions["calibration"] = (stamp_fn or _placed_stamp)(cwd, root) == record.get(
+        conditions["calibration"] = (stamp_fn or cloud_check._placed_stamp)(cwd, root) == record.get(
             "calibrationStamp")
     except Exception:
         conditions["calibration"] = False
