@@ -261,6 +261,9 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         issues = _linked_issues(pull.get("body"), e["repo"])
         launch_id, lane, ledger_reason = (
             _lane(repo_root, issues, env, e[_LAUNCH_KEY]) if e.get(_LAUNCH_KEY) else (None, {}, None))
+        if ledger_reason:
+            out["unread"].append({"pr": e["pr"], "reason": ledger_reason})
+            continue
         issue = lane.get("issue") if lane else (issues[0] if issues else None)
         lapses = _lapses(repo_root, env, lane.get("configDir"), lane.get("cloudEnvironment"))
         if not _renewed(e["parkedOn"], lapses, day):
@@ -273,9 +276,6 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         if through:
             e["outcome"], changed = "owner-let-through", True
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
-            continue
-        if ledger_reason:
-            out["unread"].append({"pr": e["pr"], "reason": ledger_reason})
             continue
         if not lane.get("cloudSessionName"):
             out["noLane"].append({"pr": e["pr"], "issue": issue})
