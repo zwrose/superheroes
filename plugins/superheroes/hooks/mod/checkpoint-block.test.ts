@@ -84,3 +84,15 @@ test('a checkpoint fence quoted inside a tilde fence is not a block', () => {
 test('CRLF line endings parse the same', () => {
   expect(extractCheckpointBlock(fenced('a\nb').replace(/\n/g, '\r\n'))).toBe('a\nb')
 })
+
+test('the block must end the reply: any non-blank line after the closing fence gives null', () => {
+  expect(extractCheckpointBlock(`${fenced('example notes')}This is only an example.\n`)).toBeNull()
+  expect(extractCheckpointBlock(`${fenced('example notes')}\n\nTrailing prose`)).toBeNull()
+  expect(extractCheckpointBlock(`${fenced('example notes')}\`\`\`bash\necho hi\n\`\`\`\n`)).toBeNull()
+  expect(extractCheckpointBlock(`${fenced('first')}after\n${fenced('second')}`)).toBe('second')
+})
+
+test('trailing blank lines and whitespace after the closing fence are fine', () => {
+  expect(extractCheckpointBlock(`${fenced('notes')}\n  \n\t\n`)).toBe('notes')
+  expect(extractCheckpointBlock(`${fenced('notes').replace(/\n/g, '\r\n')}\r\n`)).toBe('notes')
+})

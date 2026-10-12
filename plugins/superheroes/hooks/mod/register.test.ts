@@ -352,6 +352,7 @@ for (const [name, answer] of [
   ['a checkpoint example quoted in a tilde fence', `~~~markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n~~~\n`],
   ['a checkpoint example quoted in a backtick fence', `\`\`\`\`markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n\`\`\`\`\n`],
   ['an unclosed block', `\`\`\`${CHECKPOINT_INFO}\nnotes with no end\n`],
+  ['a closed block followed by prose', `${block('example notes')}This is only an example.\n`],
   ['an empty block', `\`\`\`${CHECKPOINT_INFO}\n\n\`\`\`\n`],
 ] as const) {
   test(`turn.complete with ${name}: no CLI call, no write, no toast`, async ($, on) => {

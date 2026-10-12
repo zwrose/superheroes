@@ -13,14 +13,14 @@ const CLOSE_TILDES = /^ {0,3}(~{3,})[ \t]*$/
 /**
  * The body of the last fenced block whose info string is exactly
  * `superheroes-checkpoint`, without its fences and without the one trailing
- * newline; null when there is none, the last one is never closed, or its body
- * is empty. The checkpoint fence is three or more backticks and closes on a
+ * newline; null when there is none, the last one is never closed, its body is
+ * empty, or any non-blank line follows its closing fence (the block must end the reply). The checkpoint fence is three or more backticks and closes on a
  * line of at least as many; any other fence (backtick or tilde) is walked past
  * whole, so a checkpoint fence quoted inside it is not a block.
  */
 export function extractCheckpointBlock(text: string): string | null {
   const lines = text.split(/\r?\n/)
-  let last: { body: string[]; isClosed: boolean } | null = null
+  let last: { body: string[]; isClosed: boolean; end: number } | null = null
 
   for (let i = 0; i < lines.length; i += 1) {
     const open = OPEN.exec(lines[i] ?? '')
@@ -46,11 +46,16 @@ export function extractCheckpointBlock(text: string): string | null {
     }
 
     if (!isTilde && info.trim() === CHECKPOINT_INFO) {
-      last = { body, isClosed }
+      last = { body, isClosed, end: i }
     }
   }
 
   if (last === null || !last.isClosed) {
+    return null
+  }
+
+  // The skill's contract: the block is the LAST thing in the reply.
+  if (lines.slice(last.end + 1).some((line) => line.trim() !== '')) {
     return null
   }
 
