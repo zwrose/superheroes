@@ -1,4 +1,4 @@
-**STATE:** route build-ready · filed 2026-10-10 by the advisor's size-split ruling on cloud C1 (#1742: its projection reached 1,097 non-test lines, past the 900 bound; the owner's launch word covers layers a size split adds, Canon 2026-10-10-dcc2b5e5-4) · layer 2 of 12 in the cloud-builders stack (a direct sub-issue of the epic), on cloud C1's pushed head · not launched · merges only with the whole stack
+**STATE:** route build-ready · filed 2026-10-10 by the advisor's size-split ruling on cloud C1 (#1742: its projection reached 1,097 non-test lines, past the 900 bound; the owner's launch word covers layers a size split adds, Canon 2026-10-10-dcc2b5e5-4) · layer 2 of 16 in the cloud-builders stack (a direct sub-issue of the epic), on cloud C1's pushed head · not launched · merges only with the whole stack
 
 Anchor (spec-section): cloud-builders-66a2e8 · § Part C · A cloud build's life (FR-17, FR-23, FR-26) · as-of amendment #0 (owner-approved 2026-10-10)
 

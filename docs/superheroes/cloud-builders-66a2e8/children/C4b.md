@@ -1,4 +1,4 @@
-**STATE:** route build-ready · filed 2026-10-11 by the advisor's size-split ruling on cloud C4 (#1745; the 600 bar, `rubric/review-discipline.md` § Size; craft, owner veto open) · layer 6 of 12 in the cloud-builders stack (a direct sub-issue of the epic), on C4 · build wave 1, once C4 has handed back · not launched · merges only with the whole stack
+**STATE:** route build-ready · filed 2026-10-11 by the advisor's size-split ruling on cloud C4 (#1745; the 600 bar, `rubric/review-discipline.md` § Size; craft, owner veto open) · layer 6 of 16 in the cloud-builders stack (a direct sub-issue of the epic), on C4 · build wave 1, once C4 has handed back · not launched · merges only with the whole stack
 
 **Order (advisor-launched):**
 - Launched on **claude-two**, per the owner's standing instruction (2026-10-11: "switch everything to claude-two now", claude-three's weekly usage being at 100%). Message the advisor session **"superheroes advisor"** (seat `~/.claude`) for size, scope or premise questions, and post any ruling you receive on this issue.
