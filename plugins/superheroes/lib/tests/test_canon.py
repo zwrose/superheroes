@@ -537,6 +537,19 @@ def test_store_outside_any_repository_refused(project, capsys, monkeypatch, tmp_
     assert not os.path.exists(path)
 
 
+# axis: Git routing variables in the environment do not change which repository Canon's own-repository
+# check sees: a project store that is its own repository is still accepted.
+def test_store_check_ignores_git_routing_variables(project, capsys, monkeypatch, tmp_path):
+    other = str(tmp_path / "other")
+    subprocess.run(["git", "init", "-q", "-b", "main", other], check=True)
+    monkeypatch.setenv("GIT_DIR", os.path.join(other, ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", other)
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 0, out
+    with open(project["path"], encoding="utf-8") as fh:
+        assert "A failed import keeps the previous data." in fh.read()
+
+
 # axis: a replayed entry holding a character str.splitlines() splits on is refused before any
 # write, so the written file always reads back whole (the same rule as a fresh entry).
 @pytest.mark.parametrize("sep", [" ", "\x85"])

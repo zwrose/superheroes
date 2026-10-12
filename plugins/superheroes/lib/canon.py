@@ -208,7 +208,7 @@ def _locate(root):
         dot = store_core.git_dot_entry_ancestor(loc["gitRoot"])
         if dot is None:
             raise Refusal("canon-not-git", "gitRoot %s is not a git repository" % loc["gitRoot"])
-        top = store_core.repo_root(loc["gitRoot"])
+        top = store_core.repo_root(loc["gitRoot"], env=definition_doc._scrubbed_git_env())
     except (OSError, store_core.RepoRootUnavailable):
         raise Refusal("canon-not-git", "gitRoot %s is not a git repository" % loc["gitRoot"])
     own = os.path.realpath(loc["gitRoot"])
