@@ -1855,6 +1855,159 @@ def _validate_started_repair(started_repair):
     return True
 
 
+def _terminalize_locked(repo_root, launch_id, read_result, folded, *, child_ever_spawned, reason,
+                        evidence, stage, outcome, started_repair, require_started, env, reaped):
+    """The part of `terminalize` that runs under the ledger lock, on a ledger already read and folded.
+
+    The caller holds the lock and has checked that the ledger is readable and folds; this takes no
+    lock of its own. It raises only what its callers' own guards catch.
+    """
+    if launch_id not in folded["launches"]:
+        return {
+            "ok": False, "reason": "terminal-unknown-launch",
+            "kind": None, "outcome": None, "reaped": reaped,
+        }
+
+    info = folded["launches"][launch_id]
+    if info.get("terminal"):
+        return {
+            "ok": False, "reason": "outcome-already-terminal",
+            "kind": None, "outcome": None, "reaped": reaped,
+        }
+
+    if require_started and not info.get("started"):
+        return {
+            "ok": False, "reason": "outcome-without-started",
+            "kind": None, "outcome": None, "reaped": reaped,
+        }
+
+    # A cloud lane has no local process the build depends on: the recorded pid is the
+    # launch command's own, already exited, so no probe reads it.
+    # axis: a cloud lane's outcome records with a live pid — the probe is skipped by place.
+    cloud_lane = info.get("place") == PLACE_CLOUD
+    if info.get("started") and not cloud_lane:
+        # One _child_group_is_live per recorded attempt, each with bounded
+        # settle — all inside the lock. At most one started per launch today.
+        for pid in _started_pids_to_probe(info):
+            if _child_group_is_live(
+                pid,
+                started_ts=info.get("pidStartedTs", {}).get(pid),
+                session_id=info.get("sessionId"),
+            ):
+                return {
+                    "ok": False,
+                    "reason": "terminal-child-live:%s" % pid,
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+
+    records = list(read_result["records"])
+    started = info.get("started")
+    if started or child_ever_spawned:
+        if child_ever_spawned and not started:
+            if not _validate_started_repair(started_repair):
+                return {
+                    "ok": False, "reason": "terminal-repair-unavailable",
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            if not cloud_lane and _child_group_is_live(
+                started_repair["pid"],
+                started_ts=None,
+                session_id=info.get("sessionId"),
+            ):
+                return {
+                    "ok": False,
+                    "reason": "terminal-child-live:%s" % started_repair["pid"],
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            started_record = {
+                "event": "started",
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "attempt": started_repair["attempt"],
+                "pid": started_repair["pid"],
+                "logPath": started_repair["logPath"],
+                "errPath": started_repair["errPath"],
+                "repaired": True,
+            }
+            # A repaired record stands in for the one whose append failed, so it must
+            # carry that record's overlap disclosure too — otherwise a lane that
+            # launched over an accepted overlap loses the evidence precisely on the
+            # path where the ledger was already having trouble (#1054).
+            if started_repair.get("evidence"):
+                started_record["evidence"] = started_repair["evidence"]
+            for field in _CLOUD_STARTED_FIELDS:
+                if field in started_repair:
+                    started_record[field] = started_repair[field]
+            folded_repair = fold(records + [started_record])
+            if not folded_repair["ok"]:
+                return {
+                    "ok": False, "reason": folded_repair["reason"],
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            if not append(repo_root, started_record, env=env):
+                return {
+                    "ok": False, "reason": "ledger-append-failed",
+                    "kind": None, "outcome": None, "reaped": reaped,
+                }
+            records.append(started_record)
+        kind = "outcome"
+        written_outcome = outcome if outcome is not None else "park"
+        written_evidence = (
+            evidence if isinstance(evidence, str) and evidence.strip()
+            else reason if isinstance(reason, str) and reason.strip()
+            else "unknown"
+        )
+        record = {
+            "event": "outcome",
+            "launchId": launch_id,
+            "ts": time.time(),
+            "schema": SCHEMA,
+            "outcome": written_outcome,
+            "evidence": written_evidence,
+        }
+        if started and not child_ever_spawned:
+            record["reconciled"] = True
+    elif outcome is not None:
+        return {
+            "ok": False, "reason": "terminal-outcome-without-child",
+            "kind": None, "outcome": None, "reaped": reaped,
+        }
+    else:
+        kind = "refused"
+        written_outcome = None
+        park_stage = stage if isinstance(stage, str) and stage.strip() else "unknown"
+        park_reason = reason if isinstance(reason, str) and reason.strip() else "unknown"
+        record = {
+            "event": "refused",
+            "launchId": launch_id,
+            "ts": time.time(),
+            "schema": SCHEMA,
+            "stage": park_stage,
+            "reason": park_reason,
+        }
+
+    if reaped:
+        record["reaped"] = True
+
+    folded_terminal = fold(records + [record])
+    if not folded_terminal["ok"]:
+        return {
+            "ok": False, "reason": folded_terminal["reason"],
+            "kind": None, "outcome": None, "reaped": reaped,
+        }
+
+    if not _append_raw(repo_root, record, env=env):
+        return {
+            "ok": False, "reason": "ledger-append-failed",
+            "kind": None, "outcome": None, "reaped": reaped,
+        }
+    return {
+        "ok": True, "reason": None, "kind": kind,
+        "outcome": written_outcome, "reaped": reaped,
+    }
+
+
 def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, evidence=None,
                 stage=None, outcome=None, proc=None, started_repair=None, require_started=False,
                 env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
@@ -1920,155 +2073,96 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 "kind": None, "outcome": None, "reaped": reaped,
             }
 
-        if launch_id not in folded["launches"]:
-            return {
-                "ok": False, "reason": "terminal-unknown-launch",
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-
-        info = folded["launches"][launch_id]
-        if info.get("terminal"):
-            return {
-                "ok": False, "reason": "outcome-already-terminal",
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-
-        if require_started and not info.get("started"):
-            return {
-                "ok": False, "reason": "outcome-without-started",
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-
-        # A cloud lane has no local process the build depends on: the recorded pid is the
-        # launch command's own, already exited, so no probe reads it.
-        # axis: a cloud lane's outcome records with a live pid — the probe is skipped by place.
-        cloud_lane = info.get("place") == PLACE_CLOUD
-        if info.get("started") and not cloud_lane:
-            # One _child_group_is_live per recorded attempt, each with bounded
-            # settle — all inside the lock. At most one started per launch today.
-            for pid in _started_pids_to_probe(info):
-                if _child_group_is_live(
-                    pid,
-                    started_ts=info.get("pidStartedTs", {}).get(pid),
-                    session_id=info.get("sessionId"),
-                ):
-                    return {
-                        "ok": False,
-                        "reason": "terminal-child-live:%s" % pid,
-                        "kind": None, "outcome": None, "reaped": reaped,
-                    }
-
-        records = list(read_result["records"])
-        started = info.get("started")
-        if started or child_ever_spawned:
-            if child_ever_spawned and not started:
-                if not _validate_started_repair(started_repair):
-                    return {
-                        "ok": False, "reason": "terminal-repair-unavailable",
-                        "kind": None, "outcome": None, "reaped": reaped,
-                    }
-                if not cloud_lane and _child_group_is_live(
-                    started_repair["pid"],
-                    started_ts=None,
-                    session_id=info.get("sessionId"),
-                ):
-                    return {
-                        "ok": False,
-                        "reason": "terminal-child-live:%s" % started_repair["pid"],
-                        "kind": None, "outcome": None, "reaped": reaped,
-                    }
-                started_record = {
-                    "event": "started",
-                    "launchId": launch_id,
-                    "ts": time.time(),
-                    "schema": SCHEMA,
-                    "attempt": started_repair["attempt"],
-                    "pid": started_repair["pid"],
-                    "logPath": started_repair["logPath"],
-                    "errPath": started_repair["errPath"],
-                    "repaired": True,
-                }
-                # A repaired record stands in for the one whose append failed, so it must
-                # carry that record's overlap disclosure too — otherwise a lane that
-                # launched over an accepted overlap loses the evidence precisely on the
-                # path where the ledger was already having trouble (#1054).
-                if started_repair.get("evidence"):
-                    started_record["evidence"] = started_repair["evidence"]
-                for field in _CLOUD_STARTED_FIELDS:
-                    if field in started_repair:
-                        started_record[field] = started_repair[field]
-                folded_repair = fold(records + [started_record])
-                if not folded_repair["ok"]:
-                    return {
-                        "ok": False, "reason": folded_repair["reason"],
-                        "kind": None, "outcome": None, "reaped": reaped,
-                    }
-                if not append(repo_root, started_record, env=env):
-                    return {
-                        "ok": False, "reason": "ledger-append-failed",
-                        "kind": None, "outcome": None, "reaped": reaped,
-                    }
-                records.append(started_record)
-            kind = "outcome"
-            written_outcome = outcome if outcome is not None else "park"
-            written_evidence = (
-                evidence if isinstance(evidence, str) and evidence.strip()
-                else reason if isinstance(reason, str) and reason.strip()
-                else "unknown"
-            )
-            record = {
-                "event": "outcome",
-                "launchId": launch_id,
-                "ts": time.time(),
-                "schema": SCHEMA,
-                "outcome": written_outcome,
-                "evidence": written_evidence,
-            }
-            if started and not child_ever_spawned:
-                record["reconciled"] = True
-        elif outcome is not None:
-            return {
-                "ok": False, "reason": "terminal-outcome-without-child",
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-        else:
-            kind = "refused"
-            written_outcome = None
-            park_stage = stage if isinstance(stage, str) and stage.strip() else "unknown"
-            park_reason = reason if isinstance(reason, str) and reason.strip() else "unknown"
-            record = {
-                "event": "refused",
-                "launchId": launch_id,
-                "ts": time.time(),
-                "schema": SCHEMA,
-                "stage": park_stage,
-                "reason": park_reason,
-            }
-
-        if reaped:
-            record["reaped"] = True
-
-        folded_terminal = fold(records + [record])
-        if not folded_terminal["ok"]:
-            return {
-                "ok": False, "reason": folded_terminal["reason"],
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-
-        if not _append_raw(repo_root, record, env=env):
-            return {
-                "ok": False, "reason": "ledger-append-failed",
-                "kind": None, "outcome": None, "reaped": reaped,
-            }
-        return {
-            "ok": True, "reason": None, "kind": kind,
-            "outcome": written_outcome, "reaped": reaped,
-        }
+        return _terminalize_locked(
+            repo_root, launch_id, read_result, folded,
+            child_ever_spawned=child_ever_spawned, reason=reason, evidence=evidence,
+            stage=stage, outcome=outcome, started_repair=started_repair,
+            require_started=require_started, env=env, reaped=reaped,
+        )
     except Exception:
         return {
             "ok": False, "reason": "terminalize-failed",
             "kind": None, "outcome": None, "reaped": reaped,
         }
+    finally:
+        if locked and lock_path is not None:
+            _release_lock(lock_path)
+
+
+def _repair_refusal(reason):
+    return {"ok": False, "reason": reason}
+
+
+def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None, env=None,
+                         lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """Bring a never-started lane (reserved, no `started`, not terminal) to a readable state.
+
+    One locked operation, and it refuses every lane that is not never-started: with
+    `pending_started` it appends that `started` record; without it, it records the lane's terminal
+    event. A lane that already has its `started` record is ended with `record_outcome`, never
+    repaired here. Never raises.
+    """
+    lock_path = None
+    locked = False
+    try:
+        lock_result = _ensure_lock_file(repo_root, env=env)
+        if not lock_result["ok"]:
+            return _repair_refusal(lock_result["reason"])
+        lock_path = lock_result["path"]
+        if not _acquire_lock(lock_path, lock_timeout):
+            return _repair_refusal("lock-unavailable")
+        locked = True
+
+        read_result = read(repo_root, env=env)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return _repair_refusal("ledger-unreadable:%s" % state)
+        records = list(read_result["records"])
+        folded = fold(records)
+        if not folded["ok"]:
+            return _repair_refusal(folded["reason"])
+
+        if not isinstance(launch_id, str) or launch_id not in folded["launches"]:
+            return _repair_refusal("terminal-unknown-launch")
+        info = folded["launches"][launch_id]
+        if info.get("terminal"):
+            return _repair_refusal("outcome-already-terminal")
+        # axis: a lane with its `started` record is never repaired — it is ended with `record_outcome`.
+        if info.get("started"):
+            return _repair_refusal("lane-already-started")
+
+        if pending_started is not None:
+            if (
+                not isinstance(pending_started, dict)
+                or pending_started.get("event") != "started"
+                # axis: the pending record belongs to the lane being repaired, not another launch.
+                or pending_started.get("launchId") != launch_id
+                or not _validate_started_repair(pending_started)
+                or _validate_started_cloud_fields(pending_started)
+            ):
+                return _repair_refusal("pending-started-invalid")
+            folded_repair = fold(records + [pending_started])
+            if not folded_repair["ok"]:
+                return _repair_refusal(folded_repair["reason"])
+            if not append(repo_root, pending_started, env=env):
+                return _repair_refusal("ledger-append-failed")
+            return {"ok": True, "repaired": "started", "launchId": launch_id}
+
+        if not isinstance(evidence, str) or not evidence.strip():
+            return _repair_refusal("outcome-evidence-empty")
+        terminal = _terminalize_locked(
+            repo_root, launch_id, read_result, folded,
+            child_ever_spawned=False, reason="never-started", evidence=evidence,
+            stage="never-started", outcome=None, started_repair=None,
+            require_started=False, env=env, reaped=False,
+        )
+        if not terminal["ok"]:
+            return _repair_refusal(terminal["reason"])
+        return {
+            "ok": True, "repaired": "terminal", "launchId": launch_id, "kind": terminal["kind"],
+        }
+    except Exception:
+        return _repair_refusal("repair-never-started-failed")
     finally:
         if locked and lock_path is not None:
             _release_lock(lock_path)

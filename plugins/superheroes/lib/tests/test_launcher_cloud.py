@@ -1711,7 +1711,7 @@ def test_the_unconfirmed_path_with_a_failed_append_does_not_say_to_record_died(
     assert "died" not in remedy
     assert "`reserved` record alone" in remedy
     assert "`cloudSessionName`" in remedy
-    assert "`record-outcome` refuses" in remedy
+    assert "launcher.py repair-lane --pending-file" in remedy
     assert result["remedy"] != L._CLOUD_UNCONFIRMED_REMEDY
 
 
