@@ -447,7 +447,7 @@ reading `success: true`.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
 owner the `say` sentence, or the refusal and its `detail`. Retry once from `ensure` only when nothing can
-have reached the builder: an `ensure` refusal, `relay-silent` or `relay-send-failed`. After
+have reached the builder: an `ensure` refusal or `relay-send-failed`. After `relay-silent`,
 `relay-text-mismatch` or `relay-send-unconfirmed` the builder may hold text: never resend automatically.
 A `relay-start-failed` naming an untrusted workspace means that account lacks the one-time setup step.
 
