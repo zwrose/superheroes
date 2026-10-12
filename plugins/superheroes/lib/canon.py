@@ -55,6 +55,7 @@ _OBJECT_WORDS = frozenset(("the", "a", "an", "it", "this", "that", "them", "now"
 _OBJECT_RE = re.compile(r"#\d+|v?\d+(?:\.\d+)+")
 # A recurrence word makes the sentence a rule for later work, not a one-time authorization.
 _RECURRING_RE = re.compile(r"\b(?:every|each|always|never|whenever|all|any)\b")
+_CONDITION_WORDS = frozenset(("after", "when", "once", "if", "before", "until", "as"))
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SCOPE_RE = re.compile(r"standing|piece [a-z0-9][a-z0-9-]*")
 HEADER = ("# Canon\n\nThis file is the project's Canon, the record of the owner's decisions. Its "
@@ -102,6 +103,9 @@ def _go_word(text, limit):
     """The go-verb a short imperative starts with, or None: the verb leads and stands alone or is
     followed by an object or qualifier, so a noun usage ("Release notes ...") is not read as one."""
     tokens = [t.strip(".,;:!?\"'()") for t in text.lower().split()]
+    # a condition ("after all checks pass") does not make a one-time act a rule: judge the act alone
+    cut = next((i for i, t in enumerate(tokens) if i and t in _CONDITION_WORDS), len(tokens))
+    tokens = tokens[:cut]
     if not tokens or tokens[0] not in GO_VERBS or len(tokens) > limit or _RECURRING_RE.search(
             " ".join(tokens)):
         return None
@@ -118,7 +122,7 @@ def recognize(ruling, words):
     if _DISPOSITION_RE.match(ruling):
         return "disposition", "a collector disposition (%r)" % ruling[:60]
     words = _DISPOSITION_RE.sub("", words or "", count=1)
-    if re.search(r"[;.]\s*\S", words):  # mixed words: the ruling is the rule extracted from them
+    if re.search(r"[;.]\s+\S", words):  # mixed words: the ruling is the rule extracted from them
         words = ""
     for text, limit in ((words, 8), (ruling, 16)):
         verb = _go_word(text, limit)
@@ -249,16 +253,25 @@ def _write(loc, working, lines):
     """Append whole lines at the end, creating the file shape and the union-merge attribute."""
     path = loc["path"]
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    paths = [path]
+    if loc["home"] == "repo":  # first: a failure here leaves Canon unwritten, so a retry is safe
+        attrs = os.path.join(os.path.dirname(path), ".gitattributes")
+        ensure_attributes(attrs)
+        paths.append(attrs)
     # an existing Canon is only ever appended to, never reopened for writing from the start
     lead = HEADER if not working else ("" if working.endswith("\n") else "\n")
     with open(path, "a" if working else "w", encoding="utf-8", newline="\n") as fh:
         fh.write(lead + "".join(l + "\n" for l in lines))
-    paths = [path]
-    if loc["home"] == "repo":
-        attrs = os.path.join(os.path.dirname(path), ".gitattributes")
-        ensure_attributes(attrs)
-        paths.append(attrs)
     return paths
+
+
+def _entry_lines(lines):
+    """The entry lines of a batch; an entry-shaped line with a damaged id is refused, not dropped."""
+    for l in lines:
+        if l.startswith("- **") and not _ID_RE.match(l):
+            raise Refusal("canon-bad-line", "damaged Canon entry id; repair it, nothing was "
+                          "changed: %r" % l[:80])
+    return [l for l in lines if _ID_RE.match(l)]
 
 
 def _held_lines(text):
@@ -266,7 +279,7 @@ def _held_lines(text):
     if lines and lines[0].strip() != HELD_MARKER:
         raise Refusal("canon-held-not-marked", "the held comment's first line must be "
                       + HELD_MARKER)
-    return [l for l in lines[1:] if _ID_RE.match(l)]
+    return _entry_lines(lines[1:])
 
 
 def _check_held_line(line):
@@ -332,7 +345,7 @@ def _append_locked(a):
     held = _read_held(a.held_file)
     if a.lines_file:
         with open(a.lines_file, encoding="utf-8") as fh:
-            lines = [l.rstrip("\n") for l in fh if _ID_RE.match(l)]
+            lines = _entry_lines([l.rstrip("\n") for l in fh])
         if not lines:
             raise Refusal("canon-bad-line", "no Canon entry lines in %s" % a.lines_file)
         for line in lines:
