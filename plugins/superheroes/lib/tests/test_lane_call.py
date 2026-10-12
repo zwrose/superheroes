@@ -49,8 +49,7 @@ CUSTOMER_DATA = {
     "undo": "Hard: a leak cannot be taken back.",
 }
 RESULT_KEYS = {"floor", "lane", "why", "riskAreas", "touched", "unmatchable", "proposed", "proposalTaken"}
-TOKENS = ("touches-risk-area", "risk-unclear-not-set", "risk-unclear-unmatchable", "risk-unclear-no-paths",
-          "no-floor", "proposal-below-floor", "proposal-taken", "no-proposal-defaults-full", "proposal-invalid")
+TOKENS = tuple(t.rstrip(":") for t in L.WHY_TOKENS)
 
 
 def _repo(tmp_path, areas=None, *, with_key=True):
@@ -102,7 +101,7 @@ def test_a_two_line_change_to_a_payments_file_gets_the_full_lane(tmp_path):
     got = L.call(repo, ["src/payments/charge.py"], root=store)
     assert set(got) == RESULT_KEYS
     assert got["floor"] == "full" and got["lane"] == "full"
-    assert got["why"][0] == "touches-risk-area: Payments (src/payments/charge.py)"
+    assert got["why"][0] == L.WHY_TOUCHES + " Payments (src/payments/charge.py)"
     assert got["touched"] == [{"name": "Payments", "matched": ["src/payments/charge.py"]}]
     assert got["riskAreas"] == {"state": "set", "reason": None, "detail": None}
     assert got["unmatchable"] == [] and got["proposed"] is None and got["proposalTaken"] is False
@@ -114,7 +113,7 @@ def test_a_model_that_judged_the_payments_change_trivial_still_gets_the_full_lan
     got = L.call(repo, ["src/payments/charge.py"], proposed="light", root=store)
     assert got["floor"] == "full" and got["lane"] == "full"
     assert got["proposed"] == "light" and got["proposalTaken"] is False
-    assert "proposal-below-floor" in _tokens(got) and "proposal-taken" not in _tokens(got)
+    assert L.WHY_PROPOSAL_BELOW.rstrip(":") in _tokens(got) and L.WHY_PROPOSAL_TAKEN.rstrip(":") not in _tokens(got)
 
 
 def test_a_change_outside_every_area_takes_a_proposal_at_or_above_no_floor(tmp_path):
@@ -124,12 +123,12 @@ def test_a_change_outside_every_area_takes_a_proposal_at_or_above_no_floor(tmp_p
     assert full["floor"] is None and full["lane"] == "full" and full["proposalTaken"] is True
     light = L.call(repo, ["docs/readme.md"], proposed="light", root=store)
     assert light["floor"] is None and light["lane"] == "light" and light["proposalTaken"] is True
-    assert _tokens(light) == ["no-floor", "proposal-taken"]
+    assert _tokens(light) == [L.WHY_NO_FLOOR.rstrip(":"), L.WHY_PROPOSAL_TAKEN.rstrip(":")]
     micro = L.call(repo, ["docs/readme.md"], proposed="micro", root=store)
     assert micro["lane"] == "micro" and micro["proposalTaken"] is True
     none = L.call(repo, ["docs/readme.md"], root=store)
     assert none["floor"] is None and none["lane"] == "full" and none["proposalTaken"] is False
-    assert _tokens(none) == ["no-floor", "no-proposal-defaults-full"]
+    assert _tokens(none) == [L.WHY_NO_FLOOR.rstrip(":"), L.WHY_NO_PROPOSAL.rstrip(":")]
 
 
 # --- fail-closed edges ------------------------------------------------------------------------
@@ -153,7 +152,7 @@ def test_e1_risk_areas_not_set_for_any_reason_get_the_floor_full(tmp_path):
         got = L.call(repo, ["docs/readme.md"], proposed="light", root=store)
         assert got["riskAreas"]["state"] == "not-set" and got["riskAreas"]["reason"] == reason
         assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
-        assert "risk-unclear-not-set" in _tokens(got)
+        assert L.WHY_NOT_SET.rstrip(":") in _tokens(got)
         assert got["touched"] == []
 
 
@@ -165,7 +164,7 @@ def test_e2_an_all_unmatchable_change_with_set_areas_gets_the_floor_full_never_l
     assert got["riskAreas"]["state"] == "set" and got["touched"] == []
     assert got["unmatchable"] == paths
     assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
-    assert "risk-unclear-unmatchable" in _tokens(got)
+    assert L.WHY_UNMATCHABLE.rstrip(":") in _tokens(got)
 
 
 def test_e3_a_mixed_matchable_and_unmatchable_change_touching_nothing_gets_the_floor_full(tmp_path):
@@ -174,7 +173,7 @@ def test_e3_a_mixed_matchable_and_unmatchable_change_touching_nothing_gets_the_f
     got = L.call(repo, ["docs/readme.md", "/abs/path.py"], proposed="micro", root=store)
     assert got["touched"] == [] and got["unmatchable"] == ["/abs/path.py"]
     assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
-    assert _tokens(got)[0] == "risk-unclear-unmatchable"
+    assert _tokens(got)[0] == L.WHY_UNMATCHABLE.rstrip(":")
 
 
 def test_e4_an_empty_paths_list_gets_the_floor_full_even_with_set_areas(tmp_path):
@@ -183,7 +182,7 @@ def test_e4_an_empty_paths_list_gets_the_floor_full_even_with_set_areas(tmp_path
     got = L.call(repo, [], proposed="light", root=store)
     assert got["riskAreas"]["state"] == "set"
     assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
-    assert _tokens(got)[0] == "risk-unclear-no-paths"
+    assert _tokens(got)[0] == L.WHY_NO_PATHS.rstrip(":")
 
 
 @pytest.mark.parametrize("paths", [None, "src/payments/charge.py", ("a",), {"a": 1}, ["a", 3], [None]])
@@ -193,7 +192,7 @@ def test_e5_a_paths_value_that_is_not_a_list_of_strings_gets_the_floor_full(tmp_
     got = L.call(repo, paths, proposed="light", root=store)
     assert got["riskAreas"]["state"] == "not-set"
     assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
-    assert "risk-unclear-not-set" in _tokens(got) and "risk-unclear-no-paths" not in _tokens(got)
+    assert L.WHY_NOT_SET.rstrip(":") in _tokens(got) and L.WHY_NO_PATHS.rstrip(":") not in _tokens(got)
 
 
 @pytest.mark.parametrize("proposed", ["light", "micro"])
@@ -203,7 +202,7 @@ def test_e6_a_proposal_below_the_floor_gets_full_and_is_not_taken(tmp_path, prop
     got = L.call(repo, ["src/db/schema.sql"], proposed=proposed, root=store)
     assert got["floor"] == "full" and got["lane"] == "full"
     assert got["proposed"] == proposed and got["proposalTaken"] is False
-    assert any(w.startswith("proposal-below-floor: ") for w in got["why"])
+    assert any(w.startswith(L.WHY_PROPOSAL_BELOW + " ") for w in got["why"])
 
 
 @pytest.mark.parametrize("proposed", ["medium", 3, "", "FULL", ["full"], {"lane": "light"}, True, 0])
@@ -213,7 +212,7 @@ def test_e7_an_invalid_proposal_never_lowers_the_lane(tmp_path, proposed):
     for paths in (["src/payments/charge.py"], ["docs/readme.md"], [], None):
         got = L.call(repo, paths, proposed=proposed, root=store)
         assert got["lane"] == "full" and got["proposalTaken"] is False and got["proposed"] == proposed
-        assert "proposal-invalid" in _tokens(got)
+        assert L.WHY_PROPOSAL_INVALID.rstrip(":") in _tokens(got)
         assert L.rank(got["lane"]) >= L.rank(got["floor"])
 
 
@@ -226,7 +225,7 @@ def test_a_project_with_no_risk_areas_gives_a_money_change_the_full_lane(tmp_pat
     got = L.call(repo, ["src/billing/refund.py"], proposed="light", root=store)
     assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
     assert got["riskAreas"]["state"] == "not-set" and got["riskAreas"]["reason"] == "missing"
-    assert got["why"][0].startswith("risk-unclear-not-set: ")
+    assert got["why"][0].startswith(L.WHY_NOT_SET + " ")
 
 
 # --- the census -------------------------------------------------------------------------------
@@ -357,10 +356,10 @@ def test_lane_call_module_imports_no_process_network_or_engine_module():
 def test_unavailable_carries_exactly_the_call_keys_and_the_full_floor(tmp_path):
     # axis: a basis that was never read gets the floor full; an unread basis leaving no floor or a lower lane
     repo, store = _payments_repo(tmp_path)
-    got = L.unavailable("risk-unclear-not-set: nothing was read")
+    got = L.unavailable(L.WHY_NOT_SET + " nothing was read")
     assert set(got) == RESULT_KEYS == set(L.call(repo, ["docs/readme.md"], root=store))
     assert got["floor"] == "full" and got["lane"] == "full"
-    assert got["why"] == ["risk-unclear-not-set: nothing was read"]
+    assert got["why"] == [L.WHY_NOT_SET + " nothing was read"]
     assert got["riskAreas"] == {"state": "not-set", "reason": "unreadable", "detail": "not-read"}
     assert got["touched"] == [] and got["unmatchable"] == []
     assert got["proposed"] is None and got["proposalTaken"] is False
@@ -369,21 +368,21 @@ def test_unavailable_carries_exactly_the_call_keys_and_the_full_floor(tmp_path):
 
 
 @pytest.mark.parametrize("proposed,tokens,taken", [
-    ("light", ["risk-unclear-no-paths", "proposal-below-floor"], False),
-    ("micro", ["risk-unclear-no-paths", "proposal-below-floor"], False),
-    ("full", ["risk-unclear-no-paths"], True),
-    ("medium", ["risk-unclear-no-paths", "proposal-invalid"], False),
-    (3, ["risk-unclear-no-paths", "proposal-invalid"], False),
-    (None, ["risk-unclear-no-paths"], False),
+    ("light", [L.WHY_NO_PATHS.rstrip(":"), L.WHY_PROPOSAL_BELOW.rstrip(":")], False),
+    ("micro", [L.WHY_NO_PATHS.rstrip(":"), L.WHY_PROPOSAL_BELOW.rstrip(":")], False),
+    ("full", [L.WHY_NO_PATHS.rstrip(":")], True),
+    ("medium", [L.WHY_NO_PATHS.rstrip(":"), L.WHY_PROPOSAL_INVALID.rstrip(":")], False),
+    (3, [L.WHY_NO_PATHS.rstrip(":"), L.WHY_PROPOSAL_INVALID.rstrip(":")], False),
+    (None, [L.WHY_NO_PATHS.rstrip(":")], False),
 ])
 def test_unavailable_records_the_proposal_and_never_lowers_the_lane(proposed, tokens, taken):
     # axis: unavailable with a proposal; a proposal below full being taken or lowering the lane
-    got = L.unavailable("risk-unclear-no-paths: the changed files could not be read", proposed=proposed)
+    got = L.unavailable(L.WHY_NO_PATHS + " the changed files could not be read", proposed=proposed)
     assert got["floor"] == "full" and got["lane"] == "full"
     assert got["proposed"] == proposed and got["proposalTaken"] is taken
     assert _tokens(got) == tokens
-    assert got["why"][0] == "risk-unclear-no-paths: the changed files could not be read"
-    assert "proposal-taken" not in _tokens(got) and "no-proposal-defaults-full" not in _tokens(got)
+    assert got["why"][0] == L.WHY_NO_PATHS + " the changed files could not be read"
+    assert L.WHY_PROPOSAL_TAKEN.rstrip(":") not in _tokens(got) and L.WHY_NO_PROPOSAL.rstrip(":") not in _tokens(got)
 
 
 def test_unavailable_starts_no_process_reads_no_store_and_writes_nothing(tmp_path, monkeypatch):
@@ -397,7 +396,7 @@ def test_unavailable_starts_no_process_reads_no_store_and_writes_nothing(tmp_pat
     monkeypatch.setattr(socket.socket, "connect", _refuse)
     monkeypatch.setattr(L.risk_areas, "touched", _refuse)
     before = _snapshot(tmp_path)
-    got = L.unavailable("risk-unclear-not-set: nothing was read", proposed="light")
+    got = L.unavailable(L.WHY_NOT_SET + " nothing was read", proposed="light")
     assert got["floor"] == "full" and _snapshot(tmp_path) == before
 
 
@@ -426,7 +425,7 @@ def test_cli_round_trip_prints_the_result_as_json_and_exits_zero(tmp_path):
 def test_cli_with_no_path_reports_no_paths_and_a_paths_file_is_read(tmp_path):
     repo, store = _payments_repo(tmp_path)
     run = _cli("call", "--cwd", repo, "--root", store)
-    assert run.returncode == 0 and json.loads(run.stdout)["why"][0].startswith("risk-unclear-no-paths: ")
+    assert run.returncode == 0 and json.loads(run.stdout)["why"][0].startswith(L.WHY_NO_PATHS + " ")
     listing = tmp_path / "paths.bin"
     listing.write_bytes(b"docs/a.md\0src/payments/b.py\0")
     run = _cli("call", "--cwd", repo, "--root", store, "--paths-file", str(listing), "--nul")
@@ -449,8 +448,8 @@ def test_a_broad_change_keeps_every_path_in_touched_but_bounds_the_why_lines(tmp
     got = L.call(repo, matched + unmatched, root=store)
     assert got["floor"] == "full"
     assert got["touched"] == [{"name": "Payments", "matched": matched}] and got["unmatchable"] == unmatched
-    assert got["why"][0] == "touches-risk-area: Payments (3000 paths: %s, ...)" % ", ".join(matched[:3])
-    unmatchable_why = next(w for w in got["why"] if w.startswith("risk-unclear-unmatchable"))
+    assert got["why"][0] == L.WHY_TOUCHES + " Payments (3000 paths: %s, ...)" % ", ".join(matched[:3])
+    unmatchable_why = next(w for w in got["why"] if w.startswith(L.WHY_UNMATCHABLE.rstrip(":")))
     assert "3000 changed path(s)" in unmatchable_why and repr(unmatched[2]) in unmatchable_why
     assert repr(unmatched[3]) not in unmatchable_why
     assert sum(len(w) for w in got["why"]) < 2000

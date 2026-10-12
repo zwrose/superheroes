@@ -1381,8 +1381,8 @@ PAYMENTS = {"name": "Payments", "covers": ["src/payments/*"], "why": "Charges cu
 LIGHT_PR = {"head": HEAD, "body": "**Lane call:** light. small and safe\n", "issues": []}
 BASIS_KEYS = {"floor", "lane", "why", "riskAreas", "touched", "unmatchable", "proposed", "proposalTaken", "source"}
 FILES_SOURCE = "lane rule over the PR's changed files"
-UNREAD = "risk-unclear-no-paths: the PR's changed files could not be read"
-PAY_FLOOR = "touches-risk-area: Payments (src/payments/charge.py)"
+UNREAD = rr.lane_call.WHY_NO_PATHS + " the PR's changed files could not be read"
+PAY_FLOOR = rr.lane_call.WHY_TOUCHES + " Payments (src/payments/charge.py)"
 
 
 def risk_repo(tmp_path, areas=(PAYMENTS,)):
@@ -1438,7 +1438,7 @@ def test_render_shows_the_risk_floor_after_the_lane_line(tmp_path):
     at = next(i for i, line in enumerate(lines) if line.startswith("Lane: "))
     assert lines[at + 1].startswith(f"Risk floor: full — {PAY_FLOOR}; ") and lines[at + 1].endswith(".")
     fake.changed = ["README.md"]
-    assert "Risk floor: none — no-floor: " in rr.render(build(account(repoRoot=repo), fake))
+    assert "Risk floor: none — " + rr.lane_call.WHY_NO_FLOOR + " " in rr.render(build(account(repoRoot=repo), fake))
     fake.changed = None
     assert f"Risk floor: full — {UNREAD}" in rr.render(build(account(repoRoot=repo), fake))
 
@@ -1493,7 +1493,7 @@ def test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavail
     basis = rec["laneBasis"]
     assert set(basis) == BASIS_KEYS and basis["source"] == "unavailable"
     assert basis["floor"] == "full" and basis["why"][0] == UNREAD
-    assert [w.split(": ")[0] for w in basis["why"]].count("risk-unclear-no-paths") == 1
+    assert [w.split(": ")[0] for w in basis["why"]].count(rr.lane_call.WHY_NO_PATHS.rstrip(":")) == 1
     assert rec["status"] == "not-reviewed"
     assert f"the lane (light) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
@@ -1514,7 +1514,7 @@ def test_f1_f2_an_account_naming_no_repository_reads_no_store_and_no_changed_fil
     basis = rec["laneBasis"]
     assert set(basis) == BASIS_KEYS and basis["source"] == "unavailable"
     assert basis["floor"] == "full" and basis["lane"] == "full"
-    assert basis["why"][0].startswith("risk-unclear-not-set: the account names no repository")
+    assert basis["why"][0].startswith(rr.lane_call.WHY_NOT_SET + " the account names no repository")
     assert basis["riskAreas"]["state"] == "not-set" and basis["touched"] == [] and basis["unmatchable"] == []
     assert basis["proposed"] == "full" and basis["proposalTaken"] is True
     assert rec["lane"]["value"] == "full" and rec["status"] == "reviewed"
@@ -1526,7 +1526,7 @@ def test_f4_an_unknown_lane_value_is_invalid_and_leaves_the_record_not_reviewed(
     basis = rec["laneBasis"]
     assert basis["source"] == "unavailable" and basis["floor"] == "full" and basis["lane"] == "full"
     assert basis["proposed"] == "medium" and basis["proposalTaken"] is False
-    assert [w.split(": ")[0] for w in basis["why"]] == ["risk-unclear-not-set", "proposal-invalid"]
+    assert [w.split(": ")[0] for w in basis["why"]] == [rr.lane_call.WHY_NOT_SET.rstrip(":"), rr.lane_call.WHY_PROPOSAL_INVALID.rstrip(":")]
     why0 = basis["why"][0]
     assert rec["status"] == "not-reviewed"
     assert f"the lane (medium) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
@@ -1539,7 +1539,7 @@ def test_f4_an_unknown_lane_value_over_a_read_basis_is_invalid_and_not_reviewed(
     fake.changed = ["src/payments/charge.py"]
     rec = build(account(lane="medium", repoRoot=repo), fake)
     assert rec["laneBasis"]["floor"] == "full" and rec["laneBasis"]["source"] == FILES_SOURCE
-    assert "proposal-invalid" in [w.split(": ")[0] for w in rec["laneBasis"]["why"]]
+    assert rr.lane_call.WHY_PROPOSAL_INVALID.rstrip(":") in [w.split(": ")[0] for w in rec["laneBasis"]["why"]]
     assert rec["status"] == "not-reviewed"
     assert f"the lane (medium) is below the risk floor (full); the Risk floor line gives why" in rec["whatIsMissing"]
 
@@ -1551,13 +1551,13 @@ def test_the_basis_says_how_the_records_own_lane_compares_with_the_floor(tmp_pat
     fake.changed = ["src/payments/charge.py"]
     below = build(account(repoRoot=repo), fake)["laneBasis"]
     assert below["proposed"] == "light" and below["proposalTaken"] is False and below["lane"] == "full"
-    assert "proposal-below-floor" in [w.split(": ")[0] for w in below["why"]]
+    assert rr.lane_call.WHY_PROPOSAL_BELOW.rstrip(":") in [w.split(": ")[0] for w in below["why"]]
     fake = Fake()
     fake.changed = ["src/payments/charge.py"]
     taken = build(account(repoRoot=repo), fake)["laneBasis"]
     assert taken["proposed"] == "full" and taken["proposalTaken"] is True
-    assert "proposal-taken" in [w.split(": ")[0] for w in taken["why"]]
-    assert "no-proposal-defaults-full" not in [w.split(": ")[0] for w in taken["why"]]
+    assert rr.lane_call.WHY_PROPOSAL_TAKEN.rstrip(":") in [w.split(": ")[0] for w in taken["why"]]
+    assert rr.lane_call.WHY_NO_PROPOSAL.rstrip(":") not in [w.split(": ")[0] for w in taken["why"]]
     fake.changed = None
     gone = build(account(repoRoot=repo), fake)["laneBasis"]
     assert gone["source"] == "unavailable" and gone["proposed"] == "full" and gone["proposalTaken"] is True
@@ -1648,8 +1648,8 @@ def test_many_risk_areas_with_long_paths_render_under_the_cap_with_the_floor_ful
     assert sum(len(t["matched"]) for t in basis["touched"]) == rr.BASIS_PATHS_MAX
     assert all(t["matchedCount"] == 10 for t in basis["touched"] if len(t["matched"]) < 10)
     assert len(basis["why"]) <= rr.BASIS_WHY_MAX and basis["whyCount"] > rr.BASIS_WHY_MAX
-    assert any("more touches-risk-area lines omitted" in w for w in basis["why"])
-    assert basis["why"][0].startswith("touches-risk-area:")
+    assert any("more %s lines omitted" % rr.lane_call.WHY_TOUCHES.rstrip(":") in w for w in basis["why"])
+    assert basis["why"][0].startswith(rr.lane_call.WHY_TOUCHES)
     assert len(rr.render(rec)) < rr.MAX_BODY_CHARS
 
 
@@ -1719,7 +1719,7 @@ def test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_un
     rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD, "f" * 40]))
     basis = rec["laneBasis"]
     assert basis["source"] == "unavailable" and basis["floor"] == "full"
-    assert basis["why"][0] == "risk-unclear-no-paths: the PR head moved while its changed files were read"
+    assert basis["why"][0] == rr.lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read"
     assert rec["finalCommit"]["sha"] == HEAD
     assert basis["headMoved"] is True
     assert rec["status"] == "not-reviewed"
@@ -1739,7 +1739,7 @@ def test_a_head_that_cannot_be_re_read_gives_the_could_not_be_re_read_reason_and
     basis = rec["laneBasis"]
     assert len(count) >= 2
     assert basis["source"] == "unavailable" and basis["floor"] == "full"
-    assert basis["why"][0] == "risk-unclear-no-paths: the PR head could not be re-read while its changed files were read"
+    assert basis["why"][0] == rr.lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read"
     assert "headMoved" not in basis
     assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
 

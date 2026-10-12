@@ -40,6 +40,8 @@ WHY_NO_PROPOSAL = "no-proposal-defaults-full:"
 WHY_PROPOSAL_INVALID = "proposal-invalid:"
 WHY_PROPOSAL_BELOW = "proposal-below-floor:"
 WHY_PROPOSAL_TAKEN = "proposal-taken:"
+WHY_TOKENS = (WHY_TOUCHES, WHY_NOT_SET, WHY_UNMATCHABLE, WHY_NO_PATHS, WHY_NO_FLOOR, WHY_NO_PROPOSAL,
+              WHY_PROPOSAL_INVALID, WHY_PROPOSAL_BELOW, WHY_PROPOSAL_TAKEN)
 _AGAINST_AREA = " against an area"
 
 
