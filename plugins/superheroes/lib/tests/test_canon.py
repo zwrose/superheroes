@@ -515,10 +515,26 @@ def test_unicode_line_separator_in_field_refused(project, capsys, sep):
 
 # axis: a project store nested in another checkout (no repository of its own) is refused.
 def test_store_nested_in_another_repository_refused(project, capsys, monkeypatch):
-    monkeypatch.setattr(canon, "_git", lambda cwd, *a: subprocess.CompletedProcess(
-        a, 0, stdout=os.path.dirname(cwd) + "\n", stderr=""))
+    nested = os.path.join(project["gitRoot"], "nested")
+    os.makedirs(os.path.join(nested, "docs", "superheroes"))
+    path = os.path.join(nested, "docs", "superheroes", "canon.md")
+    loc = dict(project, gitRoot=nested, path=path, exists=False)
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
     code, out = _run(capsys, "append", *_fields())
     assert code == 1 and out["reason"] == "canon-not-git"
+    assert not os.path.exists(path)
+
+
+# axis: a project store in no repository at all is refused.
+def test_store_outside_any_repository_refused(project, capsys, monkeypatch, tmp_path):
+    plain = tmp_path / "plain"
+    (plain / "docs" / "superheroes").mkdir(parents=True)
+    path = str(plain / "docs" / "superheroes" / "canon.md")
+    loc = dict(project, gitRoot=str(plain), path=path, exists=False)
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
+    code, out = _run(capsys, "append", *_fields())
+    assert code == 1 and out["reason"] == "canon-not-git"
+    assert not os.path.exists(path)
 
 
 # axis: a replayed entry holding a character str.splitlines() splits on is refused before any

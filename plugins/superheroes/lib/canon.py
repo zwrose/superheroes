@@ -203,10 +203,16 @@ def _locate(root):
         loc = definition_doc.resolve_canon(root=root)
     except Exception as exc:  # CanonLookupError, UnknownSchemaVersion: both fail closed
         raise Refusal("canon-lookup-failed", str(exc))
-    if _git(loc["gitRoot"], "rev-parse", "--git-dir").returncode != 0:
+    import store_core
+    try:
+        dot = store_core.git_dot_entry_ancestor(loc["gitRoot"])
+        if dot is None:
+            raise Refusal("canon-not-git", "gitRoot %s is not a git repository" % loc["gitRoot"])
+        top = store_core.repo_root(loc["gitRoot"])
+    except (OSError, store_core.RepoRootUnavailable):
         raise Refusal("canon-not-git", "gitRoot %s is not a git repository" % loc["gitRoot"])
-    top = _git(loc["gitRoot"], "rev-parse", "--show-toplevel").stdout.strip()
-    if not top or os.path.realpath(top) != os.path.realpath(loc["gitRoot"]):
+    own = os.path.realpath(loc["gitRoot"])
+    if os.path.realpath(dot) != own or os.path.realpath(top) != own:
         raise Refusal("canon-not-git", "gitRoot %s is not its own git repository" % loc["gitRoot"])
     default_text = ""
     if loc["home"] == "repo" and loc["defaultRef"]:
