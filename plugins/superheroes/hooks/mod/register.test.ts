@@ -377,6 +377,8 @@ test("turn.complete: a subagent's checkpoint block never reaches the parent's no
 for (const [name, answer] of [
   ['no block', 'Just an answer.'],
   ['a checkpoint example quoted in a tilde fence', `~~~markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n~~~\n`],
+  ['a checkpoint example inside an unclosed tilde fence', `~~~markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n`],
+  ['a checkpoint example inside an unclosed four-tilde fence', `~~~~markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n`],
   ['a checkpoint example quoted in a backtick fence', `\`\`\`\`markdown\n\`\`\`${CHECKPOINT_INFO}\nquoted\n\`\`\`\n\`\`\`\`\n`],
   ['an unclosed block', `\`\`\`${CHECKPOINT_INFO}\nnotes with no end\n`],
   ['a closed block followed by prose', `${block('example notes')}This is only an example.\n`],

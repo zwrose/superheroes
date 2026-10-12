@@ -81,6 +81,12 @@ test('a checkpoint fence quoted inside a tilde fence is not a block', () => {
   expect(extractCheckpointBlock(`\`\`\`\`markdown\n~~~\n${fenced('quoted')}\`\`\`\`\n`)).toBeNull()
 })
 
+test('a checkpoint fence inside a tilde fence left unclosed at the end of the reply is not a block', () => {
+  // an unclosed fence runs to the end of the reply, so the example is code, not a block
+  expect(extractCheckpointBlock(`~~~markdown\n${fenced('quoted')}`)).toBeNull()
+  expect(extractCheckpointBlock(`~~~~markdown\n${fenced('quoted')}`)).toBeNull()
+})
+
 test('CRLF line endings parse the same', () => {
   expect(extractCheckpointBlock(fenced('a\nb').replace(/\n/g, '\r\n'))).toBe('a\nb')
 })
