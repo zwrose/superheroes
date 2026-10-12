@@ -629,3 +629,26 @@ def test_coverage_check_names_an_area_that_covers_no_tracked_file(tmp_path):
     assert [a["name"] for a in out["areas"]] == ["Payments", "Ghost"]
     assert [t["area"]["name"] for t in out["touched"]] == ["Payments"]
     assert out["touched"][0]["matched"] == ["src/payments/charge.py"]
+
+
+def test_coverage_check_matches_non_ascii_names_and_runs_from_a_subfolder(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    os.makedirs(os.path.join(repo, "src", "payments"))
+    name = "r\u00e9fund.py"
+    with open(os.path.join(repo, "src", "payments", name), "w", encoding="utf-8") as fh:
+        fh.write("x = 1\n")
+    subprocess.run(["git", "-C", repo, "add", "src/payments"], check=True)
+    subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit",
+                    "-q", "-m", "fixture"], check=True)
+    areas = [dict(PAYMENTS, covers=["src/payments"])]
+    assert PC.set_item(repo, "riskAndTrust", {"riskAreas": areas}, root=store)["action"] == "written"
+    section = next(n for n in _setup_section_numbers() if "Risk and trust" in _setup_heading(n))
+    block = next(b for b in _section_blocks(section) if _is_coverage_block(b))
+    cmd = block.replace("--cwd .", "--cwd . --root " + shlex.quote(store))
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=os.path.join(_REPO_ROOT, "plugins/superheroes"))
+    for cwd in (repo, os.path.join(repo, "src", "payments")):
+        res = subprocess.run(["bash", "-c", cmd], env=env, cwd=cwd, capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert [t["area"]["name"] for t in out["touched"]] == ["Payments"], cwd
+        assert out["touched"][0]["matched"] == ["src/payments/" + name], cwd

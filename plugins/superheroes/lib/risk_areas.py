@@ -104,13 +104,15 @@ def touched(cwd, paths, root=None):
     return _result("set", None, None, areas, hits, unmatchable)
 
 
-def _read_paths_file(spec):
+def _read_paths_file(spec, nul=False):
     if spec == "-":
         text = sys.stdin.read()
     else:
-        with open(spec, encoding="utf-8") as fh:
+        with open(spec, encoding="utf-8", newline="") as fh:
             text = fh.read()
-    return [line for line in text.splitlines() if line.strip()]
+    # NUL-delimited input is taken byte for byte (git ls-files -z): no quoting, no line splitting.
+    parts = text.split("\0") if nul else text.splitlines()
+    return [part for part in parts if part.strip()]
 
 
 def main(argv):
@@ -121,12 +123,14 @@ def main(argv):
     tp.add_argument("--root", default=None)
     tp.add_argument("--path", action="append", default=[])
     tp.add_argument("--paths-file", default=None)
+    tp.add_argument("--nul", action="store_true",
+                    help="the paths file is NUL-delimited (git ls-files -z)")
     args = ap.parse_args(argv)
 
     paths = list(args.path)
     if args.paths_file is not None:
         try:
-            paths.extend(_read_paths_file(args.paths_file))
+            paths.extend(_read_paths_file(args.paths_file, nul=args.nul))
         except (OSError, UnicodeDecodeError) as exc:
             sys.stdout.write(json.dumps(
                 {"error": "paths-file-unreadable", "detail": "%s: %s" % (type(exc).__name__, exc)},
