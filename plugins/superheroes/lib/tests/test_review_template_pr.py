@@ -844,8 +844,8 @@ def test_a_failed_clear_shows_not_saved_and_the_sheet_stays_locked():
     assert "Saved" in result["after"]["verdictSave"] and result["after"]["disabled"] is True
 
 
-# Bites on: a card accepted again after its Discuss was acknowledged unlocking Merge while the failed clear still leaves the old Merge in the store, or that stored Merge coming back as a pressed verdict when the sheet is reopened.
-def test_re_accepting_after_a_failed_clear_keeps_merge_locked_and_the_stored_merge_does_not_return():
+# Bites on: a card accepted again after its Discuss was acknowledged while the failed clear still leaves the old Merge in the store (the cards must stay off until the clear lands, so no accepted-everywhere store can sit beside the withdrawn Merge), Merge enabling while its clear is pending, or the stored Merge coming back as a pressed verdict when the sheet is reopened before the retry.
+def test_a_failed_clear_holds_the_cards_off_so_a_reopen_before_the_retry_cannot_restore_the_withdrawn_merge():
     digest = _sheet_digest(PR_SAMPLE)
     page = _lock(PR_SAMPLE, """
       await acceptAll();
@@ -862,32 +862,48 @@ def test_re_accepting_after_a_failed_clear_keeps_merge_locked_and_the_stored_mer
       lastVerdictCall().reject(new Error("no"));
       await t.tick();
       const failed = lockView();
+      const cardsOff = t.state(A).disabled;
+      const answerWrites = t.sets.filter((call) => call.path === "answers/" + A).length;
+      t.click(t.button(A, "Accept"));
+      await t.tick();
+      const afterClick = { writes: t.sets.filter((call) => call.path === "answers/" + A).length, view: lockView() };
+      const beforeRetry = t.written();
+      const retry = verdictSave().children.find((child) => child.tagName === "button");
+      t.click(retry);
+      await t.tick();
+      const pending = { view: lockView(), cardsOff: t.state(A).disabled };
+      lastVerdictCall().resolve();
+      await t.tick();
+      const cardsBack = t.state(A).disabled;
       t.click(t.button(A, "Accept"));
       await t.tick();
       answerCall().resolve();
       await t.tick();
-      const reaccepted = lockView();
-      const stillStored = t.written()["verdict/%s"];
-      t.click(verdictSave().children.find((child) => child.tagName === "button"));
-      await t.tick();
-      lastVerdictCall().resolve();
-      await t.tick();
-      return { failed: failed, reaccepted: reaccepted, stillStored: stillStored, after: lockView(), written: t.written() };
-    """ % digest, host=PENDING)
+      return { failed: failed, cardsOff: cardsOff, answerWrites: answerWrites, afterClick: afterClick, beforeRetry: beforeRetry, pending: pending, after: lockView(), cardsBack: cardsBack, written: t.written() };
+    """, host=PENDING)
     result = page["result"]
     assert result["failed"]["pressed"] == ["false", "false"] and result["failed"]["disabled"] is True
-    assert result["stillStored"]["verdict"] == "merge"
-    assert result["reaccepted"]["disabled"] is True and result["reaccepted"]["label"] == _locked_label()
-    assert result["reaccepted"]["pressed"] == ["false", "false"]
-    assert "Not saved" in result["reaccepted"]["verdictSave"]
-    assert result["after"]["disabled"] is False and result["after"]["pressed"] == ["false", "false"]
-    stored = result["written"]
-    assert stored["verdict/" + digest]["verdict"] is None
-    reopened = _lock(PR_SAMPLE, "return lockView();", host={"collections": {
-        "answers": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("answers/")],
-        "verdict": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("verdict/")],
-    }})
-    assert reopened["result"]["pressed"] == ["false", "false"]
+    assert all(result["cardsOff"])
+    assert result["afterClick"]["writes"] == result["answerWrites"]
+    assert result["afterClick"]["view"]["disabled"] is True and result["afterClick"]["view"]["pressed"] == ["false", "false"]
+    assert result["beforeRetry"]["verdict/" + digest]["verdict"] == "merge"
+    assert result["pending"]["view"]["disabled"] is True and result["pending"]["view"]["pressed"] == ["false", "false"]
+    assert all(result["pending"]["cardsOff"])
+    assert result["after"]["disabled"] is False and not any(result["cardsBack"])
+    assert result["written"]["verdict/" + digest]["verdict"] is None
+
+    def collections(stored):
+        return {
+            "answers": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("answers/")],
+            "verdict": [{"id": path.split("/", 1)[1], "data": data} for path, data in stored.items() if path.startswith("verdict/")],
+        }
+
+    # The store as it stood before the retry: the Merge is still there beside a Discuss, so the reopened sheet is locked and clears it.
+    reopened = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": collections(result["beforeRetry"])})
+    assert reopened["result"]["view"]["pressed"] == ["false", "false"] and reopened["result"]["view"]["disabled"] is True
+    assert reopened["result"]["writes"] == [{"verdict": None, "note": "", "sheet": digest}]
+    final = _lock(PR_SAMPLE, "return lockView();", host={"collections": collections(result["written"])})
+    assert final["result"]["pressed"] == ["false", "false"]
 
 
 # Bites on: a stored Merge restored onto a sheet that is locked once its answers are restored (E8) staying a Merge, or being cleared when the sheet is not locked.

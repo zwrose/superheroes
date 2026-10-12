@@ -1689,6 +1689,14 @@
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const clearUnsaved = verdictController.state().answer === null && (verdictController.state().save === "failed" || verdictController.state().save === "stalled");
       const locked = incomplete || clearUnsaved;
+      // The store keeps no record that a Merge was withdrawn, so while the clear of one is unacknowledged (in flight, failed
+      // or stalled) the cards stay off: an answer saved then could make every card accepted beside the old Merge, and a
+      // reopened sheet would restore that Merge as current. They come back on when the clear lands.
+      const holdCards = verdictController.state().answer === null && verdictController.unsaved();
+      if (holdCards !== cardsHeld) {
+        cardsHeld = holdCards;
+        syncControls();
+      }
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -1734,9 +1742,11 @@
     let sendBackLine = null;
 
     // Controls are on only when the sheet allows edits; the last card's also need a schema that says what a verdict is.
+    // True while a withdrawn Merge's clear is unacknowledged: the cards are off then (see lockVerdict).
+    let cardsHeld = false;
     function syncControls() {
       const on = canEdit();
-      controllers.forEach(function (controller) { controller.setEnabled(on); });
+      controllers.forEach(function (controller) { controller.setEnabled(on && !cardsHeld); });
       if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null && sheetDigest !== null);
     }
 
