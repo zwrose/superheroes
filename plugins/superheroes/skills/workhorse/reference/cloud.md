@@ -144,11 +144,12 @@ off a cloud build's path:
 |---|---|---|
 | `skills/review-code/SKILL.md`, PR mode setup | `gh pr list --head`, `gh pr view --json`, `gh repo view --json nameWithOwner` | the stand-ins in § GitHub reads |
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
+| `lib/vet_slot.py handback`, `--pr <n> --repo <owner/name>` | `gh pr view` | `--body-file <body.md>` on the body read through `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
 | `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `lib/pr_comment.py`, `lib/cloud_builder.py` | `gh api` (REST) | works |
 | `lib/preflight_probe.py`, `gh_auth_probe` REST fallback | `gh api repos/<o>/<r>` | works |
-| `lib/launcher.py`, `lib/wave_watch.py`, `lib/vet_slot.py` | `gh pr list`, `gh pr view` | the advisor's, not a builder's path |
+| `lib/launcher.py`, `lib/wave_watch.py` | `gh pr list`, `gh pr view` | the advisor's, not a builder's path |
 | `lib/guardian_sweep.py` | `gh issue view` | the guardian's, not a builder's path |
 
 This page adds `gh api` reads only: the pull request, the issue and its comments, and the
