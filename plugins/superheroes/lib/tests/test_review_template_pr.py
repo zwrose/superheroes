@@ -591,3 +591,407 @@ def test_the_template_types_none_of_the_new_words():
                 "notIndependentMark", "caughtHeading", "changed"):
         assert PW[key] not in script, "the template types the words of %s" % key
     assert '"Accept"' not in script
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The merge verdict's lock, send-back and clear (C9 layer 1b).
+# ---------------------------------------------------------------------------------------------------------------------
+
+CARD_A, CARD_B, CARD_C = "f-e490915872bd", "f-a5cb88b79507", "i-6f4a068f1373"
+
+# What a lock scenario can read and do: the three cards of the pr sample (A: Accept / Discuss; B: Keep it, Fix in a follow-up,
+# Fix before merge; C: Ten minutes, One minute (sends the PR back)), and the verdict card's lock, unlock line and send-back message.
+LOCK = r"""
+const A = "f-e490915872bd", B = "f-a5cb88b79507", C = "i-6f4a068f1373";
+const rowNode = () => verdict().children.find((child) => hasClass(child, "answer-row"));
+const unlockLine = () => verdict().children.find((child) => child.id === "verdict-unlocks");
+const sendBackLine = () => verdict().children.find((child) => child.id === "verdict-send-back");
+const verdictSave = () => verdict().children.find((child) => hasClass(child, "save-line"));
+const lockView = () => ({
+  label: verdictRow()[0].textContent,
+  disabled: verdictRow()[0].disabled,
+  notYetDisabled: verdictRow()[1].disabled,
+  noteDisabled: verdictNote().disabled,
+  line: unlockLine().hidden ? null : unlockLine().textContent,
+  sendBack: { row: rowNode().hidden, note: verdictNote().hidden, message: sendBackLine().hidden ? null : sendBackLine().textContent },
+  pressed: verdictRow().map((button) => button.getAttribute("aria-pressed")),
+  note: verdictNote().value,
+  saves: [A, B, C].map((id) => (t.card(id) ? t.saveText(id) : "")),
+  verdictSave: t.text(verdictSave()),
+});
+const acceptAll = async () => {
+  t.click(t.button(A, "Accept"));
+  t.click(t.button(B, "Keep it"));
+  t.click(t.buttons(C)[0]);
+  await t.tick();
+};
+const settle = async (count) => {
+  t.sets.slice(0, count).forEach((call) => call.resolve());
+  await t.tick();
+};
+const verdictWrites = () => t.setLog().filter((item) => item.path.startsWith("verdict/")).map((item) => item.body);
+const lastVerdictCall = () => t.sets.filter((call) => call.path.startsWith("verdict/")).pop();
+const settleNewestFirst = async () => {
+  for (let round = 0; round < 8; round += 1) {
+    t.sets.slice().reverse().forEach((call) => call.resolve());
+    await t.tick();
+  }
+};
+"""
+
+PENDING = {"set": "pending"}
+TIMED = {"fakeTimers": True}
+
+
+def _lock(sheet, scenario, host=None, words=None):
+    return _page(sheet, LOCK + scenario, host=host, words=words)
+
+
+def _locked_label(kind="pr"):
+    return _fill(PW["mergeLocked"], merge=_fill(PW["mergeLabel" if kind == "pr" else "mergeStackLabel"], number=214 if kind == "pr" else 4))
+
+
+# (id, sheet, host, scenario, accepted, total, locked, sends back)
+LOCK_ROWS = [
+    ("all-accepted-and-saved", PR_SAMPLE, {}, "await acceptAll(); return lockView();", 3, 3, False, False),
+    ("nothing-answered", PR_SAMPLE, {}, "return lockView();", 0, 3, True, False),
+    ("accept-in-flight", PR_SAMPLE, PENDING, "await acceptAll(); await settle(2); return lockView();", 2, 3, True, False),
+    ("accept-failed", PR_SAMPLE, PENDING, """
+      await acceptAll();
+      t.sets[0].resolve(); t.sets[1].resolve(); t.sets[2].reject(new Error("no"));
+      await t.tick();
+      return lockView();
+    """, 2, 3, True, False),
+    ("accept-stalled", PR_SAMPLE, dict(PENDING, **TIMED), """
+      await acceptAll();
+      await settle(2);
+      await t.advance(10000);
+      return lockView();
+    """, 2, 3, True, False),
+    ("note-pausing", PR_SAMPLE, TIMED, """
+      await acceptAll();
+      t.type(t.note(A), "because", "input");
+      await t.tick();
+      return lockView();
+    """, 2, 3, True, False),
+    ("discuss", PR_SAMPLE, {}, """
+      t.click(t.button(A, "Discuss")); t.click(t.button(B, "Keep it")); t.click(t.buttons(C)[0]);
+      await t.tick();
+      return lockView();
+    """, 2, 3, True, False),
+    ("something-else", PR_SAMPLE, {}, """
+      t.click(t.button(A, "Accept")); t.click(t.button(B, "Keep it")); t.click(t.button(C, "Something else"));
+      await t.tick();
+      return lockView();
+    """, 2, 3, True, False),
+    ("option-that-does-not-send-back", PR_SAMPLE, {}, """
+      t.click(t.button(A, "Accept")); t.click(t.button(B, "Fix in a follow-up")); t.click(t.buttons(C)[0]);
+      await t.tick();
+      return lockView();
+    """, 3, 3, False, False),
+    ("option-that-sends-back", PR_SAMPLE, {}, """
+      t.click(t.button(A, "Accept")); t.click(t.button(B, "Keep it")); t.click(t.buttons(C)[1]);
+      await t.tick();
+      return lockView();
+    """, 2, 3, True, True),
+    ("no-cards", _emptied(PR_SAMPLE), {}, "return lockView();", 0, 0, False, False),
+]
+
+
+# Bites on: the lock counting the current pick instead of the answer the store acknowledged (an Accept in flight, failed or stalled, or a note still pausing, reading as accepted); a locked sheet whose Merge button keeps the plain words or stays enabled; Not yet or the note switched off by the lock; the unlock line's counts; a sheet with no cards locked; Discuss, Something else or an option that sends the PR back counting as accepted.
+@pytest.mark.parametrize("row", LOCK_ROWS, ids=[row[0] for row in LOCK_ROWS])
+def test_the_lock_follows_what_the_store_has_acknowledged(row):
+    _, sheet, host, scenario, accepted, total, locked, sends_back = row
+    view = _lock(sheet, scenario, host)["result"]
+    assert view["label"] == (_locked_label() if locked else "Merge #214")
+    assert view["disabled"] is locked
+    assert view["notYetDisabled"] is False and view["noteDisabled"] is False
+    if sends_back:
+        assert view["line"] is None
+        assert view["sendBack"] == {"row": True, "note": True, "message": PW["sendBack"]}
+    else:
+        assert view["line"] == (_fill(PW["unlocks"], accepted=accepted, total=total) if locked else None)
+        assert view["sendBack"] == {"row": False, "note": False, "message": None}
+    if row[0] in ("accept-failed", "accept-stalled"):
+        assert "Not saved" in view["saves"][2]
+
+
+def test_the_lock_words_are_exactly_the_shared_contract():
+    assert PW["mergeLocked"] == "{merge} · locked"
+    assert PW["unlocks"] == "Unlocks when every item above is accepted: {accepted} of {total} so far."
+    assert PW["sendBack"] == (
+        "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
+    )
+    assert _locked_label() == "Merge #214 · locked" and _locked_label("stack") == "Merge stack #4 · locked"
+    for key in ("mergeLocked", "unlocks", "sendBack"):
+        words = copy.deepcopy(WORDS)
+        del words["pr"][key]
+        page = _run_page(_files(PR_SAMPLE, words), scenario="return { uses: t.uses, sets: t.sets.length };")
+        _assert_error_shown(page)
+        assert page["result"] == {"uses": [], "sets": 0}
+
+
+# Bites on: the stack sheet not following the pr sheet's lock, or its locked Merge label naming the PR instead of the stack.
+def test_a_stack_sheet_locks_and_unlocks_the_same_way():
+    page = _lock(STACK_SAMPLE, """
+      const id = elements["sheet-cards"].children.filter(isCard)[0].id.replace("card-", "");
+      const before = lockView();
+      t.click(t.button(id, "Keep it"));
+      await t.tick();
+      return { before: before, after: lockView() };
+    """)
+    assert page["result"]["before"]["label"] == _locked_label("stack") == "Merge stack #4 · locked"
+    assert page["result"]["before"]["disabled"] is True
+    assert page["result"]["before"]["line"] == _fill(PW["unlocks"], accepted=0, total=1)
+    assert page["result"]["after"]["label"] == "Merge stack #4" and page["result"]["after"]["disabled"] is False
+    assert page["result"]["after"]["line"] is None
+
+
+# Bites on: a note typed on an accepted card (E4) leaving the sheet unlocked while its pause runs, or staying locked after it saves.
+def test_a_note_pause_locks_until_the_note_is_saved():
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      const saved = lockView();
+      t.type(t.note(A), "because", "input");
+      await t.tick();
+      const pausing = lockView();
+      await t.advance(1000);
+      return { saved: saved, pausing: pausing, after: lockView(), sets: t.setLog().filter((item) => item.path === "answers/" + A).map((item) => item.body) };
+    """, host=TIMED)
+    assert page["result"]["saved"]["disabled"] is False
+    assert page["result"]["pausing"]["disabled"] is True and page["result"]["pausing"]["line"] == _fill(PW["unlocks"], accepted=2, total=3)
+    assert page["result"]["after"]["disabled"] is False and page["result"]["after"]["line"] is None
+    assert page["result"]["sets"][-1] == {"answer": "accept", "optionId": None, "note": "because"}
+
+
+# Bites on: a Merge saved and then lost to a card going to Discuss staying on the page or in the store (E5): the clear missing, or not keeping the note, or not written as the verdict's own document.
+def test_a_saved_merge_is_cleared_when_a_card_goes_to_discuss():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      t.type(verdictNote(), "go ahead", "change");
+      t.click(verdictRow()[0]);
+      await t.tick();
+      const merged = lockView();
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      return { merged: merged, after: lockView(), writes: verdictWrites(), stored: t.written()["verdict/%s"] };
+    """ % digest)
+    result = page["result"]
+    assert result["merged"]["pressed"] == ["true", "false"]
+    assert result["after"]["pressed"] == ["false", "false"] and result["after"]["note"] == "go ahead"
+    assert result["after"]["disabled"] is True and result["after"]["label"] == _locked_label()
+    cleared = {"verdict": None, "note": "go ahead", "sheet": digest}
+    assert result["writes"] == [
+        {"verdict": None, "note": "go ahead", "sheet": digest},
+        {"verdict": "merge", "note": "go ahead", "sheet": digest},
+        cleared,
+    ]
+    assert result["stored"] == cleared
+
+
+# Bites on: the clear writing straight to the store instead of queueing behind the verdict's write in flight (E6): a Merge still pending landing after the clear.
+def test_a_clear_queues_behind_a_merge_still_in_flight():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      await settle(3);
+      t.click(verdictRow()[0]);
+      await t.tick();
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      const whileInFlight = verdictWrites();
+      t.sets[3].resolve();
+      await t.tick();
+      await settleNewestFirst();
+      return { whileInFlight: whileInFlight, writes: verdictWrites(), stored: t.written()["verdict/%s"], after: lockView() };
+    """ % digest, host=PENDING)
+    result = page["result"]
+    assert result["whileInFlight"] == [{"verdict": "merge", "note": "", "sheet": digest}]
+    cleared = {"verdict": None, "note": "", "sheet": digest}
+    assert result["writes"] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared]
+    assert result["stored"] == cleared
+    assert result["after"]["pressed"] == ["false", "false"] and result["after"]["disabled"] is True
+
+
+# Bites on: a failed clear write not shown as "Not saved" with Try again (E7), the sheet unlocking on it, or Try again not sending the cleared document.
+def test_a_failed_clear_shows_not_saved_and_the_sheet_stays_locked():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      await settle(3);
+      t.click(verdictRow()[0]);
+      await t.tick();
+      t.sets[3].resolve();
+      await t.tick();
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      lastVerdictCall().reject(new Error("no"));
+      await t.tick();
+      const failed = lockView();
+      const retry = verdictSave().children.find((child) => child.tagName === "button");
+      t.click(retry);
+      await t.tick();
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { failed: failed, retried: verdictWrites(), after: lockView(), retryWas: retry.textContent };
+    """, host=PENDING)
+    result = page["result"]
+    assert "Not saved" in result["failed"]["verdictSave"] and result["retryWas"] == "Try again"
+    assert result["failed"]["disabled"] is True and result["failed"]["label"] == _locked_label()
+    assert result["failed"]["pressed"] == ["false", "false"]
+    cleared = {"verdict": None, "note": "", "sheet": digest}
+    assert result["retried"] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared, cleared]
+    assert "Saved" in result["after"]["verdictSave"] and result["after"]["disabled"] is True
+
+
+# Bites on: a stored Merge restored onto a sheet that is locked once its answers are restored (E8) staying a Merge, or being cleared when the sheet is not locked.
+def test_a_stored_merge_is_cleared_after_load_on_a_locked_sheet_and_kept_on_an_open_one():
+    digest = _sheet_digest(PR_SAMPLE)
+    stored = {"id": digest, "data": {"verdict": "merge", "note": "my verdict note", "sheet": digest}}
+
+    def answers(*rows):
+        return [{"id": card, "data": {"answer": answer, "optionId": option, "note": ""}} for card, answer, option in rows]
+
+    locked = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": {
+        "answers": answers((CARD_A, "discuss", None), (CARD_B, "option", "keep-it"), (CARD_C, "option", "ten-minutes")),
+        "verdict": [stored],
+    }})
+    assert locked["result"]["view"]["pressed"] == ["false", "false"] and locked["result"]["view"]["note"] == "my verdict note"
+    assert locked["result"]["view"]["disabled"] is True
+    assert locked["result"]["writes"] == [{"verdict": None, "note": "my verdict note", "sheet": digest}]
+    open_sheet = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": {
+        "answers": answers((CARD_A, "accept", None), (CARD_B, "option", "keep-it"), (CARD_C, "option", "ten-minutes")),
+        "verdict": [stored],
+    }})
+    assert open_sheet["result"]["view"]["pressed"] == ["true", "false"] and open_sheet["result"]["view"]["disabled"] is False
+    assert open_sheet["result"]["writes"] == []
+
+
+# Bites on: the verdict buttons, note or unlock line left up when a card's current pick sends the PR back (E9), the message missing, the verdict not coming back when the pick is cleared or changed, or a saved Merge not cleared.
+def test_a_pick_that_sends_the_pr_back_replaces_the_verdict_with_its_message():
+    digest = _sheet_digest(PR_SAMPLE)
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      await settle(3);
+      t.click(verdictRow()[0]);
+      await t.tick();
+      t.sets[3].resolve();
+      await t.tick();
+      const merged = lockView();
+      t.click(t.button(B, "Fix before merge"));
+      await t.tick();
+      const sentBack = lockView();
+      await settleNewestFirst();
+      const settled = lockView();
+      t.click(t.button(B, "Fix before merge"));
+      await t.tick();
+      const cleared = lockView();
+      t.click(t.button(B, "Keep it"));
+      await t.tick();
+      await settleNewestFirst();
+      return { merged: merged, sentBack: sentBack, settled: settled, cleared: cleared, back: lockView(), writes: verdictWrites() };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["merged"]["pressed"] == ["true", "false"] and result["merged"]["sendBack"]["message"] is None
+    for name in ("sentBack", "settled"):
+        assert result[name]["sendBack"] == {"row": True, "note": True, "message": PW["sendBack"]}, name
+        assert result[name]["line"] is None, name
+    assert result["settled"]["pressed"] == ["false", "false"]
+    assert result["writes"][-1] == {"verdict": None, "note": "", "sheet": digest}
+    assert result["cleared"]["sendBack"] == {"row": False, "note": False, "message": None}
+    assert result["cleared"]["line"] == _fill(PW["unlocks"], accepted=2, total=3)
+    assert result["back"]["line"] is None and result["back"]["disabled"] is False and result["back"]["label"] == "Merge #214"
+
+
+# Bites on: the send-back waiting for the store to acknowledge the pick (it follows the pick the button shows, even while its write is in flight).
+def test_the_send_back_message_follows_the_pick_even_while_its_write_is_in_flight():
+    page = _lock(PR_SAMPLE, """
+      t.click(t.button(B, "Fix before merge"));
+      await t.tick();
+      return { view: lockView(), sets: t.setLog().length };
+    """, host=PENDING)
+    assert page["result"]["sets"] == 1
+    assert page["result"]["view"]["sendBack"] == {"row": True, "note": True, "message": PW["sendBack"]}
+
+
+# Bites on: a sheet with no cards locked, or its Merge enabled before the saved answers are read or without a digest (E10, E11); the lock line missing the count without a digest.
+def test_no_cards_unlocks_once_ready_and_a_missing_digest_keeps_the_controls_off_but_the_count_shown():
+    empty = _emptied(PR_SAMPLE)
+    ready = _lock(empty, "return lockView();")["result"]
+    assert ready["label"] == "Merge #214" and ready["disabled"] is False and ready["line"] is None
+    waiting = _lock(empty, "return lockView();", host={"read": "pending"})["result"]
+    assert waiting["label"] == "Merge #214" and waiting["disabled"] is True
+    no_digest_empty = _lock(empty, "return lockView();", host={"noCrypto": True})["result"]
+    assert no_digest_empty["label"] == "Merge #214" and no_digest_empty["disabled"] is True and no_digest_empty["line"] is None
+    no_digest = _lock(PR_SAMPLE, "return lockView();", host={"noCrypto": True})["result"]
+    assert no_digest["disabled"] is True and no_digest["notYetDisabled"] is True and no_digest["noteDisabled"] is True
+    assert no_digest["label"] == _locked_label()
+    assert no_digest["line"] == _fill(PW["unlocks"], accepted=0, total=3)
+
+
+# Bites on: a non-owner or a page with no store getting a control, a write or a clear (E12), even with a Merge in the store.
+@pytest.mark.parametrize("host", [{"user": "reader"}, {"user": "null"}, {"claude": "missing"}, {"db": "null"}], ids=["non-owner", "no-user", "no-host", "no-store"])
+def test_no_store_or_a_non_owner_gets_no_controls_and_no_clear(host):
+    digest = _sheet_digest(PR_SAMPLE)
+    stored = {"id": digest, "data": {"verdict": "merge", "note": "n", "sheet": digest}}
+    answers = [{"id": CARD_A, "data": {"answer": "discuss", "optionId": None, "note": ""}}]
+    page = _lock(PR_SAMPLE, """
+      const answerControls = [...elements["sheet-cards"].children.filter(isCard), verdict()]
+        .flatMap((node) => t.all(node))
+        .filter((node) => node.tagName === "button" || node.tagName === "textarea");
+      return { view: lockView(), controls: answerControls.map((node) => node.disabled), count: answerControls.length, sets: t.sets.length };
+    """, host=dict(host, collections={"answers": answers, "verdict": [stored]}))
+    result = page["result"]
+    assert result["count"] > 10 and all(result["controls"]) and result["sets"] == 0
+    assert result["view"]["pressed"] == ["false", "false"] and result["view"]["disabled"] is True
+
+
+def _republished(sheet):
+    """The sheet published again with one more byte (a new title), so its digest is new and every card id is unchanged."""
+    return _with(sheet, lambda clone: clone.__setitem__("title", clone["title"] + " (second edition)"))
+
+
+# Bites on: a verdict saved under the old digest restored on a republished sheet (UFR-6, R8), or an answer under a card id the new file still has not restored.
+def test_a_new_commit_starts_the_verdict_over_and_keeps_the_answers_of_unchanged_cards():
+    again = _republished(PR_SAMPLE)
+    assert _sheet_digest(again) != _sheet_digest(PR_SAMPLE)
+    assert [card["id"] for card in again["cards"]] == [card["id"] for card in PR_SAMPLE["cards"]]
+    old = _sheet_digest(PR_SAMPLE)
+    host = {"collections": {
+        "answers": [{"id": CARD_A, "data": {"answer": "accept", "optionId": None, "note": "still true"}}],
+        "verdict": [{"id": old, "data": {"verdict": "not-yet", "note": "old note", "sheet": old}}],
+    }}
+    same = _lock(PR_SAMPLE, "return { verdict: lockView(), card: t.state(A) };", host=host)["result"]
+    assert same["verdict"]["pressed"] == ["false", "true"] and same["verdict"]["note"] == "old note"
+    new = _lock(again, "return { verdict: lockView(), card: t.state(A), writes: verdictWrites() };", host=host)["result"]
+    assert new["verdict"]["pressed"] == ["false", "false"] and new["verdict"]["note"] == ""
+    assert new["card"]["pressed"] == ["true", "false"] and new["card"]["note"] == "still true"
+    assert new["writes"] == []
+
+
+# Bites on: the final sheet picking up the lock, the send-back or the clear (V7): its Approve locked, labelled as locked, or cleared, or an unlock line or send-back message drawn on it.
+def test_a_final_sheet_still_saves_approve_with_no_lock():
+    sheet = _sample_final()
+    digest = _sheet_digest(sheet)
+    page = _run_page(_files(sheet), scenario="""
+      const card = elements["sheet-cards"].children.find((child) => child.tagName === "article");
+      if (card) t.click(t.buttons(card.id.replace("card-", ""))[1]);
+      await t.tick();
+      const before = t.lastState();
+      t.click(t.lastButton("Approve"));
+      await t.tick();
+      return {
+        before: before, after: t.lastState(), sets: t.setLog().filter((item) => item.path.startsWith("verdict/")),
+        ids: t.lastCard().children.map((child) => child.id).filter((id) => id !== ""),
+      };
+    """, host={"collections": {"answers": [], "verdict": []}})
+    result = page["result"]
+    assert result["before"]["labels"] == ["Approve", "Not yet"] and not any(result["before"]["disabled"])
+    assert result["after"]["pressed"] == ["true", "false"] and result["after"]["labels"] == ["Approve", "Not yet"]
+    assert result["sets"] == [{"path": "verdict/" + digest, "body": {"verdict": "approve", "note": "", "sheet": digest}}]
+    assert "verdict-unlocks" not in result["ids"] and "verdict-send-back" not in result["ids"]
+    stored = _run_page(_files(sheet), scenario="return { state: t.lastState(), sets: t.setLog() };", host={"collections": {
+        "answers": [], "verdict": [{"id": digest, "data": {"verdict": "approve", "note": "", "sheet": digest}}],
+    }})
+    assert stored["result"]["state"]["pressed"] == ["true", "false"] and stored["result"]["sets"] == []

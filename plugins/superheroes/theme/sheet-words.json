@@ -72,6 +72,9 @@
     "notYetLabel": "Not yet",
     "verdictCaption": "Saved as you tap. Your merge word is this verdict plus \"done\" in the chat.",
     "acceptedCount": "{accepted} of {total} accepted",
-    "nothingToAcceptCount": "Nothing to accept"
+    "nothingToAcceptCount": "Nothing to accept",
+    "mergeLocked": "{merge} · locked",
+    "unlocks": "Unlocks when every item above is accepted: {accepted} of {total} so far.",
+    "sendBack": "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
   }
 }
