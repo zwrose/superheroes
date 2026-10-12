@@ -11,6 +11,7 @@
 - [The quiet window, and the number behind it](#the-quiet-window)
 - [Timing flags](#timing-flags)
 - [What it tells you](#what-it-tells-you)
+- [Answering a builder note](#answering-a-builder-note)
 - [The boundary the owner accepted](#the-boundary-the-owner-accepted)
 - [How it relates to the heartbeat sweep](#how-it-relates-to-the-heartbeat-sweep)
 
@@ -379,9 +380,8 @@ When **`builder-note`** fires, a cloud builder has posted an issue comment openi
 `note-answered` has recorded it. The payload carries `launchId` (the first note's lane) and `notes`,
 by comment id: `{"launchId", "issue", "commentId", "url", "createdAt", "cloudSessionName",
 "cloudSessionId", "configDir"}` — `configDir` names the Claude account the lane runs on — plus
-`alsoObserved`. Answer the builder by message to the session the lane names, as the **Cloud lanes**
-paragraph of `orchestration.md` says, never on the issue; then run `note-answered`, or the note
-fires again on the next arm. A note posted while you were away fires when you are back. It reads
+`alsoObserved`. Answer the builder as [Answering a builder note](#answering-a-builder-note) says;
+until a confirmed delivery is followed by `note-answered`, the note fires again on every arm. A note posted while you were away fires when you are back. It reads
 the repository's issue comments once per tick, a `304` re-using the stored list.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
@@ -418,6 +418,44 @@ Notes beyond the token name:
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
+
+## Answering a builder note
+
+Each note names the session to answer (`cloudSessionName`) and the account it runs on (`configDir`).
+Compare `configDir` with the account you run on, your resolved config directory (`CLAUDE_CONFIG_DIR`
+when set, otherwise `~/.claude`). Answer by message, never on the issue.
+
+**Same account.** Send the answer to the session by `SendMessage`. The gate is that call's result
+reading `success: true`.
+
+**Another account.** The answer goes through a relay, a background session on that account
+(`lib/cloud_relay.py`; `skills/workhorse/reference/cloud.md` has the builder's side). In order:
+
+1. `python3 -B <plugin root>/lib/cloud_relay.py ensure --repo-root <root> --config-dir <configDir>`,
+   before every relayed answer. It starts the relay if none is listed, which keeps it alive and
+   follows the builders to whichever account they run on, one relay per account. It returns `name`.
+2. Write the answer to a file, then `compose --repo-root <root> --config-dir <configDir> --session
+   <cloudSessionName> --text-file <file>`. It returns `msgId`, `relayMessage` and `forward`.
+3. Send `relayMessage` verbatim by `SendMessage` to the relay's `name`.
+4. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`. A message counts as
+   delivered only when the text the relay sent matches `forward` exactly; the relay's own words about
+   what it sent are never the receipt.
+
+**Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
+owner the result's `say` sentence, or the refusal and its `detail`. Retry once from `ensure`; a second
+failure stays with the owner. A `relay-start-failed` naming an untrusted workspace means that account
+has never trusted the repository root; trusting it once is the owner's step.
+
+**Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
+--comment-id <id>` for that note, then re-arm.
+
+The message resumes a parked cloud session, which re-reads its issue and carries on, so the answer
+reaches a builder that already parked. When you are back after being away, the first arm reports every
+note still waiting (`notes`, oldest first). Answer each in turn as above, each with its own gate; that
+also resumes each lane that parked on one. There is no separate resume step.
+
+Any other message you send to a cloud session on another account, the archive request after a merge
+or close included, goes through the same relay path and gate.
 
 ## The boundary the owner accepted
 
