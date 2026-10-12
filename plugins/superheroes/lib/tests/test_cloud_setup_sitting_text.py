@@ -138,3 +138,38 @@ def test_first_pick_unchanged_is_confirmed_by_name_in_step_three():
     assert make is not None, "section 6 has no line containing 'cloud_pass.py\" make'"
     assert confirm < make, "the confirm-by-name line (%d) does not come before the pass command (%d)" % (
         confirm, make)
+
+
+def test_the_id_is_compared_with_the_picker_before_each_step_that_uses_it():
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    needle = 'cloud_environment.py" compare --environment <id>'
+    compares = [i for i, line in enumerate(section) if needle in line]
+    for step in ('cloud_pass.py" make', 'cloud_check.py" start', 'cloud_check.py" judge'):
+        first = _first(section, step)
+        assert first is not None, "section 6 has no line containing %r" % step
+        assert any(c < first for c in compares), "no %r line comes before the first %r line" % (
+            needle, step)
+        assert sum(1 for c in compares if c < first) >= 1
+    marks = [_first(section, step) for step in
+             ('cloud_pass.py" make', 'cloud_check.py" start', 'cloud_check.py" judge')]
+    assert len([c for c in compares if c < marks[0]]) >= 1
+    assert len([c for c in compares if marks[0] < c < marks[1]]) >= 1, "no compare between pass and start"
+    assert len([c for c in compares if marks[1] < c < marks[2]]) >= 1, "no compare between start and judge"
+
+
+def test_no_compare_line_comes_after_the_last_judge_line():
+    section = _section_six()
+    assert section, "section 6 of set-up.md was not found"
+    judges = [i for i, line in enumerate(section) if 'cloud_check.py" judge' in line]
+    assert judges, "section 6 has no line containing 'cloud_check.py\" judge'"
+    late = [i for i, line in enumerate(section)
+            if 'cloud_environment.py" compare' in line and i > judges[-1]]
+    assert not late, "compare line(s) %r come after the last judge line (%d)" % (late, judges[-1])
+
+
+def test_check_helper_commands_pass_no_relative_working_directory():
+    section = _section_six()
+    for line in section:
+        if 'cloud_check.py"' in line:
+            assert "--cwd" not in line, "cloud_check command passes --cwd: %r" % line
