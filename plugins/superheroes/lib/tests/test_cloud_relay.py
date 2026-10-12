@@ -347,18 +347,29 @@ def test_every_check_refusal_says_it_was_not_delivered(world, monkeypatch, tmp_p
     open(path, "w").write("{not json")
     refusals.append(_check(world, mid)[0])
     open(path, "w").write(good)
-    monkeypatch.setattr(cr, "_save", lambda p, s: False)
-    _write_record(world, _send_lines("toolu_1", SESSION, msg["forward"], "2026-10-12T10:00:00.000Z"))
-    refusals.append(_check(world, mid)[0])
     assert [r["reason"] for r in refusals] == [
         "wait-invalid", "message-unknown", "ledger-repo-identity-unavailable", "relay-unknown",
-        "relay-state-unreadable", "relay-state-unwritable"]
+        "relay-state-unreadable"]
     for r in refusals:
         assert r["ok"] is False and r["delivered"] is False
         assert r["say"].endswith("; it was not delivered.")
     for r in refusals[:1] + refusals[2:]:
         assert mid in r["say"]
     assert "nope" in refusals[1]["say"]
+
+
+def test_verified_delivery_survives_an_unwritable_decision(world, monkeypatch):
+    msg = _composed(world)
+    monkeypatch.setattr(cr, "_save", lambda p, s: False)
+    _write_record(world, _send_lines("toolu_1", SESSION, msg["forward"], "2026-10-12T10:00:00.000Z"))
+    out = _check(world, msg["msgId"])[0]
+    assert out["ok"] is True and out["delivered"] is True and out["decisionSaved"] is False
+
+
+def test_accounts_sharing_a_basename_get_distinct_relay_names(tmp_path):
+    one, two = tmp_path / "one" / ".claude", tmp_path / "two" / ".claude"
+    assert cr.relay_name(str(one)) != cr.relay_name(str(two))
+    assert cr.relay_name(str(one)) == cr.relay_name(str(one) + "/")
 
 
 def test_record_noise_is_skipped(world):
@@ -397,12 +408,12 @@ def test_check_refusals(world):
 
 def test_alive_relay_is_found_by_name_and_account_without_a_start(world):
     name = cr.relay_name(world.config)
-    assert name == "superheroes-relay-claude-two"
+    assert name.startswith("superheroes-relay-claude-two-")
     run = FakeRun(lists=[json.dumps([_entry("superheroes-relay-claude-three"), _entry(name)])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out == {"ok": True, "reason": None, "name": name, "sessionId": RELAY_ID, "started": False}
     assert run.starts() == []
-    assert run.calls[0].argv == ["claude", "agents", "--json"]
+    assert run.calls[0].argv == engine_adapter.claude_agents_list_argv()["argv"]
     assert run.calls[0].env["CLAUDE_CONFIG_DIR"] == world.config
 
 
@@ -412,8 +423,7 @@ def test_none_alive_starts_the_relay_with_the_exact_argv(world):
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["ok"] is True and out["started"] is True and out["sessionId"] == RELAY_ID
     (start,) = run.starts()
-    assert start.argv == ["claude", "--bg", "-n", name, "--model", "haiku", "--effort", "low",
-                          cr.RELAY_PROMPT]
+    assert start.argv == engine_adapter.claude_relay_argv(name, cr.RELAY_PROMPT)["argv"]
     assert start.env["CLAUDE_CONFIG_DIR"] == world.config
     assert len(cr.RELAY_PROMPT.splitlines()) < 25
     state = json.load(open(_state_file(world)))
@@ -517,7 +527,7 @@ def test_compose_formats_and_records_the_pending_message(world):
     out = _compose(world, text="hello  \n\n", session=SESSION)
     forward = "Message from the superheroes advisor (id %s):\n\nhello" % out["msgId"]
     assert out["forward"] == forward and len(out["msgId"]) == 12
-    assert out["relay"] == "superheroes-relay-claude-two"
+    assert out["relay"] == cr.relay_name(world.config)
     assert out["relayMessage"] == "RELAY to %s (id %s):\n%s" % (SESSION, out["msgId"], forward)
     pending = json.load(open(_state_file(world)))["pending"][out["msgId"]]
     assert pending["session"] == SESSION and pending["forward"] == forward

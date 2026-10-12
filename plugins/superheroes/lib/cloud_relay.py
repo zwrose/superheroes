@@ -21,6 +21,7 @@ a result with a `reason` token, never a raise. The CLI prints one JSON object an
 import argparse
 import datetime
 import glob
+import hashlib
 import importlib
 import json
 import math
@@ -62,8 +63,9 @@ def _env(env):
 
 def relay_name(config_dir):
     """The relay's session name; it carries the account because names are listed across all."""
-    base = os.path.basename(str(config_dir).rstrip("/")).lstrip(".")
-    return NAME_PREFIX + base if base else None
+    full = os.path.realpath(str(config_dir))
+    base = os.path.basename(full).lstrip(".")
+    return "%s%s-%s" % (NAME_PREFIX, base, hashlib.sha256(full.encode()).hexdigest()[:8]) if base else None
 
 
 def _call(run, argv, env, timeout, cwd=None):
@@ -389,19 +391,21 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
         if verdict:
             break
         sleep(max(0, min(step, end - clock())))
-    delivered = verdict == "delivered"
+    delivered, saved = verdict == "delivered", True
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return _check_refusal(msg_id, refusal)
     if isinstance(state["pending"].get(msg_id), dict):
         state["pending"][msg_id]["decision"] = {"delivered": delivered, "reason": verdict,
                                                 "at": _now_iso()}
-        if not _save(path, state):
-            return _check_refusal(msg_id, _refuse("relay-state-unwritable"))
+        saved = _save(path, state)
     wait_text = "%g" % wait_s
     out = {"ok": delivered, "delivered": delivered, "reason": None if delivered else verdict,
            "msgId": msg_id, "say": _say(verdict, msg_id, wait_text, detail)}
     out.update(detail or {})
+    if not saved:
+        out["decisionSaved"] = False
+        out["say"] += " (The decision could not be saved: the relay's state file is unwritable.)"
     return out
 
 
