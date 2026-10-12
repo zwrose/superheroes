@@ -121,23 +121,29 @@ instructions still use.
 
 ## Step 4 — Write the notes and the compaction instructions as one block
 
-End the reply with **one** fenced block whose info string is exactly `superheroes-checkpoint` — the token `CHECKPOINT_INFO` in
-`hooks/mod/checkpoint-block.ts` (the one parser and the one definition; change it there first).
+First read the block's info string from its one definition, the `CHECKPOINT_INFO` constant in
+`hooks/mod/checkpoint-block.ts` (the one parser), and use the value it prints — `<CHECKPOINT_INFO>` below:
+
+```bash
+sed -n "s/^export const CHECKPOINT_INFO = '\(.*\)'.*/\1/p" "${CLAUDE_PLUGIN_ROOT}/hooks/mod/checkpoint-block.ts"
+```
+
+End the reply with **one** fenced block whose info string is exactly `<CHECKPOINT_INFO>`.
 Its body is the freshened notes (step 3) followed by the compaction instructions (the five
 parts of step 5, as prose). Rules:
 
 - it is the **last thing in the reply** — nothing after the closing fence;
 - **no other fence inside it** (no code blocks, no nested fences) — plain text and lists only;
-- it is the only `superheroes-checkpoint` block in the reply.
+- it is the only `<CHECKPOINT_INFO>` block in the reply.
 
-Then check how the notes get saved:
+Then check how the notes get saved. The mod sets a presence variable to the id of the session it
+runs in; its name is defined by the `$.env.set` call in `hooks/mod/register.ts`. Read the name
+(`<MOD_VAR>` below), then print that variable's value:
 
 ```bash
-printenv SUPERHEROES_COMPACT_MOD
+sed -n "s/.*\$\.env\.set('\([^']*\)'.*/\1/p" "${CLAUDE_PLUGIN_ROOT}/hooks/mod/register.ts"
+printenv <MOD_VAR>
 ```
-
-The variable's name and meaning are defined by the `$.env.set` call in `hooks/mod/register.ts`
-(change it there first): the mod sets it to the id of the session it runs in.
 
 - **Prints this session's id** (the one in the step 2 notes file name): the mod saves the block to the notes
   file when the reply ends. Do **not** write the file yourself.
@@ -149,7 +155,7 @@ The variable's name and meaning are defined by the `$.env.set` call in `hooks/mo
 An example of the block, shown inside a longer fence so it stays inert here:
 
 ````text
-```superheroes-checkpoint
+```<CHECKPOINT_INFO>
 ## Checkpoint notes
 Mode: workhorse
 Issue #911, PR #918; build record: the PR body's "Build record" section.
@@ -227,9 +233,9 @@ skill triggers compaction programmatically.
 | Mistake | Fix |
 | --- | --- |
 | Refusing because the session has no charter | Step 1 returns `generic` for a session with no charter; checkpoint covers every session. |
-| Writing the notes file when `SUPERHEROES_COMPACT_MOD` holds this session's id | The mod saves the block from the reply; writing it too races the mod. Write the file whenever the variable is unset or holds another id. |
-| Putting anything after the `superheroes-checkpoint` block, or a second fence inside it | The block must be the last thing in the reply with no inner fence; otherwise the notes are not saved. |
-| Using another info string, or fewer than three backticks | The fence's info string is exactly `superheroes-checkpoint`. |
+| Writing the notes file when `<MOD_VAR>` holds this session's id | The mod saves the block from the reply; writing it too races the mod. Write the file whenever the variable is unset or holds another id. |
+| Putting anything after the `<CHECKPOINT_INFO>` block, or a second fence inside it | The block must be the last thing in the reply with no inner fence; otherwise the notes are not saved. |
+| Using another info string, or fewer than three backticks | The fence's info string is exactly the value read from `CHECKPOINT_INFO` in step 4. |
 | Skipping the ledger resume point in a Showrunner session because the notes file was saved | The incoming advisor reads the ledger resume point, not the notes file; freshen both (step 3). |
 | Inventing a notes path or filename | Use the bootstrap's `Checkpoint file` line, else the lib's `path` verb. |
 | Pasting charter prose into the `/compact` line | The line carries pointers and live state; the charter reloads from disk after compaction. |
