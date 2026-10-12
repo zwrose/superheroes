@@ -43,6 +43,7 @@ UNSUPPORTED = "review-session-unsupported"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
+UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
@@ -161,15 +162,20 @@ def _bind(ran, run_dirs, engine_run):
     return {k: v[0] for k, v in hits.items() if len(v) == 1}
 
 
-def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None, run_dir=None):
+def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
     entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
-    out = {"name": f"{stem}{seat} (round {rnd})", "planned": True, "ran": ran,
-           "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
-           "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
-           "commit": commit, "runDir": run_dir}
-    return dict(out, notIndependent=True) if seat in same else out
+    return {"name": f"{stem}{seat} (round {rnd})", "planned": True, "ran": ran,
+            "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
+            "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
+            "commit": commit, "runDir": run_dir}
+
+
+def _unfilled_reviewer(rnd, seat):
+    """A seat the round's map left unfilled: planned, never run, no vendor or model to name."""
+    return {"name": f"{seat} (round {rnd})", "planned": True, "ran": False, "vendor": UNFILLED,
+            "model": UNFILLED, "commit": None, "runDir": None}
 
 
 def _slot_ran(state, key, row, env):
@@ -192,10 +198,18 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     envs = {k: _envelope(_path(session_dir, k, v[0])) for k, v in slots.items()}
     ran = {k: v for k, v in slots.items() if _slot_ran(state, k, v[1], envs[k])}
     bound = _bind(ran, run_dirs, engine_run)
-    same = set(seat_map_receipts.same_family_seats(state, receipt_disclosures.author_family(state)))
+    unfilled = {}  # panel round -> the seats its governing map leaves unfilled
+    for rnd in sorted({k[1] for k in slots if k[0] == sc.PANEL_PHASE}
+                      | {int(n) for n, rec in (state.get("rounds") or {}).items()
+                         if str(n).isdigit() and isinstance(rec, dict) and "seatStatus" in rec}):
+        names = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd))
+        if names:
+            unfilled[rnd] = sorted(names)
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
+        if phase == sc.PANEL_PHASE and seat in unfilled.get(rnd, ()):
+            continue  # listed below as an unfilled seat, whether or not a slot was journaled for it
         env = envs[key]
         body = env.get("payload") if isinstance(env, dict) else None
         if key in ran and phase in _RAW_PHASES and raw_dir and body is None and not (isinstance(env, dict) and "payload" in env):
@@ -205,9 +219,10 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
-        out.append(_reviewer(state, rnd, seat, stem, key in ran, same, env,
+        out.append(_reviewer(state, rnd, seat, stem, key in ran, env,
                              r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                              _text(r.get("citedHead")), bound.get(key)))
+    out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names]
     return out, raw
 
 
@@ -300,6 +315,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     if fam and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
         makers.append({"family": fam, "source": "review loop fixer"})
+    for family in sorted(receipt_disclosures.maker_families(seat_map_receipts.effective_seat_map(state))):
+        if not any(isinstance(m, dict) and m.get("family") == family for m in makers):
+            makers.append({"family": family, "source": "seat map maker list"})
     last = decisions[-1] if decisions else {}
     cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
     capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"

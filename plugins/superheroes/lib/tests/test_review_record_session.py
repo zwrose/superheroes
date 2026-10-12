@@ -203,7 +203,7 @@ def test_a_missing_slot_recovered_by_a_later_round_is_not_a_missing_review(tmp_p
         ("code-reviewer (round 1)", True), ("security-reviewer (round 2)", True)]
 
 
-def test_the_fixers_family_joins_the_makers_and_a_same_family_reviewer_is_marked(tmp_path):
+def test_the_fixers_family_joins_the_makers_and_the_session_marks_no_reviewer_independent_or_not(tmp_path):
     seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}},
                 "degradations": [{"constraint": "same-family", "seat": "code-reviewer"}]}
     s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"},
@@ -213,16 +213,68 @@ def test_the_fixers_family_joins_the_makers_and_a_same_family_reviewer_is_marked
     assert fam
     session = s.save()
     account = rs.account_from_session(session, extras(makers=[{"family": "other", "source": "the extras"}]))
-    # bites on: the fixer's family missing from the makers, or the same-family mark landing on the wrong reviewer
+    # bites on: the fixer's family missing from the makers, or the session marking independence (the record writer decides it)
     assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "review loop fixer"}]
     marks = {v["name"]: v.get("notIndependent") for v in account["reviewers"]}
-    assert marks == {"code-reviewer (round 1)": True, "security-reviewer (round 1)": None}
+    assert marks == {"code-reviewer (round 1)": None, "security-reviewer (round 1)": None}
     listed = rs.account_from_session(session, extras(makers=[{"family": fam, "source": "the extras"}]))
     assert listed["makers"] == [{"family": fam, "source": "the extras"}]
     fake = Fake()
     assert send(tmp_path, session, fake)["ok"]
     rec = rr.read(7, readers=fake.readers())
-    assert {v["name"]: v.get("notIndependent") for v in rec["reviewers"]}["code-reviewer (round 1)"] is True
+    assert "code-reviewer (round 1)" in {v["name"] for v in rec["reviewers"]}
+
+
+UNFILLED_SEAT = {"vendor": None, "model": None, "effort": None, "tier": "deep", "family": None, "source": "unfilled"}
+
+
+def test_an_unfilled_seat_is_listed_as_planned_and_not_run_even_with_no_slot_journaled(tmp_path):
+    seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
+                          "security-reviewer": dict(UNFILLED_SEAT)}}
+    s = Session(tmp_path, rounds={"1": {}, "2": {"seatStatus": {}}},
+                seatMapReceipts=[{"round": "1", "map": seat_map}])
+    s.seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras(), Fake().readers())
+    # bites on: an unfilled seat vanishing from the account, or reading as a reviewer that ran
+    rows = {v["name"]: v for v in account["reviewers"]}
+    assert set(rows) == {"code-reviewer (round 1)", "security-reviewer (round 1)", "security-reviewer (round 2)"}
+    for name in ("security-reviewer (round 1)", "security-reviewer (round 2)"):
+        assert rows[name] == {"name": name, "planned": True, "ran": False, "vendor": "unfilled",
+                              "model": "unfilled", "commit": None, "runDir": None}
+    assert rows["code-reviewer (round 1)"]["ran"] is True
+
+
+def test_an_unfilled_seat_the_driver_journaled_as_missing_is_still_listed_once_as_unfilled(tmp_path):
+    seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
+                          "security-reviewer": dict(UNFILLED_SEAT)}}
+    s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
+    s.seat("code-reviewer").seat("security-reviewer", cmd="advance")
+    account = rs.account_from_session(s.save(), extras(), Fake().readers())
+    rows = [v for v in account["reviewers"] if v["name"] == "security-reviewer (round 1)"]
+    assert len(rows) == 1 and rows[0]["ran"] is False and rows[0]["vendor"] == "unfilled"
+    fake = Fake()
+    assert send(tmp_path, s.dir, fake)["ok"]
+
+
+def test_the_maps_maker_families_join_the_makers_once(tmp_path):
+    seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}},
+                "makerFamilies": ["anthropic", "openai"]}
+    s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
+    s.seat("code-reviewer")
+    account = rs.account_from_session(
+        s.save(), extras(makers=[{"family": "openai", "source": "the extras"}]), Fake().readers())
+    # bites on: the map's maker list not reaching the account, or a family already listed being repeated
+    assert account["makers"] == [{"family": "openai", "source": "the extras"},
+                                 {"family": "anthropic", "source": "seat map maker list"}]
+
+
+def test_an_old_map_without_maker_families_or_source_changes_nothing(tmp_path):
+    seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX}}}
+    s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
+    s.seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras(), Fake().readers())
+    assert account["makers"] == []
+    assert [v["name"] for v in account["reviewers"]] == ["code-reviewer (round 1)"]
 
 
 def _merged(member_over, rep_over):
