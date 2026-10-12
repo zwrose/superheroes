@@ -78,7 +78,7 @@ go through GraphQL. Use these in their place:
 | `gh pr list --head` and `gh pr view --json …` | `cloud_builder.py pr-json --repo <o>/<r> --branch <b> --out <file>` (same field names) |
 | `gh repo view --json nameWithOwner` | `cloud_builder.py repo-json --repo <o>/<r>` |
 | a PR body | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
-| an issue and its comments | `gh api repos/<o>/<r>/issues/<n>` and `gh api repos/<o>/<r>/issues/<n>/comments` |
+| an issue and its comments | `gh api repos/<o>/<r>/issues/<n>` and `gh api --paginate repos/<o>/<r>/issues/<n>/comments` (every page, so a late advisor reply is seen) |
 
 Writes go one per call: one comment, one edit.
 
@@ -91,7 +91,7 @@ check its stack. It says in its handback that the link is owed to the advisor.
 2. Run `python3 -B <plugin root>/lib/cloud_builder.py note --question-file <file>`. It returns the
    comment text, headed as a builder note for the advisor and ending that the builder is waiting.
 3. Post that text on the build's issue.
-4. Wait in-turn, up to **15 minutes**. Poll the issue's comments (§ GitHub reads) and watch for an
+4. Wait in-turn for the advisor-reply window that `rubric/review-discipline.md` § Size sets. Poll the issue's comments (§ GitHub reads) and watch for an
    incoming message. An answer that arrives either way is the advisor's.
 5. With no answer in that time, **park**. Commit and push what is done, post a park comment on the
    issue, and end the turn. The comment says what is done and pushed with its head SHA, what is
@@ -110,9 +110,13 @@ If the pass has lapsed before the review runs, do not substitute a reviewer. Pos
 `python3 -B <plugin root>/lib/cloud_builder.py review-lapsed` on the PR, leave the PR not ready, and
 park. A review that already finished before the lapse stays recorded as it was.
 
-If the review record writer refuses because it cannot read GitHub (`review-record-gh-failed`), post
-the review receipt on the PR as a comment naming the head it reviewed. Name the review record as owed
-to the advisor in the handback.
+A cloud build hands back only with its review record written, as the charter's §11 and
+`rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. The record is
+not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
+final commit was reported by the session rather than read from the PR, or its status is not
+`reviewed` (`whatIsMissing` names an unreadable PR). In any of these the builder does not hand back.
+It posts the review receipt on the PR as a comment naming the head it reviewed, leaves the PR not
+ready, and parks, naming the review record as missing.
 
 ## Verify: cloud-only failures
 
@@ -123,7 +127,7 @@ Claim verification only with green CI on the same PR head.
 
 ## Handback
 
-Everything the vet needs is on the PR before handback: the review record or receipt, the receipts,
+Everything the vet needs is on the PR before handback: the review record, the receipts,
 the dispositions. Nothing lives only on the cloud machine. Open the PR through the GitHub channel
 from § Preflight. Verify the remote head through `cloud_builder.py pr-json`, not `gh pr view`.
 
@@ -137,7 +141,7 @@ off a cloud build's path:
 |---|---|---|
 | `skills/review-code/SKILL.md`, PR mode setup | `gh pr list --head`, `gh pr view --json`, `gh repo view --json nameWithOwner` | the stand-ins in § GitHub reads |
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
-| `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | no stand-in yet: the receipt-and-owed rule in § Review |
+| `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | no stand-in yet: the park rule in § Review |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `lib/pr_comment.py`, `lib/cloud_builder.py` | `gh api` (REST) | works |
 | `lib/preflight_probe.py`, `gh_auth_probe` REST fallback | `gh api repos/<o>/<r>` | works |
