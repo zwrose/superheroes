@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_NAME = "cloud-parked.json"
@@ -27,6 +28,9 @@ SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's revi
                      "review step says, then hand back as usual.")
 _ENTRY_KEYS = ("repo", "pr", "parkedOn", "outcome")
 _LAUNCH_KEY = "launchId"  # the lane the park came from; absent on an entry written before it was kept
+_PARK_KEY = "parkId"  # id of the latest park comment seen; absent on an entry written before it was kept
+_OPTIONAL_KEYS = (_LAUNCH_KEY, _PARK_KEY)
+_LOCK_WAIT_SECONDS = 30
 _NO_RECORD = ("review-record-missing", "review-record-unreadable")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
@@ -76,9 +80,10 @@ def _load(repo_root, env):
         return _refusal("parked-state-unreadable"), None
     cs = _sib("cloud_setup")
     if not (isinstance(entries, list) and all(
-            isinstance(e, dict) and set(e) in (set(_ENTRY_KEYS), set(_ENTRY_KEYS) | {_LAUNCH_KEY})
+            isinstance(e, dict) and set(_ENTRY_KEYS) <= set(e) <= set(_ENTRY_KEYS) | set(_OPTIONAL_KEYS)
             and isinstance(e["repo"], str) and isinstance(e["pr"], int) and e["outcome"] in (None,) + OUTCOMES
-            and isinstance(e.get(_LAUNCH_KEY), (str, type(None))) and cs._date_ok(e["parkedOn"])
+            and isinstance(e.get(_LAUNCH_KEY), (str, type(None)))
+            and isinstance(e.get(_PARK_KEY), (str, int, type(None))) and cs._date_ok(e["parkedOn"])
             for e in entries)):
         return _refusal("parked-state-unreadable"), None
     return path, entries
@@ -91,6 +96,33 @@ def _save(path, entries):
     except Exception:
         return False
     return True
+
+
+def _locked(fn):
+    """Run a verb under one per-repository lock beside the state file, so its read-modify-write is not
+    interleaved with another verb's. The state is re-read inside the lock by the verb itself."""
+    def wrapper(repo_root, *args, env=None, **kwargs):
+        env = os.environ if env is None else env
+        where = _sib("launch_ledger").ledger_path(repo_root, env)
+        if not where["ok"]:
+            return _refusal(where["reason"])
+        lock = os.path.join(os.path.dirname(where["path"]), STATE_NAME + ".lock")
+        fl = _sib("file_lock")
+        deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fl.acquire(lock)
+                break
+            except fl.LockHeld:
+                if time.monotonic() >= deadline:
+                    return _refusal("parked-state-busy")
+                time.sleep(0.05)
+        try:
+            return fn(repo_root, *args, env=env, **kwargs)
+        finally:
+            fl.release(lock)
+    wrapper.__name__, wrapper.__doc__ = fn.__name__, fn.__doc__
+    return wrapper
 
 
 def _lapses(repo_root, env, config_dir=None, environment=None):
@@ -204,6 +236,7 @@ def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
     return best[1], best[2], None
 
 
+@_locked
 def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     """Is this PR parked by the lapsed pass? Records it when so; says nothing about any other PR."""
     env = os.environ if env is None else env
@@ -222,7 +255,15 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         return {"ok": True, "kind": "not-lapsed-pass", "pr": pr, "text": None}
     known = [e for e in entries if e["repo"] == repo and e["pr"] == pr]
     parked_on = _park_day(parks[-1].get("created_at"))
-    if not known or (known[0]["outcome"] == "sent-back" and parked_on and parked_on > known[0]["parkedOn"]):
+    park_id = parks[-1].get("id")
+    park_id = park_id if isinstance(park_id, (str, int)) and not isinstance(park_id, bool) else None
+    if known and known[0]["outcome"] == "sent-back":
+        seen = known[0].get(_PARK_KEY)
+        newer = park_id != seen if (park_id is not None and seen is not None) else (
+            bool(parked_on) and parked_on > known[0]["parkedOn"])
+    else:
+        newer = False
+    if not known or newer:
         if parked_on is None:
             return _refusal("park-date-unreadable")
         pull = _pull(repo, pr, env, run)
@@ -235,12 +276,14 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         if ledger_reason:
             return _refusal(ledger_reason)
         entries[:] = [e for e in entries if e not in known]
-        entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id})
+        entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id,
+                        _PARK_KEY: park_id})
         if not _save(path, entries):
             return _refusal("parked-state-unwritable")
     return {"ok": True, "kind": "lapsed-pass", "pr": pr, "text": NOTICE_TEXT % pr}
 
 
+@_locked
 def send_back(repo_root, today=None, *, env=None, run=None):
     """The undecided entries due for their review. A closed or let-through entry is decided here; a due
     one is listed and stays undecided until `sent` records it."""
@@ -292,6 +335,7 @@ def send_back(repo_root, today=None, *, env=None, run=None):
     return out
 
 
+@_locked
 def sent(repo_root, repo, pr, *, env=None):
     """Record one parked PR as sent back, once its message was delivered. Saying it twice changes nothing."""
     env = os.environ if env is None else env

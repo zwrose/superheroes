@@ -85,8 +85,8 @@ def _pull_path(pr):
     return "repos/%s/pulls/%d" % (REPO, pr)
 
 
-def _lapsed_comment(pr, created_at="2026-10-05T10:00:00Z"):
-    comment = {"id": 900 + pr, "body": cloud_builder.REVIEW_LAPSED_TEXT}
+def _lapsed_comment(pr, created_at="2026-10-05T10:00:00Z", cid=None):
+    comment = {"id": 900 + pr if cid is None else cid, "body": cloud_builder.REVIEW_LAPSED_TEXT}
     if created_at is not None:
         comment["created_at"] = created_at
     return comment
@@ -195,7 +195,7 @@ def test_notice_for_a_lapsed_pass_park_names_the_pr_the_reason_and_the_renewal(w
     assert out == {"ok": True, "kind": "lapsed-pass", "pr": 42, "text": CP.NOTICE_TEXT % 42}
     assert out["text"].startswith("#42 is parked.") and "lapsed" in out["text"] and "Renew the pass" in out["text"]
     assert _entries(w) == [{"repo": REPO, "pr": 42, "parkedOn": "2026-10-05", "outcome": None,
-                            "launchId": "l-42"}]
+                            "launchId": "l-42", "parkId": 942}]
 
 
 def test_a_pr_whose_review_did_not_run_for_another_reason_gets_no_renewal_words(w):
@@ -219,7 +219,7 @@ def test_noticing_a_recorded_pr_again_keeps_its_first_park_day(w):
     _park(w, 10)
     w.gh.comments[10] = [_lapsed_comment(10, "2026-10-09T10:00:00Z")]
     assert _notice(w, 10)["kind"] == "lapsed-pass"
-    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": None, "launchId": None}]
+    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": None, "launchId": None, "parkId": 910}]
 
 
 def test_a_park_comment_without_a_readable_date_refuses_the_notice_and_writes_nothing(w):
@@ -268,12 +268,27 @@ def test_a_later_park_of_a_sent_back_pr_keeps_its_original_lane_and_a_newer_comm
     assert [s["cloudSessionName"] for s in _send(w)["sendBack"]] == ["orig-session"]
     assert _sent(w, 10)["ok"]
     assert _send(w)["sendBack"] == []
-    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z"))
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     entry = _entries(w)[0]
     assert entry["outcome"] is None and entry["parkedOn"] == "2026-10-11" and entry["launchId"] == "l-orig"
     out = _send(w)["sendBack"]
     assert [s["cloudSessionName"] for s in out] == ["orig-session"]
+
+
+def test_a_second_park_on_the_same_day_rearms_a_sent_back_pr_but_rereading_one_comment_does_not(w):
+    _lane(w, "l-orig", 101, "orig-session", "a")
+    w.gh.comments[10] = [_lapsed_comment(10, created_at="2026-10-05T10:00:00Z", cid=1)]
+    w.gh.pulls[10] = _pull(101)
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    _renew(w)
+    assert _sent(w, 10)["ok"]
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["outcome"] == "sent-back"
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-05T14:00:00Z", cid=2))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    entry = _entries(w)[0]
+    assert entry["outcome"] is None and entry["parkId"] == 2 and entry["launchId"] == "l-orig"
 
 
 def test_a_go_ahead_recorded_for_an_earlier_head_does_not_let_the_current_head_through(w):
@@ -497,7 +512,7 @@ def test_a_pr_stays_listed_until_it_is_recorded_as_sent_and_never_after(w):
     assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
     assert _entries(w)[0]["outcome"] is None
     assert _sent(w, 10) == {"ok": True, "action": "written"}
-    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": "sent-back", "launchId": "l-a"}]
+    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": PAST, "outcome": "sent-back", "launchId": "l-a", "parkId": 910}]
     calls = len(w.gh.calls)
     again = _send(w)
     assert again["sendBack"] == [] and again["skipped"] == [] and again["notRenewed"] == []
