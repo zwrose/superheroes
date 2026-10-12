@@ -435,11 +435,9 @@ ordinal 1 and the age subtraction proceeds unchanged.
 **A ruling is recorded where it was given, and a ruling given in chat gets the standard chat-ruling
 record.** A ruling given on a durable thread (the collector, an issue, a pull request) is already
 recorded there; a struck collector entry carrying the ruling's date and the owner's words is its
-record. A ruling given in chat has no such thread, so the session that heard it posts one dated
-comment on the collector quoting the owner's words verbatim, with what the ruling decides, at once
-(`lib/canon.py ruling-record`, defined with the anchor it serves in the issue contract's
-[Anchor resolution](issue-contract.md#anchor-resolution)). That comment's permalink is what an issue
-Anchor cites. **Canon is not a ruling log.** It holds only what passes its test (an answer to an
+record. A ruling given in chat has no such thread; the issue contract's
+[Anchor resolution](issue-contract.md#anchor-resolution) defines its record and the permalink an
+issue Anchor cites. **Canon is not a ruling log.** It holds only what passes its test (an answer to an
 owner call a later session needs, a principle, a ceded call or its take-back), written through
 `lib/canon.py`, which refuses go-words, dispositions and bookkeeping and names their home
 ([Canon's contract](../../../rubric/canon-contract.md#what-stays-out-and-where-it-goes)).

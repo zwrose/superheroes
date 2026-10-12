@@ -207,6 +207,16 @@ def test_id_counts_held_lines(project, capsys, tmp_path):
     assert out["comment"] == canon.HELD_MARKER + "\n" + _entry(7) + "\n" + out["line"] + "\n"
 
 
+# axis: a malformed --written never mints an id the replay cannot recognize; Canon stays unchanged.
+@pytest.mark.parametrize("command", ["append", "hold"])
+@pytest.mark.parametrize("written", ["2026/10/12", "2026-10-12T14:05:00Z"])
+def test_malformed_written_refused_canon_unchanged(project, capsys, command, written):
+    before = open(project["path"], "rb").read()
+    code, out = _run(capsys, command, *_fields(written=written))
+    assert code == 1 and out["reason"] == "canon-bad-field"
+    assert open(project["path"], "rb").read() == before
+
+
 # axis: a hold followed by an append of a new entry never mints the held id twice.
 def test_append_new_entry_counts_held_lines(project, capsys, tmp_path):
     code, held = _run(capsys, "hold", *_fields(ruling="The first ruling."))

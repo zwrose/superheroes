@@ -227,6 +227,8 @@ def mint_id(written, session_id, *texts):
     prefix = (session_id or "")[:8].lower()
     if not re.fullmatch(r"[0-9a-z]{8}", prefix):
         raise Refusal("canon-bad-field", "--session-id needs 8 leading [0-9a-z] characters")
+    if not _DATE_RE.fullmatch(written):
+        raise Refusal("canon-bad-field", "--written must be YYYY-MM-DD (UTC)")
     id_prefix = "%s-%s-" % (written, prefix)
     return "%s%d" % (id_prefix, next_seq(id_prefix, *texts))
 
