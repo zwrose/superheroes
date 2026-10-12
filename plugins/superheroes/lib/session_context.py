@@ -134,11 +134,11 @@ def _charter_skill_path(plugin_root, charter):
     return os.path.join(os.path.abspath(plugin_root or "."), "skills", skill_dir, "SKILL.md")
 
 
-def _checkpoint_file(session_id):
+def _checkpoint_file(session_id, cwd=None):
     """This session's checkpoint notes path, or None (invalid session id / unresolved config dir)."""
     try:
         import compaction_directive
-        return compaction_directive.checkpoint_path(session_id)
+        return compaction_directive.checkpoint_path(session_id, cwd=cwd)
     except Exception as exc:
         _breadcrumb("Checkpoint file", type(exc).__name__)
         return None
@@ -154,7 +154,7 @@ def charter_recovery(transcript_path, source, plugin_root):
     return text
 
 
-def _charter_recovery_parts(transcript_path, source, plugin_root, session_id=None):
+def _charter_recovery_parts(transcript_path, source, plugin_root, session_id=None, cwd=None):
     try:
         if source != "compact":
             return "", ""
@@ -172,7 +172,7 @@ def _charter_recovery_parts(transcript_path, source, plugin_root, session_id=Non
             "If a resume point exists at the top of this session's ledger, re-read it "
             "and prefer it over anything the summary asserts."
         ) % (charter, skill_path)
-        notes_path = _checkpoint_file(session_id)
+        notes_path = _checkpoint_file(session_id, cwd)
         if notes_path:
             text += (
                 "\nThis session's checkpoint notes file (re-read it if it exists): %s"
@@ -183,12 +183,12 @@ def _charter_recovery_parts(transcript_path, source, plugin_root, session_id=Non
         return "", ""
 
 
-def _generic_recovery_parts(source, session_id):
+def _generic_recovery_parts(source, session_id, cwd=None):
     """Compact with no charter detected: re-read the checkpoint notes (if any) and recap."""
     try:
         if source != "compact":
             return "", ""
-        notes_path = _checkpoint_file(session_id)
+        notes_path = _checkpoint_file(session_id, cwd)
         text = "This session was compacted; no superheroes charter was detected. "
         if notes_path:
             text += (
@@ -203,9 +203,9 @@ def _generic_recovery_parts(source, session_id):
         return "", ""
 
 
-def checkpoint_file_record(session_id):
+def checkpoint_file_record(session_id, cwd=None):
     """One line naming this session's checkpoint notes file; '' when no valid path resolves."""
-    path = _checkpoint_file(session_id)
+    path = _checkpoint_file(session_id, cwd)
     if not path:
         return ""
     return ("This session's checkpoint notes file: %s "
@@ -324,18 +324,18 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=N
     del _FAILURES[:]                                  # reset the per-assemble failure collector
     try:
         _charter_text, _charter_hint = _charter_recovery_parts(
-            transcript_path, source, plugin_root, session_id)
+            transcript_path, source, plugin_root, session_id, cwd)
         if _charter_text:
             recovery = _Rec("Charter recovery", _charter_text, _charter_hint)
         else:
-            _generic_text, _generic_hint = _generic_recovery_parts(source, session_id)
+            _generic_text, _generic_hint = _generic_recovery_parts(source, session_id, cwd)
             recovery = _Rec("Compaction recovery", _generic_text, _generic_hint)
-        _ckpt = _checkpoint_file(session_id)
+        _ckpt = _checkpoint_file(session_id, cwd)
         records = [
             recovery,
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
-            _Rec("Checkpoint file", checkpoint_file_record(session_id), _ckpt),
+            _Rec("Checkpoint file", checkpoint_file_record(session_id, cwd), _ckpt),
             _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), _cache_parent_hint(plugin_root)),
             _Rec("Covenant", covenant(cwd, plugin_root),
                  _covenant_doc(plugin_root)),

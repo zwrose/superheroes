@@ -355,3 +355,53 @@ def test_subprocess_exit_code_always_zero(tmp_path):
         env=env,
     )
     assert r2.returncode == 0
+
+
+# ------------------------------------- a relative CLAUDE_CONFIG_DIR resolves against the payload cwd
+def test_relative_override_notes_and_marker_resolve_against_payload_cwd(
+        monkeypatch, capsys, tmp_path):
+    session = tmp_path / "session"
+    elsewhere = tmp_path / "elsewhere"
+    session.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "cfg")
+    base = session / "cfg" / "superheroes" / "checkpoints"
+    base.mkdir(parents=True)
+    (base / "sess-test.md").write_text("relative-cfg notes", encoding="utf-8")
+    marker = base / "sess-test.delivered"
+    marker.write_text("", encoding="utf-8")
+    mod = _load_hook("cc_relative_cfg")
+
+    _stdin(monkeypatch, _precompact_payload(str(tmp_path / "t.jsonl"), cwd=str(session)))
+    assert mod.main() == 0                      # the marker is under <session cwd>/cfg: consumed
+    assert capsys.readouterr().out == ""
+    assert not marker.exists()
+
+    _stdin(monkeypatch, _precompact_payload(str(tmp_path / "t.jsonl"), cwd=str(session)))
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "relative-cfg notes" in out
+    assert str(base / "sess-test.md") in out
+    assert not (elsewhere / "cfg").exists()
+
+
+def test_relative_override_without_resolvable_payload_cwd_prints_no_notes(
+        monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "cfg")
+    mod = _load_hook("cc_relative_cfg_nocwd")
+    _stdin(monkeypatch, _precompact_payload(str(tmp_path / "t.jsonl"), cwd="not/absolute"))
+    assert mod.main() == 0
+    assert capsys.readouterr().out == _expected("generic")
+
+
+def test_absolute_override_unaffected_by_payload_cwd(monkeypatch, capsys, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    marker = _marker("sess-test")                # under the absolute <tmp>/cfg
+    mod = _load_hook("cc_absolute_cfg")
+    _stdin(monkeypatch, _precompact_payload(str(tmp_path / "t.jsonl"), cwd=str(other)))
+    assert mod.main() == 0
+    assert capsys.readouterr().out == ""
+    assert not os.path.exists(marker)
+
