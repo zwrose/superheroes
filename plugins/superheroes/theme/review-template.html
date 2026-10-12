@@ -1385,12 +1385,13 @@
     }
 
     // A card of a pr or stack sheet writes only while the store cannot end up holding a Merge beside the changed answer: not while the
-    // verdict's acknowledged pick is Merge, and not while the verdict is unsaved with no pick (its clear in flight, failed or stalled).
+    // verdict's acknowledged pick is Merge, and not while the verdict holds anything unsaved, whatever its latest pick (a clear or a
+    // Not yet in flight, failed or stalled).
     function cardMayWrite() {
       if (!onePageKind(sheetKind) || verdictController === null) return true;
       const confirmed = verdictController.confirmed();
       if (confirmed !== null && confirmed.answer === "merge") return false;
-      return !(verdictController.unsaved() && verdictController.state().answer === null);
+      return !verdictController.unsaved();
     }
 
     // A card's answers: the choices it offers, and a document written whole at answers/<card id>.

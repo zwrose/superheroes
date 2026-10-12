@@ -956,6 +956,31 @@ def test_an_accepted_to_accepted_change_waits_for_the_clear_and_a_reopen_restore
     assert reopened["b"]["pressed"][0] == "true" and reopened["b"]["pressed"].count("true") == 1
 
 
+# Bites on: a card's answer going out while the verdict holds an unsaved Not yet over an acknowledged Merge (the wait stopping at "no pick"): with the Not yet rejected, the store still holds the Merge, so the changed answer must stay out until the verdict's Try again lands.
+def test_a_card_waits_for_a_rejected_not_yet_after_a_saved_merge_and_writes_after_the_retry_lands():
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(verdictRow()[1]);
+      await t.tick();
+      lastVerdictCall().reject(new Error("no"));
+      await t.tick();
+      const failedVerdict = verdictWrites();
+      t.click(t.button(B, "Fix in a follow-up"));
+      await t.tick();
+      const waiting = { line: t.saveText(B), sent: answerWrites(B).length };
+      t.click(verdictSave().children.find((child) => child.tagName === "button"));
+      await t.tick();
+      const retrying = answerWrites(B).length;
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { failedVerdict: failedVerdict, waiting: waiting, retrying: retrying, sent: answerWrites(B).map((call) => call.body) };
+    """, host=PENDING)
+    result = page["result"]
+    assert result["failedVerdict"][-1]["verdict"] == "not-yet"
+    assert result["waiting"]["sent"] == 1
+    assert result["retrying"] == 1
+    assert result["sent"][-1] == {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""} and len(result["sent"]) == 2
+
+
 # Bites on: waiting answers going out together with the clear, or out of card order, or one of them twice, or a note typed while waiting making a second write or losing the newest state.
 def test_several_waiting_cards_write_once_each_in_card_order_after_the_clear_with_the_newest_note():
     page = _lock(PR_SAMPLE, MERGE_SAVED + """
