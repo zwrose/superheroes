@@ -1443,7 +1443,8 @@ def test_start_names_the_environment_in_the_launch(tmp_path):
     cell = model_registry.resolve_dispatch("mechanical", "claude", None)
     assert argv == engine_adapter.claude_cloud_builder_argv(
         cell["dispatch_token"], cell["effort"], _prompt(spawner), ENV_ID,
-        "cloud-check-" + NONCE[:8])["argv"]
+        "cloud-check-" + NONCE[:8], permission_mode=None)["argv"]
+    assert "--permission-mode" not in argv
     settings = json.loads(argv[argv.index("--settings") + 1])
     assert settings == {"remote": {"defaultEnvironmentId": ENV_ID}}
     assert result["environment"] == ENV_ID and OTHER_ENV_ID not in " ".join(argv)
@@ -1482,7 +1483,7 @@ def test_start_refuses_when_the_model_cannot_be_resolved_or_the_argv_is_refused(
                       lambda *a: {"ok": False, "detail": "no seat"})
         assert _start(local, spawner)["reason"] == "check-model-unresolved"
     monkeypatch.setattr(engine_adapter, "claude_cloud_builder_argv",
-                        lambda *a: {"argv": [], "reason": "cloud-session-name-invalid"})
+                        lambda *a, **k: {"argv": [], "reason": "cloud-session-name-invalid"})
     result = _start(local, spawner)
     assert result["action"] == "refused" and result["reason"] == "check-launch-refused"
     assert result["detail"] == "cloud-session-name-invalid"

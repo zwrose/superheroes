@@ -762,12 +762,13 @@ _CLOUD_SESSION_NAME_RE = re.compile("[%s]{1,%d}" % (CLOUD_SESSION_NAME_CHARS, CL
 CLOUD_PERMISSION_MODE = "auto"
 
 
-def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_name):
+def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_name,
+                              permission_mode=CLOUD_PERMISSION_MODE):
     """Build the argv that starts a builder in a cloud session. Never raises.
 
     The command needs a pseudo-terminal and refuses `-p`, so the prompt rides as the argument of
-    `--cloud`. The environment is chosen through `--settings`, the session runs in
-    `CLOUD_PERMISSION_MODE`, and `-n` names the session.
+    `--cloud`. The environment is chosen through `--settings`, a builder runs in
+    `CLOUD_PERMISSION_MODE` (`permission_mode=None` passes no mode), and `-n` names the session.
     """
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
@@ -794,7 +795,9 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
     argv = [CLAUDE_EXECUTABLE, "--cloud", prompt, "--settings", settings, "--model", token]
     if isinstance(effort, str) and effort:
         argv += ["--effort", effort]
-    argv += ["--permission-mode", CLOUD_PERMISSION_MODE, "-n", session_name]
+    if permission_mode:
+        argv += ["--permission-mode", permission_mode]
+    argv += ["-n", session_name]
     return _ok(argv)
 
 
