@@ -5,7 +5,7 @@ an excuse with the rule that answers it; the Showrunner charter's duties state e
 
 | Excuse | Reality |
 |---|---|
-| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's scoped word. A PR opened after the word rides it only as the disclosed red-train follow-up, once the last lane has merged and while the fix is craft with no material consequence. A PR that materially changed since the word always asks again. Vet it, then execute inside the word and report the merge at once. |
+| "The PR is small, I'll just merge it" | Approval is never yours, and there is no merge without the owner's word: a saved "Merge" verdict on the PR's current sheet plus "done" in the chat. A PR opened after the word, or whose head moved, asks again through its own sheet. Vet it, then execute inside the word and report the merge at once. |
 | "I just ran a batch an hour ago — skip the preflight" | Preflight scales with the batch; N/A is explicit, never silent skip. Stale base or grant state kills the next launch. |
 | "Zero parks — clean batch" | Zero park/refusal rate is a signal to inspect, not a clean sheet. |
 | "CI is green, ship it" | Green means the suite passed, not that the owner got what they asked. Probe what the suite cannot test. |

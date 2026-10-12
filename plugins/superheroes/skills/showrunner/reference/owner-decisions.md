@@ -637,24 +637,68 @@ option letters together are the ruling vocabulary: the owner rules tersely as **
 re-number or re-letter silently re-targets a ruling already given. Assign numbers and letters once;
 carry them forward unchanged.
 
-**Deliver batch 1 first and alone.** **Batch 1 is only what blocks the advisor's own next action**,
-and **explicitly excludes new-issue filings, which are never blocking**. **Batch 2 is everything else.**
-**Deliver batch 2 as soon as batch-1 rulings land** — the advisor **executes what batch 1 unblocked
-alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split exists at
-all, bounded by the section below.
+**Three batches, always in this order.** **Batch 1 holds what blocks work**: only what blocks the
+advisor's own next action, and **never a new-issue filing, which never blocks**. **Batch 2 holds the
+decisions not tied to one PR.** **Batch 3 holds one sheet per PR.**
 
-**Batch 3 is the click list, and it comes last.** Once batch-2 rulings have landed and what they
-unblocked has been executed, the walk ends with a third batch: **the pull requests that are ready to
-merge, in merge order**, each carrying **the notable acceptances it commits the owner to** and **the
-exact merge command**. It comes last for a reason an earlier slot cannot fix — **a batch-2 ruling
-routinely sends a vetted pull request back**, so a click list assembled any earlier names pull
-requests that are no longer mergeable, and the owner is left working out which lines still stand.
-**The list is delivered, not requested**: an owner who has to ask for the merge commands by hand is
-doing assembly the advisor was already positioned to do. **What batch 3 asks for is the owner's
-word**, not a craft call the advisor takes on their behalf — who then runs the command, and under
-what preconditions, is the release-and-merge duty's business and is not decided here; see
-[What batch-1 execution may and may not do](#what-batch-1-execution-may-and-may-not-do), which
-reserves merge, release, publish, and force-push from anything execution does on a ruling.
+**Batch 1 goes in the chat and at the top of the index**, and the chat message links to the index.
+The index and the PR sheets are published on the plugin's shared review template. Their data shape,
+and the shape of the advisor's input to a sheet, are the template's, in
+[the review template](../../../theme/review-template.md); this file restates none of it.
+
+**The first answer counts.** The first answer the owner gives to a batch-1 question, in the chat or
+on the index, is the answer, and it counts at once. A batch-1 answer on the index is read as soon as
+it is saved and never waits for "done". This is the one exemption from the "done" gate stated in
+"Reading a PR sheet" below.
+
+**When the two disagree.** When the advisor reads an answer in the chat and an answer on the index to
+the same batch-1 question and they disagree, it acts on neither and asks the owner which one stands.
+If it already acted on the first answer before the second arrived, it stops what that answer
+unblocked, says what it already did, and asks.
+
+**Batch 2 comes in the chat**, as soon as the batch-1 rulings land. The advisor **executes what batch
+1 unblocked alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split
+exists at all, bounded by the section below. **No batch-2 item concerns one specific PR.** An item
+about one PR goes on that PR's sheet, or into batch 1 when it blocks work.
+
+**Batch 3 is the PR sheets, and they are built last.** Build them only after the batch-1 and batch-2
+rulings have been carried out. **A ruling routinely sends a vetted pull request back**, so a sheet
+built any earlier describes a PR that is no longer ready, and the owner is left working out which
+sheets still stand. A PR that a ruling sent back has no sheet waiting for answers. Bring each PR
+current with its base before its sheet is published, so the sheet describes the commit that would
+merge. **The sheets are delivered, not requested.**
+
+**Walk a sheet's stops before sending it.** Before a sheet that has a walk is sent, the advisor
+walks its stops. A stop that a pilot run already walked, with that run's evidence, counts as walked,
+and the advisor does not repeat it by hand. The advisor's input to the sheet records which stops
+were walked, how, and why any stop was not; the shape of that record is the template's.
+
+**Reading a PR sheet.** How a sheet saves answers, with its drafts and the last tap counting, is the
+template's: [How answers come back](../../../theme/review-template.md#how-answers-come-back). The
+advisor reads a PR sheet's answers only once the owner says "done" in the chat. Before that, with
+answers saved and no "done", nothing is merged, sent back, filed, or recorded in Canon from the
+sheet. After "done", a "Keep it" on a leftover whose note says to fix it first is treated as open:
+the PR is not merged, and the advisor asks the owner which one stands.
+
+**The merge verdict.** The owner's word to merge a PR is a saved "Merge" verdict on that PR's current
+sheet together with "done" in the chat. Duty 6 in `skills/showrunner/SKILL.md` ("Coordinate releases
+and drive the merge train") is the one full statement of it. Where the host cannot show a sheet, no
+verdict can be saved, so there is no word: the merge waits, and the advisor tells the owner so rather
+than taking a chat answer in its place.
+
+**What the answers commit, after "done".**
+
+- A "Fix in a follow-up" answer, on an item or on a walk problem, is the owner's word to file that
+  follow-up (the filing word in [The tiers and the filing rule](#the-tiers-and-the-filing-rule)). The
+  follow-up carries the owner's note, and one filed for a leftover carries a date to revisit it. It
+  is filed when the advisor finishes the merge.
+- After the merge, the advisor writes each answer and the verdict back to the PR as one comment,
+  which is the PR's receipt: for each item and stop, its title, the answer and any note, then the
+  verdict and the commit the sheet described.
+- An answer that sets a rule for later work, such as a permanent acceptance, an approved calibration
+  change, or a ceded call, is recorded in Canon by Canon's write procedure
+  ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)). Every other answer stays
+  on the sheet and the PR's receipt.
 
 **Every sitting opens or closes with the "what I decided for you" recap.** One line per craft call
 the advisor has decided under the standing order since the last sitting — **what it was, what was
@@ -664,7 +708,7 @@ one they will not in practice review. **It is a recap, not a batch** — nothing
 word, and an item that needs one is not delivered here in place of the filter and the spine.
 
 **State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
-failed." The same holds for an empty batch 3 and an empty recap: nothing mergeable, and nothing
+failed." The same holds for batch 3 and an empty recap: no PR has a sheet waiting, and nothing
 decided for the owner this window, are each a fact worth stating rather than a blank space.
 
 ## Formatting — one block per spine section
@@ -699,7 +743,8 @@ wiring, dispatches. It **never** includes the four acts showrunner duty 6 reserv
 release, publish, force-push**. **A ruling on a decision never authorizes any of the four.** Who may
 do each one, and on what authority, is stated once, in duty 6 of `skills/showrunner/SKILL.md`
 ("Coordinate releases and drive the merge train"), and it differs by act; the covenant's first
-promise points there too. Read duty 6 rather than a restatement here.
+promise points there too. Read duty 6 rather than a restatement here. A merge comes only from the
+word duty 6 states, a saved "Merge" verdict with "done", never from executing a ruling.
 
 ## The collector preamble — canonical snippet
 
@@ -744,12 +789,12 @@ still appends.
 item.
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
-(1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
-as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; batch 3
-last, assembled only once every batch-2 ruling has landed and what those rulings unblocked has been
-executed = the mergeable pull requests in merge order, each with its notable acceptances and its
-exact merge command; what it asks for is the owner's word, never a craft call; state empty batches
-plainly.
+(1 - a, 2 - b); batch 1 = what blocks work (never new-issue filings), in the chat and at the top
+of the index with a link, the first answer in either place counts at once, a disagreement → act on
+neither and ask; as soon as batch-1 rulings land, deliver batch 2 in the chat, with no item about
+one PR, while executing what batch 1 unblocked; batch 3 = one sheet per PR, built only after the
+batch-1 and batch-2 rulings are carried out; a PR sheet is read only after "done"; the merge word
+is a saved "Merge" verdict plus "done"; state empty batches plainly.
 **Recap:** every sitting opens or closes with the "what I decided for you" lines — one per craft
 call decided since the last sitting, each vetoable; a recap, not a batch.
 

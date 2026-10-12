@@ -251,7 +251,9 @@ record whose finding with a real consequence was decided as craft reads `reviewe
 the fields the rows name. Any line of `whatIsMissing` that the three rows do not account for is a vet
 finding. The line saying no planned reviewer ran is accounted for when every planned review that did
 not run carries a go-ahead. The line saying CI was pending or none on the final commit is accounted
-for once CI is green on that commit now.
+for once CI is green on that commit now. The line saying a finding waits for the owner's decision is
+accounted for when the third row finds that finding shown to the owner. Any other line of
+`whatIsMissing` holds the PR, and the receipt names the line.
 
 **A go-ahead is followed, not trusted.** The record proves only that the go-ahead's citation is a
 non-blank string. Resolve it yourself: open the standing ruling's canon entry, or the place the owner's

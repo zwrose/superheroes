@@ -58,7 +58,7 @@ requests. A stack is a **mutable container** — a layer can be linked onto it a
 given — so a merge issued against a stack **number** can act on a pull request the owner never
 saw. Nothing in the tooling closes that gap; this rule does.
 
-1. **Membership is read from GitHub before any click list is drafted** — the GraphQL read in
+1. **Membership is read from GitHub before any PR sheet is built** — the GraphQL read in
    `rubric/native-stacks.md` § *How membership is verified*. That read is performed by
    `lib/stack_check.py` as `python3 -B <plugin-root>/lib/stack_check.py list --pr <a member pull
    request> --repo <owner/name>` — the entry point is **a member pull request** because GitHub's
@@ -96,10 +96,10 @@ saw. Nothing in the tooling closes that gap; this rule does.
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
 
-   **The click list names whole stacks.** A stack merges when its **feature** is complete — every
+   **The PR sheets name whole stacks.** A stack merges when its **feature** is complete — every
    layer the issue's plan names, vetted — and never when a vetted prefix exists. **A vetted prefix is
-   never a click.** The click list names whole stacks with their remaining layers, and an incomplete
-   stack is never listed. New scope that a tripwire or a vet discovers **on that feature** joins the
+   never a click.** A stack's sheet names the whole stack with its remaining layers, and an incomplete
+   stack gets no sheet. New scope that a tripwire or a vet discovers **on that feature** joins the
    stack as a layer rather than becoming a follow-on, while a finding outside the feature's
    owner-ratified scope stays a follow-up under the existing scope rule. The doctrine home is `rubric/native-stacks.md` § *How a stack merges*.
 
@@ -107,7 +107,7 @@ saw. Nothing in the tooling closes that gap; this rule does.
    rule governs what the advisor puts in front of the owner, and an incomplete stack never goes
    there. Items 2 and 3 govern how a word, once given, is checked against the remote, and that word
    may still name a prefix because the owner may narrow what the advisor listed. Neither licenses
-   drafting a click list on a prefix.
+   building a sheet on a prefix.
 
 5. **A stack is brought current by merge, bottom-up** — merge the layer below into each affected
    layer locally with `--no-ff` and push that merge plainly, starting just above the change, which

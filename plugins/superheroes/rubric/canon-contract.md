@@ -111,8 +111,8 @@ owner half, or the thread. The class includes:
 | [Decision-walk](glossary.md#decision-walk) dispositions, and proposals awaiting the owner's word | The [collector](glossary.md#collector) |
 | Declined items and their reopening [triggers](glossary.md#trigger) | The [declined registry](glossary.md#declined-registry) |
 | Lane and presentation calls | The issue |
-| Merge and release words | The thread and the pull request's owner half |
-| The threat model | Configure's threat model item |
+| Merge and release words | A merge word: the saved "Merge" verdict on the pull request's sheet with "done" in the thread, and the pull request's receipt. A release word: the thread |
+| The threat model | Configure's Risk and trust item |
 
 **Bookkeeping that rides on a ruling.** When a real ruling arrives with bookkeeping attached (where
 it was filed, which phase or milestone it is scheduled for, which issue tracks it), only the ruling
