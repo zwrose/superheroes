@@ -831,6 +831,7 @@ above).
    nothing on its own. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` when you run the sweep or read its classes.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` when you arm or re-arm a wave watch.**
    **When the wave watch reports `builder-note`, a cloud builder is waiting on your answer: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` and answer before you re-arm.**
+   **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` § Answering a builder note when you answer one: on another account the answer goes through the relay, and the note is recorded answered only after a confirmed delivery.**
 
    **The orchestration that remains is yours because the harness does not carry it:** the
    launcher's detached spawn of headless builders; arming the wave watch and re-arming it; reading
