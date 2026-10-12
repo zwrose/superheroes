@@ -59,6 +59,9 @@ def test_every_answer_button_is_one_of_the_four_patterns(kind):
 def test_the_answer_words_and_the_one_place_that_makes_buttons():
     answers = WORDS["prAnswers"]
     assert set(answers["labels"]) == set(answers["withOptions"]) | set(answers["withoutOptions"])
+    # The values a PR card can offer are exactly the agree and pick patterns' answers (the identities the schema's answer enum defines).
+    assert set(answers["withOptions"]) == {"something-else"}
+    assert set(answers["withoutOptions"]) == {"accept", "discuss"}
     assert len(re.findall(r'className\s*=\s*"answer-row"', _template_text())) == 1
 
 

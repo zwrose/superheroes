@@ -966,19 +966,24 @@ def test_a_card_waits_for_a_rejected_not_yet_after_a_saved_merge_and_writes_afte
       const failedVerdict = verdictWrites();
       t.click(t.button(B, "Fix in a follow-up"));
       await t.tick();
-      const waiting = { line: t.saveText(B), sent: answerWrites(B).length };
+      const waiting = { line: t.saveText(B), sent: answerWrites(B).length, buttons: lineButtons(B) };
       t.click(verdictSave().children.find((child) => child.tagName === "button"));
       await t.tick();
       const retrying = answerWrites(B).length;
       lastVerdictCall().resolve();
       await t.tick();
-      return { failedVerdict: failedVerdict, waiting: waiting, retrying: retrying, sent: answerWrites(B).map((call) => call.body) };
+      const sent = answerWrites(B).map((call) => call.body);
+      answerWrites(B).pop().resolve();
+      await t.tick();
+      return { failedVerdict: failedVerdict, waiting: waiting, retrying: retrying, sent: sent, after: t.saveText(B) };
     """, host=PENDING)
     result = page["result"]
     assert result["failedVerdict"][-1]["verdict"] == "not-yet"
     assert result["waiting"]["sent"] == 1
+    assert "Not saved" in result["waiting"]["line"] and result["waiting"]["buttons"] == 0
     assert result["retrying"] == 1
     assert result["sent"][-1] == {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""} and len(result["sent"]) == 2
+    assert "Saved" in result["after"] and "Not saved" not in result["after"]
 
 
 # Bites on: waiting answers going out together with the clear, or out of card order, or one of them twice, or a note typed while waiting making a second write or losing the newest state.
@@ -998,6 +1003,27 @@ def test_several_waiting_cards_write_once_each_in_card_order_after_the_clear_wit
         ["answers/" + CARD_A, {"answer": "discuss", "optionId": None, "note": "why"}],
         ["answers/" + CARD_B, {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""}],
     ]
+
+
+# Bites on: a note typed (the input event, so the note pause runs) while an answer waits for the clear making an answer write before the clear is acknowledged, unlocking the Merge, or making a second write or losing the newest note once the clear lands.
+def test_a_note_typed_while_an_answer_waits_for_the_clear_writes_once_after_the_clear_with_the_newest_note():
+    page = _lock(PR_SAMPLE, MERGE_SAVED + """
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      t.type(t.note(A), "why", "input");
+      await t.tick();
+      t.type(t.note(A), "why not", "input");
+      await t.tick();
+      await t.advance(1000);
+      const waiting = { sent: answerWrites(A).length, locked: lockView().disabled, label: lockView().label };
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { waiting: waiting, sent: answerWrites(A).map((call) => call.body), locked: lockView().disabled };
+    """, host=dict(PENDING, **TIMED))
+    result = page["result"]
+    assert result["waiting"] == {"sent": 1, "locked": True, "label": _locked_label()}
+    assert result["sent"][1:] == [{"answer": "discuss", "optionId": None, "note": "why not"}]
+    assert result["locked"] is True
 
 
 # Bites on: a stalled clear leaving the waiting answers on "Saving…", or the answers going out before the verdict's Try again lands.
