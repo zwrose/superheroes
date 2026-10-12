@@ -299,6 +299,16 @@ def _docs_for(card_id, answer, option_id=None, note="kept note"):
     return [{"id": card_id, "data": {"answer": answer, "optionId": option_id, "note": note}}]
 
 
+def _accepted_answers(sheet):
+    """The stored answers that leave a pr or stack sheet unlocked: accept on a card without options, else an option that does not send the PR back."""
+    docs = []
+    for card in sheet["cards"]:
+        options = [option for option in card.get("options", []) if not option.get("sendsBack")]
+        data = {"answer": "option", "optionId": options[0]["id"], "note": ""} if card.get("options") else {"answer": "accept", "optionId": None, "note": ""}
+        docs.append({"id": card["id"], "data": data})
+    return docs
+
+
 # Bites on: a stored answer restored although the card does not offer it now (accept on a discovery card, aligned on a PR card), or a card that offers it not restoring it.
 def test_a_stored_answer_restores_only_when_the_card_offers_it():
     discovery = _sheet(cards=[_plain_card("plan-day")])
@@ -361,7 +371,7 @@ def test_the_merge_button_names_the_pr_or_the_stack_and_saves_like_the_final_ver
       t.click(verdictRow()[1]);
       await t.tick();
       return { before: before, merged: merged, after: verdictState(), sets: t.setLog().filter((item) => item.path.startsWith("verdict/")), captions: verdictCaptions(), children: verdictChildren() };
-    """)
+    """, host={"collections": {"answers": _accepted_answers(sheet)}})
     result = page["result"]
     assert result["before"]["labels"] == [label, "Not yet"]
     assert not any(result["before"]["disabled"])
@@ -400,7 +410,7 @@ def test_a_verdict_outside_the_sheets_kind_restores_only_its_note():
         assert approve["result"]["restored"]["pressed"] == ["false", "false"] and approve["result"]["restored"]["note"] == "my verdict note"
         # A pick that was not restored is not saved back either: the next save carries no verdict.
         assert [item["body"]["verdict"] for item in approve["result"]["sets"]] == [None]
-        merge = _page(sheet, "return verdictState();", host={"collections": {"verdict": [_verdict_doc(sheet, "merge")]}})
+        merge = _page(sheet, "return verdictState();", host={"collections": {"answers": _accepted_answers(sheet), "verdict": [_verdict_doc(sheet, "merge")]}})
         assert merge["result"]["pressed"] == ["true", "false"] and merge["result"]["note"] == "my verdict note"
         not_yet = _page(sheet, "return verdictState();", host={"collections": {"verdict": [_verdict_doc(sheet, "not-yet")]}})
         assert not_yet["result"]["pressed"] == ["false", "true"]
