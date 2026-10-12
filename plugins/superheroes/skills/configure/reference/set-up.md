@@ -173,15 +173,15 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 git -C "$(git rev-parse --show-toplevel)" ls-files -z | python3 -B "$ROOT_DIR/lib/risk_areas.py" touched --cwd . --paths-file - --nul
 ```
 
-The listing starts from the repository root, so a sitting opened inside a package folder still sees
-every tracked file under its repository-relative path, and `-z` hands the names over unquoted, so a
-file name with accented or non-English characters matches its area like any other.
-
 and checks that every area in `areas` appears in `touched`. An area that matched nothing is read
 back to the owner in product terms ("Payments covers no file in the project today"), and the
 advisor corrects its `covers` with the owner and writes the whole list again before finishing. An
 area may legitimately cover files that do not exist yet; keeping it as it is, is the owner's call,
 and the advisor says so in the set-up output. No write is refused for covering nothing.
+
+The listing starts from the repository root, so a sitting opened inside a package folder still sees
+every tracked file under its repository-relative path, and `-z` hands the names over unquoted, so a
+file name with accented or non-English characters matches its area like any other.
 
 The answer to the fourth question is checked against what the project's calibration already
 records: the verify command, and test-pilot's profile when test-pilot is set up. A gap is offered to
