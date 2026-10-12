@@ -16,6 +16,7 @@ _EVIDENCE_MAP_KEYS = frozenset({
     "liveVendors",
     "livenessPinScoped",
     "authorFamily",
+    "makerFamilies",
 })
 _LIST_EVIDENCE_MAP_KEYS = frozenset({
     "violations",
@@ -314,10 +315,32 @@ def emit_receipt_seat_map(state, driver_author_family=None):
         base["authorFamily"] = author_families[0]
     else:
         base.pop("authorFamily", None)
+    # every maker family any receipt named stays named: the union, never the last receipt's list
+    maker_families: set[str] = set()
+    saw_maker_families = False
+    for entry in receipt_list:
+        raw_makers = entry["map"].get("makerFamilies")
+        if isinstance(raw_makers, list):
+            saw_maker_families = True
+            maker_families.update(fam for fam in raw_makers if isinstance(fam, str) and fam)
+    if saw_maker_families:
+        base["makerFamilies"] = sorted(maker_families)
+    else:
+        base.pop("makerFamilies", None)
+    # the roster is the latest receipt's: it names the panel that receipt composed against
+    roster = None
+    for entry in receipt_list:
+        raw_roster = entry["map"].get("roster")
+        if isinstance(raw_roster, list):
+            roster = list(raw_roster)
+    if roster is not None:
+        base["roster"] = roster
+    else:
+        base.pop("roster", None)
     for entry in receipt_list:
         map_ = entry["map"]
         for k, v in map_.items():
-            if k in ("seats", "degradations") or k in _EVIDENCE_MAP_KEYS:
+            if k in ("seats", "degradations", "roster") or k in _EVIDENCE_MAP_KEYS:
                 continue
             base[k] = v
     return base

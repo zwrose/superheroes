@@ -211,9 +211,9 @@ def test_isolate_strong_seat_exclusion_with_pins():
 
 
 def test_pinned_maker_seats_report_pin_breaks_constraint_not_author_minority():
-    """Pinned maker-family seats are owner overrides disclosed as pin-breaks-constraint.
-
-    The numeric author-minority cap is a separate constraint and was not breached here.
+    """A pin to a maker-family vendor cannot seat the maker: the seat is recorded unfilled and
+    disclosed as pin-breaks-constraint. The numeric author-minority cap is a separate constraint
+    and was not breached here.
     """
     pins = {
         "code-reviewer": {"vendor": "claude"},
@@ -231,12 +231,16 @@ def test_pinned_maker_seats_report_pin_breaks_constraint_not_author_minority():
         "premortem-reviewer",
         "grounding-seat",
     ):
+        assert m["seats"][seat]["source"] == "unfilled", seat
+        assert m["seats"][seat]["family"] is None, seat
         assert any(
             d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == seat
             for d in m["degradations"]
         )
+    for seat in SM.STRONG_TIER_SEATS:
+        assert m["seats"][seat]["family"] not in (None, "anthropic"), seat
     violations = SM.verify(m, "anthropic")
-    assert not any(v.get("constraint") == "critical-diversity" for v in violations)
+    assert not any(v.get("constraint") == "maker-family" for v in violations)
 
 
 # --- verify direction (hand-built maps) -------------------------------------------------------
@@ -448,6 +452,8 @@ def test_grounding_independence_degradation_single_vendor():
     assert any(
         d["constraint"] == "grounding-independence" for d in m["degradations"]
     )
+    # the full pool goes to the maker filter, which leaves the grounding seat unfilled
+    assert m["seats"][SM.GROUNDING_SEAT]["source"] == "unfilled"
 
 
 # --- LOGIC-2 pin-breaks-constraint -------------------------------------------------------------
@@ -471,6 +477,11 @@ def test_backfill_never_empty_family():
         m = SM.build(SM.PANEL_ROSTER, live, "anthropic", "openai", 0)
         for seat, cfg in m["seats"].items():
             assert cfg["family"] != "", f"seat {seat} has empty family with live={live}"
+            # a seat carries a non-maker family, or is recorded unfilled with no family at all
+            if cfg["source"] == "unfilled":
+                assert cfg["family"] is None and cfg["vendor"] is None, (seat, live)
+            else:
+                assert cfg["family"] not in (None, "anthropic"), (seat, live)
 
 
 # --- CLI --------------------------------------------------------------------------------------
@@ -707,14 +718,10 @@ def test_composer_authored_diff_excludes_cursor_from_strong_critical_and_groundi
 
 
 def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
-    """#651: the configuration whose safety actually changed. Pre-merge, a cursor-only panel on a
-    composer-made diff (author family 'cursor', every seat's family 'xai') recorded NO grounding
-    degradation and NO maker-family violation — a whole panel of the author's own family read as
-    clean. Post-merge both fire, so the self-review is visible instead of silent.
-
-    #670 turned this exact configuration from violation into disclosed degradation: when no
-    alternative family is live, every roster seat records `same-family` and verify reports no
-    maker-family violation.
+    """A cursor-only panel on a composer-made diff (author family 'cursor', every seat's family
+    'xai') must never read as clean. No reviewer outside the maker's family is live, so every roster
+    seat is recorded `unfilled` with a `seat-unfilled` degradation, no seat carries the maker's
+    family, and verify reports no maker-family violation for a seat that does not run.
 
     The author family is READ FROM THE REGISTRY, never hardcoded: hardcoding 'xai' would leave this
     test green if `composer-2.5`'s family ever regressed, which is the one regression it exists to
@@ -724,13 +731,14 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
     author = MRG.family_for("code-fixer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(651, None))
     assert "grounding-independence" in {d["constraint"] for d in m["degradations"]}
-    same_family = {
-        (d["constraint"], d.get("seat"))
-        for d in m["degradations"]
-        if d.get("constraint") == "same-family"
+    unfilled = {
+        d.get("seat") for d in m["degradations"] if d.get("constraint") == "seat-unfilled"
     }
     for seat in SM.PANEL_ROSTER:
-        assert ("same-family", seat) in same_family, seat
+        assert seat in unfilled, seat
+        assert m["seats"][seat]["source"] == "unfilled", seat
+        assert m["seats"][seat]["family"] is None, seat
+    assert not any(d.get("constraint") == "same-family" for d in m["degradations"])
     assert not any(
         v.get("constraint") == "maker-family" for v in SM.verify(m, author)
     )
@@ -759,19 +767,22 @@ def test_maker_family_barred_from_every_roster_seat():
 
 
 def test_single_vendor_collapse_is_same_family_degradation_not_violation():
+    # only the maker's family is live: every seat is unfilled (a disclosed degradation), never a
+    # same-family seat and never a maker-family violation
     import model_registry as MRG
 
     author = MRG.family_for("code-fixer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(670, None))
     for seat in SM.PANEL_ROSTER:
         assert any(
-            d.get("constraint") == "same-family" and d.get("seat") == seat
+            d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
             for d in m["degradations"]
         ), seat
+        assert m["seats"][seat]["source"] == "unfilled", seat
+    assert not any(d.get("constraint") == "same-family" for d in m["degradations"])
     assert not any(
         v.get("constraint") == "maker-family" for v in SM.verify(m, author)
     )
-    assert not any(d.get("constraint") == "seat-unfilled" for d in m["degradations"])
 
 
 def test_single_vendor_collapse_does_not_claim_author_minority():
@@ -779,6 +790,7 @@ def test_single_vendor_collapse_does_not_claim_author_minority():
 
     author = MRG.family_for("code-fixer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", 0)
+    assert all(m["seats"][s]["source"] == "unfilled" for s in SM.PANEL_ROSTER)
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
 
 
@@ -922,7 +934,8 @@ def test_to_receipt_same_family_derivation_is_idempotent():
         receipt = SM.to_receipt(m, author)
         counts = {}
         for d in receipt["degradations"]:
-            if d.get("constraint") == "same-family":
+            assert d.get("constraint") != "same-family"
+            if d.get("constraint") == "seat-unfilled":
                 counts[d.get("seat")] = counts.get(d.get("seat"), 0) + 1
         for seat in SM.PANEL_ROSTER:
             assert counts.get(seat, 0) == 1, seat
@@ -930,17 +943,21 @@ def test_to_receipt_same_family_derivation_is_idempotent():
 
 
 def test_pinned_maker_seat_is_still_a_violation():
+    # a pin to the maker's family no longer seats it: the seat is unfilled, so there is no
+    # maker-family seat for verify to flag, and the pin is disclosed as breaking the constraint
     pins = {"test-reviewer": {"vendor": "claude"}}
     m = SM.build(
         SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
     )
-    assert m["seats"]["test-reviewer"]["source"] == "pinned"
-    assert m["seats"]["test-reviewer"]["family"] == "anthropic"
-    violations = SM.verify(m, "anthropic")
+    assert m["seats"]["test-reviewer"]["source"] == "unfilled"
+    assert m["seats"]["test-reviewer"]["family"] is None
     assert any(
-        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
-        for v in violations
+        d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "test-reviewer"
+        for d in m["degradations"]
     )
+    violations = SM.verify(m, "anthropic")
+    assert not any(v.get("constraint") == "maker-family" for v in violations)
+    assert not any(v.get("seat") == "test-reviewer" for v in violations)
 
 
 def test_unexcused_maker_family_under_liveness_read_error_degradation():
@@ -1062,7 +1079,7 @@ def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
 
 def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp_path, capsys):
     # axis: a note the preflight returns is in `degradations` BEFORE violations are derived,
-    # so a fell-open panel reads as unproven liveness rather than a clean maker-family pass.
+    # so a fell-open panel carries its note beside the unfilled seats.
     import liveness_cache
     import preflight_probe
 
@@ -1098,7 +1115,14 @@ def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert any(d.get("constraint") == "compose-failed" for d in receipt["degradations"])
-    assert any(v.get("constraint") == "maker-family" for v in receipt["violations"])
+    # the fell-open panel has only the maker's family to offer, so no seat is filled with it
+    assert not any(v.get("constraint") == "maker-family" for v in receipt["violations"])
+    for seat in SM.PANEL_ROSTER:
+        assert receipt["seats"][seat]["source"] == "unfilled", seat
+        assert any(
+            d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
+            for d in receipt["degradations"]
+        ), seat
 
 
 def _seat_in_both_same_family_and_maker_family(receipt):
@@ -1136,8 +1160,9 @@ def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
         for v in receipt["violations"]
         if v.get("constraint") == "maker-family"
     }
+    assert not maker_seats, f"unexpected maker-family: {sorted(maker_seats)}"
     for seat in SM.PANEL_ROSTER:
-        assert seat in maker_seats, seat
+        assert receipt["seats"][seat]["source"] == "unfilled", seat
 
     same_family_seats = {
         d.get("seat")
@@ -1162,9 +1187,12 @@ def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
     collapse_receipt = SM.to_receipt(collapse)
     for seat in SM.PANEL_ROSTER:
         assert any(
-            d.get("constraint") == "same-family" and d.get("seat") == seat
+            d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
             for d in collapse_receipt["degradations"]
         ), seat
+    assert not any(
+        d.get("constraint") == "same-family" for d in collapse_receipt["degradations"]
+    )
     assert not any(
         v.get("constraint") == "maker-family" for v in collapse_receipt["violations"]
     )
@@ -1183,10 +1211,13 @@ def test_build_and_verify_agree_on_the_same_seat():
     )
     receipt_pin = SM.to_receipt(pin_scoped, "anthropic")
     assert not _seat_in_both_same_family_and_maker_family(receipt_pin)
+    assert receipt_pin["seats"]["test-reviewer"]["source"] == "unfilled"
+    assert not any(v.get("seat") == "test-reviewer" for v in receipt_pin["violations"])
 
     synthesized = SM.build(SM.PANEL_ROSTER, [], "xai", "anthropic", 0)
     receipt_syn = SM.to_receipt(synthesized, "xai")
     assert not _seat_in_both_same_family_and_maker_family(receipt_syn)
+    assert not any(v.get("constraint") == "maker-family" for v in receipt_syn["violations"])
 
 
 def test_pinned_maker_seat_does_not_claim_author_minority():
@@ -1199,11 +1230,9 @@ def test_pinned_maker_seat_does_not_claim_author_minority():
         d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "test-reviewer"
         for d in m["degradations"]
     )
+    assert m["seats"]["test-reviewer"]["source"] == "unfilled"
     violations = SM.verify(m, "anthropic")
-    assert any(
-        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
-        for v in violations
-    )
+    assert not any(v.get("constraint") == "maker-family" for v in violations)
 
 
 def test_build_carries_liveness_pin_scoped():
@@ -3199,7 +3228,7 @@ def test_codex_role_pin_astra_registered_seats_at_high():
         assert cfg["source"] == "role-pinned"
 
 
-# axis: probed family check falls back to matrix when honored role pin is not live.
+# axis: a maker-family pin leaves its seat unfilled whether or not a codex role pin is live.
 def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
     reviewer_deep_model, reviewer_deep_effort = _aug15_reviewer_deep_cell()
     kw = dict(
@@ -3217,12 +3246,13 @@ def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
     )
     without_pin = SM.build(**kw)
     with_pin = SM.build(**kw, codex_role_pins={"reviewer-deep": "gpt-6-astra"})
-    assert any(
-        v.get("constraint") == "maker-family" for v in SM.verify(without_pin, "anthropic")
-    )
-    assert any(
-        v.get("constraint") == "maker-family" for v in SM.verify(with_pin, "anthropic")
-    )
+    # the claude pins name the maker's family, so those seats are unfilled with or without a role pin
+    for built in (without_pin, with_pin):
+        assert not any(
+            v.get("constraint") == "maker-family" for v in SM.verify(built, "anthropic")
+        )
+        for seat in ("code-reviewer", "test-reviewer"):
+            assert built["seats"][seat]["source"] == "unfilled", seat
 
 
 # axis: registered gpt-6-astra role-pin falls back to matrix when Astra is not in live cells.
@@ -3804,6 +3834,8 @@ def test_cli_compose_claude_impl_openai_host_author_is_anthropic(capsys):
 
 
 def test_build_extra_maker_family_falls_back_and_discloses():
+    # author anthropic plus extra maker openai, and nothing else live: no seat is filled with
+    # either maker family, and each seat is disclosed as unfilled
     m = SM.build(
         SM.PANEL_ROSTER,
         ["claude", "codex"],
@@ -3812,12 +3844,16 @@ def test_build_extra_maker_family_falls_back_and_discloses():
         1,
         extra_maker_families=frozenset({"openai"}),
     )
-    for seat in SM.LENS_SEATS:
-        assert m["seats"][seat]["family"] == "openai"
-    secondary = [
-        d for d in m["degradations"] if d.get("constraint") == "secondary-maker-seated"
-    ]
-    assert secondary
+    for seat in SM.PANEL_ROSTER:
+        assert m["seats"][seat]["source"] == "unfilled", seat
+        assert m["seats"][seat]["family"] is None, seat
+        assert any(
+            d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
+            for d in m["degradations"]
+        ), seat
+    assert not any(
+        d.get("constraint") == "secondary-maker-seated" for d in m["degradations"]
+    )
 
 
 def test_build_extra_maker_families_default_unchanged():
@@ -3935,3 +3971,255 @@ def test_cli_compose_reads_codex_models_from_repo(tmp_path, capsys):
     for cfg in codex_deep:
         assert cfg["model"] == "gpt-5.6-sol"
         assert cfg["source"] == "role-pinned"
+
+
+# --- unfilled seats: the panel never seats a maker family -------------------------------------
+
+
+def _assert_all_unfilled(m, roster=None):
+    for seat in roster or SM.PANEL_ROSTER:
+        cfg = m["seats"][seat]
+        assert cfg["source"] == "unfilled", seat
+        assert cfg["vendor"] is None and cfg["model"] is None, seat
+        assert cfg["effort"] is None and cfg["family"] is None, seat
+        assert cfg["tier"] == SM.DEFAULT_TIER_BY_SEAT[seat], seat
+        records = [
+            d for d in m["degradations"]
+            if d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
+        ]
+        assert len(records) == 1, seat
+        assert "recorded unfilled, not run" in records[0]["reason"], seat
+
+
+def test_e1_only_author_family_live_leaves_every_seat_unfilled():
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
+    _assert_all_unfilled(m)
+    assert not any(cfg["family"] == "anthropic" for cfg in m["seats"].values())
+    assert not any(d.get("constraint") == "same-family" for d in m["degradations"])
+    assert not any(d.get("constraint") == "secondary-maker-seated" for d in m["degradations"])
+    assert m["makerFamilies"] == ["anthropic"]
+
+
+def test_e2_author_plus_extra_maker_live_leaves_every_seat_unfilled():
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex"],
+        "anthropic",
+        "openai",
+        3,
+        extra_maker_families=frozenset({"openai"}),
+    )
+    _assert_all_unfilled(m)
+    assert not any(d.get("constraint") == "secondary-maker-seated" for d in m["degradations"])
+    assert m["makerFamilies"] == ["anthropic", "openai"]
+    assert "anthropic, openai" in next(
+        d["reason"] for d in m["degradations"] if d.get("constraint") == "seat-unfilled"
+    )
+
+
+def test_e3_maker_family_pin_leaves_its_seat_unfilled_and_others_compose():
+    pins = {"code-reviewer": {"vendor": "claude"}}
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins)
+    assert m["seats"]["code-reviewer"]["source"] == "unfilled"
+    pin_records = [
+        d for d in m["degradations"]
+        if d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "code-reviewer"
+    ]
+    assert len(pin_records) == 1
+    assert "maker family" in pin_records[0]["reason"]
+    for seat in SM.PANEL_ROSTER:
+        if seat == "code-reviewer":
+            continue
+        assert m["seats"][seat]["source"] != "unfilled", seat
+        assert m["seats"][seat]["family"] not in (None, "anthropic"), seat
+    assert not any(
+        d.get("constraint") == "seat-unfilled" and d.get("seat") != "code-reviewer"
+        for d in m["degradations"]
+    )
+
+
+def test_e3_pin_to_extra_maker_family_leaves_its_seat_unfilled():
+    pins = {"test-reviewer": {"vendor": "codex"}}
+    m = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins,
+        extra_maker_families=frozenset({"openai"}),
+    )
+    assert m["seats"]["test-reviewer"]["source"] == "unfilled"
+    assert any(
+        d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "test-reviewer"
+        for d in m["degradations"]
+    )
+    assert not any(cfg["family"] == "openai" for cfg in m["seats"].values())
+
+
+def test_e3_pin_to_non_maker_family_is_unchanged():
+    pins = {"code-reviewer": {"vendor": "codex"}}
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "anthropic", 0, pins=pins)
+    assert m["seats"]["code-reviewer"]["source"] == "pinned"
+    assert m["seats"]["code-reviewer"]["vendor"] == "codex"
+
+
+def test_e4_no_live_vendor_leaves_every_seat_unfilled_with_no_synthetic_cfg():
+    m = SM.build(SM.PANEL_ROSTER, [], "anthropic", "openai", 0)
+    _assert_all_unfilled(m)
+    assert not any(cfg["vendor"] is not None for cfg in m["seats"].values())
+    assert any(d.get("constraint") == "live-vendors" for d in m["degradations"])
+
+
+def test_e5_verify_and_receipt_tolerate_unfilled_seats():
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
+    violations = SM.verify(m, "anthropic")
+    blocked = {"missing-seat", "malformed", "unresolvable-seat-vendor", "maker-family"}
+    assert not [v for v in violations if v.get("constraint") in blocked], violations
+    assert not any(v.get("seat") for v in violations), violations
+    receipt = SM.to_receipt(m, "anthropic")
+    assert not [v for v in receipt["violations"] if v.get("constraint") in blocked]
+    assert SM.same_family_degradations(m, "anthropic") == []
+
+
+def test_e5_a_forged_unfilled_record_that_names_a_vendor_is_still_checked():
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0)
+    m["seats"]["test-reviewer"] = {
+        "vendor": "claude", "model": "opus-5.5", "effort": "xhigh",
+        "tier": "reviewer-deep", "family": "anthropic", "source": "unfilled",
+    }
+    assert any(
+        v.get("constraint") == "maker-family" and v.get("seat") == "test-reviewer"
+        for v in SM.verify(m, "anthropic")
+    )
+
+
+def test_e6_compose_maker_family_flag_excludes_that_family(capsys):
+    argv = [
+        "x", "compose",
+        "--live-vendors", "claude,codex",
+        "--author-family", "anthropic",
+        "--narrative-family", "anthropic",
+        "--pr-number", "1796",
+    ]
+    assert SM.main(argv) == 0
+    without_flag = json.loads(capsys.readouterr().out)
+    assert any(cfg["family"] == "openai" for cfg in without_flag["seats"].values())
+
+    assert SM.main(argv + ["--maker-family", "openai"]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    for seat in SM.PANEL_ROSTER:
+        assert receipt["seats"][seat]["source"] == "unfilled", seat
+    assert receipt["makerFamilies"] == ["anthropic", "openai"]
+    assert not any(v.get("constraint") == "maker-family" for v in receipt["violations"])
+
+
+def test_e6_maker_family_flag_is_repeatable_and_accepts_unknown_families(capsys):
+    argv = [
+        "x", "compose",
+        "--live-vendors", "claude,codex,cursor",
+        "--author-family", "anthropic",
+        "--narrative-family", "anthropic",
+        "--pr-number", "1796",
+        "--maker-family", "openai",
+        "--maker-family", "xai",
+        "--maker-family", "not-a-registered-family",
+    ]
+    assert SM.main(argv) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["makerFamilies"] == ["anthropic", "not-a-registered-family", "openai", "xai"]
+    for seat in SM.PANEL_ROSTER:
+        assert receipt["seats"][seat]["source"] == "unfilled", seat
+
+
+def test_e6_maker_family_flag_joins_the_host_family_extra(capsys):
+    argv = [
+        "x", "compose",
+        "--live-vendors", "claude,codex,cursor",
+        "--implementation-engine", "claude",
+        "--host-model", "gpt-5.6-sol",
+        "--maker-family", "xai",
+        "--pr-number", "1796",
+    ]
+    assert SM.main(argv) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert "xai" in receipt["makerFamilies"]
+    assert "anthropic" in receipt["makerFamilies"]
+    assert not any(
+        cfg["family"] in receipt["makerFamilies"] for cfg in receipt["seats"].values()
+    )
+
+
+def test_build_and_receipt_name_the_maker_families_and_the_roster():
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0,
+                 extra_maker_families=frozenset({"xai"}))
+    assert m["makerFamilies"] == ["anthropic", "xai"]
+    assert m["roster"] == list(SM.PANEL_ROSTER)
+    receipt = SM.to_receipt(m, "anthropic")
+    assert receipt["makerFamilies"] == ["anthropic", "xai"]
+    assert receipt["roster"] == list(SM.PANEL_ROSTER)
+    custom = SM.build(["code-reviewer", "test-reviewer"], THREE_VENDORS, "anthropic", None, 0)
+    assert custom["roster"] == ["code-reviewer", "test-reviewer"]
+    assert SM.build(SM.PANEL_ROSTER, THREE_VENDORS, None, None, 0)["makerFamilies"] == []
+
+
+def test_unfilled_seats_never_count_toward_the_author_minority_or_critical_checks():
+    # one critical seat unfilled by a pin, the rest seated: nothing raises, an unfilled seat is
+    # never counted as the author's, and the seated families still decide critical diversity
+    pins = {"premortem-reviewer": {"vendor": "claude"}}
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins)
+    assert m["seats"]["premortem-reviewer"]["source"] == "unfilled"
+    assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
+    assert not any(d.get("constraint") == "critical-diversity" for d in m["degradations"])
+    # an unknown author family leaves nothing to count against and never raises either
+    unknown_author = SM.build(SM.PANEL_ROSTER, ["claude"], None, "openai", 0)
+    assert all(cfg["family"] == "anthropic" for cfg in unknown_author["seats"].values())
+    assert SM.build(SM.PANEL_ROSTER, [], None, None, 0)["seats"]
+
+
+def test_unfilled_seat_invariant_no_seat_carries_a_maker_family():
+    vendor_sets = [[], ["claude"], ["codex"], ["claude", "codex"], ["claude", "codex", "cursor"]]
+    for live in vendor_sets:
+        for author in ("anthropic", "openai", "xai"):
+            for extra in (frozenset(), frozenset({"openai"})):
+                for seed in (0, 1, 2):
+                    m = SM.build(
+                        SM.PANEL_ROSTER, live, author, "anthropic", seed,
+                        extra_maker_families=extra,
+                    )
+                    makers = {author} | set(extra)
+                    assert m["makerFamilies"] == sorted(makers)
+                    for seat in SM.PANEL_ROSTER:
+                        cfg = m["seats"][seat]
+                        ctx = (live, author, sorted(extra), seed, seat)
+                        assert cfg["family"] not in makers, ctx
+                        if cfg["source"] == "unfilled":
+                            assert cfg["vendor"] is None and cfg["family"] is None, ctx
+                            assert any(
+                                d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
+                                for d in m["degradations"]
+                            ), ctx
+                    receipt = SM.to_receipt(m, author)
+                    assert not any(
+                        v.get("constraint") in ("maker-family", "missing-seat", "malformed")
+                        for v in receipt["violations"]
+                    ), (live, author, sorted(extra))
+
+
+def test_backfill_for_a_non_maker_reason_never_returns_a_maker_family(monkeypatch):
+    # no reviewer-deep cell exists at all, so every strong seat is empty for a reason that is not the
+    # maker filter; the reviewer-tier backfill may seat a non-maker but never the author's family
+    real_matrix = SM.matrix_config
+
+    def _no_reviewer_deep(tier, vendor):
+        if tier == "reviewer-deep":
+            return None
+        return real_matrix(tier, vendor)
+
+    monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
+    only_maker = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
+    with_other = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0)
+    for seat in SM.STRONG_TIER_SEATS:
+        assert only_maker["seats"][seat]["source"] == "unfilled", seat
+        assert with_other["seats"][seat]["source"] == "backfill", seat
+        assert with_other["seats"][seat]["family"] != "anthropic", seat
+        assert any(
+            d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
+            and "backfilled to" in d["reason"]
+            for d in with_other["degradations"]
+        ), seat

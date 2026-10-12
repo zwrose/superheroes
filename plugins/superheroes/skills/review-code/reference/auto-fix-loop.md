@@ -698,14 +698,14 @@ carries `{vendor, model, effort, tier, family, source}`:
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,
   `premortem-reviewer`) **and** the `grounding-seat`, not
-  merely from strong-tier, critical, and grounding. An owner pin can still seat the maker family;
-  `verify()` flags a `maker-family` violation and records `pin-breaks-constraint` for that seat.
-  Where an alternative family is live, the maker family never seats through rotation and such a
-  panel buys its independence from anthropic/openai instead; where
-  none is live, the seat still fills with the maker family and the map records a disclosed
-  `same-family` degradation, which rides the certification shape (`-degraded`) alongside
-  `independenceDegraded` and `baseDegraded`. The `verify()` result (the
-  maker-family-vs-seat check) separates a **violation** (maker family seated when an
-  alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
-  fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the
+  merely from strong-tier, critical, and grounding. The makers are the author family plus every
+  extra maker family passed to compose with `--maker-family`. A seat with no live candidate outside
+  the makers' families is recorded **`unfilled`** (`vendor`, `model`, `effort` and `family` all null,
+  `source: "unfilled"`) with a `seat-unfilled` degradation naming the seat: it is never filled with a
+  maker family and never backfilled, so no panel is ever composed from the maker's own family. An
+  owner pin to a maker's family does not seat it either; that seat is left `unfilled` and recorded
+  as `pin-breaks-constraint`. An `unfilled` seat is a planned reviewer that did not run: it is
+  never dispatched and stays in the record. `verify()` treats it as a known not-run seat, not as a
+  missing, malformed or maker-family seat, and unusable liveness evidence still fails closed to a
+  violation for any seat that does name a maker family. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
