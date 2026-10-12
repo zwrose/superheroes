@@ -4661,3 +4661,20 @@ def test_links_are_built_without_markup_strings():
     assert "innerHTML" not in page and "insertAdjacentHTML" not in page and "outerHTML" not in page
     assert page.count("function linkedElement(") == 1
     assert 'setAttribute("target", "_blank")' in page and 'setAttribute("rel", "noopener noreferrer")' in page
+
+
+
+# Bites on: a pr or stack sheet passing the schema while the page never draws its prSheet block, so the history lines (a reviewer that did not run, an earlier commit, checks) never reach the owner.
+@pytest.mark.parametrize("sample", ["sample-pr-sheet.json", "sample-stack-sheet.json"])
+def test_page_draws_the_pr_sheet_facts_and_history(sample):
+    sheet_text = (THEME / sample).read_text(encoding="utf-8")
+    block = json.loads(sheet_text)["prSheet"]
+    files = _sample_files(json.loads(sheet_text))
+    page = _run_page(files, scenario="""
+      return { hidden: elements["sheet-history"].hidden, lines: elements["sheet-history"].children.flatMap((child) => child.children.length > 0 ? child.children.map((item) => item.textContent) : [child.textContent]) };
+    """)
+    assert page["settled"] and page["errors"] == [], page
+    assert page["result"]["hidden"] is False
+    for line in block["history"]:
+        assert line in page["result"]["lines"], "history line not drawn: %s" % line
+    assert block["whatChanged"]["summary"] in page["result"]["lines"]
