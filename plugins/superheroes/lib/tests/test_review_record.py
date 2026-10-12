@@ -1769,6 +1769,8 @@ def test_composed_prose_claiming_no_bugs_is_refused_on_a_below_floor_record(tmp_
 
 SHED_LINE = ("Reviewer detail trimmed to fit this comment (%s); each reviewer's full output is in its raw-output "
              "comment linked under rawOutputs.")
+SHED_LINE_RUN_RECORDS = ("Reviewer detail trimmed to fit this comment (%s); the engines' own run records hold the "
+                         "full output.")
 PROTECTED_ROW_KEYS = ("name", "ran", "planned", "vendor", "model", "family", "commit", "coversFinalCommit")
 RULING = {"reviewer": "security-reviewer", "kind": "standing-ruling", "canonId": "canon-7"}
 
@@ -1810,11 +1812,11 @@ def test_a_long_session_sheds_reviewer_detail_to_fit_and_says_so(monkeypatch):
     body = rr.render(rec)
     assert len(body) <= rr.MAX_BODY_CHARS
     lines = body.split("\n")
-    shed = SHED_LINE % "engine telemetry"
+    shed = SHED_LINE_RUN_RECORDS % "engine telemetry"
     assert lines.count(shed) == 1 and sum(l.startswith("Reviewer detail trimmed") for l in lines) == 1
     assert lines[lines.index(shed) - 1].startswith("- security-reviewer: did not run")
     posted = rr._parse_body(body)
-    assert posted["reviewerShed"] == "observation"
+    assert posted["reviewerShed"] == ["observation"]
     assert _protected(posted) == _protected(rec)
     assert all(set(v["observation"]) == {"read", "toolCalls"} for v in posted["reviewers"][:-1])
     assert "reviewerShed" not in rec and all(v["runDir"] for v in rec["reviewers"][:-1])
@@ -1843,19 +1845,78 @@ def test_the_shed_line_names_exactly_what_was_shed(monkeypatch):
     # first, so the reviewer steps start a little later than this test shows
     with monkeypatch.context() as m:
         m.setattr(rr, "_SHED_STEPS", ())
-        after_observation = _unshed_size(dict(rr._shed_observation(rec), reviewerShed="observation"), m)
+        after_observation = _unshed_size(dict(rr._shed_observation(rec), reviewerShed=["observation"]), m)
     with monkeypatch.context() as m:
         m.setattr(rr, "_SHED_STEPS", ())
         m.setattr(rr, "MAX_BODY_CHARS", after_observation)
         only = rr.render(rec)
         m.setattr(rr, "MAX_BODY_CHARS", after_observation - 1)
         both = rr.render(rec)
-    assert rr._parse_body(only)["reviewerShed"] == "observation" and SHED_LINE % "engine telemetry" in only.split("\n")
-    assert rr._parse_body(both)["reviewerShed"] == "runDir"
-    assert SHED_LINE % "engine telemetry and run directories" in both.split("\n")
-    assert SHED_LINE % "engine telemetry" not in both.split("\n")
+    assert rr._parse_body(only)["reviewerShed"] == ["observation"]
+    assert SHED_LINE_RUN_RECORDS % "engine telemetry" in only.split("\n")
+    assert rr._parse_body(both)["reviewerShed"] == ["observation", "runDir"]
+    assert SHED_LINE_RUN_RECORDS % "engine telemetry and run directories" in both.split("\n")
+    assert SHED_LINE_RUN_RECORDS % "engine telemetry" not in both.split("\n")
     kept = rr._parse_body(only)["reviewers"][0]
     assert set(kept["observation"]) == {"read", "toolCalls"} and kept["runDir"] == rec["reviewers"][0]["runDir"]
+
+
+def test_rows_with_no_observation_that_fit_after_run_dirs_say_run_directories_only(monkeypatch):
+    # axis: a step that changed nothing being named; the line claiming engine telemetry went when no row had any
+    rec = _long_session()
+    for v in rec["reviewers"]:
+        v.pop("observation", None)
+    with monkeypatch.context() as m:
+        m.setattr(rr, "_SHED_STEPS", ())
+        after_run_dir = _unshed_size(dict(rr._shed_run_dir(rec), reviewerShed=["runDir"]), m)
+        assert _unshed_size(rec, m) > after_run_dir
+        m.setattr(rr, "MAX_BODY_CHARS", after_run_dir)
+        body = rr.render(rec)
+    lines = body.split("\n")
+    posted = rr._parse_body(body)
+    assert posted["reviewerShed"] == ["runDir"]
+    assert SHED_LINE_RUN_RECORDS % "run directories" in lines
+    assert sum(l.startswith("Reviewer detail trimmed") for l in lines) == 1
+    assert "engine telemetry" not in "\n".join(lines)
+    assert all(v["runDir"] is None for v in posted["reviewers"])
+
+
+def _shed_line_of(rec):
+    body = rr.render(rec)
+    assert "reviewerShed" in rr._parse_body(body)
+    (line,) = [l for l in body.split("\n") if l.startswith("Reviewer detail trimmed")]
+    return line
+
+
+def test_a_record_with_empty_raw_outputs_points_at_the_engines_run_records():
+    # axis: the shed line's pointer; naming a raw-output comment the record does not link
+    rec = _long_session()
+    assert rec["rawOutputs"] == []
+    assert _shed_line_of(rec) == SHED_LINE_RUN_RECORDS % "engine telemetry"
+
+
+def test_a_record_with_only_withheld_raw_outputs_points_at_the_engines_run_records():
+    # axis: the shed line's pointer; a withheld raw output counted as a linked one
+    rec = _long_session()
+    rec["rawOutputs"] = [{"file": "a.txt", "id": 1, "url": "u", "withheld": True},
+                         {"file": "b.txt", "id": 2, "url": "u", "withheld": True}]
+    assert _shed_line_of(rec) == SHED_LINE_RUN_RECORDS % "engine telemetry"
+
+
+def test_a_record_with_one_linked_raw_output_points_at_the_raw_output_comment():
+    # axis: the shed line's pointer; a linked raw output not pointed at
+    rec = _long_session()
+    rec["rawOutputs"] = [{"file": "a.txt", "id": 1, "url": "u", "withheld": True},
+                         {"file": "b.txt", "id": 2, "url": "u", "withheld": False}]
+    assert _shed_line_of(rec) == SHED_LINE % "engine telemetry"
+
+
+def test_a_raw_outputs_value_that_is_not_a_list_of_dicts_counts_as_no_linked_output():
+    # axis: the pointer on malformed rawOutputs; a crash, or a pointer at output that is not linked
+    for bad in ("linked", None, {"file": "a.txt", "withheld": False}, ["a.txt", 3]):
+        rec = _long_session()
+        rec["rawOutputs"] = bad
+        assert _shed_line_of(rec) == SHED_LINE_RUN_RECORDS % "engine telemetry", bad
 
 
 def test_a_reviewer_row_without_a_dict_observation_is_left_as_it_is():

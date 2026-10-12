@@ -796,14 +796,30 @@ def _shed_observation(record):
 
 
 def _shed_run_dir(record):
-    """Reviewer step 2: each row's runDir becomes None."""
-    return dict(record, reviewers=[dict(v, runDir=None) for v in record["reviewers"]])
+    """Reviewer step 2: each row's non-None runDir becomes None; a row with none is left as it is."""
+    return dict(record, reviewers=[dict(v, runDir=None) if v.get("runDir") is not None else v
+                                   for v in record["reviewers"]])
 
 
 # Only reviewer evidence detail is shed; the status, whatIsMissing, findings' outcome and reason, go-aheads and each
 # row's name, ran, planned, vendor, model, family, commit and coversFinalCommit are never touched.
 _REVIEWER_STEPS = (("observation", _shed_observation), ("runDir", _shed_run_dir))
-_REVIEWER_SHED_WHAT = {"observation": "engine telemetry", "runDir": "engine telemetry and run directories"}
+_REVIEWER_SHED_WHAT = {"observation": "engine telemetry", "runDir": "run directories"}
+
+
+def _links_raw_output(record):
+    """True when the record links at least one raw-output comment that was posted (not withheld)."""
+    raws = record.get("rawOutputs")
+    return isinstance(raws, list) and any(isinstance(x, dict) and x.get("withheld") is not True for x in raws)
+
+
+def _reviewer_shed_line(record):
+    """The shed line for a record whose reviewerShed lists the applied steps: it names only those steps, and points
+    only at output the record links."""
+    what = " and ".join(_REVIEWER_SHED_WHAT[n] for n in record["reviewerShed"])
+    where = ("each reviewer's full output is in its raw-output comment linked under rawOutputs"
+             if _links_raw_output(record) else "the engines' own run records hold the full output")
+    return f"Reviewer detail trimmed to fit this comment ({what}); {where}."
 
 
 def render(record):
@@ -841,9 +857,7 @@ def render(record):
             f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
             "Reviewers:", *who,
             # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
-            *([f"Reviewer detail trimmed to fit this comment ({_REVIEWER_SHED_WHAT[r['reviewerShed']]}); each "
-               "reviewer's full output is in its raw-output comment linked under rawOutputs."]
-              if r.get("reviewerShed") else [])]
+            *([_reviewer_shed_line(r)] if r.get("reviewerShed") else [])]
         summary = "\n".join(lines)
         # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
         # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
@@ -862,10 +876,14 @@ def render(record):
         body = compose(r)
     # Then, still over the cap, the reviewers' evidence detail, one step at a time, each said on the record.
     # axis: the reviewer steps run while the body is over the cap — see bite-proof record wo_d_1795_reviewer-shed
+    # A step counts as applied, and is named, only when it changed a row; one that changed nothing is not listed.
     for name, step in _REVIEWER_STEPS:
         if len(body) <= MAX_BODY_CHARS:
             break
-        r = dict(step(r), reviewerShed=name)
+        shed = step(r)
+        if shed["reviewers"] == r["reviewers"]:
+            continue
+        r = dict(shed, reviewerShed=[*r.get("reviewerShed", []), name])
         body = compose(r)
     # axis: a body still over the cap after every step is refused, never truncated — see bite-proof record wo_d_1795_reviewer-shed
     if len(body) > MAX_BODY_CHARS:
