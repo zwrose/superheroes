@@ -31,7 +31,7 @@ not listed in the table below is the same as the **full** lane.
 
 This section is the one home of the lane floor. Every other page points here and says only what its own reader does.
 
-One rule sets the lowest lane a change may take. The advisor runs it as `python3 -B <plugin root>/lib/lane_call.py call --cwd <repo> --path <each changed or planned path> [--proposed <lane>]`, and the lane-call line records its `why`.
+One rule sets the lowest lane a change may take. The advisor runs it as `python3 -B <plugin root>/lib/lane_call.py call --cwd <repo> --path <each changed or planned path> [--proposed <lane>]`, and the lane-call line records the floor the rule returned and one line of reasoning in the advisor's own words. It never pastes the rule's generated reasons or any changed-file path; paths stay in the record's Risk floor line, the one line the record's claim check leaves out.
 
 A change that touches a [risk area](glossary.md#risk-area) gets the full lane, whatever its size. So does a change whose risk is unclear. Risk is unclear when the project's risk areas are not set: missing, empty, or the [Risk and trust](glossary.md#risk-and-trust) item cannot be read. It is also unclear when any changed path cannot be matched against them, or when the changed paths cannot be read or none are given. While a project has set no risk areas, that means every change.
 

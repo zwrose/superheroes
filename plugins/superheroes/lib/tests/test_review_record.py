@@ -1998,3 +1998,13 @@ def test_a_record_that_needed_only_the_lane_basis_steps_carries_no_shed_line(tmp
     assert posted["laneBasis"]["basisShed"] in ("why-paths", "matched", "unmatchable")
     assert "Reviewer detail trimmed" not in body and "reviewerShed" not in posted
     assert posted["reviewers"][0]["runDir"]
+
+
+def test_lane_call_pattern_alternatives_equal_the_lane_vocabulary():
+    # axis: one lane vocabulary; the parser's alternatives must equal lane_call.LANES, whatever either home holds
+    import lane_call
+
+    probe = rr._LANE_RE.pattern.split(r"\s*(", 1)[1].split(")", 1)[0]
+    assert sorted(probe.split("|")) == sorted(lane_call.LANES)
+    for lane in lane_call.LANES:
+        assert rr._LANE_RE.search("**Lane call:** " + lane + ". why").group(1) == lane

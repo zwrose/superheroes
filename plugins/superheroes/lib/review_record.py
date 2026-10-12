@@ -52,7 +52,9 @@ _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
-_LANE_RE = re.compile(r"(?m)^\*\*Lane call:\*\*\s*(full|light|micro)\b[.:]?[ \t]*(.*)$")
+_LANE_RE = re.compile(
+    r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in lane_call.LANES) + r")\b[.:]?[ \t]*(.*)$"
+)
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
