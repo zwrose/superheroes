@@ -1202,3 +1202,22 @@ No State line calls any of them open. Result: verified.
 ```
 
 **Owed: package read for the C7 size split (advisor, 2026-10-12; pending).** Cloud C7 (#1748) split at the 600 bar into C7 (answering a cloud builder) and C7b (recovering a cloud builder, #1784), on the docs PR that adds `children/C7b.md`. A touched-parts re-read is owed before the epic's body is re-injected with the new R8 and R11 quotes, in the shape of inv7: cause "C7 size split into C7 and C7b (advisor craft call at the 600 bar): touched-parts re-read"; parts C7, C7b and C8 (C8 now sits on C7b; the other child copies change only their layer count), the register (seven consumer lines gain C7b; R8's and R11's first paragraphs change) and the coverage map (six rows move from C7 to C7b). The advisor opens the invocation (inv8) with `package_read_audit.py open` when it runs the read and records its rounds and verification here; until then no inv8 record is written, so the trail stays conforming.
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C7 size split into C7 and C7b (advisor craft call at the 600 bar): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv8",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 7
+ },
+ "override": "seven consumer lines gain C7b, R8's order and R11's allocations change, six coverage rows move; C8 is touched only by renumbering; light weight is enough for a re-allocation",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
