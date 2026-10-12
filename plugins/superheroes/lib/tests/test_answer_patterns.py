@@ -6,11 +6,10 @@ import pytest
 
 import pr_sheet
 from test_pr_sheet import BIG, STACK, bundle
-from test_review_template import THEME, WORDS, _template_text
+from test_review_template import WORDS, _template_text
 from test_review_template_pr import SAMPLES, _fill, _page
 
 PW = WORDS["pr"]
-DOC = (THEME / "review-template.md").read_text(encoding="utf-8")
 
 # Every button inside every answer row on the page, with the part that holds the row.
 COLLECT = r"""
@@ -74,8 +73,3 @@ def test_default_leftover_options_are_the_words_files(case):
     for card in leftovers:
         assert card["options"] == PW["leftoverOptions"], card["id"]
 
-
-# Bites on: a word the doc quotes for PR sheets reworded in sheet-words.json while the doc still carries the old one.
-@pytest.mark.parametrize("key", ["nothingToAccept", "craftHeading", "decidedHeading", "reviewHeading", "prsHeading", "acceptingHeading", "changedHeading"])
-def test_the_doc_quotes_the_words_files_words(key):
-    assert PW[key] in DOC, "review-template.md does not quote pr.%s: %r" % (key, PW[key])

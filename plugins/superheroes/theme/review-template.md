@@ -201,13 +201,14 @@ list. Its parts come in this order:
 1. What changed: what changed, who reviewed it, what the review caught, the rounds, CI and the commit it
    ran on, the lane and why, and the commit the sheet describes.
 2. The walk: its stops. On a stack each stop names its PR.
-3. "What you're accepting": the items.
-4. The folded parts "Decided as craft, for your veto", "Already decided" and "How the review went", and
-   on a stack "The PRs in this stack". Each shows its count and opens on a tap.
+3. The items, under the accepting heading.
+4. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
+   review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
 5. The merge verdict.
 
-A part with nothing in it is left out, except "What you're accepting", which then reads
-"Nothing. The review left nothing for you." The app bar says "<k> of <n> accepted".
+A part with nothing in it is left out, except the items, which then say that the review left nothing
+for the owner. The app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
+block of `sheet-words.json`, the home of the words.
 
 ### The items
 
@@ -241,22 +242,21 @@ that cannot load and a shared sheet behave as described there.
 The verdict is "Merge #<number>" ("Merge stack #<number>" on a stack) and Not yet, with a note. It saves
 at `verdict/<digest>` exactly as a final sheet's verdict does.
 
-It is locked until every item above it is accepted. The button then reads "Merge #<number> · locked", it
-cannot be tapped, and a line says "Unlocks when every item above is accepted: <k> of <n> so far."
+It is locked until every item above it is accepted. The Merge button then says it is locked, it cannot
+be tapped, and a line says when it unlocks and how many items are accepted so far.
 
 An item counts as accepted only when its saved answer is Accept, or an option that does not send the PR
 back, and that answer shows Saved. A save in flight, failed or stalled keeps the verdict locked. An
 answer that sends the PR back never counts.
 
-- Choosing Fix before merge, or any option that sends the PR back, replaces the verdict with the
-  message "You chose to fix something before merge, so this goes back for that fix. It returns with a
-  new sheet; nothing to answer here."
+- Choosing Fix before merge, or any option that sends the PR back, replaces the verdict with a message
+  that the PR goes back for that fix and returns with a new sheet, with nothing to answer here.
 - Un-accepting an item after a Merge clears the Merge, saved as null with the note kept. A Merge
   restored onto a sheet that is locked is cleared the same way.
 
 ### A changed PR
 
-A sheet republished for a new commit carries `previousCommit` and shows "This PR changed". An item's id
+A sheet republished for a new commit carries `previousCommit` and shows a heading and note saying the PR changed. An item's id
 stays the same while its finding and its shown content do, so answers to unchanged items are kept. The
 verdict starts over, because its digest is new.
 
