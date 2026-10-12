@@ -1,6 +1,6 @@
-import type { On, SessionCompactInput } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
+import type { On, SessionCompactInput, SessionUsage } from 'claude-code'
+import { expect, mock, test } from 'claude-code/testing'
+import type { Engine, MockClock } from 'claude-code/testing'
 
 import { CHECKPOINT_INFO } from './checkpoint-block'
 
@@ -32,9 +32,36 @@ const saveAnswer = ok({ path: NOTES })
 // file; the real file's agreement with the real CLI is lib/tests/test_compaction_mod_argv_1814.py.
 const VOCABULARY = JSON.stringify({
   verbs: {
+    path: { sessionId: '--session-id' },
     instructions: { sessionId: '--session-id', transcriptPath: '--transcript', userInstructions: '--user-instructions' },
     mark: { sessionId: '--session-id' },
     save: { sessionId: '--session-id' },
+  },
+})
+
+// What `session.usage` answers at a fill, on a 1M window whose auto-compaction runs at 967000.
+const usageAt = (tokens: number): SessionUsage => ({
+  startedAt: 0,
+  rateLimits: [],
+  context: {
+    tokens,
+    window: 1000000,
+    breakdown: {
+      categories: [],
+      totalTokens: tokens,
+      maxTokens: 1000000,
+      rawMaxTokens: 1000000,
+      autocompactSource: 'auto',
+      percentage: 0,
+      gridRows: [],
+      model: 'm',
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      apiUsage: null,
+      autoCompactThreshold: 967000,
+      isAutoCompactEnabled: true,
+    },
   },
 })
 
@@ -48,6 +75,15 @@ type Rig = {
   states: unknown[]
   toasts: string[]
   order: string[]
+  clock: MockClock
+  // the slash commands the mod ran, `name args`
+  commands: string[]
+  // every `$.state.set` as [key, value]
+  sets: [string, unknown][]
+  // what `session.usage` answers (null: it fails) and what the notes file holds (null: missing)
+  usage: SessionUsage | null
+  notes: string | null
+  compactAttempts: number
 }
 
 // Registers the world beneath the mod: the CLI stub on `process.run`, the file
@@ -61,9 +97,27 @@ function rig(
     isEnvBroken?: boolean
     isStateBroken?: boolean
     vocabulary?: string | null
+    isCommandBroken?: boolean
+    compactFailures?: number
   } = {},
 ): Rig {
-  const r: Rig = { argv: [], stdins: [], writes: [], reads: [], seen: [], envs: [], states: [], toasts: [], order: [] }
+  const r: Rig = {
+    argv: [],
+    stdins: [],
+    writes: [],
+    reads: [],
+    seen: [],
+    envs: [],
+    states: [],
+    toasts: [],
+    order: [],
+    clock: mock.clock(on),
+    commands: [],
+    sets: [],
+    usage: usageAt(0),
+    notes: 'old notes',
+    compactAttempts: 0,
+  }
 
   on('session.id', () =>
     options.isIdBroken ? { deny: 'no session id' } : { value: SESSION },
@@ -89,6 +143,10 @@ function rig(
   on('fs.read', (_$, e) => {
     r.reads.push(e.path)
 
+    if (e.path === NOTES) {
+      return r.notes === null ? { deny: 'no such file' } : { value: r.notes }
+    }
+
     return options.vocabulary === null
       ? { deny: 'no such file' }
       : { value: options.vocabulary ?? VOCABULARY }
@@ -112,6 +170,7 @@ function rig(
       return { deny: 'state locked' }
     }
     r.states.push(e.value)
+    r.sets.push([e.key, e.value])
 
     return next(e)
   })
@@ -124,8 +183,26 @@ function rig(
   on('session.compact', (_$, e) => {
     r.seen.push(e)
     r.order.push('compact')
+    r.compactAttempts += 1
+    if (r.compactAttempts <= (options.compactFailures ?? 0)) {
+      throw new Error('a turn is running')
+    }
 
     return { messages: SUMMARY }
+  })
+  // the engine's own band, which the mod's draws in place of only while it has something to say
+  on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
+  on('session.usage', () => (r.usage === null ? { deny: 'no usage' } : { value: r.usage }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('command.run', (_$, e) => {
+    r.commands.push(`${e.command} ${e.args}`.trim())
+
+    if (options.isCommandBroken) {
+      throw new Error('unknown command')
+    }
+
+    return { text: '' }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
@@ -415,3 +492,363 @@ for (const [name, cli, options] of [
     expect(r.toasts).toEqual([warning])
   })
 }
+
+// ---- the automatic checkpoint (#1814 layer 2) --------------------------------------
+
+const COMMAND = 'superheroes:checkpoint auto'
+const SUCCESS = 'Checkpointed and compacted'
+const SKIPPED = 'Auto-checkpoint skipped: the notes file did not change'
+const COMPACT_FAILED = 'Auto-checkpoint saved the notes but could not compact'
+const COMMAND_FAILED = 'Auto-checkpoint failed'
+
+// Above the 500000 default trigger / inside its 50000 heads-up band / below the band.
+const PAST = 520000
+const NEAR = 470000
+const FAR_BELOW = 100000
+
+const start = ($: Engine, isInteractive = true) =>
+  $.session.start({ cwd: '/w', surface: 'terminal', isInteractive })
+
+// The engine measures the session at `tokens`.
+async function measure($: Engine, r: Rig, tokens: number) {
+  r.usage = usageAt(tokens)
+
+  return $.session.measure({
+    context: { tokens, window: 1000000 },
+    rateLimits: [],
+    changed: ['context'],
+  })
+}
+
+const BAND = {
+  hasSurvey: false,
+  isWorking: false,
+  maxRows: 10,
+  bodyColumns: 80,
+  scroll: { offset: 0, bodyRows: 10 },
+  view: {},
+}
+
+const mountBand = ($: Engine, surface: 'terminal' | 'desktop') =>
+  $.ui.mount({ plugin: 'superheroes', surface, component: 'AbovePrompt', props: BAND })
+
+test('measure at the trigger runs /superheroes:checkpoint auto once, and never again while it runs', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+
+  await measure($, r, PAST + 1000)
+  await measure($, r, PAST + 2000)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('measure below the trigger runs nothing', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, NEAR)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+})
+
+test('headless (not interactive): nothing runs automatically', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+})
+
+test('a turn in progress holds the automatic run until the turn completes', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+
+  await complete($, 'done')
+  // the measurement that follows the turn finds it idle
+  await r.clock.advance(5000)
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('usage cannot be read: no band change and nothing runs', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  r.usage = null
+  await $.session.measure({ context: { tokens: PAST, window: 1000000 }, rateLimits: [], changed: ['context'] })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+  expect(r.sets.filter(([key]) => key === 'band')).toEqual([])
+})
+
+test('a checkpoint that changed the notes compacts after the turn and toasts', async ($, on) => {
+  // the CLI answers each verb: the compaction the mod starts is steered by it (see `steer`)
+  const r = rig(on, argv =>
+    argv[3] === 'instructions' ? steer : argv[3] === 'mark' ? ok({ path: MARKER }) : saveAnswer,
+  )
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  await complete($, 'Done.')
+
+  expect(r.toasts).toEqual([SUCCESS])
+  // not inside the turn that ended: only once the clock has moved on
+  expect(r.seen).toHaveLength(0)
+
+  await r.clock.advance(1000)
+
+  expect(r.seen).toHaveLength(1)
+  // the instructions are the session's directive, which the mod fetched for its own compaction
+  expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
+})
+
+test('a checkpoint that left the notes unchanged does not compact, and a later one may run', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.toasts).toEqual([SKIPPED])
+  expect(r.seen).toHaveLength(0)
+
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('a checkpoint whose notes were deleted does not compact', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = null
+
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.toasts).toEqual([SKIPPED])
+  expect(r.seen).toHaveLength(0)
+})
+
+test("a subagent's turn never finishes the checkpoint", async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  await complete($, 'Done.', { agentId: 'agent-7' })
+  await r.clock.advance(5000)
+
+  expect(r.toasts).toEqual([])
+  expect(r.seen).toHaveLength(0)
+
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.toasts).toEqual([SUCCESS])
+  expect(r.seen).toHaveLength(1)
+})
+
+test('a checkpoint whose turn never completed stops blocking after a while', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  await r.clock.advance(31 * 60 * 1000)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('the checkpoint command fails to run: the checkpoint is cleared and the owner is told', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { isCommandBroken: true })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.toasts).toEqual([COMMAND_FAILED])
+
+  // cleared: the next measurement may try again
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('compaction that rejects is retried once, then the owner is told, with no loop', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { compactFailures: 2 })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+
+  await r.clock.advance(1000)
+  expect(r.compactAttempts).toBe(1)
+  expect(r.toasts).toEqual([SUCCESS])
+
+  await r.clock.advance(1000)
+  expect(r.compactAttempts).toBe(2)
+  expect(r.toasts).toEqual([SUCCESS, COMPACT_FAILED])
+
+  await r.clock.advance(60000)
+  expect(r.compactAttempts).toBe(2)
+})
+
+test('compaction that rejects once is retried and lands', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { compactFailures: 1 })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(2000)
+
+  expect(r.compactAttempts).toBe(2)
+  expect(r.toasts).toEqual([SUCCESS])
+})
+
+test('Snooze defers the automatic run to the fill it names, and compaction clears it', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, NEAR)
+  const ui = await mountBand($, 'terminal')
+
+  await ui.press({ key: 'snooze' })
+
+  expect(r.sets.filter(([key]) => key === 'snoozeUntilTokens')).toEqual([['snoozeUntilTokens', NEAR + 100000]])
+
+  await measure($, r, PAST)
+  await measure($, r, NEAR + 100000 - 1)
+  await r.clock.settle()
+  expect(r.commands).toEqual([])
+
+  await measure($, r, NEAR + 100000)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
+
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.sets.filter(([key]) => key === 'snoozeUntilTokens').at(-1)).toEqual(['snoozeUntilTokens', null])
+})
+
+test('click-only: the band shows, nothing runs on its own, and Now runs the checkpoint', { options: { autoCheckpointMode: 'click-only' } }, async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+
+  const ui = await mountBand($, 'terminal')
+
+  expect(await ui.find({ type: 'Text', text: 'Context is near the checkpoint threshold' })).toBeDefined()
+
+  await ui.press({ key: 'now' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('Now runs the checkpoint in auto mode too, below the trigger', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, NEAR)
+  const ui = await mountBand($, 'terminal')
+
+  await ui.press({ key: 'now' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+
+  // and not a second one while it runs
+  await measure($, r, PAST)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('off: no band and no run', { options: { autoCheckpointMode: 'off' } }, async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+  expect(r.sets.filter(([key]) => key === 'band').every(([, value]) => value === false)).toBe(true)
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the band draws "Auto-checkpoint soon" with Now and Snooze on ${surface}`, async ($, on) => {
+    const r = rig(on, () => saveAnswer)
+
+    await start($)
+    await measure($, r, NEAR)
+    const ui = await mountBand($, surface)
+
+    expect(await ui.find({ type: 'Text', text: 'Auto-checkpoint soon' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'now' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'snooze' })).toBeDefined()
+  })
+
+  test(`the band is absent on ${surface} while the fill is far below the trigger`, async ($, on) => {
+    const r = rig(on, () => saveAnswer)
+
+    await start($)
+    await measure($, r, FAR_BELOW)
+    const ui = await mountBand($, surface)
+
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'now' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'snooze' })).toBeUndefined()
+  })
+}
+
+test('the band is absent while a checkpoint runs', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  const ui = await mountBand($, 'terminal')
+
+  expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'now' })).toBeUndefined()
+})

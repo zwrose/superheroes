@@ -29,6 +29,9 @@ lose) and it prints the **ready-to-paste `/compact` line**.
 | Form | Behavior |
 | --- | --- |
 | `/superheroes:checkpoint` | Resolve the session's mode, freshen the notes, save them (the mod, or you), print a ready-to-paste `/compact` line. Works in every session; a session with no charter is `generic`. |
+| `/superheroes:checkpoint auto` | The mod's automatic run (it compacts afterwards): freshen and save the notes with a short reply; no `/compact` line. |
+
+**With the argument `auto`** keep the reply short: do steps 1 to 3, then end with the notes block exactly as step 4 specifies. Do **not** print the step 5 `/compact` line (or its explanation) — the mod compacts when the notes file has changed.
 
 ## Step 1 — Resolve this session's mode
 

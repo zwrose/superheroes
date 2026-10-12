@@ -602,6 +602,16 @@ action that owns it, leaving the rest of the calibration untouched:
 
 <!-- /decision-point: id=configure-tune-gate-policy -->
 
+### Auto-checkpoint (the compaction mod)
+
+With the compaction mod, an interactive session checkpoints its notes and compacts itself once the context passes a threshold; a heads-up band above the prompt offers **Now** and **Snooze** shortly before. Three plugin settings:
+
+- `autoCheckpointTokens` — the threshold, default `500000` (50000 to 2000000).
+- `autoCheckpointAllowance` — how many tokens before the harness's own auto-compaction the checkpoint must land, default `120000` (0 to 1000000); the checkpoint runs at the lower of the two.
+- `autoCheckpointMode` — `auto` (default: checkpoint and compact on its own), `click-only` (the band shows and only **Now** runs it) or `off`.
+
+The owner changes them in the plugin's rows in `/config`, or with `claude plugin configure superheroes` (`--values-stdin` for a scripted change).
+
 ## 3 — Flip the storage mode, always showing what will move
 
 <!-- decision-point: id=configure-tune-storage-flip mode=gate kind=owner-gate default="preview only — no execute without current-turn owner authorization" carrier=run-output -->

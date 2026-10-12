@@ -1,18 +1,38 @@
-// The superheroes mod (#1814 layer 1): steers every compaction with the
-// session's charter directive plus its checkpoint notes, and saves the
-// checkpoint block a reply ends with. Every hook here fails open — on any error
-// the event goes on unchanged (`next(e)` once), no delivered-marker is written,
-// and the PreCompact command hook steers in its place.
+// The superheroes mod (#1814): steers every compaction with the session's charter
+// directive plus its checkpoint notes, saves the checkpoint block a reply ends with
+// (layer 1), and runs the automatic checkpoint: at the trigger it runs
+// /superheroes:checkpoint, and once the notes file changed it compacts (layer 2;
+// the decisions are ./decide). Every hook here fails open — on any error the event
+// goes on unchanged (`next(e)` once), no delivered-marker is written, and the
+// PreCompact command hook steers in its place.
 
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import { instructionsArgv, markArgv, parseVocabulary, saveArgv } from './argv'
+import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv } from './argv'
 import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
+import { decide, effectiveTrigger, notesChanged, settingsFrom, snooze } from './decide'
+import type { Settings } from './decide'
 
 const CLI_TIMEOUT_MS = 15000
 
+// The compaction waits until the turn has ended; the post-turn re-measure waits for the
+// measurement that follows a turn.
+const COMPACT_DELAY_MS = 1000
+const REMEASURE_DELAY_MS = 2000
+
+// A checkpoint that never saw its turn complete stops blocking the next one after this.
+const STALE_CHECKPOINT_MS = 30 * 60 * 1000
+
 const transcriptPath = { plugin: 'superheroes', key: 'transcriptPath' } as const
+const isInteractive = { plugin: 'superheroes', key: 'isInteractive' } as const
+const isTurnActive = { plugin: 'superheroes', key: 'isTurnActive' } as const
+const checkpoint = { plugin: 'superheroes', key: 'checkpoint' } as const
+const snoozeUntilTokens = { plugin: 'superheroes', key: 'snoozeUntilTokens' } as const
+const band = { plugin: 'superheroes', key: 'band' } as const
+
+// True while a checkpoint is being started: two measurements must not both start one.
+let isStarting = false
 
 const note = ($: EngineInterface, text: string): void => {
   try {
@@ -56,8 +76,196 @@ const vocabulary = async ($: EngineInterface): Promise<CliVocabulary> =>
 const text = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null
 
-export const register: Register = on => {
+// The session's checkpoint notes as they stand, or null: a missing file, an unresolvable
+// path and a failed read all read as no notes.
+async function readNotes($: EngineInterface): Promise<string | null> {
+  try {
+    const cli = await vocabulary($)
+    const res = await directive($, pathArgv(cli, $.plugin.root, await $.session.id()))
+    const path = text(res.path)
+
+    return path === null ? null : await $.fs.read(path)
+  } catch {
+    return null
+  }
+}
+
+// The checkpoint now running, or null (none, or one so old its turn is long lost).
+async function runningCheckpoint($: EngineInterface) {
+  const { value } = await $.state.get(checkpoint)
+
+  return value && (await $.clock.now()) - value.startedAt < STALE_CHECKPOINT_MS ? value : null
+}
+
+// A checkpoint that could not start or finish: clear it, tell the owner, block nothing.
+async function abandonCheckpoint($: EngineInterface, error: unknown): Promise<void> {
+  note($, `checkpoint: ${String(error)}`)
+  try {
+    await $.state.set(checkpoint, null)
+    $.ui.toast('Auto-checkpoint failed')
+  } catch (cleanup) {
+    note($, `checkpoint cleanup: ${String(cleanup)}`)
+  }
+}
+
+// Runs /superheroes:checkpoint (automatic, or the band's Now). Never starts a second one.
+async function startCheckpoint($: EngineInterface): Promise<void> {
+  if (isStarting) {
+    return
+  }
+  isStarting = true
+
+  try {
+    if ((await runningCheckpoint($)) !== null) {
+      return
+    }
+
+    const notesBefore = await readNotes($)
+
+    await $.state.set(checkpoint, { startedAt: await $.clock.now(), notesBefore })
+    await $.state.set(band, false)
+    // not awaited: the call settles with the checkpoint turn, which must not hold a hook
+    $.command.run({ command: 'superheroes:checkpoint', args: 'auto' }).catch(error =>
+      abandonCheckpoint($, error),
+    )
+  } catch (error) {
+    await abandonCheckpoint($, error)
+  } finally {
+    isStarting = false
+  }
+}
+
+// Reads the fill, decides, and draws the band from state; starts a checkpoint on `fire`.
+// A failed usage read changes nothing.
+async function evaluate($: EngineInterface, settings: Settings): Promise<void> {
+  const { context } = await $.session.usage({ breakdown: 'summary' })
+
+  if (context.tokens === undefined) {
+    return
+  }
+
+  const trigger = effectiveTrigger(
+    settings,
+    context.breakdown?.autoCompactThreshold,
+    context.breakdown?.isAutoCompactEnabled ?? false,
+  )
+  const snoozed = (await $.state.get(snoozeUntilTokens)).value
+  const decision = decide({
+    tokens: context.tokens,
+    trigger,
+    mode: settings.mode,
+    isIdle: (await $.state.get(isTurnActive)).value !== true,
+    isInteractive: (await $.state.get(isInteractive)).value === true,
+    isRunning: (await runningCheckpoint($)) !== null,
+    snoozeUntilTokens: typeof snoozed === 'number' ? snoozed : null,
+  })
+
+  await $.state.set(band, decision.showBand)
+  if (decision.fire) {
+    await startCheckpoint($)
+  }
+}
+
+// The compaction input with the session's directive and notes as its instructions (the
+// owner's own text rides along inside them). Fails open: on any error the input comes
+// back as it was. The engine does not run the mod's own `session.compact` hook for the
+// compaction the mod starts, so that one calls this itself.
+async function steer<T extends { instructions?: string }>($: EngineInterface, e: T): Promise<T> {
+  let steered = e
+
+  try {
+    const sessionId = await $.session.id()
+    const { value: known } = await $.state.get(transcriptPath)
+    const transcript = text(known)
+    const owner = e.instructions?.trim() ? e.instructions : null
+
+    const cli = await vocabulary($)
+    const res = await directive($, instructionsArgv(cli, $.plugin.root, sessionId, transcript, owner))
+    const instructions = text(res.instructions)
+    const markerPath = text(res.markerPath)
+
+    if (instructions === null || markerPath === null) {
+      throw new Error('instructions answer lacks instructions or markerPath')
+    }
+
+    // Keep the instructions whatever the marker's acknowledgement does: a mark
+    // that published the marker and then died before answering would leave
+    // PreCompact deferring to a delivery that never reached the summarizer.
+    steered = { ...e, instructions }
+
+    // The CLI publishes the marker atomically (temp file + rename): a failed
+    // write leaves no marker, so the PreCompact fallback steers as well.
+    await directive($, markArgv(cli, $.plugin.root, sessionId))
+  } catch (error) {
+    note($, `session.compact: ${String(error)}`)
+  }
+
+  return steered
+}
+
+// The fill is about to drop: a Snooze and the band belong to the old fill.
+async function forgetFill($: EngineInterface): Promise<void> {
+  try {
+    await $.state.set(snoozeUntilTokens, null)
+    await $.state.set(band, false)
+  } catch (error) {
+    note($, `session.compact state: ${String(error)}`)
+  }
+}
+
+// Compacts after the turn that ended the checkpoint; `$.session.compact` rejects while a
+// turn runs, so it waits, and a rejection is tried once more before the owner is told.
+function compactSoon($: EngineInterface, isRetry = false): void {
+  $.clock.after(COMPACT_DELAY_MS, async () => {
+    try {
+      await $.session.compact(await steer($, {}))
+      await forgetFill($)
+    } catch (error) {
+      if (!isRetry) {
+        compactSoon($, true)
+
+        return
+      }
+      note($, `compact: ${String(error)}`)
+      $.ui.toast('Auto-checkpoint saved the notes but could not compact')
+    }
+  })
+}
+
+// Ends the checkpoint the finished main-loop turn belonged to: compacts once the notes
+// file changed, otherwise says why not. True when there was a checkpoint to end.
+async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promise<boolean> {
+  const { value } = await $.state.get(checkpoint)
+
+  if (!value) {
+    return false
+  }
+
+  const notesAfter = await readNotes($)
+
+  await $.state.set(checkpoint, null)
+  if (notesChanged(value.notesBefore, notesAfter)) {
+    compactSoon($)
+    $.ui.toast('Checkpointed and compacted')
+  } else {
+    $.ui.toast(
+      `Auto-checkpoint skipped: ${saveFailed ? 'the notes could not be saved' : 'the notes file did not change'}`,
+    )
+  }
+
+  return true
+}
+
+export const register: Register = (on, options) => {
+  const settings = settingsFrom(options)
+
   on('session.start', async ($, e, next) => {
+    try {
+      await $.state.set(isInteractive, e.isInteractive)
+    } catch (error) {
+      note($, `session.start state: ${String(error)}`)
+    }
+
     try {
       // The one definition of the mod-presence signal: the mod exports this variable
       // to the session's Bash children with the session's own id as its value. The
@@ -83,42 +291,75 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.compact', async ($, e, next) => {
-    let steered = e
-
     // A subagent's own compaction is not the session's: leave it untouched.
-    if (!e.agentId) {
-      try {
-        const sessionId = await $.session.id()
-        const { value: known } = await $.state.get(transcriptPath)
-        const transcript = text(known)
-        const owner = e.instructions?.trim() ? e.instructions : null
-
-        const cli = await vocabulary($)
-        const res = await directive(
-          $,
-          instructionsArgv(cli, $.plugin.root, sessionId, transcript, owner),
-        )
-        const instructions = text(res.instructions)
-        const markerPath = text(res.markerPath)
-
-        if (instructions === null || markerPath === null) {
-          throw new Error('instructions answer lacks instructions or markerPath')
-        }
-
-        // Keep the instructions whatever the marker's acknowledgement does: a mark
-        // that published the marker and then died before answering would leave
-        // PreCompact deferring to a delivery that never reached the summarizer.
-        steered = { ...e, instructions }
-
-        // The CLI publishes the marker atomically (temp file + rename): a failed
-        // write leaves no marker, so the PreCompact fallback steers as well.
-        await directive($, markArgv(cli, $.plugin.root, sessionId))
-      } catch (error) {
-        note($, `session.compact: ${String(error)}`)
-      }
+    if (e.agentId) {
+      return next(e)
     }
 
+    const steered = await steer($, e)
+
+    await forgetFill($)
+
     return next(steered)
+  }).catch(($, e, next) => next(e))
+
+  on('session.measure', async ($, e, next) => {
+    try {
+      await evaluate($, settings)
+    } catch (error) {
+      note($, `session.measure: ${String(error)}`)
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    try {
+      await $.state.set(isTurnActive, true)
+    } catch (error) {
+      note($, `turn.start: ${String(error)}`)
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    let drawn: RenderElement | null = null
+
+    try {
+      if (!e.props.hasSurvey && (await $.state.get(band)).value === true) {
+        const { Box, Button, Text } = $.ui.resolve(e)
+        const headsUp =
+          settings.mode === 'click-only'
+            ? 'Context is near the checkpoint threshold'
+            : 'Auto-checkpoint soon'
+
+        drawn = Box({
+          children: [
+            Text({ dimColor: true, children: `${headsUp} ` }),
+            Button({ key: 'now', label: 'Now', onPress: () => startCheckpoint($) }),
+            Button({
+              key: 'snooze',
+              label: 'Snooze',
+              onPress: async () => {
+                try {
+                  const tokens = (await $.session.usage()).context.tokens ?? 0
+
+                  await $.state.set(snoozeUntilTokens, snooze(tokens))
+                  await $.state.set(band, false)
+                } catch (error) {
+                  note($, `snooze: ${String(error)}`)
+                }
+              },
+            }),
+          ],
+        })
+      }
+    } catch (error) {
+      note($, `ui.render: ${String(error)}`)
+    }
+
+    return drawn ?? next(e)
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
@@ -129,6 +370,12 @@ export const register: Register = on => {
     let warning: string | null = null
 
     if (!e.agentId) {
+      try {
+        await $.state.set(isTurnActive, false)
+      } catch (error) {
+        note($, `turn.complete state: ${String(error)}`)
+      }
+
       try {
         const block = extractCheckpointBlock(e.answer)
 
@@ -151,6 +398,18 @@ export const register: Register = on => {
         }
       } catch (error) {
         note($, `turn.complete: ${String(error)}`)
+      }
+
+      try {
+        // The measurement that follows a turn can come before its idle flag is cleared:
+        // measure again once the turn has settled (not after a checkpoint, which compacts).
+        if (!(await finishCheckpoint($, warning !== null))) {
+          $.clock.after(REMEASURE_DELAY_MS, () => {
+            evaluate($, settings).catch(error => note($, `remeasure: ${String(error)}`))
+          })
+        }
+      } catch (error) {
+        await abandonCheckpoint($, error)
       }
     }
 
