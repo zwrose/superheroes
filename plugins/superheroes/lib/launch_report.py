@@ -210,10 +210,15 @@ def _read_still(path):
 
 def _setting_read_off(cwd, root):
     """True only when the cloud-builds setting was read cleanly and is off. The readiness reader
-    gives an unreadable setting as off, so a setting-directed reminder is not dropped on its word."""
+    gives an unreadable setting as off, so a setting-directed reminder is not dropped on its word.
+    The config reader also gives a profile it could not read or parse as the defaults, so only an
+    absent profile or one that read back whole counts as read."""
     try:
+        import core_md
         import project_config
 
+        if core_md.read(cwd, root) is None and not core_md.gate_config_profile_is_absent(cwd, root):
+            return False
         got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
         return got.get("effective") is False and got.get("malformed") is not True
     except Exception:

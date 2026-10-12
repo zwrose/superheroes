@@ -487,6 +487,19 @@ def test_R_still_leg_a_an_unreadable_setting_does_not_clear_it(tmp_path, monkeyp
     assert os.path.exists(_still_path(repo, store))
 
 
+@pytest.mark.parametrize("damage", ["corrupt", "directory"])
+def test_R_still_leg_a_a_profile_the_reader_could_not_read_does_not_clear_it(tmp_path, damage):
+    repo, store = _still_with(tmp_path, _call(reason="no-setup", by="setting"))
+    path = CM.core_path(repo, store)
+    if damage == "corrupt":
+        _put(path, "not a profile\n")
+    else:
+        os.makedirs(path)
+    assert PC.get_item(repo, PC.CLOUD_BUILDS_SLUG, root=store)["effective"] is False
+    assert _line(repo, store, ready=False, reason="no-setup", setting=False) is not None
+    assert os.path.exists(_still_path(repo, store))
+
+
 @pytest.mark.parametrize("code,condition", [("no-setup", "setup"), ("pass-lapsed", "passLive"),
                                             ("calibration", "calibration")])
 def test_R_still_leg_b_the_matching_condition_holding_again_clears_it(tmp_path, code, condition):
