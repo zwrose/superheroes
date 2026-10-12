@@ -34,7 +34,7 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
   The record carries `laneBasis`, the lane rule run over the PR's changed files (`rubric/review-discipline.md` § The lane floor says when its floor is full).
   A lane below that floor makes the record read not reviewed.
 - `finalCommit`: the commit the review ended on. `ci`: CI on it, as you saw it.
-- `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool),
+- `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool; accepted and ignored, the record computes it),
   `ownerWord` (`{words, where}`), `commit` (the commit that reviewer reviewed, when it is not the final commit; a row that names none is judged against the final commit). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
   reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
@@ -123,7 +123,14 @@ reviewer ran; no raw output file is unread; and the final commit was read from t
 At least one planned reviewer's run must cover the final commit. A reviewer listed for an earlier
 commit counts as run only for that commit, and the record shows which commit it covered; a head that
 moves after the last review round still reads not reviewed. A session whose final commit differs from the PR's final commit also reads not reviewed, because its outcomes belong to the other commit.
-Any finding short of that is listed in what is left. `makers`, `notIndependent` and `ownerWord` are shown as given, never checked, and never change "reviewed".
+Any finding short of that is listed in what is left.
+
+Reading and independence are computed by the record, never taken from the session's account:
+
+- **Reading.** When the lane is not `full` (including an unknown lane), a reviewer counts as run only when the engine's own record of its run reads `observation.read == "engaged"`. A reviewer the session only reports, or whose engine record shows no reading or an unknown one, does not count; its row says so, and each row on such a lane shows `reading` as `engaged` or `not-shown`. The `full` lane is unchanged.
+- **Which reviewer.** A reviewer credited from an engine record must be the reviewer that record names: the record's vendor and model must match the row, and the row's family is read from the record. A record that names no vendor or model, or a different one, does not count.
+- **Independence.** A reviewer from a maker's family counts only with the owner's word for the change (`ownerWord`, with non-empty `words` and `where`), and is then shown "not independent". A reviewer whose family cannot be read does not count while makers are named. A `notIndependent` value in the account is ignored. No named maker means not reviewed, because independence cannot be shown.
+- **`reading-next`.** `review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]` prints one JSON object `{"next": ..., "reason": ...}` for a review whose reading is not shown. It makes no model call and writes nothing. Its four answers: `accept` when any run's record shows a reading; `rerun` when exactly one run was made and it shows none; `move-up` when two runs show none and the seat map allows it; `park` otherwise, including when no run is given. Move-up needs all of these: the seat map has a roster, a seat entry for every roster seat, every seat filled and naming a family, no seat in a maker's family, and at least one maker family given. A missing, unreadable or non-JSON seat map is `park`. More than two runs are read as two.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
 - With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed.
