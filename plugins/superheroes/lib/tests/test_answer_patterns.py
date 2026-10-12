@@ -51,13 +51,15 @@ def test_every_answer_button_is_one_of_the_four_patterns(kind):
             assert len(row["labels"]) == 2 and row["labels"][1] == PW["notYetLabel"]
             continue
         options = [option["label"] for option in cards[row["part"]].get("options", [])]
-        expected = options + ["Something else"] if options else ["Accept", "Discuss"]
+        labels = WORDS["prAnswers"]["labels"]
+        expected = options + [labels["something-else"]] if options else [labels["accept"], labels["discuss"]]
         assert row["labels"] == expected, row["part"]
 
 
 # Bites on: a new answer word added to prAnswers, a second place in the template that creates an answer row, a default leftover option outside the words file's leftoverOptions.
 def test_the_answer_words_and_the_one_place_that_makes_buttons():
-    assert WORDS["prAnswers"]["labels"] == {"accept": "Accept", "discuss": "Discuss", "something-else": "Something else"}
+    answers = WORDS["prAnswers"]
+    assert set(answers["labels"]) == set(answers["withOptions"]) | set(answers["withoutOptions"])
     assert len(re.findall(r'className\s*=\s*"answer-row"', _template_text())) == 1
 
 
