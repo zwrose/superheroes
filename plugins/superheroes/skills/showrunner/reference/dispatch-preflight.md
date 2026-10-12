@@ -58,7 +58,7 @@ Before a launch, judge from the build's order whether it needs anything only the
 ### How each check reads for a cloud launch
 
 - `engine-auth`: unchanged. It probes this machine's engines. Whether the cloud can run the reviewer is the launcher's readiness check, not this one.
-- `base-state`: unchanged. A cloud launch also needs its start commit to be the premise's base and to be on a remote-tracking branch. The launcher's refusals `launch-cloud-head-not-base` and `launch-cloud-head-not-on-remote` are launch refusals, a no-go you clear like any other launcher refusal. They are not a place decision, and the place call's never-held, never-dropped rule covers only where a launched build runs.
+- `base-state`: unchanged. A cloud launch also needs the premise's `baseCommit` to be available from the remote: the launcher checks that fresh against the remote itself, not against this checkout's start commit or its tracking refs. The launcher's refusals `launch-cloud-base-not-on-remote` and `launch-cloud-base-remote-unchecked` are launch refusals, a no-go you clear like any other launcher refusal. They are not a place decision, and the place call's never-held, never-dropped rule covers only where a launched build runs.
 - `disjoint-surfaces`: unchanged. A cloud lane takes no slot.
 - `workspace-isolation`: a cloud launch makes no worktree on this machine. The cloud session works in its own copy of the repository, so the check passes with that reason.
 - `standing-rulings`: unchanged. The launcher establishes them.

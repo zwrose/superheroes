@@ -170,11 +170,14 @@ def record_still(cwd, place_calls, *, root=None, today=None):
             call = _recheck_first(tied)
             # a launch the owner pointed at the cloud by word stays unresolved when the setting is off
             by = "word" if any(c.get("by") == "word" for c in tied) else call.get("by")
+            # a builder-reported version on any tied call keeps the later-day clearing, whichever call came first
+            reported = next((c["reported"] for c in tied if isinstance(c.get("reported"), dict)
+                             and c["reported"].get("pluginVersion") is not None), call.get("reported"))
             state = {
                 "schema": _STILL_SCHEMA, "reason": call["reason"], "by": by,
                 "cloudVersion": call.get("cloudVersion"),
                 "advisorVersion": call.get("advisorVersion"),
-                "reported": call.get("reported"),
+                "reported": reported,
                 "observedOn": _today(today).isoformat(),
             }
             if call.get("failedCheck") is not None:

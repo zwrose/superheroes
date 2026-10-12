@@ -432,6 +432,25 @@ def test_a_word_directed_fallback_beside_a_setting_directed_one_stays_word_direc
     assert os.path.exists(_still_path(repo, store))
 
 
+@pytest.mark.parametrize("reported_first", [True, False])
+def test_a_reported_version_beside_a_setup_record_fallback_still_needs_a_later_check(
+        tmp_path, reported_first):
+    repo, store = _gitdir(tmp_path)
+    plain = _call(reason="version", cloud="0.41.0", advisor="0.42.0")
+    reported = _call(reason="version", cloud="0.41.0", advisor="0.42.0",
+                     reported={"pluginVersion": "0.41.0"})
+    LR.record_still(repo, [reported, plain] if reported_first else [plain, reported],
+                    root=store, today=TODAY)
+    assert _stored(repo, store)["reported"] == {"pluginVersion": "0.41.0"}
+    same_day = _now(ready=True, checked=TODAY.isoformat())
+    assert LR.still_line(repo, root=store, today=TODAY,
+                         readiness_fn=lambda *a, **k: dict(same_day)) is not None
+    assert os.path.exists(_still_path(repo, store))
+    later = _now(ready=True, checked="2026-10-12")
+    assert LR.still_line(repo, root=store, today=TODAY,
+                         readiness_fn=lambda *a, **k: dict(later)) is None
+
+
 def test_record_still_clears_when_a_build_went_to_the_cloud(tmp_path):
     repo, store = _gitdir(tmp_path)
     LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
