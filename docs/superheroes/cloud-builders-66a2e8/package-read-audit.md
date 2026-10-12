@@ -1406,3 +1406,71 @@ No State line calls any of them open. Result: verified.
  "round": 1
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv9",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C7p",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "R11 gives C7p a section of orchestration.md for the lapsed-pass parked notice and send-back; epic quote equal; C7p.md and #1787 match; round 2 clean. Disclosed: round 1's seat run never folded a terminal record (its supervisor stalled after the engine wrote native-result-1.json); round 1's finding was read from that native result, and the control probe engaged",
+   "finding": "code-001",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv9",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C7",
+   "result": "pass"
+  },
+  {
+   "child": "C7r",
+   "result": "pass"
+  },
+  {
+   "child": "C7p",
+   "result": "pass"
+  },
+  {
+   "child": "C7b",
+   "result": "pass"
+  },
+  {
+   "child": "C8",
+   "result": "pass"
+  }
+ ]
+}
+```
