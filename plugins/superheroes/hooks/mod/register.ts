@@ -53,7 +53,9 @@ const text = (value: unknown): string | null =>
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     try {
-      await $.env.set('SUPERHEROES_COMPACT_MOD', '1')
+      // `$.env.set` takes a literal name; the test pins it to COMPACT_MOD_ENV
+      // (checkpoint-block.ts), the one definition of the signal's name and meaning.
+      await $.env.set('SUPERHEROES_COMPACT_MOD', await $.session.id())
     } catch (error) {
       note($, `session.start: ${String(error)}`)
     }
@@ -97,10 +99,14 @@ export const register: Register = on => {
           throw new Error('instructions answer lacks instructions or markerPath')
         }
 
-        // The CLI publishes the marker atomically (temp file + rename): a failed
-        // write leaves no marker, so the PreCompact fallback still steers.
-        await directive($, 'mark', ['--session-id', await $.session.id()])
+        // Keep the instructions whatever the marker's acknowledgement does: a mark
+        // that published the marker and then died before answering would leave
+        // PreCompact deferring to a delivery that never reached the summarizer.
         steered = { ...e, instructions }
+
+        // The CLI publishes the marker atomically (temp file + rename): a failed
+        // write leaves no marker, so the PreCompact fallback steers as well.
+        await directive($, 'mark', ['--session-id', await $.session.id()])
       } catch (error) {
         note($, `session.compact: ${String(error)}`)
       }

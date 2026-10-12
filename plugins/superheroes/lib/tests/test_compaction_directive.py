@@ -485,3 +485,26 @@ def test_cli_mark_failed_write_leaves_no_marker(tmp_path, monkeypatch):
 def test_cli_mark_refuses_an_invalid_session_id(tmp_path):
     code, out, _ = _run(tmp_path, "mark", "--session-id", "../x")
     assert code == 1 and out == {"ok": False, "reason": "session-id-invalid"}
+
+
+def test_mod_event_argv_through_the_real_cli_reaches_the_summarizer_text(tmp_path):
+    # The argv the mod builds for `session.compact` (register.ts: python3 -B <root>/lib/compaction_directive.py
+    # instructions --session-id <id> --transcript <path> --user-instructions <owner text>, then `mark`),
+    # driven through the real CLI under an isolated config dir. The mod tests stub this boundary; this
+    # asserts what the summarizer would receive: the charter directive, the saved notes, the owner's text.
+    with open(_MOD_SOURCE, encoding="utf-8") as fh:
+        source = fh.read()
+    for token in ("'--session-id'", "'--transcript'", "'--user-instructions'", "'instructions'", "'mark'", "'save'"):
+        assert token in source
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [_charter_record("workhorse")])
+    code, _ = _run_stdin(tmp_path, "## Checkpoint notes\nWO4 in flight\n", "save", "--session-id", SID)
+    assert code == 0
+    code, out, _ = _run(tmp_path, "instructions", "--session-id", SID, "--transcript", str(transcript),
+                        "--user-instructions", "keep the PR number")
+    assert code == 0 and out["mode"] == "workhorse"
+    assert cd.DIRECTIVES["workhorse"].strip() in out["instructions"]
+    assert "WO4 in flight" in out["instructions"]
+    assert "keep the PR number" in out["instructions"]
+    code, marked, _ = _run(tmp_path, "mark", "--session-id", SID)
+    assert code == 0 and marked["path"] == out["markerPath"]

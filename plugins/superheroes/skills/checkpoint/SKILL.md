@@ -136,9 +136,13 @@ Then check how the notes get saved:
 printenv SUPERHEROES_COMPACT_MOD
 ```
 
-- **Set** (prints `1`): the mod saves the block to the notes file when the reply ends. Do
-  **not** write the file yourself.
-- **Unset** (prints nothing): no mod on this host. Write the **same block body** (without the
+The variable's name and meaning are defined by `COMPACT_MOD_ENV` in `hooks/mod/checkpoint-block.ts`
+(change it there first): the mod sets it to the id of the session it runs in.
+
+- **Prints this session's id** (the one in the step 2 notes file name): the mod saves the block to the notes
+  file when the reply ends. Do **not** write the file yourself.
+- **Anything else** (nothing, or a different id inherited from another session): no mod in this
+  session. Write the **same block body** (without the
   fences) to the notes file from step 2 with the host's file-write action, creating its
   directory if needed (skip this when step 2 found no notes path).
 
@@ -223,7 +227,7 @@ skill triggers compaction programmatically.
 | Mistake | Fix |
 | --- | --- |
 | Refusing because the session has no charter | Step 1 returns `generic` for a session with no charter; checkpoint covers every session. |
-| Writing the notes file when `SUPERHEROES_COMPACT_MOD` is set | The mod saves the block from the reply; writing it too races the mod. Write the file only when the variable is unset. |
+| Writing the notes file when `SUPERHEROES_COMPACT_MOD` holds this session's id | The mod saves the block from the reply; writing it too races the mod. Write the file whenever the variable is unset or holds another id. |
 | Putting anything after the `superheroes-checkpoint` block, or a second fence inside it | The block must be the last thing in the reply with no inner fence; otherwise the notes are not saved. |
 | Using another info string, or fewer than three backticks | The fence's info string is exactly `superheroes-checkpoint`. |
 | Skipping the ledger resume point in a Showrunner session because the notes file was saved | The incoming advisor reads the ledger resume point, not the notes file; freshen both (step 3). |

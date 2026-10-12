@@ -2,7 +2,7 @@ import type { On, SessionCompactInput } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { CHECKPOINT_INFO } from './checkpoint-block'
+import { CHECKPOINT_INFO, COMPACT_MOD_ENV } from './checkpoint-block'
 
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
@@ -247,7 +247,7 @@ for (const [name, cli, options] of failures) {
   })
 }
 
-test('session.compact fails open when the marker cannot be published: no marker, original instructions', async ($, on) => {
+test('session.compact keeps the retrieved instructions when the marker is not acknowledged', async ($, on) => {
   const r = rig(on, argv =>
     argv[3] === 'mark' ? { exitCode: 1, stdout: '{"ok": false, "reason": "x"}' } : steer,
   )
@@ -255,9 +255,10 @@ test('session.compact fails open when the marker cannot be published: no marker,
   const res = await compact($, { instructions: 'keep this' })
 
   expect(res).toEqual({ messages: SUMMARY })
-  expect(nth(r.seen, 0).instructions).toBe('keep this')
+  // a mark that published and then died unacknowledged must not drop the steering
+  expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
   expect(r.order).toEqual(['cli:instructions', 'cli:mark', 'compact'])
-  // the mod never writes a marker file itself, so a failed publish leaves none behind
+  // the mod never writes a marker file itself
   expect(r.writes).toHaveLength(0)
 })
 
@@ -270,13 +271,13 @@ test('session.compact fails open with no owner text: instructions stay absent', 
   expect(r.writes).toHaveLength(0)
 })
 
-test('session.start sets SUPERHEROES_COMPACT_MOD for Bash children', async ($, on) => {
+test('session.start sets the mod-presence variable to this session id for Bash children', async ($, on) => {
   const r = rig(on, () => steer)
 
   const res = await $.session.start({ cwd: '/w', surface: null, isInteractive: false })
 
   expect(res).toEqual({ cwd: '/w' })
-  expect(r.envs).toEqual([['SUPERHEROES_COMPACT_MOD', '1']])
+  expect(r.envs).toEqual([[COMPACT_MOD_ENV, SESSION]])
 })
 
 test('session.start still completes when the env write throws', async ($, on) => {
