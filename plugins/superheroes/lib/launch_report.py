@@ -3,9 +3,10 @@
 later messages.
 
 Stdlib plus plugin imports only. Every reason either one prints is drawn from the one `REASONS`
-table in `launch_place`. None of `render_report`, `record_still`, `still_check`, `still_line` and `clear_still`
-ever raises. The stored reason is the first not-ready condition in the cloud check's order, and it
-is forgotten once a build goes to the cloud or the condition behind it is fixed."""
+table in `launch_place`. None of `render_report`, `record_still`, `still_check`, `still_line`,
+`clear_still`, `read_still_cursor` and `write_still_cursor` ever raises. The stored reason is the
+first not-ready condition in the cloud check's order, and it is forgotten once a build goes to the
+cloud or the condition behind it is fixed."""
 import datetime
 import json
 import os
@@ -22,6 +23,7 @@ import mode_registry  # noqa: E402
 from launch_place import NOT_READY_CODES, REASONS, _fill, _words, fix_text, reason_text  # noqa: E402
 
 _STILL_SCHEMA = "cloud-still/1"
+_CURSOR_SCHEMA = "cloud-still-cursor/1"
 _STILL_HEADER = "Still on your machine"
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _UNREADABLE = object()
@@ -116,6 +118,10 @@ def _still_path(cwd, root):
     return os.path.join(mode_registry.project_store_dir(cwd, root), "state", "cloud-still.json")
 
 
+def _cursor_path(cwd, root):
+    return os.path.join(mode_registry.project_store_dir(cwd, root), "state", "cloud-still-cursor.json")
+
+
 def _today(given):
     if isinstance(given, datetime.datetime):
         return given.date()
@@ -134,7 +140,7 @@ def _remove(path):
     return {"action": "cleared"}
 
 
-def _write_still(path, state):
+def _write_atomic(path, state):
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".cloud-still-", dir=directory, text=True)
@@ -153,9 +159,42 @@ def _write_still(path, state):
                 pass
 
 
-def record_still(cwd, place_calls, *, root=None, today=None):
+def _write_still(path, state):
+    _write_atomic(path, state)
+
+
+def read_still_cursor(cwd, *, root=None):
+    """The ledger position of the last launch applied to the reminder: -1 when none has been, None
+    when the cursor file cannot be read or is not in the shape written. Never raises."""
+    try:
+        with open(_cursor_path(cwd, root), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return -1
+    except Exception:
+        return None
+    if not isinstance(data, dict) or set(data) != {"schema", "applied"}:
+        return None
+    applied = data["applied"]
+    if data["schema"] != _CURSOR_SCHEMA or isinstance(applied, bool) or not isinstance(applied, int) \
+            or applied < -1:
+        return None
+    return applied
+
+
+def write_still_cursor(cwd, applied, *, root=None):
+    """Record the ledger position of the last launch applied; True when it was written. Never raises."""
+    try:
+        _write_atomic(_cursor_path(cwd, root), {"schema": _CURSOR_SCHEMA, "applied": applied})
+        return True
+    except Exception:
+        return False
+
+
+def record_still(cwd, place_calls, *, root=None, today=None, keep_higher_stored=False):
     """After a launch: keep the one reason the cloud was not used, or forget it once a build went
-    to the cloud. Never raises."""
+    to the cloud. With keep_higher_stored, a stored reminder that ranks above the new reason stays
+    (unchanged), and one that cannot be read is neither replaced nor removed (refused). Never raises."""
     try:
         path = _still_path(cwd, root)
         if any(c.get("place") == "cloud" for c in place_calls):
@@ -168,6 +207,13 @@ def record_still(cwd, place_calls, *, root=None, today=None):
             best = min(rank.index(c["reason"]) for c in stuck)
             tied = [c for c in stuck if rank.index(c["reason"]) == best]
             call = _recheck_first(tied)
+            if keep_higher_stored:
+                stored = _read_still(path)
+                if stored is _UNREADABLE:
+                    return {"action": "refused", "reason": STILL_UNREADABLE}
+                # axis: a new fallback never displaces a higher-ranked unresolved reminder — see bite-proof record wo_a_launch_report
+                if stored and rank.index(stored["reason"]) < best:
+                    return {"action": "unchanged", "reason": None}
             # a launch the owner pointed at the cloud by word stays unresolved when the setting is off
             by = "word" if any(c.get("by") == "word" for c in tied) else call.get("by")
             # a builder-reported version on any tied call keeps the later-day clearing, whichever call came first

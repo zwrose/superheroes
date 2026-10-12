@@ -398,7 +398,7 @@ def test_replaying_an_older_batch_report_does_not_undo_a_newer_batchs_reminder(w
     _start(repo, "b")
     newer = launcher.launch_report_for_batch(repo, "b-newer", title_fn=_titles)
     assert newer["still"] == {"action": "written", "reason": "unreachable"}
-    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
     assert _stored(repo, store)["reason"] == "unreachable"
 
 
@@ -442,7 +442,7 @@ def test_replaying_the_same_batch_report_keeps_the_day_it_first_observed(world, 
     assert first["still"] == {"action": "written", "reason": "no-setup"}
     observed = _stored(repo, store)["observedOn"]
     monkeypatch.setattr(LR, "_today", lambda given: given or LR.datetime.date(2001, 1, 1))
-    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
     assert _stored(repo, store)["observedOn"] == observed
 
 
@@ -458,8 +458,230 @@ def test_an_unconfirmed_cloud_session_is_not_reported_and_leaves_the_still_state
     got = _report(repo)
     assert got["lanes"] == 1
     assert "#22" not in got["report"] and "In the cloud" not in got["report"]
-    assert got["still"] == {"action": "written", "reason": "no-setup"}
+    assert got["still"] == {"action": "unchanged", "reason": None}
     assert _stored(repo, store)["reason"] == "no-setup"
+
+
+# ---------------------------------------------------------------- each launch is applied once, through a cursor
+
+
+def _still_bytes(repo):
+    try:
+        with open(LR._still_path(repo, None), "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def _cursor_bytes(repo):
+    try:
+        with open(LR._cursor_path(repo, None), "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def _started_at(repo, launch_id):
+    return launcher._started_indexes(ll.read(repo)["records"])[launch_id]
+
+
+def _clear_as_fixed(repo):
+    """What `still` does once the condition behind the stored reason is fixed."""
+    fixed = {"ready": True, "setting": True, "checkedAt": None,
+             "conditions": {name: True for name in LR.cloud_ready.CONDITION_ORDER}}
+    assert LR.still_check(repo, readiness_fn=lambda *a, **k: fixed) == {"line": None, "refused": None}
+    assert _still_bytes(repo) is None
+
+
+def test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again(world):
+    repo, store = world
+    assert _declare(repo, "b-other", 4)["ok"]
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-other")
+    _start(repo, "b")
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    _clear_as_fixed(repo)
+    for batch in (BATCH, "b-other", BATCH):
+        got = launcher.launch_report_for_batch(repo, batch, title_fn=_titles)
+        assert got["still"] == {"action": "unchanged", "reason": None}
+        assert _stored(repo, store) is None
+
+
+def test_T2_a_newer_launchs_fallback_is_written_and_the_cleared_reason_does_not_return(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    _clear_as_fixed(repo)
+    _launch(repo, "b", 22, "local", _call(reason="version"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "version"}
+    assert _stored(repo, store)["reason"] == "version"
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _stored(repo, store)["reason"] == "version"
+
+
+def test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first(world, monkeypatch):
+    repo, store = world
+    _launch(repo, "a", 11, "cloud")
+    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
+    removed, written = [], []
+    real_remove, real_write = LR._remove, LR._write_still
+
+    def count_remove(path):
+        removed.append(path)
+        return real_remove(path)
+
+    def count_write(path, state):
+        written.append(path)
+        return real_write(path, state)
+
+    monkeypatch.setattr(LR, "_remove", count_remove)
+    monkeypatch.setattr(LR, "_write_still", count_write)
+    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
+    assert removed == []
+    assert len(written) == 1
+    assert _stored(repo, store)["reason"] == "unreachable"
+
+
+def test_T3b_a_cloud_launch_after_the_fallbacks_clears_once_and_writes_nothing(world, monkeypatch):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    _launch(repo, "b", 22, "cloud")
+    removed, written = [], []
+    real_remove = LR._remove
+
+    def count_remove(path):
+        removed.append(path)
+        return real_remove(path)
+
+    monkeypatch.setattr(LR, "_remove", count_remove)
+    monkeypatch.setattr(LR, "_write_still", lambda path, state: written.append(path))
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert len(removed) == 1
+    assert written == []
+
+
+def test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    before = _still_bytes(repo)
+    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _still_bytes(repo) == before
+    assert LR.read_still_cursor(repo) == _started_at(repo, "b")
+
+
+def test_T4b_a_new_higher_ranked_fallback_replaces_a_stored_lower_ranked_reminder(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
+    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    assert _stored(repo, store)["reason"] == "no-setup"
+
+
+@pytest.mark.parametrize("text", [
+    "not json", "[]", '{"schema": "cloud-still-cursor/1"}',
+    '{"schema": "cloud-still-cursor/1", "applied": "1"}',
+    '{"schema": "cloud-still-cursor/1", "applied": -5}',
+])
+def test_T5_an_unreadable_cursor_refuses_and_touches_neither_file_E3(world, text):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    assert _report(repo)["still"]["action"] == "written"
+    with open(LR._cursor_path(repo, None), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
+    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "refused", "reason": "still-cursor-unreadable"}
+    assert _still_bytes(repo) == still_before
+    assert _cursor_bytes(repo) == cursor_before
+
+
+def test_T5_a_cursor_that_cannot_be_read_refuses_and_leaves_the_reminder(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    assert _report(repo)["still"]["action"] == "written"
+    still_before = _still_bytes(repo)
+    os.remove(LR._cursor_path(repo, None))
+    os.mkdir(LR._cursor_path(repo, None))
+    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "refused", "reason": "still-cursor-unreadable"}
+    assert _still_bytes(repo) == still_before
+
+
+@pytest.mark.parametrize("beyond", [0, 1, 50])
+def test_T5_a_cursor_at_or_beyond_the_record_count_resets_and_applies_from_the_start_E4(world, beyond):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert LR.write_still_cursor(repo, len(ll.read(repo)["records"]) + beyond) is True
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    assert LR.read_still_cursor(repo) == _started_at(repo, "a")
+
+
+def test_T6_replaying_a_report_applies_nothing(world):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    _launch(repo, "b", 22, "cloud")
+    _launch(repo, "c", 33, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
+    for _ in range(2):
+        assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _still_bytes(repo) == still_before
+    assert _cursor_bytes(repo) == cursor_before
+
+
+def test_E1_E2_a_report_with_no_deciding_launch_after_the_cursor_changes_neither_file(world):
+    repo, store = world
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _cursor_bytes(repo) is None and _still_bytes(repo) is None
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+    assert _report(repo)["still"]["action"] == "written"
+    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
+    _launch(repo, "b", 22, "local", _call(reason=None, pointed=False))
+    _launch(repo, "c", 33, "local", _call(reason="local-word"))
+    assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+    assert _still_bytes(repo) == still_before
+    assert _cursor_bytes(repo) == cursor_before
+
+
+def test_E5_a_refused_reminder_write_does_not_advance_the_cursor(world, monkeypatch):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+
+    def boom(path, state):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(LR, "_write_still", boom)
+        assert _report(repo)["still"] == {"action": "refused", "reason": "write-failed"}
+    assert _cursor_bytes(repo) is None
+    assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+    assert LR.read_still_cursor(repo) == _started_at(repo, "a")
+
+
+def test_E6_an_unreadable_stored_reminder_is_neither_replaced_nor_removed_and_the_cursor_waits(
+        world, monkeypatch):
+    repo, store = world
+    _launch(repo, "a", 11, "local", _call(reason="unreachable"))
+    assert _report(repo)["still"]["action"] == "written"
+    path = LR._still_path(repo, None)
+    still_before, cursor_before = _still_bytes(repo), _cursor_bytes(repo)
+    _launch(repo, "b", 22, "local", _call(reason="no-setup"))
+    real_open = open
+
+    def deny(file, *args, **kwargs):
+        if str(file) == path:
+            raise PermissionError("not readable")
+        return real_open(file, *args, **kwargs)
+
+    with monkeypatch.context() as patched:
+        patched.setattr("builtins.open", deny)
+        got = _report(repo)
+    assert got["still"] == {"action": "refused", "reason": LR.STILL_UNREADABLE}
+    assert _still_bytes(repo) == still_before
+    assert _cursor_bytes(repo) == cursor_before
 
 
 # ---------------------------------------------------------------- the CLI

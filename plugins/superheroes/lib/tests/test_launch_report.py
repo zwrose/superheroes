@@ -761,3 +761,95 @@ def test_R_still_a_reported_fact_needs_the_reader_ready_as_well_as_a_later_check
     assert LR.still_line(repo, root=store, today=TODAY,
                          readiness_fn=lambda *a, **k: dict(ready)) is None
     assert not os.path.exists(_still_path(repo, store))
+
+
+# ---------------------------------------------------------------- the cursor, and keeping a higher reminder
+
+
+def _cursor_path(repo, store):
+    return LR._cursor_path(repo, store)
+
+
+def test_the_cursor_is_minus_one_until_written_and_reads_back_what_was_written(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    assert LR.read_still_cursor(repo, root=store) == -1
+    assert LR.write_still_cursor(repo, 7, root=store) is True
+    assert LR.read_still_cursor(repo, root=store) == 7
+    assert os.path.dirname(_cursor_path(repo, store)) == os.path.dirname(_still_path(repo, store))
+    assert os.path.basename(_cursor_path(repo, store)) == "cloud-still-cursor.json"
+    assert LR.write_still_cursor(repo, -1, root=store) is True
+    assert LR.read_still_cursor(repo, root=store) == -1
+
+
+@pytest.mark.parametrize("text", [
+    "not json", "", "[]", "null", "[" * 100000,
+    '{"schema": "cloud-still-cursor/1"}',
+    '{"applied": 3}',
+    '{"schema": "cloud-still-cursor/2", "applied": 3}',
+    '{"schema": "cloud-still-cursor/1", "applied": -2}',
+    '{"schema": "cloud-still-cursor/1", "applied": "3"}',
+    '{"schema": "cloud-still-cursor/1", "applied": 3.5}',
+    '{"schema": "cloud-still-cursor/1", "applied": true}',
+    '{"schema": "cloud-still-cursor/1", "applied": null}',
+    '{"schema": "cloud-still-cursor/1", "applied": 3, "extra": 1}',
+])
+def test_a_cursor_file_in_the_wrong_shape_reads_as_none(tmp_path, text):
+    repo, store = _gitdir(tmp_path)
+    _put(_cursor_path(repo, store), text)
+    assert LR.read_still_cursor(repo, root=store) is None
+
+
+def test_a_cursor_that_cannot_be_read_is_none_and_a_blocked_write_is_false(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    os.makedirs(_cursor_path(repo, store))
+    assert LR.read_still_cursor(repo, root=store) is None
+    other_repo, other_store = _gitdir(_sub(tmp_path, "other"))
+    _put(os.path.join(_store_dir(other_repo, other_store), "state"), "a file where the folder belongs")
+    assert LR.write_still_cursor(other_repo, 1, root=other_store) is False
+
+
+def test_keep_higher_stored_leaves_a_higher_ranked_reminder_and_replaces_an_equal_or_lower_one(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY)
+    before = open(_still_path(repo, store), "rb").read()
+    got = LR.record_still(repo, [_call(reason="unreachable")], root=store, today=TODAY,
+                          keep_higher_stored=True)
+    assert got == {"action": "unchanged", "reason": None}
+    assert open(_still_path(repo, store), "rb").read() == before
+    # without the keyword the lower-ranked reason still replaces it, as it always did
+    got = LR.record_still(repo, [_call(reason="unreachable")], root=store, today=TODAY)
+    assert got == {"action": "written", "reason": "unreachable"}
+    for new in ("unreachable", "no-setup"):
+        got = LR.record_still(repo, [_call(reason=new)], root=store, today=TODAY,
+                              keep_higher_stored=True)
+        assert got == {"action": "written", "reason": new}
+    assert _stored(repo, store)["reason"] == "no-setup"
+
+
+def test_keep_higher_stored_still_clears_on_a_cloud_build_and_writes_when_nothing_is_stored(tmp_path):
+    repo, store = _gitdir(tmp_path)
+    assert LR.record_still(repo, [_call(reason="unreachable")], root=store, today=TODAY,
+                           keep_higher_stored=True) == {"action": "written", "reason": "unreachable"}
+    assert LR.record_still(repo, [_call("cloud")], root=store, today=TODAY,
+                           keep_higher_stored=True) == {"action": "cleared", "reason": None}
+    assert not os.path.exists(_still_path(repo, store))
+
+
+def test_E6_keep_higher_stored_neither_replaces_nor_removes_an_unreadable_reminder(tmp_path, monkeypatch):
+    repo, store = _gitdir(tmp_path)
+    LR.record_still(repo, [_call(reason="unreachable")], root=store, today=TODAY)
+    path = _still_path(repo, store)
+    before = open(path, "rb").read()
+    real_open = open
+
+    def deny(file, *args, **kwargs):
+        if str(file) == path:
+            raise PermissionError("not readable")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", deny)
+    got = LR.record_still(repo, [_call(reason="no-setup")], root=store, today=TODAY,
+                          keep_higher_stored=True)
+    monkeypatch.undo()
+    assert got == {"action": "refused", "reason": LR.STILL_UNREADABLE}
+    assert open(path, "rb").read() == before

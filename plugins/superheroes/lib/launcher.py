@@ -3334,36 +3334,48 @@ def _started_indexes(records):
     }
 
 
-def _record_batch_still(repo_root, launches, reserved, started_at):
-    """Replay every confirmed, started launch in the ledger that decides the reminder, whichever
-    batch it belongs to, in the order they started: the last cloud launch clears everything before
-    it, and the deciding local fallbacks after it are recorded together, dated by the latest of
-    their start days. The reminder is the same whichever batch is reported."""
+def _record_batch_still(repo_root, launches, reserved, started_at, record_count):
+    """Apply each confirmed, started launch that decides the reminder once, in the order they
+    started, whichever batch it belongs to. A cursor holds the ledger position of the last launch
+    applied, so a report applies only the launches after it and replaying any report changes
+    nothing. A report writes once: the local fallbacks after the last new cloud launch are recorded
+    together, dated by the latest of their start days, and never displace a stored reminder that
+    ranks higher; a new cloud launch last clears once. A cursor that cannot be read refuses, and
+    one past the ledger's end (the ledger was cleared) starts over."""
+    applied = launch_report.read_still_cursor(repo_root, root=None)
+    if applied is None:
+        return {"action": "refused", "reason": "still-cursor-unreadable"}
+    if applied >= record_count:
+        applied = -1
     decided = []
     for launch_id, info in launches.items():
         if not info["started"] or info.get("cloudSessionUnconfirmed"):
             continue
+        position = started_at.get(launch_id, info["reservedIndex"])
+        if position <= applied:
+            continue
         call = _report_place_call(reserved.get(launch_id), info["place"])
         if _decides_still(call):
-            decided.append((started_at.get(launch_id, info["reservedIndex"]), call, info))
-    decided.sort(key=lambda entry: entry[0])
+            decided.append((position, call, info))
     if not decided:
-        return launch_report.record_still(repo_root, [], root=None)
+        return {"action": "unchanged", "reason": None}
+    decided.sort(key=lambda entry: entry[0])
     last_cloud = max(
         (pos for pos, (_idx, call, _info) in enumerate(decided) if call.get("place") == PLACE_CLOUD),
         default=None,
     )
-    result = {"action": "unchanged", "reason": None}
-    if last_cloud is not None:
-        _idx, cloud_call, cloud_info = decided[last_cloud]
-        result = launch_report.record_still(
-            repo_root, [cloud_call], root=None, today=_launch_day(cloud_info))
     later = decided[last_cloud + 1 if last_cloud is not None else 0:]
     if later:
         days = [day for day in (_launch_day(info) for _idx, _call, info in later) if day is not None]
         result = launch_report.record_still(
             repo_root, [call for _idx, call, _info in later], root=None,
-            today=max(days) if days else None)
+            today=max(days) if days else None, keep_higher_stored=True)
+    else:
+        _idx, cloud_call, cloud_info = decided[last_cloud]
+        result = launch_report.record_still(
+            repo_root, [cloud_call], root=None, today=_launch_day(cloud_info))
+    if result["action"] != "refused":
+        launch_report.write_still_cursor(repo_root, decided[-1][0], root=None)
     return result
 
 
@@ -3409,7 +3421,8 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
         "ok": True,
         "report": launch_report.render_report(lanes),
         "still": _record_batch_still(
-            repo_root, folded["launches"], reserved, _started_indexes(read["records"])),
+            repo_root, folded["launches"], reserved, _started_indexes(read["records"]),
+            len(read["records"])),
         "lanes": len(lanes),
     }
 

@@ -1,6 +1,6 @@
 # Launch report WO-A bite-proof: the "Still on your machine" state's clearing legs
 
-Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G14, G15, G16, G17), detectors in `plugins/superheroes/lib/tests/test_launch_report.py` (`TLR`) and `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`); G15 and G17 neutralize `plugins/superheroes/lib/launcher.py`. Every red, restore and green below was run in this dispatch on the worktree head, against `launch_report.py` and `test_launch_report.py`.
+Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G14, G15, G16, G17, G18, G19, G20), detectors in `plugins/superheroes/lib/tests/test_launch_report.py` (`TLR`) and `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`); G15, G17, G18 and G19 neutralize `plugins/superheroes/lib/launcher.py`. Every red, restore and green below was run in this dispatch on the worktree head, against `launch_report.py` and `test_launch_report.py`.
 
 - **Run command.** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-wo1 -m pytest -p no:cacheprovider -q "<T>::<node>"`.
 - **Pinned condition.** `TLR` builds its stores, repositories, account files and records under `tmp_path`; the clock is a fixed `today` (`2026-10-11`) and readiness is injected. The pin makes unobservable: the real home directory, the process environment, the network and the real wall clock.
@@ -13,6 +13,9 @@ G14 a build that went to the cloud clears the stored reason even when a local no
 G15 the launch report orders issues by their first reservation, not their last.
 G16 with no stored still state, the readiness function is never called.
 G17 the reminder replays every batch's launches.
+G18 each deciding launch is applied once: the cursor is read and honoured.
+G19 a report with a cloud launch among the new ones and a later local fallback writes once and never removes first.
+G20 a new fallback never displaces a higher-ranked stored reminder.
 
 ## Per-element receipts
 
@@ -273,11 +276,12 @@ FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_reporting
 1 failed in 7.42s
 ```
 
-- **Restore.** The inverse Edit; quoted from `launcher.py:3411-3412`:
+- **Restore.** The inverse Edit; quoted from `launcher.py:3423-3425` (the call now also passes the record count for the cursor):
 
 ```
         "still": _record_batch_still(
-            repo_root, folded["launches"], reserved, _started_indexes(read["records"])),
+            repo_root, folded["launches"], reserved, _started_indexes(read["records"]),
+            len(read["records"])),
 ```
 
 - **Green:**
@@ -285,4 +289,135 @@ FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_reporting
 ```
 .                                                                        [100%]
 1 passed in 8.60s
+```
+
+G17 was re-run against the cursor design in this dispatch with the same neutralization at the new call shape. It still goes red (the stored reason was `unreachable`, not `no-setup`: `{'reason': 'unreachable'} != {'reason': 'no-setup'}`, `1 failed in 1.87s`), and the restore above gives `1 passed in 1.83s`. Its entry stays.
+
+### G18: each deciding launch is applied once. Axis: state (the cursor is honoured)
+
+- **Neutralization applied.** In `launcher._record_batch_still`, `if applied >= record_count:` became `if True:`, so the cursor is treated as `-1` always.
+- **Node.** `TLV::test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again ____
+
+    def test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again(world):
+        repo, store = world
+        assert _declare(repo, "b-other", 4)["ok"]
+        _launch(repo, "a", 11, "local", _call(reason="no-setup"))
+        _reserve(repo, "b", 22, "local", {"placeCall": _call(reason="unreachable")}, batch="b-other")
+        _start(repo, "b")
+        assert _report(repo)["still"] == {"action": "written", "reason": "no-setup"}
+        _clear_as_fixed(repo)
+        for batch in (BATCH, "b-other", BATCH):
+            got = launcher.launch_report_for_batch(repo, batch, title_fn=_titles)
+>           assert got["still"] == {"action": "unchanged", "reason": None}
+E           AssertionError: assert {'action': 'w...': 'no-setup'} == {'action': 'u...reason': None}
+E             
+E             Differing items:
+E             {'action': 'written'} != {'action': 'unchanged'}
+E             {'reason': 'no-setup'} != {'reason': None}
+E             Use -v to get more diff
+
+test_launch_report_verbs.py:506: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_T1_a_reminder_still_cleared_is_not_brought_back_by_reporting_again
+1 failed in 2.48s
+```
+
+- **Restore.** The inverse Edit; quoted from `launcher.py:3348-3349`:
+
+```
+    if applied >= record_count:
+        applied = -1
+```
+
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 3.96s
+```
+
+### G19: a cloud launch among the new ones does not remove before a later fallback writes. Axis: ordering (one write, no prior delete)
+
+- **Neutralization applied.** In `launcher._record_batch_still`, before `if later:`, added `if last_cloud is not None: launch_report.clear_still(repo_root, root=None)`.
+- **Node.** `TLV::test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first _
+
+    monkeypatch.setattr(LR, "_remove", count_remove)
+    monkeypatch.setattr(LR, "_write_still", count_write)
+    assert _report(repo)["still"] == {"action": "written", "reason": "unreachable"}
+>   assert removed == []
+E   AssertionError: assert ['/private/tm...d-still.json'] == []
+E     
+E     Left contains one more item: '/private/tmp/claude-501/pytest-of-zwrose/pytest-1356/test_T3_a_cloud_launch_then_a_0/store/projects/cf7ef1919ddba627/state/cloud-still.json'
+E     Use -v to get more diff
+
+test_launch_report_verbs.py:540: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_T3_a_cloud_launch_then_a_local_fallback_writes_once_and_never_removes_first
+1 failed in 3.11s
+```
+
+- **Restore.** The inverse Edit (the two added lines removed); quoted from `launcher.py:3367-3368`:
+
+```
+    later = decided[last_cloud + 1 if last_cloud is not None else 0:]
+    if later:
+```
+
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.05s
+```
+
+### G20: a new fallback never displaces a higher-ranked stored reminder. Axis: conjunct (keep_higher_stored)
+
+- **Neutralization applied.** In `launch_report.record_still`, `if keep_higher_stored:` became `if False:`, so the keyword is ignored.
+- **Node.** `TLV::test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder _
+
+    _launch(repo, "b", 22, "local", _call(reason="unreachable"))
+>   assert _report(repo)["still"] == {"action": "unchanged", "reason": None}
+E   AssertionError: assert {'action': 'w...'unreachable'} == {'action': 'u...reason': None}
+E     
+E     Differing items:
+E     {'reason': 'unreachable'} != {'reason': None}
+E     {'action': 'written'} != {'action': 'unchanged'}
+E     Use -v to get more diff
+
+test_launch_report_verbs.py:569: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_T4_a_new_lower_ranked_fallback_does_not_displace_a_stored_higher_ranked_reminder
+1 failed in 2.34s
+```
+
+- **Restore.** The inverse Edit; quoted from `launch_report.py:210-211`:
+
+```
+            if keep_higher_stored:
+                stored = _read_still(path)
+```
+
+- **Green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.16s
 ```
