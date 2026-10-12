@@ -227,8 +227,8 @@
                     "minLength": 1
                   },
                   "family": {
-                    "description": "The model family the reviewer is from.",
-                    "type": "string",
+                    "description": "The model family the reviewer is from, or null when the review record could not identify it.",
+                    "type": ["string", "null"],
                     "minLength": 1
                   },
                   "ran": {

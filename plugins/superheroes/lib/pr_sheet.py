@@ -140,7 +140,7 @@ def _record(raw, n, problems):
             and lane.get("value") in _LANES and isinstance(lane.get("reason"), (str, type(None)))
             and isinstance(rounds.get("count"), int) and rounds["count"] >= 0 and isinstance(rounds.get("stoppedAtCap"), bool)
             and all(isinstance(v, dict) and v.get("ran") in _RAN and _text(v.get("name"))
-                    and (v["ran"] == review_record.RAN_NOT_RUN or _text(v.get("family"))) for v in rec["reviewers"])
+                    and ("family" in v and (v["family"] is None or _text(v["family"]))) for v in rec["reviewers"])
             and all(isinstance(m, dict) and _text(m.get("name")) and (m.get("goAhead") is None or _go_ahead(m["goAhead"]))
                     for m in rec["missingReviews"])):
         problems.append(f"{where}: its ci, lane, rounds, reviewers or missing reviews are malformed")
