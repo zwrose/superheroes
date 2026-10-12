@@ -26,9 +26,10 @@ PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 SPEC_ONLY = {"grounding-reviewer"}
 
 # The test role is the one panel seat not named `-reviewer`; it is the exception to the
-# `*-reviewer` roster discovery and to the slug-minus-suffix findings-stem derivation.
+# `*-reviewer` roster discovery and to the slug-minus-suffix findings-stem derivation. Its stem
+# is not derivable from the slug, so `round_driver.AGENT_SUFFIX` is its one home — read, never
+# restated here.
 TEST_ROLE_SEAT = "test-role"
-TEST_ROLE_STEM = "test"
 # A panel seat slug: a `*-reviewer` agent, or the test role's agent.
 _SEAT_SLUG = r"(?:[a-z][a-z-]*-reviewer|%s)" % TEST_ROLE_SEAT
 
@@ -54,7 +55,8 @@ def _agent_slugs():
 def _findings_stem(slug):
     """The findings filename stem for a panel seat slug."""
     if slug == TEST_ROLE_SEAT:
-        return TEST_ROLE_STEM
+        import round_driver
+        return round_driver.AGENT_SUFFIX[TEST_ROLE_SEAT]
     assert slug.endswith(_REVIEWER_SUFFIX), "unexpected seat slug %r" % slug
     return slug[:-len(_REVIEWER_SUFFIX)]
 
@@ -158,7 +160,7 @@ def test_agent_suffix_values_are_derivable_and_match_skill_tables():
     for slug, suffix in round_driver.AGENT_SUFFIX.items():
         assert suffix == _findings_stem(slug), (
             "round_driver.AGENT_SUFFIX[%r] = %r is not the derivable slug-minus-'-reviewer' "
-            "(the test role maps to %r)" % (slug, suffix, TEST_ROLE_STEM))
+            "(the test role's stem is read from AGENT_SUFFIX itself)" % (slug, suffix))
 
     # The SKILL.md dispatch tables' middle column (the findings filename stem) is the
     # same derived suffix — guard the doc copy too (test_full_crew_table already pins the

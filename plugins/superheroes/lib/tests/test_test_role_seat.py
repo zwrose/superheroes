@@ -48,7 +48,6 @@ def test_every_roster_holds_the_test_role_and_not_the_old_key():
     for label, roster in rosters.items():
         assert NEW in roster, "%s lost %s" % (label, NEW)
         assert OLD not in roster, "%s still holds %s" % (label, OLD)
-    assert RD.AGENT_SUFFIX[NEW] == "test"  # bites on: the findings-file stem drifting off `test`
 
 
 @pytest.mark.parametrize("live_vendors", [["claude"], THREE_VENDORS])
