@@ -578,9 +578,15 @@ def intercept(findings, repo_root, head, *, runner=run_one):
         copy[RUN_FIELD] = record
         kept.append(copy)
         # axis: only a well-formed block on its own file at line 1 buys the scope exemption; a malformed one keeps ordinary scope checking
-        if block and block["path"] == copy.get("file") and copy.get("line") == 1:
+        if block and block["path"] == copy.get("file") and _coerce_line(copy.get("line")) == (True, 1):
             exempt_ids.add(id(copy))
     return kept, runs, exempt_ids
+
+
+def _coerce_line(value):
+    # imported late: engine_adapter's pinned import closure must not gain session_contract
+    from session_contract import coerce_line
+    return coerce_line(value)
 
 
 def check_kept(repo_root, base, head, record, *, runner=run_one):

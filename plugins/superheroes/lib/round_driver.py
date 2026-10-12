@@ -4996,9 +4996,16 @@ def _break_it_kept_step(state, config):
     for key, run in latest.items():
         entry = by_key.get(key)
         disposition = entry.get("disposition") if isinstance(entry, dict) else None
+        if disposition is None:
+            # axis: an absent disposition is unresolved, never a waiver — retention is not checked, so certification is withheld
+            row = {"findingKey": key, "path": run.get("path"), "outcome": "unresolved",
+                   "reason": "no-disposition", "run": None}
+            rows.append(row)
+            failed.append(row)
+            continue
         if disposition != "fixed":
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
-                         "reason": disposition or "no-ledger-row"})
+                         "reason": disposition})
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),

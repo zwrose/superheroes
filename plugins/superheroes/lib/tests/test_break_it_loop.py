@@ -397,6 +397,23 @@ def test_l8_a_break_it_finding_not_fixed_owes_no_kept_check(world):
     assert row["outcome"] == "not-required" and row["reason"] == "refuted"
 
 
+@pytest.mark.parametrize("line", [1, "1", " 1 "])
+def test_a_numeric_line_citation_keeps_the_scope_exemption(world, line):
+    state = world.fold_panel(_break_it_finding(line=line))
+    (staged,) = state["_toVerify"]
+    assert staged["line"] == 1 and staged[break_it.RUN_FIELD]["outcome"] == "failed"
+    assert not world.round_record["compileDrops"]
+
+
+def test_a_failed_break_it_run_with_no_disposition_withholds_certification(world):
+    world.fold_panel(_break_it_finding())
+    world.fix(None)
+    RD._terminal_converged(world.state, world.state["config"], full_panel=True)
+    assert world.state["terminal"] == "cannot-certify"
+    (row,) = world.round_record["breakItKept"]
+    assert row["outcome"] == "unresolved" and row["reason"] == "no-disposition"
+
+
 def test_l9_runs_and_kept_checks_reach_the_round_records_and_the_receipt(world, tmp_path):
     world.config["recordsPath"] = str(tmp_path / "round-records.json")
     world.state["config"]["recordsPath"] = world.config["recordsPath"]
