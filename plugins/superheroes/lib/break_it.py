@@ -15,16 +15,19 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import uuid
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+from git_routing import GIT_ROUTING_VARS  # noqa: E402
+
 SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
-MAX_RUNS = 3
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
@@ -35,7 +38,105 @@ _HEADER = "break-it-test v1"
 _GIT_TIMEOUT = 120
 _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
+_SHELL_PROGRAMS = frozenset(["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish", "busybox"])
 _REGULAR_MODES = ("100644", "100755")
+_TOKEN_ENV = "BREAK_IT_RUN_TOKEN"
+_DRAIN_JOIN = 5
+_TERM_GRACE = 5
+_REAPER = r"""
+import ctypes, os, signal, subprocess, sys, time
+
+PROC_ROOT = "/proc"
+status_fd = int(sys.argv[1])
+argv = sys.argv[2:]
+try:
+    ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+except Exception:
+    pass
+
+
+def descendants():
+    parent, state = {}, {}
+    try:
+        names = os.listdir(PROC_ROOT)
+    except OSError:
+        return []  # no /proc on this host: nothing to scan, the parent's token sweep is the net
+    for name in names:
+        if name.isdigit():
+            try:
+                with open("%s/%s/stat" % (PROC_ROOT, name)) as fh:
+                    tail = fh.read().rsplit(")", 1)[1].split()
+                parent[int(name)], state[int(name)] = int(tail[1]), tail[0]
+            except (OSError, IndexError, ValueError):
+                pass
+    found, frontier = [], [os.getpid()]
+    while frontier:
+        nxt = [p for p, pp in parent.items() if pp in frontier and p not in found]
+        found.extend(nxt)
+        frontier = nxt
+    return [p for p in found if state.get(p) != "Z"]
+
+
+def sweep():
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        live = descendants()
+        if not live:
+            return
+        for pid in live:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            while os.waitpid(-1, os.WNOHANG)[0]:
+                pass
+        except OSError:
+            pass
+        time.sleep(0.02)
+
+
+def on_term(signum, frame):
+    sweep()
+    os._exit(143)
+
+
+signal.signal(signal.SIGTERM, on_term)
+try:
+    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
+except OSError:
+    os.write(status_fd, b"E")
+    os._exit(127)
+code = child.wait()
+sweep()
+os._exit(code if code >= 0 else 128 - code)
+"""
+
+
+_IMPORT_ROUTING_VARS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+                        "NODE_PATH", "RUBYLIB", "PERL5LIB", "CLASSPATH")
+
+
+def _names_root(value, root_real):
+    """True when any absolute ``os.pathsep`` entry of ``value`` resolves to ``root_real`` or lies beneath it."""
+    for entry in value.split(os.pathsep):
+        if entry and os.path.isabs(entry):
+            real = os.path.realpath(entry)
+            if real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+
+def _clean_env(extra=None, root=None):
+    """The ambient environment minus every git routing variable, the common import-routing variables
+    and, given ``root``, every variable with a path entry that resolves to or beneath that path (an
+    import path into the caller's checkout in any spelling), plus ``extra``."""
+    root_real = os.path.realpath(root) if root else None
+    env = {k: v for k, v in os.environ.items()
+           if k not in GIT_ROUTING_VARS and k not in _IMPORT_ROUTING_VARS
+           and not (root_real and _names_root(v, root_real))}
+    env.update(extra or {})
+    return env
 
 
 def is_break_it(finding):
@@ -50,7 +151,9 @@ def _path_unsafe(path):
 
 def parse_block(text):
     """``({"path", "run", "content", "sha256"}, None)`` for a well-formed ``break-it-test v1``
-    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact."""
+    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact. This
+    implements the block specification in ``agents/test-role.md`` (Break-it tests), which is the
+    one home of the grammar; nothing else restates it."""
     if not isinstance(text, str):
         return None, "block-not-a-string"
     parts = text.split("\n", 4)
@@ -74,7 +177,8 @@ def parse_block(text):
 
 def parse_command(run):
     """``(argv, env, None)`` for a plain argv command with optional leading ``NAME=value`` entries,
-    else ``(None, None, reason)``. Shell syntax is refused: the command is never run by a shell."""
+    else ``(None, None, reason)``. Shell syntax, shell interpreters and the ``env`` program are
+    refused: the command is never run by a shell."""
     if not isinstance(run, str) or not run.strip():
         return None, None, "run-empty"
     # axis: command substitution is refused on the raw text, before any tokenising — see bite-proof record wo_a_1800_break-it
@@ -93,10 +197,20 @@ def parse_command(run):
         m = _ENV_TOKEN.match(tokens[0])
         if not m:
             break
+        # axis: a leading git routing assignment is refused, so the copy's git can never be redirected — see bite-proof record wo_a_1800_break-it
+        if m.group(1) in GIT_ROUTING_VARS or m.group(1) == _TOKEN_ENV:
+            return None, None, "run-env-refused"
         env[m.group(1)] = m.group(2)
         tokens.pop(0)
     if not tokens:
         return None, None, "run-empty"
+    program = os.path.basename(tokens[0])
+    # axis: the env program is refused outright (-u and -S reach a shell the leading NAME=value entries never need) — see bite-proof record wo_a_1800_break-it
+    if program == "env":
+        return None, None, "run-env-program"
+    # axis: a shell interpreter is refused — its script argument is shell syntax — see bite-proof record wo_a_1800_break-it
+    if program in _SHELL_PROGRAMS:
+        return None, None, "run-shell-interpreter"
     return tokens, env, None
 
 
@@ -108,8 +222,17 @@ def _record(head, block, outcome, reason=None, exit_code=None, output=""):
 
 
 def _git(repo_root, *args):
-    return subprocess.run(["git", "-C", repo_root] + list(args), capture_output=True,
-                          timeout=_GIT_TIMEOUT)
+    """Run git in its own session, so a timeout kills the whole group (filter and hook helpers too)."""
+    cmd = ["git", "-C", repo_root] + list(args)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_clean_env(),
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=_GIT_TIMEOUT)
+    except BaseException:
+        _kill_group(proc.pid)
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _tail_text(raw, cut):
@@ -127,23 +250,103 @@ def _tail_text(raw, cut):
     return text[start:]
 
 
-def _read_tail(log_path):
-    try:
-        with open(log_path, "rb") as fh:
-            size = os.fstat(fh.fileno()).st_size
-            # axis: only the last OUTPUT_TAIL_BYTES of a run's output reach the record — see bite-proof record wo_a_1800_break-it
-            offset = max(0, size - OUTPUT_TAIL_BYTES)
-            fh.seek(offset)
-            return _tail_text(fh.read(), offset > 0)
-    except OSError:
-        return ""
+class _TailDrain(threading.Thread):
+    """Reads a pipe to its end, keeping only the last ``OUTPUT_TAIL_BYTES`` bytes."""
+
+    def __init__(self, stream):
+        super().__init__(daemon=True)
+        self.stream = stream
+        self.buf = b""
+        self.cut = False
+
+    def run(self):
+        try:
+            while True:
+                chunk = os.read(self.stream.fileno(), 65536)
+                if not chunk:
+                    return
+                self.buf += chunk
+                # axis: the stored output never exceeds OUTPUT_TAIL_BYTES while the test runs — see bite-proof record wo_a_1800_break-it
+                if len(self.buf) > OUTPUT_TAIL_BYTES:
+                    self.buf = self.buf[-OUTPUT_TAIL_BYTES:]
+                    self.cut = True
+        except (OSError, ValueError):
+            return
+
+    def tail(self):
+        return _tail_text(self.buf, self.cut)
 
 
-def _kill_group(pid):
+def _kill_group(pid, sig=signal.SIGKILL):
     try:
-        os.killpg(pid, signal.SIGKILL)
+        os.killpg(pid, sig)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def _tagged_pids(token):
+    """Pids of processes whose environment carries ``token`` (inherited through any session)."""
+    needle = (_TOKEN_ENV + "=" + token).encode()
+    found = []
+    if os.path.isdir("/proc/self"):
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                try:
+                    with open("/proc/%s/environ" % name, "rb") as fh:
+                        if needle in fh.read().split(b"\0"):
+                            found.append(int(name))
+                except OSError:
+                    pass
+        return found
+    try:
+        out = subprocess.run(["ps", "-Eww", "-A", "-o", "pid=,command="], capture_output=True,
+                             timeout=_GIT_TIMEOUT).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return found
+    for line in out.splitlines():
+        if needle in line.split():
+            try:
+                found.append(int(line.split(None, 1)[0]))
+            except (ValueError, IndexError):
+                pass
+    return found
+
+
+def _kill_tagged(token):
+    """Kill every process the run started, even one that left the command's session."""
+    for pid in _tagged_pids(token):
+        if pid != os.getpid():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
+def _kill_in_dir(copy):
+    """Third net, independent of session and environment: kill any process whose working directory
+    lies inside ``copy`` (``/proc/<pid>/cwd`` on Linux, ``lsof`` elsewhere when it is installed)."""
+    root = os.path.realpath(copy)
+    pids = []
+    if os.path.isdir("/proc/self"):
+        for name in os.listdir("/proc"):
+            try:
+                cwd = os.readlink("/proc/%s/cwd" % name) if name.isdigit() else ""
+            except OSError:
+                continue
+            if cwd == root or cwd.startswith(root + os.sep):
+                pids.append(int(name))
+    elif shutil.which("lsof"):
+        try:
+            out = subprocess.run(["lsof", "-t", "+D", root], capture_output=True, timeout=30).stdout
+            pids = [int(w) for w in out.split() if w.isdigit()]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for pid in pids:
+        if pid != os.getpid():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 def _write_confined(copy, rel, content):
@@ -205,7 +408,13 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
         return _record(head, block, outcome, reason, exit_code, output)
 
     try:
-        added = _git(repo_root, "worktree", "add", "--detach", copy, head)
+        # axis: the copy is an independent clone, so config, refs and tags the test writes stay inside it — see bite-proof record wo_a_1800_break-it
+        added = _git(repo_root, "clone", "--quiet", "--no-checkout", "--shared", "--no-tags",
+                     "--", os.path.abspath(repo_root), copy)
+        if added.returncode == 0:
+            added = _git(copy, "remote", "remove", "origin")
+        if added.returncode == 0:
+            added = _git(copy, "checkout", "--quiet", "--detach", head, "--")
     except (OSError, subprocess.TimeoutExpired) as exc:
         return rec(OUTCOME_NOT_RUN, "copy-failed", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     if added.returncode != 0:
@@ -221,25 +430,51 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
             refusal = "write-failed"
         if refusal:
             return rec(OUTCOME_NOT_RUN, refusal)
-    log_path = os.path.join(d, "output.log")
-    with open(log_path, "wb") as log:
+    token = uuid.uuid4().hex
+    status_r, status_w = os.pipe()
+    try:
+        # The test runs as the child of a small reaper in its own session: on Linux the reaper adopts every orphaned descendant (child subreaper) and kills the whole tree when the test ends or the reaper is terminated, however a worker detached or cleared its environment. The environment-token sweep and the working-directory sweep below are the second and third nets, the only ones on other hosts, where a worker that both leaves the copy's directory tree and clears its environment is still not contained.
+        proc = subprocess.Popen([sys.executable, "-I", "-c", _REAPER, str(status_w)] + argv, cwd=copy,
+                                env=_clean_env(dict(env, **{_TOKEN_ENV: token}), repo_root),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                pass_fds=(status_w,))
+    except (FileNotFoundError, PermissionError):
+        os.close(status_r)
+        os.close(status_w)
+        return rec(OUTCOME_NOT_RUN, "command-not-found")
+    os.close(status_w)
+    drain = _TailDrain(proc.stdout)
+    timed_out = False
+    try:
+        drain.start()
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        # axis: every exit path, an exception included, lets the reaper sweep its descendants before the group is killed — see bite-proof record wo_a_1800_break-it
+        if proc.poll() is None:
+            _kill_group(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=_TERM_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+        # axis: the whole process tree dies after every exit, detached workers included, so none outlives the call — see bite-proof record wo_a_1800_break-it
+        _kill_group(proc.pid)
+        _kill_tagged(token)
+        _kill_in_dir(copy)
+        proc.wait()
+        launch_failed = os.read(status_r, 1) == b"E"
+        os.close(status_r)
+        if drain.is_alive():
+            drain.join(_DRAIN_JOIN)
         try:
-            proc = subprocess.Popen(argv, cwd=copy, env=dict(os.environ, **env),
-                                    stdin=subprocess.DEVNULL, stdout=log,
-                                    stderr=subprocess.STDOUT, start_new_session=True)
-        except (FileNotFoundError, PermissionError):
-            return rec(OUTCOME_NOT_RUN, "command-not-found")
-        timed_out = False
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_group(proc.pid)
-            proc.wait()
-        finally:
-            # axis: the whole process group dies after every exit, so a lingering worker never outlives the call — see bite-proof record wo_a_1800_break-it
-            _kill_group(proc.pid)
-    output = _read_tail(log_path)
+            proc.stdout.close()
+        except OSError:
+            pass
+    output = drain.tail()
+    if launch_failed and not timed_out:
+        return rec(OUTCOME_NOT_RUN, "command-not-found")
     if timed_out:
         return rec(OUTCOME_NOT_RUN, "timeout", output=output)
     code = proc.returncode
@@ -264,15 +499,7 @@ def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True):
     except Exception as exc:  # the caller decides from the record; nothing is raised
         result = _record(head, block, OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     finally:
-        try:
-            _git(repo_root, "worktree", "remove", "--force", copy)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
         shutil.rmtree(d, ignore_errors=True)
-        try:
-            _git(repo_root, "worktree", "prune")
-        except (OSError, subprocess.TimeoutExpired):
-            pass
     return result
 
 
@@ -292,12 +519,12 @@ def _safe_run(runner, repo_root, head, block, **kwargs):
 
 
 def intercept(findings, repo_root, head, *, runner=run_one):
-    """Run the break-it findings and fold the results in. Returns ``(kept, runs, exempt_ids)``:
+    """Run every break-it finding (each run is bounded by its timeout; how many to write is the test
+    role's policy, stated in its agent file) and fold the results in. Returns ``(kept, runs, exempt_ids)``:
     ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
     not-run ones stamped with ``RUN_FIELD``; ``runs`` is one entry per break-it finding;
     ``exempt_ids`` holds ``id()`` of each stamped copy."""
     kept, runs, exempt_ids = [], [], set()
-    attempted = 0
     for finding in findings or []:
         if not isinstance(finding, dict):
             kept.append(finding)
@@ -309,16 +536,12 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             kept.append(copy)
             continue
         block, refusal = parse_block(copy.get("suggestion"))
-        if attempted >= MAX_RUNS:
-            record = _not_run(head, block, "run-cap")
+        if refusal:
+            record = _not_run(head, block, refusal)
+        elif block["path"] != copy.get("file"):
+            record = _not_run(head, block, "path-mismatch")
         else:
-            attempted += 1
-            if refusal:
-                record = _not_run(head, block, refusal)
-            elif block["path"] != copy.get("file"):
-                record = _not_run(head, block, "path-mismatch")
-            else:
-                record = _safe_run(runner, repo_root, head, block)
+            record = _safe_run(runner, repo_root, head, block)
         runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
         # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
         if record["outcome"] == OUTCOME_PASSED:

@@ -1,9 +1,12 @@
 import copy
 import hashlib
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -48,10 +51,29 @@ def repo(tmp_path):
     return root
 
 
+_ROLE_FILE = os.path.join(os.path.dirname(_LIB), "agents", "test-role.md")
+
+
+def _template():
+    """The block specification's lines, read from the one home of the grammar (the test role file)."""
+    with open(_ROLE_FILE, encoding="utf-8") as fh:
+        found = re.findall(r"```\n(break-it-test v1\n.*?)\n```", fh.read(), re.DOTALL)
+    assert len(found) == 1
+    lines = found[0].split("\n")
+    assert len(lines) == 5 and lines[3] == "---"
+    return lines
+
+
+def _wire(path, run, content):
+    """A block built from exactly the specification's template: header, path:, run:, ---, content."""
+    head, path_line, run_line, sep, _ = _template()
+    assert path_line.startswith("path: <") and run_line.startswith("run: <")
+    return "\n".join([head, "path: " + path, "run: " + run, sep]) + "\n" + content
+
+
 def _block(path, content, run=None):
     run = run if run is not None else "%s %s" % (PY, shlex.quote(path))
-    block, refusal = break_it.parse_block(
-        "break-it-test v1\npath: %s\nrun: %s\n---\n%s" % (path, run, content))
+    block, refusal = break_it.parse_block(_wire(path, run, content))
     assert refusal is None
     return block
 
@@ -69,7 +91,7 @@ def _fake(outcome, calls=None):
 
 
 def _finding(path, **extra):
-    block = "break-it-test v1\npath: %s\nrun: %s %s\n---\nassert True\n" % (path, PY, path)
+    block = _wire(path, "%s %s" % (PY, path), "assert True\n")
     out = {"title": "Break-it: %s" % path, "file": path, "taxonomy": break_it.TAXONOMY,
            "suggestion": block}
     out.update(extra)
@@ -106,6 +128,15 @@ def test_t1_parse_block_round_trips_and_refuses():
     for given, expected in cases:
         assert break_it.parse_block(given) == (None, expected), given
     assert break_it.parse_block(good)[1] is None
+
+
+def test_parse_block_follows_the_specification_in_the_test_role_file():
+    good = _wire("tests/test_x.py", "python tests/test_x.py", "z\n")
+    block, refusal = break_it.parse_block(good)
+    assert refusal is None and block["path"] == "tests/test_x.py" and block["content"] == "z\n"
+    header = _template()[0]
+    assert break_it.parse_block(good.replace(header, header + "x", 1)) == (
+        None, "block-header-missing")
 
 
 # T2
@@ -216,11 +247,18 @@ def _gone(pid):
 
 
 # T9
-def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path):
+# axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
+# A detached worker that also clears its environment is contained by the Linux reaper only.
+@pytest.mark.parametrize("detached,clean_env", [
+    (False, False), (True, False),
+    pytest.param(True, True, marks=pytest.mark.skipif(
+        not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper"))])
+def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env):
     pidfile = tmp_path / "worker.pid"
     content = ("import os, subprocess\n"
-               "p = subprocess.Popen(['sleep', '60'], start_new_session=False)\n"
-               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n")
+               "p = subprocess.Popen([%r, '60'], start_new_session=%s%s)\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n"
+               ) % (shutil.which("sleep"), detached, ", env={}, cwd='/'" if clean_env else "")
     block = _block("tests/test_w.py", content,
                    run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
     record = break_it.run_one(str(repo), _head(repo), block)
@@ -231,6 +269,54 @@ def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path):
     finally:
         if not _gone(pid):
             os.kill(pid, 9)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc to disable the reaper")
+def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, monkeypatch):
+    # The reaper cannot scan (no /proc for it), the worker has its own session and no environment: only the working-directory net can catch it.
+    marker = 'PROC_ROOT = "/proc"'
+    assert marker in break_it._REAPER
+    monkeypatch.setattr(break_it, "_REAPER", break_it._REAPER.replace(marker, 'PROC_ROOT = "/nonexistent"'))
+    pidfile = tmp_path / "worker.pid"
+    content = ("import os, subprocess\n"
+               "p = subprocess.Popen([%r, '60'], start_new_session=True, env={})\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % shutil.which("sleep")
+    block = _block("tests/test_w.py", content,
+                   run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
+    assert break_it.run_one(str(repo), _head(repo), block)["outcome"] == "passed"
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the detached worker outlived run_one"
+    finally:
+        if not _gone(pid):
+            os.kill(pid, 9)
+
+
+def test_t9_drain_start_failure_still_reaps_the_launched_process(repo, monkeypatch):
+    launched = []
+    real = subprocess.Popen
+
+    def spy(args, *a, **kw):
+        proc = real(args, *a, **kw)
+        if "-I" in args[:2]:
+            launched.append(proc.pid)
+        return proc
+
+    def boom(self):
+        time.sleep(1)  # let the launched test start, so a leak is a live process
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(break_it._TailDrain, "start", boom)
+    monkeypatch.setattr(break_it.subprocess, "Popen", spy)
+    block = _block("tests/test_d.py", "import time\ntime.sleep(60)\n")
+    record = break_it.run_one(str(repo), _head(repo), block)
+    assert (record["outcome"], record["reason"]) == ("not-run", "run-error")
+    assert len(launched) == 1
+    try:
+        assert _gone(launched[0]), "the launched process outlived the failed run"
+    finally:
+        if not _gone(launched[0]):
+            os.kill(launched[0], 9)
 
 
 # T10
@@ -255,7 +341,7 @@ def test_t11_run_one_leaves_nothing_behind(repo, monkeypatch):
     monkeypatch.setattr(break_it.tempfile, "mkdtemp", spy)
     head = _head(repo)
     break_it.run_one(str(repo), head, _block("tests/test_a.py", "assert True\n"))
-    break_it.run_one(str(repo), head, _block("tests/test_b.py", "assert False\n"))
+    break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", "assert False\n"))
     break_it.run_one(str(repo), head, _block("README.md", "x\n"))
     break_it.run_one(str(repo), "no-such-rev", _block("tests/test_c.py", "assert True\n"))
     assert len(made) == 4
@@ -299,17 +385,27 @@ def test_t12_intercept_drops_a_passed_run_and_keeps_failed_and_not_run(repo):
     assert all(k["breakItRun"]["role"] == break_it.ROLE for k in kept)
 
 
-def test_t12_intercept_caps_the_runs_and_refuses_a_path_mismatch(repo):
+@pytest.mark.parametrize("run", [
+    "sh -c 'printf probe | wc -c'", "bash -c 'x'", "/bin/dash -c x", "zsh -c x", "ksh -c x",
+    "mksh -c x", "fish -c x", "busybox sh -c x", "FOO=1 sh -c x"])
+def test_parse_command_refuses_shell_interpreters(run):
+    assert break_it.parse_command(run) == (None, None, "run-shell-interpreter")
+
+
+@pytest.mark.parametrize("run", [
+    "env -u X sh -c 'x'", "env -S \"sh -c x\"", "env python t.py", "env FOO=1 python t.py",
+    "/usr/bin/env zsh -c x", "FOO=1 env -i bash -c x"])
+def test_parse_command_refuses_the_env_program(run):
+    assert break_it.parse_command(run) == (None, None, "run-env-program")
+
+
+def test_t12_intercept_runs_every_finding_and_refuses_a_path_mismatch(repo):
     calls = []
     findings = [_finding("t/%d.py" % i) for i in range(4)]
     kept, runs, exempt = break_it.intercept(findings, str(repo), "H",
                                             runner=_fake("failed", calls))
-    assert calls == ["t/0.py", "t/1.py", "t/2.py"]
+    assert calls == ["t/%d.py" % i for i in range(4)]
     assert len(kept) == 4 and len(exempt) == 4
-    capped = kept[3]["breakItRun"]
-    assert (capped["outcome"], capped["reason"], capped["head"]) == ("not-run", "run-cap", "H")
-    assert set(capped) == set(runs[0]) - {"title", "file"}
-    assert capped["sha256"] is not None and capped["exitCode"] is None
     mismatch = _finding("t/real.py", file="t/other.py")
     calls.clear()
     kept, runs, exempt = break_it.intercept([mismatch], str(repo), "H", runner=_fake("passed", calls))
@@ -382,3 +478,186 @@ def test_t13_check_kept_unresolved(repo):
     assert break_it.check_kept(str(repo), None, head, record)["outcome"] == "unresolved"
     assert break_it.check_kept(str(repo), base, head, {})["outcome"] == "unresolved"
     assert break_it.check_kept(str(repo), "no-such-rev", head, record)["outcome"] == "unresolved"
+
+
+# T13
+def test_t13_git_routing_is_scrubbed_and_refused(repo, tmp_path, monkeypatch):
+    head = _head(repo)
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    content = ("import os, subprocess\n"
+               "assert 'GIT_DIR' not in os.environ and 'GIT_WORK_TREE' not in os.environ\n"
+               "top = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip()\n"
+               "assert os.path.realpath(top) == os.path.realpath(os.getcwd()), top\n")
+    record = break_it.run_one(str(repo), head, _block("tests/test_r.py", content))
+    assert record["outcome"] == "passed", record
+    refused = _block("tests/test_r.py", "pass\n", run="GIT_DIR=/x %s tests/test_r.py" % PY)
+    record = break_it.run_one(str(repo), head, refused)
+    assert (record["outcome"], record["reason"]) == ("not-run", "run-env-refused")
+
+
+# T14
+def test_t14_copy_has_independent_git_metadata(repo):
+    content = ("import subprocess\n"
+               "subprocess.check_call(['git', 'config', '--local', 'break.it', 'x'])\n"
+               "subprocess.check_call(['git', 'tag', 'break-it-tag'])\n")
+    record = break_it.run_one(str(repo), _head(repo), _block("tests/test_m.py", content))
+    assert record["outcome"] == "passed", record
+    assert _git(repo, "tag", "--list") == ""
+    done = subprocess.run(["git", "-C", str(repo), "config", "--local", "break.it"], capture_output=True)
+    assert done.returncode != 0
+
+
+# T15
+def test_t15_run_one_bounds_stored_output(repo, monkeypatch):
+    monkeypatch.setattr(break_it, "OUTPUT_TAIL_BYTES", 256)
+    content = "import sys\nfor i in range(20000):\n    sys.stdout.write('x' * 100 + '\\n')\nassert False\n"
+    record = break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", content))
+    assert record["outcome"] == "failed"
+    assert len(record["output"].encode("utf-8")) <= 256
+
+
+def test_tail_drain_never_retains_more_than_the_cap(monkeypatch):
+    monkeypatch.setattr(break_it, "OUTPUT_TAIL_BYTES", 256)
+    rfd, wfd = os.pipe()
+
+    def writer():
+        with os.fdopen(wfd, "wb") as out:
+            for i in range(5000):
+                out.write(b"x" * 100 + b" line%d\n" % i)
+            out.write(b"LAST-MARKER\n")
+
+    with os.fdopen(rfd, "rb") as stream:
+        drain = break_it._TailDrain(stream)
+        drain.start()
+        feeder = threading.Thread(target=writer)
+        feeder.start()
+        feeder.join(30)
+        drain.join(30)
+        assert not drain.is_alive()
+    assert len(drain.buf) <= 256
+    assert drain.buf.endswith(b"LAST-MARKER\n")
+
+
+def test_clean_env_keeps_scalar_settings_and_drops_absolute_root_aliases(tmp_path, monkeypatch):
+    root = tmp_path / "caller"
+    root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root)
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("TEST_MODE", "offline")
+    monkeypatch.setenv("SERVICE_TOKEN", "x")
+    monkeypatch.setenv("ROOT_ALIAS_VAR", str(alias))
+    env = break_it._clean_env(root=str(root))
+    assert env["TEST_MODE"] == "offline"
+    assert env["SERVICE_TOKEN"] == "x"
+    assert "ROOT_ALIAS_VAR" not in env
+
+
+def test_reaper_without_proc_still_propagates_the_child_exit_status(repo, monkeypatch):
+    # A host with no /proc (macOS): the reaper's descendant sweep is a no-op and the exit status survives.
+    assert 'PROC_ROOT = "/proc"' in break_it._REAPER
+    monkeypatch.setattr(break_it, "_REAPER",
+                        break_it._REAPER.replace('PROC_ROOT = "/proc"', 'PROC_ROOT = "/nonexistent-proc-root"'))
+    passing = break_it.run_one(str(repo), _head(repo), _block("tests/test_np.py", "assert 1 == 1\n"))
+    assert (passing["outcome"], passing["exitCode"]) == ("passed", 0)
+    failing = break_it.run_one(str(repo), _head(repo), _block("tests/test_nf.py", "assert 1 == 2\n"))
+    assert (failing["outcome"], failing["exitCode"]) == ("failed", 1)
+
+
+def test_inherited_import_path_into_the_caller_tree_is_dropped(repo, monkeypatch):
+    _write(repo, "callermod.py", "VALUE = 'copy'\n")
+    head = _commit(repo, "add callermod")
+    _write(repo, "callermod.py", "VALUE = 'caller'\n")  # uncommitted: only the caller's tree has it
+    monkeypatch.setenv("PYTHONPATH", str(repo))
+    content = "import os, sys\nsys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'copy', callermod.VALUE\n"
+    record = break_it.run_one(str(repo), head, _block("tests/test_ip.py", content))
+    assert record["outcome"] == "passed", record
+
+
+def test_import_path_with_dot_segment_spelling_is_dropped(repo, monkeypatch):
+    _write(repo, "callermod.py", "VALUE = 'copy'\n")
+    head = _commit(repo, "add callermod")
+    _write(repo, "callermod.py", "VALUE = 'caller'\n")
+    monkeypatch.setenv("PYTHONPATH", os.path.join(str(repo.parent), ".", repo.name))
+    content = "import os, sys\nsys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'copy', callermod.VALUE\n"
+    record = break_it.run_one(str(repo), head, _block("tests/test_ipd.py", content))
+    assert record["outcome"] == "passed", record
+
+
+def test_clean_env_scrubs_aliased_root_entries_and_keeps_unrelated(repo, tmp_path, monkeypatch):
+    aliased = os.path.join(str(repo.parent), ".", repo.name, "sub")
+    monkeypatch.setenv("BI_ALIASED", "/nowhere" + os.pathsep + aliased)
+    monkeypatch.setenv("BI_UNRELATED", str(tmp_path / "elsewhere"))
+    env = break_it._clean_env({"BI_EXTRA": "1"}, str(repo))
+    assert "BI_ALIASED" not in env
+    assert env["BI_UNRELATED"] == str(tmp_path / "elsewhere")
+    assert env["BI_EXTRA"] == "1"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper")
+def test_exception_after_launch_still_lets_the_reaper_collect_a_detached_worker(repo, tmp_path, monkeypatch):
+    pidfile = tmp_path / "worker.pid"
+
+    def boom(self):  # the run fails after launch, once the test has started its detached worker
+        deadline = time.monotonic() + 20
+        while not (pidfile.exists() and pidfile.read_text()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(break_it._TailDrain, "start", boom)
+    content = ("import os, subprocess, time\n"
+               "p = subprocess.Popen([%r, '60'], start_new_session=True, env={}, cwd='/')\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n"
+               "time.sleep(60)\n") % shutil.which("sleep")
+    block = _block("tests/test_x.py", content,
+                   run="PIDFILE=%s %s tests/test_x.py" % (shlex.quote(str(pidfile)), PY))
+    record = break_it.run_one(str(repo), _head(repo), block)
+    assert (record["outcome"], record["reason"]) == ("not-run", "run-error")
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the detached worker outlived the failed run"
+    finally:
+        if not _gone(pid):
+            os.kill(pid, 9)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="scans /proc for the helper")
+def test_git_setup_timeout_kills_the_helper_descendants(repo, tmp_path, monkeypatch):
+    marker = "61.37"
+    _write(repo, ".gitattributes", "*.dat filter=slow\n")
+    _write(repo, "a.dat", "x\n")
+    head = _commit(repo, "add filtered file")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[filter \"slow\"]\n\tsmudge = sleep %s\n" % marker)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    monkeypatch.setattr(break_it, "_GIT_TIMEOUT", 3)
+
+    def helpers():
+        found = []
+        for name in os.listdir("/proc"):
+            try:
+                with open("/proc/%s/cmdline" % name, "rb") as fh:
+                    if marker.encode() in fh.read():
+                        found.append(int(name))
+            except OSError:
+                pass
+        return found
+
+    try:
+        started = time.monotonic()
+        record = break_it.run_one(str(repo), head, _block("tests/test_g.py", "assert True\n"))
+        assert time.monotonic() - started < 30, "setup waited for the helper instead of killing it"
+        assert (record["outcome"], record["reason"]) == ("not-run", "copy-failed")
+        deadline = time.monotonic() + 5
+        while helpers() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert helpers() == [], "a git helper outlived the timed-out setup"
+    finally:
+        for pid in helpers():
+            os.kill(pid, 9)
