@@ -46,6 +46,21 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_PID", raising=False)
     # The `started` append pauses between its tries; no test waits for it.
     monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
+    # The launches below keep their base on a local bare remote; the commit is asked of that
+    # remote by git rather than of GitHub. The GitHub question has its own tests.
+    monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
+
+
+def _local_remote_has(repo_root, base, env):
+    got = subprocess.run(
+        ["git", "-C", repo_root, "remote", "get-url", "origin"],
+        capture_output=True, text=True)
+    origin = got.stdout.strip()
+    if got.returncode != 0 or not origin:
+        return None
+    has = subprocess.run(
+        ["git", "-C", origin, "cat-file", "-e", base + "^{commit}"], capture_output=True)
+    return has.returncode == 0
 
 
 def _pty_available():
@@ -620,273 +635,151 @@ def test_cloud_base_refusal_maps_the_round_trip_to_its_token(monkeypatch, answer
     assert seen == [("/repo", "abc123")]
 
 
-@pytest.fixture
-def local_remote(tmp_path):
-    """A working repo whose origin is a local bare repo by file URL: one commit pushed to it, a
-    second left unpushed. No network."""
+def _gh_runner(monkeypatch, answer):
+    """Replace the gh call; record each (owner, repo, sha, timeout). ``answer`` is a
+    CompletedProcess, None, or an exception to raise."""
+    seen = []
+
+    def run(owner, repo, sha, env, timeout):
+        seen.append((owner, repo, sha, timeout))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(L, "_gh_commit_lookup", run)
+    monkeypatch.setattr(L, "_base_on_remote_fn", L._base_on_remote)
+    return seen
+
+
+def _origin(tmp_path, url):
     repo = _init_repo(tmp_path / "repo")
-    remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
-    _git(repo, "remote", "add", "origin", remote.as_uri())
-    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
-    pushed = _head_sha(repo)
-    unpushed = _later_commit(tmp_path, repo)
-    return types.SimpleNamespace(repo=repo, remote=remote, pushed=pushed, unpushed=unpushed)
+    if url is not None:
+        _git(repo, "remote", "add", "origin", url)
+    return repo
 
 
-def test_the_real_round_trip_finds_a_pushed_commit_and_misses_an_unpushed_one(local_remote):
-    # axis: the base is read from the remote afresh, in an empty repository
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
-    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
-    assert L._cloud_base_refusal(
-        local_remote.repo, {"baseCommit": local_remote.pushed}, None) is None
-    assert L._cloud_base_refusal(
-        local_remote.repo, {"baseCommit": local_remote.unpushed}, None
-    ) == "launch-cloud-base-not-on-remote"
+SHA = "a" * 40
 
 
-def test_the_real_round_trip_ignores_a_stale_tracking_ref(local_remote):
-    # axis: a local tracking ref that holds the base does not stand in for the remote
-    _git(local_remote.repo, "update-ref", "refs/remotes/origin/main", local_remote.unpushed)
-    assert "origin/main" in _git(
-        local_remote.repo, "branch", "-r", "--contains", local_remote.unpushed)
-    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
-    # a plain fetch in the working repo would say yes, because git never asks for what it has
-    plain = subprocess.run(
-        ["git", "-C", local_remote.repo, "fetch", "-q", "origin", local_remote.unpushed],
-        capture_output=True, text=True)
-    assert plain.returncode == 0
+def _done(code, out="", err=""):
+    return subprocess.CompletedProcess([], code, stdout=out, stderr=err)
 
 
-def test_the_real_round_trip_changes_nothing_in_the_working_repo(local_remote):
-    before = (_git(local_remote.repo, "for-each-ref"), _git(local_remote.repo, "status", "--short"))
-    L._base_on_remote(local_remote.repo, local_remote.pushed, None)
-    L._base_on_remote(local_remote.repo, local_remote.unpushed, None)
-    assert (_git(local_remote.repo, "for-each-ref"), _git(local_remote.repo, "status", "--short")) == before
-    assert not (local_remote.remote / "FETCH_HEAD").exists()
+def test_a_pushed_commit_is_on_the_remote(tmp_path, monkeypatch):
+    # axis: the base is asked of GitHub afresh
+    repo = _origin(tmp_path, "git@github.com:acme/widgets.git")
+    seen = _gh_runner(monkeypatch, _done(0, SHA + "\n"))
+    assert L._base_on_remote(repo, SHA, None) is True
+    assert seen == [("acme", "widgets", SHA, L._WORKTREE_GIT_TIMEOUT)]
 
 
-def test_the_real_round_trip_fetches_one_commit_into_a_bare_scratch_repository(
-    local_remote, monkeypatch,
+def test_a_success_that_names_another_commit_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets")
+    _gh_runner(monkeypatch, _done(0, "b" * 40 + "\n"))
+    assert L._base_on_remote(repo, SHA, None) is None
+
+
+def test_only_the_422_no_commit_answer_is_absent(tmp_path, monkeypatch):
+    # axis: only GitHub saying it has no such commit is "not on the remote"
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    _gh_runner(monkeypatch, _done(
+        1, "", "gh: No commit found for SHA: %s (HTTP 422)" % SHA))
+    assert L._base_on_remote(repo, SHA, None) is False
+    assert L._cloud_base_refusal(repo, {"baseCommit": SHA}, None) == (
+        "launch-cloud-base-not-on-remote")
+
+
+@pytest.mark.parametrize("err", [
+    "gh: Not Found (HTTP 404)",
+    "gh: Bad credentials (HTTP 401)",
+    "error connecting to api.github.com",
+    "gh: Server Error (HTTP 500)",
+])
+def test_any_other_gh_failure_is_unchecked(tmp_path, monkeypatch, err):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    _gh_runner(monkeypatch, _done(1, "", err))
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert L._cloud_base_refusal(repo, {"baseCommit": SHA}, None) == (
+        "launch-cloud-base-remote-unchecked")
+
+
+def test_a_gh_that_cannot_run_or_times_out_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    _gh_runner(monkeypatch, None)
+    assert L._base_on_remote(repo, SHA, None) is None
+
+
+@pytest.mark.parametrize("raised", [
+    OSError("gh missing"), subprocess.TimeoutExpired(["gh"], 180),
+])
+def test_the_default_gh_call_maps_a_missing_gh_and_a_timeout_to_no_answer(
+    monkeypatch, raised,
 ):
-    calls = []
-    real = L._git_scrubbed
-
-    def spy(repo_root, *args, **kwargs):
-        calls.append((repo_root, args, kwargs))
-        return real(repo_root, *args, **kwargs)
-
-    monkeypatch.setattr(L, "_git_scrubbed", spy)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
-    assert calls[0][:2] == (local_remote.repo, ("remote", "get-url", "origin"))
-    assert calls[1][:2] == (local_remote.repo, ("config", "--list", "-z"))
-    scratch = calls[2][0]
-    assert calls[2][1] == ("init", "-q", "--bare", scratch)
-    assert calls[3][0] == scratch
-    fetch_args = calls[3][1]
-    assert fetch_args[-7:] == ("fetch", "-q", "--no-tags", "--depth=1", "--filter=tree:0",
-                               local_remote.remote.as_uri(), local_remote.pushed)
-    assert len(calls) == 4
-    assert all(c[2]["timeout"] == L._WORKTREE_GIT_TIMEOUT for c in calls)
-
-
-def test_a_fetch_that_fails_for_any_reason_but_an_absent_commit_is_unchecked(
-    local_remote, monkeypatch,
-):
-    # axis: only the server saying it lacks the commit is "not on the remote"; an unreachable or
-    # refusing remote leaves the question open
-    real = L._git_scrubbed
-
-    def fails(said):
-        def run(repo_root, *args, **kwargs):
-            if "fetch" in args:
-                return subprocess.CompletedProcess(args, 128, stdout="", stderr=said)
-            return real(repo_root, *args, **kwargs)
-        return run
-
-    for said in ("fatal: Could not resolve host: github.com",
-                 "fatal: Authentication failed for 'https://github.com/x/y.git/'"):
-        monkeypatch.setattr(L, "_git_scrubbed", fails(said))
-        assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-    monkeypatch.setattr(L, "_git_scrubbed", fails("fatal: remote error: upload-pack: not our ref abc"))
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is False
-
-
-def test_the_probe_finds_a_base_through_a_setting_only_the_launching_repo_holds(
-    local_remote, tmp_path,
-):
-    # axis: origin is an alias that only a repo-local insteadOf rewrite makes reachable
-    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
-         "alias://private/origin")
-    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
-    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
-
-
-def test_the_probe_finds_a_base_through_a_setting_only_a_conditional_include_supplies(
-    local_remote, tmp_path,
-):
-    # axis: the transport settings are read as the launching checkout sees them, includeIf and all
-    extra = tmp_path / "private.gitconfig"
-    extra.write_text('[url "%s"]\n\tinsteadOf = alias://private/origin\n'
-                     % local_remote.remote.as_uri())
-    _git(local_remote.repo, "config", "includeIf.gitdir:" + local_remote.repo + "/.path",
-         str(extra))
-    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
-    # the include applies to the checkout, and to nothing else
-    assert _git(local_remote.repo, "remote", "get-url", "origin").strip() == (
-        local_remote.remote.as_uri())
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is True
-    assert L._base_on_remote(local_remote.repo, local_remote.unpushed, None) is False
-
-
-def test_the_probe_hands_over_only_transport_settings_and_leaves_the_scratch_empty(
-    local_remote, monkeypatch,
-):
-    _git(local_remote.repo, "config", "core.sshCommand", "ssh -i /k")
-    _git(local_remote.repo, "config", "credential.helper", "store")
-    _git(local_remote.repo, "config", "user.name", "Someone")
-    options = L._transport_options(local_remote.repo, None)
-    pairs = [options[i + 1] for i in range(0, len(options), 2)]
-    assert "core.sshcommand=ssh -i /k" in pairs and "credential.helper=store" in pairs
-    assert all(not p.startswith(("user.", "remote.", "core.bare")) for p in pairs)
-    assert options[::2] == ["-c"] * len(pairs)
-
-
-def test_the_probe_finds_a_base_from_a_linked_worktree(local_remote, tmp_path):
-    # axis: the settings are read from the linked worktree as it sees them
-    _git(local_remote.repo, "config", "url." + local_remote.remote.as_uri() + ".insteadOf",
-         "alias://private/origin")
-    _git(local_remote.repo, "remote", "set-url", "origin", "alias://private/origin")
-    linked = tmp_path / "linked"
-    _git(local_remote.repo, "worktree", "add", "-q", "--detach", str(linked), local_remote.pushed)
-    assert L._base_on_remote(str(linked), local_remote.pushed, None) is True
-
-
-def test_a_transport_failure_is_unchecked_not_absent(local_remote, tmp_path):
-    # axis: a remote that cannot be reached says nothing about the commit
-    _git(local_remote.repo, "remote", "set-url", "origin", str(tmp_path / "no-such-remote.git"))
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-    assert L._cloud_base_refusal(
-        local_remote.repo, {"baseCommit": local_remote.pushed}, None
-    ) == "launch-cloud-base-remote-unchecked"
-
-
-def test_E5_no_origin_is_unchecked(tmp_path):
-    repo = _init_repo(tmp_path / "repo")
-    assert L._base_on_remote(repo, _head_sha(repo), None) is None
-    assert L._cloud_base_refusal(
-        repo, {"baseCommit": _head_sha(repo)}, None) == "launch-cloud-base-remote-unchecked"
-
-
-def test_E5_an_origin_url_that_reads_empty_is_unchecked(local_remote, monkeypatch):
-    real = L._git_scrubbed
-
-    def empty_url(repo_root, *args, **kwargs):
-        if args[:2] == ("remote", "get-url"):
-            return subprocess.CompletedProcess(args, 0, stdout="\n", stderr="")
-        return real(repo_root, *args, **kwargs)
-
-    monkeypatch.setattr(L, "_git_scrubbed", empty_url)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-
-
-def test_a_git_that_cannot_run_is_unchecked(local_remote, monkeypatch):
-    monkeypatch.setattr(L, "_git_scrubbed", lambda *a, **k: None)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-
-
-def test_E6_a_fetch_that_times_out_is_unchecked(local_remote, monkeypatch):
-    real = subprocess.run
-
-    def run(argv, *args, **kwargs):
-        if "fetch" in argv:
-            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
-        return real(argv, *args, **kwargs)
+    def run(*args, **kwargs):
+        raise raised
 
     monkeypatch.setattr(L.subprocess, "run", run)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-    assert L._cloud_base_refusal(
-        local_remote.repo, {"baseCommit": local_remote.pushed}, None
-    ) == "launch-cloud-base-remote-unchecked"
+    assert L._gh_commit_lookup("acme", "widgets", SHA, None, 5) is None
 
 
-def test_a_scratch_repository_that_cannot_be_made_is_unchecked(local_remote, monkeypatch):
-    real = L._git_scrubbed
+def test_the_default_gh_call_asks_the_commits_endpoint(monkeypatch):
+    seen = []
 
-    def init_fails(repo_root, *args, **kwargs):
-        if args[:1] == ("init",):
-            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal")
-        return real(repo_root, *args, **kwargs)
+    def run(argv, **kwargs):
+        seen.append((argv, kwargs["timeout"]))
+        return _done(0, SHA)
 
-    monkeypatch.setattr(L, "_git_scrubbed", init_fails)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-
-
-def test_E7_a_scratch_directory_that_cannot_be_made_is_unchecked(local_remote, monkeypatch):
-    def no_space(*args, **kwargs):
-        raise OSError("no space left")
-
-    monkeypatch.setattr(L.tempfile, "mkdtemp", no_space)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-    assert L._cloud_base_refusal(
-        local_remote.repo, {"baseCommit": local_remote.pushed}, None
-    ) == "launch-cloud-base-remote-unchecked"
+    monkeypatch.setattr(L.subprocess, "run", run)
+    L._gh_commit_lookup("acme", "widgets", SHA, None, 7)
+    assert seen == [(["gh", "api", "repos/acme/widgets/commits/" + SHA, "--jq", ".sha"], 7)]
 
 
-@pytest.mark.parametrize("which,expected", [("pushed", True), ("unpushed", False)])
-def test_E8_E9_the_scratch_directory_is_removed_whatever_the_fetch_says(
-    local_remote, monkeypatch, which, expected,
+@pytest.mark.parametrize("url", [
+    "git@github.com:acme/widgets.git",
+    "git@github.com:acme/widgets",
+    "ssh://git@github.com/acme/widgets.git",
+    "ssh://git@github.com/acme/widgets",
+    "https://github.com/acme/widgets.git",
+    "https://github.com/acme/widgets",
+])
+def test_every_github_address_form_names_its_owner_and_repository(tmp_path, monkeypatch, url):
+    repo = _origin(tmp_path, url)
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    assert L._base_on_remote(repo, SHA, None) is True
+    assert seen[0][:2] == ("acme", "widgets")
+
+
+@pytest.mark.parametrize("url", [
+    "https://gitlab.com/acme/widgets.git",
+    "https://github.com.evil.example/acme/widgets.git",
+    "/srv/git/widgets.git",
+    "file:///srv/git/widgets.git",
+    "git@github.com:acme",
+])
+def test_an_origin_that_is_not_a_github_address_is_unchecked_without_asking(
+    tmp_path, monkeypatch, url,
 ):
-    made = []
-    real = L.tempfile.mkdtemp
-
-    def tracked(*args, **kwargs):
-        made.append(real(*args, **kwargs))
-        return made[-1]
-
-    monkeypatch.setattr(L.tempfile, "mkdtemp", tracked)
-    assert L._base_on_remote(local_remote.repo, getattr(local_remote, which), None) is expected
-    assert len(made) == 1 and not os.path.exists(made[0])
+    repo = _origin(tmp_path, url)
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert seen == []
 
 
-def test_E9_the_scratch_directory_is_removed_when_the_fetch_cannot_run(local_remote, monkeypatch):
-    made = []
-    real_mkdtemp = L.tempfile.mkdtemp
-    real = L._git_scrubbed
-
-    def tracked(*args, **kwargs):
-        made.append(real_mkdtemp(*args, **kwargs))
-        return made[-1]
-
-    def no_fetch(repo_root, *args, **kwargs):
-        if "fetch" in args:
-            return None
-        return real(repo_root, *args, **kwargs)
-
-    monkeypatch.setattr(L.tempfile, "mkdtemp", tracked)
-    monkeypatch.setattr(L, "_git_scrubbed", no_fetch)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is None
-    assert len(made) == 1 and not os.path.exists(made[0])
+def test_E5_no_origin_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, None)
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert seen == []
+    assert L._cloud_base_refusal(repo, {"baseCommit": SHA}, None) == (
+        "launch-cloud-base-remote-unchecked")
 
 
-def test_E8_a_fetch_that_fails_for_a_reason_other_than_the_base_still_refuses_as_absent(
-    local_remote, monkeypatch,
-):
-    # axis: any non-zero fetch exit refuses
-    real = L._git_scrubbed
-
-    def refused(repo_root, *args, **kwargs):
-        if "fetch" in args:
-            return subprocess.CompletedProcess(
-                args, 128, stdout="", stderr="fatal: remote error: upload-pack: not our ref")
-        return real(repo_root, *args, **kwargs)
-
-    monkeypatch.setattr(L, "_git_scrubbed", refused)
-    assert L._base_on_remote(local_remote.repo, local_remote.pushed, None) is False
-    assert L._cloud_base_refusal(
-        local_remote.repo, {"baseCommit": local_remote.pushed}, None
-    ) == "launch-cloud-base-not-on-remote"
+def test_a_git_that_cannot_run_is_unchecked(tmp_path, monkeypatch):
+    repo = _origin(tmp_path, "https://github.com/acme/widgets.git")
+    seen = _gh_runner(monkeypatch, _done(0, SHA))
+    monkeypatch.setattr(L, "_git_scrubbed", lambda *a, **k: None)
+    assert L._base_on_remote(repo, SHA, None) is None
+    assert seen == []
 
 
 # --- the launch that works -----------------------------------------------------------------
