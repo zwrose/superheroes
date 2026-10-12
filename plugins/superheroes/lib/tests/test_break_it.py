@@ -160,6 +160,23 @@ def test_t6_run_one_refuses_a_path_the_head_tracks(repo):
     assert (repo / "tests/test_t.py").read_text() == "assert False, 'tracked'\n"
 
 
+# T6b
+def test_t6b_run_one_runs_a_target_that_already_holds_the_blocks_bytes(repo):
+    content = "assert False, 'kept and failing'\n"
+    _write(repo, "tests/test_t.py", content)
+    head = _commit(repo, "kept")
+    record = break_it.run_one(str(repo), head, _block("tests/test_t.py", content))
+    assert record["outcome"] == "failed" and record["reason"] is None
+    assert "kept and failing" in record["output"]
+
+
+def test_t6b_run_one_still_refuses_a_target_holding_other_bytes(repo):
+    _write(repo, "tests/test_t.py", "assert True\n")
+    head = _commit(repo, "tracked")
+    record = break_it.run_one(str(repo), head, _block("tests/test_t.py", "assert True  # weakened\n"))
+    assert (record["outcome"], record["reason"]) == ("not-run", "path-exists")
+
+
 # T7
 def test_t7_run_one_refuses_a_symlinked_ancestor(repo, tmp_path):
     outside = tmp_path / "outside"

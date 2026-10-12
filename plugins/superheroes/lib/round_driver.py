@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
+import break_it  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
@@ -489,6 +490,11 @@ FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
 
+# Per-round disclosure channels `_break_it_kept_step` records at the converge gate (not
+# `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and
+# `build_receipt` share the same home.
+TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
+
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
 # census fails. None of these is restorable on resume — `compileDrops` and `unverified` carry
@@ -902,10 +908,12 @@ def _compile_by_anchor(findings):
     return out
 
 
-def mechanical_compile(findings, diff_text=None):
+def mechanical_compile(findings, diff_text=None, scope_exempt=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
       2. diff-scope check — drop findings whose (file,line) is not an anchor of the round diff;
+         `scope_exempt` is a set of `id()`s of input dicts the break-it intercept stamped itself —
+         only those skip this check, and any other finding's `breakItRun` stamp is stripped;
       4. dedupe by the per-LOCATION anchor (file, line, normalized-title) — higher severity wins,
          dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
          two distinct-line findings that share a title (a dropped blocker);
@@ -914,6 +922,7 @@ def mechanical_compile(findings, diff_text=None):
     if not isinstance(findings, list):
         findings = []
     valid = diff_scope.parse_diff_lines(diff_text) if diff_text is not None else None
+    exempt = scope_exempt if isinstance(scope_exempt, (set, frozenset)) else frozenset()
     kept, drops = [], []
     for f in findings:
         if not isinstance(f, dict):
@@ -929,7 +938,11 @@ def mechanical_compile(findings, diff_text=None):
             continue
         fc = dict(f)
         fc["line"] = line
-        if not _diff_scope_ok(fc, valid):
+        trusted = id(f) in exempt
+        if not trusted:
+            # axis: a stamp the seat supplied itself never survives compile — only the intercept's own copies carry one
+            fc.pop(break_it.RUN_FIELD, None)
+        if not trusted and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
             continue
@@ -2168,7 +2181,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
-        _fold_panel(state, config, artifact)
+        _fold_panel(state, config, artifact, session_dir=session_dir)
     elif phase == P_VERIFIERS:
         _fold_verifiers(state, config, artifact)
     elif phase == P_SYNTHESIS:
@@ -2316,7 +2329,37 @@ def panel_seat_key_fault(dimensions, artifact):
     return "; ".join(parts)
 
 
-def _fold_panel(state, config, artifact):
+def _break_it_scope(session_dir, state, config):
+    """The (repo root, head) the break-it intercept runs against; either may be None, which the
+    runner turns into a `head-unresolved` not-run."""
+    if session_dir:
+        return _resolve_repo_root(session_dir, state), _session_certified_head(session_dir, state)
+    return config.get("repoRoot"), config.get("headSha")
+
+
+def _break_it_run_keys(runs, compiled):
+    """Put the compiled finding's key on each run entry (the same (file, normalized title) match);
+    None for a passed run, and `droppedAtCompile` for a stamped finding compile still dropped."""
+    by_identity = {}
+    for f in compiled:
+        if isinstance(f, dict) and break_it.is_break_it(f):
+            by_identity.setdefault(
+                (f.get("file"), normalize_title(str(f.get("title") or ""))), f)
+    out = []
+    for run in runs:
+        entry = dict(run)
+        if entry.get("outcome") == break_it.OUTCOME_PASSED:
+            entry["findingKey"] = None
+        else:
+            match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
+            entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
+            if match is None:
+                entry["droppedAtCompile"] = True
+        out.append(entry)
+    return out
+
+
+def _fold_panel(state, config, artifact, session_dir=None):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
     :823-827 parity) but its findings ride the round record as UNVERIFIED/provisional — surfaced,
@@ -2380,7 +2423,19 @@ def _fold_panel(state, config, artifact):
                   "independent verification"
                   % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     incomplete = bool(missing_dims)
-    compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
+    # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
+    repo_root, head = _break_it_scope(session_dir, state, config)
+    kept, runs, exempt = break_it.intercept(raw, repo_root, head)
+    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt)
+    if runs:
+        runs = _break_it_run_keys(runs, compiled)
+        _record_round(state, "breakItRuns", runs)
+        _decision(state, "break-it-run",
+                  "%d run: %d failed, %d passed (dropped), %d not run"
+                  % (len(runs),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
     # (a missing seat) does NOT qualify — it neither counts a confirmation nor resets/reseeds the
@@ -4885,6 +4940,51 @@ def _fold_stall(state, config, artifact):
 
 # ---- terminal certification -----------------------------------------------------------------
 
+def _break_it_kept_step(state, config):
+    """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
+    final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
+    parked (certification withheld). A finding with any other disposition owes no check."""
+    latest = {}
+    for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        for run in (state["rounds"][rkey].get("breakItRuns") or []):
+            if (isinstance(run, dict) and run.get("outcome") != break_it.OUTCOME_PASSED
+                    and isinstance(run.get("findingKey"), str) and run.get("findingKey")):
+                latest[run["findingKey"]] = run
+    if not latest:
+        return False
+    _, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        _park_cannot_certify(state, "break-it test not kept: disposition ledger fault (%s)" % fault)
+        return True
+    head = config.get(FIX_FOLD_HEAD_KEY) or config.get("headSha")
+    rows, failed = [], []
+    for key, run in latest.items():
+        entry = by_key.get(key)
+        disposition = entry.get("disposition") if isinstance(entry, dict) else None
+        if disposition != "fixed":
+            rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
+                         "reason": disposition or "no-ledger-row"})
+            continue
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
+        row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
+               "reason": got.get("reason")}
+        rows.append(row)
+        # axis: a fixed break-it finding whose test is not kept parks, it never certifies
+        if got.get("outcome") != break_it.KEPT:
+            failed.append(row)
+    _record_round(state, "breakItKept", rows)
+    _decision(state, "break-it-kept",
+              "%d checked: %d kept, %d not kept, %d not required"
+              % (len(rows) - sum(1 for r in rows if r["outcome"] == "not-required"),
+                 sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
+                 sum(1 for r in rows if r["outcome"] == "not-required")))
+    if failed:
+        _park_cannot_certify(
+            state, "break-it test not kept: %s (%s)" % (failed[0]["path"], failed[0]["outcome"]))
+        return True
+    return False
+
+
 def _terminal_converged(state, config, full_panel, note=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
     qualifying full confirmation panel ran) or audited-chain (scoped certifying finish, no final
@@ -4901,6 +5001,9 @@ def _terminal_converged(state, config, full_panel, note=None):
         _park_cannot_certify(
             state, "panel incomplete — a configured lens never ran and no complete panel has since "
             "recovered the coverage; certification withheld")
+        return
+    # axis: the converge gate calls the kept check; without it a dropped break-it test certifies
+    if _break_it_kept_step(state, config):
         return
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)

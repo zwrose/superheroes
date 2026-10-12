@@ -187,6 +187,8 @@ run: <one command, run from the repository root, that runs only this test file>
 <the complete file content>
 ```
 
+The loop runs `run` without a shell, from a copy of the repository that holds its tracked files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, `;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run.
+
 ## Do NOT Flag
 
 - **More test coverage in code outside every risk area your dispatch names.** Inside a touched area, a missing case on the risky path is answered with a break-it test, not a coverage request. The same holds the other way: this never covers an unproven check change, which is raised in or out of a risk area.

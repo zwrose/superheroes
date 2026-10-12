@@ -179,6 +179,27 @@ def _write_confined(copy, rel, content):
     return None
 
 
+def _already_kept(copy, rel, sha):
+    """True when ``rel`` is already a regular file in ``copy`` (no symlink on the way) whose bytes
+    hash to ``sha`` — the test was kept in the change, so it is run as it stands."""
+    parts = rel.split("/")
+    current = copy
+    try:
+        for part in parts[:-1]:
+            current = os.path.join(current, part)
+            if not stat.S_ISDIR(os.lstat(current).st_mode):
+                return False
+        target = os.path.join(current, parts[-1])
+        if not stat.S_ISREG(os.lstat(target).st_mode):
+            return False
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    return hashlib.sha256(data).hexdigest() == sha
+
+
 def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     def rec(outcome, reason=None, exit_code=None, output=""):
         return _record(head, block, outcome, reason, exit_code, output)
@@ -190,6 +211,9 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     if added.returncode != 0:
         return rec(OUTCOME_NOT_RUN, "copy-failed",
                    output=_tail_text(added.stderr, True))
+    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
+    if write and _already_kept(copy, block["path"], block.get("sha256")):
+        write = False
     if write:
         try:
             refusal = _write_confined(copy, block["path"], block["content"])
