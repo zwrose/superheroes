@@ -165,6 +165,28 @@ def test_held_line_appended_byte_for_byte(project, capsys, tmp_path, ground, ext
     assert again["appended"] == [] and again["skipped"] == [held["line"]]
 
 
+# axis: the delegation field is emitted as written, independent of the helper's own output.
+def test_ceded_call_line_carries_cedes_and_example(project, capsys):
+    code, held = _run(capsys, "hold", *_fields(
+        ground="ceded-call", cedes="test-fixture naming", example="fixture_old_data"))
+    assert code == 0
+    assert "cedes: test-fixture naming; example: fixture_old_data" in held["line"].split(canon.SEP)
+
+
+# axis: a take-back persists exactly its supersedes field and keeps the earlier ceded entry.
+def test_take_back_line_supersedes_ceded_entry(project, capsys):
+    ceded_id = "%s-abcd1234-2" % WRITTEN
+    ceded = _entry(2).replace("A ruling.", "Fixture naming is ceded.")
+    with open(project["path"], "a") as fh:
+        fh.write(ceded + "\n")
+    code, out = _run(capsys, "append", *_fields(ground="take-back", supersedes=ceded_id))
+    assert code == 0
+    line = out["appended"][0]
+    assert ("supersedes: " + ceded_id) in line.split(canon.SEP)
+    text = open(project["path"]).read().splitlines()
+    assert ceded in text and line in text
+
+
 # axis: the id continues past the default-branch copy, the working copy, and the held lines.
 def test_id_counts_default_copy(project, capsys):
     assert _run(capsys, "hold", *_fields())[1]["id"] == "%s-abcd1234-4" % WRITTEN
