@@ -7830,8 +7830,7 @@ def _nonpanel_reviewer_vendor(state, config, repo_root):
     fixer = cfg.get("fixerVendor")
     if not makers and not fixer:
         return vendor, source
-    chosen, _family = receipt_disclosures.independent_reviewer(
-        cfg, vendor, makers, fixer, receipt_disclosures.proven_live_cells(effective_seat_map(state)))
+    chosen, _family = receipt_disclosures.independent_reviewer(cfg, vendor, makers, fixer)
     if chosen is None:
         return None, None
     if chosen == vendor or source == VENDOR_SOURCE_DEFAULTED:

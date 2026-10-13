@@ -188,24 +188,13 @@ def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=
     return None, fixer_fam
 
 
-def proven_live_cells(seat_map):
-    """Set of proven-live ``(vendor, model, effort)`` cells when the map's cells are probed (or
-    unprobed, so empty); ``None`` when synthesized from the vendor rollup (no per-cell proof)."""
-    if not isinstance(seat_map, dict) or seat_map.get("liveCellsSource") not in ("probed", "unprobed"):
-        return None
-    return {tuple(c) for c in (seat_map.get("liveCells") or ()) if isinstance(c, (list, tuple))}
-
-
-def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None,
-                         live_cells=None):
+def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None):
     """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
 
     Barred families are the makers' plus the fixer's (a fixer is a maker by definition). The
     preferred vendor wins when its reviewer family is known and not barred; otherwise the first live
     vendor that qualifies. A family ``family_for`` cannot resolve is never independent, and the
-    fixer's own vendor never reviews its fix, whatever its family resolves to. With ``live_cells``
-    (see ``proven_live_cells``) a non-claude vendor qualifies only when its dispatched verifier cell
-    is in the set — fail closed."""
+    fixer's own vendor never reviews its fix, whatever its family resolves to."""
     barred = set(maker_families or ())
     if fixer_vendor:
         fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
@@ -217,9 +206,6 @@ def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), f
     candidates += [v for v in live if v not in candidates]
     for v in candidates:
         if fixer_vendor and v == fixer_vendor:
-            continue
-        if (live_cells is not None and v != "claude"
-                and (v, *(model_registry.matrix_config("verifier", v) or ())) not in live_cells):
             continue
         cand_fam = model_registry.family_for("reviewer", v)
         if cand_fam is not None and cand_fam not in barred:
