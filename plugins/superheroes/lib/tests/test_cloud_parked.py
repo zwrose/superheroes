@@ -915,6 +915,24 @@ def test_a_supersession_recorded_during_the_github_reads_still_fences_the_send_b
     assert out["sendBack"] == [] and out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
 
 
+def test_a_first_lane_superseded_during_the_second_prs_read_is_not_sent_back(w):
+    _lane(w, "l-a", 101, "session-a", "a", finished=True)
+    _lane(w, "l-b", 102, "session-b", "b", finished=True)
+    _park(w, 10, issue=101)
+    _park(w, 11, issue=102)
+    _renew(w)
+    class Racing(Gh):
+        def __call__(self, argv, **kw):
+            if argv[-1] == _pull_path(11):
+                _supersede(w, "l-a")
+            return Gh.__call__(self, argv, **kw)
+    racing = Racing()
+    racing.comments, racing.pulls = w.gh.comments, w.gh.pulls
+    out = CP.send_back(w.repo, TODAY, env=w.env, run=racing)
+    assert [c["pr"] for c in out["sendBack"]] == [11]
+    assert out["superseded"] == [{"pr": 10, "launchId": "l-a"}]
+
+
 def test_a_park_after_the_original_lane_was_superseded_binds_to_the_replacement(w):
     _lane(w, "l-old", 101, "old-session", "a", finished=True)
     _park(w, 10, issue=101)
