@@ -900,6 +900,21 @@ def test_t9_a_lane_a_successor_replaced_is_listed_apart_and_never_sent_back(w):
     assert _entries(w)[0]["outcome"] is None
 
 
+def test_a_supersession_recorded_during_the_github_reads_still_fences_the_send_back(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _renew(w)
+    class Racing(Gh):
+        def __call__(self, argv, **kw):
+            if argv[-1] == _pull_path(10):
+                _supersede(w, "l-old")
+            return Gh.__call__(self, argv, **kw)
+    racing = Racing()
+    racing.comments, racing.pulls = w.gh.comments, w.gh.pulls
+    out = CP.send_back(w.repo, TODAY, env=w.env, run=racing)
+    assert out["sendBack"] == [] and out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
+
+
 def test_a_park_after_the_original_lane_was_superseded_binds_to_the_replacement(w):
     _lane(w, "l-old", 101, "old-session", "a", finished=True)
     _park(w, 10, issue=101)

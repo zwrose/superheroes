@@ -302,7 +302,6 @@ def send_back(repo_root, today=None, *, env=None, run=None):
            "superseded": [],
            "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY)}
                          for e in entries if e["outcome"] == UNCERTAIN]}
-    superseded, recover_readable = _sib("cloud_recover").superseded_ids(repo_root, env)
     changed = False
     for e in (e for e in entries if e["outcome"] is None):
         pull = _pull(e["repo"], e["pr"], env, run)
@@ -335,7 +334,8 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         if not lane.get("cloudSessionName"):
             out["noLane"].append({"pr": e["pr"], "issue": issue})
             continue
-        # axis: a lane a successor was composed for is never sent to, and an unreadable record of that is read as "may be superseded"
+        # axis: a lane a successor was composed for is never sent to, and an unreadable record of that is read as "may be superseded"; read last, after this entry's GitHub reads
+        superseded, recover_readable = _sib("cloud_recover").superseded_ids(repo_root, env)
         if not recover_readable:
             out["unread"].append({"pr": e["pr"], "reason": "recover-state-unreadable"})
             continue

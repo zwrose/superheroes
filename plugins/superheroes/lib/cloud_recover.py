@@ -340,8 +340,6 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         return out if wrote["ok"] or wrote["reason"] == "recover-state-unreadable" else wrote
     if out["evidence"] == "handover":
         out["stoppedAt"] = _epoch(handover["createdAt"])
-    elif _is_number(age) and age >= 0:
-        out["stoppedAt"] = now - age
     entry = {"verdict": "stopped", "evidence": out["evidence"], "at": _iso(now), "stoppedAt": out["stoppedAt"],
              "handoverSha": handover["sha"] if handover else None}
     wrote = _record(repo_root, "assessed", launch_id, entry, env=env)

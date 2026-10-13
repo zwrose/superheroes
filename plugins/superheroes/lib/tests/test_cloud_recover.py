@@ -376,14 +376,13 @@ def test_assess_checks_its_arguments(w):
     assert CR.assess(w.root, "l1", session_state="idle", repo="nope", run=w.gh)["reason"] == "repo-invalid"
 
 
-def test_a_stopped_verdict_is_recorded_with_when_it_stopped(w):
+def test_a_stopped_verdict_without_a_handover_records_no_stop_time(w):
     _lane(w, "l1")
     now = _at(10, 0, 30)
     out = _assess(w, state="archived", age=30, now=now)
-    assert out["stoppedAt"] == _at(10, 0)
+    assert out["stoppedAt"] is None  # GitHub activity age is not when the session stopped
     assert _state(w)["assessed"] == {"l1": {"verdict": "stopped", "evidence": "session-archived",
-                                            "at": "2026-10-12T10:00:30Z", "stoppedAt": _at(10, 0), "handoverSha": None}}
-    assert _assess(w, "l1", state="absent", now=now)["stoppedAt"] is None  # no age, no time
+                                            "at": "2026-10-12T10:00:30Z", "stoppedAt": None, "handoverSha": None}}
 
 
 def test_a_state_that_cannot_be_written_refuses_the_stopped_verdict(w, monkeypatch):
@@ -770,7 +769,7 @@ def test_t5_a_delayed_push_is_counted_from_the_push_not_the_commit(w):
     _push(w, BRANCH, "a", when="2026-10-12T08:00:00+0000")
     w.gh.activity[BRANCH] = [_event(BRANCH, _git(w.builder, "rev-parse", "HEAD"), _stamp(9, 55))]
     _lane(w, "l1")
-    stopped = _assess(w, state="failed", age=30, now=_at(10, 0, 30))["stoppedAt"]
+    stopped = _at(10, 0)
     entry = CR.pushed(w.root, 17, repo=REPO, run=w.gh)["newest"]
     assert entry["pushTimeSource"] == "push" and entry["committedAt"] == _at(8, 0)
     assert "About 5 minutes of work since its last push" in CR.message(
