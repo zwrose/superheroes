@@ -899,14 +899,30 @@ def test_t_r1_a_version_mismatch_refusal_relaunches_on_the_owners_machine_naming
         # setup record, a calibration stamp and a project setting, none of which this fixture has, and without
         # them it reports no cloud version at all.
         conditions = {name: name != "version" for name in cloud_ready.CONDITION_ORDER}
-        return cloud_ready._result(conditions, setting=True, cloud_version=kw["reported"]["pluginVersion"],
+        return cloud_ready._result(conditions, setting=False, cloud_version=kw["reported"]["pluginVersion"],
                                    advisor_version="1.2.3")
 
     # The real routing step; `needs_fn` is also stubbed (to no needs) because the fixture repository keeps no Canon or
     # specs in-repo, which the real `machine_needs` reads as a need of the owner's machine and would answer "needs".
-    placement = launch_place.route(w.root, premise, readiness_fn=readiness, needs_fn=lambda *a, **k: [])
+    # The cloud setting is off here: the launch word is what points the build at the cloud, so the report names both.
+    placement = launch_place.route(w.root, premise, launch_place.CLOUD_WORD, readiness_fn=readiness,
+                                   needs_fn=lambda *a, **k: [])
     assert placement["place"] == "local" and placement["reason"] == "version"
     assert "1.2.2" in launch_place.reason_text(placement) and "1.2.3" in launch_place.reason_text(placement)
+
+    # Without the word, and with the setting off, nothing points at the cloud: the report names neither version.
+    # That is why the doctrine's relaunch passes the word.
+    wordless = launch_place.route(w.root, premise, readiness_fn=readiness, needs_fn=lambda *a, **k: [])
+    assert launch_place.reason_text(wordless) is None
+
+
+def test_the_relaunch_doctrine_passes_the_cloud_word():
+    doctrine = os.path.join(os.path.dirname(__file__), "..", "..", "skills", "showrunner", "reference",
+                            "orchestration.md")
+    with open(doctrine, encoding="utf-8") as f:
+        paragraphs = re.split(r"\n\s*\n", f.read())
+    [relaunch] = [p for p in paragraphs if "relaunch-refusal" in p]
+    assert "launcher.py launch --place cloud" in " ".join(relaunch.split())
 
 
 def test_t_r1b_a_second_relaunch_cannot_make_two_builders(w):

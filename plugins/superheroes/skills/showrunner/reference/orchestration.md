@@ -333,6 +333,6 @@ advisor's calls. Three of those calls have mechanics beyond the charter:
   a lane the ledger has not ended or that has no `stopped` assessment; `send-back` never messages a
   superseded lane; and the successor's intake refuses a branch that moved. A cloud lane that ended
   `refusal` because the cloud runs another plugin version is relaunched at once: run
-  `cloud_recover.py relaunch-refusal`, then launch its premise with `launcher.py launch`. The
-  version the cloud reported stands as the cloud's, so the build runs on the owner's machine and
-  the launch report names both versions.
+  `cloud_recover.py relaunch-refusal`, then launch its premise with `launcher.py launch --place cloud`.
+  The version the cloud reported stands as the cloud's, so the build runs on the owner's machine
+  and the launch report names both versions.
