@@ -799,3 +799,41 @@ def test_a_walk_stop_key_changes_when_anything_it_shows_changes(edit):
 def test_a_walk_stop_key_digest_length_is_the_width_the_schema_pattern_names():
     width = int(re.search(r"\{(\d+)\}", SCHEMA["$defs"]["walkStop"]["properties"]["key"]["pattern"]).group(1))
     assert all(len(k.rsplit("-", 1)[1]) == width == pr_sheet.STOP_DIGEST for k in _keys_of(bundle(WALK)[1]).values())
+
+
+def _placed_key(advisor, place):
+    sheet = pr_sheet.build(bundle(WALK)[0], copy.deepcopy(advisor), WORDS, place=place)
+    return {s["id"]: s["key"] for s in sheet["prSheet"]["walk"]["stops"]}
+
+
+def test_a_walk_stop_key_changes_when_a_copied_picture_changes():
+    # Axis: with pictures copied, a different file (a different src) or a picture that became missing gives the stop a new key; other stops keep theirs.
+    advisor = bundle(WALK)[1]
+    before = _placed_key(advisor, lambda path: "pictures/aaaaaaaaaaaa.png")
+    other_file = _placed_key(advisor, lambda path: "pictures/bbbbbbbbbbbb.png")
+    missing = _placed_key(advisor, lambda path: None)
+    pictured = [s["id"] for s in advisor["walk"]["stops"] if s.get("pictures")]
+    assert pictured
+    for stop_id in pictured:
+        assert len({before[stop_id], other_file[stop_id], missing[stop_id]}) == 3
+    for stop_id in set(before) - set(pictured):
+        assert before[stop_id] == other_file[stop_id] == missing[stop_id]
+
+
+def test_a_walk_stop_key_changes_when_only_one_of_the_stops_pictures_changes_src():
+    # Axis: changing the src of just one picture on a stop is enough to change the stop's key.
+    advisor = bundle(WALK)[1]
+    first = advisor["walk"]["stops"][0]["pictures"][0]["path"]
+    before = _placed_key(advisor, lambda path: "pictures/aaaaaaaaaaaa.png")
+    after = _placed_key(advisor, lambda path: "pictures/bbbbbbbbbbbb.png" if path == first else "pictures/aaaaaaaaaaaa.png")
+    assert after["p1"] != before["p1"]
+
+
+@pytest.mark.parametrize("edit", [lambda p: p.update(alt="Another alt"), lambda p: p.update(caption="Another caption")], ids=["alt", "caption"])
+def test_a_walk_stop_key_changes_when_a_copied_pictures_alt_or_caption_changes(edit):
+    # Axis: with the picture copied, a changed alt or caption still gives the stop a new key.
+    advisor = bundle(WALK)[1]
+    place = lambda path: "pictures/aaaaaaaaaaaa.png"  # noqa: E731
+    before = _placed_key(advisor, place)["p1"]
+    edit(advisor["walk"]["stops"][0]["pictures"][0])
+    assert _placed_key(advisor, place)["p1"] != before
