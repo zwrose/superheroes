@@ -73,6 +73,11 @@ test('click-only: the band shows and nothing fires, however far past the trigger
   expect(run({ mode: 'click-only', tokens: TRIGGER * 2 }).fire).toBe(false)
 })
 
+test('click-only honours Snooze: below its boundary no band, at it the band returns', () => {
+  expect(run({ mode: 'click-only', snoozeUntilTokens: TRIGGER + 1 })).toEqual({ showBand: false, fire: false, reason: 'snoozed' })
+  expect(run({ mode: 'click-only', snoozeUntilTokens: TRIGGER })).toMatchObject({ showBand: true, reason: 'click-only' })
+})
+
 test('off: no band and no fire', () => {
   expect(run({ mode: 'off' })).toEqual({ showBand: false, fire: false, reason: 'off' })
   expect(run({ mode: 'off', tokens: TRIGGER * 2 }).showBand).toBe(false)

@@ -101,7 +101,9 @@ export const decide = (input: DecideInput): Decision => {
   const band = (fire: boolean, reason: string): Decision => ({ showBand: true, fire, reason })
 
   if (mode !== AUTO_MODE) {
-    return band(false, 'click-only')
+    return tokens < (snoozeUntilTokens ?? 0)
+      ? { showBand: false, fire: false, reason: 'snoozed' }
+      : band(false, 'click-only')
   }
   if (!isInteractive) {
     return band(false, 'headless')

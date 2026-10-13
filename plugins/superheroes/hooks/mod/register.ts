@@ -307,16 +307,22 @@ async function forgetFill($: EngineInterface): Promise<void> {
 // No instructions here: the `session.compact` hook steers this compaction too. The
 // checkpoint stays set (`compacting`) until this resolves, so a measurement taken at the
 // still-high fill starts no second one; the toast waits for the compaction itself.
-function compactSoon($: EngineInterface, options: unknown, isRetry = false): void {
+function compactSoon($: EngineInterface, options: unknown, startedAt: number, isRetry = false): void {
   $.clock.after(COMPACT_DELAY_MS, async () => {
     let didFail = false
     let skipReason = ''
     let isLast = isRetry
 
     try {
+      const pending = (await $.state.get(checkpoint)).value
+
+      // another compaction already satisfied (or a new checkpoint replaced) this one
+      if (!pending?.compacting || pending.startedAt !== startedAt) {
+        return
+      }
       if (typeof (await $.state.get(isTurnActive)).value === 'string') {
         if ((await runningCheckpoint($)) !== null) {
-          compactSoon($, options, isRetry)
+          compactSoon($, options, startedAt, isRetry)
 
           return
         }
@@ -333,7 +339,7 @@ function compactSoon($: EngineInterface, options: unknown, isRetry = false): voi
       }
     } catch (error) {
       if (!isLast) {
-        compactSoon($, options, true)
+        compactSoon($, options, startedAt, true)
 
         return
       }
@@ -386,7 +392,7 @@ async function finishCheckpoint($: EngineInterface, options: unknown, saveFailed
 
   if (why === null) {
     await $.state.set(checkpoint, { ...value, compacting: true })
-    compactSoon($, options)
+    compactSoon($, options, value.startedAt)
   } else {
     await endWithoutCompacting($, options, value.fill, `Auto-checkpoint skipped: ${why}; next try after more context`)
   }
@@ -463,14 +469,18 @@ export const register: Register = (on, options) => {
 
     const steered = await steer($, e)
 
-    await forgetFill($)
-
     const result = await next(steered)
 
-    // published once the compaction is done: a measurement during it sees the old fill
+    // published once the compaction is done: a measurement during it sees the old fill;
+    // a skipped one keeps the Snooze and band
     if (!('skip' in result)) {
+      await forgetFill($)
       try {
         await $.state.set(rearmAfterCompact, true)
+        // a pending automatic compaction is satisfied by this one
+        if ((await $.state.get(checkpoint)).value?.compacting) {
+          await $.state.set(checkpoint, null)
+        }
       } catch (error) {
         note($, `session.compact state: ${String(error)}`)
       }

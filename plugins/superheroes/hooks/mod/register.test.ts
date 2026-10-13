@@ -1333,6 +1333,35 @@ test('a compaction that resolves as skipped sets no re-arm flag', async ($, on) 
   expect(r.sets.filter(([key]) => key === 'rearmAfterCompact')).toEqual([])
 })
 
+test('a skipped compaction keeps the owner Snooze: a measurement below it starts nothing', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { compactSkip: 'vetoed by a hook' })
+
+  await start($)
+  await measure($, r, NEAR)
+  await (await mountBand($, 'terminal')).press({ key: 'snooze' })
+  expect(await compact($)).toEqual({ skip: 'vetoed by a hook' })
+
+  await measure($, r, PAST)
+  await r.clock.settle()
+  expect(r.commands).toEqual([])
+  expect(r.sets.filter(([key]) => key === 'snoozeUntilTokens').at(-1)).toEqual(['snoozeUntilTokens', NEAR + 100000])
+})
+
+test('another compaction succeeding retires the pending automatic one', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await compact($)
+
+  await r.clock.advance(5000)
+  expect(r.compactAttempts).toBe(1)
+  expect(r.toasts).not.toContain(SUCCESS)
+})
+
 test(
   'a re-arm below the trigger sets no snooze: after a compaction to 80000 the trigger at 117000 runs the checkpoint',
   { options: { autoCheckpointTokens: 500000, autoCheckpointAllowance: 50000 } },
