@@ -19,6 +19,7 @@ import cloud_builder  # noqa: E402
 import cloud_check  # noqa: E402
 import cloud_parked as CP  # noqa: E402
 import cloud_pass  # noqa: E402
+import cloud_recover  # noqa: E402
 import cloud_ready as CR  # noqa: E402
 import cloud_setup as CS  # noqa: E402
 import control_plane  # noqa: E402
@@ -240,7 +241,7 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     _park(w, 10, issue=101)
     _renew(w)
     out = _send(w)
-    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "uncertain": [], "sendBack": [{
+    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
         "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
     assert _entries(w)[0]["outcome"] is None
@@ -872,3 +873,51 @@ def test_a_sent_overlapping_a_state_writing_send_back_keeps_the_sent_back_outcom
     second.join(10)
     assert second_box["out"] == {"ok": True, "action": "written"}
     assert {e["pr"]: e["outcome"] for e in _entries(w)} == {10: "sent-back", 12: "closed"}
+
+
+# ---------------------------------------------------------------- a lane a successor replaced
+
+
+def _recover_file(w):
+    return os.path.join(os.path.dirname(ll.ledger_path(w.repo, w.env)["path"]), cloud_recover.STATE_NAME)
+
+
+def _supersede(w, launch_id):
+    mark = {"at": "2026-10-12T10:00:00Z", "branch": "issue-101-work", "sha": "a" * 40}
+    with open(_recover_file(w), "w", encoding="utf-8") as fh:
+        json.dump({"superseded": {launch_id: mark}}, fh)
+
+
+def test_t9_a_lane_a_successor_replaced_is_listed_apart_and_never_sent_back(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _renew(w)
+    _supersede(w, "l-old")
+    out = _send(w)
+    assert out["sendBack"] == []
+    assert out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
+    assert out["unread"] == [] and out["noLane"] == []
+    assert _entries(w)[0]["outcome"] is None
+
+
+def test_a_lane_another_lane_replaced_is_still_sent_back(w):
+    _lane(w, "l-keep", 101, "keep-session", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    _supersede(w, "l-other")
+    out = _send(w)
+    assert out["superseded"] == []
+    assert [s["launchId"] for s in out["sendBack"]] == ["l-keep"]
+
+
+def test_a_recover_state_that_cannot_be_read_sends_nothing_back(w):
+    _lane(w, "l-1", 101, "session-1", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    with open(_recover_file(w), "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    out = _send(w)
+    assert out["sendBack"] == [] and out["superseded"] == []
+    assert out["unread"] == [{"pr": 10, "reason": "recover-state-unreadable"}]
+    with open(_recover_file(w), encoding="utf-8") as fh:
+        assert fh.read() == "{not json"
