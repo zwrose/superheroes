@@ -209,14 +209,19 @@ def _lane(repo_root, launch_id, env):
     return info, reserved, None
 
 
+def _started_later(repo_root, info, env):
+    """Whether a later launch for the lane's issue has started."""
+    ll = _sib("launch_ledger")
+    launches = ll.fold(ll.read(repo_root, env=env)["records"])["launches"].values()
+    return any(i["issue"] == info["issue"] and i["reservedIndex"] > info["reservedIndex"] and "startedTs" in i for i in launches)
+
+
 def _replaced(repo_root, launch_id, info, env):
     """Whether a successor was composed for the lane and a replacement has since started. A mark with no
     started launch behind it is a recovery interrupted before its launch, so the lane stays recoverable."""
     if launch_id not in superseded_ids(repo_root, env)[0]:
         return False
-    ll = _sib("launch_ledger")
-    launches = ll.fold(ll.read(repo_root, env=env)["records"])["launches"].values()
-    return any(i["issue"] == info["issue"] and i["reservedIndex"] > info["reservedIndex"] and "startedTs" in i for i in launches)
+    return _started_later(repo_root, info, env)
 
 
 def _newest_comment(repo, issue, since, env, run, parse):
@@ -440,7 +445,7 @@ def _own_premise(reserved):
 
 def relaunch_refusal(repo_root, launch_id, *, repo, env=None, run=None):
     """The premise that relaunches a lane that ended as a version-mismatch refusal: its own premise, stamps removed,
-    reporting the cloud's version (from the lane's whole refusal comment, posted since it started). Records nothing."""
+    reporting the cloud's version (from the lane's whole refusal comment, posted since it was reserved). Records nothing."""
     env = _env(env)
     bad = _inputs(repo=repo, launch_id=launch_id)
     if bad:
@@ -452,11 +457,15 @@ def relaunch_refusal(repo_root, launch_id, *, repo, env=None, run=None):
         return _refusal("lane-not-ended")
     if _latest_outcome(info) != "refusal":
         return _refusal("lane-not-refusal")
+    if _started_later(repo_root, info, env):
+        return _refusal("lane-replaced")
     premise, refused = _own_premise(reserved)
     if refused:
         return refused
-    start = info.get("startedTs", info.get("reservedTs"))
-    found, read = (_newest_comment(repo, info["issue"], start, env, run, _sib("cloud_builder").refusal_versions)
+    # The reservation precedes the spawn, so an intake refusal posted before the start receipt still counts;
+    # whole seconds, since GitHub stamps comments to the second.
+    start = info.get("reservedTs")
+    found, read = (_newest_comment(repo, info["issue"], int(start), env, run, _sib("cloud_builder").refusal_versions)
                    if _is_number(start) else (None, False))
     if not read:
         return _refusal("comments-unreadable")

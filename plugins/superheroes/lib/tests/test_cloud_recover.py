@@ -953,6 +953,26 @@ def test_a_refusal_comment_older_than_the_lane_is_ignored(w):
     assert _relaunch(w) == {"ok": False, "reason": "refusal-comment-missing"}
 
 
+def test_a_refusal_posted_after_the_reservation_but_before_the_start_receipt_counts(w):
+    _refused_lane(w)  # reserved 7260 seconds ago, started 7200
+    w.gh.comments = [_comment(MISMATCH, age=7230)]
+    assert _relaunch(w)["ok"] is True
+
+
+def test_a_refusal_in_the_same_second_as_the_reservation_counts(w):
+    _refused_lane(w)
+    reserved = ll.fold(ll.read(w.root)["records"])["launches"]["l1"]["reservedTs"]
+    w.gh.comments = [dict(_comment(MISMATCH), created_at=datetime.datetime.fromtimestamp(int(reserved), UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))]
+    assert _relaunch(w)["ok"] is True
+
+
+def test_a_refusal_lane_with_a_later_started_launch_is_refused_as_replaced(w):
+    _refused_lane(w, MISMATCH)
+    assert _relaunch(w)["ok"] is True
+    _lane(w, "l2", start_age=60)  # a later launch for issue 17, started
+    assert _relaunch(w) == {"ok": False, "reason": "lane-replaced"}
+
+
 def test_with_two_refusal_comments_the_newest_wins(w):
     newer = cloud_builder._refusal_comment("plugin-version-mismatch", running="1.2.4", launched="1.2.3")
     _refused_lane(w, MISMATCH, newer)
@@ -990,6 +1010,9 @@ def test_t_r2_a_cloud_lane_answers_working_and_stopped_for_the_resume_rows(w):
     assert "`cloud_recover.py assess`" in paragraph
     assert "`working` satisfies row 2" in paragraph and "`stopped` satisfies row 4" in paragraph
     assert "orchestration.md` § Adoption mechanics" in paragraph
+    assert "`ask-to-push`" in paragraph and "(`ask`, then `asked`)" in paragraph and "`awaiting-handover`" in paragraph
+    assert "still needs the pull-request read" in paragraph and "the park-record read" in paragraph
+    assert "satisfies no row" in paragraph
 
 
 # ---------------------------------------------------------------- the one input check
