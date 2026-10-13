@@ -204,3 +204,34 @@ def test_hand_submit_of_an_unseatable_single_seat_review_phase_is_refused(tmp_pa
                         RD.state_hash(state), {"findings": []})
     assert out["ok"] is False and out["reason"] == "nonpanel-reviewer-unseatable"
     assert TRI._state(session_dir)["pending"]["phase"] == phase  # the step survives the refusal
+
+
+def test_independent_reviewer_requires_the_dispatched_cell_to_be_proven_live():
+    cfg = {"vendors": ["claude", "codex", "cursor"]}
+    makers = frozenset({"anthropic"})
+    # codex is live only at a pinned cell; the verifier cell it would dispatch is not proven
+    pinned = {("codex", "gpt-6-astra", "high"), ("cursor", "cursor-grok-4.6", "xhigh")}
+    assert RDS.independent_reviewer(cfg, "codex", makers, None, pinned) == ("cursor", "xai")
+    assert RDS.independent_reviewer(cfg, "codex", makers, None, set()) == (None, None)
+    # claude is never probed; no per-cell proof (None) keeps vendor membership
+    assert RDS.independent_reviewer(cfg, "codex", makers, None, None) == ("codex", "openai")
+    assert RDS.independent_reviewer({"vendors": ["claude"]}, "claude", frozenset(), None,
+                                    set()) == ("claude", "anthropic")
+
+
+def test_proven_live_cells_reads_probed_cells_and_fails_closed_when_unprobed():
+    assert RDS.proven_live_cells({"liveCellsSource": "probed", "liveCells": [["codex", "m", "high"]]}) \
+        == {("codex", "m", "high")}
+    assert RDS.proven_live_cells({"liveCellsSource": "unprobed"}) == set()
+    assert RDS.proven_live_cells({"liveCellsSource": "synthesized", "liveCells": []}) is None
+    assert RDS.proven_live_cells({}) is None
+
+
+def test_hand_submit_guard_reads_the_shared_missing_policy(tmp_path, monkeypatch):
+    session_dir, state = _hand_unseatable_session(tmp_path, "b5-policy")
+    state["pending"] = dict(state["pending"], phase=RD.P_GAPSWEEP)
+    RD.save_state(session_dir, state)
+    monkeypatch.setattr(RA, "missing_policy", lambda phase: RA.MISSING_FOLD_FAIL_CLOSED)
+    out = RD.cmd_submit(session_dir, RD.P_GAPSWEEP, state["pending"]["attempt"],
+                        RD.state_hash(state), {"findings": []})
+    assert out.get("reason") != "nonpanel-reviewer-unseatable"

@@ -6947,7 +6947,8 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "collection-manifest-key"})
             return {"ok": False, "reason": fault}
-    if (not _via_advance and phase in (P_GAPSWEEP, P_SCOPED)
+    if (not _via_advance and phase in _NONPANEL_REVIEWER_PHASES
+            and _adapters().missing_policy(phase) == _adapters().MISSING_REFUSE_FOLD
             and _nonpanel_unseatable(state, session_dir)):
         # No reviewer outside the makers' families can be seated: no order was emitted for this
         # phase, so a hand artifact for it is not a review that ran. Refuse the fold (the advance
@@ -7829,7 +7830,8 @@ def _nonpanel_reviewer_vendor(state, config, repo_root):
     fixer = cfg.get("fixerVendor")
     if not makers and not fixer:
         return vendor, source
-    chosen, _family = receipt_disclosures.independent_reviewer(cfg, vendor, makers, fixer)
+    chosen, _family = receipt_disclosures.independent_reviewer(
+        cfg, vendor, makers, fixer, receipt_disclosures.proven_live_cells(effective_seat_map(state)))
     if chosen is None:
         return None, None
     if chosen == vendor or source == VENDOR_SOURCE_DEFAULTED:
