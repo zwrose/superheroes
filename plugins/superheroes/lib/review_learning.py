@@ -26,6 +26,7 @@ import core_md  # noqa: E402
 import project_config  # noqa: E402
 import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
+import review_record_session  # noqa: E402
 import review_seats  # noqa: E402
 
 SINCE_KEY = "reviewLearningSince"
@@ -203,9 +204,6 @@ def _seats(name):
     return out
 
 
-_MERGED = re.compile(r"\(merged into [^)]*\)")  # the mark review_record_session puts on a merged member row's reason
-
-
 def _finding_ok(f):
     """A finding row with a hashable identity and an outcome that is null (undecided) or a known one."""
     if not isinstance(f, dict):
@@ -217,11 +215,13 @@ def _finding_ok(f):
 
 def _merged_member(f):
     """True for a member row folded into a representative; the representative carries the catch."""
-    return isinstance(f.get("reason"), str) and bool(_MERGED.search(f["reason"]))
+    return review_record_session.merged_into(f.get("reason")) is not None
 
 
 def tally(records, escapes, since, *, until=None, window_days=None):
-    """Count seat reviews and catches. `records` is every review record of each PR it covers, earliest
+    """Count seat reviews and catches. A catch is credited to the seat whose lens the finding names (the
+    record's finding `reviewer` is its dimension, not the dispatch that raised it), so `seats[...]["caught"]`
+    reads "findings fixed in this seat's lens", whichever dispatch raised them. `records` is every review record of each PR it covers, earliest
     included: a catch is dated by the earliest record carrying it, so a record whose `previousRecord`
     is not among the given records reads `incomplete-evidence`, never a count."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
@@ -233,7 +233,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return dict(out, reason="no-adoption-day")
     start = _day(since)
     bad_window = window_days is not None and not (isinstance(window_days, int) and window_days > 0)
-    if start is None or end is None or bad_window:
+    if start is None or end is None or bad_window or end < start:  # an `until` before the adoption day measures nothing
         return dict(out, reason="bad-input")
     first = end - datetime.timedelta(days=window_days - 1) if window_days else start
     low = max(first, start)  # nothing dated before the adoption day ever counts (rule 1, 7)
@@ -246,7 +246,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
     seen, unattributed, incomplete = {}, 0, False  # incomplete: evidence went missing, so no count is a zero
-    given = {v for r in records if isinstance(r, dict) for v in (r.get("url"), r.get("id")) if v is not None} \
+    given = {v for r in records if isinstance(r, dict) for v in (r.get("url"), r.get("id")) if isinstance(v, (str, int))} \
         if isinstance(records, list) else set()
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
@@ -268,7 +268,13 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             incomplete = True
             continue
         prev = rec["previousRecord"]  # the link to the record before it, or null for the first
-        if prev is not None and not (isinstance(prev, dict) and any(prev.get(k) in given for k in ("url", "id") if prev.get(k) is not None)):
+        if prev is not None and not (isinstance(prev, dict) and any(isinstance(prev.get(k), (str, int)) and prev.get(k) in given for k in ("url", "id"))):
+            left["malformed"] += 1
+            incomplete = True
+            continue
+        pr, session = rec.get("pr"), rec.get("sessionId")  # the review's identity: without both, reviews and catches collapse together
+        if not (isinstance(pr, (str, int)) and not isinstance(pr, bool) and pr != ""
+                and isinstance(session, str) and session.strip()):
             left["malformed"] += 1
             incomplete = True
             continue

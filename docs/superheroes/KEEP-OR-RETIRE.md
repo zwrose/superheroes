@@ -1554,7 +1554,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** The generalist code reviewer (`plugins/superheroes/agents/code-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
 - **Start date.** 2026-10-13.
-- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Catch-based, 45 days: the findings fixed (outcome `fixed`) in this seat's lens, read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -1564,7 +1564,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** The test role (`plugins/superheroes/agents/test-role.md`). It costs a dispatch per full-lane review, with its time and tokens.
 - **Start date.** 2026-10-13.
-- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Catch-based, 45 days: the findings fixed (outcome `fixed`) in this seat's lens, read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -1574,7 +1574,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** The architecture specialist (`plugins/superheroes/agents/architecture-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
 - **Start date.** 2026-10-13.
-- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Catch-based, 45 days: the findings fixed (outcome `fixed`) in this seat's lens, read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -1584,7 +1584,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** The security specialist (`plugins/superheroes/agents/security-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
 - **Start date.** 2026-10-13.
-- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Catch-based, 45 days: the findings fixed (outcome `fixed`) in this seat's lens, read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -1594,7 +1594,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** The premortem specialist (`plugins/superheroes/agents/premortem-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
 - **Start date.** 2026-10-13.
-- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Catch-based, 45 days: the findings fixed (outcome `fixed`) in this seat's lens, read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.

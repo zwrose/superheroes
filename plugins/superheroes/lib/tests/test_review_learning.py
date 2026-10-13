@@ -1,5 +1,6 @@
 """Tests for lib/review_learning.py (#1718, review C10): the adoption day, the owner-approved
 calibration change, and the seat tally."""
+import datetime
 import json
 import os
 import subprocess
@@ -376,7 +377,8 @@ def test_tally_undated_and_malformed_records_contribute_nothing():
 
 def test_tally_until_defaults_to_today_utc():
     got = RL.tally([], [], D)
-    assert got["window"]["until"] and got["measured"] is True
+    assert got["window"]["until"] == datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    assert got["measured"] is True
 
 
 @pytest.mark.parametrize("name, seats", [
@@ -546,3 +548,45 @@ def test_tally_a_merged_member_is_not_a_second_catch():
     member = dict(_finding("a", "Security"), reason="folded (merged into B)")
     got = RL.tally([_record(1, "s", D, rows, [member, rep])], [], D, until="2026-10-11")
     assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
+
+
+# --- review C10 round 5 fixes ---
+
+@pytest.mark.parametrize("drop", [{"pr": None}, {"sessionId": None}, {"pr": True}, {"sessionId": ""}, {"pr": [1]}, {"sessionId": 7}])
+def test_tally_record_missing_review_identity_is_incomplete_evidence(drop):
+    rec = dict(_record(1, "s", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")]), **drop)
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+    assert got["leftOut"]["malformed"] == 1
+    for gone in ("pr", "sessionId"):
+        bare = {k: v for k, v in rec.items() if k != gone}
+        assert RL.tally([bare], [], D, until="2026-10-11")["reason"] == "incomplete-evidence"
+
+
+def test_tally_unhashable_record_identity_reads_unmeasured_not_a_crash():
+    first = dict(_record(1, "s", "2026-10-10", [_row("code-reviewer")]), id=["x"], url={"u": 1})
+    last = dict(_record(1, "t", "2026-10-11", [_row("code-reviewer")]), previousRecord={"id": ["x"]})
+    got = RL.tally([first, last], [], D, until="2026-10-11")
+    assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
+
+
+def test_tally_until_before_adoption_day_is_bad_input():
+    got = RL.tally([], [], "2026-10-10", until="2026-10-09")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "bad-input", {})
+
+
+def test_tally_catch_is_credited_to_the_lens_seat():
+    rec = _record(1, "s", D, [_row("code-reviewer"), _row("security-reviewer")], [_finding("k", "Security")])
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["seats"]["security-reviewer"]["caught"] == 1 and got["seats"]["code-reviewer"]["caught"] == 0
+    assert "lens" in RL.tally.__doc__
+
+
+def test_merged_member_marker_round_trips_through_the_record_writer():
+    import review_record_session as rs
+    for rep_id in ("rep-1", "pkg/a.py::title@L3", "weird (id)"):
+        reason = "fixed and audited in round 2" + rs.MERGED_INTO_FORMAT.format(rep_id)
+        assert rs.merged_into(reason) == rep_id
+        assert RL._merged_member({"reason": reason})
+    assert rs.merged_into("fixed and audited in round 2") is None and rs.merged_into(None) is None
+    assert not RL._merged_member({"reason": "no mark"})
