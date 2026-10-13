@@ -359,8 +359,9 @@ The command reads the body and the latest vet receipt and checks the read, a non
 the `advisor-vet` and `build-record` markers, the build record's followups marker, and the
 receipt's dispositions marker. It re-reads the body before the push, writes only between the two
 slot markers, and reads the result back. A refusal names its reason (for example
-`followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`, or
-`read-failed`) with a detail
+`followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`,
+`slot-span-foreign-content` (another `superheroes:` marker, such as the DoD table, sits in the slot
+span and the write would delete it), or `read-failed`) with a detail
 that says what was wrong, and writes nothing, except `write-unconfirmed`: the edit call was made (even
 one that failed or timed out) but the readback failed or differed from the pushed body. `check --pr <n> --repo <owner/name>` runs the same
 comparison with no write. The command exists because a hand-rolled write fails silently: a shell
