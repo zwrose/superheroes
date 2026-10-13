@@ -146,7 +146,7 @@ def test_a_defaulted_reviewer_replaced_by_independence_still_needs_a_vendor_clai
 
 # --- v5: provenance is judged per verifier cluster, not once for the batch ----------------------------
 
-def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, **cfg_over):
+def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, overlap=False, **cfg_over):
     """Two findings far apart (two clusters); ``source_for(index)`` names each cluster seat's
     execution-evidence source. -> (final state, ids of cluster 0's findings, ids of cluster 1's)."""
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name, **cfg_over)
@@ -164,11 +164,10 @@ def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, **cfg_over):
            for seat, _o in slots]
     assert len(ids[0]) == 1 and len(ids[1]) == 1 and ids[0] != ids[1], ids
     monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda seat: by_seat[seat]))
-    for seat, occurrence in slots:
-        cluster = IT._cluster_for(pend, seat)
-        payload = {"verdicts": [{"id": f["id"], "verdict": "REFUTED", "reason": "intentional",
-                                 "evidence": "read %s" % f.get("file")}
-                                for f in cluster.get("findings") or []]}
+    for i, (seat, occurrence) in enumerate(slots):
+        supplied = ids[i] + (ids[0] if overlap and i == 1 else [])  # overlap: seat 1 repeats seat 0
+        payload = {"verdicts": [{"id": fid, "verdict": "REFUTED", "reason": "intentional",
+                                 "evidence": "read %s" % fid} for fid in supplied]}
         IT._land(session_dir, state, pend, seat, payload, occurrence=occurrence)
         assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
     out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
@@ -196,6 +195,16 @@ def test_a_maker_cluster_does_not_void_a_proven_cluster(tmp_path, monkeypatch):
     assert set(rec["verify"]["unverified"]) == set(unproven_ids), rec["verify"]
     outcomes = {(p["ran"], p["outcome"]) for p in rec["verifierProvenance"]}
     assert outcomes == {("codex", "verdicts-folded"), ("claude", "verdicts-ignored")}
+
+
+def test_a_maker_seat_repeating_a_proven_id_does_not_void_it(tmp_path, monkeypatch):
+    state, proven_ids, unproven_ids = _drive_two_clusters(
+        tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "claude", "two-clusters-overlap",
+        overlap=True)
+    verify = state["rounds"]["1"]["verify"]
+    assert {d["id"] for d in verify["drops"]} == set(proven_ids), verify
+    assert set(verify["unverified"]) == set(unproven_ids), verify
+    assert verify["ambiguous"] == [], verify
 
 
 # --- v1: the fold authenticates against the vendor the dispatch recorded ----------------------------

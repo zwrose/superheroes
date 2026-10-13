@@ -304,6 +304,33 @@ def test_t3_finder_hand_submit_through_the_submit_path_refuses_a_lost_emission(t
     assert IT._state(session_dir)["pending"]["phase"] == RD.P_SCOPED
 
 
+@pytest.mark.parametrize("phase,seat", FINDERS)
+def test_t3_recorded_claim_requirement_survives_a_preference_edit(tmp_path, monkeypatch, phase, seat):
+    state = _state()
+    manifest = _emit(state, tmp_path, phase, "codex")
+    manifest["claimRequired"] = True
+    RR.atomic_write_json(RD._orders_manifest_path(str(tmp_path), state["round"], phase, 0), manifest)
+    state["_ordersAnchors"][RD._anchor_key(state["round"], phase, 0)] = {
+        "manifestSha256": RR.sha256_text(RR.canonical(manifest))}
+    monkeypatch.setattr(RD, "_nonpanel_replaced", lambda *_a, **_k: False)  # the edited preference is codex
+    fault = RD._finder_hand_claim_fault(state, str(tmp_path), phase, {"findings": []})
+    assert fault is not None and "carries no `reviewerVendor`" in fault, fault
+
+
+@pytest.mark.parametrize("artifact", [None, []])
+def test_t3_finder_hand_submit_refuses_a_non_object_artifact(tmp_path, artifact):
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name="hand-non-object")
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_SCOPED)
+    state = IT._state(session_dir)
+    state.pop("_advanceUsed", None)
+    RD.save_state(session_dir, state)
+    out = RD.cmd_submit(session_dir, RD.P_SCOPED, state["pending"]["attempt"],
+                        RD.state_hash(IT._state(session_dir)), artifact)
+    assert out["ok"] is False and out["reason"] == "nonpanel-reviewer-unauthenticated", out
+    assert IT._state(session_dir)["pending"]["phase"] == RD.P_SCOPED
+
+
 # --- T4: the driver-wrapped native host-seat landing --------------------------------------------------
 
 def _wrapped_verifier_artifact(state, manifest_vendor="claude"):

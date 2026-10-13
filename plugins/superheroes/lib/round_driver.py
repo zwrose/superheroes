@@ -2872,6 +2872,14 @@ def _recorded_phase_vendor(state, session_dir, phase):
     return None
 
 
+def _recorded_claim_required(state, session_dir, phase):
+    """True when the ``phase`` dispatch recorded that its result must claim the vendor that ran."""
+    best = _latest_emission_attempt(state, session_dir, phase)
+    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best) \
+        if best is not None else None
+    return isinstance(manifest, dict) and manifest.get("claimRequired") is True
+
+
 def _recorded_verifier_vendor(state, session_dir):
     """`_recorded_phase_vendor` for the verifier dispatch."""
     return _recorded_phase_vendor(state, session_dir, P_VERIFIERS)
@@ -2939,7 +2947,8 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # A claim is required when the selection replaced the reviewer engine (whatever the
         # preference read's provenance) and on the durable path, which always carries the key.
         claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
-                          or rebound or _nonpanel_replaced(state, selected, session_dir))
+                          or rebound or _nonpanel_replaced(state, selected, session_dir)
+                          or _recorded_claim_required(state, session_dir, P_VERIFIERS))
         mismatch = (claimed is not None and claimed != selected) or (claim_required and claimed is None)
         ineligible = not mismatch and selected is not None and barred(selected)
         if verdicts and selected is not None and (mismatch or ineligible):
@@ -7160,7 +7169,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         return {"ok": False, "reason": "nonpanel-reviewer-unseatable",
                 "detail": "no reviewer outside the makers' families can be seated for %s; no order "
                           "was emitted and a submitted artifact is not a review that ran" % phase}
-    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED) and isinstance(artifact, dict):
+    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED) and not isinstance(artifact, dict):
+        return {"ok": False, "reason": "nonpanel-reviewer-unauthenticated",
+                "detail": "%s artifact must be a JSON object carrying `reviewerVendor`" % phase}
+    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED):
         # A hand artifact for a finder phase is a review by the vendor it claims. When the selection
         # replaced the reviewer engine, the claim (`reviewerVendor`) is required and must equal the
         # vendor the dispatch recorded at emission — the verifier hand-submit rule, one helper.
@@ -8094,7 +8106,8 @@ def _finder_hand_claim_fault(state, session_dir, phase, artifact):
         return None
     raw = artifact.get("reviewerVendor")
     claimed = raw.strip() if isinstance(raw, str) and raw.strip() else None
-    required = source == VENDOR_SOURCE_INDEPENDENT or _nonpanel_replaced(state, expected, session_dir)
+    required = (source == VENDOR_SOURCE_INDEPENDENT or _nonpanel_replaced(state, expected, session_dir)
+                or _recorded_claim_required(state, session_dir, phase))
     if claimed is not None and claimed != expected:
         return ("%s artifact claims reviewerVendor %r but the dispatch recorded %r; a result from "
                 "another vendor is not the independent review that was ordered"
@@ -9207,6 +9220,11 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                 "orders": round_records.NOT_EMITTED, "seats": seats}
     if certified_head:
         manifest["headSha"] = certified_head
+    if phase in _NONPANEL_REVIEWER_PHASES:
+        vendor, source = _nonpanel_selection(state, session_dir)
+        if vendor is not None and (source == VENDOR_SOURCE_INDEPENDENT
+                                   or _nonpanel_replaced(state, vendor, session_dir)):
+            manifest["claimRequired"] = True
     path = _orders_manifest_path(session_dir, rnd, phase, attempt)
     manifest_sha = round_records.sha256_text(round_records.canonical(manifest))
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}

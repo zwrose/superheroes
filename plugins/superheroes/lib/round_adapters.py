@@ -497,10 +497,9 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures):
 
 def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_manifest=None,
                         is_barred=None):
-    verdicts = []
+    supplied = []
     omitted = []
     landed = []
-    seat_of_id = {}
     for seat, occurrence in _roster_slots(roster):
         entry, is_result = _landed(indexed, seat, occurrence)
         if not is_result:
@@ -508,11 +507,11 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
             continue
         landed.append(seat)
         for verdict in entry["payload"]["verdicts"]:
-            verdicts.append(dict(verdict))
-            if isinstance(verdict, dict) and isinstance(verdict.get("id"), str):
-                seat_of_id.setdefault(verdict["id"], seat)
+            supplied.append((seat, dict(verdict)))
     if omitted:
         disclosures["unverifiedClusters"] = omitted
+    verdicts = [verdict for _seat, verdict in supplied]
+    seat_of_id = {}
     artifact = {"verdicts": verdicts}
     if landed:
         # The vendor that RAN each verifier is the runner's execution record (the same provenance
@@ -526,6 +525,18 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
         ran = {trusted[seat] for seat in landed if seat in trusted}
         if ran:
             artifact["verifierVendor"] = "+".join(sorted(ran))
+        # A verdict id supplied by several seats belongs to the first proven seat (else the first):
+        # a barred or unproven seat repeating a proven seat's id never voids it.
+        def _proven(seat):
+            vendor = trusted.get(seat)
+            return bool(vendor) and not (is_barred and is_barred(vendor))
+        for seat, verdict in supplied:
+            vid = verdict.get("id")
+            if isinstance(vid, str) and (vid not in seat_of_id or (
+                    not _proven(seat_of_id[vid]) and _proven(seat))):
+                seat_of_id[vid] = seat
+        verdicts[:] = [v for seat, v in supplied
+                       if not isinstance(v.get("id"), str) or seat_of_id[v["id"]] == seat]
         artifact["verifierSeatVendors"] = {
             vid: trusted.get(seat, "") for vid, seat in seat_of_id.items()}
         # A seat whose vendor is the driver's own manifest entry (a driver-wrapped host-seat landing,
