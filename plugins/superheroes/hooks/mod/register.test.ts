@@ -132,6 +132,8 @@ function rig(
     manifest?: string | null
     compactFailures?: number
     compactSkip?: string
+    // a `/compact` command compacts the session, as the SDK host does (firing `session.compact`)
+    isCompactCommandCompacting?: boolean
     // the clock reading the session.compact handler moves to before it fails or resolves
     compactAt?: number
   } = {},
@@ -258,6 +260,11 @@ function rig(
 
     if (options.isCommandBroken) {
       throw new Error('unknown command')
+    }
+    if (options.isCompactCommandCompacting && e.command === 'compact') {
+      await engine?.session.compact({ trigger: 'manual', messages: HISTORY })
+
+      return {}
     }
     // a command whose own turn has not started yet: the test starts it later
     if (options.isCommandSilent) {
@@ -1627,6 +1634,24 @@ test('a compaction that succeeded is never retried for a failed follow-up write'
   // the checkpoint clear threw after the compaction ran: no retry follows it
   expect(r.denied).toBe(1)
   expect(r.compactAttempts).toBe(1)
+})
+
+test('a non-interactive compaction that succeeded is never retried for a failed follow-up write', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { brokenKey: 'checkpoint', isCompactCommandCompacting: true })
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(60000)
+
+  // the /compact command compacted once; the checkpoint clear threw after it: no second /compact
+  expect(r.denied).toBeGreaterThan(0)
+  expect(r.compactAttempts).toBe(1)
+  expect(r.commands.filter(c => c === 'compact')).toEqual(['compact'])
+  expect(r.toasts.filter(t => t.startsWith(COMPACT_FAILED))).toEqual([])
 })
 
 test('a follow-up turn running when the compaction timer fires costs no attempt; the next tick compacts once', async ($, on) => {

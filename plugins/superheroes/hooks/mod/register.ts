@@ -46,6 +46,10 @@ const rearmAfterCompact = { plugin: 'superheroes', key: 'rearmAfterCompact' } as
 // True while a checkpoint is being started: two measurements must not both start one.
 let isStarting = false
 
+// Counts the session's own compactions that succeeded, bumped by the `session.compact` hook.
+// A plain variable: a rejected state write cannot hide a compaction from it.
+let compactionsDone = 0
+
 const note = ($: EngineInterface, text: string): void => {
   try {
     $.ui.log(`superheroes mod: ${text}`, { to: 'debug' })
@@ -399,13 +403,12 @@ function compactSoon($: EngineInterface, options: unknown, startedAt: number, is
         res = await $.session.compact()
       } else {
         // a headless (SDK) session rejects `$.session.compact()`: run the /compact command
-        // instead. It resolves without an outcome, but the `session.compact` hook clears this
-        // `compacting` checkpoint on a successful compaction, so one still pending failed.
+        // instead. It resolves without an outcome, but the `session.compact` hook counts a
+        // successful compaction, independent of its checkpoint cleanup (which can fail).
+        const before = compactionsDone
+
         await $.command.run({ command: 'compact', args: '' })
-
-        const after = (await $.state.get(checkpoint)).value
-
-        if (after?.compacting && after.startedAt === startedAt) {
+        if (compactionsDone === before) {
           throw new Error('the /compact command did not compact')
         }
       }
@@ -567,6 +570,7 @@ export const register: Register = (on, options) => {
     if ('skip' in result) {
       await unmarkLater($, attempt)
     } else {
+      compactionsDone += 1
       await forgetFill($)
       try {
         await $.state.set(rearmAfterCompact, true)
