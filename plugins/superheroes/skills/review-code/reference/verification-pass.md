@@ -48,7 +48,12 @@ attempt must never be globbed and honored.
    (`seats.<skey>.vendor`), which replaces the reviewer engine (`$REVIEWER_ENGINE`) whenever that
    engine sits in a maker family; `$REVIEWER_ENGINE` only stands when no manifest vendor is named.
    Submit that vendor as `verifierVendor` beside `verdicts`: verdicts from any other vendor are
-   ignored by the fold. Each verifier reads the cluster's findings (with their staged
+   ignored by the fold. `$VERIFIER_MODEL` is a Claude tier alias and stands only for a native
+   Claude dispatch: when the vendor was switched to `codex` or `cursor` for independence, resolve
+   that vendor's own verifier model (and effort) from the registry cell
+   `model_registry.matrix_config("verifier", <vendor>)` and dispatch that pair instead — the
+   manifest carries the vendor, not its model, and `dispatch_guard check` with role `verifier`
+   validates the vendor/model pair, so a Claude alias on another vendor is refused. Each verifier reads the cluster's findings (with their staged
    `id`s), the round diff, and the repo — the working tree on branch/auto-fix paths, or
    `$SESSION_DIR/repo` on `--review-only`. It must **never** read the PR's own
    description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,

@@ -4265,8 +4265,8 @@ import subprocess
 import core_md as CM
 import lane_call as LC
 
-NO_FLOOR_ROSTER = ("code-reviewer", "test-role", "grounding-seat")
-RISKY_ROSTER = ("code-reviewer", "security-reviewer", "test-role", "premortem-reviewer", "grounding-seat")
+RISKY_ROSTER = SM.PANEL_ROSTER
+NO_FLOOR_ROSTER = tuple(s for s in SM.PANEL_ROSTER if s in SM.BASE_ROSTER)
 _PAYMENTS = {
     "name": "Payments",
     "covers": ["src/payments/*"],
@@ -4357,7 +4357,6 @@ def test_roster_for_full_floor_adds_the_specialists(tmp_path, monkeypatch):
     for name, basis in _bases(tmp_path, monkeypatch).items():
         assert basis["floor"] == "full", name
         assert SM.roster_for(basis) == RISKY_ROSTER, name
-    assert SM.PANEL_ROSTER == RISKY_ROSTER
 
 
 def test_roster_for_no_floor_is_the_generalist_the_test_seat_and_the_grounding_seat(tmp_path, monkeypatch):
@@ -4442,6 +4441,28 @@ def test_compose_composes_the_risky_roster_when_git_cannot_answer(tmp_path, monk
         assert receipt["laneBasis"]["floor"] == "full"
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, b"\xff\xfe", b""))
     assert tuple(_compose(capsys, repo, base=head, head=docs_head)["roster"]) == RISKY_ROSTER
+
+
+def test_compose_ignores_usable_paths_from_a_failed_git_diff(tmp_path, monkeypatch, capsys):
+    # axis: the exit-status guard, not the empty path list, is what rejects a failed diff — stdout names
+    # a path outside every risk area, so only the guard keeps the risky roster
+    repo, base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
+    _parent, docs_head = _docs_commit(repo)
+    real_run = subprocess.run
+
+    def with_exit(code):
+        def run(argv, *a, **k):
+            if "diff" in argv:
+                return subprocess.CompletedProcess(argv, code, b"docs/other.md\0", b"failure")
+            return real_run(argv, *a, **k)
+        return run
+
+    monkeypatch.setattr(subprocess, "run", with_exit(128))
+    failed = _compose(capsys, repo, base=base, head=docs_head)
+    assert tuple(failed["roster"]) == RISKY_ROSTER and failed["laneBasis"]["floor"] == "full"
+    monkeypatch.setattr(subprocess, "run", with_exit(0))
+    clean = _compose(capsys, repo, base=base, head=docs_head)
+    assert tuple(clean["roster"]) == NO_FLOOR_ROSTER and clean["laneBasis"]["floor"] is None
 
 
 def test_compose_with_no_changed_paths_composes_the_risky_roster(tmp_path, monkeypatch, capsys):

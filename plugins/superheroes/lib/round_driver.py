@@ -1144,11 +1144,61 @@ def _roster_lens_dimensions(seat_map_obj):
 
 
 _DIFF_GIT_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$")
+_DIFF_GIT_QUOTED_B = re.compile(r'^diff --git a/(.+?) ("b/.*")$')
+_DIFF_GIT_QUOTED_A = re.compile(r'^diff --git ("(?:[^"\\]|\\.)*") (.+)$')
+_GIT_C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, '"': 34, "\\": 92}
+
+
+def _git_unquote(token):
+    """A git C-quoted path as its canonical text, or None when malformed. Git quotes names holding
+    non-ASCII or control bytes: octal byte escapes plus the C single-letter ones."""
+    if len(token) < 2 or not (token.startswith('"') and token.endswith('"')):
+        return None
+    body, out, i = token[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out += ch.encode("utf-8", "surrogateescape")
+            i += 1
+        elif body[i + 1:i + 2] in _GIT_C_ESCAPES:
+            out.append(_GIT_C_ESCAPES[body[i + 1]])
+            i += 2
+        elif re.fullmatch(r"[0-7]{3}", body[i + 1:i + 4]):
+            code = int(body[i + 1:i + 4], 8)
+            if code > 255:
+                return None
+            out.append(code)
+            i += 4
+        else:
+            return None
+    return out.decode("utf-8", "surrogateescape")
+
+
+def _diff_header_sides(line):
+    """The (a-side, b-side) canonical paths of one ``diff --git`` header, git-quoted or plain, else None."""
+    rest = line[len("diff --git "):]
+    if rest.startswith('"'):
+        m = _DIFF_GIT_QUOTED_A.match(line)
+        if not m:
+            return None
+        a = _git_unquote(m.group(1))
+        b = _git_unquote(m.group(2)) if m.group(2).startswith('"') else m.group(2)
+        if a is None or b is None or not a.startswith("a/") or not b.startswith("b/"):
+            return None
+        return a[2:], b[2:]
+    m = _DIFF_GIT_QUOTED_B.match(line)
+    if m:
+        b = _git_unquote(m.group(2))
+        return (m.group(1), b[2:]) if b is not None and b.startswith("b/") else None
+    m = _DIFF_GIT_HEADER.match(line)
+    return m.groups() if m else None
 
 
 def _diff_changed_paths(diff_text):
-    """The paths a git diff names (both sides of each file header), or None when the diff cannot be
-    read as such (not text, no file header, or a header this reader cannot parse)."""
+    """The canonical paths a git diff names (both sides of each file header, git C-quoting undone), or
+    None when the diff cannot be read as such (not text, no file header, or a header this reader
+    cannot parse). Read from the diff in hand rather than re-derived from a pinned head: the head a
+    post-fix diff describes is not on the config, and a stale head would fail open."""
     if not isinstance(diff_text, str):
         return None
     headers = [ln for ln in diff_text.split("\n") if ln.startswith("diff --git ")]
@@ -1156,10 +1206,10 @@ def _diff_changed_paths(diff_text):
         return None
     paths = []
     for ln in headers:
-        m = _DIFF_GIT_HEADER.match(ln)
-        if not m:
+        sides = _diff_header_sides(ln)
+        if sides is None:
             return None
-        for p in m.groups():
+        for p in sides:
             if p not in paths:
                 paths.append(p)
     return paths
