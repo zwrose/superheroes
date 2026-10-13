@@ -23,6 +23,14 @@ The advisor's input is one JSON object; any key not listed is refused.
   number         The PR's number, or the stack's number. An integer, 1 or more.
   title, summary Non-empty strings: the sheet's title, and what changed in one line.
   previousCommit Optional. Null, or a commit id (7 to 40 lowercase hex) when this sheet replaces an earlier one.
+  carriedForward Optional. Present when the move to the new head is not material, so the earlier sheet's answers and Merge
+                 carry forward: {fromSheet, heads, date, moved, whyNotMaterial}, all required. fromSheet is the path (absolute,
+                 or relative to the input's folder) of the earlier published sheet.json of this same PR or stack; heads maps
+                 each covered PR number (a decimal string: number on a pr, every prs[].number on a stack, no more and no
+                 fewer) to that PR's new head commit; date is YYYY-MM-DD; moved and whyNotMaterial are non-empty strings. The
+                 sheet then takes previousCommit and its commits from the earlier sheet and heads, and records the earlier
+                 sheet's digest (and the digests it carried) in prSheet.carriedForward. previousCommit, when also given,
+                 must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned.
   prs            Required on a stack, refused on a pr: at least 2 {number, title}, bottom PR first.
   leftovers      Optional object. A key names a left-for-owner finding by its findingKey, or by its id when
                  no other left-for-owner finding shares it ("<pr number>:<key>" on a stack). A value is {"options": ..., "recommendation": ...}: options is "leftover" (the
@@ -94,6 +102,8 @@ with open(SCHEMA_PATH, encoding="utf-8") as _fh:
 # The identifier and commit patterns are read from the sheet schema, their one home.
 _ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
 _COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
+_CARRY = _SCHEMA["$defs"]["prSheet"]["properties"]["carriedForward"]
+_DATE = re.compile(_CARRY["properties"]["date"]["pattern"])
 _URL = re.compile(_SCHEMA["$defs"]["walk"]["properties"]["open"]["properties"]["url"]["pattern"])
 _PICTURE = re.compile(_SCHEMA["$defs"]["walkPicture"]["anyOf"][0]["properties"]["src"]["pattern"])
 # The picture filename's digest length is read from that same pattern, so the schema alone sets it.
@@ -263,7 +273,7 @@ def _check_list(name, entries, required, optional, problems):
 
 def _check_input(adv, words, problems):
     """Collects the input's problems; returns the PR numbers the sheet covers, or None when unknown."""
-    optional = ("previousCommit", "prs", "leftovers", "items", "closesSpec", "walk")
+    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "items", "closesSpec", "walk")
     _keys("the advisor's input", adv, ("schema", "kind", "number", "title", "summary"), optional, problems)
     kind, number, prs = adv.get("kind"), adv.get("number"), adv.get("prs")
     if adv.get("schema") != "pr-sheet-input/1":
@@ -342,6 +352,53 @@ def _check_walk(walk, allowed, problems):
                 problems.append(f"{w} picture {n} needs a non-empty path and alt, and a non-empty caption when it has one")
 
 
+def _check_carry_input(carry, allowed, problems):
+    """Collects the carriedForward input's problems; True when it is sound, so the earlier sheet can be checked against it."""
+    found = len(problems)
+    if not _keys("carriedForward", carry, ("fromSheet", "heads", "date", "moved", "whyNotMaterial"), (), problems):
+        return False
+    problems.extend(f"carriedForward {k} must be a non-empty string" for k in ("fromSheet", "moved", "whyNotMaterial") if not _text(carry[k]))
+    if not (isinstance(carry["date"], str) and _DATE.match(carry["date"])):
+        problems.append("carriedForward date must be a date written YYYY-MM-DD")
+    heads = carry["heads"]
+    if not isinstance(heads, dict):
+        problems.append("carriedForward heads must be an object of PR number to head commit")
+    else:
+        problems.extend(f"carriedForward heads {k} must be a commit id of 7 to 40 lowercase hex characters" for k, v in heads.items() if not _commit(v))
+        if allowed is not None and set(heads) != {str(n) for n in allowed}:
+            problems.append(f"carriedForward heads has PRs {sorted(heads)}, but the sheet covers PRs {sorted(str(n) for n in allowed)}")
+    return len(problems) == found
+
+
+def _check_previous(advisor, previous, problems):
+    """The earlier sheet as a dict when it is this PR's or stack's own sheet and the carry may stand on it; else None after naming why."""
+    if previous is None:
+        problems.append("carriedForward needs the bytes of the earlier sheet (fromSheet), and none were given")
+        return None
+    try:
+        sheet = json.loads(previous)
+    except ValueError as err:
+        problems.append(f"the earlier sheet (carriedForward fromSheet) is not JSON: {err}")
+        return None
+    if not isinstance(sheet, dict) or sheet.get("kind") not in sheet_prose.PR_KINDS:
+        problems.append("the earlier sheet (carriedForward fromSheet) is not a pr or stack sheet")
+        return None
+    found = sheet_prose.check_sheet(sheet)
+    if found:
+        problems.extend(f"the earlier sheet (carriedForward fromSheet): {p}" for p in found)
+        return None
+    before, part = len(problems), sheet["prSheet"]
+    if sheet["kind"] != advisor["kind"]:
+        problems.append(f"the earlier sheet is a {sheet['kind']} sheet, but this one is a {advisor['kind']} sheet")
+    if part["number"] != advisor["number"]:
+        problems.append(f"the earlier sheet is for number {part['number']}, not {advisor['number']}")
+    if advisor["kind"] == "stack" and [p["number"] for p in part.get("prs", [])] != [p["number"] for p in advisor["prs"]]:
+        problems.append(f"the earlier sheet covers PRs {[p['number'] for p in part.get('prs', [])]}, but this stack lists PRs {[p['number'] for p in advisor['prs']]}, in that order")
+    if advisor.get("previousCommit") and advisor["previousCommit"] != part["commit"]:
+        problems.append(f"previousCommit {advisor['previousCommit']} is not the earlier sheet's commit {part['commit']}")
+    return sheet if len(problems) == before else None
+
+
 def _lookups(kind, pr, finding):
     """The leftovers keys that can name a finding: its findingKey first, then its reviewer id."""
     names = [finding.get("findingKey"), finding.get("id")]
@@ -381,12 +438,19 @@ def _walk(walk, place):
     return {**head, "picturesFrom": walk["picturesFrom"], "stops": keyed}
 
 
-def build(records, advisor, words, place=None):
-    """Returns the sheet's data file as a dict, or raises Refusal with every problem found."""
+def build(records, advisor, words, place=None, previous=None):
+    """Returns the sheet's data file as a dict, or raises Refusal with every problem found.
+
+    previous is the exact bytes of the earlier sheet the input's carriedForward.fromSheet names, None when there is no carry
+    (a carry given None is refused).
+    """
     problems = []
     if not isinstance(advisor, dict):
         raise Refusal(["the advisor's input must be an object"])
     allowed = _check_input(advisor, words, problems)
+    earlier = None
+    if "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems) and allowed is not None:
+        earlier = _check_previous(advisor, previous, problems)
     recs = [r for r in (_record(raw, n, problems) for n, raw in enumerate(records, 1)) if r]
     kind, number, have = advisor.get("kind"), advisor.get("number"), [r["pr"] for r in recs]
     if allowed is not None and len(recs) == len(records):
@@ -482,7 +546,30 @@ def build(records, advisor, words, place=None):
     if stack:
         sheet["prs"] = [{"number": p["number"], "title": p["title"], "commit": by_pr[p["number"]]["finalCommit"]["sha"]}
                         for p in advisor["prs"]]
+    if earlier is not None:
+        # The carry: the heads the advisor names replace the records' final commits, and the chain of earlier digests grows by the sheet carried from.
+        # whatChanged.ci stays as the record gives it, because it names the commit CI ran on.
+        carry = advisor["carriedForward"]
+        heads = carry["heads"]
+        sheet["previousCommit"] = earlier["prSheet"]["commit"]
+        sheet["commit"] = heads[str(allowed[-1] if stack else number)]
+        for found in sheet.get("prs", []):
+            found["commit"] = heads[str(found["number"])]
+        sheet["carriedForward"] = {"sheets": [hashlib.sha256(previous).hexdigest(), *earlier["prSheet"].get("carriedForward", {}).get("sheets", [])],
+                                   "date": carry["date"], "moved": carry["moved"], "whyNotMaterial": carry["whyNotMaterial"]}
     return {"schema": "superheroes-sheet/1", "kind": kind, "title": advisor["title"], "prSheet": sheet, "cards": cards}
+
+
+def _earlier_sheet(advisor, base):
+    """The exact bytes of the earlier sheet the input's carriedForward.fromSheet names, None when there is no carry to read;
+    an unreadable file is a refusal that names it."""
+    carry = advisor.get("carriedForward") if isinstance(advisor, dict) else None
+    if not (isinstance(carry, dict) and _text(carry.get("fromSheet"))):
+        return None
+    try:
+        return pathlib.Path(base, carry["fromSheet"]).read_bytes()
+    except OSError as err:
+        raise Refusal([f"{carry['fromSheet']} could not be read as the earlier sheet: {err}"])
 
 
 def _pr_words():
@@ -557,8 +644,13 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
             sends_back = sends_back or (fix is not None and fix.get("sendsBack") is True)
     revisions = [counted[card["id"]] and counted[card["id"]].get("revision") for card in cards]
     covered = None if not all(revisions) else {f"answers/{card['id']}@{rev}" for card, rev in zip(cards, revisions)}
-    verdict = _collection(store, "verdict").get(digest)
-    stands = (sheet_prose.fits_definition("verdict", verdict) and verdict["sheet"] == digest and verdict["verdict"] == "merge"
+    # The verdict is the document of the first revision in the chain (this sheet, then each sheet it carried a verdict forward from) that has one;
+    # that document must be a verdict of that revision, or there is none: an older revision's Merge never stands past a document in between.
+    verdicts = _collection(store, "verdict")
+    chain = [digest, *sheet["prSheet"].get("carriedForward", {}).get("sheets", [])]
+    held = next((revision for revision in chain if revision in verdicts), None)
+    verdict = verdicts.get(held)
+    stands = (held is not None and sheet_prose.fits_definition("verdict", verdict) and verdict["sheet"] == held and verdict["verdict"] == "merge"
               and accepted == len(cards) and not blocking
               and covered is not None and set(verdict["covers"]) == covered)
     state = "being-fixed" if sends_back else "ready" if stands else "needs-you"
@@ -802,7 +894,7 @@ def main(argv=None):
             raise Refusal(problems)
         staged, created, folder, base = {}, [], pathlib.Path(args.out).parent, pathlib.Path(args.input).parent
         if args.command == "build":
-            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged)), {}
+            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged), _earlier_sheet(loaded[-2], base)), {}
         else:
             sheet = build_index(loaded[0], base, loaded[2] if args.answers else {}, loaded[1], _stager(base, staged))
             extra = {"rows": len(sheet["index"]["rows"])}

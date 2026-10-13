@@ -42,17 +42,17 @@ def bundle(case):
     return [load(r) for r in records], load(advisor)
 
 
-def build(records, advisor):
-    return pr_sheet.build(copy.deepcopy(records), copy.deepcopy(advisor), WORDS)
+def build(records, advisor, previous=None):
+    return pr_sheet.build(copy.deepcopy(records), copy.deepcopy(advisor), WORDS, previous=previous)
 
 
 def built(case):
     return build(*bundle(case))
 
 
-def problems_of(records, advisor):
+def problems_of(records, advisor, previous=None):
     with pytest.raises(pr_sheet.Refusal) as caught:
-        build(records, advisor)
+        build(records, advisor, previous)
     return caught.value.problems
 
 
@@ -262,6 +262,171 @@ def test_a_stack_is_built_in_prs_order_whatever_the_record_order():
     # Axis: records given out of order still give the bottom PR first and the top PR's commit.
     records, advisor = bundle(STACK)
     assert build(records[::-1], advisor) == build(records, advisor)
+
+
+# --- carrying a verdict forward across a move that is not material ---
+
+NO_PREVIOUS = "no bytes"
+CARRY_DATE, CARRY_MOVED, CARRY_WHY = "2026-09-30", "the branch was brought current with main", "main added only a README line"
+CARRY_CASES = {
+    "pr": (SMALL, {"211": "1" * 40}),
+    "pr-with-cards": (BIG, {"214": "2" * 40}),
+    "stack": (STACK, {"5": "5" * 40, "6": "6" * 40, "7": "7" * 40}),
+}
+
+
+def sheet_bytes(sheet):
+    """A sheet as the builder's command writes it: the exact bytes a digest is taken of."""
+    return (json.dumps(sheet, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def carry_input(advisor, heads, **more):
+    advisor["carriedForward"] = {"fromSheet": "earlier/sheet.json", "heads": dict(heads), "date": CARRY_DATE, "moved": CARRY_MOVED, "whyNotMaterial": CARRY_WHY, **more}
+    return advisor
+
+
+def carry_with(case, edit):
+    """The problems of a carry over `case` after edit(advisor, earlier sheet) changed what it could; edit may return the bytes to give as the earlier sheet."""
+    records, advisor = bundle(case)
+    earlier = built(case)
+    carry_input(advisor, CARRY_CASES[next(k for k, v in CARRY_CASES.items() if v[0] == case)][1])
+    given = edit(advisor, earlier)
+    previous = None if given == NO_PREVIOUS else given if isinstance(given, bytes) else sheet_bytes(earlier)
+    return problems_of(records, advisor, previous)
+
+
+@pytest.mark.parametrize("name", CARRY_CASES)
+def test_a_carry_takes_its_heads_and_digest_and_leaves_everything_else_as_built(name):
+    # Bites on: a carried sheet that keeps the records' final commits, forgets previousCommit, records the wrong digest, or changes anything beyond the commits and the carry (the CI line names the commit CI ran on).
+    # Axis: previousCommit is the earlier sheet's commit, commit and each prs[].commit come from heads (the top PR's on a stack), carriedForward holds the earlier bytes' digest and the input's words, nothing else moves.
+    case, heads = CARRY_CASES[name]
+    records, advisor = bundle(case)
+    earlier = build(records, advisor)
+    previous = sheet_bytes(earlier)
+    plain = build(records, advisor)
+    carried = build(records, carry_input(advisor, heads), previous)
+    part = carried["prSheet"]
+    top = str(advisor["prs"][-1]["number"] if advisor["kind"] == "stack" else advisor["number"])
+    assert part["previousCommit"] == earlier["prSheet"]["commit"]
+    assert part["commit"] == heads[top] != plain["prSheet"]["commit"]
+    assert part["carriedForward"] == {"sheets": [hashlib.sha256(previous).hexdigest()], "date": CARRY_DATE, "moved": CARRY_MOVED, "whyNotMaterial": CARRY_WHY}
+    if advisor["kind"] == "stack":
+        assert [(f["number"], f["commit"]) for f in part["prs"]] == [(f["number"], heads[str(f["number"])]) for f in advisor["prs"]]
+    assert part["whatChanged"]["ci"] == plain["prSheet"]["whatChanged"]["ci"] and part["whatChanged"]["ci"]["commit"] != part["commit"]
+    moved = ("commit", "previousCommit", "carriedForward", "prs")
+    assert {**carried, "prSheet": {k: v for k, v in part.items() if k not in moved}} == {**plain, "prSheet": {k: v for k, v in plain["prSheet"].items() if k not in moved}}
+    assert [{k: v for k, v in f.items() if k != "commit"} for f in part.get("prs", [])] == [{k: v for k, v in f.items() if k != "commit"} for f in plain["prSheet"].get("prs", [])]
+    assert list(Draft202012Validator(SCHEMA).iter_errors(carried)) == [] and check_sheet_problems(carried) == []
+
+
+def test_a_previous_commit_beside_a_carry_builds_when_it_is_the_earlier_sheets_commit():
+    # Bites on: the carry refusing a previousCommit that agrees with the earlier sheet, or taking it instead of the earlier sheet's.
+    records, advisor = bundle(SMALL)
+    previous = sheet_bytes(build(records, advisor))
+    advisor["previousCommit"] = build(records, advisor)["prSheet"]["commit"]
+    carried = build(records, carry_input(advisor, CARRY_CASES["pr"][1]), previous)
+    assert carried["prSheet"]["previousCommit"] == advisor["previousCommit"] and "carriedForward" in carried["prSheet"]
+
+
+def test_a_chain_of_carries_lists_the_earlier_digests_newest_first():
+    # Bites on: the chain keeping only the newest digest, listing the oldest first, or dropping the digests the earlier sheet had carried.
+    records, advisor = bundle(SMALL)
+    first = sheet_bytes(build(records, advisor))
+    second = build(records, carry_input(advisor, {"211": "1" * 40}), first)
+    second_bytes = sheet_bytes(second)
+    third = build(records, carry_input(advisor, {"211": "3" * 40}), second_bytes)
+    assert second["prSheet"]["carriedForward"]["sheets"] == [hashlib.sha256(first).hexdigest()]
+    assert third["prSheet"]["carriedForward"]["sheets"] == [hashlib.sha256(second_bytes).hexdigest(), hashlib.sha256(first).hexdigest()]
+    assert third["prSheet"]["previousCommit"] == "1" * 40 and third["prSheet"]["commit"] == "3" * 40
+    assert list(Draft202012Validator(SCHEMA).iter_errors(third)) == [] and check_sheet_problems(third) == []
+
+
+def three_layer_to_two():
+    """The stack's earlier sheet, from the days it had two layers."""
+    records, advisor = bundle(STACK)
+    advisor["prs"] = advisor["prs"][:2]
+    advisor["walk"]["stops"] = [stop for stop in advisor["walk"]["stops"] if stop["pr"] != 7]
+    return sheet_bytes(build(records[:2], advisor))
+
+
+CARRY_REFUSALS = [
+    pytest.param(SMALL, lambda a, e: NO_PREVIOUS, "none were given", id="no-earlier-bytes"),
+    pytest.param(SMALL, lambda a, e: b"{nope", "is not JSON", id="earlier-not-json"),
+    pytest.param(SMALL, lambda a, e: b"[]", "is not a pr or stack sheet", id="earlier-not-an-object"),
+    pytest.param(SMALL, lambda a, e: e.__setitem__("kind", "plain"), "is not a pr or stack sheet", id="earlier-of-another-kind-of-sheet"),
+    pytest.param(SMALL, lambda a, e: sheet_bytes(built(STACK)), "is a stack sheet, but this one is a pr sheet", id="kind-differs"),
+    pytest.param(SMALL, lambda a, e: e["prSheet"].__setitem__("number", 999), "is for number 999, not 211", id="number-differs"),
+    pytest.param(STACK, lambda a, e: three_layer_to_two(), "covers PRs [5, 6], but this stack lists PRs [5, 6, 7]", id="stack-gained-a-layer"),
+    pytest.param(STACK, lambda a, e: e["prSheet"]["prs"].reverse(), "covers PRs [7, 6, 5], but this stack lists PRs [5, 6, 7]", id="stack-members-in-another-order"),
+    pytest.param(SMALL, lambda a, e: a.__setitem__("previousCommit", "abcdef0"), "previousCommit abcdef0 is not the earlier sheet's commit", id="previous-commit-differs"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"]["heads"].clear(), "heads has PRs [], but the sheet covers PRs ['211']", id="heads-empty"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"]["heads"].update({"212": "1" * 40}), "heads has PRs ['211', '212'], but the sheet covers PRs ['211']", id="heads-extra-key"),
+    pytest.param(STACK, lambda a, e: a["carriedForward"]["heads"].pop("7"), "heads has PRs ['5', '6'], but the sheet covers PRs ['5', '6', '7']", id="heads-missing-key"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"]["heads"].update({"211": "XYZ"}), "heads 211 must be a commit id", id="heads-value-not-a-commit"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"].update(extra=1), "carriedForward has an unknown key extra", id="carry-unknown-key"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"].pop("whyNotMaterial"), "carriedForward is missing whyNotMaterial", id="carry-missing-key"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"].update(date="30 September"), "date must be a date written YYYY-MM-DD", id="carry-bad-date"),
+    pytest.param(SMALL, lambda a, e: a["carriedForward"].update(moved=" "), "moved must be a non-empty string", id="carry-empty-moved"),
+    pytest.param(SMALL, lambda a, e: a.__setitem__("carriedForward", "earlier/sheet.json"), "carriedForward must be an object", id="carry-not-an-object"),
+    pytest.param(SMALL, lambda a, e: e["prSheet"].pop("whatChanged"), "the earlier sheet (carriedForward fromSheet):", id="earlier-sheet-does-not-fit-the-schema"),
+]
+
+
+@pytest.mark.parametrize("case, edit, expected", CARRY_REFUSALS)
+def test_a_carry_that_cannot_be_proved_is_refused(case, edit, expected):
+    # Bites on: a carry built on bytes that are missing, not JSON, not a pr or stack sheet, of another kind, number or stack member list, with a previousCommit that disagrees, or with heads that do not name exactly the covered PRs.
+    # Axis: each is a collected refusal problem (a Refusal, never a crash) that names its cause; the fail-closed edges of the carry.
+    assert any(expected in problem for problem in carry_with(case, edit)), expected
+
+
+def test_a_carry_refusal_is_collected_with_the_other_problems():
+    # Bites on: the carry's checks raising on the first problem instead of listing it with the others.
+    records, advisor = bundle(SMALL)
+    advisor["summary"] = ""
+    problems = problems_of(records, carry_input(advisor, {}), None)
+    assert any("summary must be a non-empty string" in p for p in problems) and any("heads has PRs" in p for p in problems)
+
+
+def carry_world(tmp_path, advisor_edit=None):
+    """The small PR's earlier sheet written to tmp_path/earlier/sheet.json, and a carried input beside tmp_path/in.json."""
+    (tmp_path / "earlier").mkdir()
+    done = cli([FIXTURES / "record-small.json"], FIXTURES / "input-small.json", tmp_path / "earlier" / "sheet.json")
+    assert done.returncode == 0, done.stdout
+    advisor = carry_input(load("input-small.json"), {"211": "1" * 40})
+    if advisor_edit:
+        advisor_edit(advisor)
+    source = tmp_path / "in.json"
+    source.write_text(json.dumps(advisor), encoding="utf-8")
+    return source
+
+
+def test_the_cli_reads_the_earlier_sheet_beside_the_input_and_digests_its_exact_bytes(tmp_path):
+    # Bites on: the builder digesting a re-serialised copy instead of the file's bytes, or resolving fromSheet against the working folder instead of the input's.
+    source = carry_world(tmp_path)
+    out = tmp_path / "out.json"
+    done = cli([FIXTURES / "record-small.json"], source, out)
+    assert done.returncode == 0, done.stdout
+    sheet = json.loads(out.read_text(encoding="utf-8"))
+    assert sheet["prSheet"]["carriedForward"]["sheets"] == [hashlib.sha256((tmp_path / "earlier" / "sheet.json").read_bytes()).hexdigest()]
+    assert sheet["prSheet"]["commit"] == "1" * 40
+
+
+def test_the_cli_takes_an_absolute_from_sheet_too(tmp_path):
+    # Bites on: an absolute fromSheet being joined under the input's folder.
+    source = carry_world(tmp_path, lambda advisor: advisor["carriedForward"].update(fromSheet=str(tmp_path / "earlier" / "sheet.json")))
+    done = cli([FIXTURES / "record-small.json"], source, tmp_path / "out.json")
+    assert done.returncode == 0, done.stdout
+
+
+def test_the_cli_refuses_an_earlier_sheet_it_cannot_read_and_names_the_file(tmp_path):
+    # Bites on: an unreadable fromSheet crashing, being skipped, or built as though there were no carry.
+    # Axis: fail-closed edge 1: a carry without readable earlier bytes is a refusal that names the file, and nothing is written.
+    source = carry_world(tmp_path, lambda advisor: advisor["carriedForward"].update(fromSheet="earlier/missing.json"))
+    out = tmp_path / "out.json"
+    done = cli([FIXTURES / "record-small.json"], source, out)
+    assert done.returncode == 1 and not out.exists()
+    result = json.loads(done.stdout)
+    assert result["ok"] is False and any("earlier/missing.json" in problem for problem in result["problems"])
 
 
 REFUSALS = [
@@ -1042,6 +1207,98 @@ def test_pr_state_of_a_sheet_with_no_cards_and_no_walk():
     merge = {"verdict": "merge", "note": "", "sheet": digest, "covers": []}
     assert pr_sheet.pr_state(sheet, {"verdict": {digest: merge}}, WORDS)["state"] == "ready"
     assert pr_sheet.pr_state(sheet, {"verdict": {digest: dict(merge, covers=[f"answers/ghost@{REV_A}"])}}, WORDS)["state"] == "needs-you"
+
+
+# --- pr_state over a verdict carried forward ---
+
+def carried_bytes(*chain):
+    """A state sheet republished with its verdict carried forward from chain (the newest earlier sheet first), as bytes."""
+    sheet = state_sheet()
+    sheet["prSheet"]["previousCommit"] = "abcdef0"
+    sheet["prSheet"]["carriedForward"] = {"sheets": [hashlib.sha256(b).hexdigest() for b in chain], "date": "2026-09-30",
+                                          "moved": "The branch was brought current with main.", "whyNotMaterial": "Main added only a README line."}
+    return json.dumps(sheet, indent=2).encode("utf-8")
+
+
+def digest_of(sheet):
+    return hashlib.sha256(sheet).hexdigest()
+
+
+# A -> B -> C: B carried A's verdict, C carried B's (and so A's).
+SHEET_A = STATE_SHEET
+SHEET_B = carried_bytes(SHEET_A)
+SHEET_C = carried_bytes(SHEET_B, SHEET_A)
+A_ID, B_ID, C_ID = digest_of(SHEET_A), digest_of(SHEET_B), digest_of(SHEET_C)
+NULLED = {"verdict": None, "note": "", "sheet": B_ID}
+
+
+def verdicts_of(*held):
+    """A store holding the accepted answers and these verdict documents, as (digest, document) pairs in the order they were saved."""
+    return {"answers": ACCEPTED, "walk": {}, "verdict": dict(held)}
+
+
+def state_of(sheet, store):
+    return pr_sheet.pr_state(sheet, store, WORDS)["state"]
+
+
+CARRIED_STATES = {
+    "carried-merge-stands": (SHEET_B, verdicts_of((A_ID, merge_doc(digest=A_ID))), "ready"),
+    "carried-merge-stands-two-revisions-on": (SHEET_C, verdicts_of((A_ID, merge_doc(digest=A_ID))), "ready"),
+    "a-merge-on-the-middle-revision-stands": (SHEET_C, verdicts_of((B_ID, merge_doc(digest=B_ID))), "ready"),
+    "own-merge-stands": (SHEET_B, verdicts_of((B_ID, merge_doc(digest=B_ID))), "ready"),
+    "own-null-overrides": (SHEET_B, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, {"verdict": None, "note": "", "sheet": B_ID})), "needs-you"),
+    "own-not-yet-overrides": (SHEET_B, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, {"verdict": "not-yet", "note": "", "sheet": B_ID})), "needs-you"),
+    "withdrawal-on-the-middle-revision-saved-first": (SHEET_C, verdicts_of((B_ID, NULLED), (A_ID, merge_doc(digest=A_ID))), "needs-you"),
+    "withdrawal-on-the-middle-revision-saved-last": (SHEET_C, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, NULLED)), "needs-you"),
+    "not-yet-on-the-middle-revision": (SHEET_C, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, {**NULLED, "verdict": "not-yet"})), "needs-you"),
+    "first-candidate-names-another-digest": (SHEET_B, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, merge_doc(digest=A_ID))), "needs-you"),
+    "first-candidate-has-an-unknown-field": (SHEET_B, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, merge_doc(digest=B_ID, extra=1))), "needs-you"),
+    "first-candidate-is-not-an-object": (SHEET_B, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, "merge")), "needs-you"),
+    "the-found-carried-document-names-another-digest": (SHEET_C, verdicts_of((A_ID, merge_doc(digest=A_ID)), (B_ID, merge_doc(digest=A_ID))), "needs-you"),
+    "the-found-carried-document-lacks-covers": (SHEET_B, verdicts_of((A_ID, {k: v for k, v in merge_doc(digest=A_ID).items() if k != "covers"})), "needs-you"),
+    "changed-answers-end-the-carry": (
+        SHEET_B, {**verdicts_of((A_ID, merge_doc(digest=A_ID))), "answers": {"leftover": KEEP, "closure": card_doc("accept", revision=REV_B)}}, "needs-you"),
+    "a-card-no-longer-accepted-ends-the-carry": (
+        SHEET_B, {**verdicts_of((A_ID, merge_doc(digest=A_ID))), "answers": {"leftover": KEEP, "closure": card_doc("discuss")}}, "needs-you"),
+    "a-walk-problem-ends-the-carry": (
+        SHEET_B, {**verdicts_of((A_ID, merge_doc(digest=A_ID))), "walk": {T1: walk_doc("problem")}}, "needs-you"),
+    "an-older-digest-outside-the-chain-is-never-read": (SHEET_B, verdicts_of(("f" * 64, merge_doc(digest="f" * 64))), "needs-you"),
+    "a-send-back-still-wins": (
+        SHEET_B, {**verdicts_of((A_ID, merge_doc(digest=A_ID))), "answers": {"leftover": SEND_BACK, "closure": ACCEPT}}, "being-fixed"),
+}
+
+
+@pytest.mark.parametrize("sheet, store, expected", list(CARRIED_STATES.values()), ids=list(CARRIED_STATES))
+def test_pr_state_reads_a_carried_verdict_through_the_chain(sheet, store, expected):
+    # Bites on: pr_state reading only the sheet's own digest, falling through an intermediate document or a malformed first one to an older Merge, or skipping the stands-conditions for a carried Merge.
+    # Axis: the first revision in the chain (own digest, then carriedForward.sheets) with any document decides; that document counts only when it fits and names its own revision; fail-closed edges 4, 5, 6.
+    assert state_of(sheet, store) == expected
+
+
+def test_a_sheet_republished_with_a_previous_commit_alone_never_reads_the_old_digest():
+    # Bites on: pr_state reading a chain a sheet does not have (a material republish inheriting the old Merge).
+    # Axis: fail-closed edge 7: with no carry the old digests are never read.
+    material = state_sheet()
+    material["prSheet"]["previousCommit"] = "abcdef0"
+    sheet = json.dumps(material, indent=2).encode("utf-8")
+    assert state_of(sheet, verdicts_of((A_ID, merge_doc(digest=A_ID)))) == "needs-you"
+    assert state_of(sheet, verdicts_of((digest_of(sheet), merge_doc(digest=digest_of(sheet))))) == "ready"
+    assert state_of(SHEET_A, verdicts_of((A_ID, merge_doc(digest=A_ID)))) == "ready"
+
+
+def test_the_index_row_of_a_carried_sheet_is_ready_on_the_earlier_merge(tmp_path):
+    # Bites on: the index reading a different rule from pr_state for a carried sheet.
+    root = tmp_path / "in"
+    (root / "pr").mkdir(parents=True)
+    (root / "pr" / "sheet.json").write_bytes(SHEET_B)
+    write_json(root / "pr" / "store.json", verdicts_of((A_ID, merge_doc(digest=A_ID))))
+    source = write_json(root / "index.json", {"schema": "index-input/1", "questions": [], "mergeOrder": [1724],
+                                              "prs": [{"number": 1724, "link": "https://sheets.example.test/pr-1724", "sheet": "pr/sheet.json", "store": "pr/store.json"}]})
+    (tmp_path / "out").mkdir()
+    done = index_cli(source, tmp_path / "out" / "index.json")
+    assert done.returncode == 0, done.stdout
+    rows = json.loads((tmp_path / "out" / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
+    assert [(row["number"], row["state"]) for row in rows] == [(1724, "ready")]
 
 
 # --- the index builder ---

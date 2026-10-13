@@ -111,7 +111,9 @@ def _expected_what_changed(sheet):
 def _expected_order(sheet):
     prs = sheet["prSheet"]
     expected = ["pr-what-changed"]
-    if "previousCommit" in prs:
+    if "carriedForward" in prs:
+        expected.append("pr-carried")
+    elif "previousCommit" in prs:
         expected.append("pr-changed")
     if "walk" in prs:
         expected.append("pr-walk")
@@ -128,6 +130,18 @@ def _with_previous(sheet):
     return _with(sheet, lambda clone: clone["prSheet"].__setitem__("previousCommit", PREVIOUS))
 
 
+CARRY = {"date": "2026-09-30", "moved": "the branch was brought current with main", "whyNotMaterial": "main added only a README line"}
+
+
+def _carried_from(earlier, *older, head="1111111111111111111111111111111111111111"):
+    """The sheet republished for a new head with its verdict carried forward from `earlier` (and the sheets it had carried, `older`, newest first)."""
+    def mutate(clone):
+        clone["prSheet"]["previousCommit"] = clone["prSheet"]["commit"]
+        clone["prSheet"]["commit"] = head
+        clone["prSheet"]["carriedForward"] = {"sheets": [_sheet_digest(earlier), *[_sheet_digest(sheet) for sheet in older]], **CARRY}
+    return _with(earlier, mutate)
+
+
 def _emptied(sheet):
     def mutate(clone):
         clone["cards"] = []
@@ -139,11 +153,13 @@ def _emptied(sheet):
 
 # Bites on: the five parts of a pr sheet or a stack sheet drawn in any other order (What changed, the walk, What you're accepting, the folded parts with the stack's PR list, the merge verdict), a part with nothing in it kept, or the box that says the PR moved drawn anywhere but directly under What changed.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
-@pytest.mark.parametrize("variant", ["as-is", "moved", "emptied"])
+@pytest.mark.parametrize("variant", ["as-is", "moved", "carried", "emptied"])
 def test_parts_are_drawn_in_order(kind, variant):
-    sheet = {"as-is": SAMPLES[kind], "moved": _with_previous(SAMPLES[kind]), "emptied": _emptied(SAMPLES[kind])}[variant]
+    sheet = {"as-is": SAMPLES[kind], "moved": _with_previous(SAMPLES[kind]), "carried": _carried_from(SAMPLES[kind]), "emptied": _emptied(SAMPLES[kind])}[variant]
     page = _page(sheet, "return order();")
     assert page["result"] == _expected_order(sheet)
+    if variant == "carried":
+        assert page["result"][:3] == ["pr-what-changed", "pr-carried", "pr-walk"] and "pr-changed" not in page["result"]
     if variant == "as-is":
         folded = ["pr-craft", "pr-decided", "pr-review"] + (["pr-prs"] if kind == "stack" else [])
         cards = ["card"] * (3 if kind == "pr" else 1)
@@ -228,6 +244,20 @@ def test_this_pr_changed_shows_only_with_a_previous_commit():
     assert page["result"]["box"] == [PW["changedHeading"], _fill(PW["changed"], previous=PREVIOUS[:7])]
     assert "9f8e7d6" in page["result"]["box"][1] and PREVIOUS not in page["result"]["box"][1]
     assert page["result"]["className"] == "sh-box"
+
+
+# Bites on: the carried-forward box missing when carriedForward is present, drawn when it is absent, the changed box still drawn beside it, or its words not the carried words filled with the date, the first 7 characters of previousCommit, what moved and why.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_the_carried_box_replaces_the_changed_box_only_with_a_carry(kind):
+    without = _page(_with_previous(SAMPLES[kind]), 'return order();')
+    assert "pr-carried" not in without["result"] and "pr-changed" in without["result"]
+    sheet = _carried_from(SAMPLES[kind])
+    page = _page(sheet, 'return { order: order(), box: shape(part("pr-carried")), className: part("pr-carried").className, noChanged: part("pr-changed") === undefined };')
+    previous = sheet["prSheet"]["previousCommit"]
+    assert page["result"]["box"] == [PW["carriedHeading"], _fill(PW["carried"], date=CARRY["date"], previous=previous[:7], moved=CARRY["moved"], why=CARRY["whyNotMaterial"])]
+    assert previous[:7] in page["result"]["box"][1] and previous not in page["result"]["box"][1] and "{" not in page["result"]["box"][1]
+    assert page["result"]["className"] == "sh-box" and page["result"]["noChanged"] is True
+    assert page["result"]["order"][:2] == ["pr-what-changed", "pr-carried"]
 
 
 # Bites on: the walk's stops out of order, a stop's PR not named on a stack (or named on a pr sheet), or a stop without its own answer controls.
@@ -595,7 +625,7 @@ def test_a_wording_file_missing_a_pr_word_shows_the_error_box():
 def test_every_new_word_comes_from_the_words_file():
     new_keys = [
         "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark", "caughtHeading", "roundsLine", "ciLine",
-        "laneLine", "describesCommit", "changedHeading", "changed", "walkHeading", "walkStopPr", "acceptingHeading",
+        "laneLine", "describesCommit", "changedHeading", "changed", "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading",
         "craftHeading", "decidedHeading", "reviewHeading", "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel",
         "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "historyCap",
     ]
@@ -619,6 +649,7 @@ def test_every_new_word_comes_from_the_words_file():
     """)
     collect(_emptied(PR_SAMPLE))
     collect(PR_SAMPLE)
+    collect(_carried_from(PR_SAMPLE))
     missing = set(new_keys) - shown
     assert not missing, "words typed in the page, or never shown: %s" % sorted(missing)
     assert {"accept", "discuss", "something-else"} <= shown
@@ -649,7 +680,7 @@ def test_data_text_is_drawn_as_text_and_links_open_in_a_new_tab():
 # Bites on: a new owner-facing string typed in the template instead of the words file.
 def test_the_template_types_none_of_the_new_words():
     script = "\n".join(line for line in _template_text().splitlines() if not line.strip().startswith("//"))
-    for key in ("whatChangedHeading", "changedHeading", "walkHeading", "acceptingHeading", "craftHeading", "decidedHeading",
+    for key in ("whatChangedHeading", "changedHeading", "carriedHeading", "carried", "walkHeading", "acceptingHeading", "craftHeading", "decidedHeading",
                 "reviewHeading", "prsHeading", "verdictHeading", "verdictCaption", "nothingToAcceptCount", "familyUnknown",
                 "notIndependentMark", "caughtHeading", "changed"):
         assert PW[key] not in script, "the template types the words of %s" % key
@@ -1565,3 +1596,104 @@ def test_answers_saved_without_a_revision_keep_merge_locked_as_the_index_reads_i
     digest = _sheet_digest(PR_SAMPLE)
     store = {"answers": {doc["id"]: doc["data"] for doc in docs}, "walk": {}, "verdict": {digest: _verdict_doc(PR_SAMPLE, "merge", covers=[])["data"]}}
     assert pr_sheet.pr_state(sheet_bytes, store)["state"] == "needs-you"
+
+
+# --- a carried verdict: the page reads the chain of earlier digests, and writes only to its own ---
+
+OLD_DIGEST = _sheet_digest(PR_SAMPLE)
+THIRD = "2222222222222222222222222222222222222222"
+
+
+def _merge_under(earlier, **more):
+    """A Merge over the accepted answers, stored under the digest of the sheet `earlier`; `more` overrides fields of the document."""
+    held = _verdict_doc(earlier, "merge")
+    return {"id": held["id"], "data": {**held["data"], **more}}
+
+
+def _carried_store(*verdicts):
+    return {"collections": {"answers": _accepted_answers(PR_SAMPLE), "verdict": list(verdicts)}}
+
+
+# Bites on: the page reading only its own digest on a sheet that carries a verdict forward (a carried Merge restored as cleared), or restoring it locked, or writing anything on a plain restore.
+def test_a_merge_saved_on_the_earlier_revision_restores_pressed_and_unlocked_on_the_carried_sheet():
+    carried = _carried_from(PR_SAMPLE)
+    page = _lock(carried, "return { view: lockView(), writes: verdictWrites(), sets: t.setLog() };", host=_carried_store(_verdict_doc(PR_SAMPLE, "merge")))
+    assert page["result"]["view"]["pressed"] == ["true", "false"] and page["result"]["view"]["disabled"] is False
+    assert page["result"]["view"]["note"] == "my verdict note" and page["result"]["writes"] == [] and page["result"]["sets"] == []
+
+
+# Bites on: the carried document read in preference to the sheet's own, so a Not yet or a cleared Merge saved on the carried sheet itself does not override the earlier Merge.
+@pytest.mark.parametrize("own,pressed", [("not-yet", ["false", "true"]), (None, ["false", "false"])], ids=["not-yet", "cleared"])
+def test_the_own_digests_document_overrides_a_carried_merge(own, pressed):
+    carried = _carried_from(PR_SAMPLE)
+    mine = _sheet_digest(carried)
+    doc = {"id": mine, "data": {"verdict": own, "note": "mine", "sheet": mine}}
+    page = _lock(carried, "return { view: lockView(), writes: verdictWrites() };", host=_carried_store(_verdict_doc(PR_SAMPLE, "merge"), doc))
+    assert page["result"]["view"]["pressed"] == pressed and page["result"]["view"]["note"] == "mine" and page["result"]["writes"] == []
+
+
+# Bites on: a material republish (previousCommit only) reading the old digest, or drawing the carried box.
+def test_a_material_republish_shows_the_changed_box_and_does_not_restore_the_old_merge():
+    again = _republished(PR_SAMPLE)
+    page = _lock(again, "return { view: lockView(), order: order() };", host=_carried_store(_verdict_doc(PR_SAMPLE, "merge")))
+    assert page["result"]["view"]["pressed"] == ["false", "false"]
+    assert "pr-changed" in page["result"]["order"] and "pr-carried" not in page["result"]["order"]
+
+
+# Bites on: the page falling through to an older revision's Merge past a document in between (a withdrawal on the middle revision of A to B to C, or a document on the first candidate that does not name its own digest).
+@pytest.mark.parametrize("middle,pressed", [
+    (None, ["true", "false"]),
+    ("cleared", ["false", "false"]),
+    ("not-yet", ["false", "true"]),
+    ("foreign", ["false", "false"]),
+], ids=["no-document-in-between", "middle-withdrawn", "middle-not-yet", "middle-names-another-digest"])
+def test_the_chain_stops_at_the_first_revision_that_holds_a_document(middle, pressed):
+    second = _carried_from(PR_SAMPLE)
+    third = _carried_from(second, PR_SAMPLE, head=THIRD)
+    assert third["prSheet"]["carriedForward"]["sheets"] == [_sheet_digest(second), _sheet_digest(PR_SAMPLE)]
+    stored = [_verdict_doc(PR_SAMPLE, "merge")]
+    mid = _sheet_digest(second)
+    if middle == "foreign":
+        stored.append({"id": mid, "data": {"verdict": "not-yet", "note": "", "sheet": OLD_DIGEST}})
+    elif middle is not None:
+        stored.append({"id": mid, "data": {"verdict": None if middle == "cleared" else middle, "note": "", "sheet": mid}})
+    page = _lock(third, "return { view: lockView(), writes: verdictWrites() };", host=_carried_store(*stored))
+    assert page["result"]["view"]["pressed"] == pressed and page["result"]["writes"] == []
+
+
+# Bites on: the page accepting a document found under a carried digest whose sheet field names another revision, or falling through to an older Merge after refusing it.
+def test_a_carried_document_that_does_not_name_its_own_digest_is_no_verdict_and_the_walk_stops():
+    second = _carried_from(PR_SAMPLE)
+    third = _carried_from(second, PR_SAMPLE, head=THIRD)
+    wrong = _merge_under(second, sheet=OLD_DIGEST)
+    page = _lock(third, "return lockView();", host=_carried_store(_verdict_doc(PR_SAMPLE, "merge"), wrong))
+    assert page["result"]["pressed"] == ["false", "false"] and page["result"]["note"] == ""
+
+
+# Bites on: a carried Merge restored although the answers changed since it was given (the covers comparison no longer applying to a carried document).
+def test_a_carried_merge_whose_covers_differ_from_the_answers_now_restores_cleared():
+    carried = _carried_from(PR_SAMPLE)
+    stale = _merge_under(PR_SAMPLE, covers=[name[:-1] + "f" for name in _covers(_accepted_answers(PR_SAMPLE))])
+    page = _lock(carried, "return { view: lockView(), writes: verdictWrites() };", host=_carried_store(stale))
+    assert page["result"]["view"]["pressed"] == ["false", "false"] and page["result"]["view"]["note"] == "my verdict note"
+
+
+# Bites on: a changed answer under a carried Merge going out before the Merge is withdrawn, or the withdrawal written under the earlier digest instead of the sheet's own.
+def test_a_changed_answer_under_a_carried_merge_writes_null_to_the_own_digest_first():
+    carried = _carried_from(PR_SAMPLE)
+    mine = _sheet_digest(carried)
+    page = _lock(carried, """
+      const restored = lockView();
+      t.click(t.button(A, "Discuss"));
+      await t.tick();
+      const before = t.setLog().map((item) => item.path);
+      lastVerdictCall().resolve();
+      await t.tick();
+      return { restored: restored, before: before, after: t.setLog().map((item) => ({ path: item.path, body: item.body })) };
+    """, host=dict(PENDING, **_carried_store(_verdict_doc(PR_SAMPLE, "merge"))))
+    result = page["result"]
+    assert result["restored"]["pressed"] == ["true", "false"]
+    assert result["before"] == ["verdict/" + mine]
+    assert [item["path"] for item in result["after"]] == ["verdict/" + mine, "answers/" + CARD_A]
+    assert result["after"][0]["body"]["verdict"] is None and result["after"][0]["body"]["sheet"] == mine
+    assert result["after"][1]["body"]["answer"] == "discuss"

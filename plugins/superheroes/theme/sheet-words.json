@@ -59,6 +59,8 @@
     "describesCommit": "Describes commit {commit}.",
     "changedHeading": "This PR changed",
     "changed": "The PR moved past commit {previous} since the last sheet was made. Your answers to unchanged items are kept; the merge verdict starts over on this sheet.",
+    "carriedHeading": "Carried forward",
+    "carried": "On {date} the PR moved past commit {previous}: {moved}. That is not a material change, because {why}. Your answers and your merge verdict carry forward to this sheet.",
     "walkHeading": "Walk it",
     "walkStopPr": "#{pr}",
     "walkCount": "{walked} of {total} walked",
