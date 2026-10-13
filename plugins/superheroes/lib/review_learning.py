@@ -136,24 +136,6 @@ def _run_git(cwd, *args):
                           timeout=GIT_TIMEOUT_SECONDS, env=definition_doc._scrubbed_git_env())
 
 
-def _commit_landed(git_root, rel, before_head, line):
-    """Whether the commit this run made is in HEAD: True, False, or None when git cannot say.
-
-    A commit that errored or timed out may still have landed, since a hook after it can outlast the
-    timeout. It landed when HEAD moved off `before_head` and the committed Canon holds `line`. A git
-    read that fails is no evidence either way, so it is None, never False."""
-    try:
-        head = _run_git(git_root, "rev-parse", "HEAD")
-        if head.returncode != 0:
-            return False if before_head is None else None
-        if head.stdout.strip() == before_head:
-            return False
-        shown = _run_git(git_root, "show", "HEAD:" + rel)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    return line in shown.stdout.splitlines() if shown.returncode == 0 else None
-
-
 def _commit_canon(res, line):
     """Canon's write procedure steps 7-8: commit only Canon's paths, then see the line in HEAD."""
     git_root = res["gitRoot"]
@@ -175,8 +157,8 @@ def _commit_canon(res, line):
     except OSError as exc:
         failure = "git could not be run (%s: %s)" % (type(exc).__name__, exc)
     if failure:
-        # a commit that errored or timed out continues only when HEAD shows it landed (project_config._commit_landed)
-        landed = _commit_landed(git_root, rel, before_head, line)
+        # a commit that errored or timed out continues only when HEAD shows it landed (the one shared proof)
+        landed = project_config._commit_landed(git_root, rel, before_head, [line])
         if landed is not True:
             return None, failure + ("; git could not say whether the commit landed" if landed is None else "")
     try:
@@ -255,12 +237,17 @@ def _seats(name):
     return out
 
 
+def _id_ok(value):
+    """An identity field that is absent or hashable (a string or int)."""
+    return value is None or isinstance(value, (str, int))
+
+
 def _finding_ok(f):
     """A finding row with a hashable identity and an outcome that is null (undecided) or a known one."""
     if not isinstance(f, dict):
         return False
     key = f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")
-    return isinstance(key, (str, int)) and (f.get("outcome") is None or (
+    return isinstance(key, (str, int)) and _id_ok(f.get("id")) and _id_ok(f.get(session_contract.FINDING_KEY_FIELD)) and (f.get("outcome") is None or (
         isinstance(f["outcome"], str) and f["outcome"] in review_findings_schema.OUTCOME_SET))
 
 

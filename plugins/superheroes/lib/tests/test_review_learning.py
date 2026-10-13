@@ -625,6 +625,32 @@ def test_merged_member_marker_round_trips_through_the_record_writer():
     assert not RL._merged_member({"reason": "no mark"})
 
 
+def test_merged_member_carried_into_a_later_review_still_names_its_representative(monkeypatch):
+    import review_record
+    import review_record_session as rs
+    member = {"id": "A", "findingKey": "ka", "outcome": "fixed", "reviewer": "Code",
+              "reason": "fixed and audited" + rs.MERGED_INTO_FORMAT.format("kb")}
+    rep = {"id": "B", "findingKey": "kb", "outcome": "fixed", "reviewer": "Code", "reason": "fixed"}
+    monkeypatch.setattr(review_record, "read", lambda pr, repo, readers: {"ok": True, "findings": [member, rep]})
+    carried = rs._carried({"pr": 1, "findings": []}, {"repo": "r"}, "/unused", None)
+    carried_member = next(f for f in carried if f["id"] == "A")
+    assert carried_member["reason"].endswith(rs.CARRIED)
+    assert rs.merged_into(carried_member["reason"]) == "kb"
+    first = _record(1, "s1", D, [_row("code-reviewer")], [member, rep])
+    later = _record(1, "s2", "2026-10-11", [_row("code-reviewer")], carried)
+    later["previousRecord"] = {"id": first.get("id", "first")}
+    first["id"] = "first"
+    got = RL.tally([first, later], [], D, until="2026-10-11")
+    assert got["measured"] is True and got["seats"]["code-reviewer"]["caught"] == 1
+
+
+@pytest.mark.parametrize("bad", [{"findingKey": ["x"]}, {"id": ["x"]}, {"id": {"u": 1}, "findingKey": "k"}])
+def test_tally_unhashable_finding_identity_reads_incomplete_evidence(bad):
+    row = dict(_finding("k", "Code"), **bad)
+    got = RL.tally([_record(1, "s", D, [_row("code-reviewer")], [row])], [], D, until="2026-10-11")
+    assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
+
+
 # --- review C10 round 7 fixes ---
 
 def test_the_persisted_adoption_key_is_the_literal_core_md_spelling(proj):

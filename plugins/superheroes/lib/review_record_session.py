@@ -239,7 +239,8 @@ _MERGED_INTO = re.compile(r"\(merged into (.*)\)$")  # built from MERGED_INTO_FO
 
 def merged_into(reason):
     """The representative id a merged member row's reason names (the mark `MERGED_INTO_FORMAT` writes), or None."""
-    found = _MERGED_INTO.search(reason) if isinstance(reason, str) else None
+    # the carry path appends CARRIED after the mark each later review; the mark's own end is what remains
+    found = _MERGED_INTO.search(reason.replace(CARRIED, "")) if isinstance(reason, str) else None
     return found.group(1) if found else None
 
 
