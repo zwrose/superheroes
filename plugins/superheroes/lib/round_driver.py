@@ -235,7 +235,7 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
 # version; while it is unfinished, `_upgrade_gate` refuses every command on it.
-SESSION_GENERATION = 2
+SESSION_GENERATION = 3
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
