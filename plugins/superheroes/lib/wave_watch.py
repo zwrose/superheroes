@@ -1012,6 +1012,11 @@ def _has_next_page(connection):
     return isinstance(page_info, dict) and page_info.get("hasNextPage") is not False
 
 
+def carries_issue(name, number):
+    """Whether a branch name carries the issue number as a whole number (170 is not 17)."""
+    return re.search(r"(?<!\d)%d(?!\d)" % number, name) is not None
+
+
 def _lane_activity_epoch(repository, number):
     """Newest GitHub activity for one issue number, or None when it cannot be read whole."""
     issue = repository.get("i%d" % number)
@@ -1035,12 +1040,11 @@ def _lane_activity_epoch(repository, number):
         return None
     # The refs query matches substrings, so keep only a branch carrying this issue number
     # as a whole number.
-    whole_number = re.compile(r"(?<!\d)%d(?!\d)" % number)
     for node in branch_nodes:
         if not isinstance(node, dict) or not isinstance(node.get("name"), str):
             return None
         # bite-axis: WHOLE NUMBER — a branch for issue 170 is not activity on issue 17.
-        if not whole_number.search(node["name"]):
+        if not carries_issue(node["name"], number):
             continue
         target = node.get("target")
         stamps.append(target.get("committedDate") if isinstance(target, dict) else None)

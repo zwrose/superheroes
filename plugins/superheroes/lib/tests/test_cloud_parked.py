@@ -925,6 +925,22 @@ def test_a_park_after_the_original_lane_was_superseded_binds_to_the_replacement(
     assert _entries(w)[0]["launchId"] == "l-new"
 
 
+def test_a_new_park_while_the_recover_state_is_unreadable_is_refused_and_binds_on_retry(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _supersede(w, "l-old")
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    with open(_recover_file(w), "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    assert _notice(w, 10) == {"ok": False, "reason": "recover-state-unreadable"}
+    assert _entries(w)[0]["launchId"] == "l-old"
+    os.remove(_recover_file(w))
+    _supersede(w, "l-old")
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-new"
+
+
 def test_a_lane_another_lane_replaced_is_still_sent_back(w):
     _lane(w, "l-keep", 101, "keep-session", "a")
     _park(w, 10, issue=101)

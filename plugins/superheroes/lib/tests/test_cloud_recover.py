@@ -364,6 +364,8 @@ def test_a_parked_lane_whose_session_failed_is_assessed_stopped_until_a_successo
     _died(w, "l1", "park")
     assert _assess(w, state="archived")["verdict"] == "stopped"
     assert _successor(w)["ok"] is True
+    assert _assess(w, state="archived")["verdict"] == "stopped"  # no replacement has started: the recovery is still owed
+    _lane(w, "l2")
     assert _assess(w, state="archived")["verdict"] == "ended"
 
 
@@ -566,16 +568,33 @@ def test_t1_the_successor_premise_adopts_the_pushed_branch_and_passes_the_launch
     assert _state(w)["superseded"]["l1"]["branch"] == BRANCH and _state(w)["superseded"]["l1"]["sha"] == sha
 
 
-def test_a_stack_layer_that_opened_its_pull_request_is_relaunched_through_the_real_stack_gate(w):
+def _membership(monkeypatch, got):
+    monkeypatch.setattr(CR._sib("stack_check"), "read_membership", lambda **k: got)
+
+
+def test_a_pull_request_not_linked_into_the_stack_is_not_adopted_and_an_unreadable_stack_refuses(w, monkeypatch):
+    _push(w, BRANCH, "a")
+    _lane(w, "l1")
+    assert _assess(w, state="failed")["verdict"] == "stopped"
+    _died(w, "l1")
+    w.gh.pulls = [{"number": 99}]
+    _membership(monkeypatch, {"ok": False, "reason": "boom"})
+    assert _successor(w) == {"ok": False, "reason": "stack-membership-unreadable"}
+    _membership(monkeypatch, {"ok": False, "reason": CR._sib("stack_check").REASON_NOT_LINKED})
+    assert "adopts" not in _successor(w)["premise"]
+
+
+def test_a_stack_layer_that_opened_its_pull_request_is_relaunched_through_the_real_stack_gate(w, monkeypatch):
     sha = _push(w, BRANCH, "a")  # the original layer-2 premise has no adopts: its pull request did not exist yet
     _lane(w, "l1")
     assert _assess(w, state="failed")["verdict"] == "stopped"
     _died(w, "l1")
     w.gh.pulls = [{"number": 99}]
-    premise = _successor(w)["premise"]
-    assert premise["adopts"] == 99
     member = {"position": 2, "number": 99, "baseRefName": "layer-1", "headRefName": BRANCH, "headRefOid": sha}
     below = {"position": 1, "headRefName": "layer-1", "headRefOid": w.base}
+    _membership(monkeypatch, {"ok": True, "queried": below, "members": [member]})
+    premise = _successor(w)["premise"]
+    assert premise["adopts"] == 99
     gate = L._apply_stack_gate(
         dict(premise, **{"stack": 2}), w.base, w.root, {},
         lambda *a, **k: {"ok": True, "pr": 5, "repo": REPO},

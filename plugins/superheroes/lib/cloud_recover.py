@@ -206,6 +206,16 @@ def _lane(repo_root, launch_id, env):
     return info, reserved, None
 
 
+def _replaced(repo_root, launch_id, info, env):
+    """Whether a successor was composed for the lane and a replacement has since started. A mark with no
+    started launch behind it is a recovery interrupted before its launch, so the lane stays recoverable."""
+    if launch_id not in superseded_ids(repo_root, env)[0]:
+        return False
+    ll = _sib("launch_ledger")
+    launches = ll.fold(ll.read(repo_root, env=env)["records"])["launches"].values()
+    return any(i["issue"] == info["issue"] and i["reservedIndex"] > info["reservedIndex"] and "startedTs" in i for i in launches)
+
+
 def _handover(repo, issue, since, env, run):
     """(the newest handover comment created at or after `since` as a dict or None, whether the comments
     were read). A comment without a readable creation time or a whole handover body is not kept."""
@@ -280,11 +290,11 @@ def pushed(repo_root, issue, *, repo, adopted=None, env=None, run=None):
     if code != 0:
         return _refusal("remote-unreadable")
     # axis: the issue number matches as a whole number, so a branch for another issue that contains its digits is not this lane's
-    whole = re.compile(r"(?<!\d)%d(?!\d)" % issue)
+    carries = _sib("wave_watch").carries_issue
     kept = {}
     for line in out.splitlines():
         sha, _, ref = line.partition("\t")
-        if _SHA_RE.match(sha) and ref.startswith("refs/heads/") and (whole.search(ref[len("refs/heads/"):]) or ref == "refs/heads/%s" % adopted):
+        if _SHA_RE.match(sha) and ref.startswith("refs/heads/") and (carries(ref[len("refs/heads/"):], issue) or ref == "refs/heads/%s" % adopted):
             kept[ref[len("refs/heads/"):]] = sha
     branches = [_branch_entry(repo_root, repo, name, kept[name], env, run) for name in sorted(kept)]
     newest = branches[0] if len(branches) == 1 and "reason" not in branches[0] else None
@@ -308,7 +318,7 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
            "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None}
     # axis: a parked or died lane is still recoverable from current stop evidence until a successor is composed for it
-    if info["terminal"] and (info.get("outcome") not in ("park", "died") or launch_id in superseded_ids(repo_root, env)[0]):
+    if info["terminal"] and (info.get("outcome") not in ("park", "died") or _replaced(repo_root, launch_id, info, env)):
         out["verdict"] = "ended"
         return out
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
@@ -456,7 +466,13 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
             if not isinstance(prs, list):
                 return _refusal("open-pr-unreadable")
             if len(prs) == 1 and isinstance(prs[0], dict) and isinstance(prs[0].get("number"), int):
-                premise["adopts"] = prs[0]["number"]
+                # axis: an open pull request is adopted only when linked into the stack at this position, as a cloud builder does not link its own
+                sc = _sib("stack_check")
+                got = sc.read_membership(pr=prs[0]["number"], repo=repo, expect_stack=premise.get("stack"), run=run)
+                if not got["ok"] and got["reason"] != sc.REASON_NOT_LINKED:
+                    return _refusal("stack-membership-unreadable")
+                if got["ok"] and any(m["number"] == prs[0]["number"] and m["position"] == premise["layerPosition"] for m in got["members"]):
+                    premise["adopts"] = prs[0]["number"]
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     if entry is None:
         mark["neverPushedEvidence"] = never_pushed_evidence

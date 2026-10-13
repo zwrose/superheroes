@@ -323,7 +323,8 @@ advisor's calls. Three of those calls have mechanics beyond the charter:
      all after a definite failure.
   4. On `stopped`, record the lane's outcome `died` with `record-outcome`, run `successor`, then
      launch that premise with `launcher.py launch`. The routing step places it: cloud when cloud is
-     ready, the owner's machine otherwise.
+     ready, the owner's machine otherwise. Until that launch starts, `assess` keeps answering `stopped`, so an
+     interrupted recovery is rerun, never lost.
   5. Tell the owner with `message`'s text.
 
   The state is `cloud-recover.json`, beside the launch ledger. Recovery never leaves two builders on

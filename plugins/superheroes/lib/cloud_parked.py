@@ -271,10 +271,15 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         if pull is None:
             return _refusal("pr-read-failed")
         issues = _linked_issues(pull.get("body"), repo)
+        old = known[0].get(_LAUNCH_KEY) if known else None
+        superseded, recover_readable = _sib("cloud_recover").superseded_ids(repo_root, env)
+        # axis: an unreadable recovery record refuses before the park id is saved, so a retry can still rebind to the replacement
+        if old and not recover_readable:
+            return _refusal("recover-state-unreadable")
         launch_id, _, ledger_reason = (
             _lane(repo_root, issues, env,
                   # axis: a park after the original lane was superseded binds to the replacement, not the superseded launch
-                  known[0].get(_LAUNCH_KEY) if known and known[0].get(_LAUNCH_KEY) not in _sib("cloud_recover").superseded_ids(repo_root, env)[0] else None,
+                  old if old not in superseded else None,
                   reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
