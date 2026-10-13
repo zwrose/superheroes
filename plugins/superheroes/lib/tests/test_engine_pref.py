@@ -1144,11 +1144,11 @@ def test_load_engine_prefs_rejects_present_but_malformed_optional_fields(tmp_pat
         "seatPins": {
             "code-reviewer": {"vendor": "codex", "model": []},
             "security-reviewer": {"vendor": "claude", "effort": "  "},
-            "test-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+            "test-role": {"vendor": "codex", "model": "gpt-5.6-sol"},
         },
     })
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-    assert got["seatPins"] == {"test-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}}
+    assert got["seatPins"] == {"test-role": {"vendor": "codex", "model": "gpt-5.6-sol"}}
     assert got["invalidSeatPins"]["code-reviewer"] == "invalid model (must be a non-empty string)"
     assert got["invalidSeatPins"]["security-reviewer"] == "invalid effort (must be a non-empty string)"
 
@@ -1159,14 +1159,14 @@ def test_load_engine_prefs_invalid_seat_pins_structural(tmp_path):
         "seatPins": {
             "code-reviewer": "not-a-dict",
             "security-reviewer": {"model": "gpt-5.6-sol"},
-            "test-reviewer": {"vendor": "  "},
+            "test-role": {"vendor": "  "},
         },
     })
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
     assert "seatPins" not in got
     assert got["invalidSeatPins"]["code-reviewer"] == "pin must be an object with a vendor"
     assert got["invalidSeatPins"]["security-reviewer"] == "missing or invalid vendor"
-    assert got["invalidSeatPins"]["test-reviewer"] == "missing or invalid vendor"
+    assert got["invalidSeatPins"]["test-role"] == "missing or invalid vendor"
 
 
 def test_load_engine_prefs_passes_through_unknown_seat_name(tmp_path):

@@ -55,8 +55,8 @@ def _rd_dispatch_count_for_missing_seat(missing_dim, missing_round):
 
     orig_fold = RD._fold_panel
 
-    def spy_fold(state, config, artifact):
-        orig_fold(state, config, artifact)
+    def spy_fold(state, config, artifact, **kwargs):
+        orig_fold(state, config, artifact, **kwargs)
         rec = state["rounds"].get(str(state["round"]), {})
         if rec.get("seatStatus"):
             seat_status["value"] = rec["seatStatus"].get(missing_dim)
