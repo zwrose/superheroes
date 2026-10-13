@@ -4193,6 +4193,8 @@ def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_dif
         return False
     state["headDiff"] = diff_text
     state["reviewedDiff"] = diff_text
+    # axis: the lane basis is re-asked at every full panel scheduled over a new head — see bite-proof record wo_a_1797_roster
+    _reevaluate_lane_dimensions(state, config, diff_text)
     return True
 
 

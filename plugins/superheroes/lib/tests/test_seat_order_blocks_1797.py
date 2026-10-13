@@ -337,3 +337,13 @@ def test_a_head_the_lane_call_clears_keeps_the_reduced_lenses(tmp_path, monkeypa
     state = _reduced_state(tmp_path)
     _kind, dims = _unknown_surface_dimensions(state, _RISKY_DIFF)
     assert dims == ["code-reviewer", "test-role"]
+
+
+@pytest.mark.parametrize("diff", [_RISKY_DIFF, "not a git diff"])
+def test_the_verify_then_panel_refresh_re_asks_the_lane_call(tmp_path, diff):
+    # axis: the lane basis is re-asked at every full panel scheduled over a new head — see bite-proof record wo_a_1797_roster
+    state = _reduced_state(tmp_path)
+    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
+    assert RD._refresh_panel_diff_at_verified_head(
+        state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (diff, None))
+    assert state["config"]["dimensions"] == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]

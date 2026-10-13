@@ -636,7 +636,13 @@ def test_review_code_skill_composes_after_the_base_pin_and_leaves_pins_to_core_m
     assert "--pins" not in compose_line and "PINS_ARGS" not in compose_line
     assert "SEAT_PINS" not in skill + setup and "PINS_ARGS" not in skill + setup
     # the lane call needs the pinned base and the reviewed head, so compose runs after the base pin
-    assert '--base-ref "$BASE_REF"' in compose_line and '--head-sha "$HEAD_SHA"' in compose_line
+    assert '--base-ref "$BASE_REF"' in compose_line and '--head-sha "$COMPOSE_HEAD"' in compose_line
+    # the compose head is the commit the review diff reads: local HEAD on the auto-fix path (the loop
+    # diffs "$BASE_REF"...HEAD), the PR head only on the read-only path (#1797)
+    head_pick = setup[:setup.index("SEAT_MAP=$(python3")].rsplit("\n", 3)
+    head_pick = "\n".join(head_pick)
+    assert 'COMPOSE_HEAD=$(git rev-parse HEAD)' in head_pick and 'COMPOSE_HEAD="$HEAD_SHA"' in head_pick
+    assert '--head-sha "$HEAD_SHA"' not in compose_line
     assert '--repo-root "$REPO_ROOT"' in compose_line
     # the compose block lives in setup.md under its own heading, and SKILL.md points at it right after the base pin
     assert "\n## Compose the panel seat map\n" in setup
