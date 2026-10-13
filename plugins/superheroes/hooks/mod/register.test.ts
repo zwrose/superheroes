@@ -119,6 +119,7 @@ function rig(
     brokenKey?: string
     vocabulary?: string | null
     isCommandBroken?: boolean
+    isCommandSilent?: boolean
     manifest?: string | null
     compactFailures?: number
     compactSkip?: string
@@ -238,6 +239,10 @@ function rig(
 
     if (options.isCommandBroken) {
       throw new Error('unknown command')
+    }
+    // a command whose own turn has not started yet: the test starts it later
+    if (options.isCommandSilent) {
+      return { text: '' }
     }
     // as measured on harness 2.1.296, the command's own turn starts with this text; it is
     // never completed here, the test completes it (turn 't1')
@@ -842,6 +847,35 @@ test('an unrelated turn completing first leaves the checkpoint pending; its own 
   expect(r.toasts).toEqual([])
   expect(r.seen).toHaveLength(0)
 
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.toasts).toEqual([SUCCESS])
+  expect(r.seen).toHaveLength(1)
+})
+
+test('an ordinary user turn completing before the checkpoint command turn starts leaves it pending and unbound', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { isCommandSilent: true })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+
+  await $.turn.start({ text: 'a plain question', turnId: 'user' })
+  await $.turn.complete({ answer: 'a user answer', durationMs: 10, isAborted: false, turnId: 'user', reason: 'answer' })
+  await r.clock.advance(5000)
+
+  const bound = r.sets.some(([key, value]) => key === 'checkpoint' && (value as { turnId?: string } | null)?.turnId !== undefined)
+  expect(bound).toBe(false)
+  expect(r.toasts).toEqual([])
+  expect(r.seen).toHaveLength(0)
+
+  // the command's own turn, in the measured text shape, then binds and compacts
+  await $.turn.start({
+    text: `<command-message>superheroes:checkpoint</command-message>\n<command-name>/superheroes:checkpoint</command-name>\n<command-args>auto</command-args>`,
+    turnId: 't1',
+  })
   await complete($, 'Done.')
   await r.clock.advance(1000)
 

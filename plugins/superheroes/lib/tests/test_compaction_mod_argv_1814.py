@@ -79,6 +79,7 @@ def test_mod_argv_runs_through_the_real_cli_into_the_summarizer_text_and_the_mar
 
     code, located, err = _exec(argvs["path"], env, cwd)
     assert code == 0 and located["ok"] is True, err
+    assert located["path"] == saved["path"], err  # the path verb answers where `save` just wrote
 
     code, out, err = _exec(argvs["instructions"], env, cwd)
     assert code == 0 and out["ok"] is True, err
