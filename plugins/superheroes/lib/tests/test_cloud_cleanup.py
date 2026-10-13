@@ -5,6 +5,7 @@ delete included, are a fake `run` that holds the repository's branches in memory
 against a remote, and nothing touches the real home directory, clock or network."""
 import json
 import os
+import re
 import urllib.parse
 import sys
 from types import SimpleNamespace
@@ -467,9 +468,17 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
 
 
 def test_the_owner_message_is_the_boards_words_byte_for_byte():
-    # the board's owner-approved text is an external contract, so it is the one literal pinned here
-    assert CC.OWNER_MESSAGE_MERGED % 412 == ("#412 is merged. I've asked its cloud builder to archive itself. "
-                                             "You'll get one prompt for it: tap Allow once.")
+    # the committed board is the authoritative home of the owner message; the sentence is read from it
+    board = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "docs", "superheroes",
+                         "cloud-builders-66a2e8", "board", "build-board.html")
+    with open(board, encoding="utf-8") as fh:
+        html = fh.read()
+    paragraphs = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", p)).strip()
+                  for p in re.findall(r"<p>(.*?)</p>", html, re.S)]
+    found = [p for p in paragraphs if re.match(r"#\d+ is merged\.", p)]
+    assert len(found) == 1
+    number = int(re.match(r"#(\d+)", found[0]).group(1))
+    assert CC.OWNER_MESSAGE_MERGED % number == found[0]
 
 
 # ---------------------------------------------------------------- review round 1
@@ -531,6 +540,38 @@ def test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up(w):
     got = _plan(w)
     assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
     assert _record(w, "m-1", "delivered")["request"]["session"] == "session-two"
+
+
+def _adopter(w, launch_id, issue, session, ts):
+    reserved = _reserved(launch_id, BATCH, [launch_id], w.repo, issue=issue, place="cloud",
+                         cloudEnvironment="env-fixture-one", pluginVersion="1.2.3", ts=ts)
+    reserved["premise"] = dict(reserved.get("premise") or {}, adopts=PR)
+    assert ll.reserve(w.repo, reserved, env=w.env)["ok"]
+    if session:
+        started = _started(launch_id)
+        started.update(cloudSessionName=session, cloudSessionId="session_01AbCdEf123")
+        assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+
+
+def test_a_cloud_builder_that_adopted_a_locally_built_pr_is_cleaned_up_with_no_older_cloud_lane(w):
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    _adopter(w, "l-2", 101, "session-two", _T2)
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
+
+
+def test_a_reservation_that_never_started_a_session_never_wins_the_adoption(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    _adopter(w, "l-2", 101, None, _T2)
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1" and got["session"] == "session-one"
+
+
+def test_an_unstarted_adopter_alone_is_still_no_cloud_lane(w):
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    _adopter(w, "l-2", 101, None, _T2)
+    assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}
 
 
 def test_a_pending_request_is_written_before_the_send_and_replaced_by_the_outcome_of_the_same_message(w):

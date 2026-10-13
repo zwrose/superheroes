@@ -195,10 +195,11 @@ def _epoch(stamp):
         return None
 
 
-def _adopting_successor(repo_root, lid, lane, pr, branch, env):
-    """(launchId, lane, refusal): the latest later cloud lane of the same issue whose premise adopts this PR
-    or its branch; the given lane when there is none. Read from the reserved records, which carry the premise
-    `cloud_recover.successor` wrote."""
+def _adopting_successor(repo_root, lid, lane, issues, pr, branch, env):
+    """(launchId, lane, refusal): the latest later cloud lane of the given issues whose premise adopts this PR
+    or its branch and whose fold shows a started cloud session; the given lane when there is none (an empty
+    lane when the PR had no older cloud lane, so any such adopter is found). Read from the reserved records,
+    which carry the premise `cloud_recover.successor` wrote."""
     ll = _sib("launch_ledger")
     got = ll.read(repo_root, env=env)
     if got["state"] not in ("ok", "missing", "tornTail"):
@@ -214,8 +215,9 @@ def _adopting_successor(repo_root, lid, lane, pr, branch, env):
             or (bool(branch) and premise.get("adoptsBranch") == branch))
 
     later = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
-             if i["place"] == ll.PLACE_CLOUD and i["issue"] == lane.get("issue")
-             and i["reservedIndex"] > lane["reservedIndex"] and adopts(premises.get(k))]
+             if i["place"] == ll.PLACE_CLOUD and i["issue"] in issues
+             and isinstance(i.get("cloudSessionName"), str) and i["cloudSessionName"]
+             and i["reservedIndex"] > lane.get("reservedIndex", -1) and adopts(premises.get(k))]
     if not later:
         return lid, lane, None
     best = max(later, key=lambda t: t[0])
@@ -253,6 +255,12 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         if reason:
             return _refusal(reason), None
     lanes = [(lid, lane) for lid, lane, _ in found if lane]
+    if not lanes and not launch_id:
+        # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup
+        lid, lane, reason = _adopting_successor(repo_root, None, {}, issues, pr, _name(pull.get("head"), "ref"), env)
+        if reason:
+            return _refusal(reason), None
+        lanes = [(lid, lane)] if lane else []
     if not lanes:
         return _refusal("no-cloud-lane"), None
     if len(lanes) > 1:
@@ -260,7 +268,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     lid, lane = lanes[0]
     if not launch_id:
         # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup
-        lid, lane, reason = _adopting_successor(repo_root, lid, lane, pr, _name(pull.get("head"), "ref"), env)
+        lid, lane, reason = _adopting_successor(repo_root, lid, lane, [lane.get("issue")], pr, _name(pull.get("head"), "ref"), env)
         if reason:
             return _refusal(reason), None
     session = lane.get("cloudSessionName")
