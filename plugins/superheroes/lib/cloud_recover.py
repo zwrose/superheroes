@@ -6,6 +6,7 @@ to push, the successor's premise, and the board's words.
   cloud_recover.py ask --repo-root D --launch-id L
   cloud_recover.py asked --repo-root D --launch-id L [--uncertain]
   cloud_recover.py successor --repo-root D --launch-id L --repo O/N [--never-pushed 'what was checked']
+  cloud_recover.py relaunch-refusal --repo-root D --launch-id L --repo O/N
   cloud_recover.py message --issue N --place cloud|local [--stopped-at EPOCH] [--pushed-at EPOCH]
                            [--never-pushed] [--push-time-source push|commit]
 
@@ -218,9 +219,10 @@ def _replaced(repo_root, launch_id, info, env):
     return any(i["issue"] == info["issue"] and i["reservedIndex"] > info["reservedIndex"] and "startedTs" in i for i in launches)
 
 
-def _handover(repo, issue, since, env, run):
-    """(the newest handover comment created at or after `since` as a dict or None, whether the comments
-    were read). A comment without a readable creation time or a whole handover body is not kept."""
+def _newest_comment(repo, issue, since, env, run, parse):
+    """(the newest comment created at or after `since` whose `parse(body)` is truthy, as {"commentId", "url",
+    "parsed", "createdAt"} or None, whether the comments were read). A comment without a readable creation
+    time or a body `parse` accepts is not kept."""
     cb = _sib("cloud_builder")
     endpoint = "repos/%s/issues/%d/comments?since=%s" % (repo, issue, _iso(since))
     code, out = cb._gh(run, ["api", "--paginate", endpoint], cb._git_env(env))
@@ -232,14 +234,13 @@ def _handover(repo, issue, since, env, run):
         return None, False
     found = []
     for comment in comments:
-        created, body = _epoch(comment.get("created_at")), comment.get("body")
-        sha = cb.handover_sha(body)
-        if created is not None and created >= since and sha:
-            found.append((created, comment, sha))
+        created, parsed = _epoch(comment.get("created_at")), parse(comment.get("body"))
+        if created is not None and created >= since and parsed:
+            found.append((created, comment, parsed))
     if not found:
         return None, True
-    _, comment, sha = max(found, key=lambda t: t[0])
-    return {"commentId": comment.get("id"), "url": comment.get("html_url"), "sha": sha,
+    _, comment, parsed = max(found, key=lambda t: t[0])
+    return {"commentId": comment.get("id"), "url": comment.get("html_url"), "parsed": parsed,
             "createdAt": comment["created_at"]}, True
 
 
@@ -336,7 +337,10 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         out["verdict"] = "ended"
         return _withdrawn(repo_root, launch_id, out, env)
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
-    handover, read = _handover(repo, info["issue"], start, env, run) if _is_number(start) else (None, False)
+    found, read = (_newest_comment(repo, info["issue"], start, env, run, _sib("cloud_builder").handover_sha)
+                   if _is_number(start) else (None, False))
+    handover = found and {"commentId": found["commentId"], "url": found["url"], "sha": found["parsed"],
+                          "createdAt": found["createdAt"]}
     out["handover"], out["handoverRead"] = handover, "ok" if read else "failed"
     fresh = (session_state in _LIVE_STATES and _is_number(age)
              and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
@@ -426,6 +430,44 @@ def _adopted(found, handover_sha):
     return found["newest"], None
 
 
+def _own_premise(reserved):
+    """(the lane's own premise with the launcher's stamps removed, refusal) from its reserved record."""
+    premise = reserved.get("premise") if isinstance(reserved, dict) else None
+    if not isinstance(premise, dict):
+        return None, _refusal("lane-premise-unreadable")
+    return {k: v for k, v in premise.items() if k not in _LAUNCHER_STAMPED}, None
+
+
+def relaunch_refusal(repo_root, launch_id, *, repo, env=None, run=None):
+    """The premise that relaunches a lane that ended as a version-mismatch refusal: its own premise, stamps removed,
+    reporting the cloud's version (from the lane's whole refusal comment, posted since it started). Records nothing."""
+    env = _env(env)
+    bad = _inputs(repo=repo, launch_id=launch_id)
+    if bad:
+        return _refusal(bad)
+    info, reserved, refused = _lane(repo_root, launch_id, env)
+    if refused:
+        return refused
+    if not info["terminal"]:
+        return _refusal("lane-not-ended")
+    if _latest_outcome(info) != "refusal":
+        return _refusal("lane-not-refusal")
+    premise, refused = _own_premise(reserved)
+    if refused:
+        return refused
+    start = info.get("startedTs", info.get("reservedTs"))
+    found, read = (_newest_comment(repo, info["issue"], start, env, run, _sib("cloud_builder").refusal_versions)
+                   if _is_number(start) else (None, False))
+    if not read:
+        return _refusal("comments-unreadable")
+    if found is None:
+        return _refusal("refusal-comment-missing")
+    running, launched = found["parsed"]
+    premise["reportedCloud"] = {"pluginVersion": running}
+    return {"ok": True, "launchId": launch_id, "issue": info["issue"], "premise": premise,
+            "cloudVersion": running, "advisorVersion": launched}
+
+
 def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=None, run=None):
     """The premise a successor launch adopts: the lane's own premise with the launcher's stamps removed and
     its `baseCommit` kept, carrying the lane's pushed work as `adoptsBranch` and `adoptsHead` (neither, when
@@ -448,10 +490,9 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     # axis: a lane terminalized without an assess that returned stopped never gets a successor
     if assessed.get("verdict") != "stopped":
         return _refusal("lane-not-assessed-stopped")
-    premise = reserved.get("premise") if isinstance(reserved, dict) else None
-    if not isinstance(premise, dict):
-        return _refusal("lane-premise-unreadable")
-    premise = {k: v for k, v in premise.items() if k not in _LAUNCHER_STAMPED}
+    premise, refused = _own_premise(reserved)
+    if refused:
+        return refused
     found = pushed(repo_root, info["issue"], repo=repo, adopted=premise.get("adoptsBranch"), env=env, run=run)
     if not found["ok"]:
         return found
@@ -530,6 +571,7 @@ _VERBS = {  # verb: (function, required flags, optional flags); each flag is (na
     "ask": (ask, [_ROOT, _LAUNCH], []),
     "asked": (asked, [_ROOT, _LAUNCH], [("--uncertain", {"action": "store_true"})]),
     "successor": (successor, [_ROOT, _LAUNCH, _REPO], [("--never-pushed", {"dest": "never_pushed_evidence"})]),
+    "relaunch-refusal": (relaunch_refusal, [_ROOT, _LAUNCH, _REPO], []),
     "message": (message, [("--issue", {"type": int}), ("--place", {})],
                 [("--repo-root", {}), ("--stopped-at", {"type": float}), ("--pushed-at", {"type": float}),
                  ("--never-pushed", {"action": "store_true"}), ("--push-time-source", {"default": "push"})]),
