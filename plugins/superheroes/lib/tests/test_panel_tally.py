@@ -483,11 +483,11 @@ def test_uncertified_reason_none_when_every_seat_certified():
 def test_uncertified_reason_joins_multiple_uncertifiable_seats_and_skips_certified():
     results = {"code": {"status": "run", "confidence": "high"},
                "premortem-reviewer": {"status": "run", "confidence": "low", "receiptMissing": True},
-               "test-reviewer": {"status": "missing", "confidence": "low", "malformed": True}}
-    reason = PT.uncertified_reason(results, ["code", "premortem-reviewer", "test-reviewer"])
+               "test-role": {"status": "missing", "confidence": "low", "malformed": True}}
+    reason = PT.uncertified_reason(results, ["code", "premortem-reviewer", "test-role"])
     assert "code" not in reason.split("—")[0]  # the certified seat is not named
     assert "premortem-reviewer returned no verification receipt" in reason
-    assert "test-reviewer did not return a usable result" in reason
+    assert "test-role did not return a usable result" in reason
     assert "; " in reason
 
 
