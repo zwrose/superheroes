@@ -5755,12 +5755,23 @@ def _run_seam(seams, action, payload, state, config):
                 out["seatMap"] = sm
         return out
     if action == P_VERIFIERS:
-        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
+        result = seams["verifier"](payload.get("clusters"), state["round"])
+        # The callback may report the vendor it actually ran on: `{"verdicts": [...], "vendor": v}`.
+        # A bare list reports nothing. Never the driver's selection: that is an assertion of who ran
+        # with no execution record.
+        reported = None
+        if isinstance(result, dict) and "verdicts" in result:
+            vendor = result.get("vendor")
+            reported = vendor.strip() if isinstance(vendor, str) and vendor.strip() else None
+            result = result["verdicts"]
+        artifact = {"verdicts": result}
         fault = verifier_results_fault(artifact)
         if fault is not None:
             return {"verdicts": [], "_verifierArtifactFault": fault}
-        # The library layer IS the orchestrator: it dispatches on the driver's selected vendor.
-        artifact["verifierVendor"] = _nonpanel_selection(state)[0]
+        # No report leaves the key absent, so `_fold_verifiers` applies its own rule (an unclaimed
+        # verdict is ignored when the selection replaced the reviewer engine).
+        if reported is not None:
+            artifact["verifierVendor"] = reported
         return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}

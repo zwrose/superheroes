@@ -101,8 +101,11 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
         return []
 
     def default_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                for c in (clusters or []) for i in (c.get("ids") or [])]
+        # Report the vendor it ran on: with the default fixer `claude` the independent selection is
+        # `codex`, and an unreported verdict does not count once the selection replaced the engine.
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
 
     def default_synthesis(findings, rnd):
         return None
@@ -1554,8 +1557,9 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
 
 def test_run_loop_verifier_valid_reason_control():
     def good_verifier(clusters, rnd):
-        return [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
-                for c in (clusters or []) for i in (c.get("ids") or [])]
+        return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "reason": "checked", "evidence": "ran"}
+                             for c in (clusters or []) for i in (c.get("ids") or [])],
+                "vendor": "codex"}
 
     result, state = _run_loop_capturing_state(
         _seams(reviewer=_panel_finding_reviewer(), verifier=good_verifier),
