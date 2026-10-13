@@ -1314,6 +1314,27 @@ def test_a_schema_without_the_walk_answers_by_kind_leaves_the_walk_unanswerable(
     assert result["gate"] == {"hidden": False, "message": PW["walkSchemaMissing"]}
 
 
+# Bites on: the page keeping the walk's answers on offer when the schema lists none for a stop's kind, so the other stops would still draw buttons and the gate line would blame storage.
+# Axis: a stop whose kind has no answer list in walkAnswersByKind turns the whole walk off as a schema with no list does: no stop draws an answer button, every control is off, a tap writes nothing, and the gate line names the schema.
+def test_a_stop_kind_with_no_answer_list_leaves_the_walk_unanswerable():
+    schema = json.loads(json.dumps(SCHEMA))
+    by_kind = schema["$defs"]["walkAnswersByKind"]
+    del by_kind["properties"]["look"]
+    if "required" in by_kind:
+        by_kind["required"] = [kind for kind in by_kind["required"] if kind != "look"]
+    page = _page(WALK_SHEET, WALK + """
+      const out = { p1: answerRow("p1").map((button) => button.textContent), f1: answerRow("f1").map((button) => button.textContent), off: walkControls().map((node) => node.disabled), gate: { hidden: t.gate().hidden, message: t.gate().message } };
+      t.click(pickOf("p1"));
+      await t.tick();
+      out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
+      return out;
+    """, schema=schema)
+    result = page["result"]
+    assert result["p1"] == [] and result["f1"] == []
+    assert result["off"] and all(result["off"]) and result["walkWrites"] == []
+    assert result["gate"] == {"hidden": False, "message": PW["walkSchemaMissing"]}
+
+
 # Axis: an answer the schema offers that the wording file has no label for refuses the sheet, since the button could not be drawn.
 def test_an_offered_answer_without_a_label_refuses_the_sheet():
     schema = json.loads(json.dumps(SCHEMA))

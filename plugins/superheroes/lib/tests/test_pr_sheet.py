@@ -765,6 +765,22 @@ def test_a_words_file_that_cannot_be_used_is_a_refusal_that_names_it(tmp_path, m
     assert list(out.parent.iterdir()) == []
 
 
+# Bites on: the words check reading only the first block the index command needs, so a words file missing a later block (prAnswers, answers, index) is read as whole and fails later or not at all.
+@pytest.mark.parametrize("block", ["prAnswers", "answers", "index"])
+def test_a_words_file_missing_an_index_only_block_is_a_refusal_that_names_the_block(tmp_path, monkeypatch, capsys, block):
+    # Axis: the index command refuses a words file that lacks any one of the blocks only it reads, with the words path and the block's name in the problem, exit 1, and nothing written.
+    words = tmp_path / "words.json"
+    words.write_text(json.dumps({name: found for name, found in ALL_WORDS.items() if name != block}), encoding="utf-8")
+    monkeypatch.setattr(pr_sheet, "WORDS_PATH", str(words))
+    out = tmp_path / "out" / "sheet.json"
+    out.parent.mkdir()
+    code = pr_sheet.main(["index", "--input", str(FIXTURES / "index-input.json"), "--out", str(out)])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1 and result["ok"] is False
+    assert result["problems"] == [f"{words} could not be read: it has no {block} block"], result["problems"]
+    assert list(out.parent.iterdir()) == []
+
+
 def test_a_broken_words_file_does_not_stop_the_builder_at_import(tmp_path):
     # Axis: the builder in a copy of the plugin whose words file is not JSON still starts and refuses in JSON, rather than ending in a traceback at import.
     plugin = tmp_path / "plugin"

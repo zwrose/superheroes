@@ -82,7 +82,7 @@
     "screenshotUploading": "Adding the screenshot…",
     "screenshotFailed": "That screenshot didn't upload.",
     "screenshotUnavailable": "Screenshots can't be added here; say what you saw in the note.",
-    "walkSchemaMissing": "The walk is off: the sheet's schema lacks $defs.walkAnswersByKind. Republish the schema, then reload.",
+    "walkSchemaMissing": "The walk is off: the sheet's schema has no answer list in $defs.walkAnswersByKind for a stop on this sheet. Republish the schema, then reload.",
     "walkProblemsOne": "1 walk problem needs a choice: fix before merge, or in a follow-up.",
     "walkProblemsMany": "{count} walk problems need a choice: fix before merge, or in a follow-up.",
     "followUpsOne": "1 walk problem goes to a follow-up.",

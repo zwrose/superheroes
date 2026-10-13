@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -932,3 +933,24 @@ def test_prose_follows_a_reordered_walk_answer_list(tmp_path, monkeypatch):
     path.write_text(json.dumps(schema), encoding="utf-8")
     monkeypatch.setattr(sheet_prose, "SCHEMA", path)
     assert sheet_prose.offered_walk_answers("try") == schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"]
+
+
+# Bites on: the chat walk listing a stop's answers in a fixed order (or from a list of its own) instead of the schema's walkAnswersByKind order for the stop's kind.
+def test_the_chat_walk_lists_each_stops_answers_in_the_reordered_schema_order(tmp_path, monkeypatch):
+    # Axis: with the try list reversed in the schema, the try stop's Answers line reverses and the look stop's stays as the schema lists it.
+    schema = load_schema()
+    schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"].reverse()
+    path = tmp_path / "schema" / "sheet.schema.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    fixtures = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
+    built = tmp_path / "sheet.json"
+    done = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "pr_sheet.py"), "build", "--record", str(fixtures / "record-big.json"),
+                           "--input", str(fixtures / "input-walk.json"), "--out", str(built)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout
+    sheet = json.loads(built.read_text(encoding="utf-8"))
+    monkeypatch.setattr(sheet_prose, "SCHEMA", path)
+    lines = sheet_prose.render(sheet).splitlines()
+    assert "   Answers: p1 Skip / p1 Problem / p1 Works" in lines
+    assert "   Answers: f1 Looks right / f1 Problem / f1 Skip" in lines
+    assert "   Answers: p1 Works / p1 Problem / p1 Skip" not in lines
