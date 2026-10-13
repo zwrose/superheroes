@@ -49,10 +49,9 @@ For every launch, the launcher decides where each build runs.
 
 ### The needs you check for
 
-Before a launch, judge from the build's order whether it needs anything only the owner's machine has. Write that into the premise as `needs`, a list of plain phrases. The launcher adds three needs by itself:
+Before a launch, judge from the build's order whether it needs anything only the owner's machine has. Write that into the premise as `needs`, a list of plain phrases. The launcher adds two needs by itself:
 
 - **The phone simulator**, for a premise asking for the iPhone check.
-- **GitHub's stack interface**, for every layer of a stack (a premise with `stack`). The cloud blocks GitHub's GraphQL interface: there, `gh pr` and `gh issue` fail while `gh api` REST calls work. Reading and linking a stack's layers uses GraphQL.
 - **This project's Canon and specs**, when they are kept outside the repository.
 
 ### How each check reads for a cloud launch

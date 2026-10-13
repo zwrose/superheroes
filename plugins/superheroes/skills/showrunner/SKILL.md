@@ -834,6 +834,7 @@ above).
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` § Answering a builder note when you answer one: on another account the answer goes through the relay, and the note is recorded answered only after a confirmed delivery.**
    **When a cloud build's PR is parked because the reviewer pass lapsed, tell the owner, and send it back for review once the pass is renewed: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back.**
    **When a cloud lane stops or stalls, recover it at once from its pushed work: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Adoption mechanics.**
+   **When a cloud-built stack layer hands back, link it, or record the link still owed, before the vet: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Cloud lanes.**
 
    **The orchestration that remains is yours because the harness does not carry it:** the
    launcher's detached spawn of headless builders; arming the wave watch and re-arming it; reading
