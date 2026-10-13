@@ -284,11 +284,14 @@ async function steer<T extends { instructions?: string }>($: EngineInterface, e:
   return steered
 }
 
-// The fill is about to drop: a Snooze and the band belong to the old fill.
+// The fill is about to drop: a Snooze and the band belong to the old fill. The re-arm is
+// set for every main-loop compaction; if it is then skipped or fails, the next measurement
+// only snoozes by `rearmAt`.
 async function forgetFill($: EngineInterface): Promise<void> {
   try {
     await $.state.set(snoozeUntilTokens, null)
     await $.state.set(band, false)
+    await $.state.set(rearmAfterCompact, true)
   } catch (error) {
     note($, `session.compact state: ${String(error)}`)
   }
@@ -331,7 +334,6 @@ function compactSoon($: EngineInterface, isRetry = false): void {
         // the next automatic run waits for the fill to grow, as a skipped checkpoint does
         await rearmFromEnd($, value?.fill)
       } else {
-        await $.state.set(rearmAfterCompact, true)
         $.ui.toast('Checkpointed and compacted')
       }
     } catch (error) {

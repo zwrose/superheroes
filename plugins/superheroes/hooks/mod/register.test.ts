@@ -1192,6 +1192,8 @@ test('after a successful compaction the context must grow before an automatic ru
   await complete($, 'Done.')
   await r.clock.advance(1000)
   expect(r.toasts).toEqual([SUCCESS])
+  // the kit's compaction stub runs no hook; the engine fires it for the real one
+  await compact($, { trigger: 'plugin' as SessionCompactInput['trigger'] })
 
   // still above the trigger after the compaction: nothing runs, and it is the only such measurement
   await measure($, r, FILL)
@@ -1219,6 +1221,7 @@ test('after a compaction that leaves 80000 with the harness compacting at 167000
   await complete($, 'Done.')
   await r.clock.advance(1000)
   expect(r.toasts).toEqual([SUCCESS])
+  await compact($, { trigger: 'plugin' as SessionCompactInput['trigger'] })
 
   r.usage = usage(80000)
   await $.session.measure({ context: { tokens: 80000, window: 200000 }, rateLimits: [], changed: ['context'] })
@@ -1252,6 +1255,21 @@ test('a checkpoint that ends unchanged re-arms from its ending fill, not its sta
 
   expect(r.seen).toHaveLength(0)
   expect(r.commands).toEqual([COMMAND])
+
+  // the snooze releases at the re-arm boundary, before the harness compacts at 167000
+  await at(163500)
+  expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('a manual compaction that leaves 80000 with a 50000 trigger starts no checkpoint on the next measure', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await compact($, { trigger: 'manual' })
+  await measure($, r, 80000)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
 })
 
 test('a compaction that succeeded is never retried for a failed follow-up write', async ($, on) => {
