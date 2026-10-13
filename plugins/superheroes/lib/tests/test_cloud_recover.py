@@ -99,7 +99,8 @@ class Gh:
         if "/comments?" in endpoint:
             if self.comments_fail:
                 return subprocess.CompletedProcess(argv, 1, "", "boom")
-            return subprocess.CompletedProcess(argv, 0, json.dumps(self.comments), "")
+            since = parse_qs(urlparse(endpoint).query)["since"][0]  # like GitHub: only comments updated after `since`
+            return subprocess.CompletedProcess(argv, 0, json.dumps([c for c in self.comments if c["created_at"] > since]), "")
         return subprocess.CompletedProcess(argv, 1, "", "unrouted")
 
 

@@ -229,7 +229,7 @@ def _newest_comment(repo, issue, since, env, run, parse):
     "parsed", "createdAt"} or None, whether the comments were read). A comment without a readable creation
     time or a body `parse` accepts is not kept."""
     cb = _sib("cloud_builder")
-    endpoint = "repos/%s/issues/%d/comments?since=%s" % (repo, issue, _iso(since))
+    endpoint = "repos/%s/issues/%d/comments?since=%s" % (repo, issue, _iso(since - 1))
     code, out = cb._gh(run, ["api", "--paginate", endpoint], cb._git_env(env))
     try:
         comments = _sib("pr_comment")._parse_paginated_arrays(out) if code == 0 else None
