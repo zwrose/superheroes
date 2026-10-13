@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Review sheet data file",
-  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids.",
+  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole, or the index block of the index that lists every PR waiting on the owner. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids; stop ids are unique within the walk; row numbers are unique within the index.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "kind", "title", "cards"],
@@ -12,9 +12,9 @@
       "const": "superheroes-sheet/1"
     },
     "kind": {
-      "description": "Which sheet this is: a remainder sheet for a review that left findings unsettled, a final sheet for a finished review, or a plain sheet with only cards.",
+      "description": "Which sheet this is: a remainder sheet for a review that left findings unsettled, a final sheet for a finished review, a plain sheet with only cards, a pr sheet for one PR, a stack sheet for one sheet over a stack of PRs that merges whole, or an index that lists the questions that block work and every PR waiting on the owner.",
       "type": "string",
-      "enum": ["remainder", "final", "plain"]
+      "enum": ["remainder", "final", "plain", "pr", "stack", "index"]
     },
     "title": {
       "description": "The review's name, shown in the app bar.",
@@ -121,49 +121,373 @@
         }
       }
     },
+    "prSheet": {
+      "description": "The summary of one PR, or of a stack of PRs that merges whole, present only on a pr sheet or a stack sheet.",
+      "$ref": "#/$defs/prSheet"
+    },
+    "index": {
+      "description": "The list of PRs waiting on the owner, present only on an index.",
+      "$ref": "#/$defs/index"
+    },
     "cards": {
-      "description": "The calls the owner has to make, one card each. A remainder sheet or a plain sheet has at least one; a final sheet may have none when the review left no calls.",
+      "description": "The calls the owner has to make, one card each. A remainder sheet or a plain sheet has at least one; a final sheet, a pr sheet, a stack sheet or an index may have none when there are no calls left.",
       "type": "array",
       "items": {"$ref": "#/$defs/card"}
     }
   },
   "allOf": [
     {
-      "description": "A remainder sheet must carry the remainder block and must not carry the final block.",
+      "description": "A remainder sheet must carry the remainder block and must not carry the final block or the prSheet block.",
       "if": {"properties": {"kind": {"const": "remainder"}}, "required": ["kind"]},
-      "then": {"required": ["remainder"], "not": {"required": ["final"]}}
+      "then": {"required": ["remainder"], "not": {"anyOf": [{"required": ["final"]}, {"required": ["prSheet"]}]}}
     },
     {
-      "description": "A final sheet must carry the final block and must not carry the remainder block.",
+      "description": "A final sheet must carry the final block and must not carry the remainder block or the prSheet block.",
       "if": {"properties": {"kind": {"const": "final"}}, "required": ["kind"]},
-      "then": {"required": ["final"], "not": {"required": ["remainder"]}}
+      "then": {"required": ["final"], "not": {"anyOf": [{"required": ["remainder"]}, {"required": ["prSheet"]}]}}
     },
     {
-      "description": "A plain sheet must carry neither the remainder block nor the final block.",
+      "description": "A plain sheet must carry none of the remainder block, the final block and the prSheet block.",
       "if": {"properties": {"kind": {"const": "plain"}}, "required": ["kind"]},
-      "then": {"not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}]}}
+      "then": {"not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}, {"required": ["prSheet"]}]}}
+    },
+    {
+      "description": "A pr sheet must carry the prSheet block, which must not list a stack's PRs, and must carry neither the remainder block nor the final block.",
+      "if": {"properties": {"kind": {"const": "pr"}}, "required": ["kind"]},
+      "then": {
+        "required": ["prSheet"],
+        "not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}]},
+        "properties": {"prSheet": {"not": {"required": ["prs"]}}}
+      }
+    },
+    {
+      "description": "A stack sheet must carry the prSheet block, which must list the stack's PRs, and must carry neither the remainder block nor the final block.",
+      "if": {"properties": {"kind": {"const": "stack"}}, "required": ["kind"]},
+      "then": {
+        "required": ["prSheet"],
+        "not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}]},
+        "properties": {"prSheet": {"required": ["prs"]}}
+      }
+    },
+    {
+      "description": "On a pr sheet or a stack sheet, every option says whether picking it sends the PR back for a fix.",
+      "if": {"properties": {"kind": {"enum": ["pr", "stack"]}}, "required": ["kind"]},
+      "then": {"properties": {"cards": {"items": {"properties": {"options": {"items": {"required": ["sendsBack"]}}}}}}}
     },
     {
       "description": "A remainder sheet or a plain sheet must have at least one card.",
       "if": {"properties": {"kind": {"enum": ["remainder", "plain"]}}, "required": ["kind"]},
       "then": {"properties": {"cards": {"minItems": 1}}}
+    },
+    {
+      "description": "An index must carry the index block and must carry none of the remainder block, the final block and the prSheet block.",
+      "if": {"properties": {"kind": {"const": "index"}}, "required": ["kind"]},
+      "then": {"required": ["index"], "not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}, {"required": ["prSheet"]}]}}
+    },
+    {
+      "description": "Every sheet but an index must not carry the index block.",
+      "if": {"properties": {"kind": {"enum": ["remainder", "final", "plain", "pr", "stack"]}}, "required": ["kind"]},
+      "then": {"not": {"required": ["index"]}}
+    },
+    {
+      "description": "On an index, every card is a question with options and no option sends anything back.",
+      "if": {"properties": {"kind": {"const": "index"}}, "required": ["kind"]},
+      "then": {"properties": {"cards": {"items": {"properties": {"options": {"minItems": 1, "items": {"not": {"required": ["sendsBack"]}}}}}}}}
     }
   ],
   "$defs": {
+    "index": {
+      "description": "The list of PRs waiting on the owner: one row for each, which may be none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rows"],
+      "properties": {
+        "rows": {
+          "description": "The rows of the index, in the order shown within each state.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/indexRow"}
+        }
+      }
+    },
+    "indexRow": {
+      "description": "One PR, or one stack, on the index, with the counts the row's caption shows.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt", "caption"],
+      "properties": {
+        "number": {"description": "The PR's number, or the stack's number.", "type": "integer", "minimum": 1},
+        "kind": {"description": "Whether the row is one PR or a stack that merges whole.", "enum": ["pr", "stack"]},
+        "title": {"description": "The title of the PR's sheet.", "type": "string", "minLength": 1},
+        "link": {"description": "The link that opens the PR's sheet, which must be an https link.", "type": "string", "pattern": "^https://\\S+$"},
+        "state": {"description": "Where the PR stands: needs-you when it waits on the owner, being-fixed when it has gone back for a fix, ready when the owner has given a merge verdict.", "enum": ["needs-you", "being-fixed", "ready"]},
+        "accepted": {"description": "How many of the sheet's items are accepted.", "type": "integer", "minimum": 0},
+        "total": {"description": "How many items the sheet has.", "type": "integer", "minimum": 0},
+        "walked": {"description": "How many of the sheet's walk stops have a result.", "type": "integer", "minimum": 0},
+        "walkTotal": {"description": "How many walk stops the sheet has.", "type": "integer", "minimum": 0},
+        "mergesAt": {"description": "The place of the PR in the merge order, counting from 1, or null when it has none.", "type": ["integer", "null"], "minimum": 1},
+        "caption": {"description": "The line shown under the row's name, composed once when the index is built: what is accepted, what is walked, then where the PR stands. The page and the chat prose show it as it is.", "type": "string", "minLength": 1}
+      }
+    },
+    "commit": {
+      "description": "A git commit id in lowercase hex, from seven to forty characters.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "prSheet": {
+      "description": "What the owner needs to see of one PR, or of a stack of PRs that merges whole: what changed, the craft decisions made, the calls already decided, how the review went, and, when there is something to try, a walk through the change.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "commit", "whatChanged", "craft", "alreadyDecided", "history"],
+      "properties": {
+        "number": {
+          "description": "The PR's number on a pr sheet, or the stack's number on a stack sheet.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "commit": {
+          "description": "The commit this sheet describes.",
+          "$ref": "#/$defs/commit"
+        },
+        "previousCommit": {
+          "description": "The commit the replaced sheet described, present only on a sheet that replaced one published for an earlier commit of the same PR.",
+          "$ref": "#/$defs/commit"
+        },
+        "whatChanged": {
+          "description": "What the PR changed and how its review went, in facts.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary", "reviewers", "caught", "rounds", "stoppedAtCap", "ci", "lane", "laneReason"],
+          "properties": {
+            "summary": {
+              "description": "What the PR changes, in plain words.",
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewers": {
+              "description": "The reviewers of the PR, one entry each.",
+              "type": "array",
+              "items": {
+                "description": "One reviewer, with where the fact that it ran comes from and whether it was independent of the maker.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "family", "ran"],
+                "properties": {
+                  "name": {
+                    "description": "The reviewer's name.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "family": {
+                    "description": "The model family the reviewer is from, or null when the review record could not identify it.",
+                    "type": ["string", "null"],
+                    "minLength": 1
+                  },
+                  "ran": {
+                    "description": "Where the fact that the reviewer ran comes from, as the review record writer states it (its ran vocabulary has one home, review_record.RAN_STATES, which the sheet builder validates against).",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notIndependent": {
+                    "description": "True when the reviewer is from a maker's model family, so its review was not independent. Absent when the review record did not say.",
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "caught": {
+              "description": "What the review caught, one line each.",
+              "type": "array",
+              "items": {"type": "string", "minLength": 1}
+            },
+            "rounds": {
+              "description": "How many review rounds ran.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "stoppedAtCap": {
+              "description": "True when the review loop stopped at its round cap.",
+              "type": "boolean"
+            },
+            "ci": {
+              "description": "The state of the PR's checks and the commit they ran on.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["state", "commit"],
+              "properties": {
+                "state": {
+                  "description": "The state of the checks in a word or two.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "commit": {
+                  "description": "The commit the checks ran on, or null when they ran on none.",
+                  "type": ["string", "null"],
+                  "anyOf": [{"$ref": "#/$defs/commit"}, {"type": "null"}]
+                }
+              }
+            },
+            "lane": {
+              "description": "The review lane the PR went through, or null when there is none (the lane vocabulary has one home, review_record.LANES, which the sheet builder validates against).",
+              "type": ["string", "null"]
+            },
+            "laneReason": {
+              "description": "Why the PR went through that lane, or null when no reason was given.",
+              "type": ["string", "null"]
+            }
+          }
+        },
+        "craft": {
+          "description": "The craft decisions the maker took, each with the reason for it.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/entry"}
+        },
+        "alreadyDecided": {
+          "description": "The calls already decided for the owner, each with the ruling that decided it.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/entry"}
+        },
+        "history": {
+          "description": "How the review went, one line each.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "walk": {
+          "description": "The walk through the change, absent when the PR has nothing to try.",
+          "$ref": "#/$defs/walk"
+        },
+        "prs": {
+          "description": "The PRs of the stack, bottom PR first, present only on a stack sheet.",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "description": "One PR of the stack.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["number", "title", "commit"],
+            "properties": {
+              "number": {
+                "description": "The PR's number.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "description": "The PR's title.",
+                "type": "string",
+                "minLength": 1
+              },
+              "commit": {
+                "description": "The commit the PR is at.",
+                "$ref": "#/$defs/commit"
+              }
+            }
+          }
+        }
+      }
+    },
+    "entry": {
+      "description": "One decision, with its title and the words that explain it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "detail"],
+      "properties": {
+        "title": {
+          "description": "The decision in one line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "description": "The reason for a craft decision, or the ruling that decided the call.",
+          "type": "string",
+          "minLength": 1
+        },
+        "pr": {
+          "description": "On a stack sheet, the number of the PR the decision came from.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "walk": {
+      "description": "The part of a PR sheet where the owner tries the change, stop by stop: how to open the product, where the pictures come from, and the stops.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["open", "picturesFrom", "stops"],
+      "properties": {
+        "open": {
+          "description": "How to open the product the walk is about.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label"],
+          "properties": {
+            "label": {"description": "The way to open the product, such as Open the test shop.", "type": "string", "minLength": 1},
+            "url": {"description": "A link to the product itself, never to a picture.", "type": "string", "pattern": "^https?://\\S+$"},
+            "detail": {"description": "What else is needed to open it, such as how to sign in.", "type": "string", "minLength": 1}
+          }
+        },
+        "note": {"description": "The advisor's line under the heading.", "type": "string", "minLength": 1},
+        "picturesFrom": {"description": "Where the walk's pictures come from, in the advisor's words.", "type": "string", "minLength": 1},
+        "stops": {
+          "description": "The stops of the walk, in order.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/walkStop"}
+        }
+      }
+    },
+    "walkStop": {
+      "description": "One stop of the walk: a try stop is walked by hand, a look stop is a screen that cannot be reached by hand and is only looked at.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "key", "title", "pr", "group", "kind", "steps", "expect", "pictures"],
+      "properties": {
+        "id": {"description": "The id of the stop.", "$ref": "#/$defs/id"},
+        "key": {"description": "Names the stop's stored answer at walk/<key>; changes when anything the stop shows, or the walk's open or note, changes.", "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{12}$"},
+        "title": {"description": "The stop's title.", "type": "string", "minLength": 1},
+        "pr": {"description": "The number of the PR the stop belongs to.", "type": "integer", "minimum": 1},
+        "group": {"description": "The named group the stop is listed under.", "type": "string", "minLength": 1},
+        "kind": {"description": "A try stop is walked by hand; a look stop is only looked at.", "enum": ["try", "look"]},
+        "steps": {
+          "description": "The steps of a try stop, in order; empty on a look stop.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "expect": {"description": "The Expect line on a try stop, the Look for line on a look stop.", "type": "string", "minLength": 1},
+        "optional": {"description": "True when the stop is not needed for the merge.", "type": "boolean"},
+        "notWalked": {"description": "Why the advisor did not walk this stop.", "type": "string", "minLength": 1},
+        "pictures": {"type": "array", "items": {"$ref": "#/$defs/walkPicture"}}
+      },
+      "allOf": [
+        {"description": "A try stop needs at least one step.", "if": {"properties": {"kind": {"const": "try"}}, "required": ["kind"]},
+         "then": {"properties": {"steps": {"minItems": 1}}}},
+        {"description": "A look stop has no steps.", "if": {"properties": {"kind": {"const": "look"}}, "required": ["kind"]},
+         "then": {"properties": {"steps": {"const": []}}}}
+      ]
+    },
+    "walkPicture": {
+      "description": "A picture copied into the sheet's own published files, or one that could not be copied and shows as missing; neither names another page.",
+      "anyOf": [
+        {"type": "object", "additionalProperties": false, "required": ["src", "alt"], "properties": {
+          "src": {"type": "string", "pattern": "^pictures/[0-9a-f]{12}\\.(png|jpg|jpeg|gif|webp)$"},
+          "alt": {"type": "string", "minLength": 1}, "caption": {"type": "string", "minLength": 1}}},
+        {"type": "object", "additionalProperties": false, "required": ["missing", "alt"], "properties": {
+          "missing": {"const": true},
+          "alt": {"type": "string", "minLength": 1}, "caption": {"type": "string", "minLength": 1}}}
+      ]
+    },
     "id": {
       "description": "A short lowercase identifier made of letters, digits and hyphens that starts with a letter or digit.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$"
     },
     "answer": {
-      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it. An answer the card does not offer now (aligned or discuss on a card with options, or option or something-else on a card without) counts as unanswered.",
+      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it. An answer the card does not offer now (aligned or discuss on a card with options, or option or something-else on a card without; accept on any sheet but a pr sheet or a stack sheet; aligned on a pr sheet or a stack sheet) counts as unanswered.",
       "type": "object",
       "additionalProperties": false,
       "required": ["answer", "optionId", "note"],
       "properties": {
         "answer": {
-          "description": "What the owner tapped. On a card with options: option for a pick of one of the card's options, or something-else for Something else, which leaves the call open for chat. On a card without options: aligned or discuss. Null when nothing is picked (none yet, or a pick cleared by tapping it again).",
-          "enum": ["aligned", "discuss", "option", "something-else", null]
+          "description": "What the owner tapped. On a card with options: option for a pick of one of the card's options, or something-else for Something else, which leaves the call open for chat. On a card without options: aligned or discuss, or on a pr sheet or a stack sheet accept or discuss. Accept is offered only by a pr sheet or a stack sheet. Null when nothing is picked (none yet, or a pick cleared by tapping it again).",
+          "enum": ["aligned", "discuss", "option", "something-else", "accept", null]
         },
         "optionId": {
           "description": "The id of the picked option, or null. It is a string exactly when the answer is option.",
@@ -172,6 +496,11 @@
         "note": {
           "description": "The owner's note on the card, an empty string when there is none.",
           "type": "string"
+        },
+        "revision": {
+          "description": "A fresh random value written with every save on a pr sheet or a stack sheet, so a Merge can name exactly the answers it was given for; other sheets never write it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
         }
       },
       "allOf": [
@@ -188,7 +517,7 @@
         {
           "description": "An answer other than option must not name an option.",
           "if": {
-            "properties": {"answer": {"enum": ["aligned", "discuss", "something-else", null]}},
+            "properties": {"answer": {"enum": ["aligned", "discuss", "something-else", "accept", null]}},
             "required": ["answer"]
           },
           "then": {
@@ -197,15 +526,32 @@
         }
       ]
     },
+    "walkAnswer": {
+      "description": "The document a PR sheet stores for one walk stop, at walk/<stop key> in the sheet's own store. Each document is written whole on every change and the owner's last tap counts. Works is offered on a try stop and Looks right on a look stop; the other counts as unanswered. A fix is chosen only on a Problem. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answer", "fix", "note", "shots"],
+      "properties": {
+        "answer": {"description": "What the owner tapped, or null when nothing is picked.", "enum": ["works", "looks-right", "problem", "skip", null]},
+        "fix": {"description": "What should happen with a Problem, or null: an id from walkFixes in sheet-words.json, the one home of the ids; the page restores only an id it offers.", "type": ["string", "null"]},
+        "note": {"description": "What the owner saw, an empty string when there is no note.", "type": "string"},
+        "shots": {"description": "The asset ids of the screenshots the owner added.", "type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "allOf": [
+        {"description": "A fix is chosen only on a Problem.",
+         "if": {"properties": {"answer": {"enum": ["works", "looks-right", "skip", null]}}, "required": ["answer"]},
+         "then": {"properties": {"fix": {"const": null}}}}
+      ]
+    },
     "verdict": {
-      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a republished sheet starts unsigned and a page showing an older revision never touches a newer one. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet (a final sheet) or Merge or Not yet (a pr sheet or a stack sheet) or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a republished sheet starts unsigned and a page showing an older revision never touches a newer one. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["verdict", "note", "sheet"],
       "properties": {
         "verdict": {
-          "description": "What the owner has tapped so far: approve the spec, not yet, or null when nothing is picked (only a note was saved, or the pick was cleared by tapping it again).",
-          "enum": ["approve", "not-yet", null]
+          "description": "What the owner has tapped so far: approve the spec (a final sheet only), merge the PR or the stack (a pr sheet or a stack sheet only), not yet, or null when nothing is picked (only a note was saved, or the pick was cleared by tapping it again).",
+          "enum": ["approve", "merge", "not-yet", null]
         },
         "note": {
           "description": "The owner's note with the verdict, an empty string when there is none.",
@@ -215,7 +561,39 @@
           "description": "The sheet revision this verdict belongs to: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. It equals <digest> in the document's path. A document whose digest differs from the current file's is not a verdict on this sheet.",
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "covers": {
+          "description": "On a pr sheet or a stack sheet, the answers a Merge was given for, one answers/<card id>@<revision> for each card. A Merge whose covers differs from the card answers the store holds now is not a Merge.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^answers/[a-z0-9][a-z0-9-]*@[0-9a-f]{16}$"}
         }
+      },
+      "allOf": [
+        {
+          "description": "A Merge must name the answers it was given for.",
+          "if": {"properties": {"verdict": {"const": "merge"}}, "required": ["verdict"]},
+          "then": {"required": ["covers"]}
+        }
+      ]
+    },
+    "verdictsByKind": {
+      "description": "Which verdicts each kind of sheet offers on its last card, in button order, by the sheet's kind. The page builds its verdict buttons from this list and restores a stored verdict only when its own kind offers it; a stored verdict outside its kind's list restores only its note. A remainder sheet or a plain sheet has no verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "final": {"enum": ["approve", "not-yet"]},
+        "pr": {"enum": ["merge", "not-yet"]},
+        "stack": {"enum": ["merge", "not-yet"]}
+      }
+    },
+    "walkAnswersByKind": {
+      "description": "Which answers each kind of walk stop offers, in button order, by the stop's kind: the one home of that list. The page builds a stop's answer buttons from it and restores a stored answer only when the stop's own kind offers it, the chat prose lists the same answers, and the sheet builder counts a stored answer only when the stop's kind offers it. The words on the buttons are in sheet-words.json. A schema without this definition leaves the walk's answers off. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "try": {"enum": ["works", "problem", "skip"]},
+        "look": {"enum": ["looks-right", "problem", "skip"]}
       }
     },
     "card": {
@@ -354,6 +732,10 @@
           "description": "The plain consequence of picking this option.",
           "type": "string",
           "minLength": 1
+        },
+        "sendsBack": {
+          "description": "True when picking this option sends the PR back for a fix before it merges. A pr sheet or a stack sheet says so on every option; other sheets may leave it out.",
+          "type": "boolean"
         }
       }
     },

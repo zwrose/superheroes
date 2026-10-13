@@ -386,8 +386,10 @@ with its durable copy as a comment on the parked item's issue or PR.
 
 Each project keeps **Canon**, the record of the owner's decisions, as one file, `canon.md`, beside
 its definition-docs. A session finds it with `definition_doc.py canon`, which prints where the file
-lives and which git repository a write is committed to. The rules for what Canon holds, how an entry
-is written, and how sessions read and merge it live in `plugins/superheroes/rubric/canon-contract.md`.
+lives and which git repository a write is committed to. A session writes or holds an entry with
+`canon.py append` or `canon.py hold`, which refuses what Canon keeps out. The rules for what Canon
+holds, how an entry is written, and how sessions read and merge it live in
+`plugins/superheroes/rubric/canon-contract.md`.
 
 ---
 
@@ -1167,7 +1169,7 @@ every consumer with no test failing. That one literal is not the second hand-mai
 the contract it checks. A fact shared only among this repository's own modules, languages, skill
 docs, or fixtures is not an external identifier, even when a separate process reads it, and every
 other test of an external identifier still reads the home. This paragraph is the one statement of
-the exception; the bite-proof rubric, review-base rule 6, and the test-reviewer's
+the exception; the bite-proof rubric, review-base rule 6, and the test role's
 **literal-pin** check point here.
 
 ### 11.4 Pointable step-body (the dispatched consumer cites, never copies)

@@ -10,19 +10,23 @@ A session never edits the template's code to make a sheet. It writes a data file
 
 ## Who uses it
 
-Discovery's remainder sheets and its final sheet use the template. Any session may use it when it
-has calls for the owner, and the owner may ask for one. No other review is required to use it.
+Discovery's remainder sheets and its final sheet use the template, and so do PR sheets and stack
+sheets, which put a PR's review to the owner before it merges. Any session may use it when it has
+calls for the owner, and the owner may ask for one. No other review is required to use it.
 
 ## The data file
 
 The data file is `sheet.json`. Its shape is defined by `sheet.schema.json`, which sits beside this
-doc. There are three kinds of sheet:
+doc. There are six kinds of sheet:
 
 - `remainder`: the calls a review left for the owner. It carries a `remainder` block, and its
   `unsettled` list names the cards that hold a finding the review didn't settle.
 - `final`: the sign-off sheet. It carries a `final` block with the review's history, the findings
   that were declined and why, and the approval state.
 - `plain`: any other set of calls. It carries neither block.
+- `pr`: one PR's review put to the owner before merge. It carries a `prSheet` block. See § A PR sheet and a stack sheet.
+- `stack`: the same for a stack of PRs that merges whole, as one sheet. Its `prSheet` block also lists the stack's PRs.
+- `index`: the list of PRs waiting on the owner, with the questions that block work above it. It carries an `index` block, and its cards may be none. See § The index.
 
 Each card's `id` must stay the same call across republishes, because answers are keyed by it.
 Change the wording of a card freely; never reuse an id for a different call.
@@ -62,6 +66,9 @@ files     = {"comic-panel.css": "<staged comic-panel.css>",
 capabilities = {"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}
 ```
 
+A PR sheet's call adds `"assets": {}` to `capabilities`: Add a screenshot uploads through it, and it makes
+the sheet organization-internal.
+
 The publish call also declares the sheet's store and viewer. This lets everyone who can open the
 sheet read it, and only its owner answer.
 
@@ -85,11 +92,12 @@ Keep the returned link with the data file.
 
 ## The answers
 
-A card with options offers one button per option, labelled with the option's own label, and
+On a plain, remainder or final sheet, a card with options offers one button per option, labelled with the option's own label, and
 **Something else**, and nothing more. A card without options offers **Aligned** and **Discuss**. A
 pick chooses that option. Something else leaves the call open for chat, and the note is the place to
 say what instead. Aligned agrees with the card's recommendation, or with the statement when there is
-no recommendation. Discuss leaves the call open for chat. No review adds its own answer buttons.
+no recommendation. Discuss leaves the call open for chat. No review adds its own answer buttons. A PR
+sheet's buttons are set out in § A PR sheet and a stack sheet.
 
 A card's `warning` follows the rule in `sheet.schema.json` (`$defs/card/properties/warning`). It
 draws the red badge. Every other card draws a plain badge naming its kind
@@ -169,6 +177,176 @@ A final sheet may have no cards, when the review left no calls. It then shows "N
 answer" in place of the count, the list and the stepper, and the history, the last card, the line
 below it and the next box work as usual.
 
+## A PR sheet and a stack sheet
+
+A PR sheet (`kind` is `pr`) puts one PR's review to the owner before the merge. A stack sheet (`kind` is
+`stack`) does the same for a stack that merges whole, as one sheet. Both carry the `prSheet` block
+(`$defs/prSheet` in `sheet.schema.json`). Every word the page shows on one is in the `pr` and
+`prAnswers` blocks of `sheet-words.json`.
+
+The advisor never writes the data file by hand. It builds it from the PR's review record, one
+`--record` for each PR of a stack, and its own input:
+
+```
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--record <file> ...] --input <file> --out sheet.json
+```
+
+The shape of the advisor's input is defined in the docstring of `lib/pr_sheet.py`, and nowhere else.
+Publishing is as § Publishing a sheet says.
+
+A published PR sheet is private to the owner until shared, and only the owner's answers count, as
+§ Publishing a sheet and § How answers come back say.
+
+### Layout
+
+A PR sheet is one scrolling page with every item shown at once, and has no Previous or Next and no item
+list. Its parts come in this order:
+
+1. What changed: what changed, who reviewed it, what the review caught, the rounds, CI and the commit it
+   ran on, the lane and why, and the commit the sheet describes.
+2. The walk, when the PR has something to try: a box to open the product, the count walked, a line saying
+   the advisor walked it first and where the pictures come from, then the stops in the order the data file
+   declares them, with a group label wherever the group changes, so a group listed apart is labelled again
+   where it reappears. A try
+   stop shows its numbered steps, an Expect line, its pictures, **Works**, **Problem** and **Skip**, and a
+   note. A look stop shows a Look for line and **Looks right**. A Problem asks **Fix before merge** or
+   **Fix in a follow-up**, offers **Add a screenshot**, and labels the note "What did you see?". When the
+   picture store does not answer in time, the next tap asks again; when this view cannot store pictures at
+   all, the button stays off. On a stack each stop names its PR.
+3. The items, under the accepting heading.
+4. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
+   review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
+5. The merge verdict.
+
+A part with nothing in it is left out, except the items, which then say that the review left nothing
+for the owner. The app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
+block of `sheet-words.json`, the home of the words.
+
+### The items
+
+Each item shows, in this order, its kind, its title, what happens if it is left, its options with what
+each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
+note left empty.
+
+- An item with a real choice offers its options and **Something else**. A leftover's options are Keep
+  it, Fix in a follow-up and Fix before merge, unless the item calls for others.
+- An item with no real choice offers **Accept** and **Discuss** and shows no options list.
+- When the merge closes a spec's last open piece, the spec's closure receipt is one of the items.
+
+### The four answer patterns
+
+No PR sheet offers an answer button outside these four:
+
+- Pick: an item with a real choice. One of its options, or Something else.
+- Agree: an item with no real choice. Accept is the yes-word.
+- Check: a walk stop, answered Works (Looks right on a look stop), Problem or Skip. A Problem then asks
+  for a fix choice. The answers each kind of stop offers, and their order, come from
+  `$defs/walkAnswersByKind` in `sheet.schema.json`, their one home; their labels come from `sheet-words.json`.
+- Sign-off: the merge verdict, Merge or Not yet.
+
+Discovery's sheets use agree (Aligned), pick and sign-off (Approve), unchanged. The sheets for a PR, a
+stack and the index differ from them in four things: the answer buttons, the merge verdict, the zoom
+buttons (−, +, Fit) on an opened picture, and a question that blocks work on the index, whose first answer
+counts at once. Everything else is as the rest of this doc says: taps save as drafts, the last tap is the
+answer, and a failed save, a picture that cannot load and a shared sheet behave as described there.
+
+### The merge verdict
+
+The verdict is "Merge #<number>" ("Merge stack #<number>" on a stack) and Not yet, with a note. It saves
+at `verdict/<digest>` exactly as a final sheet's verdict does. Every answer save on a PR sheet or a stack
+sheet carries a fresh `revision` (`$defs/answer`), and a Merge records `covers` (`$defs/verdict`), one
+`answers/<card id>@<revision>` for each card: the answers it was given for. A Merge whose covered answers
+have since changed, from any page, is not a Merge, and the verdict reopens cleared.
+
+It is locked until every item above it is accepted. The Merge button then says it is locked, it cannot
+be tapped, and a line says when it unlocks and how many items are accepted so far. When an accepted answer
+was saved without a revision, a line says so and names those cards by their questions.
+
+An item counts as accepted only when its saved answer is Accept, or an option that does not send the PR
+back, and that answer shows Saved. A save in flight, failed or stalled keeps the verdict locked. An
+answer that sends the PR back never counts.
+
+- Choosing Fix before merge, or any option that sends the PR back, replaces the verdict with a message
+  that the PR goes back for that fix and returns with a new sheet, with nothing to answer here.
+- A walk stop answered Problem with no saved fix choice keeps the verdict locked. Fix before merge on a stop
+  replaces the verdict with the same send-back message. Stops not walked never lock the verdict, which says
+  how many are not walked, optional stops not counted.
+- Un-accepting an item after a Merge clears the Merge, saved as null with the note kept. A Merge
+  restored onto a sheet that is locked is cleared the same way.
+
+### Pictures on the walk
+
+The builder copies each walk picture into `pictures/` beside `sheet.json` and lists the paths in its
+result; publish each listed path in `files`. A picture it could not copy shows as missing and links nowhere.
+
+### A changed PR
+
+A sheet republished for a new commit carries `previousCommit` and shows a heading and note saying the PR changed. An item's id
+stays the same while its finding and its shown content do, so answers to unchanged items are kept. The
+verdict starts over, because its digest is new.
+
+### How a PR sheet's answers come back
+
+The session reads a PR sheet's answers and its verdict together only after the owner says "done" in the
+chat. Nothing is merged, sent back, filed or recorded from a sheet before then.
+
+A saved Merge together with "done" is the owner's word to merge that PR. Neither alone is, and a saved
+Not yet, or no verdict, with "done" is not. A Merge counts only when its `covers` names exactly the
+`answers/<card id>@<revision>` of every card as the store holds them now; an answer saved again from any
+page has a new `revision`, so the Merge no longer covers it and is not a Merge.
+
+The walk's results are stored at `walk/<stop key>` (`$defs/walkAnswer`), the key being the stop's `key` in `sheet.json`, and read with the answers and
+verdict after "done". A stop's `shots` are asset ids shown at `/_blob/<id>`. A Fix in a follow-up on a
+stop is the owner's word to file that follow-up.
+
+A note that disagrees with its answer (Keep it with a note that says to fix it first) leaves the item
+open, and the session asks which one stands.
+
+## The index
+
+The index (`kind` is `index`) lists every PR that waits on the owner, so the owner has one place to see what
+needs them. It carries the `index` block (`$defs/index` in `sheet.schema.json`); every word the page shows
+on it is in the `index` block of `sheet-words.json`.
+
+### What it shows
+
+- On top, the questions that block work. They are the advisor's first batch of questions, the ones that
+  block its next step, and each is a card with its context, any pictures, its options, the recommendation
+  and a note box, answered with the pick pattern. When none is left the index says "Nothing is blocking
+  work right now."
+- Below, every PR with a sheet, under **Needs you**, **Being fixed** or **Ready**; a group with no PR is
+  left out. A row names the PR (or the stack), then its counts: how many items are accepted, how many walk
+  stops are walked, and on Needs you where the PR comes in the merge order. The builder composes that line once
+  into the row's `caption`, and the page and the chat prose show it as it is. A row opens the PR's sheet.
+- A line at the end tells the owner to say "done" in the chat once every sheet they meant to answer is
+  saved.
+
+### How it is built
+
+The advisor builds the data file from its own input and each PR's published sheet and store:
+
+```
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" index --input <file> [--answers <file>] --out sheet.json
+```
+
+The shape of the input and of a store dump is defined in the docstring of `lib/pr_sheet.py`, and nowhere
+else. `--answers` holds the answers to the index's own questions; a question it answers is left out, so an
+answered question leaves the index when the advisor rebuilds it.
+
+### When a PR is Being fixed or Ready
+
+A PR is **Being fixed** when a saved answer sends it back for a fix: an option that sends the PR back, or
+a walk Problem whose fix is before merge. Otherwise it is **Ready** when its Merge verdict stands: saved on
+the sheet's current revision, with every item accepted, no walk Problem left without a follow-up fix, and
+`covers` naming exactly the answers the store holds now. Every other PR is under **Needs you**. One rule,
+`pr_state` in `lib/pr_sheet.py`, decides this.
+
+A sheet republished for a fixed PR keeps its link, so the PR's row keeps opening the current sheet.
+
+### Publishing the index
+
+As § Publishing a sheet says, with no `assets`: the index has no screenshots to add.
+
 ## How answers come back
 
 A tap saves at once into the sheet's own store, and the owner can change it; tapping the picked
@@ -180,7 +358,9 @@ with the answer controls turned off.
 A save that fails says so on the card and offers Try again.
 
 The session that sent the sheet reads every answer together once the owner says in the chat that the
-sheet is done, and never acts on a single tap.
+sheet is done, and never acts on a single tap. One exemption: a question that blocks work on the index
+(§ The index) counts as soon as the advisor reads its first answer, wherever it came from, without waiting
+for "done". When the chat and the index disagree, the advisor asks.
 
 On a final sheet the session reads `answers` and `verdict/<digest>` together, where `<digest>` is the
 SHA-256 of the `sheet.json` it published (for example `shasum -a 256 sheet.json`). It reads only that
@@ -191,7 +371,7 @@ unanswered: the session asks rather than assuming. A saved Approve never counts 
 own; the owner's word in the chat does.
 
 The stored `answer` is `option` or `something-else` on a card with options, and `aligned` or
-`discuss` on a card without.
+`discuss` on a card without. On a PR sheet a card without options stores `accept` or `discuss`.
 
 The session reads each stored answer against the card as it is published now:
 
@@ -224,7 +404,9 @@ same link.
 ## When the host can't show a sheet
 
 Where the host can't show a sheet, the session puts the same cards to the owner as numbered chat
-prose, each with its context, options and recommendation, built from the same data file.
+prose, each with its context, options and recommendation, built from the same data file. A PR sheet
+and a stack sheet go to the owner as numbered prose the same way. In that prose each walk stop shows its id,
+and its answers are written with that id (for example `p1 Works`), so a short chat answer names the stop it answers.
 
 Render the prose with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/sheet_prose.py" render --sheet <the data file>`
 and paste its output. It runs on a plain Python, with nothing to install. It refuses a data file it

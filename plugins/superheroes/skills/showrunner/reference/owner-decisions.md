@@ -13,6 +13,7 @@
 - [The reader clause](#the-reader-clause)
 - [The venue ladder](#the-venue-ladder)
 - [Craft calls and owner calls](#craft-calls-and-owner-calls)
+- [Where a ruling is recorded](#where-a-ruling-is-recorded)
 - [The revisit-trigger registry](#the-revisit-trigger-registry)
 - [The gardening pass](#the-gardening-pass)
 - [The gardening record](#the-gardening-record)
@@ -428,6 +429,18 @@ appending, the session checks the collector for an existing entry covering the s
 **updates that entry in place** rather than adding a second.
 On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
 ordinal 1 and the age subtraction proceeds unchanged.
+
+## Where a ruling is recorded
+
+**A ruling is recorded where it was given, and a ruling given in chat gets the standard chat-ruling
+record.** A ruling given on a durable thread (the collector, an issue, a pull request) is already
+recorded there; a struck collector entry carrying the ruling's date and the owner's words is its
+record. A ruling given in chat has no such thread; the issue contract's
+[Anchor resolution](issue-contract.md#anchor-resolution) defines its record and the permalink an
+issue Anchor cites. **Canon is not a ruling log.** It holds only what passes its test (an answer to an
+owner call a later session needs, a principle, a ceded call or its take-back), written through
+`lib/canon.py`, which refuses go-words, dispositions and bookkeeping and names their home
+([Canon's contract](../../../rubric/canon-contract.md#what-stays-out-and-where-it-goes)).
 
 ## The revisit-trigger registry
 

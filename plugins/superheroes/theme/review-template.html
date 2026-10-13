@@ -24,7 +24,7 @@
   .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
   .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
   .sheet-page :is(h2, h3, p, ul, blockquote) { margin: 0; }
-  .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
+  .sheet-page :is(.sh-card, .sh-box, .sheet-fix) > * + * { margin-top: 8px; }
   .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
   .sheet-page .sh-card > .sh-label { margin-top: 16px; }
   .sheet-page .sh-card > .sh-label + * { margin-top: 4px; }
@@ -44,8 +44,18 @@
   .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
   .sheet-page #sheet-final > * + * { margin-top: 16px; }
   .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
+  .sheet-page :is(.sheet-index-blocks, .sheet-index-group) { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-index-row { display: grid; gap: 4px; text-decoration: none; }
+  .sheet-page .sheet-folded { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-folded ul { padding-left: 20px; }
+  .sheet-page .sheet-folded .sh-button { justify-self: start; max-width: 100%; text-align: left; white-space: normal; }
+  .sheet-page :is(.sheet-walk-list, .sheet-caught) { padding-left: 20px; }
   @media (min-width: 900px) {
     .sheet-page { max-width: 1200px; }
+    .sheet-page.is-pr { max-width: 720px; }
+    .sheet-page.is-pr .sheet-layout { grid-template-columns: minmax(0, 1fr); }
+    .sheet-page.is-pr .sheet-main { grid-column: 1; }
+    .sheet-page.is-pr .sheet-side { display: none; }
     .sheet-layout { grid-template-columns: 340px minmax(0, 1fr); }
     .sheet-side { grid-column: 1; grid-row: 1; }
     .sheet-main { grid-column: 2; grid-row: 1; }
@@ -56,6 +66,7 @@
   .sheet-viewer { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); position: fixed; z-index: 2; }
   .sheet-viewer-bar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
   .sheet-viewer-bar .sheet-viewer-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .sheet-viewer-zoom { display: flex; gap: 8px; }
   .sheet-viewer-frame { display: flex; overflow: auto; overscroll-behavior: contain; touch-action: none; }
   .sheet-viewer-frame img { display: block; flex: none; margin: auto; max-height: none; max-width: none; }
   .sheet-viewer-frame p { margin: auto; padding: 16px; }
@@ -93,6 +104,7 @@
     <div class="sheet-viewer-bar">
       <span id="sheet-viewer-caption" class="sh-label sheet-viewer-caption"></span>
       <span class="sh-caption">Pinch or double-tap to zoom.</span>
+      <span id="sheet-viewer-zoom" class="sheet-viewer-zoom"></span>
       <button id="sheet-viewer-close" class="sh-button" type="button">Close</button>
     </div>
     <div id="sheet-viewer-frame" class="sheet-viewer-frame">
@@ -109,7 +121,8 @@
   // these in a form the reader does not implement, is refused whole before any sheet is checked, so
   // a sheet is never drawn against a rule this page cannot check. The rest is authored here
   // because a schema cannot express it: unique card ids, unique option ids within a card,
-  // unsettled ids that name real cards, and a recommendation that names one of its card's options.
+  // unsettled ids that name real cards, a recommendation that names one of its card's options, and unique
+  // index row numbers.
   const READ_RULES = [
     "type", "const", "enum", "minLength", "minimum", "minItems", "uniqueItems", "pattern", "required",
     "properties", "additionalProperties", "items", "$ref", "allOf", "if", "then", "not", "anyOf",
@@ -455,6 +468,29 @@
       });
     }
 
+    const rowNumbers = new Set();
+    const reportedRows = new Set();
+    ((isObject(sheet.index) && Array.isArray(sheet.index.rows)) ? sheet.index.rows : []).forEach((row) => {
+      if (!isObject(row)) return;
+      if (rowNumbers.has(row.number) && !reportedRows.has(row.number)) {
+        reportedRows.add(row.number);
+        problems.push("Two index rows share the number " + row.number + ".");
+      }
+      rowNumbers.add(row.number);
+    });
+
+    const walkStops = (isObject(sheet.prSheet) && isObject(sheet.prSheet.walk) && Array.isArray(sheet.prSheet.walk.stops)) ? sheet.prSheet.walk.stops : [];
+    const stopIds = new Set();
+    const reportedStops = new Set();
+    walkStops.forEach((stop) => {
+      if (!isObject(stop)) return;
+      if (stopIds.has(stop.id) && !reportedStops.has(stop.id)) {
+        reportedStops.add(stop.id);
+        problems.push('Two walk stops share the id "' + stop.id + '".');
+      }
+      stopIds.add(stop.id);
+    });
+
     return problems;
   }
 </script>
@@ -480,8 +516,12 @@
     // { labels, withOptions, withoutOptions }. labels gives the words on the answer buttons by the value a stored
     // answer takes (the option value takes its words from the card); withOptions is what a card with options
     // offers after its option buttons, withoutOptions what a card without options offers. A value the schema lists
-    // that has no words there leaves the answer controls off. Null until that file was read.
+    // that has no words in either kind's block leaves the answer controls off. A pr sheet or a stack sheet offers the
+    // block under prAnswers; every other kind offers the one under answers. Null until that file was read.
     let answerWords = null;
+    // The words of both blocks by value, so a schema value only the other kind's block labels (accept on a discovery
+    // sheet, aligned on a pr sheet) is known, not unlabelled. What a card offers is still decided from answerWords alone.
+    let knownLabels = {};
     let reloading = false;
 
     // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
@@ -519,9 +559,12 @@
       });
       if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
-      if (kinds.some(function (kind) { return !kind.carriesOption && typeof answerWords.labels[kind.value] !== "string"; })) return null;
+      if (kinds.some(function (kind) { return !kind.carriesOption && typeof knownLabels[kind.value] !== "string"; })) return null;
       if (answerWords.withOptions.concat(answerWords.withoutOptions).some(function (value) { return !values.includes(value); })) return null;
-      return { root: schema, rule: rule, kinds: kinds };
+      // The revision's width comes from the schema's pattern (^[0-9a-f]{N}$ with N even); any other format is refused, so no revision is generated.
+      const shape = isObject(rule.properties.revision) && typeof rule.properties.revision.pattern === "string" ? /^\^\[0-9a-f\]\{(\d+)\}\$$/.exec(rule.properties.revision.pattern) : null;
+      const width = shape === null ? 0 : Number(shape[1]);
+      return { root: schema, rule: rule, kinds: kinds, revisionBytes: width > 0 && width % 2 === 0 ? width / 2 : 0 };
     }
 
     // True when the stored document fits the given rule of the schema (answer or verdict).
@@ -540,11 +583,12 @@
       return fitsRule(answerShape.root, answerShape.rule, data);
     }
 
-    // The words on the final sheet's verdict buttons, by the value a stored verdict takes.
+    // The words on the final sheet's verdict buttons, by the value a stored verdict takes. A pr sheet or a stack
+    // sheet takes its verdict words from sheet-words.json instead.
     const VERDICT_LABELS = { approve: "Approve", "not-yet": "Not yet" };
 
     // What the sheet's schema says a verdict is (its $defs.verdict): { root, rule, values }, where values lists
-    // the non-null verdicts in the order the schema gives them. Null until the schema was read, and left null
+    // the sheet kind's verdicts the schema gives, in the kind's order. Null until the schema was read, and left null
     // when it is not in that shape: the last card's controls stay off.
     let verdictShape = null;
 
@@ -553,15 +597,25 @@
     // when the browser can't compute it.
     let sheetDigest = null;
 
-    function readVerdictShape(schema) {
+    function readVerdictShape(schema, kind) {
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
-      const rule = isObject(schema.$defs) ? schema.$defs.verdict : undefined;
+      const defs = isObject(schema.$defs) ? schema.$defs : {};
+      const rule = defs.verdict;
+      // The verdicts the kind offers and restores, in button order, are the schema's own ($defs.verdictsByKind): the page keeps no list of them.
+      const byKind = isObject(defs.verdictsByKind) && isObject(defs.verdictsByKind.properties) ? defs.verdictsByKind.properties[kind] : undefined;
+      if (!isObject(byKind) || !Array.isArray(byKind.enum)) return null;
       if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.verdict)) return null;
       const listed = rule.properties.verdict.enum;
       if (!Array.isArray(listed)) return null;
-      const values = listed.filter(function (item) { return item !== null; });
-      if (values.length === 0 || values.some(function (item) { return typeof item !== "string" || typeof VERDICT_LABELS[item] !== "string"; })) return null;
-      return { root: schema, rule: rule, values: values };
+      const offered = byKind.enum;
+      // A verdict the document can hold but no kind offers is one the page has no words for: the controls stay off.
+      const known = Object.keys(defs.verdictsByKind.properties).flatMap(function (name) {
+        const item = defs.verdictsByKind.properties[name];
+        return isObject(item) && Array.isArray(item.enum) ? item.enum : [];
+      });
+      if (listed.some(function (value) { return value !== null && !known.includes(value); })) return null;
+      if (offered.length === 0 || offered.some(function (value) { return typeof value !== "string" || !listed.includes(value); })) return null;
+      return { root: schema, rule: rule, values: offered };
     }
 
     const SAY = {
@@ -671,6 +725,7 @@
     const viewer = document.getElementById("sheet-viewer");
     const viewerCaption = document.getElementById("sheet-viewer-caption");
     const viewerClose = document.getElementById("sheet-viewer-close");
+    const viewerZoom = document.getElementById("sheet-viewer-zoom");
     const viewerFrame = document.getElementById("sheet-viewer-frame");
     const viewerPicture = document.getElementById("sheet-viewer-picture");
     const sheetPage = document.querySelector(".sheet-page");
@@ -701,8 +756,8 @@
     // The zoom a Safari trackpad pinch began at; its scale is counted from there.
     let gestureStart = null;
 
-    function missingLine(alt) {
-      const line = textElement("p", "sh-caption", MISSING_PICTURE + alt);
+    function missingLine(alt, walkWords) {
+      const line = textElement("p", "sh-caption", walkWords ? fill(prWords.pictureMissing, { alt: alt }) : MISSING_PICTURE + alt);
       line.setAttribute("tabindex", "-1");
       return line;
     }
@@ -957,8 +1012,8 @@
     }
 
     // A card's pictures. Each opens the image view by tap, Enter or Space; one that cannot load becomes a line
-    // saying so, with the card's other parts and the picture's caption left alone.
-    function buildImages(images) {
+    // saying so, with the card's other parts and the picture's caption left alone. A walk's pictures (walkWords) are plain text, and a missing one is that line from the start.
+    function buildImages(images, walkWords) {
       const wrap = document.createElement("div");
       wrap.className = "sheet-images";
       images.forEach(function (image) {
@@ -969,12 +1024,13 @@
         const open = function () {
           if (!missing) openViewer(image, picture);
         };
-        picture.addEventListener("error", function () {
+        const lose = function () {
           missing = true;
-          const line = missingLine(image.alt);
+          const line = missingLine(image.alt, walkWords);
           figure.replaceChildren(line, ...Array.from(figure.children).filter(function (child) { return child !== picture; }));
           if (viewerOpener === picture) viewerOpener = line;
-        });
+        };
+        picture.addEventListener("error", lose);
         picture.addEventListener("click", open);
         picture.addEventListener("keydown", function (event) {
           if (event.key !== "Enter" && event.key !== " ") return;
@@ -985,15 +1041,16 @@
         picture.addEventListener("keyup", function (event) {
           if (event.key === " ") open();
         });
-        picture.setAttribute("src", image.src);
+        if (image.missing !== true) picture.setAttribute("src", image.src);
         picture.setAttribute("alt", image.alt);
         picture.setAttribute("tabindex", "0");
         picture.setAttribute("role", "button");
         picture.setAttribute("aria-label", "Open picture: " + image.alt);
         figure.appendChild(picture);
         if (typeof image.caption === "string" && image.caption !== "") {
-          figure.appendChild(linkedElement("figcaption", "sh-caption", image.caption));
+          figure.appendChild((walkWords ? textElement : linkedElement)("figcaption", "sh-caption", image.caption));
         }
+        if (image.missing === true) lose();
         wrap.appendChild(figure);
       });
       return wrap;
@@ -1019,7 +1076,15 @@
     }
 
     function sameAnswer(one, other) {
-      return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note;
+      return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note && one.shots.length === other.shots.length && one.shots.every(function (id, index) { return id === other.shots[index]; });
+    }
+
+    function answerRow(label) {
+      const row = document.createElement("div");
+      row.className = "answer-row";
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", label);
+      return row;
     }
 
     // Nothing on the sheet may be edited before the saved answers are read.
@@ -1083,40 +1148,48 @@
     // settles the newest answer goes out next. The acknowledged answer is trusted only after a write
     // resolved: from the moment a write starts until it resolves it is unknown, so a rejected or stalled
     // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
-    // A state is always { answer, optionId, note }: a verdict is the answer, with no option.
+    // A state is always { answer, optionId, note, shots }: a verdict is the answer, with no option, and only a walk stop has shots.
+    // A spec may add pressed and unpick (when a choice shows pressed, what a second tap leaves), paint, enable, and an extra block that a second row joins.
+    // A spec with revised set writes a fresh revision with every body it sends, and revisionOf gives the revision of a restored document.
     function addSaver(spec, article) {
       const choices = spec.choices;
-      const none = { answer: null, optionId: null, note: "" };
+      const none = { answer: null, optionId: null, note: "", shots: [] };
       let latest = none;
-      const unknown = { answer: undefined, optionId: undefined, note: undefined };
+      const unknown = { answer: undefined, optionId: undefined, note: undefined, shots: [] };
+      const pressed = spec.pressed || function (choice, state) { return state.answer === choice.answer && state.optionId === choice.optionId; };
+      const unpick = spec.unpick || function () { return { answer: null, optionId: null }; };
       let acked = none;
+      let lastSaved = none;
+      // The revision the store holds for the acknowledged state, null while that is unknown or the state carries none.
+      let ackedRevision = null;
       let inFlight = null;
+      // Every state sent since the store's last acknowledgement: in flight, failed or stalled; any of them may be what the store holds.
+      let sent = [];
       let stalled = false;
       let stallTimer = null;
       let shown = "idle";
       let timer = null;
       let switchedOn = false;
       let retryButton = null;
+      // True while a save is due but spec.mayWrite said no: nothing was sent, and resume() sends it once the page allows.
+      let waiting = false;
+      // The answers whose button is held off by the page (the merge verdict's, while the sheet is locked): they stay off whatever setEnabled says.
+      const heldAnswers = new Set();
 
-      const row = document.createElement("div");
-      row.className = "answer-row";
-      row.setAttribute("role", "group");
-      row.setAttribute("aria-label", spec.rowLabel);
+      const row = answerRow(spec.rowLabel);
+      const secondRow = choices.some(function (choice) { return choice.row === 2; }) ? spec.extra.appendChild(answerRow(spec.extraLabel)) : null;
       const buttons = choices.map(function (choice) {
         const button = textElement("button", "sh-button", choice.label);
         button.setAttribute("type", "button");
         button.setAttribute("aria-pressed", "false");
         button.disabled = true;
         button.addEventListener("click", function () {
-          if (!spec.live()) return;
+          if (!spec.live() || heldAnswers.has(choice.answer)) return;
           // Tapping the pick again clears it; the note stays.
-          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
-          setLatest(picked
-            ? { answer: null, optionId: null, note: latest.note }
-            : { answer: choice.answer, optionId: choice.optionId, note: latest.note });
+          setLatest({ ...latest, ...(pressed(choice, latest) ? unpick(choice, latest) : { answer: choice.answer, optionId: choice.optionId }) });
           save();
         });
-        row.appendChild(button);
+        (choice.row === 2 ? secondRow : row).appendChild(button);
         return button;
       });
 
@@ -1130,13 +1203,13 @@
       keepInView(note);
       note.addEventListener("input", function () {
         if (!spec.live()) return;
-        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        setLatest({ ...latest, note: note.value });
         clearTimeout(timer);
         timer = setTimeout(save, NOTE_PAUSE_MS);
       });
       note.addEventListener("change", function () {
         if (!spec.live()) return;
-        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        setLatest({ ...latest, note: note.value });
         save();
       });
 
@@ -1147,11 +1220,11 @@
 
       function paint() {
         buttons.forEach(function (button, index) {
-          const choice = choices[index];
-          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
+          const picked = pressed(choices[index], latest);
           button.className = picked ? "sh-button sh-button--main" : "sh-button";
           button.setAttribute("aria-pressed", picked ? "true" : "false");
         });
+        if (spec.paint !== undefined) spec.paint(latest, noteLabel);
         refreshSheet();
       }
 
@@ -1204,7 +1277,15 @@
         if (!ready) return;
         if (inFlight !== null) return;
         if (forced !== true && sameAnswer(latest, acked)) {
-          if (shown === "saving") showStatus(heldStatus(acked));
+          const held = waiting;
+          waiting = false;
+          if (shown === "saving" || held) showStatus(heldStatus(acked));
+          return;
+        }
+        // The page can hold a write back (a card's, while a withdrawn Merge may still stand in the store); the line is then worked out by resume().
+        if (spec.mayWrite !== undefined && !spec.mayWrite(latest)) {
+          waiting = true;
+          refreshSheet();
           return;
         }
         send();
@@ -1212,9 +1293,14 @@
 
       function send() {
         const body = latest;
+        // A body that carries a revision gets a fresh one each time it is sent, and the revision stays with that send.
+        const revision = spec.revised === true ? freshRevision() : null;
+        waiting = false;
         inFlight = body;
+        sent.push(body);
         // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
         acked = unknown;
+        ackedRevision = null;
         stalled = false;
         clearTimeout(stallTimer);
         stallTimer = setTimeout(function () {
@@ -1222,40 +1308,53 @@
           stalled = true;
           showStatus("stalled");
         }, STALL_MS);
-        showStatus("saving");
         let request;
         try {
           // The document written here has the shape the schema defines for this saver's path.
-          request = Promise.resolve(store.doc(spec.path).set(spec.document(body)));
+          request = Promise.resolve(store.doc(spec.path).set(spec.document(body, revision)));
         } catch (error) {
           request = Promise.reject(error);
         }
-        request.then(function () { settle(body, true); }, function () { settle(body, false); });
+        // After the request is made: showing the status redraws the sheet, which may send another saver's held answer, and that must come after this one.
+        showStatus("saving");
+        request.then(function () { settle(body, true, revision); }, function () { settle(body, false, null); });
       }
 
-      function settle(body, saved) {
+      function settle(body, saved, revision) {
         inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
-        if (saved) acked = body;
+        if (saved) {
+          acked = lastSaved = body;
+          ackedRevision = revision;
+          sent = [];
+        }
         // A note's pause is still running: it sends the newest state itself when it ends.
         if (timer !== null) {
           showStatus("saving");
           return;
         }
         if (!sameAnswer(latest, body)) {
-          send();
+          save();
           return;
         }
         showStatus(saved ? "saved" : "failed");
       }
 
+      // True while this saver holds an answer or note the store has not confirmed: a write in flight, a
+      // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
+      function isUnsaved() {
+        return inFlight !== null || timer !== null || !sameAnswer(latest, acked);
+      }
+
       spec.keep({
         // A stored document restores what the spec's rule lets it restore.
         restore: function (data) {
-          const state = spec.state(data);
+          const state = { shots: [], ...spec.state(data) };
           latest = state;
-          acked = state;
+          acked = lastSaved = state;
+          ackedRevision = spec.revisionOf === undefined ? null : spec.revisionOf(data, state);
+          sent = [];
           note.value = state.note;
           paint();
           // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
@@ -1263,15 +1362,51 @@
         },
         // Turns the controls (and a Try again on the save line) on or off.
         setEnabled: function (on) {
+          on = on && spec.live();
           switchedOn = on;
-          buttons.forEach(function (button) { button.disabled = !on; });
+          buttons.forEach(function (button, index) { button.disabled = !on || heldAnswers.has(choices[index].answer); });
           note.disabled = !on;
           if (retryButton !== null) retryButton.disabled = !on;
+          if (spec.enable !== undefined) spec.enable(on);
         },
-        // True while this saver holds an answer or note the store has not confirmed: a write in flight, a
-        // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
-        unsaved: function () {
-          return inFlight !== null || timer !== null || !sameAnswer(latest, acked);
+        unsaved: isUnsaved,
+        // The pick the store has acknowledged, or null while anything of this saver is unsaved.
+        confirmed: function () {
+          return isUnsaved() ? null : { answer: acked.answer, optionId: acked.optionId };
+        },
+        acknowledged: function () {
+          return [lastSaved, ...sent, latest];
+        },
+        // The revision of the document the store has acknowledged, or null while that is unknown or it has none.
+        revision: function () {
+          return ackedRevision;
+        },
+        // Gives a choice's button its words, and holds it off (or lets the controls decide again).
+        setChoice: function (answer, label, held) {
+          if (held) heldAnswers.add(answer);
+          else heldAnswers.delete(answer);
+          buttons.forEach(function (button, index) {
+            if (choices[index].answer !== answer) return;
+            button.textContent = label;
+            button.disabled = !switchedOn || held;
+          });
+        },
+        // Shows or hides the buttons and the note; the save line stays as it is.
+        setShown: function (shown) {
+          row.hidden = !shown;
+          noteLabel.hidden = !shown;
+          note.hidden = !shown;
+        },
+        // Takes the pick away and keeps the note. It goes through save(), so it queues behind a write in flight
+        // and the newest state is the last one the store gets.
+        clear: function () {
+          if (!spec.live()) return;
+          setLatest({ ...latest, answer: null, optionId: null });
+          save();
+        },
+        addShot: function (id) {
+          setLatest({ ...latest, shots: latest.shots.concat([id]) });
+          save();
         },
         // The latest pick (what the pressed button shows) and the kind the save line shows now.
         state: function () {
@@ -1279,7 +1414,13 @@
         },
         // The latest pick and note, as they stand now.
         current: function () {
-          return { answer: latest.answer, optionId: latest.optionId, note: latest.note };
+          return latest;
+        },
+        // Re-runs a save that was held back: it goes out once mayWrite() allows; until then the line says Saving…, or Not saved (no Try again) when the page says what it waits on has failed or stalled.
+        resume: function (lost) {
+          if (!waiting) return;
+          if (spec.mayWrite(latest)) save();
+          else if (lost !== (shown === "stalled")) showStatus(lost ? "stalled" : "saving");
         },
         // Cuts a note's pause short: the pending save runs now.
         flush: function () {
@@ -1288,6 +1429,7 @@
       });
 
       article.appendChild(row);
+      if (spec.extra !== undefined) article.appendChild(spec.extra);
       article.appendChild(noteLabel);
       article.appendChild(note);
       article.appendChild(saveLine);
@@ -1312,6 +1454,53 @@
       return choices;
     }
 
+    // A walk state blocks Merge when it is a Problem whose fix is none, unknown or one that sends the PR back: one home for the rule, read by lockVerdict and by the walk saver.
+    function blocking(pick) {
+      return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
+    }
+
+    // True when this browser can make a revision: the schema says how wide one is and a random source exists.
+    function canMakeRevision() {
+      return answerShape !== null && answerShape.revisionBytes !== 0
+        && typeof crypto !== "undefined" && crypto !== null && typeof crypto.getRandomValues === "function";
+    }
+
+    // A fresh revision (of the width the schema's pattern says) for a body about to be sent; null when this browser has no random source, so the answer is sent without one
+    // and its card can never be covered by a Merge.
+    function freshRevision() {
+      try {
+        if (!canMakeRevision()) return null;
+        return Array.from(crypto.getRandomValues(new Uint8Array(answerShape.revisionBytes)), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+      } catch (error) {
+        return null;
+      }
+    }
+
+    // The answers a Merge is given for: answers/<card id>@<revision> for every card whose acknowledged answer has a revision, sorted.
+    function coveredAnswers() {
+      return items.map(function (item) { return { id: item.id, revision: controllers.get(item.id).revision() }; })
+        .filter(function (entry) { return entry.revision !== null; })
+        .map(function (entry) { return "answers/" + entry.id + "@" + entry.revision; })
+        .sort();
+    }
+
+    // True when a stored Merge's covers names exactly the answers the cards were restored with: one for every card, each with a revision, and nothing else.
+    function coversHold(covers) {
+      if (!Array.isArray(covers) || new Set(covers).size !== covers.length) return false;
+      const held = coveredAnswers();
+      return held.length === items.length && covers.length === held.length && held.every(function (name) { return covers.includes(name); });
+    }
+
+    // A card of a pr or stack sheet writes only while the store cannot end up holding a Merge beside the changed answer: not while the
+    // verdict's acknowledged pick is Merge, and not while the verdict holds anything unsaved, whatever its latest pick (a clear or a
+    // Not yet in flight, failed or stalled).
+    function cardMayWrite() {
+      if (!revisedKind(sheetKind) || verdictController === null) return true;
+      const confirmed = verdictController.confirmed();
+      if (confirmed !== null && confirmed.answer === "merge") return false;
+      return !verdictController.unsaved();
+    }
+
     // A card's answers: the choices it offers, and a document written whole at answers/<card id>.
     function addAnswerParts(card, article) {
       const choices = offeredChoices(card);
@@ -1321,7 +1510,15 @@
         noteId: "note-" + card.id,
         path: "answers/" + card.id,
         live: canEdit,
-        document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
+        mayWrite: cardMayWrite,
+        revised: revisedKind(sheetKind),
+        document: function (body, revision) {
+          const doc = { answer: body.answer, optionId: body.optionId, note: body.note };
+          if (revision !== null) doc.revision = revision;
+          return doc;
+        },
+        // A restored answer's revision counts only when the card shows that answer; a document without one has none.
+        revisionOf: function (data, state) { return state.answer !== null && typeof data.revision === "string" ? data.revision : null; },
         // A stored document restores a pick only when it fits the schema's answer rule and the card offers
         // that answer now. A document that does not fit, or names an answer the card no longer offers,
         // restores only its note, and only when that is text.
@@ -1339,21 +1536,33 @@
       }, article);
     }
 
-    // The final sheet's last card: the verdict's buttons and note, written whole at verdict/<digest> as the owner
-    // taps, like an answer. The one document of this revision is the verdict, and it never counts as approval on
-    // its own.
+    // The words on a verdict button: the final sheet's own, or a pr sheet's or a stack sheet's from sheet-words.json
+    // (Merge names the PR or the stack by its number).
+    function verdictLabel(value) {
+      if (sheetKind === "final") return VERDICT_LABELS[value];
+      if (value === "not-yet") return prWords.notYetLabel;
+      return fill(sheetKind === "stack" ? prWords.mergeStackLabel : prWords.mergeLabel, { number: prNumber });
+    }
+
+    // The last card: the verdict's buttons and note, written whole at verdict/<digest> as the owner
+    // taps, like an answer. The one document of this revision is the verdict, and it never counts as approval or
+    // as a merge on its own.
     function addVerdictParts(article) {
       addSaver({
         choices: verdictShape === null ? [] : verdictShape.values.map(function (value) {
-          return { label: VERDICT_LABELS[value], answer: value, optionId: null };
+          return { label: verdictLabel(value), answer: value, optionId: null };
         }),
         rowLabel: "Your verdict",
         noteId: "verdict-note",
         path: "verdict/" + sheetDigest,
         live: function () { return canEdit() && verdictShape !== null && sheetDigest !== null; },
-        document: function (body) { return { verdict: body.answer, note: body.note, sheet: sheetDigest }; },
-        // A stored document restores a pick only when it fits the schema's verdict rule and answers this
-        // revision; one that does not fit restores only its note, and only when that is text.
+        document: function (body) {
+          const doc = { verdict: body.answer, note: body.note, sheet: sheetDigest };
+          if (revisedKind(sheetKind)) doc.covers = coveredAnswers();
+          return doc;
+        },
+        // A stored document restores a pick only when it fits the schema's verdict rule and the sheet's kind offers
+        // that verdict; one that does not restores only its note, and only when that is text.
         state: function (data) {
           const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
           if (verdictShape !== null && fitsRule(verdictShape.root, verdictShape.rule, data) && verdictShape.values.includes(data.verdict)) {
@@ -1406,14 +1615,24 @@
     // The plain answers carry only their presentation class here; their words come from sheet-words.json.
     const PICK_PILLS = {
       aligned: ["sh-pill sh-pill--aligned"],
+      accept: ["sh-pill sh-pill--aligned"],
       discuss: ["sh-pill sh-pill--discuss"],
       "something-else": ["sh-pill sh-pill--discuss"],
       picked: ["sh-pill sh-pill--aligned", "Picked"],
       open: ["sh-pill sh-pill--open", "Open"],
     };
-    // One entry per card, in card order: { id, question, article, row }.
+    // One entry per card, in card order: { id, question, options, article, row }.
     let items = [];
     let sheetKind = "plain";
+    // A pr sheet, a stack sheet or the index is one scrolling page: every card shown, no stepper and no item rows.
+    let onePage = false;
+    // The PR's number (the stack's on a stack sheet) and the words under "pr" in sheet-words.json, for those two kinds.
+    let prNumber = 0;
+    let prWords = null;
+    // The index's words (the "index" block of sheet-words.json) and rows, and the zoom words an opened picture's buttons take (from "pr"); null or empty on other kinds.
+    let indexWords = null;
+    let indexRows = [];
+    let zoomWords = null;
     let openIndex = 0;
     let expanded = false;
 
@@ -1422,6 +1641,27 @@
       button.setAttribute("type", "button");
       button.addEventListener("click", onClick);
       return button;
+    }
+
+    // The walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
+    let walkStops = [];
+    let walkCount = textElement("span", "sh-label", "");
+    let walkLines = [];
+    let walkRule = null;
+    // The answers each kind of stop offers, in button order, from the schema's walkAnswersByKind (null leaves the walk's answers off).
+    let walkOffered = null;
+
+    function walkOfferedFor(kind) {
+      return walkOffered !== null && Array.isArray(walkOffered[kind]) ? walkOffered[kind] : [];
+    }
+
+    // How many items the store has acknowledged as accepted (Accept, or an option that does not send the PR back) and nothing of the item is unsaved.
+    function savedAcceptances() {
+      return items.filter(function (item) {
+        const held = controllers.get(item.id).confirmed();
+        const option = held === null ? undefined : item.options.find(function (candidate) { return candidate.id === held.optionId; });
+        return held !== null && (held.answer === "accept" || (option !== undefined && option.sendsBack === false));
+      }).length;
     }
 
     // Moving to a different card puts the page back at its top; opening the card already open only refreshes.
@@ -1522,12 +1762,21 @@
       const answered = states.filter(function (state) { return state.answer !== null; });
       const chatting = answered.filter(openForChat);
 
+      const notLoaded = total + (total === 1 ? " item" : " items") + " · answers not loaded";
       // A final sheet may have no cards: there is then nothing to count, step through or list.
-      countHost.textContent = total === 0
-        ? "Nothing left to answer"
-        : ready
-          ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
-          : total + (total === 1 ? " item" : " items") + " · answers not loaded";
+      if (sheetKind === "index") {
+        countHost.textContent = indexCount();
+      } else if (onePage) {
+        countHost.textContent = total === 0
+          ? prWords.nothingToAcceptCount
+          : ready ? fill(prWords.acceptedCount, { accepted: savedAcceptances(), total: total }) : notLoaded;
+      } else {
+        countHost.textContent = total === 0
+          ? "Nothing left to answer"
+          : ready
+            ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
+            : notLoaded;
+      }
       countHost.hidden = false;
 
       // A card folds away only when it is answered, is not the open card and has nothing unsaved.
@@ -1538,7 +1787,7 @@
       items.forEach(function (item, index) {
         const state = states[index];
         const current = index === openIndex;
-        item.article.hidden = !current;
+        item.article.hidden = !onePage && !current;
         item.row.className = "sh-button" + (current ? " sh-button--main sheet-row is-current" : " sheet-row") + (folded[index] ? " is-folded" : "");
         item.row.setAttribute("aria-current", current ? "true" : "false");
         const parts = [textElement("span", "sheet-row-text", (index + 1) + " · " + item.question)];
@@ -1571,23 +1820,104 @@
         pair.next.disabled = openIndex === total - 1;
       });
 
-      footerHost.hidden = false;
-      stepperHost.hidden = total === 0;
-      bottomStepperHost.hidden = total === 0;
-      itemsHost.hidden = total === 0;
-      cardsHost.hidden = total === 0;
+      footerHost.hidden = onePage && sheetKind !== "index";
+      stepperHost.hidden = onePage || total === 0;
+      bottomStepperHost.hidden = onePage || total === 0;
+      itemsHost.hidden = onePage || total === 0;
+      // A pr sheet's cards host also holds the parts around the cards, so it is shown with no cards too.
+      cardsHost.hidden = !onePage && total === 0;
       whyBox.hidden = sheetKind !== "remainder";
       historyBox.hidden = sheetKind !== "final";
-      finalHost.hidden = sheetKind !== "final";
+      finalHost.hidden = sheetKind !== "final" && !revisedKind(sheetKind);
       // The no-digest caption shows only once the sheet is ready, the schema says what a verdict is and this
       // browser can't work out which revision the sheet is: the last card's controls are then off, and this says why.
       if (digestCaption !== null) digestCaption.hidden = !(ready && verdictShape !== null && sheetDigest === null);
+      if (revisedKind(sheetKind) && verdictController !== null) lockVerdict(states);
+    }
+
+    // The merge verdict's lock, send-back and clear, worked out from the controllers and from nothing else. An item
+    // counts as accepted only by the answer the store has acknowledged (Accept, or an option that does not send the PR
+    // back) while its saver holds nothing unsaved; the sheet is locked while any item is not. A card whose current pick
+    // is an option that sends the PR back replaces the verdict's buttons, note and unlock line with the send-back message.
+    // A Merge held while the sheet is locked is cleared through the verdict saver, so it queues behind any write in flight.
+    // A walk stop whose latest answer is a Problem with no fix chosen, or with anything of its saver unsaved, locks the merge too; stops not walked never do.
+    function lockVerdict(states) {
+      const total = items.length;
+      const optionOf = function (index, optionId) {
+        return optionId === null ? undefined : items[index].options.find(function (item) { return item.id === optionId; });
+      };
+      const accepted = savedAcceptances();
+      const incomplete = accepted < total;
+      const walked = walkStops.map(function (stop) {
+        const controller = controllers.get("walk:" + stop.key);
+        return { optional: stop.optional === true, now: controller.current(), saved: controller.confirmed() || { answer: null }, unsaved: controller.unsaved(), acked: controller.acknowledged() };
+      });
+      const count = function (test) { return walked.filter(test).length; };
+      const fixOf = function (pick) {
+        return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
+      };
+      // A stop blocks while any state its store might hold does (see blocking).
+      // A Problem whose fix the store has not yet acknowledged counts too (acked[0] is the last saved pick), so a follow-up chosen over a held Problem stays locked until it lands; an edit beside a saved follow-up does not.
+      const open = count(function (item) {
+        const saved = item.acked[0];
+        return item.acked.some(blocking) || (item.unsaved && item.now.answer === "problem" && !(saved.answer === "problem" && saved.optionId === item.now.optionId));
+      });
+      // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
+      // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
+      const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
+      const clearUnsaved = verdictController.state().answer === null && verdictLost;
+      // An accepted answer saved without a revision (an earlier page, or no random source) cannot be named by a Merge's covers, so Merge stays off until it is answered again.
+      const uncovered = coveredAnswers().length < total;
+      const locked = incomplete || uncovered || clearUnsaved || open > 0;
+      const sendsBack = states.some(function (state, index) {
+        const option = optionOf(index, state.optionId);
+        return option !== undefined && option.sendsBack === true;
+      }) || walked.some(function (item) { return fixOf(item.now).sendsBack === true; });
+      const counts = [
+        open,
+        count(function (item) { return fixOf(item.saved).sendsBack === false; }),
+        count(function (item) { return !item.optional && !prWords.walkedAnswers.includes(item.now.answer); }),
+      ];
+      ["walkProblems", "followUps", "notWalked"].forEach(function (name, index) {
+        walkLines[index].textContent = counts[index] === 0 ? "" : fill(prWords[name + (counts[index] === 1 ? "One" : "Many")], { count: counts[index] });
+        walkLines[index].hidden = counts[index] === 0 || sendsBack;
+      });
+      walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return prWords.walkedAnswers.includes(item.saved.answer); }), total: walked.length });
+      walkCount.hidden = !ready;
+      const mergeLabel = verdictLabel("merge");
+      verdictController.setChoice("merge", locked ? fill(prWords.mergeLocked, { merge: mergeLabel }) : mergeLabel, locked);
+      verdictController.setShown(!sendsBack);
+      // Cards the store holds as accepted with no revision (saved by an earlier page, or by a browser with no random source) are named, with what to do about it, so a locked Merge is never left unexplained.
+      const resave = items.map(function (item, index) { return index; }).filter(function (index) {
+        const held = controllers.get(items[index].id).confirmed();
+        const option = held === null ? undefined : items[index].options.find(function (candidate) { return candidate.id === held.optionId; });
+        return held !== null && (held.answer === "accept" || (option !== undefined && option.sendsBack === false)) && controllers.get(items[index].id).revision() === null;
+      });
+      const resaveText = resave.length === 0 ? "" : fill(canMakeRevision() ? prWords.resaveLegacy : prWords.resaveNoRevision, { titles: resave.map(function (index) { return "“" + items[index].question + "”"; }).join(", ") });
+      unlockLine.textContent = [incomplete ? fill(prWords.unlocks, { accepted: accepted, total: total }) : "", resaveText].filter(function (part) { return part !== ""; }).join(" ");
+      unlockLine.hidden = unlockLine.textContent === "" || sendsBack;
+      sendBackLine.hidden = !sendsBack;
+      if (ready && locked && verdictController.state().answer === "merge") verdictController.clear();
+      // The answers held back until the verdict's write is acknowledged go out now, in card order; while that write has failed
+      // or stalled, whatever its pick (a Not yet over a saved Merge too), they read Not saved rather than Saving….
+      controllers.forEach(function (controller) { controller.resume(verdictLost); });
     }
 
     // The words a final sheet shares with the chat prose (lib/sheet_prose.py) live in one file, sheet-words.json,
     // which both read; the page fetches it before drawing any sheet (the answers every card offers are in it
     // too). Nothing here retypes them.
     let finalWords = null;
+    function onePageKind(kind) {
+      return revisedKind(kind) || kind === "index";
+    }
+    // The kinds whose answers carry a revision and whose Merge covers them: a pr sheet and a stack sheet.
+    function revisedKind(kind) {
+      return kind === "pr" || kind === "stack";
+    }
+    // The kinds that save a verdict at verdict/<digest>, and so need the wording file and the sheet's digest.
+    function verdictKind(kind) {
+      return kind === "final" || revisedKind(kind);
+    }
     function plural(count, noun) {
       return count + " " + noun + (count === 1 ? "" : "s");
     }
@@ -1604,6 +1934,9 @@
     // The caption on the last card that says why its controls are off when this browser can't work out the
     // sheet's digest, once the sheet is drawn.
     let digestCaption = null;
+    // A pr sheet's or a stack sheet's verdict card: the line that says what unlocks Merge, and the send-back message.
+    let unlockLine = null;
+    let sendBackLine = null;
 
     // Controls are on only when the sheet allows edits; the last card's also need a schema that says what a verdict is.
     function syncControls() {
@@ -1659,29 +1992,449 @@
       finalHost.replaceChildren(article, textElement("p", "sh-caption", finalWords.doneStep), next);
     }
 
+    // The words under "pr" in sheet-words.json that a pr sheet or a stack sheet is drawn from. A wording file without
+    // one of them cannot draw the sheet.
+    const PR_WORD_KEYS = [
+      "nothingToAccept", "historyCap", "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark",
+      "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
+      "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
+      "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
+      "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
+      "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
+      "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
+      "walkSchemaMissing", "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
+    ];
+
+    // The answers each stop kind offers, in button order, are the schema's own ($defs.walkAnswersByKind): { try: [...], look: [...] }.
+    // Null when the schema gives none in that shape, which leaves the walk's answers off.
+    function readWalkOffered(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const defs = isObject(schema) && isObject(schema.$defs) ? schema.$defs : {};
+      const byKind = isObject(defs.walkAnswersByKind) ? defs.walkAnswersByKind.properties : undefined;
+      if (!isObject(byKind)) return null;
+      const offered = {};
+      const kinds = Object.keys(byKind);
+      for (let index = 0; index < kinds.length; index += 1) {
+        const list = isObject(byKind[kinds[index]]) ? byKind[kinds[index]].enum : undefined;
+        if (!Array.isArray(list) || list.length === 0 || list.some(function (value) { return typeof value !== "string"; })) return null;
+        offered[kinds[index]] = list;
+      }
+      return kinds.length > 0 ? offered : null;
+    }
+
+    // The words must label every answer the schema offers (offered is null when it offers none).
+    function hasWalkWords(pr, offered) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const answers = pr.walkAnswers;
+      const labelled = isObject(answers) && isObject(answers.labels)
+        && (offered === null || Object.keys(offered).every(function (kind) { return offered[kind].every(function (value) { return typeof answers.labels[value] === "string"; }); }));
+      return labelled && Array.isArray(pr.walkFixes) && pr.walkFixes.every(function (fix) {
+        return isObject(fix) && ["id", "label", "consequence"].every(function (key) { return typeof fix[key] === "string"; }) && typeof fix.sendsBack === "boolean";
+      });
+    }
+
+    function hasPrWords(words, offered) {
+      return words !== null && typeof words === "object" && typeof words.roundNoun === "string" && words.pr !== null
+        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr, offered);
+    }
+
+    // The words under "index" in sheet-words.json that the index is drawn from, the three zoom words it takes from "pr", and the shapes of groups and ordinals.
+    // A wording file without one of them cannot draw the index.
+    const INDEX_WORD_KEYS = [
+      "blocksHeading", "nothingBlocking", "firstAnswerCounts", "rowPr", "rowStack", "accepted", "nothingToAccept", "walked", "mergesAt",
+      "mergesAtNumber", "beingFixed", "ready", "open", "questionsOne", "questionsMany", "needYou", "nothingNeedsYou", "done",
+    ];
+    // The states an index row can have come from the schema (indexRow's state enum), the one home of that list; null when the schema gives none.
+    function readIndexStates(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const defs = isObject(schema) && isObject(schema.$defs) ? schema.$defs : {};
+      const row = isObject(defs.indexRow) && isObject(defs.indexRow.properties) ? defs.indexRow.properties.state : undefined;
+      return isObject(row) && Array.isArray(row.enum) && row.enum.every(function (state) { return typeof state === "string"; }) ? row.enum : null;
+    }
+
+    function hasIndexWords(words, states) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      if (states === null || !isObject(words) || !isObject(words.index) || !isObject(words.pr)) return false;
+      const index = words.index;
+      return INDEX_WORD_KEYS.every(function (key) { return typeof index[key] === "string"; })
+        && isObject(index.groups) && states.every(function (state) { return typeof index.groups[state] === "string"; })
+        && Array.isArray(index.ordinals) && index.ordinals.every(function (ordinal) { return typeof ordinal === "string"; })
+        && ["zoomOut", "zoomIn", "zoomFit"].every(function (key) { return typeof words.pr[key] === "string"; });
+    }
+
+    // The app bar's count: the questions while any are left, else how many PRs need the owner.
+    function indexCount() {
+      if (items.length > 0) return items.length === 1 ? indexWords.questionsOne : fill(indexWords.questionsMany, { count: items.length });
+      const needing = indexRows.filter(function (row) { return row.state === "needs-you"; }).length;
+      return needing > 0 ? fill(indexWords.needYou, { count: needing }) : indexWords.nothingNeedsYou;
+    }
+
+    // One row: a link that opens the PR's sheet in a new tab, holding its name, its caption and the word that says it opens.
+    function buildIndexRow(row) {
+      const link = document.createElement("a");
+      link.className = "sh-box sheet-index-row";
+      Object.entries({ href: row.link, target: "_blank", rel: "noopener" }).forEach(function (pair) { link.setAttribute(pair[0], pair[1]); });
+      link.replaceChildren(
+        textElement("span", "sh-label", fill(indexWords[row.kind === "stack" ? "rowStack" : "rowPr"], { number: row.number, title: row.title })),
+        textElement("span", "sh-caption", row.caption),
+        textElement("span", "", indexWords.open),
+      );
+      return link;
+    }
+
+    // The questions that block work, or the line that says there are none.
+    function buildIndexBlocks(articles) {
+      const section = prSection("section", "index-blocks", "sheet-index-blocks");
+      section.appendChild(textElement("h2", "", indexWords.blocksHeading));
+      if (articles.length === 0) {
+        section.appendChild(textElement("p", "", indexWords.nothingBlocking));
+      } else {
+        articles.forEach(function (article) { section.appendChild(article); });
+        section.appendChild(textElement("p", "sh-caption", indexWords.firstAnswerCounts));
+      }
+      return section;
+    }
+
+    // The parts of the index below its questions: one for each state that has a row, in the order the wording file lists the groups (the order the chat prose uses too).
+    function buildIndexGroups(rows) {
+      return Object.keys(indexWords.groups).filter(function (state) { return rows.some(function (row) { return row.state === state; }); }).map(function (state) {
+        const section = prSection("section", "index-group-" + state, "sheet-index-group");
+        section.appendChild(textElement("h2", "", indexWords.groups[state]));
+        rows.filter(function (row) { return row.state === state; }).forEach(function (row) { section.appendChild(buildIndexRow(row)); });
+        return section;
+      });
+    }
+
+    // The first seven characters of a commit, as every line of a pr sheet names one.
+    function shortCommit(commit) {
+      return commit.slice(0, 7);
+    }
+
+    function prSection(tag, id, className) {
+      const section = document.createElement(tag);
+      section.id = id;
+      section.className = className;
+      return section;
+    }
+
+    // What changed: only the facts of prSheet.whatChanged and the commit the sheet describes.
+    function buildWhatChanged(prSheet) {
+      const facts = prSheet.whatChanged;
+      const box = prSection("section", "pr-what-changed", "sh-box");
+      box.appendChild(textElement("h2", "", prWords.whatChangedHeading));
+      box.appendChild(linkedElement("p", "", facts.summary));
+      if (facts.reviewers.length > 0) {
+        const named = facts.reviewers.map(function (reviewer) {
+          const notes = [reviewer.family === null ? prWords.familyUnknown : reviewer.family];
+          if (reviewer.notIndependent === true) notes.push(prWords.notIndependentMark);
+          return reviewer.name + " (" + notes.join(", ") + ")";
+        });
+        box.appendChild(linkedElement("p", "", fill(prWords.reviewedBy, { reviewers: named.join("; ") })));
+      }
+      if (facts.caught.length > 0) {
+        const list = document.createElement("ul");
+        list.className = "sheet-caught";
+        facts.caught.forEach(function (line) { list.appendChild(linkedElement("li", "", line)); });
+        box.appendChild(textElement("h3", "sh-label", prWords.caughtHeading));
+        box.appendChild(list);
+      }
+      box.appendChild(textElement("p", "", fill(prWords.roundsLine, { rounds: plural(facts.rounds, finalWords.roundNoun) })));
+      if (facts.stoppedAtCap) box.appendChild(textElement("p", "", prWords.historyCap));
+      // Checks that ran on no commit have no sentence of their own: the state is shown as it came.
+      box.appendChild(textElement("p", "", facts.ci.commit === null
+        ? facts.ci.state
+        : fill(prWords.ciLine, { state: facts.ci.state, commit: shortCommit(facts.ci.commit) })));
+      if (facts.lane !== null) {
+        const line = fill(prWords.laneLine, { lane: facts.lane, reason: facts.laneReason === null ? "" : facts.laneReason });
+        box.appendChild(linkedElement("p", "", facts.laneReason === null ? line.replace(/:\s*$/, "") : line));
+      }
+      box.appendChild(textElement("p", "sh-caption", fill(prWords.describesCommit, { commit: shortCommit(prSheet.commit) })));
+      return box;
+    }
+
+    // The box under What changed on a sheet that replaced one made for an earlier commit.
+    function buildChanged(previousCommit) {
+      const box = prSection("section", "pr-changed", "sh-box");
+      box.appendChild(textElement("h2", "", prWords.changedHeading));
+      box.appendChild(textElement("p", "", fill(prWords.changed, { previous: shortCommit(previousCommit) })));
+      return box;
+    }
+
+    function boldLead(tag, className, bold, text) {
+      const element = textElement(tag, className, "");
+      element.replaceChildren(textElement("b", "", bold), document.createTextNode(" " + text));
+      return element;
+    }
+
+    // The host's picture store, asked for on the first tap of an Add a screenshot: a promise of the store, or of null when there is none or it cannot upload.
+    // An ask the page's own deadline cut off is not kept, so the next tap asks again. And the uploads that still count for the leave-page guard.
+    let assetsAsk = null;
+    let uploads = 0;
+
+    // One walk stop, all plain text: its parts and pictures, then its answers saved at walk/<key>; a Problem opens the fix block.
+    function buildStop(stop, walk) {
+      const article = prSection("article", "stop-" + stop.id, "sh-box");
+      const meta = document.createElement("div");
+      meta.appendChild(textElement("span", "sh-tag", (sheetKind === "stack" ? fill(prWords.walkStopPr, { pr: stop.pr }) + " " : "") + stop.id.toUpperCase()));
+      if (stop.optional === true) meta.appendChild(textElement("span", "sh-badge", prWords.optionalBadge));
+      article.replaceChildren(meta, textElement("h3", "sh-heading", stop.title));
+      if (stop.kind === "try") {
+        const steps = prSection("ol", "steps-" + stop.id, "sheet-walk-list");
+        stop.steps.forEach(function (step) { steps.appendChild(textElement("li", "", step)); });
+        article.appendChild(steps);
+      }
+      article.appendChild(boldLead("p", "expect", stop.kind === "try" ? prWords.expectLabel : prWords.lookForLabel, stop.expect));
+      if (stop.notWalked !== undefined) article.appendChild(textElement("p", "sh-caption", fill(prWords.notWalkedByAdvisor, { reason: stop.notWalked })));
+      if (stop.pictures.length > 0) article.appendChild(buildImages(stop.pictures, true));
+      if (stop.pictures.some(function (picture) { return picture.missing !== true; })) article.appendChild(textElement("p", "sh-caption", prWords.tapPicture));
+      const extra = prSection("div", "fix-" + stop.id, "sheet-fix");
+      extra.hidden = true;
+      const fixes = prSection("ul", "fixes-" + stop.id, "");
+      prWords.walkFixes.forEach(function (fix) { fixes.appendChild(boldLead("li", "", fix.label + ":", fix.consequence)); });
+      extra.replaceChildren(textElement("p", "sh-label", prWords.fixQuestion), fixes);
+      let controller = null;
+      let uploading = false;
+      // The store this stop uploads to, once a tap found one; the number of the latest upload attempt; and the attempt whose failed line is showing (0 when none is).
+      let assets = null;
+      let attempt = 0;
+      let failedAttempt = 0;
+      const shotLine = textElement("span", "sh-caption", "");
+      const input = document.createElement("input");
+      input.setAttribute("type", "file");
+      input.setAttribute("accept", "image/png,image/jpeg,image/gif,image/webp");
+      input.hidden = true;
+      const pick = actionButton(prWords.addScreenshot, async function () {
+        if (!canEdit()) return;
+        // No store, no upload, or an ask the host rejects is a "no" for good. Only the page's own deadline firing first is not: the host's answer is
+        // memoized and may be there by the next tap, so that ask is not kept and the button stays on.
+        const ask = assetsAsk || (assetsAsk = withDeadline(function () { return window.claude.use("assets"); }).then(function (found) {
+          return found && typeof found.upload === "function" ? found : null;
+        }, function (error) { return error === DEADLINE ? DEADLINE : null; }));
+        const found = await ask;
+        if (found === DEADLINE) {
+          if (assetsAsk === ask) assetsAsk = null;
+          shotLine.textContent = prWords.screenshotUnavailable;
+          return;
+        }
+        assets = found;
+        pick.disabled = found === null;
+        if (pick.disabled) shotLine.textContent = prWords.screenshotUnavailable;
+        else input.click();
+      });
+      pick.disabled = true;
+      input.addEventListener("change", async function () {
+        const file = input.files && input.files[0];
+        input.value = "";
+        if (!file || !canEdit()) return;
+        uploading = true;
+        attempt += 1;
+        const mine = attempt;
+        failedAttempt = 0;
+        pick.disabled = true;
+        shotLine.textContent = prWords.screenshotUploading;
+        let id = null;
+        const real = (async function () { return (await assets.upload(file)).id; })();
+        // The upload counts for the leave-page guard until it settles or its deadline passes, whichever comes first, and stops counting once.
+        uploads += 1;
+        let counted = true;
+        const release = function () { if (counted) { counted = false; uploads -= 1; } };
+        real.then(release, release);
+        try { id = await withDeadline(function () { return real; }); } catch (error) { id = null; }
+        release();
+        uploading = false;
+        pick.disabled = false;
+        if (typeof id === "string" && id !== "") controller.addShot(id);
+        else {
+          // The failed line stays until the next upload attempt, or this upload's late success, replaces it.
+          if (attempt === mine) failedAttempt = mine;
+          shotLine.textContent = prWords.screenshotFailed;
+          // A stall is not a loss: an upload that lands after the deadline is still saved, once.
+          real.then(function (late) {
+            if (typeof late !== "string" || late === "") return;
+            if (failedAttempt === mine) failedAttempt = 0;
+            controller.addShot(late);
+          }, function () {});
+        }
+      });
+      addSaver({
+        choices: walkOfferedFor(stop.kind).map(function (value) { return { label: prWords.walkAnswers.labels[value], answer: value, optionId: null }; })
+          .concat(walkOffered === null ? [] : prWords.walkFixes.map(function (fix) { return { label: fix.label, answer: "problem", optionId: fix.id, row: 2 }; })),
+        rowLabel: "Your answer",
+        extra: extra,
+        extraLabel: prWords.fixQuestion,
+        noteId: "walk-note-" + stop.id,
+        path: "walk/" + stop.key,
+        live: function () { return canEdit() && walkRule !== null; },
+        // A Problem that sends the PR back waits while a saved Merge may still stand; any other answer, and a follow-up Problem that never blocks Merge, writes freely.
+        mayWrite: function (latest) { return !blocking(latest) || cardMayWrite(); },
+        // Problem shows pressed whichever fix is chosen, and tapping a chosen fix again leaves the Problem with no fix.
+        pressed: function (choice, latest) {
+          return choice.answer === latest.answer && (choice.optionId === latest.optionId || (choice.answer === "problem" && choice.optionId === null));
+        },
+        unpick: function (choice) { return { answer: choice.optionId === null ? null : "problem", optionId: null }; },
+        paint: function (latest, noteLabel) {
+          extra.hidden = latest.answer !== "problem";
+          noteLabel.textContent = latest.answer === "problem" ? prWords.problemNote : "Note";
+          if (!uploading && failedAttempt === 0 && latest.shots.length > 0) shotLine.textContent = fill(prWords.screenshotsAdded, { count: latest.shots.length });
+        },
+        enable: function (on) { pick.disabled = !on; },
+        document: function (body) { return { answer: body.answer, fix: body.optionId, note: body.note, shots: body.shots }; },
+        // A stored document restores its pick only when it fits the walk-answer rule and names an answer and a fix offered; else only its text note.
+        state: function (data) {
+          const fits = walkRule !== null && fitsRule(walkRule.root, walkRule.rule, data)
+            && (data.answer === null || walkOfferedFor(stop.kind).includes(data.answer))
+            && (data.fix === null || prWords.walkFixes.some(function (fix) { return fix.id === data.fix; }));
+          if (fits) return { answer: data.answer, optionId: data.fix, note: data.note, shots: data.shots.slice() };
+          // A stored Problem whose fix is not offered, or whose document is malformed, stays a Problem with no fix, so it keeps blocking Merge.
+          return { answer: data.answer === "problem" ? "problem" : null, optionId: null, note: typeof data.note === "string" ? data.note : "", shots: [] };
+        },
+        keep: function (made) { controller = made; controllers.set("walk:" + stop.key, made); },
+      }, article);
+      extra.appendChild(prSection("div", "shots-" + stop.id, "save-line")).replaceChildren(pick, shotLine, input);
+      return article;
+    }
+
+    // The walk: the open box, the advisor's lines, then the stops in the order they are declared, a group's label shown
+    // each time a stop's group differs from the previous stop's (a group listed apart is labelled again where it resumes).
+    function buildWalk(walk) {
+      const section = prSection("section", "pr-walk", "sh-box");
+      walkCount = prSection("span", "walk-count", "sh-label");
+      const open = document.createElement("p");
+      if (walk.open.url === undefined) {
+        open.textContent = walk.open.label;
+      } else {
+        const link = textElement("a", "", walk.open.label + " ↗");
+        Object.entries({ href: walk.open.url, target: "_blank", rel: "noopener" }).forEach(function (pair) { link.setAttribute(pair[0], pair[1]); });
+        open.appendChild(link);
+      }
+      const box = prSection("div", "pr-walk-open", "sh-box");
+      box.replaceChildren(open, ...(walk.open.detail === undefined ? [] : [textElement("p", "sh-caption", walk.open.detail)]));
+      const head = prSection("div", "pr-walk-head", "sheet-stepper");
+      head.replaceChildren(textElement("h2", "", prWords.walkHeading), walkCount);
+      section.replaceChildren(head, box);
+      if (walk.note !== undefined) section.appendChild(textElement("p", "", walk.note));
+      section.appendChild(textElement("p", "sh-caption", fill(prWords.advisorWalked, { from: walk.picturesFrom })));
+      walkStops = walk.stops;
+      let previousGroup = null;
+      walk.stops.forEach(function (stop) {
+        if (stop.group !== previousGroup) section.appendChild(textElement("p", "sh-label", stop.group));
+        previousGroup = stop.group;
+        section.appendChild(buildStop(stop, walk));
+      });
+      return section;
+    }
+
+    // The view's zoom buttons (pr and stack sheets, and the index): − and + step about the frame's centre, Fit goes back to the fitted size (a factor of 0 holds at 1).
+    function zoomButtons() {
+      return [[zoomWords.zoomOut, 1 / WHEEL_STEP_MAX], [zoomWords.zoomIn, WHEEL_STEP_MAX], [zoomWords.zoomFit, 0]].map(function (zoom) {
+        return actionButton(zoom[0], function () { zoomTo(scale * zoom[1], viewerFrame.clientWidth / 2, viewerFrame.clientHeight / 2); });
+      });
+    }
+
+    // A part that is folded away at load and opens its lines on a tap.
+    function buildFolded(id, heading, lines) {
+      const wrap = prSection("div", id, "sheet-folded");
+      const list = document.createElement("ul");
+      list.hidden = true;
+      lines.forEach(function (line) { list.appendChild(linkedElement("li", "", line)); });
+      const cue = cueElement();
+      const toggle = actionButton("", function () {
+        list.hidden = !list.hidden;
+        showOpenState(toggle, cue, !list.hidden);
+      });
+      toggle.replaceChildren(cue, textElement("span", "", heading + " (" + lines.length + ")"));
+      showOpenState(toggle, cue, !list.hidden);
+      wrap.replaceChildren(toggle, list);
+      return wrap;
+    }
+
+    function buildVerdict() {
+      const article = prSection("article", "sheet-verdict", "sh-card");
+      article.appendChild(textElement("h2", "", prWords.verdictHeading));
+      addVerdictParts(article);
+      digestCaption = textElement("p", "sh-caption", SAY.verdictNoDigest);
+      digestCaption.hidden = true;
+      article.appendChild(digestCaption);
+      unlockLine = textElement("p", "sh-caption", "");
+      unlockLine.id = "verdict-unlocks";
+      sendBackLine = textElement("p", "", prWords.sendBack);
+      sendBackLine.id = "verdict-send-back";
+      sendBackLine.hidden = true;
+      article.appendChild(unlockLine);
+      walkLines = ["walk-problems", "follow-ups", "not-walked"].map(function (name) { return article.appendChild(prSection("p", "verdict-" + name, "sh-caption")); });
+      article.appendChild(sendBackLine);
+      article.appendChild(textElement("p", "sh-caption", prWords.verdictCaption));
+      return article;
+    }
+
+    // The parts above the cards, in the order the owner reads them: What changed, the box that says the PR moved
+    // (when it did), the walk, and the heading of What you're accepting with its line when there are no cards.
+    function prHead(prSheet, hasCards) {
+      const parts = [buildWhatChanged(prSheet)];
+      if (prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
+      if (prSheet.walk !== undefined) parts.push(buildWalk(prSheet.walk));
+      const accepting = textElement("h2", "", prWords.acceptingHeading);
+      accepting.id = "pr-accepting";
+      parts.push(accepting);
+      if (!hasCards) {
+        const nothing = textElement("p", "", prWords.nothingToAccept);
+        nothing.id = "pr-nothing";
+        parts.push(nothing);
+      }
+      return parts;
+    }
+
+    // The parts below the cards: the folded parts that have something in them, then the merge verdict.
+    function prTail(prSheet) {
+      const entryLine = function (entry) { return (sheetKind === "stack" && entry.pr !== undefined ? fill(prWords.walkStopPr, { pr: entry.pr }) + ": " : "") + entry.title + " — " + entry.detail; };
+      const parts = [];
+      if (prSheet.craft.length > 0) parts.push(buildFolded("pr-craft", prWords.craftHeading, prSheet.craft.map(entryLine)));
+      if (prSheet.alreadyDecided.length > 0) parts.push(buildFolded("pr-decided", prWords.decidedHeading, prSheet.alreadyDecided.map(entryLine)));
+      if (prSheet.history.length > 0) parts.push(buildFolded("pr-review", prWords.reviewHeading, prSheet.history));
+      if (sheetKind === "stack") {
+        parts.push(buildFolded("pr-prs", prWords.prsHeading, prSheet.prs.map(function (pr) {
+          return fill(prWords.walkStopPr, { pr: pr.number }) + " " + pr.title + " · " + shortCommit(pr.commit);
+        })));
+      }
+      parts.push(buildVerdict());
+      return parts;
+    }
+
     function render(sheet) {
       const fragment = document.createDocumentFragment();
       controllers.clear();
       verdictController = null;
       digestCaption = null;
+      unlockLine = null;
+      sendBackLine = null;
+      walkStops = [];
       historyBox.replaceChildren();
       finalHost.replaceChildren();
+      // The kind is set before the cards are built: a card's saver reads it to decide whether its answers carry a revision.
+      sheetKind = sheet.kind;
       items = sheet.cards.map(function (card, index) {
         const article = buildCard(card);
-        fragment.appendChild(article);
-        return { id: card.id, question: card.question, article: article, row: actionButton("", function () { openAt(index); }) };
+        if (sheet.kind !== "index") fragment.appendChild(article);
+        return { id: card.id, question: card.question, options: card.options, article: article, row: actionButton("", function () { openAt(index); }) };
       });
-      sheetKind = sheet.kind;
-      footerHost.replaceChildren(savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption]));
+      onePage = onePageKind(sheetKind);
+      sheetPage.className = onePage ? "sheet-page is-pr" : "sheet-page";
+      prNumber = revisedKind(sheetKind) ? sheet.prSheet.number : 0;
+      indexRows = sheetKind === "index" ? sheet.index.rows : [];
+      viewerZoom.replaceChildren(...(onePage ? zoomButtons() : []));
+      footerHost.replaceChildren(...(sheetKind === "index" ? [textElement("p", "sh-caption", indexWords.done)] : onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
       openIndex = 0;
       expanded = false;
       whyHeading.textContent = "Why only these " + sheet.cards.length;
       whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
       if (sheetKind === "final") buildFinal(sheet.final);
+      if (revisedKind(sheetKind)) finalHost.replaceChildren(...prTail(sheet.prSheet));
       itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
-      cardsHost.replaceChildren(fragment);
+      cardsHost.replaceChildren(...(sheetKind === "index"
+        ? [buildIndexBlocks(items.map(function (item) { return item.article; })), ...buildIndexGroups(sheet.index.rows)]
+        : [...(revisedKind(sheetKind) ? prHead(sheet.prSheet, sheet.cards.length > 0) : []), fragment]));
       status.hidden = true;
       refreshSheet();
     }
@@ -1707,20 +2460,22 @@
       return data === undefined || data === null || typeof data !== "object" || Array.isArray(data) ? null : data;
     }
 
-    function applyDocument(doc) {
-      const controller = controllers.get(doc.id);
+    function applyDocument(doc, key) {
+      const controller = controllers.get(key);
       const data = documentData(doc);
       if (controller === undefined || data === null) return;
       controller.restore(data);
     }
 
-    // The last card's saved verdict puts its pick and note back, and counts as nothing on the sheet. Only this
-    // revision's own document is looked at (the one under its digest, and only when its own sheet field says
+    // The last card's saved verdict puts its pick and note back, and counts as nothing on the sheet. It is applied after the answers
+    // are, because a Merge is judged against them. Only this revision's own document is looked at (the one under its digest, and only when its own sheet field says
     // the same): another revision's document is never read, so nothing of it is restored.
     function applyVerdict(verdicts) {
       if (verdictController === null) return;
       const stored = documentData(verdicts.docs.find(function (doc) { return doc.id === sheetDigest; }));
-      if (stored !== null && typeof stored.sheet === "string" && stored.sheet === sheetDigest) verdictController.restore(stored);
+      if (stored === null || typeof stored.sheet !== "string" || stored.sheet !== sheetDigest) return;
+      // A Merge stands only on the answers it was given for, which are the ones the cards were just restored with; any other restores cleared, with its note, and nothing is written.
+      verdictController.restore(revisedKind(sheetKind) && stored.verdict === "merge" && !coversHold(stored.covers) ? { ...stored, verdict: null } : stored);
     }
 
     // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
@@ -1740,13 +2495,15 @@
         say(SAY.readFailed, restore);
       }, STALL_MS);
       try {
-        // A final sheet also reads its verdict; a failed or stalled read of either is a failed read. The verdict
-        // lives under this revision's digest, so without a digest there is nothing of this revision to read.
-        const names = sheetKind === "final" && sheetDigest !== null ? ["answers", "verdict"] : ["answers"];
-        const [saved, verdicts] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
+        // A final sheet, a pr sheet and a stack sheet also read their verdict, a sheet with a walk its walk answers; a failed or stalled read of any is a failed read.
+        // The verdict lives under this revision's digest, so without a digest there is nothing of this revision to read.
+        const names = ["answers"].concat(verdictKind(sheetKind) && sheetDigest !== null ? ["verdict"] : [], walkStops.length > 0 ? ["walk"] : []);
+        const read = {};
+        await Promise.all(names.map(async function (name) { read[name] = await store.collection(name).get(); }));
         if (ready) return;
-        saved.docs.forEach(applyDocument);
-        if (verdicts !== undefined) applyVerdict(verdicts);
+        read.answers.docs.forEach(function (doc) { applyDocument(doc, doc.id); });
+        if (read.verdict !== undefined) applyVerdict(read.verdict);
+        if (read.walk !== undefined) read.walk.docs.forEach(function (doc) { applyDocument(doc, "walk:" + doc.id); });
       } catch (error) {
         if (ready || attempt !== readAttempt) return;
         clearTimeout(readTimer);
@@ -1761,6 +2518,8 @@
       ready = true;
       syncControls();
       gate.hidden = true;
+      // A walk whose answers the schema cannot hold stays off, and the line says so.
+      if (walkStops.length > 0 && walkRule === null) say(walkOffered === null ? prWords.walkSchemaMissing : SAY.noStore, false);
       // The owner lands on the first call still waiting for an answer, or on the first when none is.
       const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
       openIndex = waiting === -1 ? 0 : waiting;
@@ -1877,17 +2636,40 @@
         words = await withDeadline(function () { return fetchJson("sheet-words.json", "The sheet's wording file"); });
       } catch (problems) {
         wordsProblem = Array.isArray(problems) ? problems.join(" ") : problems === DEADLINE ? "The sheet's wording file did not answer in time." : "The sheet's wording file could not be loaded.";
-        // A final sheet can't be drawn without its words; any other sheet is drawn with its answer controls off.
-        if (sheet.kind === "final") {
+        // A final sheet, a pr sheet, a stack sheet and the index can't be drawn without their words; any other sheet is drawn with its answer controls off.
+        if (verdictKind(sheet.kind) || sheet.kind === "index") {
           showErrors([wordsProblem]);
           return;
         }
       }
-      if (sheet.kind === "final") finalWords = words;
-      answerWords = words !== null && typeof words === "object" ? words.answers : null;
-      sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.bytes) : null;
+      const offered = readWalkOffered(schema);
+      if ((revisedKind(sheet.kind) && !hasPrWords(words, offered)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
+        showErrors(["The sheet's wording file lacks words this sheet needs."]);
+        return;
+      }
+      if (verdictKind(sheet.kind)) finalWords = words;
+      prWords = revisedKind(sheet.kind) ? words.pr : null;
+      zoomWords = onePageKind(sheet.kind) ? words.pr : null;
+      indexWords = sheet.kind === "index" ? words.index : null;
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const wordsFile = isObject(words) ? words : {};
+      // A pr sheet and a stack sheet offer the prAnswers block; every other kind, the index too, offers the answers block.
+      answerWords = (revisedKind(sheet.kind) ? wordsFile.prAnswers : wordsFile.answers) || null;
+      knownLabels = Object.assign({}, ...[wordsFile.answers, wordsFile.prAnswers].map(function (block) {
+        return isObject(block) && isObject(block.labels) ? block.labels : {};
+      }));
+      sheetDigest = verdictKind(sheet.kind) ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
-      verdictShape = readVerdictShape(schema);
+      verdictShape = readVerdictShape(schema, sheet.kind);
+      walkOffered = revisedKind(sheet.kind) ? offered : null;
+      walkRule = isObject(schema.$defs) && isObject(schema.$defs.walkAnswer) ? { root: schema, rule: schema.$defs.walkAnswer } : null;
+      // The walk stays off unless the schema says which answers a stop offers and every answer and fix offered fits the walk-answer rule, so a saved pick is one a reopen restores.
+      if (prWords !== null && walkOffered === null) walkRule = null;
+      // A stop whose kind the schema lists no answers for would offer fix buttons without a primary answer, so the walk stays off and draws no buttons, as when the schema has no list at all.
+      if (walkOffered !== null && isObject(sheet.prSheet) && isObject(sheet.prSheet.walk) && Array.isArray(sheet.prSheet.walk.stops)
+        && sheet.prSheet.walk.stops.some(function (stop) { return !isObject(stop) || !Array.isArray(walkOffered[stop.kind]); })) { walkRule = null; walkOffered = null; }
+      if (walkRule !== null && prWords !== null && ![].concat(...Object.values(walkOffered)).map(function (answer) { return [answer, null]; }).concat(prWords.walkFixes.map(function (fix) { return ["problem", fix.id]; }))
+        .every(function (pair) { return fitsRule(walkRule.root, walkRule.rule, { answer: pair[0], fix: pair[1], note: "", shots: [] }); })) walkRule = null;
       render(sheet);
       if (wordsProblem !== null) {
         // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.
@@ -1922,6 +2704,7 @@
           if (controller.unsaved()) pending = true;
         });
         if (verdictController !== null && verdictController.unsaved()) pending = true;
+        if (uploads > 0) pending = true;
         if (!pending) return;
         event.preventDefault();
         event.returnValue = "";
