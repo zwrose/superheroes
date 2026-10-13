@@ -2215,7 +2215,7 @@ PANEL = list(seat_map_module.PANEL_ROSTER)
 SEAT_MAP = seat_map_module.to_receipt(
     seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
 ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
-NO_READING = {"observation": {"read": "unknown"}}
+NO_READING = dict(ENGAGED_RUN, observation={"read": "unknown"})
 
 
 def _seats(**over):
