@@ -606,9 +606,11 @@ action that owns it, leaving the rest of the calibration untouched:
 
 With the compaction mod, an interactive session checkpoints its notes and compacts itself once the context passes a threshold; a heads-up band above the prompt offers **Now** and **Snooze** shortly before. Three plugin settings:
 
-- `autoCheckpointTokens` — the threshold, default `500000` (50000 to 2000000).
-- `autoCheckpointAllowance` — how many tokens before the harness's own auto-compaction the checkpoint must land, default `120000` (0 to 1000000); the checkpoint runs at the lower of the two.
-- `autoCheckpointMode` — `auto` (default: checkpoint and compact on its own), `click-only` (the band shows and only **Now** runs it) or `off`.
+- `autoCheckpointTokens` — the context size at which the checkpoint starts.
+- `autoCheckpointAllowance` — how many tokens before the harness's own auto-compaction the checkpoint must land; the checkpoint runs at the lower of the two.
+- `autoCheckpointMode` — `auto` (checkpoint and compact on its own), `click-only` (the band shows and only **Now** runs it) or `off`.
+
+`/config` shows each setting's current value; the defaults and bounds live in the manifest's `userConfig` (`.claude-plugin/plugin.json`) alone.
 
 The owner changes them in the plugin's rows in `/config`, or with `claude plugin configure superheroes` (`--values-stdin` for a scripted change).
 

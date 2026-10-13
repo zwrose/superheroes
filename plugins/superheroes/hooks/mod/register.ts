@@ -273,6 +273,8 @@ async function forgetFill($: EngineInterface): Promise<void> {
 // still-high fill starts no second one; the toast waits for the compaction itself.
 function compactSoon($: EngineInterface, isRetry = false): void {
   $.clock.after(COMPACT_DELAY_MS, async () => {
+    let didFail = false
+
     try {
       await $.session.compact()
       $.ui.toast('Checkpointed and compacted')
@@ -284,8 +286,17 @@ function compactSoon($: EngineInterface, isRetry = false): void {
       }
       note($, `compact: ${String(error)}`)
       $.ui.toast('Auto-checkpoint saved the notes but could not compact')
+      didFail = true
     }
     try {
+      if (didFail) {
+        // the next automatic run waits for the fill to grow, as a skipped checkpoint does
+        const { value } = await $.state.get(checkpoint)
+
+        if (typeof value?.tokens === 'number') {
+          await $.state.set(snoozeUntilTokens, snooze(value.tokens))
+        }
+      }
       await $.state.set(checkpoint, null)
     } catch (error) {
       note($, `compact state: ${String(error)}`)

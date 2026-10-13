@@ -852,6 +852,11 @@ test('compaction that rejects is retried once, then the owner is told, with no l
 
   await r.clock.advance(60000)
   expect(r.compactAttempts).toBe(2)
+
+  // snoozed to the fill it started at: a measurement there starts no new checkpoint
+  await measure($, r, PAST)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
 })
 
 test('compaction that rejects once is retried and lands', async ($, on) => {
@@ -959,8 +964,12 @@ test('Now through the save and the compaction: the reply block is saved, then th
     if (argv[3] === 'save') {
       r.notes = 'fresh notes'
     }
+    // the CLI's directive carries the notes file it reads
+    if (argv[3] === 'instructions') {
+      return ok({ mode: 'showrunner', notesPath: NOTES, notesFound: true, markerPath: MARKER, instructions: `${DIRECTIVE}\n${r.notes}` })
+    }
 
-    return saveAnswer
+    return argv[3] === 'mark' ? ok({}) : saveAnswer
   })
 
   await start($)
@@ -982,6 +991,13 @@ test('Now through the save and the compaction: the reply block is saved, then th
 
   expect(r.seen).toHaveLength(1)
   expect(r.toasts).toEqual(['Checkpoint notes saved', SUCCESS])
+
+  // The engine re-enters the plugin's own hook for a plugin-started compaction (harness 2.1.296,
+  // #1814 comment 6134267207); the kit's stub does not, so the test dispatches it here.
+  await compact($, { trigger: 'plugin' as SessionCompactInput['trigger'] })
+
+  expect(nth(r.seen, 1).instructions).toBe(`${DIRECTIVE}\nfresh notes`)
+  expect(r.argv.filter(argv => argv[3] === 'mark')).toHaveLength(1)
 })
 
 test('off: no band and no run', { options: { autoCheckpointMode: 'off' } }, async ($, on) => {
