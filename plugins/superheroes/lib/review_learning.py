@@ -33,9 +33,13 @@ HALVES = ("riskAreas", "threatModel")
 _KEYS = {"risk-and-trust": {"schema", "kind", "half", "value", "ruling"},
          "standing-ruling": {"schema", "kind", "ruling"}}
 SUPERSEDES_KEY = "supersedes"  # optional on either kind: the Canon entry id a replacement retires
-_ENTRY_ID = re.compile(r"\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*")
 DIMENSION_SEAT = review_seats.DIMENSION_SEAT
 _KNOWN = set(DIMENSION_SEAT) | set(DIMENSION_SEAT.values())
+
+
+def _canon_id(value):
+    """Whether the whole string is one Canon entry id, by Canon's own grammar (canon.ids_in)."""
+    return isinstance(value, str) and canon.ids_in("- **%s**" % value) == {value}
 
 
 def _result(ok, outcome, reason=None, detail=None, **extra):
@@ -96,7 +100,7 @@ def _proposal_problem(p):
     if set(p) - {SUPERSEDES_KEY} != keys or p.get("schema") != PROPOSAL_SCHEMA:
         return "a %s proposal is exactly %s (plus an optional %s) with schema %s" % (
             p["kind"], sorted(keys), SUPERSEDES_KEY, PROPOSAL_SCHEMA)
-    if SUPERSEDES_KEY in p and not (isinstance(p[SUPERSEDES_KEY], str) and _ENTRY_ID.fullmatch(p[SUPERSEDES_KEY])):
+    if SUPERSEDES_KEY in p and not (_canon_id(p[SUPERSEDES_KEY])):
         return "supersedes must be the id of the Canon entry being replaced (YYYY-MM-DD-xxxxxxxx-N)"
     try:
         canon._field("ruling", p["ruling"] if isinstance(p["ruling"], str) else "")
@@ -133,6 +137,8 @@ def _commit_canon(res, line):
 
 
 def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
+    """Record an owner-approved calibration change. The caller applies between reviews: the command
+    does not check for a running review, so the advisor runs it only when no review loop is in flight."""
     # axis: a calibration change is written only on the owner's exact yes, with their words, place and date — see bite-proof record wo_a_1718_no-owner-yes
     if not _owner_yes(approval):
         return _result(False, "refused", "no-owner-yes", "no approval with answer 'yes', words, where and an ISO date")
@@ -179,6 +185,9 @@ def _seats(name):
 
 
 def tally(records, escapes, since, *, until=None, window_days=None):
+    """Count seat reviews and catches. `records` is every review record of each PR it covers, earliest
+    included: a catch is dated by the earliest record carrying it, so a record whose `previousRecord`
+    is not among the given records reads `incomplete-evidence`, never a count."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
@@ -201,6 +210,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
     seen, unattributed, incomplete = {}, 0, False  # incomplete: evidence went missing, so no count is a zero
+    given = {v for r in records if isinstance(r, dict) for v in (r.get("url"), r.get("id")) if v is not None} \
+        if isinstance(records, list) else set()
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
         if not isinstance(rec, dict):
@@ -216,15 +227,25 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["malformed"] += 1
             incomplete = True
             continue
+        prev = rec.get("previousRecord")  # the link to the record before it, or null for the first
+        if prev is not None and not (isinstance(prev, dict) and any(prev.get(k) in given for k in ("url", "id") if prev.get(k) is not None)):
+            left["malformed"] += 1
+            incomplete = True
+            continue
+        if any(not (isinstance(r, dict) and r.get("ran") in review_record.RAN_STATES and isinstance(r.get("name"), str))
+               for r in rec["reviewers"]) or any(
+                not (isinstance(f, dict) and (f.get("findingKey") or f.get("id"))) for f in rec["findings"]):
+            left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
+            incomplete = True
+            continue
         if outside(day):
             left[outside(day)] += 1
         for row in rec.get("reviewers") or []:
-            if (not outside(day) and isinstance(row, dict) and row.get("ran") in review_record.RAN_STATES
-                    and row["ran"] != review_record.RAN_NOT_RUN):
+            if (not outside(day) and row["ran"] != review_record.RAN_NOT_RUN):
                 for seat in _seats(row.get("name")):
                     reviews[seat].add((rec.get("pr"), rec.get("sessionId")))
         for f in rec.get("findings") or []:
-            key = f.get("findingKey") or f.get("id") if isinstance(f, dict) else None
+            key = f.get("findingKey") or f.get("id")
             if key is not None:
                 hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "days": {}})
                 hit["fixed"] = hit["fixed"] or f.get("outcome") == "fixed"

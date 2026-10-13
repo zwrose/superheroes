@@ -406,6 +406,34 @@ def test_tally_incomplete_evidence_reads_unmeasured_never_zero():
         assert got["seats"] == {}
 
 
+def test_tally_damaged_rows_read_incomplete_not_measured_zero():
+    row, fin = _row("code-reviewer"), _finding("k", "Code")
+    for rec in (_record(1, "s", D, [row], [{"outcome": "fixed", "reviewer": "Code"}]),
+                _record(1, "s", D, [row], [{}]), _record(1, "s", D, [row], ["junk"]),
+                _record(1, "s", D, [{"name": "code-reviewer"}], [fin]),
+                _record(1, "s", D, ["junk"], [fin])):
+        got = RL.tally([rec], [], D, until="2026-10-11")
+        assert got["measured"] is False and got["reason"] == "incomplete-evidence", rec
+    ok = RL.tally([_record(1, "s", D, [row], [dict(fin, outcome=None), _finding("k2", "")])], [], D, until="2026-10-11")
+    assert ok["measured"] is True and ok["unattributedCatches"] == 1
+
+
+def test_tally_missing_earlier_record_reads_incomplete_and_a_full_chain_counts():
+    first = dict(_record(1, "s1", "2026-10-09", [_row("code-reviewer")], [_finding("k", "Code")]),
+                 url="u1", previousRecord=None)
+    last = dict(_record(1, "s2", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")]),
+                url="u2", previousRecord={"id": 1, "url": "u1"})
+    got = RL.tally([last], [], D, until="2026-10-11")
+    assert got["measured"] is False and got["reason"] == "incomplete-evidence"
+    full = RL.tally([first, last], [], D, until="2026-10-11")
+    assert full["measured"] is True and full["seats"]["code-reviewer"]["caught"] == 0
+
+
+def test_supersedes_id_grammar_is_canons():
+    assert RL._canon_id("2026-10-13-abcdefgh-1") and not RL._canon_id("2026-10-13-abcdefgh-0")
+    assert not RL._canon_id("2026-10-13-abcdefgh-1**x") and not RL._canon_id("2026-10-13-abcdefgh-1\nx")
+
+
 # --- the CLI ---
 
 def _json_file(tmp_path, name, value):

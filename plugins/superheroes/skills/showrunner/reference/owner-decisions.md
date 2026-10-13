@@ -567,11 +567,11 @@ advisor run together to keep calibration honest.
      proposal to tighten it.** A tightening: "make database changes a risk area", resting on two
      escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
      window".
-   - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
+   - **The counts come from `lib/review_learning.py tally`.** It reads review records (every record of each PR it covers, earliest included) and logged
      escapes only, counts only reviews dated on or after the adoption day and inside the condition
      window, and decides nothing. The advisor reads the counts and judges. Missing evidence reads
      unmeasured, never zero: a record or escape that is undated or has lost its reviewers or findings
-     turns the whole tally unmeasured (`incomplete-evidence`) instead of counting as nothing.
+     turns the whole tally unmeasured (`incomplete-evidence`), as does a record whose earlier record is not supplied or a reviewer or finding row that is damaged, instead of counting as nothing.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -692,7 +692,7 @@ say how it changes and what the advisor says when the owner finds a review slow.
   A result other than `applied` is reported to the owner as it is, never as done. A `partial` result
   means the approval is recorded and the setting did not change.
 - **From the next review on.** A Risk and trust change takes effect for every review that starts after
-  the setting is written. A review already running finishes on what it read when it started. A standing
+  the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
   ruling about leftovers binds where Canon's own reading rules say it does.
 - **The adoption day.** The project's adoption day is recorded once, with `lib/review_learning.py adopt`,
   when the project adopts the plugin release that carries this learning. It lives in the project's
