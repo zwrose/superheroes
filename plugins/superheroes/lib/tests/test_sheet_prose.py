@@ -983,6 +983,39 @@ def test_prose_says_the_pr_moved_between_what_changed_and_the_walk(tmp_path):
     assert PR_WORDS["changedHeading"] not in _prose_of(tmp_path, _sample("pr"))
 
 
+CARRIED = {"sheets": ["a" * 64], "date": "2026-09-30", "moved": "the branch was brought current with main", "whyNotMaterial": "main added only a README line"}
+
+
+def _carried(sheet):
+    sheet["prSheet"]["previousCommit"] = "0123456789abcdef"
+    sheet["prSheet"]["carriedForward"] = dict(CARRIED)
+    return sheet
+
+
+# Bites on: the chat prose drawing the changed heading and text for a carried sheet, or drawing the carried text without filling its date, commit, what moved or why.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_shows_the_carried_text_in_place_of_the_changed_text(tmp_path, kind):
+    # Axis: a sheet with carriedForward prints the carried heading and text (date, first 7 of previousCommit, moved, why) after What changed and before the walk, and prints no changed heading or text.
+    out = _prose_of(tmp_path, _carried(_sample(kind)))
+    paragraph = PR_WORDS["carried"].replace("{date}", "2026-09-30").replace("{previous}", "0123456").replace("{moved}", CARRIED["moved"]).replace("{why}", CARRIED["whyNotMaterial"])
+    heading = "**%s**" % PR_WORDS["carriedHeading"]
+    assert out.index("Describes commit") < out.index(heading) < out.index(paragraph) < out.index("**%s**" % PR_WORDS["walkHeading"])
+    assert "{" not in paragraph
+    assert PR_WORDS["changedHeading"] not in out
+    assert PR_WORDS["changed"].split("{previous}")[0] not in out
+
+
+# Bites on: the changed text being replaced for every republish, so a material move (previousCommit alone) loses its heading.
+def test_prose_still_shows_the_changed_text_for_a_material_republish(tmp_path):
+    # Axis: previousCommit without carriedForward prints the changed heading and text and none of the carried words.
+    sheet = _sample("pr")
+    sheet["prSheet"]["previousCommit"] = "0123456789abcdef"
+    out = _prose_of(tmp_path, sheet)
+    assert "**%s**" % PR_WORDS["changedHeading"] in out
+    assert PR_WORDS["changed"].replace("{previous}", "0123456") in out
+    assert PR_WORDS["carriedHeading"] not in out
+
+
 # Bites on: a pr or stack card offering the discovery answers (Aligned) instead of the PR answers (Accept), or a discovery sheet offering Accept.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
 def test_prose_offers_a_pr_card_the_pr_answers(tmp_path, kind):

@@ -542,7 +542,11 @@ def _pr_body(sheet):
     """A PR or stack sheet's prose after its title line, in the order the page shows it; ends with a blank line."""
     prsheet, stack = sheet["prSheet"], sheet["kind"] == "stack"
     lines = _pr_what_changed(prsheet)
-    if "previousCommit" in prsheet:
+    if "carriedForward" in prsheet:
+        carried = prsheet["carriedForward"]
+        lines += ["**%s**" % PR["carriedHeading"], "", _fill(PR["carried"], date=carried["date"], previous=_short(prsheet["previousCommit"]),
+                                                              moved=_text(carried["moved"]), why=_text(carried["whyNotMaterial"])), ""]
+    elif "previousCommit" in prsheet:
         lines += ["**%s**" % PR["changedHeading"], "", _fill(PR["changed"], previous=_short(prsheet["previousCommit"])), ""]
     if "walk" in prsheet:
         lines += _pr_walk(sheet)

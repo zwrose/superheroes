@@ -238,6 +238,13 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["number", "commit", "whatChanged", "craft", "alreadyDecided", "history"],
+      "allOf": [
+        {
+          "description": "A carried-forward verdict belongs to a sheet that replaced an earlier one.",
+          "if": {"required": ["carriedForward"]},
+          "then": {"required": ["previousCommit"]}
+        }
+      ],
       "properties": {
         "number": {
           "description": "The PR's number on a pr sheet, or the stack's number on a stack sheet.",
@@ -251,6 +258,36 @@
         "previousCommit": {
           "description": "The commit the replaced sheet described, present only on a sheet that replaced one published for an earlier commit of the same PR.",
           "$ref": "#/$defs/commit"
+        },
+        "carriedForward": {
+          "description": "Present only on a sheet republished for a new head whose move is not material, so the earlier sheet's answers and Merge carry forward to it, and only together with previousCommit (the builder, lib/pr_sheet.py, enforces that the two come together, and the rule below says it too). sheets lists the SHA-256 digests of the earlier sheets whose verdict this sheet reads, newest first: the sheet it replaced, then each sheet that one had carried forward. The verdict is the document of the first revision in the chain (this sheet's own digest, then these) that has one.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sheets", "date", "moved", "whyNotMaterial"],
+          "properties": {
+            "sheets": {
+              "description": "The digests of the earlier sheets, newest first, each the SHA-256 in lowercase hex of the exact bytes of that published sheet.json.",
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            },
+            "date": {
+              "description": "The day the move was judged not material, written YYYY-MM-DD.",
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "moved": {
+              "description": "What moved, in plain words.",
+              "type": "string",
+              "minLength": 1
+            },
+            "whyNotMaterial": {
+              "description": "Why the move is not material, in plain words.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
         },
         "whatChanged": {
           "description": "What the PR changed and how its review went, in facts.",
@@ -544,7 +581,7 @@
       ]
     },
     "verdict": {
-      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet (a final sheet) or Merge or Not yet (a pr sheet or a stack sheet) or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a republished sheet starts unsigned and a page showing an older revision never touches a newer one. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet (a final sheet) or Merge or Not yet (a pr sheet or a stack sheet) or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a final sheet republished starts unsigned, and so does a pr sheet or a stack sheet republished with a material move; a page showing an older revision never touches a newer one. A pr sheet or a stack sheet whose prSheet.carriedForward is present reads the verdict from the document of the first revision in its chain (its own digest, then prSheet.carriedForward.sheets) that has one, and every write still goes to its own digest. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["verdict", "note", "sheet"],
@@ -558,7 +595,7 @@
           "type": "string"
         },
         "sheet": {
-          "description": "The sheet revision this verdict belongs to: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. It equals <digest> in the document's path. A document whose digest differs from the current file's is not a verdict on this sheet.",
+          "description": "The sheet revision this verdict belongs to: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. It equals <digest> in the document's path. A document whose digest differs from the revision it was read for (this sheet's own, or on a pr sheet or a stack sheet that carries a verdict forward, the earlier sheet's it was found under) is not a verdict.",
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },
