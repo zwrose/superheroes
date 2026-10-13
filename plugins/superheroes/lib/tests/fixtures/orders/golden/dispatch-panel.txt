@@ -19,6 +19,9 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - CLAUDE.md (project conventions): CLAUDE.md
 
+
+
+
 - Prior comments + author justifications: /tmp/superheroes-session-wo4-golden/prior-comments.json
 - Focus: touch auth paths carefully
 
