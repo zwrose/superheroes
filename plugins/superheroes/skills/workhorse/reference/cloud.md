@@ -7,6 +7,7 @@
   - [Preflight](#preflight)
   - [GitHub reads, without GraphQL](#github-reads-without-graphql)
   - [Asking the advisor: the builder note](#asking-the-advisor-the-builder-note)
+  - [When the advisor asks you to push](#when-the-advisor-asks-you-to-push)
   - [Review](#review)
   - [Verify: cloud-only failures](#verify-cloud-only-failures)
   - [Handback](#handback)
@@ -38,10 +39,18 @@ notice, a review receipt.
 3. On `ok: false` (exit 1) the result's `outcome` is `refusal`. Post the result's `comment` on the
    issue and end the lane. Build nothing; the advisor relaunches on the owner's machine. At intake,
    before the preflight, post with `gh api` or the session's GitHub tools, whichever works.
-4. On `ok: true`, the clone is checked out detached at the launch's base commit. Create the build
-   branch there, and post the result's `comment` as the first comment on the issue. It states three
-   facts: a cloud build, the plugin version, and that commits carry the cloud's author name while the
-   PR is under the owner's name. Never re-word it.
+4. On `ok: true` for a launch with no `Adopts branch:` line, the clone is checked out detached at
+   the launch's base commit. Create the build branch there, and post the result's `comment` as the
+   first comment on the issue. It states three facts: a cloud build, the plugin version, and that
+   commits carry the cloud's author name while the PR is under the owner's name. Never re-word it.
+5. When the launch carries `Adopts branch: <name>`, the result's `branch` names it and the clone is
+   on that branch at the launch's base commit, which is the branch's pushed head, with its upstream
+   set. Continue that branch: do not create a build branch, push to it with plain `git push`, and
+   post the result's `comment` as the first comment, as above. Beyond the refusals every launch can
+   get (step 3), the adopt steps add five, each naming what failed: `adopted-branch-moved` (the
+   branch moved past the head the launch named, so another builder may be on it),
+   `adopted-branch-unfetchable`, `base-checkout-failed`, `adopted-branch-upstream-failed` or
+   `adopts-branch-invalid`. Post it and end the lane as in step 3.
 
 ## Workspace
 
@@ -99,6 +108,16 @@ check its stack. It says in its handback that the link is owed to the advisor.
 
 A cloud session stays listed while parked, and the advisor's message resumes it. On resume, re-read
 the issue, then carry on from the pushed head.
+
+## When the advisor asks you to push
+
+A message from the advisor can ask you to push your work and hand the issue over, because another
+builder is about to take it. Do exactly that, once: push every commit you have; run
+`python3 -B <plugin root>/lib/cloud_builder.py handover --head <your pushed head sha>`; post its
+`comment` on the issue as it is; then stop working on the issue and end your turn. Never post a
+handover for a head you did not push. If the verb answers `head-invalid`, the head you gave is not a
+full 40-character lowercase commit sha: give your pushed head's full sha, as `git rev-parse HEAD`
+prints it.
 
 ## Review
 
