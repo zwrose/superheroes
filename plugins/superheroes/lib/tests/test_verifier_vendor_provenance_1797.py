@@ -338,7 +338,8 @@ def test_a_runner_channel_seat_without_evidence_is_still_ignored(tmp_path):
     envelopes = [RR.read_json(RR.store_path(session_dir, pend["round"], pend["phase"],
                                             RR.storage_key(seat, occ), pend["attempt"]))[0]
                  for seat, occ in IT._slots_of(roster)]
-    runner = {"seats": {k: dict(v, channel="stdout") for k, v in manifest["seats"].items()}}
+    runner = {"seats": {k: dict(v, channel="stdout", vendor="cursor")
+                        for k, v in manifest["seats"].items()}}
     art, why = round_adapters.assemble(RD.P_VERIFIERS, envelopes, before, before["config"],
                                        orders_manifest=runner)
     assert why is None

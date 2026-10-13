@@ -490,7 +490,7 @@ ORDER_EMISSION_DISCLOSURE_CHANNELS = (
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
-VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
+VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
@@ -515,11 +515,9 @@ TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
 # unconditionally, not as a disclosure); `lensCoverage` is the panel's per-round coverage anchor
 # owned by the round that ran the panel; `verify` carries finding-shaped verifier evidence (drops,
 # downgrades, unverified, ambiguous) that round-records.json never stores — the receipt gets
-# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`); `verifierProvenance`
-# pairs the selected verifier vendor with the vendor that ran each wave's verdicts — the durable
-# per-seat records and the orders manifest already carry that pairing, so it is not restored.
+# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`).
 UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
-                               "verify", "verifierProvenance")
+                               "verify")
 
 def _round_disclosure_key(value):
     """The rounds-map key for a durable record's round value — one home for producer and restorer.
@@ -2816,18 +2814,32 @@ def _anchored_orders_manifest(state, session_dir, rnd, phase, attempt):
 
 
 def _latest_emission_attempt(state, session_dir, phase):
-    """The latest attempt number of this round's ``phase`` dispatch the state-mirrored emission
-    anchors name, or None when none was emitted. Never raises."""
-    anchors = state.get("_ordersAnchors")
-    if not session_dir or not isinstance(anchors, dict):
+    """The latest attempt number of this round's ``phase`` dispatch that was emitted, found through
+    the state-mirrored emission anchors AND the journalled ``orders-emitted`` events (the same two
+    homes `_orders_anchor` resolves an emission from, so a session that lost its state mirror still
+    names its emission), or None when none was emitted. Never raises."""
+    if not session_dir:
         return None
     rnd = state.get("round")
     best = None
-    for key in anchors:
+    anchors = state.get("_ordersAnchors")
+    for key in (anchors if isinstance(anchors, dict) else ()):
         parts = key.split(":") if isinstance(key, str) else []
         if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase \
                 and parts[2].isdigit() and (best is None or int(parts[2]) > best):
             best = int(parts[2])
+    try:
+        events = read_journal(session_dir)
+    except Exception:  # noqa: BLE001 — an unreadable journal contributes no emission
+        events = []
+    for event in events if isinstance(events, list) else ():
+        if not isinstance(event, dict) or event.get("outcome") != "orders-emitted":
+            continue
+        attempt = event.get("attempt")
+        if event.get("round") == rnd and event.get("phase") == phase \
+                and isinstance(attempt, int) and not isinstance(attempt, bool) \
+                and (best is None or attempt > best):
+            best = attempt
     return best
 
 
@@ -6023,6 +6035,21 @@ def _fix_batch_paths(state, artifact=None):
     return paths
 
 
+def _retain_unauthenticated_finder_findings(state, artifact):
+    """Carry the candidates of a finder result that failed vendor authentication onto the state as
+    explicitly UNVERIFIED rows, so the fail-closed park withholds certification without discarding
+    the review work already obtained. Rows never enter the fold (no verification, no ledger)."""
+    found = artifact.get("findings") if isinstance(artifact, dict) else None
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    for f in found if isinstance(found, list) else ():
+        if isinstance(f, dict):
+            row = dict(f)
+            row["unverified"] = True
+            rows.append(row)
+    _set_findings(state, rows)
+
+
 def _driver_receipt(state):
     """The terminal receipt of a run_loop state — the driver's own, built from the state alone."""
     return build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
@@ -6054,10 +6081,14 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
-            if action in (P_GAPSWEEP, P_SCOPED) and _library_finder_unauthenticated(
-                    state, artifact.pop("reviewerVendor", None)):
-                _park_cannot_certify(state, "nonpanel-finder-unauthenticated:%s" % action)
-                return _driver_receipt(state)
+            if action in (P_GAPSWEEP, P_SCOPED):
+                reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
+                if _library_finder_unauthenticated(state, reported):
+                    _retain_unauthenticated_finder_findings(state, artifact)
+                    _park_cannot_certify(
+                        state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
+                            action, _nonpanel_selection(state)[0], reported))
+                    return _driver_receipt(state)
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
                       verified_head_resolution=_verified_head_at_fold(None, state),

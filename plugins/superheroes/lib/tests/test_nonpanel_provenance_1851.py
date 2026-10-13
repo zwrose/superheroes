@@ -362,3 +362,50 @@ def test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family():
     assert bar("claude", host=None) is True
     state = _state(fixer=None)
     assert nonpanel_barred(state, None)("codex") is False
+
+
+# --- review round 1 fixes: native stdout fallback, journal-only emission, rejection disclosure -----------
+
+@pytest.mark.parametrize("phase,seat", FINDERS)
+def test_native_vendor_on_the_stdout_fallback_contract_authenticates_from_the_manifest(phase, seat):
+    # axis: a native (non-runner) vendor handed the stdout fallback contract is judged by the manifest
+    # vendor like a file-channel host seat; a runner-channel vendor with no evidence still is not
+    state = _state(fixer="codex", host="anthropic")
+    art, why = _assemble_finder(state, phase, seat, None, "claude", wrapped=True)
+    assert why is None and art["findings"] == [], (art, why)
+    art, why = _assemble_finder(state, phase, seat, None, "cursor", wrapped=True)
+    assert art is None and "executed=None:recorded=cursor" in why, (art, why)
+
+
+def test_journal_only_emission_still_binds_the_fold_to_the_ordered_vendor(tmp_path):
+    # axis: the emission is found through the journal when the state mirror is absent
+    state = _state()
+    _emit(state, tmp_path, RD.P_VERIFIERS, "codex")
+    manifest_sha = state["_ordersAnchors"][RD._anchor_key(state["round"], RD.P_VERIFIERS, 0)]["manifestSha256"]
+    RD._journal_append(str(tmp_path), {"cmd": "next", "outcome": "orders-emitted", "phase": RD.P_VERIFIERS,
+                                       "round": state["round"], "attempt": 0,
+                                       "manifestSha256": manifest_sha})
+    state.pop("_ordersAnchors")
+    assert RD._recorded_verifier_vendor(state, str(tmp_path)) == "codex"
+    state["config"]["vendors"] = ["claude", "cursor"]  # the preference moved on after the emission
+    row, unverified = _fold(state, tmp_path, _seat_artifact(state, "codex"))
+    assert row["outcome"] == "verdicts-folded" and unverified == 0
+
+
+def test_verifier_rejection_reaches_the_receipt(tmp_path):
+    state = _state()
+    _emit(state, tmp_path, RD.P_VERIFIERS, "codex")
+    _fold(state, tmp_path, _seat_artifact(state, "cursor"))
+    receipt = RD.build_receipt(state, session_dir=None, form=RD.RECEIPT_FORM_CERTIFIED)
+    rows = receipt["rounds"][0]["verifierProvenance"]
+    assert rows == [{"expected": "codex", "ran": "cursor", "outcome": "verdicts-ignored"}]
+    assert any("verifier-verdicts-ignored" in line for line in receipt["degraded"]), receipt["degraded"]
+
+
+def test_unauthenticated_library_finder_findings_are_retained_unverified():
+    state, _calls = _library_run({"findings": [{"title": "real defect", "severity": "Important",
+                                                "file": "a.py", "line": 1}], "vendor": "claude"})
+    assert _parked(state)
+    assert "expected=codex" in state["certification"]["reason"] and "reported=claude" in state["certification"]["reason"]
+    kept = [f for f in state["findings"] if f.get("title") == "real defect"]
+    assert len(kept) == 1 and kept[0]["unverified"] is True

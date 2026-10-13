@@ -293,8 +293,8 @@ def _maker_barred(state, config):
 
 
 def _manifest_vendor_for_wrapped_seat(envelope, seat, occurrence, orders_manifest, is_barred):
-    """The vendor the DRIVER's orders manifest recorded at emission for a host-seat (file-channel)
-    seat whose v2 envelope the driver wrapped itself from a bare payload (so it carries no runner
+    """The vendor the DRIVER's orders manifest recorded at emission for a host-seat (a file-channel
+    seat, or a native-vendor seat handed the stdout fallback contract) whose v2 envelope the driver wrapped itself from a bare payload (so it carries no runner
     execution evidence); None for any other landing, a runner-channel seat, an unusable entry, or a
     vendor in a maker family. This is the only place a manifest vendor stands in for evidence."""
     if not isinstance(orders_manifest, dict) or envelope.get("executionEvidence") is not None:
@@ -303,10 +303,16 @@ def _manifest_vendor_for_wrapped_seat(envelope, seat, occurrence, orders_manifes
         return None
     seats = orders_manifest.get("seats")
     entry = seats.get(round_records.storage_key(seat, occurrence)) if isinstance(seats, dict) else None
-    if not isinstance(entry, dict) or entry.get("channel") != session_contract.CHANNEL_FILE:
+    if not isinstance(entry, dict):
         return None
     vendor = entry.get("vendor")
     if not isinstance(vendor, str) or vendor not in model_registry.VENDORS:
+        return None
+    # A native (non-runner) vendor can be handed the stdout contract (an unresolved or defaulted
+    # preference read) and the orchestrator lands its returned payload, which the driver wraps just
+    # as it wraps a file landing; only a runner-channel vendor must carry runner execution evidence.
+    if entry.get("channel") != session_contract.CHANNEL_FILE \
+            and session_contract.runner_channel_vendor(vendor):
         return None
     if callable(is_barred) and is_barred(vendor):
         return None

@@ -85,6 +85,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
     "priorCommentsUnavailable": bool_value,
     "verifyPasses": dict_list,
+    "verifierProvenance": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -586,6 +587,17 @@ def build_degraded_prose(state, form, journal=None):
                     "— the finding was kept without a recorded failing run"
                     % (rkey, len(not_run),
                        ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
+        vprov = declared.get("verifierProvenance")
+        if vprov:
+            ignored = [r for r in vprov if isinstance(r, dict) and r.get("outcome") == "verdicts-ignored"]
+            if ignored:
+                degraded_out.append(
+                    "verifier-verdicts-ignored (round %s): verdicts not folded — %s"
+                    % (rkey, "; ".join(
+                        "expected %s, ran %s%s" % (
+                            r.get("expected"), r.get("ran"),
+                            " (%s)" % r.get("reason") if r.get("reason") else "")
+                        for r in ignored)))
         bik = declared.get("breakItKept")
         if bik:
             not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]
