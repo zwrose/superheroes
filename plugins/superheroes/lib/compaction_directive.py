@@ -23,6 +23,7 @@ import glob
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -313,6 +314,43 @@ def unmark_attempt(session_id, since_ms, until_ms, env=None, cwd=None):
 
 
 # ----------------------------------------------------------------- reaping
+def _stale(mtime, suffix, current):
+    """The reap rule on one file's mtime: notes past ``NOTES_MAX_AGE_DAYS``, markers outside the
+    delivery window (``delivered_recently``'s 120 seconds)."""
+    if suffix == ".md":
+        return current - mtime > NOTES_MAX_AGE_DAYS * 86400
+    return abs(current - mtime) > 120
+
+
+def _remove_if_still_stale(path, suffix, current):
+    """1 when the file at ``path`` was removed. A save can replace ``path`` between the scan's
+    stale check and a remove by name, so the candidate is first renamed to a private name (one
+    ``_atomic_write``'s temp names and ``reap``'s own filter never match) and re-judged there; a
+    file that turned out fresh goes back under its name unless a newer save already holds it.
+    Never raises; no private file is left behind."""
+    private = os.path.join(os.path.dirname(path), ".%s.reap-%d-%s" % (os.path.basename(path), os.getpid(), os.urandom(4).hex()))
+    try:
+        os.rename(path, private)
+    except OSError:
+        return 0
+    try:
+        info = os.lstat(private)
+        if stat.S_ISREG(info.st_mode) and _stale(info.st_mtime, suffix, current):
+            return 1
+        try:
+            os.link(private, path)       # fails when the name was re-created: that save is newer
+        except OSError:
+            pass
+        return 0
+    except OSError:
+        return 0
+    finally:
+        try:
+            os.remove(private)
+        except OSError:
+            pass
+
+
 def reap(session_id, env=None, cwd=None, now=None):
     """Remove stale files from the checkpoint directory: ``<id>.md`` notes older than
     ``NOTES_MAX_AGE_DAYS`` (by mtime) and ``<id>.delivered`` markers outside the delivery window.
@@ -335,13 +373,8 @@ def reap(session_id, env=None, cwd=None, now=None):
                     continue
                 if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
                     continue
-                if suffix == ".md":
-                    is_stale = current - entry.stat(follow_symlinks=False).st_mtime > NOTES_MAX_AGE_DAYS * 86400
-                else:
-                    is_stale = not delivered_recently(stem, env, now=current, cwd=cwd)
-                if is_stale:
-                    os.remove(entry.path)
-                    removed += 1
+                if _stale(entry.stat(follow_symlinks=False).st_mtime, suffix, current):
+                    removed += _remove_if_still_stale(entry.path, suffix, current)
             except Exception:
                 continue
     except Exception:

@@ -771,3 +771,47 @@ def test_reap_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "scandir", boom)
     assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+
+
+def _reap_leftovers(tmp_path):
+    return [n for n in os.listdir(os.path.dirname(_ckpt(tmp_path, "x"))) if ".reap-" in n]
+
+
+def test_reap_keeps_a_file_another_session_saved_between_the_scan_and_the_rename(tmp_path, monkeypatch):
+    path = _ckpt(tmp_path, "busy-one.md")
+    _touch(path, mtime=OLD_NOTES, text="old")
+    real_rename = os.rename
+
+    def save_then_rename(src, dst):
+        if src == path:
+            _touch(path, mtime=NOW, text="fresh save")     # the other session's save lands first
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", save_then_rename)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "fresh save"
+    assert _reap_leftovers(tmp_path) == []
+
+
+def test_reap_drops_the_renamed_copy_when_a_newer_save_re_created_the_name(tmp_path, monkeypatch):
+    path = _ckpt(tmp_path, "busy-one.md")
+    _touch(path, mtime=OLD_NOTES)
+    real_rename = os.rename
+
+    def refreshed_and_re_saved(src, dst):
+        real_rename(src, dst)
+        os.utime(dst, (NOW, NOW))                           # the renamed file turns out fresh
+        _touch(path, mtime=NOW, text="newest")              # and a newer save holds the name
+
+    monkeypatch.setattr(os, "rename", refreshed_and_re_saved)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "newest"
+    assert _reap_leftovers(tmp_path) == []
+
+
+def test_reap_leaves_no_private_file_after_removing_a_stale_one(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert os.listdir(os.path.dirname(_ckpt(tmp_path, "x"))) == []

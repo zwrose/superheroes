@@ -129,6 +129,8 @@ function rig(
     manifest?: string | null
     compactFailures?: number
     compactSkip?: string
+    // the clock reading the session.compact handler moves to before it fails or resolves
+    compactAt?: number
   } = {},
 ): Rig {
   const r: Rig = {
@@ -228,7 +230,10 @@ function rig(
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
-  on('session.compact', (_$, e) => {
+  on('session.compact', async (_$, e) => {
+    if (options.compactAt !== undefined) {
+      await r.clock.set(options.compactAt)
+    }
     r.seen.push(e)
     r.order.push('compact')
     r.compactAttempts += 1
@@ -439,7 +444,7 @@ test('session.compact fails open with no owner text: instructions stay absent', 
 const unmarks = (r: Rig) => r.argv.filter(argv => argv[3] === 'unmark')
 
 test('session.compact: next throws (Esc) — the error propagates and one unmark is scheduled for the attempt', async ($, on) => {
-  const r = rig(on, () => steer, { compactFailures: Infinity })
+  const r = rig(on, () => steer, { compactFailures: Infinity, compactAt: 1500 })
 
   await r.clock.set(1000)
   await expect(compact($)).rejects.toThrow()
@@ -456,10 +461,11 @@ test('session.compact: next throws (Esc) — the error propagates and one unmark
   expect(Number(flag(unmark, '--since'))).toBeLessThanOrEqual(markAt)
   expect(Number(flag(unmark, '--until'))).toBeGreaterThanOrEqual(markAt)
   expect(Number(flag(unmark, '--since'))).toBe(1000)
+  expect(Number(flag(unmark, '--until'))).toBe(1500)
 })
 
 test('session.compact: next resolves a skip — one unmark is scheduled for the attempt', async ($, on) => {
-  const r = rig(on, () => steer, { compactSkip: 'vetoed by a hook' })
+  const r = rig(on, () => steer, { compactSkip: 'vetoed by a hook', compactAt: 1500 })
 
   await r.clock.set(1000)
   const res = await compact($)
@@ -476,6 +482,8 @@ test('session.compact: next resolves a skip — one unmark is scheduled for the 
 
   expect(Number(flag(unmark, '--since'))).toBeLessThanOrEqual(markAt)
   expect(Number(flag(unmark, '--until'))).toBeGreaterThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--since'))).toBe(1000)
+  expect(Number(flag(unmark, '--until'))).toBe(1500)
 })
 
 test('session.compact: a compaction that completes schedules no unmark', async ($, on) => {
