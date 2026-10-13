@@ -205,11 +205,14 @@ list. Its parts come in this order:
 1. What changed: what changed, who reviewed it, what the review caught, the rounds, CI and the commit it
    ran on, the lane and why, and the commit the sheet describes.
 2. The walk, when the PR has something to try: a box to open the product, the count walked, a line saying
-   the advisor walked it first and where the pictures come from, then the stops in named groups. A try
+   the advisor walked it first and where the pictures come from, then the stops in the order the data file
+   declares them, with a group label wherever the group changes, so a group listed apart is labelled again
+   where it reappears. A try
    stop shows its numbered steps, an Expect line, its pictures, **Works**, **Problem** and **Skip**, and a
    note. A look stop shows a Look for line and **Looks right**. A Problem asks **Fix before merge** or
-   **Fix in a follow-up**, offers **Add a screenshot**, and labels the note "What did you see?". On a
-   stack each stop names its PR.
+   **Fix in a follow-up**, offers **Add a screenshot**, and labels the note "What did you see?". When the
+   picture store does not answer in time, the next tap asks again; when this view cannot store pictures at
+   all, the button stays off. On a stack each stop names its PR.
 3. The items, under the accepting heading.
 4. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
    review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
@@ -237,7 +240,8 @@ No PR sheet offers an answer button outside these four:
 - Pick: an item with a real choice. One of its options, or Something else.
 - Agree: an item with no real choice. Accept is the yes-word.
 - Check: a walk stop, answered Works (Looks right on a look stop), Problem or Skip. A Problem then asks
-  for a fix choice.
+  for a fix choice. The answers each kind of stop offers, and their order, come from
+  `$defs/walkAnswersByKind` in `sheet.schema.json`, their one home; their labels come from `sheet-words.json`.
 - Sign-off: the merge verdict, Merge or Not yet.
 
 Discovery's sheets use agree (Aligned), pick and sign-off (Approve), unchanged. The sheets for a PR, a
@@ -255,7 +259,8 @@ sheet carries a fresh `revision` (`$defs/answer`), and a Merge records `covers` 
 have since changed, from any page, is not a Merge, and the verdict reopens cleared.
 
 It is locked until every item above it is accepted. The Merge button then says it is locked, it cannot
-be tapped, and a line says when it unlocks and how many items are accepted so far.
+be tapped, and a line says when it unlocks and how many items are accepted so far. When an accepted answer
+was saved without a revision, a line says so and names those cards by their questions.
 
 An item counts as accepted only when its saved answer is Accept, or an option that does not send the PR
 back, and that answer shows Saved. A save in flight, failed or stalled keeps the verdict locked. An
@@ -400,7 +405,8 @@ same link.
 
 Where the host can't show a sheet, the session puts the same cards to the owner as numbered chat
 prose, each with its context, options and recommendation, built from the same data file. A PR sheet
-and a stack sheet go to the owner as numbered prose the same way.
+and a stack sheet go to the owner as numbered prose the same way. In that prose each walk stop shows its id,
+and its answers are written with that id (for example `p1 Works`), so a short chat answer names the stop it answers.
 
 Render the prose with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/sheet_prose.py" render --sheet <the data file>`
 and paste its output. It runs on a plain Python, with nothing to install. It refuses a data file it
