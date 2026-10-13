@@ -20,7 +20,7 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv, unmarkArgv } from './argv'
 import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
-import { decide, effectiveTrigger, isAttended, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
+import { DESKTOP_SURFACE, decide, effectiveTrigger, isAttended, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
 import type { Settings } from './decide'
 
 const MANIFEST = '.claude-plugin/plugin.json'
@@ -393,7 +393,22 @@ function compactSoon($: EngineInterface, options: unknown, startedAt: number, is
         throw new Error('a turn is still running')
       }
 
-      const res = await $.session.compact()
+      let res: { skip?: string } | undefined
+
+      if ((await $.state.get(isInteractive)).value === true) {
+        res = await $.session.compact()
+      } else {
+        // a headless (SDK) session rejects `$.session.compact()`: run the /compact command
+        // instead. It resolves without an outcome, but the `session.compact` hook clears this
+        // `compacting` checkpoint on a successful compaction, so one still pending failed.
+        await $.command.run({ command: 'compact', args: '' })
+
+        const after = (await $.state.get(checkpoint)).value
+
+        if (after?.compacting && after.startedAt === startedAt) {
+          throw new Error('the /compact command did not compact')
+        }
+      }
 
       // a vetoed compaction resolves with a skip: the context did not shrink
       if (typeof res?.skip === 'string') {
@@ -579,7 +594,7 @@ export const register: Register = (on, options) => {
 
   // the desktop app joining the roster is the moment an attended session begins: no measure
   // need follow it
-  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+  on('session.attach', { surface: DESKTOP_SURFACE }, async ($, e, next) => {
     const result = await next(e)
 
     try {
