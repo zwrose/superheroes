@@ -690,8 +690,8 @@ def test_reap_removes_old_notes_and_keeps_newer_ones(tmp_path):
 
 
 def test_reap_removes_markers_past_the_delivery_window_and_keeps_newer_ones(tmp_path):
-    _touch(_ckpt(tmp_path, "old-one.delivered"), mtime=NOW - 121)
-    _touch(_ckpt(tmp_path, "new-one.delivered"), mtime=NOW - 119)
+    _touch(_ckpt(tmp_path, "old-one.delivered"), mtime=NOW - cd.DELIVERY_WINDOW_SECONDS - 1)
+    _touch(_ckpt(tmp_path, "new-one.delivered"), mtime=NOW - cd.DELIVERY_WINDOW_SECONDS + 1)
     assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
     assert not os.path.exists(_ckpt(tmp_path, "old-one.delivered"))
     assert os.path.exists(_ckpt(tmp_path, "new-one.delivered"))
