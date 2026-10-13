@@ -136,10 +136,15 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    prose that states a rule a session or a gate follows. When it is **not clear** which side a hunk
    falls on, it takes the reviewer floor.
 
-   A bring-current with no conflict is not a material change to the owner's word, so each layer's
-   sheet is republished carrying its verdict forward and the stack's word stands. A conflict
-   resolution that changes behavior-bearing content is judged by the material-consequence line, and
-   doubt counts as material.
+   Every bring-current, conflict-free or not, is judged by the material-consequence line before the
+   word is carried: a clean textual merge can still change the approved feature's behavior, for
+   instance when a lower layer changes a shared default an upper layer relies on without touching
+   that layer's diff, and the digest and review checks above do not establish that the owner
+   approved that consequence. Only when the judgment finds no material consequence is the stack's
+   single sheet republished carrying its verdict forward, with `carriedForward.fromSheet` naming its
+   previous revision and `heads` giving the new head of every PR the sheet covers, and the stack's
+   word stands. A move that is material, or in doubt, is republished unsigned, and doubt counts as
+   material.
 
    GitHub's cascading rebase (the server-side **Rebase stack** action for a lane; `gh stack rebase`
    + `gh stack push` only for a local tracked stack an operator owns end to end) is the disclosed
