@@ -3,6 +3,7 @@
 
 - Session artifacts
 - Setup resolution — run these in order
+- Compose the panel seat map
 
 ---
 
@@ -96,8 +97,6 @@ REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
 
-**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). Author and narrative families come from the host model the session-start hook read (`SUPERHEROES_HOST_MODEL`) and the implementation engine; an unreadable host model is disclosed on the map as unknown; its family is never assumed, the author family is always the implementation engine's family (a `claude` implementation engine reads anthropic whatever the host), so the maker is still kept off the panel. When the implementation engine is `claude` and the host family is known and differs, compose also keeps the host family off the panel as a second maker family (review-code's native fixer writes on the host family) and records a `maker-family-split` degradation. Compose also takes a repeatable `--maker-family <family>` flag naming any further model family that wrote or fixed the change (a build passes the families of its implementers and fixers); the makers are the author family plus every such family, and none of them is ever seated on the panel. A seat that no reviewer outside the makers' families can fill is recorded `unfilled` (no vendor, model or family) with a `seat-unfilled` degradation and is not run; it is never filled with a maker family and never backfilled. The receipt names the maker families (`makerFamilies`) and the roster the map was composed against (`roster`). Liveness is probed for every cross-vendor engine whose CLI is installed plus any a calibration role names, whatever the roles say, so the panel's independence does not depend on which engine an unrelated role names; an installed engine that fails its probe is not live. A `codexModels` role pin for `reviewer` or `reviewer-deep` seats a codex seat on the pinned model at that model's own effort when live, else falls back with a disclosure. The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
-
 **What `--pins` does and does not do (#1039).** A pin value is `{vendor, model?, effort?}`; a **bare
 string is the documented shorthand** for `{"vendor": "<string>"}` and resolves down the identical
 honorability path. Any other **pin value shape** — null, number, bool, list — and a **non-null** pin
@@ -115,26 +114,6 @@ other seats does not do that.
 
 ```bash
 CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.review_cross_vendor_engines(p)))" "$ROOT_DIR") || { echo "review engine set failed (exit $?) — see its error above" >&2; exit 1; }
-SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
-PINS_ARGS=()
-[ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
-# Optional $MAKER_FAMILIES (space-separated, set by a build caller): one --maker-family per family; omitted when empty.
-MAKER_ARGS=()
-for F in ${MAKER_FAMILIES:-}; do MAKER_ARGS+=(--maker-family "$F"); done
-# Leg 1 (#610): compose probes live vendors on a cache miss and rides a within-TTL receipt
-# otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
-# select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
-# (#1121) and was reaped in #1138.
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" "${MAKER_ARGS[@]}" --repo-root "$REPO_ROOT") || { echo "seat map compose failed (exit $?) — see its error above" >&2; exit 1; }
-AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
-```
-
-A compose failure halts setup with compose's own error on stderr; there is no fall-open seat map.
-
-An empty author family refuses before any seat is dispatched — the composed map would be unjudgeable for maker-family constraints.
-
-```bash
-[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: the composed seat map has no author family" >&2; exit 1; }
 ```
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
@@ -191,3 +170,27 @@ REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empt
 A `verify-command-malformed` refusal halts the review: `core.md`'s `verifyCommand` is present but not a non-empty string, so quote the remedy and stop — never run the review unverified on it. Any other non-empty `REFUSAL` means `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
 
 **Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.
+
+## Compose the panel seat map
+
+**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. The roster is composed from the lane call: the generalist, the test role and the grounding seat are always on the panel, and the security and premortem reviewers join when a risk area is touched or risk is unclear; the architecture reviewer is not on the default panel. Optional per-seat pins come from `enginePreferences.seatPins` in core.md, which compose reads itself (`--pins` overlays them per seat); pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). The compose block below runs from `SKILL.md`, right after its base-pin block, not in the Setup resolution order above, because the lane call reads the change between `$BASE_REF` and `$HEAD_SHA`, which are only set there. Author and narrative families come from the host model the session-start hook read (`SUPERHEROES_HOST_MODEL`) and the implementation engine; an unreadable host model is disclosed on the map as unknown; its family is never assumed, the author family is always the implementation engine's family (a `claude` implementation engine reads anthropic whatever the host), so the maker is still kept off the panel. When the implementation engine is `claude` and the host family is known and differs, compose also keeps the host family off the panel as a second maker family (review-code's native fixer writes on the host family) and records a `maker-family-split` degradation. Compose also takes a repeatable `--maker-family <family>` flag naming any further model family that wrote or fixed the change (a build passes the families of its implementers and fixers); the makers are the author family plus every such family, and none of them is ever seated on the panel. A seat that no reviewer outside the makers' families can fill is recorded `unfilled` (no vendor, model or family) with a `seat-unfilled` degradation and is not run; it is never filled with a maker family and never backfilled. The receipt names the maker families (`makerFamilies`) and the roster the map was composed against (`roster`). Liveness is probed for every cross-vendor engine whose CLI is installed plus any a calibration role names, whatever the roles say, so the panel's independence does not depend on which engine an unrelated role names; an installed engine that fails its probe is not live. A `codexModels` role pin for `reviewer` or `reviewer-deep` seats a codex seat on the pinned model at that model's own effort when live, else falls back with a disclosure. The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
+
+```bash
+# Optional $MAKER_FAMILIES (space-separated, set by a build caller): one --maker-family per family; omitted when empty.
+MAKER_ARGS=()
+for F in ${MAKER_FAMILIES:-}; do MAKER_ARGS+=(--maker-family "$F"); done
+# Leg 1 (#610): compose probes live vendors on a cache miss and rides a within-TTL receipt
+# otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
+# select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
+# (#1121) and was reaped in #1138.
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --base-ref "$BASE_REF" --head-sha "$HEAD_SHA" "${MAKER_ARGS[@]}" --repo-root "$REPO_ROOT") || { echo "seat map compose failed (exit $?) — see its error above" >&2; exit 1; }
+AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
+```
+
+A compose failure halts the review with compose's own error on stderr; there is no fall-open seat map.
+
+An empty author family refuses before any seat is dispatched — the composed map would be unjudgeable for maker-family constraints.
+
+```bash
+[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: the composed seat map has no author family" >&2; exit 1; }
+```

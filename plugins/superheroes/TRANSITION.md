@@ -40,6 +40,13 @@ These retirements ship in the same release as the review record, and never apart
 - A session or model may raise a change's lane. It may never lower it below that floor.
 - A review record whose lane sits below the floor reads not reviewed.
 
+### Review: the full-lane panel follows the lane call
+
+- The full lane's panel is composed from the lane call: the code reviewer, the test role and the grounding seat on every change, plus the security and premortem reviewers when a risk area is touched or risk is unclear. The architecture reviewer leaves the default panel; a seat map can still name it. The seat-map receipt's `roster` is the composed roster, and gains `laneBasis`.
+- `seat_map.py compose` gains `--base-ref`. With `--head-sha` it names the change the lane call reads; without them the roster is the full set of five seats.
+- Compose reads `enginePreferences.seatPins` from core.md itself. `--pins` overlays them per seat, and a pin that cannot apply is disclosed in the receipt.
+- The seat-map compose now runs right after review-code pins the base commit, not in the setup file.
+
 ### Review: every reviewer independent of every maker
 
 - A reviewer from a maker's family no longer runs without the owner's word for that change. When the owner gives it, the review record names that reviewer and says "not independent". The light lane's host-model stand-in after a forfeit is gone, and nothing stands in on either single-reviewer lane.

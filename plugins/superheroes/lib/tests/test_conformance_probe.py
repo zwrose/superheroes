@@ -1133,7 +1133,9 @@ def test_e7_preflight_entry_parks_on_a_real_unfilled_seat(tmp_path):
     assert "PARK" in payload["engine-auth"]["reason"]
     assert "no reviewer outside the maker family" in payload["engine-auth"]["reason"]
     seats = payload.get("seatMap", {}).get("seats") or {}
-    for seat in SM.LENS_SEATS:
+    lens_seats = [s for s in payload["seatMap"]["roster"] if s in SM.LENS_SEATS]
+    assert lens_seats
+    for seat in lens_seats:
         assert seats[seat]["source"] == "unfilled", seat
     assert all(v.get("family") != "openai" for v in seats.values())
 
