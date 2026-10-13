@@ -1291,3 +1291,69 @@ test('a compaction that succeeded is never retried for a failed follow-up write'
   expect(r.denied).toBe(1)
   expect(r.compactAttempts).toBe(1)
 })
+
+test('a follow-up turn running when the compaction timer fires costs no attempt; the next tick compacts once', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { compactFailures: 1 })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await $.turn.start({ text: 'and then?', turnId: 't2' })
+
+  // the stub rejects the first compaction, as the host does while a turn runs
+  await r.clock.advance(3000)
+  expect(r.compactAttempts).toBe(0)
+  expect(r.toasts).toEqual([])
+
+  await $.turn.complete({ answer: 'Done.', durationMs: 10, isAborted: false, turnId: 't2', reason: 'answer' })
+  await r.clock.advance(1000)
+
+  expect(r.compactAttempts).toBe(1)
+  expect(r.toasts).toEqual([])
+  await r.clock.advance(1000)
+  expect(r.compactAttempts).toBe(2)
+  expect(r.toasts).toEqual([SUCCESS])
+})
+
+test('the re-arm flag is published after the compaction completes', async ($, on) => {
+  const r = rig(on, () => steer)
+
+  await start($)
+  await compact($)
+  expect(r.sets.filter(([key]) => key === 'rearmAfterCompact')).toEqual([['rearmAfterCompact', true]])
+})
+
+test('a compaction that resolves as skipped sets no re-arm flag', async ($, on) => {
+  const r = rig(on, () => steer, { compactSkip: 'vetoed by a hook' })
+
+  await start($)
+  expect(await compact($)).toEqual({ skip: 'vetoed by a hook' })
+  expect(r.sets.filter(([key]) => key === 'rearmAfterCompact')).toEqual([])
+})
+
+test(
+  'a re-arm below the trigger sets no snooze: after a compaction to 80000 the trigger at 117000 runs the checkpoint',
+  { options: { autoCheckpointTokens: 500000, autoCheckpointAllowance: 50000 } },
+  async ($, on) => {
+    const r = rig(on, () => saveAnswer)
+    const usage = (tokens: number) => {
+      const u = usageAt(tokens)
+
+      return { ...u, context: { ...u.context, breakdown: { ...u.context.breakdown!, autoCompactThreshold: THRESHOLD } } }
+    }
+    const at = async (tokens: number) => {
+      r.usage = usage(tokens)
+      await $.session.measure({ context: { tokens, window: 200000 }, rateLimits: [], changed: ['context'] })
+      await r.clock.settle()
+    }
+
+    await start($)
+    await compact($)
+    await at(80000)
+    expect(r.commands).toEqual([])
+    await at(117000)
+    expect(r.commands).toEqual([COMMAND])
+  },
+)

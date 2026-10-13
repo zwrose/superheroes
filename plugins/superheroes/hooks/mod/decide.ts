@@ -126,7 +126,7 @@ export const snooze = (tokens: number): number => tokens + SNOOZE_STEP_TOKENS
 // auto-compact is on), so a checkpoint still runs first. The owner's Snooze keeps `snooze`.
 export const rearmAt = (fill: number, autoCompactThreshold: number | undefined): number =>
   autoCompactThreshold !== undefined && autoCompactThreshold > fill
-    ? Math.min(snooze(fill), fill + Math.floor((autoCompactThreshold - fill) / 2))
+    ? Math.min(snooze(fill), fill + Math.max(1, Math.floor((autoCompactThreshold - fill) / 2)))
     : snooze(fill)
 
 // The changed-file gate: a checkpoint counts only when the notes file now holds

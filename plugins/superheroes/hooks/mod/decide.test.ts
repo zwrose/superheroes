@@ -206,7 +206,7 @@ test('notesChanged: unchanged, empty or missing notes do not count', () => {
 test('rearmAt: a step past the fill, within half the headroom before the harness compacts', () => {
   expect(rearmAt(80000, 967000)).toBe(80000 + SNOOZE_STEP_TOKENS)
   expect(rearmAt(80000, 167000)).toBe(80000 + 43500)
-  expect(rearmAt(166999, 167000)).toBe(166999)
+  expect(rearmAt(166999, 167000)).toBe(167000)
   expect(rearmAt(167000, 167000)).toBe(167000 + SNOOZE_STEP_TOKENS)
   expect(rearmAt(180000, 167000)).toBe(180000 + SNOOZE_STEP_TOKENS)
   expect(rearmAt(80000, undefined)).toBe(snooze(80000))

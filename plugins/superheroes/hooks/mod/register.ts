@@ -197,6 +197,15 @@ async function startCheckpoint($: EngineInterface, isNow = false): Promise<void>
   }
 }
 
+// Where an automatic re-arm waits: nowhere (null) while the fill is below the trigger, which
+// alone governs then; otherwise `rearmAt`.
+const rearmTo = (
+  tokens: number,
+  trigger: number,
+  breakdown: { isAutoCompactEnabled?: boolean; autoCompactThreshold?: number } | undefined,
+): number | null =>
+  tokens < trigger ? null : rearmAt(tokens, breakdown?.isAutoCompactEnabled ? breakdown.autoCompactThreshold : undefined)
+
 // Reads the fill, decides, and draws the band from state; starts a checkpoint on `fire`.
 // A failed usage read changes nothing.
 async function evaluate($: EngineInterface, options: unknown): Promise<void> {
@@ -222,9 +231,7 @@ async function evaluate($: EngineInterface, options: unknown): Promise<void> {
   // the first measurement after a successful compaction: context must grow from here
   // before an automatic run repeats, within the harness's own compaction window
   if ((await $.state.get(rearmAfterCompact)).value === true) {
-    const { isAutoCompactEnabled, autoCompactThreshold } = context.breakdown ?? {}
-
-    await $.state.set(snoozeUntilTokens, rearmAt(context.tokens, isAutoCompactEnabled ? autoCompactThreshold : undefined))
+    await $.state.set(snoozeUntilTokens, rearmTo(context.tokens, trigger, context.breakdown))
     await $.state.set(rearmAfterCompact, false)
   }
   // read before the idle gate: a stale checkpoint's expiry frees a lost turn's busy mark
@@ -284,30 +291,39 @@ async function steer<T extends { instructions?: string }>($: EngineInterface, e:
   return steered
 }
 
-// The fill is about to drop: a Snooze and the band belong to the old fill. The re-arm is
-// set for every main-loop compaction; if it is then skipped or fails, the next measurement
-// only snoozes by `rearmAt`.
+// The fill is about to drop: a Snooze and the band belong to the old fill.
 async function forgetFill($: EngineInterface): Promise<void> {
   try {
     await $.state.set(snoozeUntilTokens, null)
     await $.state.set(band, false)
-    await $.state.set(rearmAfterCompact, true)
   } catch (error) {
     note($, `session.compact state: ${String(error)}`)
   }
 }
 
 // Compacts after the turn that ended the checkpoint; `$.session.compact` rejects while a
-// turn runs, so it waits, and a rejection is tried once more before the owner is told.
+// turn runs, so it waits (a busy turn counts as no attempt, until the checkpoint is stale),
+// and a rejection is tried once more before the owner is told.
 // No instructions here: the `session.compact` hook steers this compaction too. The
 // checkpoint stays set (`compacting`) until this resolves, so a measurement taken at the
 // still-high fill starts no second one; the toast waits for the compaction itself.
-function compactSoon($: EngineInterface, isRetry = false): void {
+function compactSoon($: EngineInterface, options: unknown, isRetry = false): void {
   $.clock.after(COMPACT_DELAY_MS, async () => {
     let didFail = false
     let skipReason = ''
+    let isLast = isRetry
 
     try {
+      if (typeof (await $.state.get(isTurnActive)).value === 'string') {
+        if ((await runningCheckpoint($)) !== null) {
+          compactSoon($, options, isRetry)
+
+          return
+        }
+        isLast = true
+        throw new Error('a turn is still running')
+      }
+
       const res = await $.session.compact()
 
       // a vetoed compaction resolves with a skip: the context did not shrink
@@ -316,8 +332,8 @@ function compactSoon($: EngineInterface, isRetry = false): void {
         throw new Error(res.skip)
       }
     } catch (error) {
-      if (!isRetry) {
-        compactSoon($, true)
+      if (!isLast) {
+        compactSoon($, options, true)
 
         return
       }
@@ -332,7 +348,7 @@ function compactSoon($: EngineInterface, isRetry = false): void {
       await $.state.set(checkpoint, null)
       if (didFail) {
         // the next automatic run waits for the fill to grow, as a skipped checkpoint does
-        await rearmFromEnd($, value?.fill)
+        await rearmFromEnd($, options, value?.fill)
       } else {
         $.ui.toast('Checkpointed and compacted')
       }
@@ -344,7 +360,7 @@ function compactSoon($: EngineInterface, isRetry = false): void {
 
 // Ends the checkpoint the finished main-loop turn belonged to: compacts once the notes
 // file changed, otherwise says why not. A failed save or an unreadable baseline never compacts.
-async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAborted: boolean, turnId: string): Promise<void> {
+async function finishCheckpoint($: EngineInterface, options: unknown, saveFailed: boolean, isAborted: boolean, turnId: string): Promise<void> {
   const { value } = await $.state.get(checkpoint)
 
   // only the checkpoint command's own turn ends it: a user turn queued ahead of it does not
@@ -354,7 +370,7 @@ async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAbort
 
   // an interrupted checkpoint turn is cancelled, whatever its reply saved
   if (isAborted) {
-    await endWithoutCompacting($, value.fill, 'Auto-checkpoint cancelled: the turn was interrupted')
+    await endWithoutCompacting($, options, value.fill, 'Auto-checkpoint cancelled: the turn was interrupted')
 
     return
   }
@@ -370,22 +386,27 @@ async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAbort
 
   if (why === null) {
     await $.state.set(checkpoint, { ...value, compacting: true })
-    compactSoon($)
+    compactSoon($, options)
   } else {
-    await endWithoutCompacting($, value.fill, `Auto-checkpoint skipped: ${why}; next try after more context`)
+    await endWithoutCompacting($, options, value.fill, `Auto-checkpoint skipped: ${why}; next try after more context`)
   }
 }
 
 // Snoozes past the fill as it stands now, the checkpoint's own turn included (or this would
-// start again at once); an unreadable fill falls back to a step past the start fill.
-async function rearmFromEnd($: EngineInterface, startFill: number | undefined): Promise<void> {
-  let until = typeof startFill === 'number' ? snooze(startFill) : undefined
+// start again at once), unless it is below the trigger; an unreadable fill falls back to a
+// step past the start fill.
+async function rearmFromEnd($: EngineInterface, options: unknown, startFill: number | undefined): Promise<void> {
+  let until: number | null | undefined = typeof startFill === 'number' ? snooze(startFill) : undefined
 
   try {
     const { context } = await $.session.usage({ breakdown: 'summary' })
 
     if (context.tokens !== undefined) {
-      until = rearmAt(context.tokens, context.breakdown?.isAutoCompactEnabled ? context.breakdown.autoCompactThreshold : undefined)
+      const settings = await loadSettings($, options)
+      const { isAutoCompactEnabled, autoCompactThreshold } = context.breakdown ?? {}
+      const trigger = settings === null ? 0 : effectiveTrigger(settings, autoCompactThreshold, isAutoCompactEnabled ?? false)
+
+      until = rearmTo(context.tokens, trigger, context.breakdown)
     }
   } catch {
     // keep the fallback
@@ -396,9 +417,9 @@ async function rearmFromEnd($: EngineInterface, startFill: number | undefined): 
 }
 
 // Ends a checkpoint that will not compact: cleared, re-armed, and the owner told.
-async function endWithoutCompacting($: EngineInterface, startFill: number | undefined, message: string): Promise<void> {
+async function endWithoutCompacting($: EngineInterface, options: unknown, startFill: number | undefined, message: string): Promise<void> {
   await $.state.set(checkpoint, null)
-  await rearmFromEnd($, startFill)
+  await rearmFromEnd($, options, startFill)
   $.ui.toast(message)
 }
 
@@ -444,7 +465,18 @@ export const register: Register = (on, options) => {
 
     await forgetFill($)
 
-    return next(steered)
+    const result = await next(steered)
+
+    // published once the compaction is done: a measurement during it sees the old fill
+    if (!('skip' in result)) {
+      try {
+        await $.state.set(rearmAfterCompact, true)
+      } catch (error) {
+        note($, `session.compact state: ${String(error)}`)
+      }
+    }
+
+    return result
   }).catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {
@@ -556,7 +588,7 @@ export const register: Register = (on, options) => {
       }
 
       try {
-        await finishCheckpoint($, warning !== null, e.isAborted, e.turnId)
+        await finishCheckpoint($, options, warning !== null, e.isAborted, e.turnId)
       } catch (error) {
         await abandonCheckpoint($, error)
       }
