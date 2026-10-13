@@ -2025,12 +2025,17 @@
         pick.disabled = true;
         shotLine.textContent = prWords.screenshotUploading;
         let id = null;
-        try { id = await withDeadline(async function () { return (await (await assetsAsk).upload(file)).id; }); } catch (error) { id = null; }
+        const real = (async function () { return (await (await assetsAsk).upload(file)).id; })();
+        real.then(function () { uploads -= 1; }, function () { uploads -= 1; });
+        try { id = await withDeadline(function () { return real; }); } catch (error) { id = null; }
         uploading = false;
-        uploads -= 1;
         pick.disabled = false;
         if (typeof id === "string" && id !== "") controller.addShot(id);
-        else shotLine.textContent = prWords.screenshotFailed;
+        else {
+          shotLine.textContent = prWords.screenshotFailed;
+          // A stall is not a loss: an upload that lands after the deadline is still saved, once.
+          real.then(function (late) { if (typeof late === "string" && late !== "") controller.addShot(late); }, function () {});
+        }
       });
       addSaver({
         choices: prWords.walkAnswers[stop.kind].map(function (value) { return { label: prWords.walkAnswers.labels[value], answer: value, optionId: null }; })

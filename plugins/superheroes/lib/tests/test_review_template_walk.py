@@ -1096,6 +1096,26 @@ def test_a_stalled_upload_gives_the_button_back_and_says_it_failed():
     assert result["after"] == {"line": PW["screenshotFailed"], "pick": False}
 
 
+# Axis: an upload that answers after the deadline is still saved once, and the failed line gives way to the count.
+def test_an_upload_that_lands_after_the_deadline_is_saved_once():
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      await t.advance(30000);
+      const out = { stalled: shotLineOf("p1") };
+      t.uploads[0].resolve({ id: "SHOT" });
+      await t.tick();
+      out.line = shotLineOf("p1");
+      out.shots = t.setLog().pop().body.shots;
+      return out;
+    """.replace("SHOT", SHOT_1), host={"assets": "hold", "fakeTimers": True})
+    result = page["result"]
+    assert result["stalled"] == PW["screenshotFailed"]
+    assert result["line"] == _fill(PW["screenshotsAdded"], count=1) and result["shots"] == [SHOT_1]
+
+
 # Axis: a republished sheet whose stop changed restores nothing for that stop, while an unchanged stop keeps its answer.
 def test_a_republished_stop_that_changed_starts_unanswered_and_an_unchanged_one_keeps_its_answer():
     def edited(clone):
