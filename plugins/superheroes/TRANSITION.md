@@ -142,6 +142,13 @@ These retirements ship in the same release as the review record, and never apart
 - `cloud_parked.py send-back` has a new `superseded` list: a parked PR whose lane was replaced is listed there and never messaged.
 - Recovery needs the session's listed state as input, which is a host action, and it never recovers a lane whose session reads working with recent activity.
 
+### Cloud builds: cleanup and the reviewer pass at the gardening pass
+
+- `lib/cloud_cleanup.py` is new, with three verbs: `plan` says whether a cloud lane's pull request has merged or closed and what to send its session, `record` records how that request went, and `branch` deletes the pull request's branch when the repository kept it.
+- The advisor cleans up a cloud lane only after its pull request merges or closes, the same way for both. While the pull request is open, handed back or parked, nothing is cleaned up. The only step it asks of the owner is the archive prompt, and on a request that could not be confirmed it asks nothing; nothing reminds the owner about an unanswered prompt.
+- The gardening pass has a new duty 8: it reads the reviewer pass for a project with a cloud setup, through the new `cloud_setup.py gardening` verb, and says the days left and the lapse date, with `Renew now` when the pass would lapse before the next pass is owed. The gardening record carries that line. Nothing reads the lapse date between passes.
+- The label of the pass's list is now "The eight duties, a closed list."; duties 1 to 7 are unchanged.
+
 ## 0.42.0
 
 ### Before you upgrade

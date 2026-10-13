@@ -782,7 +782,10 @@ above).
    wrong tier does not error, it just burns a shared account's limit at multiplied cost.
    **The launcher provisions each build's worktree**, so **you never hand a builder a worktree and
    never launch one into the primary checkout**. Reaping a finished lane's worktree, and its
-   simulated phones, is yours, not the builder's. When the issue's done-definition names an iPhone
+   simulated phones, is yours, not the builder's. A finished **cloud** lane has no worktree to reap:
+   once its pull request merges or closes, its cleanup is the archive request and the branch step.
+   **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane when a cloud lane's pull request merges or closes.**
+   When the issue's done-definition names an iPhone
    check (a check on a simulated iPhone), the premise carries `"iphoneCheck": true`. The premise
    names no place to check.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § iPhone lanes: launching and reaping their phones when you launch an iPhone lane or reap one.**

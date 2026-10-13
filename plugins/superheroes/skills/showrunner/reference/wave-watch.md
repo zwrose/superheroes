@@ -465,7 +465,8 @@ note still waiting (`notes`, oldest first). Answer each in turn as above, each w
 also resumes each lane that parked on one. There is no separate resume step.
 
 Any other message you send to a cloud session on another account, the archive request after a merge
-or close included, goes through the same relay path and gate.
+or close included, goes through the same relay path and gate. The archive request's own steps are in
+`skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane.
 
 ## The boundary the owner accepted
 
