@@ -2877,7 +2877,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
     # unproven family and folds like silence.
     selected, source = _nonpanel_selection(state, session_dir)
-    barred = _adapters()._maker_barred(state, config)
+    barred = receipt_disclosures.nonpanel_barred(state, config)
     if selected is not None and verdicts and _emission_unverifiable(state, session_dir, P_VERIFIERS):
         # The dispatch anchored an emission but its manifest is unreadable or tampered: the vendor
         # it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
@@ -8045,7 +8045,7 @@ def _library_finder_unauthenticated(state, reported):
         return True
     if reported is None:
         return _nonpanel_replaced(state, selected)
-    return reported != selected or _adapters()._maker_barred(state, state.get("config"))(reported)
+    return reported != selected or receipt_disclosures.nonpanel_barred(state, state.get("config"))(reported)
 
 
 def _finder_hand_claim_fault(state, session_dir, phase, artifact):
@@ -8071,7 +8071,7 @@ def _finder_hand_claim_fault(state, session_dir, phase, artifact):
     if required and claimed is None:
         return ("%s artifact carries no `reviewerVendor`; the selection replaced the reviewer "
                 "engine, so the vendor that ran must be claimed (expected %r)" % (phase, expected))
-    if _adapters()._maker_barred(state, state.get("config"))(expected):
+    if receipt_disclosures.nonpanel_barred(state, state.get("config"))(expected):
         return ("%s reviewer %r is ineligible (a maker family, the fixer's vendor, or an unresolvable "
                 "host family); its result is not the independent review that was ordered"
                 % (phase, expected))

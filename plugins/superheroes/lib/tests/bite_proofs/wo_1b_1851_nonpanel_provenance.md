@@ -789,3 +789,63 @@ FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_t4_n
 ```
 
 ---
+
+## F1 — `receipt_disclosures.nonpanel_barred`: the one home of the non-panel eligibility predicate
+
+- **axis:** the shared predicate takes the host family from the effective seat map, so a native seat is judged by the host family and not by the registry's family (the driver and the adapters read this one function, not the adapters seam)
+- Added by WO-F1 (#1851, review C5 L4) after P1-P10; the neutralization was applied and undone by two targeted edits, not by the P2-P10 script. No sha256 was taken for this entry; the restore is shown by the quoted lines.
+
+**neutralization** (`plugins/superheroes/lib/receipt_disclosures.py`):
+```diff
+--- before (restored text)
+    return reviewer_ineligible(accumulated_maker_families(state), cfg.get("fixerVendor"),
+                               host_family=host_family(seat_map_receipts.effective_seat_map(state)))
++++ neutralized
+    return reviewer_ineligible(accumulated_maker_families(state), cfg.get("fixerVendor"))
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family -q -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family ___
+
+    def test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family():
+        # axis: receipt_disclosures.nonpanel_barred passes the seat map's host family — see bite-proof
+        nonpanel_barred = RD.receipt_disclosures.nonpanel_barred
+    
+        def bar(vendor, **cfg):
+            state = _state(fixer=None, **cfg)
+            return nonpanel_barred(state, state["config"])(vendor)
+    
+        assert bar("claude", host="anthropic", makers=["anthropic"]) is True
+        assert bar("codex", host="anthropic", makers=["anthropic"]) is False
+        # the host family, not the registry's anthropic, decides for the native seat
+>       assert bar("claude", host="openai", makers=["openai"]) is True
+E       AssertionError: assert False is True
+E        +  where False = <function test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family.<locals>.bar at 0x7f7b150823e0>('claude', host='openai', makers=['openai'])
+
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:360: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family
+1 failed in 1.24s
+```
+
+**restore:** inverse edit of the neutralized line. Restored lines quoted back from the file:
+```
+    return reviewer_ineligible(accumulated_maker_families(state), cfg.get("fixerVendor"),
+                               host_family=host_family(seat_map_receipts.effective_seat_map(state)))
+```
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 2.31s
+```
+
+---

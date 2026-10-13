@@ -289,10 +289,7 @@ def _maker_barred(state, config):
     unresolvable reviewer family) — `receipt_disclosures.reviewer_ineligible`, the same bar
     `independent_reviewer` applies when the driver selects a non-panel reviewer — including the host
     family a native seat takes from the seat map, so the two sides judge a vendor identically."""
-    cfg = config if isinstance(config, dict) else {}
-    return receipt_disclosures.reviewer_ineligible(
-        receipt_disclosures.accumulated_maker_families(state), cfg.get("fixerVendor"),
-        host_family=receipt_disclosures.host_family(seat_map_receipts.effective_seat_map(state)))
+    return receipt_disclosures.nonpanel_barred(state, config)
 
 
 def _manifest_vendor_for_wrapped_seat(envelope, seat, occurrence, orders_manifest, is_barred):

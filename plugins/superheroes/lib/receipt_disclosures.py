@@ -290,6 +290,16 @@ def accumulated_maker_families(state):
             | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
 
 
+def nonpanel_barred(state, config):
+    """Predicate ``(vendor) -> bool``: True when a vendor may not review a non-panel round — the one
+    home of the non-panel eligibility bar, so the driver and the adapters judge a vendor identically:
+    the accumulated makers, the configured fixer's vendor, and the host family a native seat takes
+    from the effective seat map. A ``config`` that is not a dict reads as empty."""
+    cfg = config if isinstance(config, dict) else {}
+    return reviewer_ineligible(accumulated_maker_families(state), cfg.get("fixerVendor"),
+                               host_family=host_family(seat_map_receipts.effective_seat_map(state)))
+
+
 def auditor_constraints(state):
     """(maker_families, pinned_vendors) for `independent_auditor`: makers accumulate over every
     seat-map receipt; the pinned vendors come off the effective seat map."""

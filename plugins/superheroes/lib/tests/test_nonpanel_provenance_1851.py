@@ -342,3 +342,23 @@ def test_t4_native_host_seat_finder_is_trusted_only_for_a_known_non_maker_host(p
         assert why is None and art["provenance"]["provenanceSource"] == {seat: "dispatch-manifest"}
     else:
         assert art is None and why.startswith("missing-seat-refuse-fold:%s" % seat), (art, why)
+
+
+# --- F1: the shared home of the non-panel eligibility predicate ---------------------------------------
+
+def test_f1_nonpanel_barred_is_the_shared_predicate_and_reads_the_host_family():
+    # axis: receipt_disclosures.nonpanel_barred passes the seat map's host family — see bite-proof
+    nonpanel_barred = RD.receipt_disclosures.nonpanel_barred
+
+    def bar(vendor, **cfg):
+        state = _state(fixer=None, **cfg)
+        return nonpanel_barred(state, state["config"])(vendor)
+
+    assert bar("claude", host="anthropic", makers=["anthropic"]) is True
+    assert bar("codex", host="anthropic", makers=["anthropic"]) is False
+    # the host family, not the registry's anthropic, decides for the native seat
+    assert bar("claude", host="openai", makers=["openai"]) is True
+    assert bar("codex", host="openai", makers=["openai"]) is True
+    assert bar("claude", host=None) is True
+    state = _state(fixer=None)
+    assert nonpanel_barred(state, None)("codex") is False
