@@ -827,3 +827,59 @@ def test_craft_and_decided_entries_name_their_pr_only_on_a_stack(kind, sheet):
         assert page["result"]["craft"][0].startswith("#7: ") and page["result"]["decided"][0].startswith("#7: ")
     else:
         assert not any(line.startswith("#") for line in page["result"]["craft"] + page["result"]["decided"])
+
+
+# Axis: a Problem tapped while Works is still in flight waits for the Merge clear, even though the queued state goes out when Works settles.
+def test_a_problem_queued_behind_an_inflight_works_still_waits_for_the_merge_clear():
+    page = _page(WALK_SHEET, WALK + """
+      t.click(btn("p1", "Works"));
+      t.click(btn("p1", "Problem"));
+      const out = { start: t.setLog().map((item) => item.path) };
+      t.sets[0].resolve();
+      await t.tick();
+      out.settled = t.setLog().map((item) => item.path);
+      t.sets[1].reject({ code: "unavailable" });
+      await t.tick();
+      out.rejected = t.setLog().map((item) => item.path);
+      return out;
+    """, host=dict(MERGED, set="hold"))
+    result = page["result"]
+    assert result["start"] == ["walk/p1", "verdict/" + DIGEST]
+    assert result["settled"] == result["start"] and result["rejected"] == result["start"]
+
+
+# Axis: a saved Problem with no fix keeps Merge locked while its replacement is in flight or failed.
+def test_a_saved_problem_stays_blocking_until_its_replacement_is_saved():
+    page = _page(WALK_SHEET, WALK + LOCK + """
+      const out = { start: lock().merge };
+      await choose("p1", "Works");
+      out.pending = lock().merge;
+      t.sets[0].reject({ code: "unavailable" });
+      await t.tick();
+      out.failed = lock().merge;
+      t.click(tryAgain("p1"));
+      await t.tick();
+      t.sets[1].resolve();
+      await t.tick();
+      out.landed = lock().merge;
+      return out;
+    """, host=dict(ACCEPTED, set="hold", collections=dict(ACCEPTED["collections"], walk=[{"id": "p1", "data": _body("problem")}])))
+    result = page["result"]
+    assert result == {"start": LOCKED, "pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
+
+
+# Axis: an upload that never answers stops waiting at the deadline, says so, and gives the button and the leave-page guard back.
+def test_a_stalled_upload_gives_the_button_back_and_says_it_failed():
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      const out = { during: { line: shotLineOf("p1"), pick: pickOf("p1").disabled } };
+      await t.advance(30000);
+      out.after = { line: shotLineOf("p1"), pick: pickOf("p1").disabled };
+      return out;
+    """, host={"assets": "hold", "fakeTimers": True})
+    result = page["result"]
+    assert result["during"]["pick"] is True
+    assert result["after"] == {"line": PW["screenshotFailed"], "pick": False}

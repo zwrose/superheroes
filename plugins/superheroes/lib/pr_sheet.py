@@ -66,7 +66,7 @@ with open(SCHEMA_PATH, encoding="utf-8") as _fh:
 _ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
 _COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
 _URL = re.compile(_SCHEMA["$defs"]["walk"]["properties"]["open"]["properties"]["url"]["pattern"])
-_PICTURE_TYPES = ("png", "jpg", "jpeg", "gif", "webp")
+_PICTURE = re.compile(_SCHEMA["$defs"]["walkPicture"]["anyOf"][0]["properties"]["src"]["pattern"])
 _LANES = review_record.LANES
 _RAN = review_record.RAN_STATES
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
@@ -456,12 +456,14 @@ def _stager(base, staged):
             return None
         file = pathlib.Path(base, path)
         try:
-            data = file.read_bytes() if file.suffix.lower()[1:] in _PICTURE_TYPES and file.is_file() else b""
+            data = file.read_bytes() if file.is_file() else b""
         except OSError:
             data = b""
         if not data:
             return None
         src = f"pictures/{hashlib.sha256(data).hexdigest()[:12]}{file.suffix.lower()}"
+        if not _PICTURE.match(src):
+            return None
         staged[src] = data
         return src
     return place

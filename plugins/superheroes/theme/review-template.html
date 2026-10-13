@@ -1129,6 +1129,7 @@
       const pressed = spec.pressed || function (choice, state) { return state.answer === choice.answer && state.optionId === choice.optionId; };
       const unpick = spec.unpick || function () { return { answer: null, optionId: null }; };
       let acked = none;
+      let lastSaved = none;
       let inFlight = null;
       let stalled = false;
       let stallTimer = null;
@@ -1285,14 +1286,14 @@
         inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
-        if (saved) acked = body;
+        if (saved) acked = lastSaved = body;
         // A note's pause is still running: it sends the newest state itself when it ends.
         if (timer !== null) {
           showStatus("saving");
           return;
         }
         if (!sameAnswer(latest, body)) {
-          send();
+          save();
           return;
         }
         showStatus(saved ? "saved" : "failed");
@@ -1309,7 +1310,7 @@
         restore: function (data) {
           const state = { shots: [], ...spec.state(data) };
           latest = state;
-          acked = state;
+          acked = lastSaved = state;
           note.value = state.note;
           paint();
           // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
@@ -1327,6 +1328,9 @@
         // The pick the store has acknowledged, or null while anything of this saver is unsaved.
         confirmed: function () {
           return isUnsaved() ? null : { answer: acked.answer, optionId: acked.optionId };
+        },
+        acknowledged: function () {
+          return lastSaved;
         },
         // Gives a choice's button its words, and holds it off (or lets the controls decide again).
         setChoice: function (answer, label, held) {
@@ -1738,13 +1742,13 @@
       const incomplete = accepted < total;
       const walked = walkStops.map(function (stop) {
         const controller = controllers.get("walk:" + stop.id);
-        return { optional: stop.optional === true, now: controller.current(), saved: controller.confirmed() || { answer: null }, unsaved: controller.unsaved() };
+        return { optional: stop.optional === true, now: controller.current(), saved: controller.confirmed() || { answer: null }, unsaved: controller.unsaved(), acked: controller.acknowledged() };
       });
       const count = function (test) { return walked.filter(test).length; };
       const fixOf = function (pick) {
         return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
       };
-      const open = count(function (item) { return item.now.answer === "problem" && (item.now.optionId === null || item.unsaved); });
+      const open = count(function (item) { return (item.now.answer === "problem" && (item.now.optionId === null || item.unsaved)) || (item.unsaved && item.acked.answer === "problem" && item.acked.optionId === null); });
       // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
@@ -2002,7 +2006,7 @@
         pick.disabled = true;
         shotLine.textContent = prWords.screenshotUploading;
         let id = null;
-        try { id = (await (await assetsAsk).upload(file)).id; } catch (error) { id = null; }
+        try { id = await withDeadline(async function () { return (await (await assetsAsk).upload(file)).id; }); } catch (error) { id = null; }
         uploading = false;
         uploads -= 1;
         pick.disabled = false;
