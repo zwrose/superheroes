@@ -1156,7 +1156,7 @@ def main(argv=None):
     n.add_argument("--maker-family", action="append", default=[], dest="maker_families")
     args = parser.parse_args(argv)
     if args.command == "reading-next":
-        runs = [_engine_run(d)[0] for d in args.run_dirs]
+        runs = [_engine_run(d)[0] for d in dict.fromkeys(os.path.realpath(d) for d in args.run_dirs)]
         print(json.dumps(reading_next(runs, _read_seat_map(args.seat_map), args.maker_families)))
         return 0
     result = write(args.account, args.repo_root) if args.command == "write" else read(args.pr, args.repo)

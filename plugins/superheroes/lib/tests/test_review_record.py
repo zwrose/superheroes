@@ -2338,6 +2338,7 @@ def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
 
     engaged = run("engaged", [(ted._VALID_FINDINGS_STDOUT, False, 0, "")])
     forfeited = run("forfeited", [("not json", False, 0, ""), ("not json", False, 0, "")])
+    second = run("second", [("not json", False, 0, ""), ("not json", False, 0, "")])
     maps = tmp_path / "map.json"
     maps.write_text(json.dumps(SEAT_MAP))
     tail = ["--maker-family", "anthropic", "--seat-map", str(maps)]
@@ -2348,4 +2349,5 @@ def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
 
     assert nxt(engaged) == "accept"
     assert nxt(forfeited) == "rerun"
-    assert nxt(forfeited, forfeited) == "move-up"
+    assert nxt(forfeited, forfeited) == "rerun"  # one persisted run counted twice is still one run
+    assert nxt(forfeited, second) == "move-up"

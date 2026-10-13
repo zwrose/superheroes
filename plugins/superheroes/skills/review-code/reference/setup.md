@@ -118,11 +118,14 @@ CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');imp
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
+# Optional $MAKER_FAMILIES (space-separated, set by a build caller): one --maker-family per family; omitted when empty.
+MAKER_ARGS=()
+for F in ${MAKER_FAMILIES:-}; do MAKER_ARGS+=(--maker-family "$F"); done
 # Leg 1 (#610): compose probes live vendors on a cache miss and rides a within-TTL receipt
 # otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
 # select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
 # (#1121) and was reaped in #1138.
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT") || { echo "seat map compose failed (exit $?) — see its error above" >&2; exit 1; }
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" "${MAKER_ARGS[@]}" --repo-root "$REPO_ROOT") || { echo "seat map compose failed (exit $?) — see its error above" >&2; exit 1; }
 AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
 ```
 
