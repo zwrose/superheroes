@@ -794,3 +794,8 @@ def test_a_walk_stop_key_changes_when_anything_it_shows_changes(edit):
     edit(advisor)
     after = _keys_of(advisor)["p1"]
     assert after != before and after.startswith("p1-")
+
+
+def test_a_walk_stop_key_digest_length_is_the_width_the_schema_pattern_names():
+    width = int(re.search(r"\{(\d+)\}", SCHEMA["$defs"]["walkStop"]["properties"]["key"]["pattern"]).group(1))
+    assert all(len(k.rsplit("-", 1)[1]) == width == pr_sheet.STOP_DIGEST for k in _keys_of(bundle(WALK)[1]).values())

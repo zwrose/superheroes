@@ -72,6 +72,7 @@ PICTURE_DIGEST = int(re.search(r"\{(\d+)\}", _PICTURE.pattern).group(1))
 # The walk's keys, stop kinds and per-kind step rules come from the same schema; only the input's own
 # `path` picture key has no schema twin (the sheet carries src or missing instead).
 _WALK, _STOP = _SCHEMA["$defs"]["walk"], _SCHEMA["$defs"]["walkStop"]
+STOP_DIGEST = int(re.search(r"\{(\d+)\}", _STOP["properties"]["key"]["pattern"]).group(1))  # the stop key's digest width, from its schema pattern
 _KINDS = tuple(_STOP["properties"]["kind"]["enum"])
 _STEPS = {a["if"]["properties"]["kind"]["const"]: a["then"]["properties"]["steps"] for a in _STOP["allOf"]}
 
@@ -343,7 +344,7 @@ def _walk(walk, place):
     keyed = []
     for s in stops:  # the key names the stop's stored answer and changes when anything the stop shows does
         shown = json.dumps([s, head], sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-        keyed.append({"id": s["id"], "key": s["id"] + "-" + hashlib.sha256(shown.encode("utf-8")).hexdigest()[:12], **{k: v for k, v in s.items() if k != "id"}})
+        keyed.append({"id": s["id"], "key": s["id"] + "-" + hashlib.sha256(shown.encode("utf-8")).hexdigest()[:STOP_DIGEST], **{k: v for k, v in s.items() if k != "id"}})
     return {**head, "picturesFrom": walk["picturesFrom"], "stops": keyed}
 
 
