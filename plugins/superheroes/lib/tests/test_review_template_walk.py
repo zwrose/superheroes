@@ -99,7 +99,7 @@ def _path(stop_id, sheet=WALK_SHEET):
     """The store path the page gives a stop: its id plus an FNV-1a hash of the stop as shown."""
     stop = next(s for s in sheet["prSheet"]["walk"]["stops"] if s["id"] == stop_id)
     shown = json.dumps([stop["pr"], stop["kind"], stop["title"], stop["steps"], stop["expect"],
-                        [[p.get("src"), p["alt"]] for p in stop["pictures"]]], separators=(",", ":"), ensure_ascii=False)
+                        [[p.get("src"), p["alt"], p.get("caption") or None] for p in stop["pictures"]]], separators=(",", ":"), ensure_ascii=False)
     hashed = 2166136261
     for unit in memoryview(shown.encode("utf-16-le")).cast("H"):
         hashed = ((hashed ^ unit) * 16777619) & 0xFFFFFFFF
@@ -880,6 +880,25 @@ def test_a_saved_problem_stays_blocking_until_its_replacement_is_saved():
     assert result == {"start": LOCKED, "pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
 
 
+# Axis: a saved Fix before merge keeps Merge locked while its replacement is in flight or failed, and only the landed replacement unlocks it.
+def test_a_saved_fix_before_merge_stays_blocking_until_its_replacement_is_saved():
+    page = _page(WALK_SHEET, WALK + LOCK + """
+      const out = {};
+      await choose("p1", "Works");
+      out.pending = lock().merge;
+      t.sets[0].reject({ code: "unavailable" });
+      await t.tick();
+      out.failed = lock().merge;
+      t.click(tryAgain("p1"));
+      await t.tick();
+      t.sets[1].resolve();
+      await t.tick();
+      out.landed = lock().merge;
+      return out;
+    """, host=dict(ACCEPTED, set="hold", collections=dict(ACCEPTED["collections"], walk=[{"id": _path("p1")[5:], "data": _body("problem", "before-merge")}])))
+    assert page["result"] == {"pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
+
+
 # Axis: an upload that never answers stops waiting at the deadline, says so, and gives the button and the leave-page guard back.
 def test_a_stalled_upload_gives_the_button_back_and_says_it_failed():
     page = _page(WALK_SHEET, WALK + """
@@ -913,3 +932,30 @@ def test_a_republished_stop_that_changed_starts_unanswered_and_an_unchanged_one_
     assert result["p1"]["pressed"] == ["false"] * 3 and result["p1"]["note"] == "" and result["p1"]["save"] == ""
     assert result["p2"]["pressed"] == ["true", "false", "false"] and result["p2"]["note"] == "kept p2"
     assert result["count"] == _fill(PW["walkCount"], walked=1, total=5)
+
+
+def _stop_edit(change):
+    def edited(clone):
+        change(next(s for s in clone["prSheet"]["walk"]["stops"] if s["id"] == "p1"))
+        return clone
+    return _with(WALK_SHEET, edited)
+
+
+# Axis: a stop's key follows every UTF-16 unit and each picture's caption, so a changed expectation behind many emoji or a changed caption starts unanswered.
+def test_a_stop_changed_behind_emoji_or_in_a_caption_starts_unanswered():
+    def emoji(clone):
+        clone["title"] = "Retry " + "\U0001F4B3" * 6
+        clone["pictures"] = []
+        clone["expect"] = "Charges: 1"
+
+    def caption(clone):
+        clone["pictures"][0]["caption"] = "The expected success state"
+
+    for first in (emoji, caption):
+        before = _stop_edit(first)
+        after = _stop_edit(lambda clone: (first(clone), clone.update(expect="Charges: 2") if first is emoji else clone["pictures"][0].update(caption="An error state")))
+        assert _path("p1", before) != _path("p1", after)
+        page = _page(after, WALK + "return stopState('p1');", host={"collections": {"walk": [{"id": _path("p1", before)[5:], "data": _body("works", None, "old")}]}})
+        assert page["result"]["pressed"] == ["false"] * 3 and page["result"]["note"] == ""
+        saved = _page(before, WALK + "await choose('p1', 'Works'); return t.setLog().map((item) => item.path);")
+        assert saved["result"] == [_path("p1", before)]

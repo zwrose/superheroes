@@ -717,7 +717,6 @@ BAD_WALK_ANSWERS = {
     "fix-on-skip": {"answer": "skip", "fix": "follow-up", "note": "", "shots": []},
     "fix-on-null": {"answer": None, "fix": "before-merge", "note": "", "shots": []},
     "unknown-answer": {"answer": "maybe", "fix": None, "note": "", "shots": []},
-    "unknown-fix": {"answer": "problem", "fix": "later", "note": "", "shots": []},
     "no-shots": {"answer": "works", "fix": None, "note": ""},
     "extra-key": {"answer": "works", "fix": None, "note": "", "shots": [], "extra": 1},
     "empty-shot-id": {"answer": "problem", "fix": None, "note": "", "shots": [""]},

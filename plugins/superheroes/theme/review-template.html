@@ -1753,7 +1753,7 @@
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
-      const locked = incomplete || clearUnsaved || open > 0;
+      const locked = incomplete || clearUnsaved || open > 0 || walked.some(function (item) { return item.unsaved && fixOf(item.acked).sendsBack === true; });
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -1963,8 +1963,8 @@
     // One walk stop, all plain text: its parts and pictures, then its answers saved at walk/<id>; a Problem opens the fix block.
     function buildStop(stop) {
       // The stop's store key is its id plus a hash (FNV-1a) of what is shown, so a republished stop that changed starts unanswered.
-      const shown = JSON.stringify([stop.pr, stop.kind, stop.title, stop.steps, stop.expect, stop.pictures.map(function (picture) { return [picture.src || null, picture.alt]; })]);
-      stop.key = stop.id + "-" + Array.from(shown).reduce(function (hash, _, index) { return Math.imul(hash ^ shown.charCodeAt(index), 16777619) >>> 0; }, 2166136261).toString(16);
+      const shown = JSON.stringify([stop.pr, stop.kind, stop.title, stop.steps, stop.expect, stop.pictures.map(function (picture) { return [picture.src || null, picture.alt, picture.caption || null]; })]);
+      stop.key = stop.id + "-" + Array.prototype.reduce.call(shown, function (hash, _, index) { return Math.imul(hash ^ shown.charCodeAt(index), 16777619) >>> 0; }, 2166136261).toString(16);
       const article = prSection("article", "stop-" + stop.id, "sh-box");
       const meta = document.createElement("div");
       meta.appendChild(textElement("span", "sh-tag", (sheetKind === "stack" ? fill(prWords.walkStopPr, { pr: stop.pr }) + " " : "") + stop.id.toUpperCase()));

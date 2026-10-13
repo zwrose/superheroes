@@ -476,7 +476,7 @@
       "required": ["answer", "fix", "note", "shots"],
       "properties": {
         "answer": {"description": "What the owner tapped, or null when nothing is picked.", "enum": ["works", "looks-right", "problem", "skip", null]},
-        "fix": {"description": "What should happen with a Problem, or null.", "enum": ["before-merge", "follow-up", null]},
+        "fix": {"description": "What should happen with a Problem, or null: an id from walkFixes in sheet-words.json, the one home of the ids; the page restores only an id it offers.", "type": ["string", "null"]},
         "note": {"description": "What the owner saw, an empty string when there is no note.", "type": "string"},
         "shots": {"description": "The asset ids of the screenshots the owner added.", "type": "array", "items": {"type": "string", "minLength": 1}}
       },
