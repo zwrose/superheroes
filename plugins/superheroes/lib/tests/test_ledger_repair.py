@@ -59,6 +59,9 @@ def _cloud_lane(tmp_path, monkeypatch, launch_id="c1"):
     return _setup_cloud_lane(tmp_path, monkeypatch, launch_id, started=False)
 
 
+NB = "listing checked"
+
+
 def _owner_lock(repo, launch_id):
     located = ll.launch_ownership_lock_path(repo, launch_id)
     assert located["ok"], located
@@ -152,7 +155,7 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
         else _local_lane(tmp_path, monkeypatch)
     )
     launch_id = "c1" if place == "cloud" else "l1"
-    result = ll.repair_never_started(repo, launch_id, evidence="the launch command never ran")
+    result = ll.repair_never_started(repo, launch_id, evidence="the launch command never ran", no_builder_evidence=NB)
     assert result == {
         "ok": True, "repaired": "terminal", "launchId": launch_id, "kind": "refused",
     }
@@ -161,7 +164,7 @@ def test_repair_without_pending_records_the_terminal_event(tmp_path, monkeypatch
     assert _events(repo, launch_id) == ["reserved", "refused"]
     refused = [r for r in ll.read(repo)["records"] if r["event"] == "refused"][0]
     assert refused["stage"] == "never-started" and refused["reason"] == "never-started"
-    assert refused["evidence"] == "the launch command never ran"
+    assert refused["evidence"] == "the launch command never ran [no builder: %s]" % NB
 
 
 # --- launcher ownership: only a stopped launcher's lane is terminalized --------------------------
@@ -190,7 +193,7 @@ def test_repair_without_pending_refuses_a_lane_whose_launcher_holds_its_ownershi
     owner = _owner_lock(repo, launch_id)
     file_lock.acquire(owner)
     try:
-        result = ll.repair_never_started(repo, launch_id, evidence="never ran")
+        result = ll.repair_never_started(repo, launch_id, evidence="never ran", no_builder_evidence=NB)
         assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
         assert result["reason"] == "lane-may-be-launching"
         assert ll.read(repo)["records"] == before
@@ -198,7 +201,7 @@ def test_repair_without_pending_refuses_a_lane_whose_launcher_holds_its_ownershi
     finally:
         file_lock.release(owner)
     # Once the owner lets go, the same lane repairs.
-    released = ll.repair_never_started(repo, launch_id, evidence="never ran")
+    released = ll.repair_never_started(repo, launch_id, evidence="never ran", no_builder_evidence=NB)
     assert released["ok"] is True and released["repaired"] == "terminal"
 
 
@@ -211,7 +214,7 @@ def test_repair_without_pending_proceeds_when_the_owner_is_dead(tmp_path, monkey
     launch_id = "c1" if place == "cloud" else "l1"
     owner = _owner_lock(repo, launch_id)
     _write_dead_owner(owner)
-    result = ll.repair_never_started(repo, launch_id, evidence="never ran")
+    result = ll.repair_never_started(repo, launch_id, evidence="never ran", no_builder_evidence=NB)
     assert result["ok"] is True and result["repaired"] == "terminal"
     assert _lane(repo, launch_id)["terminal"] is True
     assert not os.path.lexists(owner), "the repair releases the lock it took"
@@ -229,21 +232,46 @@ def test_repair_without_pending_proceeds_when_no_ownership_lock_exists(
     launch_id = "c1" if place == "cloud" else "l1"
     owner = _owner_lock(repo, launch_id)
     assert not os.path.lexists(owner)
-    result = ll.repair_never_started(repo, launch_id, evidence="never ran")
+    result = ll.repair_never_started(repo, launch_id, evidence="never ran", no_builder_evidence=NB)
     assert result["ok"] is True and result["repaired"] == "terminal"
     assert not os.path.lexists(owner)
 
 
-def test_repair_without_pending_refuses_when_the_ownership_lock_cannot_be_settled(
+def test_repair_without_pending_refuses_when_the_ownership_lock_path_cannot_be_derived(
     tmp_path, monkeypatch,
 ):
-    # Fail closed: an unreadable lock is neither confirmed dead nor absent.
+    # Fail closed: with no lock path the launcher cannot be shown stopped.
     repo = _cloud_lane(tmp_path, monkeypatch)
     before = ll.read(repo)["records"]
     monkeypatch.setattr(ll, "_launch_ownership_lock_path_or_none", lambda *a: None)
-    result = ll.repair_never_started(repo, "c1", evidence="never ran")
+    result = ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=NB)
     assert result == {"ok": False, "reason": "launch-ownership-lock-unavailable"}
     assert ll.read(repo)["records"] == before
+
+
+@pytest.mark.parametrize("place", ["cloud", "local"])
+def test_repair_refuses_an_ownership_lock_with_an_unparseable_holder_past_the_grace(
+    tmp_path, monkeypatch, place,
+):
+    # axis: file_lock reclaims an unparseable holder after its grace without confirming death;
+    # the repair must not read that reclaim as a stopped launcher. Real acquisition path.
+    repo = (
+        _cloud_lane(tmp_path, monkeypatch) if place == "cloud"
+        else _local_lane(tmp_path, monkeypatch)
+    )
+    launch_id = "c1" if place == "cloud" else "l1"
+    owner = _owner_lock(repo, launch_id)
+    os.makedirs(os.path.dirname(owner), exist_ok=True)
+    with open(owner, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    old = time.time() - file_lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(owner, (old, old))
+    before = ll.read(repo)["records"]
+    result = ll.repair_never_started(repo, launch_id, evidence="never ran", no_builder_evidence=NB)
+    assert result == {"ok": False, "reason": ll.REPAIR_LANE_MAY_BE_LAUNCHING}
+    assert ll.read(repo)["records"] == before
+    with open(owner, encoding="utf-8") as fh:
+        assert fh.read() == "{not json"
 
 
 def test_repair_holds_the_ownership_lock_across_its_terminal_write(tmp_path, monkeypatch):
@@ -257,7 +285,7 @@ def test_repair_holds_the_ownership_lock_across_its_terminal_write(tmp_path, mon
         return real_terminalize(*a, **k)
 
     monkeypatch.setattr(ll, "terminalize", watching)
-    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"] is True
+    assert ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=NB)["ok"] is True
     assert seen == [True]
 
 
@@ -293,7 +321,7 @@ def test_a_cloud_launch_holds_its_ownership_lock_while_spawning_and_leaves_none(
         owner = _owner_lock(repo, launch_id)
         observed.append((
             os.path.lexists(owner),
-            ll.repair_never_started(repo, launch_id, evidence="never ran"),
+            ll.repair_never_started(repo, launch_id, evidence="never ran", no_builder_evidence=NB),
         ))
         return inner(argv, cwd, log_path, child_env, timeout)
 
@@ -318,6 +346,68 @@ def test_a_cloud_launch_that_raises_still_releases_its_ownership_lock(tmp_path, 
     assert seen and not os.path.lexists(seen[0])
 
 
+# --- terminal repair is an evidenced operator assertion that no builder exists ----------------
+
+
+def test_terminal_repair_without_no_builder_refuses_and_names_the_cloud_session(
+    tmp_path, monkeypatch,
+):
+    repo = _cloud_lane(tmp_path, monkeypatch)
+    before = ll.read(repo)["records"]
+    for missing in (None, "", "   ", 5):
+        result = ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=missing)
+        assert result["ok"] is False and result["reason"] == "builder-may-exist"
+        assert ll.cloud_session_name(656, "c1") in result["check"]
+    assert ll.read(repo)["records"] == before
+
+
+def test_the_cloud_session_name_has_one_home_the_launcher_reads():
+    assert ll.cloud_session_name(7, "launch-abc") == "issue-7-abc"
+
+
+def _local_lane_with_session(tmp_path, monkeypatch, config_dir):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    assert _declare(repo, "b-local", 1)["ok"]
+    session = "123e4567-e89b-42d3-a456-426614174000"
+    assert ll.append(repo, _reserved(
+        "l1", "b-local", ["x"], repo, sessionId=session, configDir=str(config_dir),
+        worktree=str(tmp_path / "wt"),
+    ))
+    return repo, session
+
+
+def test_local_terminal_repair_without_no_builder_names_the_worktree_and_session(
+    tmp_path, monkeypatch,
+):
+    repo, session = _local_lane_with_session(tmp_path, monkeypatch, tmp_path / "cfg")
+    result = ll.repair_never_started(repo, "l1", evidence="never ran")
+    assert result["reason"] == "builder-may-exist"
+    assert str(tmp_path / "wt") in result["check"] and session in result["check"]
+
+
+def test_local_terminal_repair_proceeds_with_no_builder_when_no_transcript_exists(
+    tmp_path, monkeypatch,
+):
+    repo, _session = _local_lane_with_session(tmp_path, monkeypatch, tmp_path / "cfg")
+    result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
+    assert result["ok"] is True
+    refused = [r for r in ll.read(repo)["records"] if r["event"] == "refused"][0]
+    assert NB in refused["evidence"]
+
+
+def test_local_terminal_repair_refuses_when_the_session_transcript_exists(tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg"
+    repo, session = _local_lane_with_session(tmp_path, monkeypatch, cfg)
+    bucket = cfg / "projects" / "bucket"
+    bucket.mkdir(parents=True)
+    (bucket / (session + ".jsonl")).write_text("{}\n")
+    before = ll.read(repo)["records"]
+    result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
+    assert result["ok"] is False and result["reason"] == "builder-may-exist"
+    assert ll.read(repo)["records"] == before
+
+
 # --- refusals ----------------------------------------------------------------------------------
 
 
@@ -336,7 +426,7 @@ def test_repair_refuses_a_lane_that_already_has_started(tmp_path, monkeypatch):
 
 def test_repair_refuses_a_terminal_lane(tmp_path, monkeypatch):
     repo = _cloud_lane(tmp_path, monkeypatch)
-    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"]
+    assert ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=NB)["ok"]
     before = ll.read(repo)["records"]
     for kwargs in ({"pending_started": _cloud_started("c1")}, {"evidence": "again"}):
         result = ll.repair_never_started(repo, "c1", **kwargs)
@@ -346,7 +436,7 @@ def test_repair_refuses_a_terminal_lane(tmp_path, monkeypatch):
 
 def test_repair_refuses_an_unknown_launch(tmp_path, monkeypatch):
     repo = _cloud_lane(tmp_path, monkeypatch)
-    result = ll.repair_never_started(repo, "nope", evidence="never ran")
+    result = ll.repair_never_started(repo, "nope", evidence="never ran", no_builder_evidence=NB)
     assert result == {"ok": False, "reason": "terminal-unknown-launch"}
 
 
@@ -426,7 +516,7 @@ def test_repair_refuses_an_unreadable_ledger_and_writes_nothing(tmp_path, monkey
         fh.write(b"not json\n")
     with open(path, "rb") as fh:
         before = fh.read()
-    result = ll.repair_never_started(repo, "c1", evidence="never ran")
+    result = ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=NB)
     assert result == {"ok": False, "reason": "ledger-unreadable:interiorCorrupt"}
     with open(path, "rb") as fh:
         assert fh.read() == before
@@ -439,12 +529,12 @@ def test_repair_refuses_when_the_lock_is_held_by_another_holder(tmp_path, monkey
     assert lock["ok"]
     assert ll._acquire_lock(lock["path"], 1)
     try:
-        result = ll.repair_never_started(repo, "c1", evidence="never ran", lock_timeout=0.2)
+        result = ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=NB, lock_timeout=0.2)
     finally:
         ll._release_lock(lock["path"])
     assert result == {"ok": False, "reason": "lock-unavailable"}
     assert ll.read(repo)["records"] == before
-    assert ll.repair_never_started(repo, "c1", evidence="never ran")["ok"] is True
+    assert ll.repair_never_started(repo, "c1", evidence="never ran", no_builder_evidence=NB)["ok"] is True
 
 
 # --- the launcher reads the ledger before it names a remedy ------------------------------------
@@ -601,8 +691,14 @@ def test_cli_repair_lane_restores_started_from_a_pending_file(tmp_path, monkeypa
 
 def test_cli_repair_lane_records_the_terminal_event_from_evidence(tmp_path, monkeypatch, capsys):
     repo = _cloud_lane(tmp_path, monkeypatch)
+    refused = L.main([
+        "repair-lane", "--repo-root", repo, "--launch-id", "c1", "--evidence", "never ran",
+    ])
+    assert refused == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "builder-may-exist"
     code = L.main([
         "repair-lane", "--repo-root", repo, "--launch-id", "c1", "--evidence", "never ran",
+        "--no-builder", NB,
     ])
     out = json.loads(capsys.readouterr().out)
     assert code == 0

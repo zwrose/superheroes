@@ -2486,9 +2486,7 @@ def launch_build(
         return place_refusal
     cloud = place == PLACE_CLOUD
     plugin_ver = plugin_version() if cloud else None
-    cloud_session_name = (
-        "issue-%s-%s" % (issue, launch_id[len("launch-"):]) if cloud else None
-    )
+    cloud_session_name = ll.cloud_session_name(issue, launch_id) if cloud else None
     # A cloud launch makes no worktree: the config root resolves against the launching checkout.
     worktree_path = None if cloud else build_worktree_path(repo_root, issue, launch_id, env=env)
     requested = spawn_config_dir(env=env, cwd=repo_root if cloud else worktree_path)
@@ -3561,6 +3559,7 @@ def _cli_repair_lane(args):
             return _fail(ll.REPAIR_PENDING_STARTED_INVALID)
     return ll.repair_never_started(
         args.repo_root, args.launch_id, pending_started=pending, evidence=args.evidence,
+        no_builder_evidence=args.no_builder,
     )
 
 
@@ -3673,6 +3672,11 @@ def main(argv=None):
              "without it the lane's terminal event is recorded from --evidence",
     )
     rl.add_argument("--evidence", default=None)
+    rl.add_argument(
+        "--no-builder", default=None,
+        help="one line naming what was checked to show no builder exists (the cloud session "
+             "listing, or the worktree); required to record the lane's terminal event",
+    )
     rl.set_defaults(func=_cli_repair_lane)
 
     am = sub.add_parser("amend")

@@ -55,6 +55,7 @@ AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
 CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
 REPAIR_PENDING_STARTED_INVALID = "pending-started-invalid"
 REPAIR_LANE_MAY_BE_LAUNCHING = "lane-may-be-launching"
+REPAIR_BUILDER_MAY_EXIST = "builder-may-exist"
 # The launcher's own timeouts, kept here as one home (the launcher aliases these).
 CLOUD_SPAWN_TIMEOUT_SECONDS = 120
 LAUNCH_DEADLINE_SECONDS = 300
@@ -2089,8 +2090,52 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             _release_lock(lock_path)
 
 
-def _repair_refusal(reason):
-    return {"ok": False, "reason": reason}
+def _repair_refusal(reason, **extra):
+    result = {"ok": False, "reason": reason}
+    result.update(extra)
+    return result
+
+
+def cloud_session_name(issue, launch_id):
+    """The name the launcher gives a cloud lane's session. The one home of the naming rule.
+
+    The launcher names the session with it, and a terminal repair names it to the operator so they
+    can look for that session in the host's listing. Never raises.
+    """
+    return "issue-%s-%s" % (issue, str(launch_id)[len("launch-"):])
+
+
+# Unresolved ownership-lock reclaim classes: the holder's death was never confirmed.
+_REPAIR_UNCONFIRMED_RECLAIMS = (
+    file_lock.REASON_MALFORMED_HOLDER, file_lock.REASON_FOREIGN_HOST_TTL_EXPIRED,
+)
+
+
+def _builder_check_for(launch_id, info):
+    """What the operator must check before asserting no builder exists, as one line."""
+    if info.get("place") == PLACE_CLOUD:
+        return (
+            "look for the cloud session named %s in the host's session listing"
+            % cloud_session_name(info.get("issue"), launch_id)
+        )
+    return (
+        "look in the worktree %s for a builder (recorded session id %s)"
+        % (info.get("worktree"), info.get("sessionId"))
+    )
+
+
+def _local_transcript_exists(info):
+    """True unless the lane's recorded session transcript is positively absent.
+
+    Resolved by the wave watch's own locator; an ambiguous or unreadable lookup counts as present
+    (fail closed), because the transcript appears only once a builder started.
+    """
+    import wave_watch  # lazy: wave_watch imports this module
+
+    mtime, ambiguous, unresolved = wave_watch._session_transcript_mtime(
+        info.get("sessionId"), os.environ, info.get("configDir"),
+    )
+    return mtime is not None or ambiguous or unresolved
 
 
 _OWNERSHIP_LOCK_PREFIX = "ownership-"
@@ -2149,19 +2194,24 @@ def _launch_ownership_lock_path_or_none(repo_root, launch_id, env):
     return located["path"] if located["ok"] else None
 
 
-def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None, env=None,
-                         lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence=None,
+                         no_builder_evidence=None, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Bring a never-started lane (reserved, no `started`, not terminal) to a readable state.
 
     One locked operation, and it refuses every lane that is not never-started: with
     `pending_started` it appends that `started` record; without it, it records the lane's terminal
-    event, and only when the launch that reserved the lane has stopped: it takes that launch's
-    ownership lock (`acquire_launch_ownership`'s lock) with dead-holder reclaim and holds it across
-    its terminal write. A live holder means the launch is still running, so the terminal repair
-    refuses `lane-may-be-launching`; a holder confirmed dead, or no lock at all, lets it proceed;
-    any other lock failure refuses (fail closed). The pending-record restore never ends a lane and
-    needs no ownership. A lane that already has its `started` record is ended with
-    `record_outcome`, never repaired here. Never raises.
+    event, which is an evidenced operator assertion that no builder exists. A dead or absent
+    launcher does not prove that (a builder may have spawned, and nothing local sees a cloud
+    session), so terminal repair needs `no_builder_evidence`, one line naming what was checked;
+    without it the repair refuses `builder-may-exist` and names what to check. It also takes the
+    launch's ownership lock (`acquire_launch_ownership`'s lock) with dead-holder reclaim and holds
+    it across its terminal write: a live holder refuses `lane-may-be-launching` whatever the
+    evidence says, and a holder whose death was not confirmed (malformed, or on a foreign host)
+    refuses too. An absent lock or a confirmed-dead holder only lets the assertion proceed. A local
+    lane whose recorded session transcript exists refuses `builder-may-exist` even with the
+    evidence. The pending-record restore never ends a lane and needs no ownership. A lane that
+    already has its `started` record is ended with `record_outcome`, never repaired here. Never
+    raises.
     """
     lock_path = None
     locked = False
@@ -2214,15 +2264,36 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
             return _repair_refusal("outcome-evidence-empty")
         # axis: a missing `started` does not prove the launcher stopped — only its ownership lock
         # does: a live holder may still spawn and append, and a terminal event written now would
-        # orphan its session.
+        # orphan its session. An absent or dead owner still does not prove no builder exists.
         owner = _launch_ownership_lock_path_or_none(repo_root, launch_id, env)
         if owner is None:
             return _repair_refusal("launch-ownership-lock-unavailable")
+        # Checked before the lock is taken, so a holder whose death was never confirmed is
+        # refused with its lock file untouched (acquisition would reclaim and replace it).
+        if file_lock.stale_reason(owner, reclaim_dead_holder=True) in _REPAIR_UNCONFIRMED_RECLAIMS:
+            return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
         try:
-            file_lock.acquire(owner, reclaim_dead_holder=True)
+            _reclaimed, reclaim_reason = file_lock.acquire_with_reason(
+                owner, reclaim_dead_holder=True,
+            )
         except file_lock.LockHeld:
             return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
         owned = owner
+        if reclaim_reason in _REPAIR_UNCONFIRMED_RECLAIMS:
+            return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
+        # axis: the terminal repair is an operator assertion that no builder exists; nothing here
+        # can see a cloud session, so it is required and recorded rather than inferred.
+        if not isinstance(no_builder_evidence, str) or not no_builder_evidence.strip():
+            return _repair_refusal(
+                REPAIR_BUILDER_MAY_EXIST, check=_builder_check_for(launch_id, info),
+            )
+        if info.get("place") != PLACE_CLOUD and _local_transcript_exists(info):
+            return _repair_refusal(
+                REPAIR_BUILDER_MAY_EXIST,
+                check="the lane's session transcript exists, so a builder started: %s"
+                % _builder_check_for(launch_id, info),
+            )
+        evidence = "%s [no builder: %s]" % (evidence.strip(), no_builder_evidence.strip())
         terminal = terminalize(
             repo_root, launch_id, child_ever_spawned=False, reason="never-started",
             stage="never-started", evidence=evidence, env=env, _lock_held=True,

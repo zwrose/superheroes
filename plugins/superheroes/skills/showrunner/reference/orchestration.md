@@ -59,8 +59,11 @@ and a parked blocker inside a delivered PR, are friction the terminal tallies ca
 refused.** A never-started lane is still refused with `outcome-without-started`. End one with
 `launcher.py repair-lane --repo-root <root> --launch-id <id>`: with `--pending-file <file>` holding a
 `started` record that fits the lane (a launch result's `pendingStarted`) it restores that record, and
-without it, with `--evidence "<one line>"`, it records the lane's terminal event from its `reserved`
-record. It refuses a lane that already started (end that one with `record-outcome`) or already
+without it, with `--evidence "<one line>"` and `--no-builder "<one line naming what you checked>"`, it
+records the lane's terminal event from its `reserved` record. Terminal repair needs `--no-builder`
+after you check the host's session listing (cloud) or the worktree (local): a dead launcher does not
+prove no builder spawned, and without it the repair refuses `builder-may-exist` and names what to
+check. It refuses a lane that already started (end that one with `record-outcome`) or already
 ended. The second call lands as a `reoutcome` amendment and leaves the original terminal outcome
 untouched. The CLI exits
 **non-zero** with `recorded: 'amendment'` (or `'amendment-existing'` on an identical retry), because
