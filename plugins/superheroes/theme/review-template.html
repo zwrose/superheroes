@@ -1761,7 +1761,11 @@
         return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
       };
       // A stop blocks while any state its store might hold does (see blocking).
-      const open = count(function (item) { return item.acked.some(blocking); });
+      // A Problem whose fix the store has not yet acknowledged counts too (acked[0] is the last saved pick), so a follow-up chosen over a held Problem stays locked until it lands; an edit beside a saved follow-up does not.
+      const open = count(function (item) {
+        const saved = item.acked[0];
+        return item.acked.some(blocking) || (item.unsaved && item.now.answer === "problem" && !(saved.answer === "problem" && saved.optionId === item.now.optionId));
+      });
       // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";

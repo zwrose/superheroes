@@ -26,7 +26,7 @@ def _load(name):
 
 
 def _src_of(path):
-    return "pictures/" + hashlib.sha256(path.encode("utf-8")).hexdigest()[:12] + ".png"
+    return "pictures/" + hashlib.sha256(path.encode("utf-8")).hexdigest()[:pr_sheet.PICTURE_DIGEST] + ".png"
 
 
 def _place(path):
@@ -102,15 +102,17 @@ const shoot = async (id) => {
 """
 
 
+_PATHS = {}
+
+
 def _path(stop_id, sheet=WALK_SHEET):
-    """The store path the page gives a stop: its id plus an FNV-1a hash of the stop as shown."""
-    stop = next(s for s in sheet["prSheet"]["walk"]["stops"] if s["id"] == stop_id)
-    shown = json.dumps([stop["pr"], stop["kind"], stop["title"], stop["steps"], stop["expect"],
-                        [[p.get("src"), p["alt"], p.get("caption") or None] for p in stop["pictures"]]], separators=(",", ":"), ensure_ascii=False)
-    hashed = 2166136261
-    for unit in memoryview(shown.encode("utf-16-le")).cast("H"):
-        hashed = ((hashed ^ unit) * 16777619) & 0xFFFFFFFF
-    return "walk/%s-%x" % (stop_id, hashed)
+    """The store path the page gives a stop, read from the write the page makes when the stop's first answer is tapped."""
+    key = json.dumps(sheet, sort_keys=True)
+    if key not in _PATHS:
+        ids = [s["id"] for s in sheet["prSheet"]["walk"]["stops"]]
+        written = _page(sheet, WALK + "const out = {}; for (const id of %s) { t.click(answerRow(id)[0]); await t.tick(); } return t.setLog().map((item) => item.path);" % json.dumps(ids))["result"]
+        _PATHS[key] = dict(zip(ids, written))
+    return _PATHS[key][stop_id]
 
 
 UNLOCKED = {"label": "Merge #214", "disabled": False, "pressed": "false"}
@@ -432,6 +434,17 @@ def test_works_is_written_at_once_and_the_saved_merge_stays():
 
 def _walk_docs(written):
     return [{"id": path.split("/", 1)[1], "data": body} for path, body in written.items() if path.startswith("walk/")]
+
+
+# Axis: a follow-up fix chosen while the Problem's write is still held keeps Merge locked until that fix is saved.
+def test_a_follow_up_chosen_over_a_held_problem_keeps_the_merge_locked():
+    page = _page(WALK_SHEET, WALK + """
+      t.click(btn("p1", "Problem"));
+      await t.tick();
+      await choose("p1", "Fix in a follow-up");
+      return merge();
+    """, host=dict(MERGED, set="hold"))
+    assert page["result"]["disabled"] is True
 
 
 # Axis: beside a saved Merge, a follow-up Problem's note edit and a screenshot are both written at once and the Merge stays, since a follow-up never blocks Merge.
