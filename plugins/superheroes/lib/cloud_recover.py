@@ -556,10 +556,16 @@ def message(issue, *, place, stopped_at, pushed_at=None, never_pushed=False, pus
         return {"ok": True, "text": "%s It never pushed, so I relaunched the build from the beginning %s." % (first, where)}
     text = "%s I recovered the lane from its pushed work %s." % (first, where)
     if stopped_at is not None and pushed_at is not None:
-        minutes = max(0, round((stopped_at - pushed_at) / 60))
+        gap = stopped_at - pushed_at
+        minutes = round(gap / 60)
         since = "push" if push_time_source == "push" else "pushed commit"
-        text += " About %d minute%s of work since its last %s is being redone." % (
-            minutes, "" if minutes == 1 else "s", since)
+        if gap < 60:
+            text += " No work since its last %s is lost." % since
+        elif minutes >= 120:
+            text += " About %d hours of work since its last %s is being redone." % (round(minutes / 60), since)
+        else:
+            text += " About %d minute%s of work since its last %s is being redone." % (
+                minutes, "" if minutes == 1 else "s", since)
     return {"ok": True, "text": text}
 
 
