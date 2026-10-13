@@ -4562,6 +4562,24 @@ def test_the_risky_roster_still_needs_two_critical_families():
     assert {"constraint": "critical-diversity"} in SM.verify(broken, "xai")
 
 
+def test_classify_violations_holds_the_critical_family_bar_of_the_roster():
+    # axis: the classifier reads the roster's critical-family requirement, not a fixed two — see bite-proof record wo_a_1797_roster
+    viol = [{"constraint": "critical-diversity"}]
+    stands = {"constraint": "critical-diversity", "evidence": "alternative-live"}
+    # requirement 1: one reachable family meets the bar, so the violation stands (a fixed two would excuse it)
+    reduced = dict(SM.build(NO_FLOOR_ROSTER, ["claude"], "xai", "anthropic", 0),
+                   laneBasis={"floor": None}, violations=list(viol))
+    assert SM.required_critical_families(NO_FLOOR_ROSTER) == 1
+    got = SM.classify_violations(reduced)
+    assert got["unexcused"] == [stands] and got["excusedByLiveness"] == []
+    # requirement 2: one reachable family cannot meet the bar (excused); two can (stands)
+    one = dict(SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0), violations=list(viol))
+    got = SM.classify_violations(one)
+    assert stands not in got["unexcused"] and got["excusedByLiveness"]
+    two = dict(SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0), violations=list(viol))
+    assert stands in SM.classify_violations(two)["unexcused"]
+
+
 # --- the maker's family is barred from every known seat -----------------------------------------
 
 

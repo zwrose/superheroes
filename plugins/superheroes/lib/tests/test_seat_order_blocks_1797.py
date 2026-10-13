@@ -322,14 +322,57 @@ def _unknown_surface_dimensions(state, diff):
     return state["rounds"]["2"]["roundKind"], RD._advance(state, state["config"])["payload"]["dimensions"]
 
 
+def _assert_halted_lane_expanded(state):
+    assert state["terminal"] == "halted"
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] != "converged"
+    assert state["decisions"][-1]["kind"] == "lane-expanded-recompose"
+    assert "fresh" in state["decisions"][-1]["detail"] or "freshly" in state["certification"]["reason"]
+    assert state["certification"]["shape"] is None
+    nxt = RD._advance(state, state["config"])
+    assert nxt["action"] == RD.P_TERMINAL and nxt["payload"]["verdict"] == "halted"
+
+
 @pytest.mark.parametrize("diff", [_RISKY_DIFF, "not a git diff", ""])
-def test_a_head_the_lane_call_cannot_clear_restores_the_risky_lenses(tmp_path, diff):
-    # axis: the lane basis is re-asked at each new reviewed head; unreadable risk expands — see bite-proof record wo_a_1797_roster
+def test_a_head_the_lane_call_cannot_clear_halts_lane_expanded_recompose(tmp_path, diff):
+    # axis: a reduced session reaching a risky or unreadable head halts, never recomposes — see bite-proof record wo_a_1797_roster
     state = _reduced_state(tmp_path)
     assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
-    kind, dims = _unknown_surface_dimensions(state, diff)
-    assert kind == "full-panel-unknown-surface"
-    assert dims == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]
+    state["round"] = 2
+    state["_headDiffUnknown"] = True
+    RD._enter_delta_round(state, state["config"], panel_diff_seam=lambda *_: (diff, None),
+                          panel_head="a" * 40)
+    _assert_halted_lane_expanded(state)
+    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
+    assert "roundKind" not in state["rounds"].get("2", {})
+
+
+def test_an_unreadable_head_diff_halts_lane_expanded_recompose(tmp_path):
+    state = _reduced_state(tmp_path)
+    state["round"] = 2
+    state["headDiff"] = None
+    assert RD._reevaluate_lane_dimensions(state, state["config"], None) is True
+    _assert_halted_lane_expanded(state)
+
+
+def test_a_delta_round_after_a_risky_head_cannot_reach_converged(tmp_path):
+    # v6: a valid baseline and a parseable delta must not carry a reduced panel to certification
+    state = _reduced_state(tmp_path)
+    state["round"] = 2
+    reviewed = _RISKY_DIFF.replace("+new", "+newer")
+    state["deltaBaseline"] = {"round": 2, "diff": reviewed}
+    state["headDiff"] = _RISKY_DIFF
+    state["fixBatch"] = []
+    RD._enter_delta_round(state, state["config"])
+    _assert_halted_lane_expanded(state)
+    assert state.get("step") != RD.P_AUDITS and state.get("step") != RD.P_SCOPED
+
+
+def test_a_halted_session_dispatches_no_further_phase(tmp_path):
+    state = _reduced_state(tmp_path)
+    assert not RD._refresh_panel_diff_at_verified_head(
+        state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
+    _assert_halted_lane_expanded(state)
 
 
 def test_a_head_the_lane_call_clears_keeps_the_reduced_lenses(tmp_path, monkeypatch):
@@ -340,52 +383,11 @@ def test_a_head_the_lane_call_clears_keeps_the_reduced_lenses(tmp_path, monkeypa
     assert dims == ["code-reviewer", "test-role"]
 
 
-@pytest.mark.parametrize("diff", [_RISKY_DIFF, "not a git diff"])
-def test_the_verify_then_panel_refresh_re_asks_the_lane_call(tmp_path, diff):
-    # axis: the lane basis is re-asked at every full panel scheduled over a new head — see bite-proof record wo_a_1797_roster
+def test_a_clean_head_continues_with_the_reduced_dimensions(tmp_path, monkeypatch):
+    import lane_call
+    monkeypatch.setattr(lane_call, "call", lambda cwd, paths, proposed=None, root=None: {"floor": None})
     state = _reduced_state(tmp_path)
-    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
     assert RD._refresh_panel_diff_at_verified_head(
-        state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (diff, None))
-    assert state["config"]["dimensions"] == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]
-
-
-# --- the expanded roster is seated in the map dispatch reads ------------------------------------
-
-def _populated_reduced_state(tmp_path, **cfg):
-    reduced = SM.build(SM.BASE_ROSTER, ["claude", "codex"], "anthropic", None, 0)
-    reduced["laneBasis"] = {"floor": None}
-    assert "security-reviewer" not in reduced["seats"]
-    return RD.new_state(dict({"repoRoot": str(tmp_path), "seatMap": reduced,
-                              "vendors": ["claude", "codex"]}, **cfg))
-
-
-def test_a_risky_head_seats_the_restored_specialists_in_the_effective_map(tmp_path):
-    # axis: the lane expansion recomposes the governing seat map — see bite-proof record wo_a_1797_roster
-    state = _populated_reduced_state(tmp_path)
-    kind, dims = _unknown_surface_dimensions(state, _RISKY_DIFF)
-    assert dims == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]
-    effective = RD.effective_seat_map(state)
-    assert effective["laneBasis"]["floor"] == "full"
-    for seat in ("security-reviewer", "premortem-reviewer"):
-        assert effective["seats"][seat]["vendor"] == "codex"
-        assert RD._seat_dispatch_row(state, seat)["vendor"] == "codex"
-    # the next panel's orders carry the restored seats on codex (the row emission renders from)
-    cfg = state["config"]
-    for seat in ("security-reviewer", "premortem-reviewer"):
-        row = RD._seat_transport_row(state, RD.P_PANEL, seat, 0, cfg, {}, str(tmp_path))
-        assert row["vendor"] == "codex"
-
-
-def test_a_restored_specialist_with_no_composable_map_is_recorded_unfilled(tmp_path):
-    # fail-closed: the effective map has no liveVendors/authorFamily to compose from
-    state = _populated_reduced_state(tmp_path)
-    for key in ("liveVendors", "authorFamily"):
-        state["seatMapReceipts"][0]["map"].pop(key)
-        state["config"]["seatMap"].pop(key)
-    _unknown_surface_dimensions(state, _RISKY_DIFF)
-    effective = RD.effective_seat_map(state)
-    for seat in ("security-reviewer", "premortem-reviewer"):
-        assert SM.is_unfilled(effective["seats"][seat])
-    assert effective["seats"]["code-reviewer"]["vendor"]  # the reduced roster's seats are kept
-    assert {"security-reviewer", "premortem-reviewer"} <= set(RDS.unfilled_seats(effective))
+        state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
+    assert not state.get("terminal")
+    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]

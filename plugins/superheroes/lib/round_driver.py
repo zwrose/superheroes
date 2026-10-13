@@ -1163,15 +1163,20 @@ def _diff_changed_paths(diff_text):
     return paths
 
 
+LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
+
+
 def _reevaluate_lane_dimensions(state, config, diff_text):
-    """Re-ask the lane call at a new reviewed head (#1797). A session whose seeded seat map was
-    reduced (``laneBasis.floor`` None) keeps its reduced lenses only while the head still touches no
-    risk area; a head that touches one, or whose risk cannot be read, restores the risky roster's
-    lenses before the next panel. Unreadable evidence always expands. Never raises."""
+    """Re-ask the lane call at a new reviewed head (#1797). A session whose seat map was composed for
+    a reduced roster (``laneBasis.floor`` None) continues unchanged while the head still touches no
+    risk area. When the head's basis calls for seats the governing map's roster lacks, or its risk
+    cannot be read, the session HALTS ``lane-expanded-recompose``: the driver holds none of the
+    setup-time facts to recompose a seat map mid-session, so the review restarts with a freshly
+    composed map on the current head. Returns True when it halted. Never raises."""
     sm = config.get("seatMap")
     basis = sm.get("laneBasis") if isinstance(sm, dict) else None
     if not (isinstance(basis, dict) and "floor" in basis and basis["floor"] is None):
-        return
+        return False
     new_basis = None
     try:
         import lane_call
@@ -1185,65 +1190,22 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
     except Exception:
         new_basis = {"floor": "full"}
     if not isinstance(new_basis, dict) or new_basis.get("floor") is None:
-        return
-    risky = seat_map.roster_for(new_basis)
-    before = list(config.get("dimensions") or [])
-    config["dimensions"] = [d for d in DIMENSIONS if d in risky or d in before]
-    restored = [d for d in config["dimensions"] if d not in before]
-    basis_out = {"floor": new_basis.get("floor")}
-    config["seatMap"] = dict(sm, laneBasis=basis_out)
-    if restored:
-        _recompose_expanded_seat_map(state, config, restored, basis_out)
-
-
-def _recompose_expanded_seat_map(state, config, restored, basis):
-    """Seat the specialists a lane expansion restored, in the map dispatch actually reads.
-
-    Dispatch and `_fold_panel` read `seat_map_receipts.effective_seat_map(state)`, which prefers the
-    latest receipt carrying seats over `config["seatMap"]`; so the expanded roster is composed with
-    the pure `seat_map.build` (no liveness probe) from the effective map's own facts and the makers
-    accumulated so far, and recorded as a receipt. Fail-closed: when the map cannot supply what
-    `build` needs, or `build` raises, each restored specialist is recorded as an unfilled seat — it
-    surfaces as planned-but-not-run, never dispatched on a maker family and never silently absent."""
-    effective = seat_map_receipts.effective_seat_map(state)
-    effective = effective if isinstance(effective, dict) else {}
-    composed = None
-    try:
-        live = effective.get("liveVendors")
-        author = effective.get("authorFamily")
-        if (isinstance(live, list) and live and isinstance(author, str) and author):
-            old_seats = effective.get("seats") if isinstance(effective.get("seats"), dict) else {}
-            pins = {name: {k: entry.get(k) for k in ("vendor", "model", "effort")}
-                    for name, entry in old_seats.items()
-                    if isinstance(entry, dict) and entry.get("source") == "pinned"}
-            narrative = effective.get("narrativeFamily")
-            seed = effective.get("seed")
-            composed = seat_map.build(
-                seat_map.PANEL_ROSTER, list(live), author,
-                narrative if isinstance(narrative, str) and narrative else None,
-                seed if isinstance(seed, int) and not isinstance(seed, bool) else 0,
-                pins=pins or None,
-                extra_maker_families=frozenset(
-                    receipt_disclosures.accumulated_maker_families(state)))
-    except Exception:  # noqa: BLE001 — a compose that cannot run is the fail-closed branch below
-        composed = None
-    if isinstance(composed, dict) and isinstance(composed.get("seats"), dict):
-        composed["laneBasis"] = dict(basis)
-    else:
-        composed = dict(effective)
-        seats = dict(composed.get("seats")) if isinstance(composed.get("seats"), dict) else {}
-        for name in restored:
-            if not isinstance(seats.get(name), dict):
-                seats[name] = seat_map._unfilled_cfg(
-                    seat_map.DEFAULT_TIER_BY_SEAT.get(name, "reviewer-deep"))
-        composed["seats"] = seats
-        composed["laneBasis"] = dict(basis)
-    receipts = state.get("seatMapReceipts")
-    if not isinstance(receipts, list):
-        receipts = []
-        state["seatMapReceipts"] = receipts
-    receipts.append({"round": str(state.get("round")), "map": composed})
-    config["seatMap"] = dict(composed)
+        return False
+    roster = seat_map.effective_roster(sm)
+    if roster is not None and all(n in roster for n in seat_map.roster_for(new_basis)):
+        return False
+    state["terminal"] = "halted"
+    state["certification"] = {
+        "shape": None,
+        "reason": ("lane-expanded-recompose: this change now touches a risk area (or its risk cannot "
+                   "be read), and the seat map was composed for a smaller roster — the review must "
+                   "restart with a freshly composed seat map on the current head; certification "
+                   "withheld")}
+    _decision(state, LANE_EXPANDED_RECOMPOSE,
+              "the head touches a risk area (or its risk cannot be read) beyond the reduced seat "
+              "map — halt; run Setup again into a fresh session on the current head")
+    state["step"] = P_TERMINAL
+    return True
 
 
 def _default_config(overrides=None):
@@ -4253,8 +4215,7 @@ def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_dif
     state["headDiff"] = diff_text
     state["reviewedDiff"] = diff_text
     # axis: the lane basis is re-asked at every full panel scheduled over a new head — see bite-proof record wo_a_1797_roster
-    _reevaluate_lane_dimensions(state, config, diff_text)
-    return True
+    return not _reevaluate_lane_dimensions(state, config, diff_text)
 
 
 def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_seam=None):
@@ -4269,7 +4230,8 @@ def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_s
         return False
     state["headDiff"] = diff_text
     state["reviewedDiff"] = diff_text
-    _reevaluate_lane_dimensions(state, config, diff_text)
+    if _reevaluate_lane_dimensions(state, config, diff_text):
+        return False
     _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
@@ -4295,7 +4257,8 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     surface."""
     post_fix = bool(state.pop("_postFixEntry", False))
     if not state.get("_headDiffUnknown"):
-        _reevaluate_lane_dimensions(state, config, state.get("headDiff"))
+        if _reevaluate_lane_dimensions(state, config, state.get("headDiff")):
+            return
     # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
     # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
     # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
