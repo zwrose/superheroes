@@ -154,6 +154,8 @@ def _record(raw, n, problems):
             problems.append(f"{where}: left-for-owner finding {name!r} has no consequence")
         elif out in (_CRAFT, _RULING, _SHOWN_WRONG) and not _text(f.get("reason")):
             problems.append(f"{where}: {out} finding {name!r} has no reason")
+        if _text(name) and out == _LEFT and not (f.get("findingKey") or f.get("id")):
+            problems.append(f"{where}: left-for-owner finding {name!r} has no findingKey or id, so the advisor's input cannot name it")
     return rec
 
 
@@ -241,7 +243,9 @@ def _check_input(adv, words, problems):
             and not (_text(spec["spec"]) and _text(spec["receipt"])):
         problems.append("closesSpec needs a spec and a receipt, both non-empty strings")
     for stop in _check_list("walk", adv.get("walk", []), ("id", "title", "pr"), (), problems):
-        if allowed is not None and stop["pr"] not in allowed:
+        if not _num(stop["pr"]):
+            problems.append(f"walk stop {stop['id']} needs pr, an integer 1 or more")
+        elif allowed is not None and stop["pr"] not in allowed:
             problems.append(f"walk stop {stop['id']} is for PR #{stop['pr']}, which is not in this sheet")
     return allowed
 

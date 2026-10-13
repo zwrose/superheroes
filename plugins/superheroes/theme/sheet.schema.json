@@ -385,14 +385,14 @@
       "pattern": "^[a-z0-9][a-z0-9-]*$"
     },
     "answer": {
-      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it. An answer the card does not offer now (aligned or discuss on a card with options, or option or something-else on a card without) counts as unanswered.",
+      "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null when nothing is picked: a note saved before any pick, or a pick cleared by tapping it again. This is not part of the data file: no property of the sheet refers to it, and the page reads its answer choices from it. An answer the card does not offer now (aligned or discuss on a card with options, or option or something-else on a card without; accept on any sheet but a pr sheet or a stack sheet; aligned on a pr sheet or a stack sheet) counts as unanswered.",
       "type": "object",
       "additionalProperties": false,
       "required": ["answer", "optionId", "note"],
       "properties": {
         "answer": {
-          "description": "What the owner tapped. On a card with options: option for a pick of one of the card's options, or something-else for Something else, which leaves the call open for chat. On a card without options: aligned or discuss. Null when nothing is picked (none yet, or a pick cleared by tapping it again).",
-          "enum": ["aligned", "discuss", "option", "something-else", null]
+          "description": "What the owner tapped. On a card with options: option for a pick of one of the card's options, or something-else for Something else, which leaves the call open for chat. On a card without options: aligned or discuss, or on a pr sheet or a stack sheet accept or discuss. Accept is offered only by a pr sheet or a stack sheet. Null when nothing is picked (none yet, or a pick cleared by tapping it again).",
+          "enum": ["aligned", "discuss", "option", "something-else", "accept", null]
         },
         "optionId": {
           "description": "The id of the picked option, or null. It is a string exactly when the answer is option.",
@@ -417,7 +417,7 @@
         {
           "description": "An answer other than option must not name an option.",
           "if": {
-            "properties": {"answer": {"enum": ["aligned", "discuss", "something-else", null]}},
+            "properties": {"answer": {"enum": ["aligned", "discuss", "something-else", "accept", null]}},
             "required": ["answer"]
           },
           "then": {
@@ -427,14 +427,14 @@
       ]
     },
     "verdict": {
-      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a republished sheet starts unsigned and a page showing an older revision never touches a newer one. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores at verdict/<digest>, one per sheet revision, saved the moment the owner taps Approve or Not yet (a final sheet) or Merge or Not yet (a pr sheet or a stack sheet) or pauses typing the note, the same way an answer is saved: every save writes the whole document and the last write counts. <digest> is the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json and equals the sheet field, so a republished sheet starts unsigned and a page showing an older revision never touches a newer one. A null verdict (a note saved before any pick, or a verdict cleared by tapping it again) is unanswered. It never counts as approval on its own: the owner's word in the chat does. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["verdict", "note", "sheet"],
       "properties": {
         "verdict": {
-          "description": "What the owner has tapped so far: approve the spec, not yet, or null when nothing is picked (only a note was saved, or the pick was cleared by tapping it again).",
-          "enum": ["approve", "not-yet", null]
+          "description": "What the owner has tapped so far: approve the spec (a final sheet only), merge the PR or the stack (a pr sheet or a stack sheet only), not yet, or null when nothing is picked (only a note was saved, or the pick was cleared by tapping it again).",
+          "enum": ["approve", "merge", "not-yet", null]
         },
         "note": {
           "description": "The owner's note with the verdict, an empty string when there is none.",
@@ -445,6 +445,16 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         }
+      }
+    },
+    "verdictsByKind": {
+      "description": "Which verdicts each kind of sheet offers on its last card, in button order, by the sheet's kind. The page builds its verdict buttons from this list and restores a stored verdict only when its own kind offers it; a stored verdict outside its kind's list restores only its note. A remainder sheet or a plain sheet has no verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "final": {"enum": ["approve", "not-yet"]},
+        "pr": {"enum": ["merge", "not-yet"]},
+        "stack": {"enum": ["merge", "not-yet"]}
       }
     },
     "card": {

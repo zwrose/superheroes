@@ -564,9 +564,48 @@ def canonical(node):
     return json.dumps(node, sort_keys=True, separators=(",", ":"))
 
 
+def without_descriptions(node):
+    if isinstance(node, dict):
+        return {key: without_descriptions(value) for key, value in node.items() if key != "description"}
+    if isinstance(node, list):
+        return [without_descriptions(item) for item in node]
+    return node
+
+
+def with_pr_values(name, node):
+    """The base copy of an answer or verdict definition with the values layer 1b added to it."""
+    if name == "answer":
+        node["properties"]["answer"]["enum"].insert(-1, "accept")
+        for part in node["allOf"]:
+            if "enum" in part["if"]["properties"]["answer"]:
+                part["if"]["properties"]["answer"]["enum"].insert(-1, "accept")
+    else:
+        node["properties"]["verdict"]["enum"].insert(node["properties"]["verdict"]["enum"].index("approve") + 1, "merge")
+    return node
+
+
 @pytest.mark.parametrize("name", ["answer", "verdict"])
-def test_answer_and_verdict_definitions_are_unchanged_from_the_base(name):
-    # Axis: the answer and verdict documents are byte-identical in canonical JSON to the base commit's, because the page's readers still own them.
+def test_answer_and_verdict_definitions_differ_from_the_base_only_by_the_pr_values(name):
+    # Axis: apart from their descriptions, the answer and verdict documents equal the base commit's with only accept (before null, in both answer enums) and merge (after approve) added, because the page's readers still own them.
     base = subprocess.run(["git", "show", "%s:%s" % (BASE_COMMIT, SCHEMA_IN_REPO)], cwd=THEME,
                           capture_output=True, text=True, check=True).stdout
-    assert canonical(load_schema()["$defs"][name]) == canonical(json.loads(base)["$defs"][name])
+    expected = with_pr_values(name, without_descriptions(json.loads(base)["$defs"][name]))
+    assert canonical(without_descriptions(load_schema()["$defs"][name])) == canonical(expected)
+
+
+def test_accept_answer_document_names_no_option():
+    # Axis: a pr sheet or a stack sheet card with no options may store accept, and then it names no option.
+    assert document_errors("answer", {"answer": "accept", "optionId": None, "note": ""}) == []
+    assert document_errors("answer", {"answer": "accept", "optionId": None, "note": "kept"}) == []
+
+
+def test_accept_answer_with_an_option_is_refused():
+    # Axis: accept is an answer other than option, so a document that pairs it with an option id is refused.
+    assert document_errors("answer", {"answer": "accept", "optionId": "keep-it", "note": ""}) != []
+
+
+def test_merge_is_a_valid_verdict():
+    # Axis: a pr sheet or a stack sheet stores merge at verdict/<digest> like the final sheet stores approve, and the verdict list is approve, merge, not-yet, null.
+    digest = "a" * 64
+    assert document_errors("verdict", {"verdict": "merge", "note": "", "sheet": digest}) == []
+    assert load_schema()["$defs"]["verdict"]["properties"]["verdict"]["enum"] == ["approve", "merge", "not-yet", None]

@@ -385,3 +385,96 @@ def test_a_record_lane_outside_the_vocabulary_is_refused_by_the_builder():
     records[0]["lane"] = {"value": "medium", "reason": None}
     with pytest.raises(pr_sheet.Refusal):
         build(records, advisor)
+
+
+WALK_STOP = "walk stop retry-loop needs pr, an integer 1 or more"
+NO_IDENTITY = ("record for PR #214: left-for-owner finding 'Customers are not told a retry happened' "
+               "has no findingKey or id, so the advisor's input cannot name it")
+
+
+def without_identity(records, advisor, position=5):
+    """The big record with one left-for-owner finding stripped of its findingKey and id, and no override aimed at it."""
+    finding = records[0]["findings"][position]
+    finding.pop("findingKey")
+    finding.pop("id")
+    advisor["leftovers"].pop("F6")
+
+
+@pytest.mark.parametrize("bad", [True, 0, "5", 2.0], ids=["bool", "zero", "string", "float"])
+def test_a_walk_stop_pr_must_be_an_integer_one_or_more(bad):
+    # Axis: a walk stop's pr is refused by name unless it is an int, not a bool, of 1 or more; true is never PR #1.
+    records, advisor = bundle(BIG)
+    records[0]["pr"] = advisor["number"] = 1
+    advisor["walk"][0]["pr"] = bad
+    assert WALK_STOP in problems_of(records, advisor)
+
+
+def test_a_walk_stop_for_pr_one_still_builds():
+    # Axis: the integer 1 is a good walk stop pr, so the bool check refuses true and not the number it equals.
+    records, advisor = bundle(BIG)
+    records[0]["pr"] = advisor["number"] = 1
+    for stop in advisor["walk"]:
+        stop["pr"] = 1
+    assert [stop["pr"] for stop in build(records, advisor)["prSheet"]["walk"]] == [1, 1]
+
+
+def test_a_leftover_with_no_identity_is_refused_up_front():
+    # Axis: a left-for-owner finding with neither a findingKey nor an id is refused with a message that names it, not a crash while building.
+    records, advisor = bundle(BIG)
+    without_identity(records, advisor)
+    assert problems_of(records, advisor) == [NO_IDENTITY]
+
+
+def test_a_leftover_with_an_id_only_still_builds():
+    # Axis: a left-for-owner finding with an id and no findingKey is named by its id and builds, with the same card as before.
+    records, advisor = bundle(BIG)
+    before = [c["id"] for c in build(records, advisor)["cards"]]
+    records[0]["findings"][6].pop("findingKey")
+    sheet = build(records, advisor)
+    assert len(leftover_cards(sheet)) == 2
+    assert [c["id"] for c in sheet["cards"]][0] == before[0]
+    assert leftover_cards(sheet)[1]["recommendation"]["optionId"] == "fix-in-a-follow-up"
+
+
+def test_a_reviewer_with_no_family_builds_and_shows_null():
+    # Axis: a reviewer record whose family is null is carried as null, and the sheet still passes the schema and the page check.
+    records, advisor = bundle(BIG)
+    records[0]["reviewers"][0]["family"] = None
+    sheet = build(records, advisor)
+    assert sheet["prSheet"]["whatChanged"]["reviewers"][0]["family"] is None
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("mutate, expected", [
+    pytest.param(lambda r: r.update(reviewers=["code-reviewer"]), "its ci, lane, rounds, reviewers or missing reviews are malformed", id="reviewer-not-an-object"),
+    pytest.param(lambda r: r.update(missingReviews=[{"goAhead": None}]), "its ci, lane, rounds, reviewers or missing reviews are malformed", id="missing-review-without-a-name"),
+    pytest.param(lambda r: r.update(findings=["not an object"]), "a finding has no title, summary or id", id="finding-not-an-object"),
+])
+def test_a_malformed_nested_record_is_refused(mutate, expected):
+    # Axis: a reviewer, a missing review or a finding of the wrong shape is refused with a problem line, not a crash.
+    records, advisor = bundle(BIG)
+    mutate(records[0])
+    assert any(expected in p for p in problems_of(records, advisor))
+
+
+def test_one_input_with_several_problems_is_refused_with_all_of_them():
+    # Axis: problems from the advisor's input, a walk stop, a finding's identity and a reviewer all come back in one refusal.
+    records, advisor = bundle(BIG)
+    advisor["extra"] = 1
+    advisor["walk"][0]["pr"] = True
+    without_identity(records, advisor)
+    records[0]["reviewers"][1]["family"] = 5
+    problems = problems_of(records, advisor)
+    assert len(problems) == 4
+    assert {WALK_STOP, NO_IDENTITY, "the advisor's input has an unknown key extra",
+            "record for PR #214: its ci, lane, rounds, reviewers or missing reviews are malformed"} == set(problems)
+
+
+def test_a_leftover_with_no_override_gets_the_words_three_options():
+    # Axis: a left-for-owner finding the advisor says nothing about gets the words' leftover options, and only fix-before-merge sends back.
+    records, advisor = bundle(BIG)
+    advisor["leftovers"].pop("F6")
+    card = next(c for c in leftover_cards(build(records, advisor)) if c["question"] == "Customers are not told a retry happened")
+    assert card["options"] == WORDS["leftoverOptions"] and len(card["options"]) == 3
+    assert [o["sendsBack"] for o in card["options"]] == [False, False, True]
+    assert "recommendation" not in card

@@ -32,6 +32,8 @@ BOARD_SAVED = WORDS["boardSaved"]
 BOARD_NOT_SAVED = WORDS["boardNotSaved"]
 NEXT = WORDS["next"]
 ANSWERS = WORDS["answers"]
+PR = WORDS["pr"]
+PR_ANSWERS = WORDS["prAnswers"]
 
 PR_KINDS = ("pr", "stack")
 
@@ -219,7 +221,12 @@ def _validate(schema, value, path, defs):
         if len(value) < shortest:
             problems.append("%s must be at least %s characters long." % (where, shortest) if shortest > 1 else "%s must not be empty." % where)
         if "pattern" in schema and not re.search(schema["pattern"], value):
-            problems.append('%s ("%s") is not a lowercase id of letters, digits and hyphens.' % (where, value))
+            # The id wording belongs to the schema's own id rule; any other pattern is named by its description.
+            if schema["pattern"] == defs.get("id", {}).get("pattern"):
+                problems.append('%s ("%s") is not a lowercase id of letters, digits and hyphens.' % (where, value))
+            else:
+                rule = schema.get("description") or "it must match the pattern %s" % schema["pattern"]
+                problems.append('%s has the value "%s", which does not fit its rule: %s' % (where, value, rule))
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value < schema.get("minimum", value):
         problems.append("%s must be %s or more." % (where, schema["minimum"]))
     if isinstance(value, list):
@@ -306,7 +313,7 @@ def _letter(position):
     return letters
 
 
-def _render_card(number, card):
+def _render_card(number, card, answers=ANSWERS):
     kind = _text(card["callKind"]) + (" (warning)" if card["warning"] else "")
     lines = [
         "%d. **%s**" % (number, _text(card["question"])),
@@ -344,11 +351,11 @@ def _render_card(number, card):
             line += " (option %s)" % _letter(ids.index(recommendation["optionId"]))
         lines.append(line)
     if options:
-        offered = [_letter(position) for position in range(len(options))] + [ANSWERS["labels"][value] for value in ANSWERS["withOptions"]]
+        offered = [_letter(position) for position in range(len(options))] + [answers["labels"][value] for value in answers["withOptions"]]
     else:
-        offered = [ANSWERS["labels"][value] for value in ANSWERS["withoutOptions"]]
-    answers = " or ".join(offered) if len(offered) <= 2 else ", ".join(offered[:-1]) + ", or " + offered[-1]
-    lines.append("   - Answer: %s" % answers)
+        offered = [answers["labels"][value] for value in answers["withoutOptions"]]
+    said = " or ".join(offered) if len(offered) <= 2 else ", ".join(offered[:-1]) + ", or " + offered[-1]
+    lines.append("   - Answer: %s" % said)
     return lines
 
 
@@ -380,6 +387,87 @@ def _final_tail(final):
     return lines + ["- Answer: Approve or Not yet, with any note.", "- " + WORDS["doneStepInChat"], "", "**%s.** %s" % (WORDS["nextHeading"], NEXT), ""]
 
 
+def _short(commit):
+    return commit[:7]
+
+
+def _pr_what_changed(prsheet):
+    """A PR sheet's What changed: the facts of whatChanged and the commit the sheet describes, each a paragraph."""
+    facts = prsheet["whatChanged"]
+    lines = ["**%s**" % PR["whatChangedHeading"], "", _text(facts["summary"]), ""]
+    if facts["reviewers"]:
+        named = []
+        for reviewer in facts["reviewers"]:
+            notes = [PR["familyUnknown"] if reviewer["family"] is None else _text(reviewer["family"])]
+            if reviewer.get("notIndependent") is True:
+                notes.append(PR["notIndependentMark"])
+            named.append("%s (%s)" % (_text(reviewer["name"]), ", ".join(notes)))
+        lines += [_fill(PR["reviewedBy"], reviewers="; ".join(named)), ""]
+    if facts["caught"]:
+        lines += ["**%s**" % PR["caughtHeading"], ""] + ["- " + _text(line) for line in facts["caught"]] + [""]
+    lines += [_fill(PR["roundsLine"], rounds=_plural(facts["rounds"], WORDS["roundNoun"])), ""]
+    if facts["stoppedAtCap"]:
+        lines += [PR["historyCap"], ""]
+    ci = facts["ci"]
+    # Checks that ran on no commit have no sentence of their own: the state is shown as it came.
+    lines += [_text(ci["state"]) if ci["commit"] is None else _fill(PR["ciLine"], state=_text(ci["state"]), commit=_short(ci["commit"])), ""]
+    if facts["lane"] is not None:
+        reason = facts["laneReason"]
+        line = _fill(PR["laneLine"], lane=_text(facts["lane"]), reason="" if reason is None else _text(reason))
+        lines += [re.sub(r":\s*$", "", line) if reason is None else line, ""]
+    return lines + [_fill(PR["describesCommit"], commit=_short(prsheet["commit"])), ""]
+
+
+def _pr_walk(sheet):
+    stack = sheet["kind"] == "stack"
+    lines = ["**%s**" % PR["walkHeading"], ""]
+    for stop in sheet["prSheet"]["walk"]:
+        lines.append("- " + (_fill(PR["walkStopPr"], pr=str(stop["pr"])) + " " if stack else "") + _text(stop["title"]))
+    return lines + [""]
+
+
+def _pr_folded(heading, entries):
+    """A part the page folds away: its heading with the count, then its entries."""
+    return ["**%s (%d)**" % (heading, len(entries)), ""] + ["- " + entry for entry in entries] + [""]
+
+
+def _pr_entry(found):
+    return "%s — %s" % (_text(found["title"]), _text(found["detail"]))
+
+
+def _offered_verdicts(kind):
+    """The verdicts the schema's verdictsByKind lists for this kind of sheet, in button order: the page's own roster."""
+    with open(SCHEMA, encoding="utf-8") as handle:
+        return json.load(handle)["$defs"]["verdictsByKind"]["properties"][kind]["enum"]
+
+
+def _pr_body(sheet):
+    """A PR or stack sheet's prose after its title line, in the order the page shows it; ends with a blank line."""
+    prsheet, stack = sheet["prSheet"], sheet["kind"] == "stack"
+    lines = _pr_what_changed(prsheet)
+    if "previousCommit" in prsheet:
+        lines += ["**%s**" % PR["changedHeading"], "", _fill(PR["changed"], previous=_short(prsheet["previousCommit"])), ""]
+    if prsheet["walk"]:
+        lines += _pr_walk(sheet)
+    lines += ["**%s**" % PR["acceptingHeading"], ""]
+    if not sheet["cards"]:
+        lines += [PR["nothingToAccept"], ""]
+    for number, card in enumerate(sheet["cards"], 1):
+        lines += _render_card(number, card, PR_ANSWERS) + [""]
+    stacked = [_fill(PR["walkStopPr"], pr=str(found["number"])) + " %s · %s" % (_text(found["title"]), _short(found["commit"]))
+               for found in prsheet["prs"]] if stack else []
+    for heading, entries in ((PR["craftHeading"], [_pr_entry(found) for found in prsheet["craft"]]),
+                             (PR["decidedHeading"], [_pr_entry(found) for found in prsheet["alreadyDecided"]]),
+                             (PR["reviewHeading"], [_text(line) for line in prsheet["history"]]),
+                             (PR["prsHeading"], stacked)):
+        if entries:
+            lines += _pr_folded(heading, entries)
+    merge = _fill(PR["mergeStackLabel"] if stack else PR["mergeLabel"], number=str(prsheet["number"]))
+    labels = {"merge": merge, "not-yet": PR["notYetLabel"]}
+    choices = " or ".join(labels[verdict] for verdict in _offered_verdicts(sheet["kind"]))
+    return lines + ["**%s**" % PR["verdictHeading"], "", _fill(PR["verdictInChat"], choices=choices, merge=merge), ""]
+
+
 def render(sheet):
     """The sheet's prose as one string; the sheet must already have passed check_sheet."""
     cards = sheet["cards"]
@@ -388,9 +476,12 @@ def render(sheet):
         lines += [_why_line(sheet), ""]
     if sheet["kind"] == "final":
         lines += _final_head(sheet["final"])
-    for number, card in enumerate(cards, 1):
-        lines += _render_card(number, card)
-        lines.append("")
+    if sheet["kind"] in PR_KINDS:
+        lines += _pr_body(sheet)
+    else:
+        for number, card in enumerate(cards, 1):
+            lines += _render_card(number, card)
+            lines.append("")
     if sheet["kind"] == "final":
         lines += _final_tail(sheet["final"])
     return "\n".join(line.rstrip() for line in lines[:-1]) + "\n"
@@ -428,8 +519,6 @@ def main(argv=None) -> int:
     problems = check_sheet(sheet)
     if problems:
         return _refuse(problems)
-    if sheet["kind"] in PR_KINDS:
-        return _refuse(["This is a PR sheet, which has no chat form. Open the sheet's link to answer it."])
     sys.stdout.write(render(sheet))
     return 0
 
