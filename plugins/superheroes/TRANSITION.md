@@ -129,6 +129,13 @@ These retirements ship in the same release as the review record, and never apart
 - A parked PR goes back only after a cloud session confirms the renewed pass; the pass command alone does not count. It never goes back when it closed first or the owner already let it through.
 - The advisor records a PR sent only after the message is delivered. When delivery could not be confirmed it runs `sent --uncertain`: the PR is never resent on its own and is listed under `uncertain` until the owner decides. A send-back that was not delivered keeps being listed.
 
+### Showrunner: recovering a cloud builder
+
+- `lib/cloud_recover.py` is new, with six verbs: `pushed` reads what the lane pushed, `assess` answers whether the lane is `working`, `unresolved`, `awaiting-handover`, `ask-to-push` or `stopped`, `ask` composes the request to push and hand over, `asked` records that the request went out, `successor` composes the replacement launch from the pushed work, and `message` composes the owner's notice.
+- Its state is `cloud-recover.json`, beside the launch ledger.
+- `cloud_parked.py send-back` has a new `superseded` list: a parked PR whose lane was replaced is listed there and never messaged.
+- Recovery needs the session's listed state as input, which is a host action, and it never recovers a lane whose session reads working with recent activity.
+
 ## 0.42.0
 
 ### Before you upgrade

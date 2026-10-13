@@ -213,6 +213,12 @@ looked.** The advisor runs this sweep before composing the successor's launch an
 found for handoff; the adopting builder re-runs the sweep at intake and reconciles against that
 handoff — both halves run, neither replaces the other.
 
+**A cloud lane is the one exception.** It has no worktree or local branch to sweep, so for a cloud
+lane the ask to push replaces the sweep: the advisor asks a stalled builder that still answers, once,
+to push and hand over, and the successor starts from what was pushed. Work in a cloud lane that was
+never pushed cannot be preserved and is redone, and a cloud lane that never pushed starts again from
+its base.
+
 ### Check for a sibling build at a clean-base intake
 
 A builder launched on a clean base, with no branch handed over, checks at intake for another build
