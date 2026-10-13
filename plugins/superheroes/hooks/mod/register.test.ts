@@ -857,6 +857,45 @@ test('the desktop app attaching late starts the checkpoint with no further measu
   expect(r.commands).toEqual([COMMAND])
 })
 
+test('the desktop app attaching late carries the checkpoint through the save and the /compact command', async ($, on) => {
+  const r: Rig = rig(
+    on,
+    argv => {
+      if (argv[3] === 'save') {
+        r.notes = 'fresh notes'
+      }
+      if (argv[3] === 'instructions') {
+        return ok({ mode: 'showrunner', notesPath: NOTES, notesFound: true, markerPath: MARKER, instructions: `${DIRECTIVE}\n${r.notes}` })
+      }
+
+      return argv[3] === 'mark' ? ok({}) : saveAnswer
+    },
+    { isCompactCommandCompacting: true },
+  )
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.surfaces = ['desktop']
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+
+  await complete($, block('the notes'))
+
+  expect(r.notes).toBe('fresh notes')
+  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.toasts).toEqual(['Checkpoint notes saved'])
+
+  await r.clock.advance(1000)
+
+  expect(r.commands).toEqual([COMMAND, 'compact'])
+  expect(r.seen).toHaveLength(1)
+  expect(r.toasts).toEqual(['Checkpoint notes saved', SUCCESS])
+})
+
 test('a mobile attach to a non-interactive session runs nothing', async ($, on) => {
   const r = rig(on, () => saveAnswer)
 
@@ -1652,6 +1691,26 @@ test('a non-interactive compaction that succeeded is never retried for a failed 
   expect(r.compactAttempts).toBe(1)
   expect(r.commands.filter(c => c === 'compact')).toEqual(['compact'])
   expect(r.toasts.filter(t => t.startsWith(COMPACT_FAILED))).toEqual([])
+})
+
+test('a non-interactive /compact that does not compact is a failure: retried once, then the owner is told', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { isCompactCommandCompacting: true, compactSkip: 'vetoed by a hook' })
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+
+  await r.clock.advance(1000)
+  expect(r.commands.filter(c => c === 'compact')).toEqual(['compact'])
+  expect(r.toasts).toEqual([])
+
+  await r.clock.advance(1000)
+  expect(r.commands.filter(c => c === 'compact')).toEqual(['compact', 'compact'])
+  expect(r.toasts.filter(t => t.startsWith(COMPACT_FAILED))).toHaveLength(1)
+  expect(r.toasts.filter(t => t.startsWith(SUCCESS))).toEqual([])
 })
 
 test('a follow-up turn running when the compaction timer fires costs no attempt; the next tick compacts once', async ($, on) => {
