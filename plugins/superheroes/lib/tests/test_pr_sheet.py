@@ -1027,7 +1027,7 @@ def run_index(tmp_path, mutate=None, answers=None):
     return index_cli(source, out / "index.json", answers), out
 
 
-_INDEX_ROW_KEYS = ("number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt")
+_INDEX_ROW_KEYS = ("number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt", "caption")
 
 
 def test_the_index_is_built_from_the_input_and_each_prs_sheet_and_store(tmp_path):
@@ -1055,6 +1055,38 @@ def test_the_index_is_built_from_the_input_and_each_prs_sheet_and_store(tmp_path
     assert question["recommendation"]["optionId"] == "keep-visible"
     assert (out / picture).read_bytes() == (FIXTURES / "elsewhere" / "cart-empty.png").read_bytes()
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def _caption_row(state, accepted=0, total=0, walked=0, walk_total=0, merges_at=None):
+    return {"state": state, "accepted": accepted, "total": total, "walked": walked, "walkTotal": walk_total, "mergesAt": merges_at}
+
+
+CAPTION_CASES = [
+    (_caption_row("needs-you"), "Nothing to accept"),
+    (_caption_row("needs-you", merges_at=1), "Nothing to accept · merges first"),
+    (_caption_row("needs-you", 0, 2, 0, 4, merges_at=2), "0 of 2 accepted · 0 of 4 walked · merges second"),
+    (_caption_row("needs-you", 1, 1, 0, 0, merges_at=10), "1 of 1 accepted · merges tenth"),
+    (_caption_row("needs-you", 1, 1, 0, 0, merges_at=11), "1 of 1 accepted · merges at place 11"),
+    (_caption_row("needs-you", 0, 0, 3, 3), "Nothing to accept · 3 of 3 walked"),
+    (_caption_row("needs-you", 1, 2, merges_at=1.0), "1 of 2 accepted · merges first"),
+    (_caption_row("being-fixed", 1, 2, merges_at=1), "1 of 2 accepted · Going back for a fix · a new sheet comes after it"),
+    (_caption_row("ready", 2, 2, 1, 1, merges_at=1), "2 of 2 accepted · 1 of 1 walked · Merge verdict given"),
+]
+
+
+@pytest.mark.parametrize("row, caption", CAPTION_CASES, ids=[c for _, c in CAPTION_CASES])
+def test_an_index_rows_caption(row, caption):
+    # Axis: the caption is the accepted part (or Nothing to accept), the walked part when the PR has a walk, then the state part
+    # (with the merge place on needs-you, a whole-number place read as an int), joined with " · ".
+    assert pr_sheet._row_caption(row, INDEX_WORDS) == caption
+
+
+def test_the_built_index_carries_each_rows_caption(tmp_path):
+    # Axis: the builder stores the caption on every row, so the page and the chat prose have nothing to compose.
+    done, out = run_index(tmp_path)
+    assert done.returncode == 0, done.stdout
+    rows = json.loads((out / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
+    assert all(r["caption"] == pr_sheet._row_caption(r, INDEX_WORDS) and r["caption"] for r in rows)
 
 
 def test_an_index_with_no_questions_and_no_prs_is_built(tmp_path):

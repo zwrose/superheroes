@@ -105,6 +105,8 @@
     "nothingToAcceptCount": "Nothing to accept",
     "mergeLocked": "{merge} · locked",
     "unlocks": "Unlocks when every item above is accepted: {accepted} of {total} so far.",
+    "resaveLegacy": "Merge stays locked: an earlier version of this page saved the answers on the cards numbered {numbers}. Clear each one and pick it again to save it afresh.",
+    "resaveNoRevision": "Merge stays locked: this browser can't mark the saved answers on the cards numbered {numbers} the way Merge needs. Answer them from a browser that can.",
     "sendBack": "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
   },
   "index": {

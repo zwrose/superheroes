@@ -62,7 +62,7 @@ names a file in the same shape that holds the answers to the index's own questio
 A question that --answers answers (an option the question offers, or Something else) is left out of the index.
 
 Each row's counts and state come from pr_state() below, its title and kind from the PR's own sheet, and its
-place in the merge order from mergeOrder. Rows are listed by place in the merge order, then the rest in the
+place in the merge order from mergeOrder; its caption is composed here once, and the page and the chat prose show it as it is. Rows are listed by place in the merge order, then the rest in the
 order of prs.
 """
 from __future__ import annotations
@@ -104,13 +104,9 @@ _WALK, _STOP = _SCHEMA["$defs"]["walk"], _SCHEMA["$defs"]["walkStop"]
 STOP_DIGEST = int(re.search(r"\{(\d+)\}", _STOP["properties"]["key"]["pattern"]).group(1))  # the stop key's digest width, from its schema pattern
 _KINDS = tuple(_STOP["properties"]["kind"]["enum"])
 _STEPS = {a["if"]["properties"]["kind"]["const"]: a["then"]["properties"]["steps"] for a in _STOP["allOf"]}
-# The stored documents' shapes, which pr_state reads, from the same schema.
+# The stored documents (answer, walkAnswer, verdict) pr_state reads are checked against their schema definitions by sheet_prose.fits_definition.
 _DEFS = _SCHEMA["$defs"]
-_ANSWER, _WALK_ANSWER, _VERDICT, _INDEX_ROW = _DEFS["answer"], _DEFS["walkAnswer"], _DEFS["verdict"], _DEFS["indexRow"]
-_REVISION = re.compile(_ANSWER["properties"]["revision"]["pattern"])
-_COVERS = re.compile(_VERDICT["properties"]["covers"]["items"]["pattern"])
-_DIGEST = re.compile(_VERDICT["properties"]["sheet"]["pattern"])
-_LINK = re.compile(_INDEX_ROW["properties"]["link"]["pattern"])
+_LINK = re.compile(_DEFS["indexRow"]["properties"]["link"]["pattern"])
 _STORE_KEYS = ("answers", "verdict", "walk")
 
 
@@ -494,41 +490,8 @@ def _pr_words():
         return json.load(handle)["pr"]
 
 
-def _fits(doc, shape):
-    """True when doc is an object with every key the schema object requires and no key it does not list."""
-    return isinstance(doc, dict) and set(shape["required"]) <= set(doc) <= set(shape["properties"])
-
-
 def _matches(pattern, value):
     return isinstance(value, str) and pattern.fullmatch(value) is not None
-
-
-def _fits_answer(doc):
-    """True when doc is a stored card answer: the shape of $defs/answer, optionId a string exactly when the answer is option."""
-    if not (_fits(doc, _ANSWER) and doc["answer"] in _ANSWER["properties"]["answer"]["enum"] and isinstance(doc["note"], str)):
-        return False
-    if "revision" in doc and not _matches(_REVISION, doc["revision"]):
-        return False
-    return _matches(_ID, doc["optionId"]) if doc["answer"] == "option" else doc["optionId"] is None
-
-
-def _fits_walk_answer(doc):
-    """True when doc is a stored walk result: the shape of $defs/walkAnswer, a fix only on a Problem."""
-    return (_fits(doc, _WALK_ANSWER) and doc["answer"] in _WALK_ANSWER["properties"]["answer"]["enum"]
-            and (doc["fix"] is None or (isinstance(doc["fix"], str) and doc["answer"] == "problem"))
-            and isinstance(doc["note"], str)
-            and isinstance(doc["shots"], list) and all(isinstance(s, str) and s for s in doc["shots"]))
-
-
-def _fits_verdict(doc):
-    """True when doc is a stored verdict: the shape of $defs/verdict, covers present on a Merge."""
-    if not (_fits(doc, _VERDICT) and doc["verdict"] in _VERDICT["properties"]["verdict"]["enum"]
-            and isinstance(doc["note"], str) and _matches(_DIGEST, doc["sheet"])):
-        return False
-    covers = doc.get("covers")
-    if "covers" in doc and not (isinstance(covers, list) and all(_matches(_COVERS, c) for c in covers) and len(set(covers)) == len(covers)):
-        return False
-    return doc["verdict"] != "merge" or "covers" in doc
 
 
 def _pr_answer_words():
@@ -542,7 +505,7 @@ def _counted_answer(card, doc, answer_words):
     What a card offers is read from answer_words (the prAnswers block of sheet-words.json), as the page reads it: the
     plain answers listed for a card with options or without, and an option only when it is one of the card's own.
     """
-    if not _fits_answer(doc):
+    if not sheet_prose.fits_definition("answer", doc):
         return None
     if card["options"]:
         offered = doc["answer"] in answer_words["withOptions"] or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in card["options"]])
@@ -582,7 +545,7 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
         sends_back = sends_back or (picked is not None and picked.get("sendsBack") is True)
     for stop in stops:
         doc = walks.get(stop["key"])
-        if not (_fits_walk_answer(doc) and doc["answer"] in words["walkAnswers"][stop["kind"]] and (doc["fix"] is None or doc["fix"] in fixes)):
+        if not (sheet_prose.fits_definition("walkAnswer", doc) and doc["answer"] in words["walkAnswers"][stop["kind"]] and (doc["fix"] is None or doc["fix"] in fixes)):
             # As the page restores it: a stored Problem whose fix is no longer offered, or whose document is malformed, stays a Problem with no fix and keeps blocking.
             if isinstance(doc, dict) and doc.get("answer") == "problem":
                 walked, blocking = walked + 1, True
@@ -595,7 +558,7 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
     revisions = [counted[card["id"]] and counted[card["id"]].get("revision") for card in cards]
     covered = None if not all(revisions) else {f"answers/{card['id']}@{rev}" for card, rev in zip(cards, revisions)}
     verdict = _collection(store, "verdict").get(digest)
-    stands = (_fits_verdict(verdict) and verdict["sheet"] == digest and verdict["verdict"] == "merge"
+    stands = (sheet_prose.fits_definition("verdict", verdict) and verdict["sheet"] == digest and verdict["verdict"] == "merge"
               and accepted == len(cards) and not blocking
               and covered is not None and set(verdict["covers"]) == covered)
     state = "being-fixed" if sends_back else "ready" if stands else "needs-you"
@@ -674,6 +637,22 @@ def _check_index_input(adv, problems):
         problems.append("mergeOrder names a PR more than once")
 
 
+def _row_caption(row, words):
+    """The line under an index row's name, the one home of the rule: what is accepted (or nothing to accept), what is walked
+    when the PR has a walk, then where the PR stands, with the merge place on a PR that needs the owner, joined with " · "."""
+    parts = [_fill(words["accepted"], accepted=row["accepted"], total=row["total"]) if row["total"] else words["nothingToAccept"]]
+    if row["walkTotal"] > 0:
+        parts.append(_fill(words["walked"], walked=row["walked"], total=row["walkTotal"]))
+    if row["state"] == "being-fixed":
+        parts.append(words["beingFixed"])
+    elif row["state"] == "ready":
+        parts.append(words["ready"])
+    elif row["mergesAt"] is not None:
+        place, ordinals = int(row["mergesAt"]), words["ordinals"]
+        parts.append(_fill(words["mergesAt"], ordinal=ordinals[place - 1]) if place <= len(ordinals) else _fill(words["mergesAtNumber"], place=place))
+    return " · ".join(parts)
+
+
 def _index_row(entry, base, order, words, problems):
     """The index row for one PR entry, read from its sheet and store files; None after naming what is wrong."""
     where = f"PR #{entry['number']}"
@@ -695,14 +674,15 @@ def _index_row(entry, base, order, words, problems):
     problems.extend(store_problems)
     if found or store is None:
         return None
-    return {"number": entry["number"], "kind": sheet["kind"], "title": sheet["title"], "link": entry["link"],
-            **pr_state(sheet_bytes, store, words["pr"], words["prAnswers"]),
-            "mergesAt": order.index(entry["number"]) + 1 if entry["number"] in order else None}
+    row = {"number": entry["number"], "kind": sheet["kind"], "title": sheet["title"], "link": entry["link"],
+           **pr_state(sheet_bytes, store, words["pr"], words["prAnswers"]),
+           "mergesAt": order.index(entry["number"]) + 1 if entry["number"] in order else None}
+    return {**row, "caption": _row_caption(row, words["index"])}
 
 
 def _answered(question, doc):
     """True when doc is an answer the question offers: one of its options, or Something else."""
-    return _fits_answer(doc) and (doc["answer"] == "something-else"
+    return sheet_prose.fits_definition("answer", doc) and (doc["answer"] == "something-else"
                                   or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in question["options"]]))
 
 

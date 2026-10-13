@@ -261,6 +261,22 @@ def test_a_merge_saved_on_one_page_does_not_stand_after_another_page_changed_an_
     assert _row(_build_index(tmp_path, capsys, [_entry(tmp_path, 214, BIG, merged)]), 214)["state"] == "needs-you"
 
 
+# Bites on: two pages, each starting from its own fresh state, writing the same revision for different saves (a counter that restarts on every page), so a Merge page A saved stays valid after page B changed the same card.
+def test_revisions_written_by_two_pages_for_the_same_card_differ_and_the_earlier_merge_falls(tmp_path, capsys):
+    page_a = _run(BIG, "await acceptAll(); await merge('go ahead');")
+    assert page_a["view"]["standing"] is True
+    store_a = _apply(_empty(), page_a["written"])
+    assert _state(BIG, store_a)["state"] == "ready"
+    answers_only = {path: body for path, body in page_a["written"].items() if path.startswith("answers/")}
+    page_b = _run(BIG, "t.type(t.note(%s), 'because', 'change'); await t.tick();" % json.dumps(A), _apply(_empty(), answers_only))
+    assert list(page_b["written"]) == ["answers/" + A]
+    assert page_b["written"]["answers/" + A]["revision"] != page_a["written"]["answers/" + A]["revision"]
+    merged = _apply(store_a, page_b["written"])
+    assert _state(BIG, merged)["state"] == "needs-you"
+    assert _run(BIG, "", merged)["view"]["standing"] is False
+    assert _row(_build_index(tmp_path, capsys, [_entry(tmp_path, 214, BIG, merged)]), 214)["state"] == "needs-you"
+
+
 # Bites on: a cleared answer (answer null, written when a pick is tapped again) counted as an answer by pr_state or by the page.
 def test_a_cleared_answer_counts_as_unanswered_on_both_sides():
     run = _run(BIG, "await acceptAll(); await merge('go ahead'); await tap(A, 'Accept');")

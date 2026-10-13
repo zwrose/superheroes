@@ -1194,9 +1194,10 @@ def test_a_stacks_craft_and_decided_entries_name_their_pr_and_a_pr_sheets_do_not
 INDEX_WORDS = WORDS["index"]
 
 
-def _row(number, state, accepted=0, total=0, walked=0, walk_total=0, merges_at=None, kind="pr", title=None):
+def _row(number, state, accepted=0, total=0, walked=0, walk_total=0, merges_at=None, kind="pr", title=None, caption=None):
     return {"number": number, "kind": kind, "title": title or "Title %d" % number, "link": "https://sheets.example.test/%d" % number,
-            "state": state, "accepted": accepted, "total": total, "walked": walked, "walkTotal": walk_total, "mergesAt": merges_at}
+            "state": state, "accepted": accepted, "total": total, "walked": walked, "walkTotal": walk_total, "mergesAt": merges_at,
+            "caption": caption or "Caption of %d" % number}
 
 
 def _index_sheet(rows, cards=None):
@@ -1207,9 +1208,11 @@ def _index_sheet(rows, cards=None):
     return {"schema": "superheroes-sheet/1", "kind": "index", "title": INDEX_WORDS["title"], "index": {"rows": rows}, "cards": cards}
 
 
-ROWS = [_row(211, "needs-you", merges_at=1), _row(214, "needs-you", 0, 2, 1, 4, merges_at=2, title="Retry a failed payment"),
-        _row(300, "needs-you", 1, 3, merges_at=11), _row(219, "being-fixed", title="Order export"),
-        _row(4, "ready", 2, 2, kind="stack", title="Gift cards")]
+ROWS = [_row(211, "needs-you", merges_at=1, caption="Nothing to accept · merges first"),
+        _row(214, "needs-you", 0, 2, 1, 4, merges_at=2, title="Retry a failed payment", caption="0 of 2 accepted · 1 of 4 walked · merges second"),
+        _row(300, "needs-you", 1, 3, merges_at=11, caption="1 of 3 accepted · merges at place 11"),
+        _row(219, "being-fixed", title="Order export", caption="Nothing to accept · Going back for a fix · a new sheet comes after it"),
+        _row(4, "ready", 2, 2, kind="stack", title="Gift cards", caption="2 of 2 accepted · Merge verdict given")]
 
 
 # Bites on: the index prose dropping its title line, a question (with its pick answers), the first-answer line, a group heading, a row's name, caption or link, or the done line; or printing the groups out of order.
@@ -1259,22 +1262,12 @@ def test_prose_of_an_index_with_no_question_and_no_row_to_answer(tmp_path):
     assert _prose_of(tmp_path, _index_sheet([], cards=[])).endswith(INDEX_WORDS["done"] + "\n")
 
 
-CAPTIONS = [
-    (_row(1, "needs-you"), "Nothing to accept"),
-    (_row(1, "needs-you", merges_at=1), "Nothing to accept · merges first"),
-    (_row(1, "needs-you", 0, 2, 0, 4, merges_at=2), "0 of 2 accepted · 0 of 4 walked · merges second"),
-    (_row(1, "needs-you", 1, 1, 0, 0, merges_at=10), "1 of 1 accepted · merges tenth"),
-    (_row(1, "needs-you", 1, 1, 0, 0, merges_at=11), "1 of 1 accepted · merges at place 11"),
-    (_row(1, "needs-you", 0, 0, 3, 3), "Nothing to accept · 3 of 3 walked"),
-    (_row(1, "being-fixed", 1, 2, merges_at=1), "1 of 2 accepted · Going back for a fix · a new sheet comes after it"),
-    (_row(1, "ready", 2, 2, 1, 1, merges_at=1), "2 of 2 accepted · 1 of 1 walked · Merge verdict given"),
-]
-
-
-@pytest.mark.parametrize("row, caption", CAPTIONS, ids=[c for _, c in CAPTIONS])
-def test_an_index_rows_caption(row, caption):
-    # Axis: the caption is the accepted part (or Nothing to accept), the walked part when the PR has a walk, then the state part, joined with " · ".
-    assert _load_prose_module().row_caption(row) == caption
+# Bites on: the prose composing a caption of its own instead of printing the row's caption as it is (the chat then disagrees with the page and the builder), including on a row whose merge place is a whole number written as a float.
+def test_the_prose_prints_each_rows_caption_as_it_is(tmp_path):
+    rows = [_row(1, "needs-you", merges_at=1.0, caption="Whatever the builder wrote · verbatim"), _row(2, "ready", 3, 3, caption="Another line")]
+    out = _prose_of(tmp_path, _index_sheet(rows))
+    assert "- #1 · Title 1 — Whatever the builder wrote · verbatim — https://sheets.example.test/1\n" in out
+    assert "- #2 · Title 2 — Another line — https://sheets.example.test/2\n" in out
 
 
 def test_the_index_title_line_counts_the_questions():
@@ -1289,3 +1282,20 @@ def test_the_index_title_line_counts_the_questions():
 def test_repeated_index_row_numbers_are_refused(tmp_path):
     result = _render(tmp_path, _index_sheet([_row(4, "ready"), _row(5, "ready"), _row(4, "needs-you")]))
     assert result.returncode == 1 and result.stdout == "" and result.stderr == "Index row number 4 is used more than once.\n"
+
+
+# Bites on: the stored-document check restating the schema's conditional rules (a fix off a Problem, a Merge with no covers, an answer's option) instead of reading $defs, so a schema change moves the page and not the index.
+@pytest.mark.parametrize("name, document, fits", [
+    ("answer", {"answer": "option", "optionId": "keep-it", "note": ""}, True),
+    ("answer", {"answer": "option", "optionId": None, "note": ""}, False),
+    ("answer", {"answer": "accept", "optionId": "keep-it", "note": ""}, False),
+    ("answer", {"answer": "accept", "optionId": None, "note": "", "revision": "0123456789abcdef"}, True),
+    ("answer", {"answer": "accept", "optionId": None, "note": "", "revision": "XYZ"}, False),
+    ("walkAnswer", {"answer": "problem", "fix": "x", "note": "", "shots": []}, True),
+    ("walkAnswer", {"answer": "works", "fix": "x", "note": "", "shots": []}, False),
+    ("verdict", {"verdict": "merge", "note": "", "sheet": "a" * 64}, False),
+    ("verdict", {"verdict": "merge", "note": "", "sheet": "a" * 64, "covers": ["answers/a@0123456789abcdef"]}, True),
+    ("verdict", {"verdict": "not-yet", "note": "", "sheet": "a" * 64}, True),
+], ids=lambda value: value if isinstance(value, str) and len(value) < 12 else None)
+def test_a_stored_document_fits_when_its_schema_definition_says_so(name, document, fits):
+    assert _load_prose_module().fits_definition(name, document) is fits

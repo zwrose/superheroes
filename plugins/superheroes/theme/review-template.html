@@ -1447,12 +1447,17 @@
       return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
     }
 
+    // True when this browser can make a revision: the schema says how wide one is and a random source exists.
+    function canMakeRevision() {
+      return answerShape !== null && answerShape.revisionBytes !== 0
+        && typeof crypto !== "undefined" && crypto !== null && typeof crypto.getRandomValues === "function";
+    }
+
     // A fresh revision (of the width the schema's pattern says) for a body about to be sent; null when this browser has no random source, so the answer is sent without one
     // and its card can never be covered by a Merge.
     function freshRevision() {
       try {
-        if (answerShape === null || answerShape.revisionBytes === 0) return null;
-        if (typeof crypto === "undefined" || crypto === null || typeof crypto.getRandomValues !== "function") return null;
+        if (!canMakeRevision()) return null;
         return Array.from(crypto.getRandomValues(new Uint8Array(answerShape.revisionBytes)), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
       } catch (error) {
         return null;
@@ -1865,8 +1870,15 @@
       const mergeLabel = verdictLabel("merge");
       verdictController.setChoice("merge", locked ? fill(prWords.mergeLocked, { merge: mergeLabel }) : mergeLabel, locked);
       verdictController.setShown(!sendsBack);
-      unlockLine.textContent = fill(prWords.unlocks, { accepted: accepted, total: total });
-      unlockLine.hidden = !incomplete || sendsBack;
+      // Cards the store holds as accepted with no revision (saved by an earlier page, or by a browser with no random source) are named, with what to do about it, so a locked Merge is never left unexplained.
+      const resave = items.map(function (item, index) { return index; }).filter(function (index) {
+        const held = controllers.get(items[index].id).confirmed();
+        const option = held === null ? undefined : items[index].options.find(function (candidate) { return candidate.id === held.optionId; });
+        return held !== null && (held.answer === "accept" || (option !== undefined && option.sendsBack === false)) && controllers.get(items[index].id).revision() === null;
+      });
+      const resaveText = resave.length === 0 ? "" : fill(canMakeRevision() ? prWords.resaveLegacy : prWords.resaveNoRevision, { numbers: resave.map(function (index) { return index + 1; }).join(", ") });
+      unlockLine.textContent = [incomplete ? fill(prWords.unlocks, { accepted: accepted, total: total }) : "", resaveText].filter(function (part) { return part !== ""; }).join(" ");
+      unlockLine.hidden = unlockLine.textContent === "" || sendsBack;
       sendBackLine.hidden = !sendsBack;
       if (ready && locked && verdictController.state().answer === "merge") verdictController.clear();
       // The answers held back until the verdict's write is acknowledged go out now, in card order; while that write has failed
@@ -1970,7 +1982,7 @@
       "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
       "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
-      "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "sendBack",
+      "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
       "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
       "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
@@ -2016,20 +2028,6 @@
         && ["zoomOut", "zoomIn", "zoomFit"].every(function (key) { return typeof words.pr[key] === "string"; });
     }
 
-    // The line under an index row's name: what is accepted, what is walked, then where the PR stands.
-    function rowCaption(row) {
-      const parts = [row.total === 0 ? indexWords.nothingToAccept : fill(indexWords.accepted, { accepted: row.accepted, total: row.total })];
-      if (row.walkTotal > 0) parts.push(fill(indexWords.walked, { walked: row.walked, total: row.walkTotal }));
-      if (row.state === "being-fixed") parts.push(indexWords.beingFixed);
-      else if (row.state === "ready") parts.push(indexWords.ready);
-      else if (row.mergesAt !== null) {
-        parts.push(row.mergesAt <= indexWords.ordinals.length
-          ? fill(indexWords.mergesAt, { ordinal: indexWords.ordinals[row.mergesAt - 1] })
-          : fill(indexWords.mergesAtNumber, { place: row.mergesAt }));
-      }
-      return parts.join(" · ");
-    }
-
     // The app bar's count: the questions while any are left, else how many PRs need the owner.
     function indexCount() {
       if (items.length > 0) return items.length === 1 ? indexWords.questionsOne : fill(indexWords.questionsMany, { count: items.length });
@@ -2044,7 +2042,7 @@
       Object.entries({ href: row.link, target: "_blank", rel: "noopener" }).forEach(function (pair) { link.setAttribute(pair[0], pair[1]); });
       link.replaceChildren(
         textElement("span", "sh-label", fill(indexWords[row.kind === "stack" ? "rowStack" : "rowPr"], { number: row.number, title: row.title })),
-        textElement("span", "sh-caption", rowCaption(row)),
+        textElement("span", "sh-caption", row.caption),
         textElement("span", "", indexWords.open),
       );
       return link;

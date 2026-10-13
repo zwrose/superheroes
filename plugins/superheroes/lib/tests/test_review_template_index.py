@@ -38,7 +38,7 @@ const groupView = (node) => ({ id: node.id, heading: node.children[0].textConten
 """
 
 
-def _row(number, state, accepted, total, walked=0, walk_total=0, merges_at=None, kind="pr", title=None):
+def _row(number, state, accepted, total, walked=0, walk_total=0, merges_at=None, kind="pr", title=None, caption=None):
     return {
         "number": number,
         "kind": kind,
@@ -50,6 +50,7 @@ def _row(number, state, accepted, total, walked=0, walk_total=0, merges_at=None,
         "walked": walked,
         "walkTotal": walk_total,
         "mergesAt": merges_at,
+        "caption": caption or "Caption of %d" % number,
     }
 
 
@@ -97,12 +98,12 @@ def _row_views(rows):
     return [
         {"label": label, "caption": caption, "open": IW["open"], "href": row["link"], "target": "_blank", "rel": "noopener", "tag": "a"}
         for row, (label, caption) in zip(rows, [
-            ("#214 · Checkout drops the cart", "2 of 3 accepted · 1 of 5 walked · merges second"),
-            ("#211 · Change 211", "Nothing to accept · merges first"),
-            ("Stack #4 · Order history", "0 of 1 accepted · merges at place 12"),
-            ("#300 · Change 300", "1 of 2 accepted"),
-            ("#220 · Change 220", "1 of 4 accepted · 2 of 2 walked · Going back for a fix · a new sheet comes after it"),
-            ("#230 · Change 230", "3 of 3 accepted · Merge verdict given"),
+            ("#214 · Checkout drops the cart", "Caption of 214"),
+            ("#211 · Change 211", "Caption of 211"),
+            ("Stack #4 · Order history", "Caption of 4"),
+            ("#300 · Change 300", "Caption of 300"),
+            ("#220 · Change 220", "Caption of 220"),
+            ("#230 · Change 230", "Caption of 230"),
         ])
     ]
 
@@ -152,7 +153,7 @@ def test_with_no_question_the_blocks_work_part_says_nothing_is_blocking():
     assert IW["nothingBlocking"] == "Nothing is blocking work right now."
 
 
-# Bites on: a group drawn out of the order needs-you, being-fixed, ready, a heading that is not the word for its state, a row out of data order, or a row missing; a caption missing its accepted count ("Nothing to accept" with no items), its walked part, its merge place (and the number form past the ordinals), or its being-fixed and ready lines.
+# Bites on: a group drawn out of the order needs-you, being-fixed, ready, a heading that is not the word for its state, a row out of data order, or a row missing; a row's caption not drawn as the row carries it.
 def test_each_group_lists_its_rows_in_data_order_with_the_caption_rule():
     page = _page(_index(), "return { groups: kids().filter((node) => node.id.startsWith('index-group-')).map(groupView) };")
     groups = page["result"]["groups"]
@@ -161,7 +162,7 @@ def test_each_group_lists_its_rows_in_data_order_with_the_caption_rule():
     assert all(group["headingTag"] == "h2" for group in groups)
     views = _row_views(ROWS)
     assert [group["rows"] for group in groups] == [views[:4], views[4:5], views[5:]]
-    assert groups[0]["rows"][1]["caption"] == "Nothing to accept · merges first"
+    assert groups[0]["rows"][1]["caption"] == "Caption of 211"
 
 
 # Bites on: a row that is not a link, one that opens in this tab, loses rel="noopener", links anywhere but the row's own link, or holds its text as markup.
@@ -212,17 +213,10 @@ def test_empty_groups_are_left_out():
     assert nothing["result"]["footer"]["caption"] == IW["done"]
 
 
-# Bites on: a caption rule other than the chat prose's: the walked part drawn with no walk stops or missing with some, a place past the ordinals read from the list, a going-back line on a ready row.
-@pytest.mark.parametrize("row,caption", [
-    (_row(1, "needs-you", 0, 0), "Nothing to accept"),
-    (_row(2, "needs-you", 0, 0, walked=0, walk_total=3), "Nothing to accept · 0 of 3 walked"),
-    (_row(3, "needs-you", 2, 2, walked=1, walk_total=1, merges_at=1), "2 of 2 accepted · 1 of 1 walked · merges first"),
-    (_row(4, "needs-you", 1, 2, merges_at=10), "1 of 2 accepted · merges tenth"),
-    (_row(5, "needs-you", 1, 2, merges_at=11), "1 of 2 accepted · merges at place 11"),
-    (_row(6, "being-fixed", 1, 2, merges_at=1), "1 of 2 accepted · Going back for a fix · a new sheet comes after it"),
-    (_row(7, "ready", 2, 2, walked=3, walk_total=3, merges_at=2), "2 of 2 accepted · 3 of 3 walked · Merge verdict given"),
-], ids=["nothing-to-accept", "walk-with-nothing-to-accept", "accepted-walked-and-first-place", "tenth-place", "place-past-the-ordinals", "being-fixed", "ready-with-walk"])
-def test_the_caption_follows_the_rule(row, caption):
+# Bites on: the page composing a caption of its own instead of drawing the row's caption as it is (as text, never markup).
+@pytest.mark.parametrize("caption", ["2 of 2 accepted · 1 of 1 walked · merges first", "Whatever the builder wrote", SAD_FACE + " <b>not markup</b>"], ids=["builder-line", "any-text", "text-not-markup"])
+def test_the_caption_is_the_rows_own_text(caption):
+    row = _row(3, "needs-you", 9, 9, walked=9, walk_total=9, merges_at=1, caption=caption)
     page = _page(_index(cards=[], rows=[row]), "return kids().filter((node) => node.id.startsWith('index-group-')).map(groupView)[0].rows[0].caption;")
     assert page["result"] == caption
 

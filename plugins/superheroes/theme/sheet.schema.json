@@ -213,7 +213,7 @@
       "description": "One PR, or one stack, on the index, with the counts the row's caption shows.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt"],
+      "required": ["number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt", "caption"],
       "properties": {
         "number": {"description": "The PR's number, or the stack's number.", "type": "integer", "minimum": 1},
         "kind": {"description": "Whether the row is one PR or a stack that merges whole.", "enum": ["pr", "stack"]},
@@ -224,7 +224,8 @@
         "total": {"description": "How many items the sheet has.", "type": "integer", "minimum": 0},
         "walked": {"description": "How many of the sheet's walk stops have a result.", "type": "integer", "minimum": 0},
         "walkTotal": {"description": "How many walk stops the sheet has.", "type": "integer", "minimum": 0},
-        "mergesAt": {"description": "The place of the PR in the merge order, counting from 1, or null when it has none.", "type": ["integer", "null"], "minimum": 1}
+        "mergesAt": {"description": "The place of the PR in the merge order, counting from 1, or null when it has none.", "type": ["integer", "null"], "minimum": 1},
+        "caption": {"description": "The line shown under the row's name, composed once when the index is built: what is accepted, what is walked, then where the PR stands. The page and the chat prose show it as it is.", "type": "string", "minLength": 1}
       }
     },
     "commit": {

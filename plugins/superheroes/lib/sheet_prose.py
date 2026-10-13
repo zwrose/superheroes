@@ -9,6 +9,7 @@ the standard library only, so it runs under a plain python3.
 It refuses a data file it can't trust: one problem per line on stderr, nothing on stdout, exit 1.
 """
 import argparse
+import functools
 import json
 import math
 import re
@@ -293,6 +294,28 @@ def check_sheet(sheet):
     return [p[0].upper() + p[1:] for p in problems] or _check_cross_fields(sheet)
 
 
+@functools.lru_cache(maxsize=None)
+def _enforceable_defs(path):
+    """The $defs of the schema at path, read once; ValueError when it uses a keyword the reader does not enforce."""
+    with open(path, encoding="utf-8") as handle:
+        schema = json.load(handle)
+    unchecked = _unchecked_rules(schema)
+    if unchecked:
+        raise ValueError("; ".join(unchecked))
+    return schema.get("$defs", {})
+
+
+def fits_definition(name, document):
+    """True when document fits the whole of sheet.schema.json's $defs/<name>, by the reader check_sheet uses.
+
+    The stored documents (answer, walkAnswer, verdict) are checked here against their schema definitions, so the
+    schema stays the one home of their fields, patterns and conditional rules. Raises ValueError when the schema uses
+    a keyword the reader does not enforce, as check_sheet refuses it whole.
+    """
+    defs = _enforceable_defs(SCHEMA)
+    return not _validate(defs[name], document, "", defs)
+
+
 def _why_line(sheet):
     remainder = sheet["remainder"]
     rounds, fixes = remainder["roundsRun"], remainder["fixesMade"]
@@ -496,21 +519,6 @@ def _pr_body(sheet):
     return lines + ["**%s**" % PR["verdictHeading"], "", _fill(PR["verdictInChat"], choices=choices, merge=merge), ""]
 
 
-def row_caption(row, words=INDEX):
-    """The line under an index row's name: what is accepted, what is walked, then where the PR stands. The page keeps its own copy."""
-    parts = [_fill(words["accepted"], accepted=str(row["accepted"]), total=str(row["total"])) if row["total"] else words["nothingToAccept"]]
-    if row["walkTotal"] > 0:
-        parts.append(_fill(words["walked"], walked=str(row["walked"]), total=str(row["walkTotal"])))
-    if row["state"] == "being-fixed":
-        parts.append(words["beingFixed"])
-    elif row["state"] == "ready":
-        parts.append(words["ready"])
-    elif row["mergesAt"] is not None:
-        place, ordinals = row["mergesAt"], words["ordinals"]
-        parts.append(_fill(words["mergesAt"], ordinal=ordinals[place - 1]) if place <= len(ordinals) else _fill(words["mergesAtNumber"], place=str(place)))
-    return " · ".join(parts)
-
-
 def _index_body(sheet):
     """An index's prose after its title line: the questions that block work, then the PRs by state, then the done line."""
     cards, rows = sheet["cards"], sheet["index"]["rows"]
@@ -526,7 +534,7 @@ def _index_body(sheet):
             lines += ["**%s**" % heading, ""]
             for row in grouped:
                 label = _fill(INDEX["rowStack" if row["kind"] == "stack" else "rowPr"], number=str(row["number"]), title=_text(row["title"]))
-                lines.append("- %s — %s — %s" % (label, row_caption(row), _text(row["link"])))
+                lines.append("- %s — %s — %s" % (label, _text(row["caption"]), _text(row["link"])))
             lines.append("")
     return lines + [INDEX["done"], ""]
 

@@ -775,7 +775,7 @@ def test_the_lock_follows_what_the_store_has_acknowledged(row):
 
 
 def test_the_lock_words_are_exactly_the_shared_contract():
-    for key in ("mergeLocked", "unlocks", "sendBack"):
+    for key in ("mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack"):
         words = copy.deepcopy(WORDS)
         del words["pr"][key]
         page = _run_page(_files(PR_SAMPLE, words), scenario="return { uses: t.uses, sets: t.sets.length };")
@@ -1511,6 +1511,8 @@ def test_without_a_random_source_answers_save_without_a_revision_and_the_merge_c
     # Merge is locked while any card's answer has no revision, so no Merge with an incomplete covers is ever written.
     assert not [path for path in written if path.startswith("verdict/")]
     assert page["result"]["view"]["disabled"] is True and page["result"]["view"]["pressed"] == ["false", "false"]
+    # The lock says why and which cards are affected, and that this browser is the reason.
+    assert page["result"]["view"]["line"] == _fill(PW["resaveNoRevision"], numbers="1, 2, 3")
 
 
 # Bites on: the generator typing the revision width instead of reading the schema's pattern (a format it cannot make must give no revision).
@@ -1539,6 +1541,9 @@ def test_answers_saved_without_a_revision_keep_merge_locked_as_the_index_reads_i
       return { initial, after: lockView(), writes: verdictWrites() };
     """, host={"collections": {"answers": docs}})["result"]
     assert page["initial"]["disabled"] is True and page["after"]["pressed"] == ["false", "false"] and page["writes"] == []
+    # Every card shows Saved and accepted, so the lock must say which cards to save again and how (the unlock line alone is hidden at 3 of 3).
+    assert page["initial"]["line"] == _fill(PW["resaveLegacy"], numbers="1, 2, 3")
+    assert page["after"]["line"] == page["initial"]["line"]
     assert page["after"]["verdictSave"] != "Saved"
     sheet_bytes = _sample_files(PR_SAMPLE)["sheet.json"]["body"].encode("utf-8")
     digest = _sheet_digest(PR_SAMPLE)

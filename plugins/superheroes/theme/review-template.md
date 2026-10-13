@@ -311,7 +311,8 @@ on it is in the `index` block of `sheet-words.json`.
   work right now."
 - Below, every PR with a sheet, under **Needs you**, **Being fixed** or **Ready**; a group with no PR is
   left out. A row names the PR (or the stack), then its counts: how many items are accepted, how many walk
-  stops are walked, and on Needs you where the PR comes in the merge order. It opens the PR's sheet.
+  stops are walked, and on Needs you where the PR comes in the merge order. The builder composes that line once
+  into the row's `caption`, and the page and the chat prose show it as it is. A row opens the PR's sheet.
 - A line at the end tells the owner to say "done" in the chat once every sheet they meant to answer is
   saved.
 

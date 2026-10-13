@@ -758,7 +758,7 @@ def test_walk_answer_documents_are_refused(document):
 
 def index_row(**more):
     return {"number": 214, "kind": "pr", "title": "Retry a failed payment", "link": "https://sheets.example.test/pr-214",
-            "state": "needs-you", "accepted": 1, "total": 2, "walked": 0, "walkTotal": 3, "mergesAt": 1, **more}
+            "state": "needs-you", "accepted": 1, "total": 2, "walked": 0, "walkTotal": 3, "mergesAt": 1, "caption": "1 of 2 accepted · merges first", **more}
 
 
 def index_sheet():
@@ -823,6 +823,9 @@ INDEX_RED_FIXTURES = [
     ("row-empty-title", index_sheet, set_row(title="")),
     ("row-unknown-field", index_sheet, set_row(extra=1)),
     ("row-missing-field", index_sheet, lambda s: s["index"]["rows"][0].pop("mergesAt")),
+    ("row-missing-caption", index_sheet, lambda s: s["index"]["rows"][0].pop("caption")),
+    ("row-empty-caption", index_sheet, set_row(caption="")),
+    ("row-non-string-caption", index_sheet, set_row(caption=3)),
 ]
 
 
