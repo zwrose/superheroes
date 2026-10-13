@@ -380,7 +380,7 @@ def sent(repo_root, repo, pr, *, uncertain=False, park_id=None, env=None):
     if not found:
         return _refusal("not-parked")
     entry = found[0]
-    if park_id is not None and str(entry.get(_PARK_KEY)) != str(park_id):
+    if str(entry.get(_PARK_KEY)) != str(park_id):
         return _refusal("park-changed")
     if entry["outcome"] in ("closed", "owner-let-through"):
         return _refusal("already-decided")

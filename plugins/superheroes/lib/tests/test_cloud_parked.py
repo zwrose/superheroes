@@ -142,8 +142,12 @@ def _send(w, today=TODAY):
     return CP.send_back(w.repo, today, env=w.env, run=w.gh)
 
 
+def _park_id(w, pr):
+    return next((e.get("parkId") for e in _entries(w) if e["pr"] == pr), None)
+
+
 def _sent(w, pr, repo=REPO):
-    return CP.sent(w.repo, repo, pr, env=w.env)
+    return CP.sent(w.repo, repo, pr, park_id=_park_id(w, pr), env=w.env)
 
 
 def _park(w, pr, issue=None, **pull):
@@ -626,7 +630,7 @@ def test_an_unreadable_state_file_refuses_every_verb_and_is_never_overwritten(w)
         w.gh.comments[11] = [_lapsed_comment(11)]
         assert _notice(w, 11) == {"ok": False, "reason": "parked-state-unreadable"}
         assert _send(w) == {"ok": False, "reason": "parked-state-unreadable"}
-        assert _sent(w, 10) == {"ok": False, "reason": "parked-state-unreadable"}
+        assert CP.sent(w.repo, REPO, 10, env=w.env) == {"ok": False, "reason": "parked-state-unreadable"}
         assert open(_state_file(w), encoding="utf-8").read() == bad
 
 
@@ -767,7 +771,7 @@ def test_an_unreadable_launch_ledger_leaves_a_renewed_pr_unread_not_without_a_la
 
 
 def _uncertain(w, pr):
-    return CP.sent(w.repo, REPO, pr, uncertain=True, env=w.env)
+    return CP.sent(w.repo, REPO, pr, uncertain=True, park_id=_park_id(w, pr), env=w.env)
 
 
 def test_an_unconfirmed_send_is_never_resent_but_is_listed_every_time_until_a_newer_park_rearms_it(w):
@@ -791,7 +795,7 @@ def test_the_cli_sent_uncertain_records_an_unconfirmed_delivery(w, capsys):
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
     _renew(w)
-    argv = ["sent", "--repo-root", w.repo, "--repo", REPO, "--pr", "10", "--uncertain"]
+    argv = ["sent", "--repo-root", w.repo, "--repo", REPO, "--pr", "10", "--uncertain", "--park-id", str(_park_id(w, 10))]
     assert CP.main(argv) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "action": "written"}
     assert _entries(w)[0]["outcome"] == "send-uncertain"
@@ -1005,3 +1009,19 @@ def test_an_acknowledgement_for_a_replaced_park_records_nothing(w):
     assert CP.sent(w.repo, REPO, 10, park_id=item["parkId"], env=w.env) == {"ok": False, "reason": "park-changed"}
     assert _entries(w)[0]["outcome"] is None
     assert CP.sent(w.repo, REPO, 10, park_id="1010", env=w.env)["action"] == "written"
+
+
+def test_a_legacy_acknowledgement_for_a_replaced_park_records_nothing(w):
+    _lane(w, "l-1", 101, "session-1", "a")
+    _park(w, 10, issue=101)
+    entries = _entries(w)
+    del entries[0]["parkId"]
+    with open(_state_file(w), "w", encoding="utf-8") as fh:
+        json.dump(entries, fh)
+    _renew(w)
+    item = _send(w)["sendBack"][0]
+    assert item["parkId"] is None
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert CP.sent(w.repo, REPO, 10, env=w.env) == {"ok": False, "reason": "park-changed"}
+    assert _entries(w)[0]["outcome"] is None
