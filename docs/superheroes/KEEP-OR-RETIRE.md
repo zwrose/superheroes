@@ -1548,6 +1548,68 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** harness-limit — release evidence wants benchmarks but no cadence has run since 0.14.0
   against 0.32.0 current (the assessment record, H4 reframing).
 
+### I. Review seats and the review record writer
+
+#### I1 — The generalist code reviewer
+
+- **Component.** The generalist code reviewer (`plugins/superheroes/agents/code-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
+- **Start date.** 2026-10-13.
+- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — counting starts at the adoption day.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+
+#### I2 — The test role
+
+- **Component.** The test role (`plugins/superheroes/agents/test-role.md`). It costs a dispatch per full-lane review, with its time and tokens.
+- **Start date.** 2026-10-13.
+- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — counting starts at the adoption day.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. The test role took the test reviewer's seat. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+
+#### I3 — The architecture specialist
+
+- **Component.** The architecture specialist (`plugins/superheroes/agents/architecture-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
+- **Start date.** 2026-10-13.
+- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — counting starts at the adoption day.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+
+#### I4 — The security specialist
+
+- **Component.** The security specialist (`plugins/superheroes/agents/security-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
+- **Start date.** 2026-10-13.
+- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — counting starts at the adoption day.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+
+#### I5 — The premortem specialist
+
+- **Component.** The premortem specialist (`plugins/superheroes/agents/premortem-reviewer.md`). It costs a dispatch per full-lane review, with its time and tokens.
+- **Start date.** 2026-10-13.
+- **Condition.** Catch-based, 45 days: the findings this seat raised that were fixed (outcome `fixed`), read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — counting starts at the adoption day.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. D10 (Review lens agents) still holds the lens agents as one row; splitting or narrowing D10 is an owner decision left open.
+
+#### I6 — The review record writer
+
+- **Component.** The review record writer (`plugins/superheroes/lib/review_record.py`, with its session adapter `plugins/superheroes/lib/review_record_session.py`). It costs one record per review and the paths that read it.
+- **Start date.** 2026-10-13.
+- **Condition.** Citation-based, 45 days: vet receipts, PR sheets and misses-log entries that rely on a review record the writer wrote. The writer catches nothing by construction, so it takes a citation shape. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — counting starts at the adoption day.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the record is the one place a review's findings and outcomes are kept, and no change of host or model removes the need for it.
+
 ### Supplemental entries
 
 #### S21 — `run_loop`'s certified path (retired)
