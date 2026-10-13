@@ -1311,7 +1311,7 @@ def test_a_schema_without_the_walk_answers_by_kind_leaves_the_walk_unanswerable(
     """, schema=schema)
     result = page["result"]
     assert result["buttons"] == 0 and result["off"] and all(result["off"]) and result["walkWrites"] == []
-    assert result["gate"] == {"hidden": False, "message": NO_STORE}
+    assert result["gate"] == {"hidden": False, "message": PW["walkSchemaMissing"]}
 
 
 # Axis: an answer the schema offers that the wording file has no label for refuses the sheet, since the button could not be drawn.
@@ -1321,3 +1321,13 @@ def test_an_offered_answer_without_a_label_refuses_the_sheet():
     page = _run_page(_files(WALK_SHEET, schema=schema), scenario="return null;")
     _assert_error_shown(page)
     assert page["errors"] == ["The sheet's wording file lacks words this sheet needs."]
+
+
+# Axis: a schema without walkAnswersByKind names that schema defect on the gate line, not a storage failure.
+def test_a_schema_without_the_walk_answers_by_kind_names_the_schema_on_the_gate_line():
+    schema = json.loads(json.dumps(SCHEMA))
+    del schema["$defs"]["walkAnswersByKind"]
+    page = _page(WALK_SHEET, WALK + """
+      return t.gate().message;
+    """, schema=schema)
+    assert page["result"] == PW["walkSchemaMissing"] and "walkAnswersByKind" in page["result"] and page["result"] != NO_STORE

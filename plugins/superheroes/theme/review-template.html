@@ -2002,7 +2002,7 @@
       "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
       "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
-      "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
+      "walkSchemaMissing", "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
     ];
 
     // The answers each stop kind offers, in button order, are the schema's own ($defs.walkAnswersByKind): { try: [...], look: [...] }.
@@ -2519,7 +2519,7 @@
       syncControls();
       gate.hidden = true;
       // A walk whose answers the schema cannot hold stays off, and the line says so.
-      if (walkStops.length > 0 && walkRule === null) say(SAY.noStore, false);
+      if (walkStops.length > 0 && walkRule === null) say(walkOffered === null ? prWords.walkSchemaMissing : SAY.noStore, false);
       // The owner lands on the first call still waiting for an answer, or on the first when none is.
       const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
       openIndex = waiting === -1 ? 0 : waiting;
