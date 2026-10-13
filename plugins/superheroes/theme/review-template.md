@@ -163,10 +163,11 @@ page fetched them (the bytes themselves, so a file with a byte-order mark hashes
 document's `sheet` equals it. Each revision of the sheet has its own document, so a republished final
 sheet has a new digest and starts unsigned, and so does a PR or stack sheet republished with a material
 move (`previousCommit` alone); a page showing an older revision never touches a newer one. When the
-sheet reopens, the page reads the document whose id is its own digest, and restores the pick and note
-only when that document fits `$defs/verdict` and its `sheet` equals the digest. Another revision's
-document is ignored, with one exception: a PR or stack sheet republished with `carriedForward` reads
-through its chain (§ A carried PR). A verdict of null (a note saved before any pick, or a
+sheet reopens, the page reads only the document whose id is its own digest, and restores the pick and
+note only when that document fits `$defs/verdict` and its `sheet` equals the digest. Another revision's
+document is ignored. That holds for a final sheet, and for a PR or stack sheet with no carry; the one
+exception is a PR or stack sheet republished with `carriedForward`, which reads through its chain
+(§ A carried PR). A verdict of null (a note saved before any pick, or a
 cleared verdict) restores only the note. A browser that cannot compute the digest (no
 `crypto.subtle`) leaves the last card's controls off, with a plain line on the card saying it can't
 tell which version of the sheet this is, and reads and writes nothing under `verdict`.
