@@ -67,6 +67,8 @@ _ID = re.compile(_SCHEMA["$defs"]["id"]["pattern"])
 _COMMIT = re.compile(_SCHEMA["$defs"]["commit"]["pattern"])
 _URL = re.compile(_SCHEMA["$defs"]["walk"]["properties"]["open"]["properties"]["url"]["pattern"])
 _PICTURE = re.compile(_SCHEMA["$defs"]["walkPicture"]["anyOf"][0]["properties"]["src"]["pattern"])
+# The picture filename's digest length is read from that same pattern, so the schema alone sets it.
+PICTURE_DIGEST = int(re.search(r"\{(\d+)\}", _PICTURE.pattern).group(1))
 _LANES = review_record.LANES
 _RAN = review_record.RAN_STATES
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
@@ -461,7 +463,7 @@ def _stager(base, staged):
             data = b""
         if not data:
             return None
-        src = f"pictures/{hashlib.sha256(data).hexdigest()[:12]}{file.suffix.lower()}"
+        src = f"pictures/{hashlib.sha256(data).hexdigest()[:PICTURE_DIGEST]}{file.suffix.lower()}"
         if not _PICTURE.match(src):
             return None
         staged[src] = data

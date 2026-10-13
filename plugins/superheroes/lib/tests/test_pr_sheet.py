@@ -489,7 +489,7 @@ FIXED_SRC = "pictures/0123456789ab.png"
 
 
 def src_of(name):
-    return "pictures/" + hashlib.sha256((FIXTURES / "elsewhere" / name).read_bytes()).hexdigest()[:12] + ".png"
+    return "pictures/" + hashlib.sha256((FIXTURES / "elsewhere" / name).read_bytes()).hexdigest()[:pr_sheet.PICTURE_DIGEST] + ".png"
 
 
 def test_the_full_walk_is_carried_through():

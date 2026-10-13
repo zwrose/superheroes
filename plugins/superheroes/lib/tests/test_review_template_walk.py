@@ -485,7 +485,7 @@ def test_a_stored_problem_without_a_fix_beside_a_stored_merge_clears_the_merge()
     assert result["stop"]["pressed"] == ["false", "true", "false"] and result["stop"]["note"] == "It hung"
 
 
-# Axis: a stored walk document that does not fit (a fix on Works, Looks right on a try stop, a fix the page does not offer) restores only its note, while one that fits is restored whole.
+# Axis: a stored walk document that does not fit (a fix on Works, Looks right on a try stop) restores only its note, a Problem with a fix the page does not offer restores as a Problem with no fix, while one that fits is restored whole.
 def test_a_stored_document_that_does_not_fit_restores_only_its_note():
     docs = [
         {"id": _path("p1")[5:], "data": _body("works", "follow-up", "kept 1")},
@@ -501,11 +501,13 @@ def test_a_stored_document_that_does_not_fit_restores_only_its_note():
       return out;
     """, host={"collections": {"walk": docs}})
     result = page["result"]
-    for stop_id, note in (("p1", "kept 1"), ("p2", "kept 2"), ("p3", "kept 3"), ("f1", "kept 5")):
+    for stop_id, note in (("p1", "kept 1"), ("p2", "kept 2"), ("f1", "kept 5")):
         assert result[stop_id] == {"pressed": ["false"] * 3, "fixPressed": ["false"] * 2, "fixHidden": True, "noteLabel": "Note", "note": note, "save": "Saved", "shots": ""}, stop_id
+    # A fix the page does not offer is the one exception: the recorded Problem stays, with no fix, so it keeps blocking Merge.
+    assert result["p3"]["pressed"] == ["false", "true", "false"] and result["p3"]["fixPressed"] == ["false"] * 2 and result["p3"]["note"] == "kept 3"
     assert result["p4"]["pressed"] == ["false", "false", "true"] and result["p4"]["note"] == "kept 4"
     assert result["p4"]["shots"] == _fill(PW["screenshotsAdded"], count=1)
-    assert result["count"] == _fill(PW["walkCount"], walked=0, total=5)
+    assert result["count"] == _fill(PW["walkCount"], walked=1, total=5)
 
 
 # Axis: a walk read that rejects leaves every control off with the retry line, and the retry that succeeds turns them on and restores what it read.
@@ -914,6 +916,52 @@ def test_a_problem_in_flight_stays_blocking_when_works_replaces_it():
       return out;
     """, host=dict(ACCEPTED, set="hold"))
     assert page["result"] == {"pending": LOCKED, "landed": UNLOCKED}
+
+
+# Axis: a Problem write that was rejected may still be stored, so Merge stays locked while its Works replacement is pending or failed, until a replacement lands.
+def test_a_rejected_problem_write_keeps_merge_locked_until_a_replacement_lands():
+    page = _page(WALK_SHEET, WALK + LOCK + """
+      const out = {};
+      await choose("p1", "Problem");
+      await choose("p1", "Works");
+      t.sets[0].reject({ code: "unavailable" });
+      await t.tick();
+      out.pending = lock().merge;
+      t.sets[1].reject({ code: "unavailable" });
+      await t.tick();
+      out.failed = lock().merge;
+      t.click(tryAgain("p1"));
+      await t.tick();
+      t.sets[2].resolve();
+      await t.tick();
+      out.landed = lock().merge;
+      return out;
+    """, host=dict(ACCEPTED, set="hold"))
+    assert page["result"] == {"pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
+
+
+_CLEAR = {"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST}}
+
+
+# Axis: a restored Problem with Fix before merge beside a restored Merge clears that Merge.
+def test_a_restored_fix_before_merge_clears_a_restored_merge():
+    page = _page(WALK_SHEET, WALK + LOCK + """
+      await t.tick();
+      return { merge: lock().merge, sets: t.setLog() };
+    """, host=dict(MERGED, collections=dict(MERGED["collections"], walk=[{"id": _path("p1")[5:], "data": _body("problem", "before-merge")}])))
+    assert page["result"]["merge"] == LOCKED and page["result"]["sets"] == [_CLEAR]
+
+
+# Axis: a stored Problem whose fix is not offered, or whose document is malformed, restores as a Problem with no fix that still clears a restored Merge.
+@pytest.mark.parametrize("data", [_body("problem", "retired-fix", "Still broken"), {"answer": "problem", "fix": None, "note": "Still broken"}])
+def test_a_restored_problem_with_an_unknown_fix_stays_a_blocking_problem(data):
+    page = _page(WALK_SHEET, WALK + LOCK + """
+      await t.tick();
+      return { merge: lock().merge, sets: t.setLog(), p1: stopState("p1") };
+    """, host=dict(MERGED, collections=dict(MERGED["collections"], walk=[{"id": _path("p1")[5:], "data": data}])))
+    result = page["result"]
+    assert result["merge"] == LOCKED and result["sets"] == [_CLEAR]
+    assert result["p1"]["pressed"][1] == "true" and result["p1"]["note"] == "Still broken"
 
 
 # Axis: an upload that never answers stops waiting at the deadline, says so, and gives the button and the leave-page guard back.

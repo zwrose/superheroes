@@ -1131,6 +1131,8 @@
       let acked = none;
       let lastSaved = none;
       let inFlight = null;
+      // Every state sent since the store's last acknowledgement: in flight, failed or stalled; any of them may be what the store holds.
+      let sent = [];
       let stalled = false;
       let stallTimer = null;
       let shown = "idle";
@@ -1261,6 +1263,7 @@
         const body = latest;
         waiting = false;
         inFlight = body;
+        sent.push(body);
         // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
         acked = unknown;
         stalled = false;
@@ -1286,7 +1289,10 @@
         inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
-        if (saved) acked = lastSaved = body;
+        if (saved) {
+          acked = lastSaved = body;
+          sent = [];
+        }
         // A note's pause is still running: it sends the newest state itself when it ends.
         if (timer !== null) {
           showStatus("saving");
@@ -1311,6 +1317,7 @@
           const state = { shots: [], ...spec.state(data) };
           latest = state;
           acked = lastSaved = state;
+          sent = [];
           note.value = state.note;
           paint();
           // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
@@ -1330,7 +1337,7 @@
           return isUnsaved() ? null : { answer: acked.answer, optionId: acked.optionId };
         },
         acknowledged: function () {
-          return inFlight === null ? [lastSaved] : [lastSaved, inFlight];
+          return [lastSaved, ...sent, latest];
         },
         // Gives a choice's button its words, and holds it off (or lets the controls decide again).
         setChoice: function (answer, label, held) {
@@ -1748,13 +1755,14 @@
       const fixOf = function (pick) {
         return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
       };
-      const held = function (item, test) { return item.unsaved && item.acked.some(test); };
-      const open = count(function (item) { return (item.now.answer === "problem" && (item.now.optionId === null || item.unsaved)) || held(item, function (pick) { return pick.answer === "problem" && pick.optionId === null; }); });
+      // A state blocks Merge when it is a Problem whose fix is none, unknown or one that sends the PR back; a stop blocks while any state its store might hold does.
+      const blocking = function (pick) { return pick.answer === "problem" && fixOf(pick).sendsBack !== false; };
+      const open = count(function (item) { return item.acked.some(blocking); });
       // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
-      const locked = incomplete || clearUnsaved || open > 0 || walked.some(function (item) { return held(item, function (pick) { return fixOf(pick).sendsBack === true; }); });
+      const locked = incomplete || clearUnsaved || open > 0;
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -2045,9 +2053,9 @@
           const fits = walkRule !== null && fitsRule(walkRule.root, walkRule.rule, data)
             && (data.answer === null || prWords.walkAnswers[stop.kind].includes(data.answer))
             && (data.fix === null || prWords.walkFixes.some(function (fix) { return fix.id === data.fix; }));
-          return fits
-            ? { answer: data.answer, optionId: data.fix, note: data.note, shots: data.shots.slice() }
-            : { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "", shots: [] };
+          if (fits) return { answer: data.answer, optionId: data.fix, note: data.note, shots: data.shots.slice() };
+          // A stored Problem whose fix is not offered, or whose document is malformed, stays a Problem with no fix, so it keeps blocking Merge.
+          return { answer: data.answer === "problem" ? "problem" : null, optionId: null, note: typeof data.note === "string" ? data.note : "", shots: [] };
         },
         keep: function (made) { controller = made; controllers.set("walk:" + stop.key, made); },
       }, article);
