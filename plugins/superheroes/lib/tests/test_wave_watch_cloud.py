@@ -707,7 +707,9 @@ def test_edge10_loop_threads_the_cache_across_arms(repo):
     assert result["event"] == "timer"
     assert result["arms"] >= 3
     assert len(gh.api_calls()) == 1
-    assert result["cloudLanes"] == [{
+    lanes = result["cloudLanes"]
+    assert _FRESH <= lanes[0].pop("activityAgeSeconds") < _WINDOW
+    assert lanes == [{
         "launchId": "cloud-a", "issue": 101,
         "cloudSessionName": "cloud-101", "cloudSessionId": "session_101",
     }]
@@ -723,7 +725,9 @@ def test_loop_exits_on_a_stale_cloud_lane_and_carries_cloud_lanes(repo):
     )
     assert result["event"] == "lane-stale"
     assert result["launches"][0]["place"] == "cloud"
-    assert result["cloudLanes"] == [{
+    lanes = result["cloudLanes"]
+    assert _QUIET <= lanes[0].pop("activityAgeSeconds") < _QUIET + 120
+    assert lanes == [{
         "launchId": "cloud-a", "issue": 101,
         "cloudSessionName": "cloud-101", "cloudSessionId": "session_101",
     }]
@@ -733,12 +737,24 @@ def test_cloud_lanes_is_sorted_by_launch_id_and_names_the_session(repo):
     _add_cloud_lane(repo, "cloud-b", 102, unconfirmed=True)
     _add_cloud_lane(repo, "cloud-a", 101)
     result = _run(repo, _fresh_gh(101, 102))
-    assert result["cloudLanes"] == [
+    lanes = result["cloudLanes"]
+    for lane in lanes:
+        assert _FRESH <= lane.pop("activityAgeSeconds") < _WINDOW
+    assert lanes == [
         {"launchId": "cloud-a", "issue": 101,
          "cloudSessionName": "cloud-101", "cloudSessionId": "session_101"},
         {"launchId": "cloud-b", "issue": 102,
          "cloudSessionName": "cloud-102", "cloudSessionId": None},
     ]
+
+
+def test_cloud_lanes_age_is_present_when_the_read_succeeded_and_absent_when_it_failed(repo):
+    _add_cloud_lane(repo, "cloud-a", 101)
+    fresh = _run(repo, _fresh_gh(101))
+    age = fresh["cloudLanes"][0]["activityAgeSeconds"]
+    assert isinstance(age, float) and 0 <= age < _WINDOW
+    failed = _run(repo, _Gh(graphql=_exit_nonzero))
+    assert failed["cloudLanes"] and "activityAgeSeconds" not in failed["cloudLanes"][0]
 
 
 def test_a_one_second_arm_still_samples_cloud_activity(repo):

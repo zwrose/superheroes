@@ -1030,6 +1030,8 @@ def test_t_r2_a_cloud_lane_answers_working_and_stopped_for_the_resume_rows(w):
     assert "`ask-to-push`" in paragraph and "(`ask`, then `asked`)" in paragraph and "`awaiting-handover`" in paragraph
     assert "still needs the pull-request read" in paragraph and "the park-record read" in paragraph
     assert "satisfies no row" in paragraph
+    assert "`activityAgeSeconds`" in paragraph and "`relaunch-refusal`" in paragraph
+    assert paragraph.index("`relaunch-refusal`") < paragraph.index("generic `ended` rule")
 
 
 # ---------------------------------------------------------------- the one input check

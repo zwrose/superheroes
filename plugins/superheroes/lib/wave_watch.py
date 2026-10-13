@@ -1112,6 +1112,19 @@ def _fetch_cloud_activity(
         return unreadable
 
 
+def _cloud_activity_age(info, activity_time, now):
+    """Seconds since a cloud lane's last activity; its start counts when later."""
+    reference = activity_time
+    started_ts = info.get("startedTs")
+    if (
+        isinstance(started_ts, (int, float))
+        and not isinstance(started_ts, bool)
+        and math.isfinite(started_ts)
+    ):
+        reference = max(reference, started_ts)
+    return now - reference
+
+
 def _evaluate_cloud_activity(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
     cloud_state, known_slug=None,
@@ -1163,15 +1176,7 @@ def _evaluate_cloud_activity(
         if activity_time is None:
             degraded.add(DEGRADATION_CLOUD_ACTIVITY_UNAVAILABLE)
             continue
-        reference = activity_time
-        started_ts = info.get("startedTs")
-        if (
-            isinstance(started_ts, (int, float))
-            and not isinstance(started_ts, bool)
-            and math.isfinite(started_ts)
-        ):
-            reference = max(reference, started_ts)
-        age = now - reference
+        age = _cloud_activity_age(info, activity_time, now)
         # bite-axis: QUIET WINDOW — activity quiet past the window is stale; a
         # future-dated reference fails toward the alert like a future-dated transcript.
         if age < 0 or age > LIVENESS_QUIET_WINDOW_SECONDS:
@@ -1437,18 +1442,29 @@ def note_answered(repo_root, comment_id, *, env=None):
         }
 
 
-def _cloud_lanes_payload(live_lanes):
-    """The `cloudLanes` result key for a batch's live cloud lanes; {} when there are none."""
-    entries = [
-        {
+def _cloud_lanes_payload(live_lanes, cloud_state=None):
+    """The `cloudLanes` result key for a batch's live cloud lanes; {} when there are none.
+
+    A lane whose activity was read carries `activityAgeSeconds`; a failed read leaves it out.
+    """
+    cached = cloud_state[0][1] if cloud_state and cloud_state[0] else {}
+    now = time.time()
+    entries = []
+    for lid, info in sorted(live_lanes.items()):
+        if not _is_cloud_lane(info):
+            continue
+        entry = {
             "launchId": lid,
             "issue": info.get("issue"),
             "cloudSessionName": info.get("cloudSessionName"),
             "cloudSessionId": info.get("cloudSessionId"),
         }
-        for lid, info in sorted(live_lanes.items())
-        if _is_cloud_lane(info)
-    ]
+        activity_time = (
+            cached.get(info.get("issue")) if _valid_issue_number(info.get("issue")) else None
+        )
+        if info.get("started") and activity_time is not None:
+            entry["activityAgeSeconds"] = round(_cloud_activity_age(info, activity_time, now), 3)
+        entries.append(entry)
     return {"cloudLanes": entries} if entries else {}
 
 
@@ -2233,7 +2249,7 @@ def _evaluate_tick(
             known_slug=repo_slug,
         )
 
-    cloud_payload = _cloud_lanes_payload(live_lanes)
+    cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state)
     if cloud_payload_out is not None:
         cloud_payload_out.update(cloud_payload)
 
@@ -2282,6 +2298,7 @@ def _timer_at_deadline(
     ignore_launch_ids,
     pr_sampled,
     add_window_degradations,
+    cloud_state=None,
 ):
     _batch_lanes, live_lanes, deadline_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded,
@@ -2296,7 +2313,7 @@ def _timer_at_deadline(
             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
     return _event_result(
         EVENT_TIMER, batch_id, degraded,
-        **_cloud_lanes_payload(live_lanes)
+        **_cloud_lanes_payload(live_lanes, cloud_state)
     )
 
 
@@ -2464,6 +2481,7 @@ def watch_arm(
                     ignore_launch_ids=ignore_launch_ids,
                     pr_sampled=pr_sampled,
                     add_window_degradations=True,
+                    cloud_state=cloud_state,
                 ), resolved_ledger_path)
 
             tick = max(
