@@ -951,6 +951,16 @@ def test_the_chat_walk_lists_each_stops_answers_in_the_reordered_schema_order(tm
     sheet = json.loads(built.read_text(encoding="utf-8"))
     monkeypatch.setattr(sheet_prose, "SCHEMA", path)
     lines = sheet_prose.render(sheet).splitlines()
-    assert "   Answers: p1 Skip / p1 Problem / p1 Works" in lines
-    assert "   Answers: f1 Looks right / f1 Problem / f1 Skip" in lines
-    assert "   Answers: p1 Works / p1 Problem / p1 Skip" not in lines
+    labels = json.loads((Path(sheet_prose.__file__).resolve().parents[1] / "theme" / "sheet-words.json").read_text(encoding="utf-8"))["pr"]["walkAnswers"]["labels"]
+    by_kind = load_schema()["$defs"]["walkAnswersByKind"]["properties"]
+    stops = {stop["kind"]: stop["id"] for stop in sheet["prSheet"]["walk"]["stops"]}
+
+    def answers_line(stop_id, order):
+        return "   Answers: " + " / ".join("%s %s" % (stop_id, labels[a]) for a in order)
+
+    canonical_try = by_kind["try"]["enum"]
+    reversed_try = schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"]
+    assert reversed_try != canonical_try  # the reorder must change the try stop's line, or this proves nothing
+    assert answers_line(stops["try"], reversed_try) in lines
+    assert answers_line(stops["look"], by_kind["look"]["enum"]) in lines
+    assert answers_line(stops["try"], canonical_try) not in lines
