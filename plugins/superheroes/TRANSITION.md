@@ -90,7 +90,9 @@ These retirements ship in the same release as the review record, and never apart
 
 - Decisions come in three batches. Batch 1 holds what blocks work, in the chat and at the top of the index. Batch 2 holds decisions not tied to one PR, in the chat. Batch 3 is one sheet per PR, built after the first two are carried out.
 - The click list is gone.
-- The owner's word to merge is a saved "Merge" verdict on the PR's current sheet plus "done" in the chat. A chat message naming PRs is not the word. A head that moves after its sheet was published starts the verdict over.
+- The owner's word to merge is a saved "Merge" verdict on the PR's current sheet plus "done" in the chat. A chat message naming PRs is not the word.
+  - A head that moves after its sheet was published is judged by the material-consequence line, and doubt counts as material. A move with no material consequence (a base update with no conflict, a mechanical bring-current, a craft fix) keeps the word: the sheet is republished carrying the verdict forward, with a dated note saying what moved and why it is not material.
+  - A move that is material starts the verdict over: the sheet shows "This PR changed" and is unsigned. A PR opened after the word, or a layer linked onto a stack, is outside the word.
 - A "Fix in a follow-up" answer is the word to file that follow-up.
 - After the merge, the advisor writes the answers and the verdict back to the PR.
 - Until a project upgrades, its advisor keeps the click list and the chat merge word.

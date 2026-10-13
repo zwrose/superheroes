@@ -41,10 +41,10 @@ its advisor vet.
 
 A red on the train is a per-lane green that goes red on the union or on `main`'s post-merge run.
 Land its fix as the disclosed integration commit on the last open PR, or as the disclosed
-follow-up PR once the last lane has merged. Either way the merge it needs asks again: a moved head
-starts that PR's sheet over, and a new PR gets its own sheet, so the fix merges only on a saved
-"Merge" verdict on its current sheet together with "done" (duty 6). Report it in the thread like
-any merge.
+follow-up PR once the last lane has merged. Either way the merge rides a saved "Merge" verdict on
+its current sheet together with "done" (duty 6). A moved head keeps the word when the fix is not
+material (duty 6 and `owner-decisions.md` say how it is judged and republished), and a new
+follow-up PR gets its own sheet and asks through it. Report it in the thread like any merge.
 
 **The post-merge-only red.** A test green on the identical tree pre-merge can go
 **deterministically** red post-merge in CI only — coverage-instrumented runners, for one, can lose
@@ -72,7 +72,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    saved "Merge" verdict: the whole stack, in order (the showrunner charter's **The word** in duty
    6). There is no prefix word, and no word narrows a stack. A layer linked onto the stack **after**
    its sheet was published is **outside** the word, and its arrival changes the stack, so the sheet
-   is replaced by an unsigned one.
+   is replaced by an unsigned one. This is not a head move: a head move is judged by the
+   material-consequence line, while a newly linked layer is always outside the word.
 
 3. **Immediately before the irreversible command, re-read remote membership** and compare **the
    sheet's list**, the whole stack, to the remote entries. Mismatch — a different order, a missing
@@ -134,6 +135,11 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    **behavior-bearing content**: product code; a test's assertions or fixtures' expected values; or any
    prose that states a rule a session or a gate follows. When it is **not clear** which side a hunk
    falls on, it takes the reviewer floor.
+
+   A bring-current with no conflict is not a material change to the owner's word, so each layer's
+   sheet is republished carrying its verdict forward and the stack's word stands. A conflict
+   resolution that changes behavior-bearing content is judged by the material-consequence line, and
+   doubt counts as material.
 
    GitHub's cascading rebase (the server-side **Rebase stack** action for a lane; `gh stack rebase`
    + `gh stack push` only for a local tracked stack an operator owns end to end) is the disclosed
