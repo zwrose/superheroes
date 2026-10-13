@@ -110,6 +110,8 @@ type Rig = {
   compactAttempts: number
   // state writes the rig rejected
   denied: number
+  // what `session.surfaces` answers (null: the read fails)
+  surfaces: readonly string[] | null
 }
 
 // Registers the world beneath the mod: the CLI stub on `process.run`, the file
@@ -154,6 +156,7 @@ function rig(
     isUnreadable: false,
     compactAttempts: 0,
     denied: 0,
+    surfaces: [],
   }
 
   on('session.id', () =>
@@ -247,6 +250,7 @@ function rig(
   // the engine's own band, which the mod's draws in place of only while it has something to say
   on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
   on('session.usage', () => (r.usage === null ? { deny: 'no usage' } : { value: r.usage }))
+  on('session.surfaces', () => (r.surfaces === null ? { deny: 'no roster' } : { value: r.surfaces }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('command.run', async (_$, e) => {
@@ -749,6 +753,109 @@ test('headless (not interactive): nothing runs automatically', async ($, on) => 
 
   await start($, false)
   await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+})
+
+// A non-interactive session (the desktop app's Code tab hosts one) is attended only while
+// the desktop app is on the surface roster, read at each decision.
+const bandWrites = (r: Rig) => r.sets.filter(([key]) => key === 'band')
+
+test('desktop on the roster: a non-interactive session runs the automatic checkpoint', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('desktop on the roster: a non-interactive session draws the band with Now and Snooze', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, NEAR)
+  const ui = await mountBand($, 'desktop')
+
+  expect(await ui.find({ type: 'Text', text: 'Auto-checkpoint soon' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'now' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'snooze' })).toBeDefined()
+})
+
+for (const mode of ['auto', 'click-only'] as const) {
+  test(`an unattended session (empty roster) runs nothing and draws no band in ${mode} mode`, { options: { autoCheckpointMode: mode } }, async ($, on) => {
+    const r = rig(on, () => saveAnswer)
+
+    await start($, false)
+    r.surfaces = []
+    await measure($, r, PAST)
+    await measure($, r, NEAR)
+    await r.clock.settle()
+    const ui = await mountBand($, 'desktop')
+
+    expect(r.commands).toEqual([])
+    expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'now' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'snooze' })).toBeUndefined()
+  })
+}
+
+test('other surfaces on the roster do not attend a non-interactive session', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  for (const surfaces of [['mobile'], ['vscode']]) {
+    r.surfaces = surfaces
+    await measure($, r, PAST)
+    await r.clock.settle()
+  }
+
+  expect(r.commands).toEqual([])
+  expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+})
+
+test('a roster read that fails leaves a non-interactive session unattended, and the session goes on', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = null
+  const res = await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(res).toEqual({ changed: ['context'] })
+  expect(r.commands).toEqual([])
+  expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+})
+
+test('the desktop app attaching late starts the checkpoint with no further measure', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+
+  r.surfaces = ['desktop']
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('a mobile attach to a non-interactive session runs nothing', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  await measure($, r, PAST)
+  r.surfaces = ['mobile']
+  await $.session.attach({ surface: 'mobile', clientId: 'mobile:default' })
   await r.clock.settle()
 
   expect(r.commands).toEqual([])
