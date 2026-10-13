@@ -21,8 +21,10 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import canon  # noqa: E402
+import control_plane  # noqa: E402
 import core_md  # noqa: E402
 import project_config  # noqa: E402
+import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
 import review_seats  # noqa: E402
 
@@ -138,13 +140,20 @@ def _commit_canon(res, line):
 
 def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     """Record an owner-approved calibration change. The caller applies between reviews: the command
-    does not check for a running review, so the advisor runs it only when no review loop is in flight."""
+    does not check for a running review, so the advisor runs it only when no review loop is in flight.
+
+    Canon's append path cannot carry a store root (`canon._locate` resolves the ambient store), so a
+    `root` naming any other store is refused (`store-override-unsupported`) before anything is written,
+    rather than recording the approval in one store and the calibration in another."""
     # axis: a calibration change is written only on the owner's exact yes, with their words, place and date — see bite-proof record wo_a_1718_no-owner-yes
     if not _owner_yes(approval):
         return _result(False, "refused", "no-owner-yes", "no approval with answer 'yes', words, where and an ISO date")
     problem = _proposal_problem(proposal)
     if problem:
         return _result(False, "refused", "proposal-invalid", problem)
+    if root is not None and os.path.realpath(os.path.expanduser(root)) != control_plane.store_root():
+        return _result(False, "refused", "store-override-unsupported",
+                       "Canon's append cannot take a store root; --root %s is not the ambient store" % root)
     try:
         res = _append_canon(canon_root, session_id, proposal, approval)
     except canon.Refusal as exc:
@@ -192,6 +201,23 @@ def _seats(name):
         if seat and seat not in out:
             out.append(seat)
     return out
+
+
+_MERGED = re.compile(r"\(merged into [^)]*\)")  # the mark review_record_session puts on a merged member row's reason
+
+
+def _finding_ok(f):
+    """A finding row with a hashable identity and an outcome that is null (undecided) or a known one."""
+    if not isinstance(f, dict):
+        return False
+    key = f.get("findingKey") or f.get("id")
+    return isinstance(key, (str, int)) and (f.get("outcome") is None or (
+        isinstance(f["outcome"], str) and f["outcome"] in review_findings_schema.OUTCOME_SET))
+
+
+def _merged_member(f):
+    """True for a member row folded into a representative; the representative carries the catch."""
+    return isinstance(f.get("reason"), str) and bool(_MERGED.search(f["reason"]))
 
 
 def tally(records, escapes, since, *, until=None, window_days=None):
@@ -247,8 +273,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             incomplete = True
             continue
         if any(not (isinstance(r, dict) and r.get("ran") in review_record.RAN_STATES and isinstance(r.get("name"), str))
-               for r in rec["reviewers"]) or any(
-                not (isinstance(f, dict) and (f.get("findingKey") or f.get("id"))) for f in rec["findings"]):
+               for r in rec["reviewers"]) or any(not _finding_ok(f) for f in rec["findings"]):
             left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
             incomplete = True
             continue
@@ -260,7 +285,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                     reviews[seat].add((rec.get("pr"), rec.get("sessionId")))
         for f in rec.get("findings") or []:
             key = f.get("findingKey") or f.get("id")
-            if key is not None:
+            if key is not None and not _merged_member(f):
                 hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "at": {}})
                 hit["fixed"] = hit["fixed"] or f.get("outcome") == "fixed"
                 at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))

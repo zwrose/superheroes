@@ -51,10 +51,11 @@ def _identity(cwd):
 
 
 @pytest.fixture
-def proj(tmp_path):
+def proj(tmp_path, monkeypatch):
     """A project whose core.md holds one risk area, payments, covering src/payments/."""
     repo, store = str(tmp_path / "proj"), str(tmp_path / "store")
     os.makedirs(repo)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)  # the ambient store is the fixture's: Canon's lookup follows it
     _git(repo, "init", "-q")
     _git(repo, "remote", "add", "origin", "git@github.com:o/r.git")
     mode_registry.write_registry(repo, mode_registry.IN_REPO, "rk", root=store)
@@ -118,6 +119,14 @@ def test_no_owner_yes_writes_nothing(proj, canon_root):
         assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", "no-owner-yes"), approval
         assert _state(proj, canon_root) == before
     assert _touched(proj) == []
+
+
+def test_apply_refuses_a_store_override_canon_cannot_carry(proj, canon_root, tmp_path):
+    repo, _ = proj
+    before = _state(proj, canon_root)
+    got = RL.apply(repo, _proposal(), APPROVAL, canon_root=canon_root, session_id=SID, root=str(tmp_path / "other"))
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", "store-override-unsupported")
+    assert _state(proj, canon_root) == before and _touched(proj) == []
 
 
 # --- FR-76 / I2: recorded in Canon by Canon's procedure, then applied ---
@@ -518,3 +527,22 @@ def test_cli_tally(proj, tmp_path, capsys):
     assert (code, out["reason"], out["since"]) == (0, "short-of-window", D)
     code, out = _cli(capsys, "tally", "--records", str(tmp_path / "missing"), "--escapes", escs, "--since", D)
     assert (code, out["reason"]) == (1, "bad-input")
+
+
+def test_tally_unknown_or_unhashable_finding_fields_read_incomplete():
+    row = _row("code-reviewer")
+    for bad in (dict(_finding("k", "Code"), outcome="fxed"), dict(_finding("k", "Code"), outcome=["fixed"]),
+                dict(_finding("k", "Code"), findingKey=["k"])):
+        got = RL.tally([_record(1, "s", D, [row], [bad])], [], D, until="2026-10-11")
+        assert got["measured"] is False and got["reason"] == "incomplete-evidence", bad
+    for good in ("shown-wrong", "craft", "left-for-owner", "ruling", None):
+        got = RL.tally([_record(1, "s", D, [row], [dict(_finding("k", "Code"), outcome=good)])], [], D, until="2026-10-11")
+        assert got["measured"] is True, good
+
+
+def test_tally_a_merged_member_is_not_a_second_catch():
+    rows = [_row("code-reviewer"), _row("security-reviewer")]
+    rep = _finding("b", "Code + Security")
+    member = dict(_finding("a", "Security"), reason="folded (merged into B)")
+    got = RL.tally([_record(1, "s", D, rows, [member, rep])], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
