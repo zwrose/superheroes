@@ -114,6 +114,7 @@ function rig(
     isIdBroken?: boolean
     isEnvBroken?: boolean
     isStateBroken?: boolean
+    brokenKey?: string
     vocabulary?: string | null
     isCommandBroken?: boolean
     manifest?: string | null
@@ -198,7 +199,7 @@ function rig(
     return { value: undefined }
   })
   on('state.set', (_$, e, next) => {
-    if (options.isStateBroken) {
+    if (options.isStateBroken || e.key === options.brokenKey) {
       return { deny: 'state locked' }
     }
     r.states.push(e.value)
@@ -1226,4 +1227,42 @@ test('after a compaction that leaves 80000 with the harness compacting at 167000
   await r.clock.settle()
 
   expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('a checkpoint that ends unchanged re-arms from its ending fill, not its starting one', { options: { autoCheckpointTokens: 100000 } }, async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+  const usage = (tokens: number) => {
+    const u = usageAt(tokens)
+
+    return { ...u, context: { ...u.context, breakdown: { ...u.context.breakdown!, autoCompactThreshold: THRESHOLD } } }
+  }
+  const at = async (tokens: number) => {
+    r.usage = usage(tokens)
+    await $.session.measure({ context: { tokens, window: 200000 }, rateLimits: [], changed: ['context'] })
+    await r.clock.settle()
+  }
+
+  await start($)
+  await at(150000)
+  expect(r.commands).toEqual([COMMAND])
+  // the checkpoint's own turn grew the context; the notes stay as they were
+  r.usage = usage(160000)
+  await complete($, 'Done.')
+  await at(160000)
+
+  expect(r.seen).toHaveLength(0)
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('a compaction that succeeded is never retried for a failed follow-up write', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { brokenKey: 'rearmAfterCompact' })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(5000)
+
+  expect(r.compactAttempts).toBe(1)
 })

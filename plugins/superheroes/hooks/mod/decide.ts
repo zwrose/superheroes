@@ -2,9 +2,14 @@
 // imports, and the one home of every threshold rule. register.ts reads the engine
 // and acts on what this answers.
 
-export type Mode = 'auto' | 'click-only' | 'off'
+// The manifest's `userConfig.autoCheckpointMode.options` is the roster of modes; the code
+// names only the two whose behavior it implements, and any other valid mode is band-only.
+// These spellings are owners' saved setting values, fixed outside the repository: the
+// CONVENTIONS §11.3 exception.
+export const AUTO_MODE = 'auto'
+export const OFF_MODE = 'off'
 
-export type Settings = { thresholdTokens: number; allowanceTokens: number; mode: Mode }
+export type Settings = { thresholdTokens: number; allowanceTokens: number; mode: string }
 
 // How far below the trigger the heads-up band appears, and how far past the
 // current fill a Snooze pushes the next automatic run.
@@ -47,7 +52,7 @@ export const settingsFrom = (options: unknown, schema: unknown): Settings | null
     return null
   }
 
-  return { thresholdTokens, allowanceTokens: Math.min(allowance, thresholdTokens - 1), mode: mode as Mode }
+  return { thresholdTokens, allowanceTokens: Math.min(allowance, thresholdTokens - 1), mode: mode as string }
 }
 
 // The fill at which the checkpoint runs. With the harness's own auto-compaction on
@@ -69,7 +74,7 @@ export const effectiveTrigger = (
 export type DecideInput = {
   tokens: number
   trigger: number
-  mode: Mode
+  mode: string
   isIdle: boolean
   isInteractive: boolean
   isRunning: boolean
@@ -83,7 +88,7 @@ export type Decision = { showBand: boolean; fire: boolean; reason: string }
 export const decide = (input: DecideInput): Decision => {
   const { tokens, trigger, mode, isIdle, isInteractive, isRunning, snoozeUntilTokens } = input
 
-  if (mode === 'off') {
+  if (mode === OFF_MODE) {
     return { showBand: false, fire: false, reason: 'off' }
   }
   if (isRunning) {
@@ -95,7 +100,7 @@ export const decide = (input: DecideInput): Decision => {
 
   const band = (fire: boolean, reason: string): Decision => ({ showBand: true, fire, reason })
 
-  if (mode !== 'auto') {
+  if (mode !== AUTO_MODE) {
     return band(false, 'click-only')
   }
   if (!isInteractive) {

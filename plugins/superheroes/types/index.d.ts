@@ -8,11 +8,11 @@ declare module 'claude-code' {
       isTurnActive: string | null
       // set while an automatic or Now checkpoint runs (and through the compaction it ends in,
       // `compacting`); the notes as they stood before it: null = no file, absent = unreadable;
-      // `rearmTo`: where the next automatic run waits for if it ends without compacting;
+      // `fill`: the context fill it started at, the fallback for its re-arm;
       // `turnId`: the turn running its command, once seen
       checkpoint: {
         startedAt: number
-        rearmTo?: number
+        fill?: number
         turnId?: string
         notesBefore?: string | null
         compacting?: boolean
