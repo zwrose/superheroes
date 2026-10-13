@@ -1412,6 +1412,11 @@
       return choices;
     }
 
+    // A walk state blocks Merge when it is a Problem whose fix is none, unknown or one that sends the PR back: one home for the rule, read by lockVerdict and by the walk saver.
+    function blocking(pick) {
+      return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
+    }
+
     // A card of a pr or stack sheet writes only while the store cannot end up holding a Merge beside the changed answer: not while the
     // verdict's acknowledged pick is Merge, and not while the verdict holds anything unsaved, whatever its latest pick (a clear or a
     // Not yet in flight, failed or stalled).
@@ -1755,8 +1760,7 @@
       const fixOf = function (pick) {
         return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
       };
-      // A state blocks Merge when it is a Problem whose fix is none, unknown or one that sends the PR back; a stop blocks while any state its store might hold does.
-      const blocking = function (pick) { return pick.answer === "problem" && fixOf(pick).sendsBack !== false; };
+      // A stop blocks while any state its store might hold does (see blocking).
       const open = count(function (item) { return item.acked.some(blocking); });
       // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
@@ -2036,9 +2040,7 @@
         path: "walk/" + stop.key,
         live: canEdit,
         // A Problem that sends the PR back waits while a saved Merge may still stand; any other answer, and a follow-up Problem that never blocks Merge, writes freely.
-        mayWrite: function (latest) {
-          return latest.answer !== "problem" || prWords.walkFixes.some(function (fix) { return fix.id === latest.optionId && fix.sendsBack === false; }) || cardMayWrite();
-        },
+        mayWrite: function (latest) { return !blocking(latest) || cardMayWrite(); },
         // Problem shows pressed whichever fix is chosen, and tapping a chosen fix again leaves the Problem with no fix.
         pressed: function (choice, latest) {
           return choice.answer === latest.answer && (choice.optionId === latest.optionId || (choice.answer === "problem" && choice.optionId === null));

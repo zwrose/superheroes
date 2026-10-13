@@ -434,16 +434,20 @@ def _walk_docs(written):
     return [{"id": path.split("/", 1)[1], "data": body} for path, body in written.items() if path.startswith("walk/")]
 
 
-# Axis: beside a saved Merge, a follow-up Problem's note is written at once and the Merge stays, since a follow-up never blocks Merge.
-def test_a_follow_up_problem_note_is_written_beside_a_saved_merge():
+# Axis: beside a saved Merge, a follow-up Problem's note edit and a screenshot are both written at once and the Merge stays, since a follow-up never blocks Merge.
+def test_a_follow_up_problem_note_and_screenshot_are_written_beside_a_saved_merge():
     held = _walk_docs({_path("p1"): _body("problem", "follow-up")})
     page = _page(WALK_SHEET, WALK + """
       t.type(noteOf("p1"), "Also slow", "change");
       await t.tick();
-      return { sets: t.setLog(), merge: merge(), save: saveOf("p1") };
-    """, host={"collections": dict(MERGED["collections"], walk=held)})
-    assert page["result"] == {"sets": [{"path": _path("p1"), "body": _body("problem", "follow-up", "Also slow")}],
-                              "merge": dict(UNLOCKED, pressed="true"), "save": "Saved"}
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      return { sets: t.setLog().map((call) => call.body), merge: merge(), save: saveOf("p1") };
+    """, host={"collections": dict(MERGED["collections"], walk=held), "assets": "ok"})
+    result = page["result"]
+    assert [(body["note"], len(body["shots"])) for body in result["sets"]] == [("Also slow", 0), ("Also slow", 1)]
+    assert result["merge"] == dict(UNLOCKED, pressed="true") and result["save"] == "Saved"
 
 
 # Axis: every stop answered (each check answer, a Problem with each fix, notes, a screenshot) comes back from the store on a reopened page with its answers, notes, screenshots and the right walked count.
