@@ -310,7 +310,7 @@ REFUSALS = {
     "invalid JSON": (lambda: "{not json", "not valid JSON"),
     "top level not an object": (lambda: "[1, 2]", "The data file must be object."),
     "wrong schema": (_mutated(lambda s: _set(s, "superheroes-sheet/2", "schema")), 'Schema must be "superheroes-sheet/1".'),
-    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain."),
+    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain, pr, stack."),
     "empty title": (_mutated(lambda s: _set(s, "", "title")), "Title must not be empty."),
     "empty cards": (_mutated(lambda s: _set(s, [], "cards")), "Cards must not be empty."),
     "missing section title": (_mutated(lambda s: _drop(s, "cards", 1, "context", 0, "title")), "Cards[1].context[0] has no title."),
@@ -819,3 +819,42 @@ def test_final_sheet_wording_is_the_same_on_the_page_and_in_the_prose(tmp_path, 
         assert len(items) == len(declined)
     else:
         assert seen["history"]["paragraphs"][1] == after("**Declined findings.** ")
+
+
+def _pr_kind_sheet(kind):
+    """A valid pr sheet, or a valid stack sheet, with one card whose options all say sendsBack."""
+    body = {
+        "number": 1724,
+        "commit": "662d4487",
+        "whatChanged": {
+            "summary": "Adds a sheet for one PR.",
+            "reviewers": [{"name": "reviewer-one", "family": "claude", "ran": "engine-record", "notIndependent": False}],
+            "caught": [],
+            "rounds": 2,
+            "stoppedAtCap": False,
+            "ci": {"state": "green", "commit": None},
+            "lane": None,
+            "laneReason": None,
+        },
+        "craft": [],
+        "alreadyDecided": [],
+        "history": ["2 rounds ran."],
+        "walk": [{"id": "schema", "title": "The schema", "pr": 1724}],
+    }
+    if kind == "stack":
+        body["walk"].append({"id": "builder", "title": "The builder", "pr": 1725})
+        body["prs"] = [{"number": 1724, "title": "The schema", "commit": "662d4487"},
+                       {"number": 1725, "title": "The builder", "commit": "abcdef0"}]
+    card = _card("leftover", options=[{"id": "keep-it", "label": "Keep it", "consequence": "Ships.", "sendsBack": False}])
+    return {"schema": "superheroes-sheet/1", "kind": kind, "title": "PR 1724", "prSheet": body, "cards": [card]}
+
+
+# Bites on: the renderer printing chat prose for a pr or stack sheet, which has no chat form, or a refusal that skips stderr, prints to stdout, or exits 0.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_prose_refuses_a_pr_sheet_with_one_line(tmp_path, kind):
+    path = tmp_path / "sheet.json"
+    path.write_text(json.dumps(_pr_kind_sheet(kind)), encoding="utf-8")
+    result = _run(path)
+    assert result.returncode == 1, result.stdout
+    assert result.stdout == ""
+    assert result.stderr == "This is a PR sheet, which has no chat form. Open the sheet's link to answer it.\n"

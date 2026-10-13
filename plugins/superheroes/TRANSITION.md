@@ -34,6 +34,11 @@ These retirements ship in the same release as the review record, and never apart
 - A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
 - A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
 
+### Review: the PR sheet builder
+
+- `pr_sheet.py build` makes a PR sheet's data file from the PR's review record and the advisor's input, `pr-sheet-input/1`, whose shape its module docstring defines. A stack that merges whole gets one sheet from all its records.
+- `theme/sheet.schema.json` gains the `pr` and `stack` sheet kinds, and on those kinds every option carries `sendsBack`. Discovery's remainder, final and plain sheets are unchanged.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).

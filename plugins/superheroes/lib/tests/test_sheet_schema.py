@@ -65,6 +65,8 @@ def test_sample_meets_integrity_rules():
     assert check_sheet_problems(load_sample()) == []
 
 
+PR = "properties/prSheet/properties/"
+
 CENSUS = {
     "sheet kind": "properties/kind",
     "title": "properties/title",
@@ -91,6 +93,40 @@ CENSUS = {
     "recommendation": "properties/cards/items/properties/recommendation",
     "recommendation reason":
         "properties/cards/items/properties/recommendation/properties/reason",
+    "pr sheet": "properties/prSheet",
+    "pr number": PR + "number",
+    "pr commit": PR + "commit",
+    "previous commit": PR + "previousCommit",
+    "what changed": PR + "whatChanged",
+    "what changed summary": PR + "whatChanged/properties/summary",
+    "reviewers": PR + "whatChanged/properties/reviewers",
+    "reviewer name": PR + "whatChanged/properties/reviewers/items/properties/name",
+    "reviewer family": PR + "whatChanged/properties/reviewers/items/properties/family",
+    "reviewer ran": PR + "whatChanged/properties/reviewers/items/properties/ran",
+    "reviewer not independent": PR + "whatChanged/properties/reviewers/items/properties/notIndependent",
+    "caught": PR + "whatChanged/properties/caught",
+    "rounds": PR + "whatChanged/properties/rounds",
+    "stopped at cap": PR + "whatChanged/properties/stoppedAtCap",
+    "ci": PR + "whatChanged/properties/ci",
+    "ci state": PR + "whatChanged/properties/ci/properties/state",
+    "ci commit": PR + "whatChanged/properties/ci/properties/commit",
+    "lane": PR + "whatChanged/properties/lane",
+    "lane reason": PR + "whatChanged/properties/laneReason",
+    "craft decisions": PR + "craft",
+    "already decided": PR + "alreadyDecided",
+    "entry title": PR + "craft/items/properties/title",
+    "entry detail": PR + "craft/items/properties/detail",
+    "entry pr": PR + "craft/items/properties/pr",
+    "review history": PR + "history",
+    "walk": PR + "walk",
+    "walk stop id": PR + "walk/items/properties/id",
+    "walk stop title": PR + "walk/items/properties/title",
+    "walk stop pr": PR + "walk/items/properties/pr",
+    "stack prs": PR + "prs",
+    "stack pr number": PR + "prs/items/properties/number",
+    "stack pr title": PR + "prs/items/properties/title",
+    "stack pr commit": PR + "prs/items/properties/commit",
+    "option sends back": "properties/cards/items/properties/options/items/properties/sendsBack",
 }
 
 
@@ -115,7 +151,7 @@ def resolve_ref(schema, ref):
 
 def test_every_sheet_item_has_a_schema_path():
     # Axis: each item the data file must carry has a property definition at a named schema path.
-    assert len(CENSUS) == 23
+    assert len(CENSUS) == 57
     schema = load_schema()
     for item, path in CENSUS.items():
         try:
@@ -228,7 +264,7 @@ def test_final_and_plain_sheets_validate():
     assert errors_for(plain) == []
 
 
-@pytest.mark.parametrize("path", [SCHEMA_PATH, SAMPLE_PATH], ids=lambda p: p.name)
+@pytest.mark.parametrize("path", [SCHEMA_PATH, SAMPLE_PATH, THEME / "sheet-words.json"], ids=lambda p: p.name)
 def test_shipped_files_carry_no_provenance(path):
     # Axis: shipped text names no requirement, ruling, issue, handoff or work-item tokens.
     text = path.read_text(encoding="utf-8")
@@ -373,3 +409,164 @@ def test_the_retired_verdict_definitions_are_gone():
     assert "draftVerdict" not in schema["$defs"] and "sentAnswer" not in schema["$defs"]
     text = SCHEMA_PATH.read_text(encoding="utf-8")
     assert "draftVerdict" not in text and "sentAnswer" not in text and "/sends" not in text and "draft-verdict" not in text
+
+
+BASE_COMMIT = "662d4487027238eadb0f63825ec0a7fd7bbcbf92"
+SCHEMA_IN_REPO = "plugins/superheroes/theme/sheet.schema.json"
+
+
+def pr_card(card_id, options):
+    return {
+        "id": card_id,
+        "callKind": "Leftover",
+        "warning": False,
+        "question": "What happens to this leftover?",
+        "context": [{"title": "Where it stands", "blocks": [{"paragraph": "It reads one way."}]}],
+        "images": [],
+        "options": options,
+    }
+
+
+def pr_options():
+    return [
+        {"id": "keep-it", "label": "Keep it", "consequence": "Ships as is.", "sendsBack": False},
+        {"id": "fix-before-merge", "label": "Fix before merge", "consequence": "The PR goes back.", "sendsBack": True},
+    ]
+
+
+def pr_body():
+    return {
+        "number": 1724,
+        "commit": "662d4487",
+        "whatChanged": {
+            "summary": "Adds a sheet for one PR.",
+            "reviewers": [{"name": "reviewer-one", "family": "claude", "ran": "engine-record", "notIndependent": False}],
+            "caught": ["A missing edge."],
+            "rounds": 2,
+            "stoppedAtCap": False,
+            "ci": {"state": "green", "commit": "662d4487"},
+            "lane": "full",
+            "laneReason": "It changes a schema.",
+        },
+        "craft": [{"title": "Kept the words in one file", "detail": "Both readers share it."}],
+        "alreadyDecided": [{"title": "One sheet per PR", "detail": "The owner ruled so."}],
+        "history": ["2 rounds ran."],
+        "walk": [{"id": "schema", "title": "The schema", "pr": 1724}],
+    }
+
+
+def pr_sheet():
+    return {
+        "schema": "superheroes-sheet/1",
+        "kind": "pr",
+        "title": "PR 1724",
+        "prSheet": pr_body(),
+        "cards": [pr_card("leftover", pr_options()), pr_card("closure", [])],
+    }
+
+
+def stack_sheet():
+    body = pr_body()
+    body["number"] = 1700
+    body["walk"] = [{"id": "schema", "title": "The schema", "pr": 1724}, {"id": "builder", "title": "The builder", "pr": 1725}]
+    body["prs"] = [{"number": 1724, "title": "The schema", "commit": "662d4487"},
+                   {"number": 1725, "title": "The builder", "commit": "abcdef0"}]
+    sheet = pr_sheet()
+    sheet["kind"] = "stack"
+    sheet["prSheet"] = body
+    return sheet
+
+
+def pr_mutated(change, build):
+    sheet = build()
+    change(sheet)
+    return sheet
+
+
+def test_pr_and_stack_sheets_validate_on_both_readers():
+    # Axis: a well-formed pr sheet and stack sheet, with options that all say sendsBack and a card with none, are accepted by the schema and the page's check.
+    for sheet in (pr_sheet(), stack_sheet()):
+        assert errors_for(sheet) == [], sheet["kind"]
+        assert check_sheet_problems(sheet) == [], sheet["kind"]
+
+
+def pr_sheet_without_pr_sheet(sheet):
+    del sheet["prSheet"]
+
+
+def stack_without_prs(sheet):
+    del sheet["prSheet"]["prs"]
+
+
+def pr_with_prs(sheet):
+    sheet["prSheet"]["prs"] = stack_sheet()["prSheet"]["prs"]
+
+
+def plain_with_pr_sheet(sheet):
+    sheet["kind"] = "plain"
+
+
+def pr_with_final(sheet):
+    sheet["final"] = final_sheet()["final"]
+
+
+PR_RED_FIXTURES = [
+    ("pr-without-pr-sheet", pr_sheet, pr_sheet_without_pr_sheet),
+    ("stack-without-prs", stack_sheet, stack_without_prs),
+    ("pr-carrying-prs", pr_sheet, pr_with_prs),
+    ("plain-carrying-pr-sheet", pr_sheet, plain_with_pr_sheet),
+    ("pr-carrying-final", pr_sheet, pr_with_final),
+    ("option-missing-sends-back", pr_sheet, lambda s: s["cards"][0]["options"][0].pop("sendsBack")),
+    ("commit-not-hex", pr_sheet, lambda s: s["prSheet"].__setitem__("commit", "XYZ")),
+    ("unknown-pr-sheet-field", pr_sheet, lambda s: s["prSheet"].__setitem__("extra", 1)),
+    ("ci-commit-not-hex", pr_sheet, lambda s: s["prSheet"]["whatChanged"]["ci"].__setitem__("commit", "XYZ")),
+]
+
+
+@pytest.mark.parametrize("build, change", [(b, c) for _, b, c in PR_RED_FIXTURES], ids=[n for n, _, _ in PR_RED_FIXTURES])
+def test_pr_sheet_red_fixtures_are_refused_by_both_readers(build, change):
+    # Axis: each way of breaking the pr or stack sheet's kind rules or field shapes is refused by the schema and by the page's check.
+    sheet = pr_mutated(change, build)
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+def test_pr_sheet_accepts_no_cards_a_null_ci_commit_and_a_null_lane():
+    # Axis: a pr or stack sheet with no cards, a null ci commit, and a null lane and lane reason is accepted by both readers.
+    for build in (pr_sheet, stack_sheet):
+        sheet = build()
+        sheet["cards"] = []
+        sheet["prSheet"]["whatChanged"]["ci"]["commit"] = None
+        sheet["prSheet"]["whatChanged"]["lane"] = None
+        sheet["prSheet"]["whatChanged"]["laneReason"] = None
+        assert errors_for(sheet) == [], sheet["kind"]
+        assert check_sheet_problems(sheet) == [], sheet["kind"]
+
+
+def test_remainder_option_without_sends_back_is_still_accepted():
+    # Axis: sendsBack stays optional off a pr or stack sheet, so a remainder sheet's option without it is accepted by both readers.
+    sheet = load_sample()
+    assert "sendsBack" not in json.dumps(sheet)
+    assert sheet["kind"] == "remainder" and sheet["cards"][0]["options"]
+    assert errors_for(sheet) == []
+    assert check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("sample", ["sample-sheet.json", "sample-final-sheet.json"])
+def test_discovery_samples_still_validate_on_both_readers(sample):
+    # Axis: the discovery samples shipped with the page are accepted by the schema and the page's check.
+    sheet = json.loads((THEME / sample).read_text(encoding="utf-8"))
+    assert errors_for(sheet) == []
+    assert check_sheet_problems(sheet) == []
+
+
+def canonical(node):
+    return json.dumps(node, sort_keys=True, separators=(",", ":"))
+
+
+@pytest.mark.parametrize("name", ["answer", "verdict"])
+def test_answer_and_verdict_definitions_are_unchanged_from_the_base(name):
+    # Axis: the answer and verdict documents are byte-identical in canonical JSON to the base commit's, because the page's readers still own them.
+    base = subprocess.run(["git", "show", "%s:%s" % (BASE_COMMIT, SCHEMA_IN_REPO)], cwd=THEME,
+                          capture_output=True, text=True, check=True).stdout
+    assert canonical(load_schema()["$defs"][name]) == canonical(json.loads(base)["$defs"][name])

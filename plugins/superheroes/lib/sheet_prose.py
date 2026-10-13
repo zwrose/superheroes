@@ -33,6 +33,8 @@ BOARD_NOT_SAVED = WORDS["boardNotSaved"]
 NEXT = WORDS["next"]
 ANSWERS = WORDS["answers"]
 
+PR_KINDS = ("pr", "stack")
+
 TYPE_NAMES = ("object", "array", "string", "boolean", "null", "integer", "number")
 
 _MARKDOWN_CHARACTERS = re.compile(r"([\\`*_\[\]<>~|&])")
@@ -426,6 +428,8 @@ def main(argv=None) -> int:
     problems = check_sheet(sheet)
     if problems:
         return _refuse(problems)
+    if sheet["kind"] in PR_KINDS:
+        return _refuse(["This is a PR sheet, which has no chat form. Open the sheet's link to answer it."])
     sys.stdout.write(render(sheet))
     return 0
 

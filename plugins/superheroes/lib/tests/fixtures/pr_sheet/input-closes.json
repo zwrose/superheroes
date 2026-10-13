@@ -1,0 +1,39 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "pr",
+  "number": 214,
+  "title": "Retry a failed payment",
+  "summary": "A payment that fails is tried again up to three times before the order is given up.",
+  "previousCommit": null,
+  "leftovers": {
+    "F6": {
+      "options": "none",
+      "recommendation": {"text": "Leave it as is", "reason": "The statement line already names the shop."}
+    },
+    "F7": {
+      "options": "leftover",
+      "recommendation": {"text": "Fix it in a follow-up", "reason": "The email needs wording the owner has not chosen yet.", "optionId": "fix-in-a-follow-up"}
+    }
+  },
+  "items": [
+    {
+      "id": "retry-window",
+      "kind": "Behavior change",
+      "title": "Retry for ten minutes after a failure",
+      "ifLeft": "A failed payment is retried for ten minutes, then the order is cancelled.",
+      "options": [
+        {"id": "ten-minutes", "label": "Ten minutes", "consequence": "Orders wait up to ten minutes for a payment to clear.", "sendsBack": false},
+        {"id": "one-minute", "label": "One minute", "consequence": "The PR goes back to shorten the window and returns with a new sheet.", "sendsBack": true}
+      ],
+      "recommendation": {"text": "Keep ten minutes", "reason": "Most card declines clear within that time.", "optionId": "ten-minutes"}
+    }
+  ],
+  "closesSpec": {
+    "spec": "retry-failed-payments",
+    "receipt": "Every line of the spec's acceptance list has a merged test: retry limit, back-off, order number kept."
+  },
+  "walk": [
+    {"id": "retry-loop", "title": "The retry loop", "pr": 214},
+    {"id": "payment-tests", "title": "The new payment tests", "pr": 214}
+  ]
+}
