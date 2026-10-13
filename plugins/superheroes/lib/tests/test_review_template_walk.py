@@ -94,6 +94,18 @@ const shoot = async (id) => {
 };
 """
 
+
+def _path(stop_id, sheet=WALK_SHEET):
+    """The store path the page gives a stop: its id plus an FNV-1a hash of the stop as shown."""
+    stop = next(s for s in sheet["prSheet"]["walk"]["stops"] if s["id"] == stop_id)
+    shown = json.dumps([stop["pr"], stop["kind"], stop["title"], stop["steps"], stop["expect"],
+                        [[p.get("src"), p["alt"]] for p in stop["pictures"]]], separators=(",", ":"), ensure_ascii=False)
+    hashed = 2166136261
+    for unit in memoryview(shown.encode("utf-16-le")).cast("H"):
+        hashed = ((hashed ^ unit) * 16777619) & 0xFFFFFFFF
+    return "walk/%s-%x" % (stop_id, hashed)
+
+
 UNLOCKED = {"label": "Merge #214", "disabled": False, "pressed": "false"}
 LOCKED = {"label": "Merge #214 · locked", "disabled": True, "pressed": "false"}
 NO_LINE = {"hidden": True, "text": ""}
@@ -231,12 +243,12 @@ def test_problem_shows_the_fix_block_and_works_hides_it():
     assert result["look"]["pressed"] == ["true", "false", "false"] and result["look"]["fixHidden"] is True
     assert result["lookProblem"]["pressed"] == ["false", "true", "false"] and result["lookProblem"]["fixHidden"] is False
     assert [(item["path"], item["body"]) for item in result["sets"]] == [
-        ("walk/p1", _body("problem")),
-        ("walk/p1", _body("problem", "before-merge")),
-        ("walk/p1", _body("problem", "before-merge", "It hung")),
-        ("walk/p1", _body("works", None, "It hung")),
-        ("walk/f1", _body("looks-right")),
-        ("walk/f1", _body("problem")),
+        (_path("p1"), _body("problem")),
+        (_path("p1"), _body("problem", "before-merge")),
+        (_path("p1"), _body("problem", "before-merge", "It hung")),
+        (_path("p1"), _body("works", None, "It hung")),
+        (_path("f1"), _body("looks-right")),
+        (_path("f1"), _body("problem")),
     ]
 
 
@@ -391,7 +403,7 @@ def test_a_problem_write_waits_for_the_merge_clear_to_land():
     clear = {"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST}}
     assert result["before"] == {"merge": dict(UNLOCKED, pressed="true"), "sets": []}
     assert result["tapped"]["sets"] == [clear] and result["tapped"]["save"] == "Saving…"
-    assert result["cleared"]["sets"] == [clear, {"path": "walk/p1", "body": _body("problem")}]
+    assert result["cleared"]["sets"] == [clear, {"path": _path("p1"), "body": _body("problem")}]
     assert result["cleared"]["merge"] == LOCKED
     assert result["end"] == {"save": "Saved", "merge": LOCKED}
 
@@ -406,7 +418,7 @@ def test_works_is_written_at_once_and_the_saved_merge_stays():
       return { tapped: tapped, merge: merge(), sets: t.setLog(), save: saveOf("p1") };
     """, host=dict(MERGED, set="hold"))
     result = page["result"]
-    assert result["tapped"] == [{"path": "walk/p1", "body": _body("works")}]
+    assert result["tapped"] == [{"path": _path("p1"), "body": _body("works")}]
     assert result["sets"] == result["tapped"]
     assert result["merge"] == dict(UNLOCKED, pressed="true") and result["save"] == "Saved"
 
@@ -438,11 +450,11 @@ def test_answered_stops_come_back_when_the_page_is_reopened():
     """, host={"assets": "ok"})
     written = first["result"]["written"]
     assert written == {
-        "walk/p1": _body("problem", "before-merge", "Declined twice", ["asset-1"]),
-        "walk/p2": _body("works", None, "Sent at once"),
-        "walk/p3": _body("skip"),
-        "walk/p4": _body("problem", "follow-up", "Two charges"),
-        "walk/f1": _body("looks-right"),
+        _path("p1"): _body("problem", "before-merge", "Declined twice", ["asset-1"]),
+        _path("p2"): _body("works", None, "Sent at once"),
+        _path("p3"): _body("skip"),
+        _path("p4"): _body("problem", "follow-up", "Two charges"),
+        _path("f1"): _body("looks-right"),
     }
     page = _page(WALK_SHEET, WALK + """
       const out = { count: walkCount(), stops: {} };
@@ -462,7 +474,7 @@ def test_answered_stops_come_back_when_the_page_is_reopened():
 
 # Axis: a stored Problem with no fix beside a stored Merge leaves the sheet locked and clears that Merge.
 def test_a_stored_problem_without_a_fix_beside_a_stored_merge_clears_the_merge():
-    docs = dict(MERGED["collections"], walk=[{"id": "p1", "data": _body("problem", None, "It hung")}])
+    docs = dict(MERGED["collections"], walk=[{"id": _path("p1")[5:], "data": _body("problem", None, "It hung")}])
     page = _page(WALK_SHEET, WALK + LOCK + """
       await t.tick();
       return { ...lock(), sets: t.setLog(), stop: stopState("p1") };
@@ -476,11 +488,11 @@ def test_a_stored_problem_without_a_fix_beside_a_stored_merge_clears_the_merge()
 # Axis: a stored walk document that does not fit (a fix on Works, Looks right on a try stop, a fix the page does not offer) restores only its note, while one that fits is restored whole.
 def test_a_stored_document_that_does_not_fit_restores_only_its_note():
     docs = [
-        {"id": "p1", "data": _body("works", "follow-up", "kept 1")},
-        {"id": "p2", "data": _body("looks-right", None, "kept 2")},
-        {"id": "p3", "data": _body("problem", "someone-else", "kept 3")},
-        {"id": "p4", "data": _body("skip", None, "kept 4", ["asset-9"])},
-        {"id": "f1", "data": _body("works", None, "kept 5")},
+        {"id": _path("p1")[5:], "data": _body("works", "follow-up", "kept 1")},
+        {"id": _path("p2")[5:], "data": _body("looks-right", None, "kept 2")},
+        {"id": _path("p3")[5:], "data": _body("problem", "someone-else", "kept 3")},
+        {"id": _path("p4")[5:], "data": _body("skip", None, "kept 4", ["asset-9"])},
+        {"id": _path("f1")[5:], "data": _body("works", None, "kept 5")},
     ]
     page = _page(WALK_SHEET, WALK + """
       const out = {};
@@ -510,7 +522,7 @@ def test_a_walk_read_that_rejects_leaves_the_controls_off_until_the_retry_succee
       await t.tick();
       out.after = { hidden: t.gate().hidden, walk: walkControls().map((node) => node.disabled), p2: stopState("p2").pressed };
       return out;
-    """, host={"readByCollection": {"walk": ["reject", "docs"]}, "collections": {"walk": [{"id": "p2", "data": _body("works")}]}})
+    """, host={"readByCollection": {"walk": ["reject", "docs"]}, "collections": {"walk": [{"id": _path("p2")[5:], "data": _body("works")}]}})
     result = page["result"]
     assert result["gate"] == READ_FAILED and result["hidden"] is False and result["retry"] is True
     assert set(result["off"]["walk"]) == {True} and set(result["off"]["verdict"]) == {True} and result["writes"] == 0
@@ -610,7 +622,7 @@ def test_a_missing_picture_is_a_line_and_its_stop_still_saves():
                                  [["p", _fill(PW["pictureMissing"], alt="The gave-up screen on a small phone")]]]
     assert result["images"] == 0 and result["tap"] is False
     assert result["state"]["pressed"] == ["true", "false", "false"] and result["state"]["save"] == "Saved"
-    assert result["sets"] == [{"path": "walk/f1", "body": _body("looks-right")}]
+    assert result["sets"] == [{"path": _path("f1", only_missing), "body": _body("looks-right")}]
 
 
 # Axis: an image that errors becomes the missing line in its figure, its caption stays, and the stop still saves an answer.
@@ -713,7 +725,7 @@ def test_without_a_picture_store_add_a_screenshot_says_so_and_turns_off(host):
     assert result["usesAtLoad"] == ["db", "user"]
     assert result["line"] == PW["screenshotUnavailable"] and result["disabled"] is True
     assert result["picked"] == 0 and result["uploads"] == 0
-    assert result["sets"] == [{"path": "walk/p1", "body": _body("problem")}]
+    assert result["sets"] == [{"path": _path("p1"), "body": _body("problem")}]
 
 
 # Axis: two uploaded screenshots are written as the document's shots in order and the line counts 2.
@@ -844,7 +856,7 @@ def test_a_problem_queued_behind_an_inflight_works_still_waits_for_the_merge_cle
       return out;
     """, host=dict(MERGED, set="hold"))
     result = page["result"]
-    assert result["start"] == ["walk/p1", "verdict/" + DIGEST]
+    assert result["start"] == [_path("p1"), "verdict/" + DIGEST]
     assert result["settled"] == result["start"] and result["rejected"] == result["start"]
 
 
@@ -863,7 +875,7 @@ def test_a_saved_problem_stays_blocking_until_its_replacement_is_saved():
       await t.tick();
       out.landed = lock().merge;
       return out;
-    """, host=dict(ACCEPTED, set="hold", collections=dict(ACCEPTED["collections"], walk=[{"id": "p1", "data": _body("problem")}])))
+    """, host=dict(ACCEPTED, set="hold", collections=dict(ACCEPTED["collections"], walk=[{"id": _path("p1")[5:], "data": _body("problem")}])))
     result = page["result"]
     assert result == {"start": LOCKED, "pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
 
@@ -883,3 +895,21 @@ def test_a_stalled_upload_gives_the_button_back_and_says_it_failed():
     result = page["result"]
     assert result["during"]["pick"] is True
     assert result["after"] == {"line": PW["screenshotFailed"], "pick": False}
+
+
+# Axis: a republished sheet whose stop changed restores nothing for that stop, while an unchanged stop keeps its answer.
+def test_a_republished_stop_that_changed_starts_unanswered_and_an_unchanged_one_keeps_its_answer():
+    def edited(clone):
+        next(s for s in clone["prSheet"]["walk"]["stops"] if s["id"] == "p1")["steps"].append("Pay with a second failing card")
+        return clone
+
+    changed = _with(WALK_SHEET, edited)
+    docs = [{"id": _path(stop_id)[5:], "data": _body("works", None, "kept " + stop_id)} for stop_id in ("p1", "p2")]
+    assert _path("p1", changed) != _path("p1") and _path("p2", changed) == _path("p2")
+    page = _page(changed, WALK + """
+      return { p1: stopState("p1"), p2: stopState("p2"), count: walkCount() };
+    """, host={"collections": {"walk": docs}})
+    result = page["result"]
+    assert result["p1"]["pressed"] == ["false"] * 3 and result["p1"]["note"] == "" and result["p1"]["save"] == ""
+    assert result["p2"]["pressed"] == ["true", "false", "false"] and result["p2"]["note"] == "kept p2"
+    assert result["count"] == _fill(PW["walkCount"], walked=1, total=5)

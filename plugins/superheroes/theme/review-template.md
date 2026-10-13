@@ -284,7 +284,7 @@ chat. Nothing is merged, sent back, filed or recorded from a sheet before then.
 A saved Merge together with "done" is the owner's word to merge that PR. Neither alone is, and a saved
 Not yet, or no verdict, with "done" is not.
 
-The walk's results are stored at `walk/<stop id>` (`$defs/walkAnswer`) and read with the answers and
+The walk's results are stored at `walk/<stop id>-<hash of the stop as shown>` (`$defs/walkAnswer`) and read with the answers and
 verdict after "done". A stop's `shots` are asset ids shown at `/_blob/<id>`. A Fix in a follow-up on a
 stop is the owner's word to file that follow-up.
 

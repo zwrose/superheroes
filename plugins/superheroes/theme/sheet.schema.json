@@ -470,7 +470,7 @@
       ]
     },
     "walkAnswer": {
-      "description": "The document a PR sheet stores for one walk stop, at walk/<stop id> in the sheet's own store. Each document is written whole on every change and the owner's last tap counts. Works is offered on a try stop and Looks right on a look stop; the other counts as unanswered. A fix is chosen only on a Problem. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a PR sheet stores for one walk stop, at walk/<stop id>-<hash of the stop as shown> in the sheet's own store. Each document is written whole on every change and the owner's last tap counts. Works is offered on a try stop and Looks right on a look stop; the other counts as unanswered. A fix is chosen only on a Problem. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["answer", "fix", "note", "shots"],
