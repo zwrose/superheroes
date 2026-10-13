@@ -14,6 +14,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,16 +24,19 @@ if _LIB_DIR not in sys.path:
 import canon  # noqa: E402
 import control_plane  # noqa: E402
 import core_md  # noqa: E402
+import definition_doc  # noqa: E402
 import project_config  # noqa: E402
 import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
 import review_record_session  # noqa: E402
 import review_seats  # noqa: E402
+import session_contract  # noqa: E402
 
 SINCE_KEY = "reviewLearningSince"
 PROPOSAL_SCHEMA = "calibration-proposal/1"
 COMMIT_MESSAGE = "docs: record an approved calibration change in Canon"
-HALVES = ("riskAreas", "threatModel")
+GIT_TIMEOUT_SECONDS = 60  # a stalled signer or commit hook must not hang apply after Canon is appended
+_FIXED = review_findings_schema.OUTCOMES[0]
 _KEYS = {"risk-and-trust": {"schema", "kind", "half", "value", "ruling"},
          "standing-ruling": {"schema", "kind", "ruling"}}
 SUPERSEDES_KEY = "supersedes"  # optional on either kind: the Canon entry id a replacement retires
@@ -111,8 +115,8 @@ def _proposal_problem(p):
         return exc.payload["detail"]
     if p["kind"] == "risk-and-trust":
         item = project_config._item_by_slug("riskAndTrust")
-        if p["half"] not in HALVES or project_config.validate_item_value(item, {p["half"]: p["value"]}):
-            return "half must be riskAreas or threatModel, and value must be that half's valid value"
+        if not isinstance(p["half"], str) or project_config.validate_item_value(item, {p["half"]: p["value"]}):
+            return "half must name one riskAndTrust half, and value must be that half's valid value"
     return None
 
 
@@ -125,18 +129,29 @@ def _append_canon(canon_root, session_id, proposal, approval):
     return canon.cmd_append(canon._parser().parse_args(argv))
 
 
+def _run_git(cwd, *args):
+    """Canon's git, bounded: the same invocation as canon._git plus a timeout (canon.py stays untouched)."""
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                          timeout=GIT_TIMEOUT_SECONDS, env=definition_doc._scrubbed_git_env())
+
+
 def _commit_canon(res, line):
     """Canon's write procedure steps 7-8: commit only Canon's paths, then see the line in HEAD."""
     git_root = res["gitRoot"]
     rel = os.path.relpath(res["path"], git_root).replace(os.sep, "/")
-    for args in (("add", "--", *res["commitPaths"]), ("commit", "-m", COMMIT_MESSAGE, "--", *res["commitPaths"])):
-        got = canon._git(git_root, *args)
-        if got.returncode != 0:
-            return None, "git %s failed: %s" % (args[0], (got.stderr or got.stdout).strip())
-    shown = canon._git(git_root, "show", "HEAD:" + rel)
-    if shown.returncode != 0 or line not in shown.stdout.splitlines():
-        return None, "HEAD:%s does not hold the appended line" % rel
-    return canon._git(git_root, "rev-parse", "HEAD").stdout.strip(), None
+    try:
+        for args in (("add", "--", *res["commitPaths"]), ("commit", "-m", COMMIT_MESSAGE, "--", *res["commitPaths"])):
+            got = _run_git(git_root, *args)
+            if got.returncode != 0:
+                return None, "git %s failed: %s" % (args[0], (got.stderr or got.stdout).strip())
+        shown = _run_git(git_root, "show", "HEAD:" + rel)
+        if shown.returncode != 0 or line not in shown.stdout.splitlines():
+            return None, "HEAD:%s does not hold the appended line" % rel
+        return _run_git(git_root, "rev-parse", "HEAD").stdout.strip(), None
+    except subprocess.TimeoutExpired as exc:
+        return None, "git %s timed out after %ss" % (exc.cmd[3] if len(exc.cmd) > 3 else "command", GIT_TIMEOUT_SECONDS)
+    except OSError as exc:
+        return None, "git could not be run (%s: %s)" % (type(exc).__name__, exc)
 
 
 def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
@@ -208,7 +223,7 @@ def _finding_ok(f):
     """A finding row with a hashable identity and an outcome that is null (undecided) or a known one."""
     if not isinstance(f, dict):
         return False
-    key = f.get("findingKey") or f.get("id")
+    key = f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")
     return isinstance(key, (str, int)) and (f.get("outcome") is None or (
         isinstance(f["outcome"], str) and f["outcome"] in review_findings_schema.OUTCOME_SET))
 
@@ -290,10 +305,10 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                 for seat in _seats(row.get("name")):
                     reviews[seat].add((rec.get("pr"), rec.get("sessionId")))
         for f in rec.get("findings") or []:
-            key = f.get("findingKey") or f.get("id")
+            key = f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")
             if key is not None and not _merged_member(f):
                 hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "at": {}})
-                hit["fixed"] = hit["fixed"] or f.get("outcome") == "fixed"
+                hit["fixed"] = hit["fixed"] or f.get("outcome") == _FIXED
                 at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))
                 at[1].update(_seats(f.get("reviewer")))
     for hit in seen.values():  # a catch is dated by, and credited to, the earliest record that carries it, once
@@ -304,7 +319,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     counts = {"missed": 0, "seenAndLeft": 0}
     for esc in escapes if isinstance(escapes, list) else []:
         day = _day(esc.get("reviewedAt")) if isinstance(esc, dict) else None
-        label = {"missed": "missed", "seen-and-left": "seenAndLeft"}.get(esc.get("call")) if isinstance(esc, dict) else None
+        call = esc.get("call") if isinstance(esc, dict) else None
+        label = {"missed": "missed", "seen-and-left": "seenAndLeft"}.get(call) if isinstance(call, str) else None
         if day is None and isinstance(esc, dict):
             left["undated"] += 1
             incomplete = True

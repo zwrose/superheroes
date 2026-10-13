@@ -209,7 +209,9 @@ def test_partial_when_the_calibration_write_refuses(proj, canon_root, monkeypatc
 
 
 def test_failed_canon_commit_leaves_calibration_alone(proj, canon_root):
-    hook = os.path.join(canon_root, ".git", "hooks", "pre-commit")
+    hooks = os.path.join(canon_root, ".git", "hooks")
+    _git(canon_root, "config", "core.hooksPath", hooks)  # the fixture's own hooks dir, whatever the ambient config says
+    hook = os.path.join(hooks, "pre-commit")
     with open(hook, "w") as fh:
         fh.write("#!/bin/sh\nexit 1\n")
     os.chmod(hook, 0o755)
@@ -217,6 +219,35 @@ def test_failed_canon_commit_leaves_calibration_alone(proj, canon_root):
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
     assert (got["ok"], got["outcome"], got["reason"]) == (False, "canon-not-committed", "canon-commit-failed")
     assert _state(proj, canon_root)[0] == core_before and _touched(proj) == []
+
+
+def test_canon_commit_timeout_reads_canon_not_committed(proj, canon_root, monkeypatch):
+    def hang(cwd, *args):
+        raise subprocess.TimeoutExpired(["git", "-C", cwd, *args], RL.GIT_TIMEOUT_SECONDS)
+    monkeypatch.setattr(RL, "_run_git", hang)
+    core_before = _state(proj, canon_root)[0]
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "canon-not-committed", "canon-commit-failed")
+    assert "timed out" in got["detail"]
+    assert _state(proj, canon_root)[0] == core_before and _touched(proj) == []
+
+
+def test_canon_commit_carries_only_canons_paths(proj, canon_root):
+    with open(os.path.join(canon_root, "unrelated.txt"), "w") as fh:
+        fh.write("staged by someone else\n")
+    _git(canon_root, "add", "unrelated.txt")
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert got["ok"] is True
+    touched = set(_git(canon_root, "show", "--name-only", "--format=", "HEAD").split())
+    assert "unrelated.txt" not in touched and CANON_REL in touched
+    assert "unrelated.txt" in _git(canon_root, "diff", "--cached", "--name-only").split()
+
+
+def test_tally_escape_with_a_non_string_call_reads_malformed_not_a_crash():
+    for call in (["missed"], {"a": 1}, 7, None):
+        got = RL.tally([], [{"pr": 1, "reviewedAt": "2026-10-05", "call": call}], D, until="2026-10-11")
+        assert got["measured"] is False and got["reason"] == "incomplete-evidence", call
+        assert got["leftOut"]["malformed"] == 1
 
 
 # --- I3: the adoption day is recorded once ---
