@@ -19,12 +19,14 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv } from './argv'
 import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
-import { decide, effectiveTrigger, notesChanged, settingsFrom, snooze } from './decide'
+import { decide, effectiveTrigger, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
 import type { Settings } from './decide'
 
 const MANIFEST = '.claude-plugin/plugin.json'
 
 const CLI_TIMEOUT_MS = 15000
+
+const CHECKPOINT_COMMAND = 'superheroes:checkpoint'
 
 // The compaction waits until the turn has ended.
 const COMPACT_DELAY_MS = 1000
@@ -126,7 +128,18 @@ async function readNotes($: EngineInterface): Promise<string | null | undefined>
 async function runningCheckpoint($: EngineInterface) {
   const { value } = await $.state.get(checkpoint)
 
-  return value && (await $.clock.now()) - value.startedAt < STALE_CHECKPOINT_MS ? value : null
+  if (!value) {
+    return null
+  }
+  if ((await $.clock.now()) - value.startedAt < STALE_CHECKPOINT_MS) {
+    return value
+  }
+  // a lost checkpoint turn must not leave the session busy for good
+  if (value.turnId !== undefined && (await $.state.get(isTurnActive)).value === value.turnId) {
+    await $.state.set(isTurnActive, null)
+  }
+
+  return null
 }
 
 // A checkpoint that could not start or finish: clear it, tell the owner, block nothing.
@@ -153,17 +166,22 @@ async function startCheckpoint($: EngineInterface, isNow = false): Promise<void>
       return
     }
     const notesBefore = await readNotes($)
-    // the fill it started at: a checkpoint that ends without compacting snoozes to it
-    let tokens: number | undefined
+    // where a checkpoint that ends without compacting snoozes to, from the fill it started at
+    let rearmTo: number | undefined
 
     try {
-      tokens = (await $.session.usage()).context.tokens
+      const { context } = await $.session.usage({ breakdown: 'summary' })
+
+      rearmTo =
+        context.tokens === undefined
+          ? undefined
+          : rearmAt(context.tokens, context.breakdown?.isAutoCompactEnabled ? context.breakdown.autoCompactThreshold : undefined)
     } catch {
       // an unread fill only means no snooze when this checkpoint is skipped
     }
 
     // a turn may have begun while the notes and fill were read: write nothing then
-    if ((await $.state.get(isTurnActive)).value === true) {
+    if (typeof (await $.state.get(isTurnActive)).value === 'string') {
       if (isNow) {
         $.ui.toast('Auto-checkpoint: wait for the current turn to finish')
       }
@@ -171,10 +189,10 @@ async function startCheckpoint($: EngineInterface, isNow = false): Promise<void>
       return
     }
 
-    await $.state.set(checkpoint, { startedAt: await $.clock.now(), tokens, ...(notesBefore === undefined ? {} : { notesBefore }) })
+    await $.state.set(checkpoint, { startedAt: await $.clock.now(), rearmTo, ...(notesBefore === undefined ? {} : { notesBefore }) })
     await $.state.set(band, false)
     // not awaited: the call settles with the checkpoint turn, which must not hold a hook
-    $.command.run({ command: 'superheroes:checkpoint', args: 'auto' }).catch(error =>
+    $.command.run({ command: CHECKPOINT_COMMAND, args: 'auto' }).catch(error =>
       abandonCheckpoint($, error),
     )
   } catch (error) {
@@ -207,20 +225,24 @@ async function evaluate($: EngineInterface, options: unknown): Promise<void> {
     context.breakdown?.isAutoCompactEnabled ?? false,
   )
   // the first measurement after a successful compaction: context must grow from here
-  // before an automatic run repeats, however low the trigger is
+  // before an automatic run repeats, within the harness's own compaction window
   if ((await $.state.get(rearmAfterCompact)).value === true) {
-    await $.state.set(snoozeUntilTokens, snooze(context.tokens))
+    const { isAutoCompactEnabled, autoCompactThreshold } = context.breakdown ?? {}
+
+    await $.state.set(snoozeUntilTokens, rearmAt(context.tokens, isAutoCompactEnabled ? autoCompactThreshold : undefined))
     await $.state.set(rearmAfterCompact, false)
   }
+  // read before the idle gate: a stale checkpoint's expiry frees a lost turn's busy mark
+  const isRunning = (await runningCheckpoint($)) !== null
 
   const snoozed = (await $.state.get(snoozeUntilTokens)).value
   const decision = decide({
     tokens: context.tokens,
     trigger,
     mode: settings.mode,
-    isIdle: (await $.state.get(isTurnActive)).value !== true,
+    isIdle: typeof (await $.state.get(isTurnActive)).value !== 'string',
     isInteractive: (await $.state.get(isInteractive)).value === true,
-    isRunning: (await runningCheckpoint($)) !== null,
+    isRunning,
     snoozeUntilTokens: typeof snoozed === 'number' ? snoozed : null,
   })
 
@@ -312,8 +334,8 @@ function compactSoon($: EngineInterface, isRetry = false): void {
         // the next automatic run waits for the fill to grow, as a skipped checkpoint does
         const { value } = await $.state.get(checkpoint)
 
-        if (typeof value?.tokens === 'number') {
-          await $.state.set(snoozeUntilTokens, snooze(value.tokens))
+        if (typeof value?.rearmTo === 'number') {
+          await $.state.set(snoozeUntilTokens, value.rearmTo)
         }
       }
       await $.state.set(checkpoint, null)
@@ -325,16 +347,17 @@ function compactSoon($: EngineInterface, isRetry = false): void {
 
 // Ends the checkpoint the finished main-loop turn belonged to: compacts once the notes
 // file changed, otherwise says why not. A failed save or an unreadable baseline never compacts.
-async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAborted: boolean): Promise<void> {
+async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAborted: boolean, turnId: string): Promise<void> {
   const { value } = await $.state.get(checkpoint)
 
-  if (!value || value.compacting) {
+  // only the checkpoint command's own turn ends it: a user turn queued ahead of it does not
+  if (!value || value.compacting || value.turnId !== turnId) {
     return
   }
 
   // an interrupted checkpoint turn is cancelled, whatever its reply saved
   if (isAborted) {
-    await endWithoutCompacting($, value.tokens, 'Auto-checkpoint cancelled: the turn was interrupted')
+    await endWithoutCompacting($, value.rearmTo, 'Auto-checkpoint cancelled: the turn was interrupted')
 
     return
   }
@@ -352,16 +375,16 @@ async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAbort
     await $.state.set(checkpoint, { ...value, compacting: true })
     compactSoon($)
   } else {
-    await endWithoutCompacting($, value.tokens, `Auto-checkpoint skipped: ${why}; next try after more context`)
+    await endWithoutCompacting($, value.rearmTo, `Auto-checkpoint skipped: ${why}; next try after more context`)
   }
 }
 
-// Ends a checkpoint that will not compact: cleared, snoozed to the fill it started at (or this
+// Ends a checkpoint that will not compact: cleared, snoozed past the fill it started at (or this
 // would start again at once), and the owner told.
-async function endWithoutCompacting($: EngineInterface, tokens: number | undefined, message: string): Promise<void> {
+async function endWithoutCompacting($: EngineInterface, rearmTo: number | undefined, message: string): Promise<void> {
   await $.state.set(checkpoint, null)
-  if (typeof tokens === 'number') {
-    await $.state.set(snoozeUntilTokens, snooze(tokens))
+  if (typeof rearmTo === 'number') {
+    await $.state.set(snoozeUntilTokens, rearmTo)
   }
   $.ui.toast(message)
 }
@@ -423,7 +446,18 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     try {
-      await $.state.set(isTurnActive, true)
+      await $.state.set(isTurnActive, e.turnId)
+
+      const running = await runningCheckpoint($)
+
+      // measured on harness 2.1.296: a command's turn.start text carries its <command-name> tag
+      if (
+        running !== null &&
+        running.turnId === undefined &&
+        e.text.includes(`<command-name>/${CHECKPOINT_COMMAND}</command-name>`)
+      ) {
+        await $.state.set(checkpoint, { ...running, turnId: e.turnId })
+      }
     } catch (error) {
       note($, `turn.start: ${String(error)}`)
     }
@@ -479,7 +513,7 @@ export const register: Register = (on, options) => {
 
     if (!e.agentId) {
       try {
-        await $.state.set(isTurnActive, false)
+        await $.state.set(isTurnActive, null)
       } catch (error) {
         note($, `turn.complete state: ${String(error)}`)
       }
@@ -509,7 +543,7 @@ export const register: Register = (on, options) => {
       }
 
       try {
-        await finishCheckpoint($, warning !== null, e.isAborted)
+        await finishCheckpoint($, warning !== null, e.isAborted, e.turnId)
       } catch (error) {
         await abandonCheckpoint($, error)
       }

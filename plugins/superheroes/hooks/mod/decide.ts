@@ -116,6 +116,14 @@ export const decide = (input: DecideInput): Decision => {
 
 export const snooze = (tokens: number): number => tokens + SNOOZE_STEP_TOKENS
 
+// Where an automatic re-arm waits for: a step past the fill, but never beyond the middle of
+// the headroom left before the harness compacts (`autoCompactThreshold`: known only while its
+// auto-compact is on), so a checkpoint still runs first. The owner's Snooze keeps `snooze`.
+export const rearmAt = (fill: number, autoCompactThreshold: number | undefined): number =>
+  autoCompactThreshold !== undefined && autoCompactThreshold > fill
+    ? Math.min(snooze(fill), fill + Math.floor((autoCompactThreshold - fill) / 2))
+    : snooze(fill)
+
 // The changed-file gate: a checkpoint counts only when the notes file now holds
 // text that differs from what it held before.
 export const notesChanged = (before: string | null, after: string | null): boolean =>

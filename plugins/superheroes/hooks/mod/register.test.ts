@@ -5,11 +5,16 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import { CHECKPOINT_INFO } from './checkpoint-block'
 import { SNOOZE_STEP_TOKENS } from './decide'
 
+const THRESHOLD = 167000
+
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
 type Cli = { exitCode: number; stdout: string } | null
 // a CLI stub may hold its answer (a promise) to overlap events
 type CliAnswer = Cli | Promise<Cli>
+
+// the engine of the running test, set by `start`: the command stub begins its turn through it
+let engine: Engine | null = null
 
 const SESSION = 'sess-1'
 const HISTORY = [{ role: 'user' as const, text: 'hello', toolUses: [] }]
@@ -222,12 +227,18 @@ function rig(
   on('session.usage', () => (r.usage === null ? { deny: 'no usage' } : { value: r.usage }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
-  on('command.run', (_$, e) => {
+  on('command.run', async (_$, e) => {
     r.commands.push(`${e.command} ${e.args}`.trim())
 
     if (options.isCommandBroken) {
       throw new Error('unknown command')
     }
+    // as measured on harness 2.1.296, the command's own turn starts with this text; it is
+    // never completed here, the test completes it (turn 't1')
+    await engine?.turn.start({
+      text: `<command-message>${e.command}</command-message>\n<command-name>/${e.command}</command-name>\n<command-args>${e.args}</command-args>`,
+      turnId: 't1',
+    })
 
     return { text: '' }
   })
@@ -534,8 +545,11 @@ const PAST = 520000
 const NEAR = 470000
 const FAR_BELOW = 100000
 
-const start = ($: Engine, isInteractive = true) =>
-  $.session.start({ cwd: '/w', surface: 'terminal', isInteractive })
+const start = ($: Engine, isInteractive = true) => {
+  engine = $
+
+  return $.session.start({ cwd: '/w', surface: 'terminal', isInteractive })
+}
 
 // The engine measures the session at `tokens`.
 async function measure($: Engine, r: Rig, tokens: number) {
@@ -798,6 +812,26 @@ test("a subagent's turn never finishes the checkpoint", async ($, on) => {
 
   await complete($, 'Done.', { agentId: 'agent-7' })
   await r.clock.advance(5000)
+
+  expect(r.toasts).toEqual([])
+  expect(r.seen).toHaveLength(0)
+
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+
+  expect(r.toasts).toEqual([SUCCESS])
+  expect(r.seen).toHaveLength(1)
+})
+
+test('an unrelated turn completing first leaves the checkpoint pending; its own turn then compacts', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await $.turn.complete({ answer: 'a user answer', durationMs: 10, isAborted: false, turnId: 'user', reason: 'answer' })
+  await r.clock.advance(1000)
 
   expect(r.toasts).toEqual([])
   expect(r.seen).toHaveLength(0)
@@ -1081,7 +1115,8 @@ test('two measurements overlapping the first start run one checkpoint', async ($
 
   // without the isStarting guard the second start also passes the running-checkpoint check
   expect(r.commands).toEqual([COMMAND])
-  expect(r.sets.filter(([key, value]) => key === 'checkpoint' && value !== null)).toHaveLength(1)
+  // the start's own write, not the later binding to its turn
+  expect(r.sets.filter(([key, value]) => key === 'checkpoint' && value !== null && (value as { turnId?: string }).turnId === undefined)).toHaveLength(1)
 })
 
 test('a turn that begins while the start reads the notes: nothing is recorded or run', async ($, on) => {
@@ -1164,5 +1199,31 @@ test('after a successful compaction the context must grow before an automatic ru
 
   await measure($, r, FILL + SNOOZE_STEP_TOKENS)
   await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('after a compaction that leaves 80000 with the harness compacting at 167000, an automatic run happens before it', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+  const usage = (tokens: number) => {
+    const u = usageAt(tokens)
+
+    return { ...u, context: { ...u.context, breakdown: { ...u.context.breakdown!, autoCompactThreshold: THRESHOLD } } }
+  }
+
+  await start($)
+  r.usage = usage(60000)
+  await $.session.measure({ context: { tokens: 60000, window: 200000 }, rateLimits: [], changed: ['context'] })
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+  expect(r.toasts).toEqual([SUCCESS])
+
+  r.usage = usage(80000)
+  await $.session.measure({ context: { tokens: 80000, window: 200000 }, rateLimits: [], changed: ['context'] })
+  r.usage = usage(123500)
+  await $.session.measure({ context: { tokens: 123500, window: 200000 }, rateLimits: [], changed: ['context'] })
+  await r.clock.settle()
+
   expect(r.commands).toEqual([COMMAND, COMMAND])
 })
