@@ -40,10 +40,11 @@ review record shows. It does not reclassify the PR. The containing lane keeps it
 its advisor vet.
 
 A red on the train is a per-lane green that goes red on the union or on `main`'s post-merge run.
-Whether its fix rides the word already given is duty 6's red-train exception, which turns on the
-fix being craft with no material consequence (`rubric/glossary.md#material-consequence`); when it
-rides, land it as the disclosed integration commit on the last open PR, or as the disclosed
-follow-up PR once the last lane has merged, and report it in the thread like any merge.
+Land its fix as the disclosed integration commit on the last open PR, or as the disclosed
+follow-up PR once the last lane has merged. Either way the merge it needs asks again: a moved head
+starts that PR's sheet over, and a new PR gets its own sheet, so the fix merges only on a saved
+"Merge" verdict on its current sheet together with "done" (duty 6). Report it in the thread like
+any merge.
 
 **The post-merge-only red.** A test green on the identical tree pre-merge can go
 **deterministically** red post-merge in CI only — coverage-instrumented runners, for one, can lose
@@ -53,12 +54,12 @@ close it with a disclosed follow-up PR from the failing head instead.
 
 ## Merging a stack
 
-**The invariant:** the owner's word names pull requests, and the merge acts on exactly those pull
-requests. A stack is a **mutable container** — a layer can be linked onto it after the word is
-given — so a merge issued against a stack **number** can act on a pull request the owner never
-saw. Nothing in the tooling closes that gap; this rule does.
+**The invariant:** the owner's word is a saved "Merge" verdict plus "done" on the stack's sheet,
+which lists the stack's pull requests, and the merge acts on exactly those pull requests. A stack is
+a **mutable container** — a layer can be linked onto it after the word is given — so a merge issued
+against a stack **number** can act on a pull request the owner never saw. Nothing in the tooling closes that gap; this rule does.
 
-1. **Membership is read from GitHub before any click list is drafted** — the GraphQL read in
+1. **Membership is read from GitHub before any PR sheet is built** — the GraphQL read in
    `rubric/native-stacks.md` § *How membership is verified*. That read is performed by
    `lib/stack_check.py` as `python3 -B <plugin-root>/lib/stack_check.py list --pr <a member pull
    request> --repo <owner/name>` — the entry point is **a member pull request** because GitHub's
@@ -67,27 +68,28 @@ saw. Nothing in the tooling closes that gap; this rule does.
    state only and is never evidence (see `rubric/native-stacks.md` § *Anti-patterns*). A base-branch chain that was never
    linked is **not** a stack and cannot be merged as one.
 
-2. **The word enumerates every pull request in the intended merge prefix**, by number and in order —
-   the showrunner charter's **The word** in duty 6; a layer linked onto the stack **after** the
-   word is **outside** that word.
+2. **The word covers exactly the pull requests the stack's sheet lists**, the sheet that carries the
+   saved "Merge" verdict: the whole stack, in order (the showrunner charter's **The word** in duty
+   6). There is no prefix word, and no word narrows a stack. A layer linked onto the stack **after**
+   its sheet was published is **outside** the word, and its arrival changes the stack, so the sheet
+   is replaced by an unsigned one.
 
-3. **Immediately before the irreversible command, re-read remote membership** and compare the owner's
-   enumeration to the remote entries **through the chosen target pull request** — not the whole
-   stack when the word names a prefix. Mismatch — a different order, a missing member, an unexpected
-   layer **within that prefix**, a member no longer open or now draft, or a head sha that no longer
+3. **Immediately before the irreversible command, re-read remote membership** and compare **the
+   sheet's list**, the whole stack, to the remote entries. Mismatch — a different order, a missing
+   member, an unexpected layer, a member no longer open or now draft, or a head sha that no longer
    matches the recorded evidence — **refuses**, and the advisor asks the owner again rather than
-   merging a container whose contents changed. Layers **above** the chosen target are outside this
-   operation and are not a mismatch. **Full-stack** equality is required only when the merge is
-   invoked by **stack number**. This re-read is not optional and is not satisfied by the earlier read
-   at click-list time: the point of it is the window between them. The re-read is the same
+   merging a container whose contents changed. Full-stack equality with the sheet's list is always
+   required, whether the merge is invoked by pull request number or by stack number. This re-read is
+   not optional and is not satisfied by the earlier read when the sheet was built: the point of it is
+   the window between them. The re-read is the same
    `lib/stack_check.py` invocation again; a non-zero exit **refuses** and stops the merge, returning
    the refusal `reason` from `lib/stack_check.py` (`REASON_*` constants).
 
-4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; every
-   member up to and including the chosen pull request. The argument is `[<stack-number> |
+4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; the
+   command merges the whole stack the sheet lists, and the target is its top layer. The argument is `[<stack-number> |
    <pr-number>]` per `gh stack merge --help` — with no argument the stack of the current branch is
    used — and a bare number is read first as a stack number, then as a pull request number, so
-   verify that number against the enumeration in item 3 immediately before the command runs. A
+   verify that number against the sheet's list in item 3 immediately before the command runs. A
    **direct** merge is atomic (all or nothing);
    a **merge-queue** merge is ordered and best-effort and can leave a merged prefix on the trunk.
    **Never pull request by pull request**: serial merges are the anti-pattern
@@ -96,18 +98,17 @@ saw. Nothing in the tooling closes that gap; this rule does.
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
 
-   **The click list names whole stacks.** A stack merges when its **feature** is complete — every
+   **The PR sheets name whole stacks.** A stack merges when its **feature** is complete — every
    layer the issue's plan names, vetted — and never when a vetted prefix exists. **A vetted prefix is
-   never a click.** The click list names whole stacks with their remaining layers, and an incomplete
-   stack is never listed. New scope that a tripwire or a vet discovers **on that feature** joins the
+   never a click.** A stack's sheet names the whole stack with its remaining layers, and an incomplete
+   stack gets no sheet. New scope that a tripwire or a vet discovers **on that feature** joins the
    stack as a layer rather than becoming a follow-on, while a finding outside the feature's
    owner-ratified scope stays a follow-up under the existing scope rule. The doctrine home is `rubric/native-stacks.md` § *How a stack merges*.
 
    This rule and items 2 and 3 govern different moments, so do not read one against the other. This
    rule governs what the advisor puts in front of the owner, and an incomplete stack never goes
-   there. Items 2 and 3 govern how a word, once given, is checked against the remote, and that word
-   may still name a prefix because the owner may narrow what the advisor listed. Neither licenses
-   drafting a click list on a prefix.
+   there. Items 2 and 3 govern how the word, once given, is checked against the remote, and that word
+   covers the whole stack the sheet lists. Neither licenses building a sheet on a prefix.
 
 5. **A stack is brought current by merge, bottom-up** — merge the layer below into each affected
    layer locally with `--no-ff` and push that merge plainly, starting just above the change, which
@@ -159,9 +160,8 @@ saw. Nothing in the tooling closes that gap; this rule does.
    dispositions and receipts, its own CI on its own head, its base — for each
    non-bottom layer, the layer below's branch; for the bottom layer, the stack's base
    (`baseRefName`) — and its membership read back. **Once per stack, at the top:** that the ordered
-   entries **through the chosen target pull request** equal the layers the advisor planned and the
-   owner enumerated (full-stack equality only when merging by stack number), that no member within
-   that scope is unexpected, and that the stack's `baseRefName` matches the planned or owner-approved
+   entries of the whole stack equal the layers the advisor planned and the stack's sheet lists, that
+   no member is unexpected, and that the stack's `baseRefName` matches the planned or owner-approved
    base.
 
 ## Merging a spec PR
