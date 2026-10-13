@@ -189,7 +189,7 @@ SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "
 AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
 ```
 
-A compose failure halts the review with compose's own error on stderr; there is no fall-open seat map. When the review halts with `lane-expanded-recompose`, run Setup again into a fresh session on the current head (the compose then seats the specialists).
+A compose failure halts the review with compose's own error on stderr; there is no fall-open seat map. When the review halts with `lane-expanded-recompose`, first push the loop's local fix commits (Setup reads the PR head from the remote; an adopted build pushes with `git push origin HEAD:$PR_BRANCH`), then run Setup again into a fresh session (the compose then seats the specialists).
 
 An empty author family refuses before any seat is dispatched — the composed map would be unjudgeable for maker-family constraints.
 

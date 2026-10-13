@@ -46,6 +46,16 @@ def test_independent_reviewer_adds_the_fixers_family_to_the_makers():
     assert RDS.independent_reviewer({"vendors": ["codex"]}, "codex", frozenset(), "codex") == (None, None)
 
 
+def test_independent_reviewer_bars_another_vendor_in_the_fixers_family(monkeypatch):
+    real = RDS.model_registry.family_for
+    # a third live vendor shares the fixer's family: only the family bar can exclude it
+    monkeypatch.setattr(RDS.model_registry, "family_for",
+                        lambda role, v: "anthropic" if v == "codex" else real(role, v))
+    cfg = {"vendors": ["claude", "codex", "cursor"]}
+    got = RDS.independent_reviewer(cfg, "codex", frozenset(), "claude")
+    assert got[0] is not None and got[0] not in ("claude", "codex")
+
+
 def test_independent_reviewer_never_treats_an_unresolvable_family_as_independent():
     assert RDS.independent_reviewer({"vendors": ["nope"]}, "nope", frozenset({"anthropic"}), None) == (None, None)
     assert RDS.independent_reviewer({"vendors": ["nope", "codex"]}, "nope",
