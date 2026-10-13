@@ -40,6 +40,7 @@ class Gh:
         self.bare = str(bare)
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
+        self.push_url = "git@github.com:%s.git" % REPO
 
     def _live(self, branch):
         got = subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", "refs/heads/" + branch],
@@ -47,6 +48,8 @@ class Gh:
         return got.stdout.strip() or None
 
     def __call__(self, argv, **kw):
+        if argv[0] == "git" and argv[3:6] == ["remote", "get-url", "--push"]:
+            return SimpleNamespace(returncode=0, stdout=self.push_url + "\n", stderr="")
         if argv[0] == "git":
             return subprocess.run(argv, **kw)
         self.calls.append(tuple(argv))
@@ -389,3 +392,40 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
 
 def test_the_owner_message_is_the_boards_words_byte_for_byte():
     assert CC.OWNER_MESSAGE_MERGED % 412 == OWNER_MERGED_412
+
+
+# ---------------------------------------------------------------- review round 1
+
+
+def test_a_delivered_request_is_not_asked_for_again(w):
+    _lane(w, "l-1", 101)
+    assert _record(w, "m-1", "delivered")["ok"]
+    got = _plan(w)
+    assert got["action"] == "cleanup" and got["archiveText"] is None and got["alreadyDelivered"] is True
+
+
+def test_record_and_branch_keep_the_explicit_launch_selection(w):
+    w.gh.pulls[PR] = _pull(issues=(101, 202), head_sha=w.head)
+    _lane(w, "l-1", 101, session="session-a")
+    _lane(w, "l-2", 202, session="session-b")
+    assert _record(w, "m-1", "delivered") == {"ok": False, "reason": "lane-ambiguous"}
+    got = CC.record(w.repo, REPO, PR, "m-1", "delivered", launch_id="l-2", env=w.env, run=w.gh)
+    assert got["ok"] and got["request"]["session"] == "session-b"
+    out = CC.branch(w.repo, REPO, PR, remote=w.remote, launch_id="l-2", env=w.env, run=w.gh)
+    assert out.get("deleted") is True, out
+
+
+def test_an_open_pr_head_in_a_differently_cased_repository_spelling_keeps_the_branch(w):
+    _lane(w, "l-1", 101)
+    w.gh.open_prs = [_open_pr(head_ref=BRANCH, base_ref="release", head_repo="Owner/Name")]
+    assert _branch(w) == {"ok": False, "reason": "branch-in-use"}
+    assert BRANCH in _remote_branches(w)
+
+
+def test_a_push_destination_other_than_the_checked_repository_is_refused_before_any_delete(w):
+    _lane(w, "l-1", 101)
+    w.gh.push_url = "git@github.com:owner/mirror.git"
+    assert _branch(w) == {"ok": False, "reason": "push-destination-mismatch"}
+    assert BRANCH in _remote_branches(w)
+    w.gh.push_url = "https://github.com/Owner/Name"
+    assert _branch(w)["deleted"] is True

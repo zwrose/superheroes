@@ -1,8 +1,12 @@
 """The advisor's cleanup after a cloud lane ends: the archive request to its builder and the PR's branch.
 
   cloud_cleanup.py plan   --repo-root D --repo O/N --pr P [--launch-id ID]
-  cloud_cleanup.py record --repo-root D --repo O/N --pr P --msg-id ID --outcome delivered|uncertain|failed
-  cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--remote URL]
+  cloud_cleanup.py record --repo-root D --repo O/N --pr P --msg-id ID --outcome delivered|uncertain|failed [--launch-id ID]
+  cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--remote URL] [--launch-id ID]
+
+A plan whose request is already `delivered` carries `archiveText: null` and `alreadyDelivered: true`: the
+caller sends nothing, and goes on to `branch`. A `--launch-id` given to `plan` is given again to `record`
+and `branch`, so all three act on the one lane.
 
 Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
@@ -212,10 +216,14 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     facts = {"branch": _name(head, "ref"), "headSha": _name(head, "sha"), "headRepo": _name(head, "repo", "full_name"),
              "baseRepo": _name(pull.get("base"), "repo", "full_name")}
     text = ARCHIVE_TEXT_MERGED if outcome == "merged" else ARCHIVE_TEXT_CLOSED
+    delivered = request.get("outcome") == "delivered"
     result = {"ok": True, "action": "cleanup", "outcome": outcome, "repo": repo, "pr": pr, "issue": lane.get("issue"),
               "launchId": lid, "session": session, "sessionId": lane.get("cloudSessionId"),
-              "configDir": lane.get("configDir"), "archiveText": text % pr, "request": request,
-              "branch": facts["branch"], "headSha": facts["headSha"]}
+              "configDir": lane.get("configDir"), "archiveText": None if delivered else text % pr,
+              "request": request, "branch": facts["branch"], "headSha": facts["headSha"]}
+    # axis: a confirmed delivery needs no further send, so a retried cleanup carries no archive text
+    if delivered:
+        result["alreadyDelivered"] = True
     return result, facts
 
 
@@ -227,7 +235,7 @@ def plan(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
 
 
 @_locked
-def record(repo_root, repo, pr, msg_id, outcome, *, env=None, run=None):
+def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, run=None):
     """Record the archive request the advisor sent for this PR's lane. The receipt records the request,
     never the owner's prompt for it."""
     env = os.environ if env is None else env
@@ -238,7 +246,7 @@ def record(repo_root, repo, pr, msg_id, outcome, *, env=None, run=None):
         return _refusal("msg-id-invalid")
     if outcome not in OUTCOMES:
         return _refusal("outcome-invalid")
-    got = plan(repo_root, repo, number, env=env, run=run)
+    got = plan(repo_root, repo, number, launch_id=launch_id, env=env, run=run)
     if not got["ok"]:
         return got
     if got["action"] == "none":
@@ -292,15 +300,39 @@ def _in_use(repo, branch, env, run):
         # axis: an open PR's base is as much a use of the branch as its head, so a stack's lower layer is kept — see bite-proof record c8_cloud_cleanup
         if _name(other, "base", "ref") == branch:
             return True
-        if _name(other, "head", "ref") == branch and _name(other, "head", "repo", "full_name") == repo:
+        # repository names compare without case (GitHub reports its own spelling); branch names stay exact
+        head_repo = _name(other, "head", "repo", "full_name")
+        if _name(other, "head", "ref") == branch and head_repo and head_repo.lower() == repo.lower():
             return True
     return False
 
 
-def branch(repo_root, repo, pr, *, remote=None, env=None, run=None):
+def _push_destination_ok(repo_root, repo, remote, env, run):
+    """True only when the URL a push to `remote` (default `origin`) would use names `repo` on its host."""
+    target = remote if remote else "origin"
+    code, out, _ = _gh_git(run, ["git", "-C", repo_root, "remote", "get-url", "--push", target], env)
+    url = out.strip() if code == 0 and out.strip() else (target if remote else None)
+    norm = _sib("store_core").normalize_remote(url)
+    return bool(norm) and "/" in norm and norm.split("/", 1)[1].lower() == repo.lower()
+
+
+def _gh_git(run, argv, env):
+    """(exit code, stdout, stderr) of one `git` call; (None, "", "") when it could not run at all."""
+    runner = subprocess.run if run is None else run
+    try:
+        proc = runner(argv, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
+                      env={k: v for k, v in env.items() if not k.startswith("GIT_")})
+    except Exception:
+        return None, "", ""
+    code, out, err = (getattr(proc, name, None) for name in ("returncode", "stdout", "stderr"))
+    return (code if isinstance(code, int) else None), (out if isinstance(out, str) else ""), \
+        (err if isinstance(err, str) else "")
+
+
+def branch(repo_root, repo, pr, *, remote=None, launch_id=None, env=None, run=None):
     """Delete the merged or closed PR's head branch, only while it is exactly the PR's recorded head."""
     env = os.environ if env is None else env
-    got, facts = _plan(repo_root, repo, pr, None, env, run)
+    got, facts = _plan(repo_root, repo, pr, launch_id, env, run)
     if not got["ok"] or got["action"] == "none":
         return got
     name, head_sha = facts["branch"], facts["headSha"]
@@ -328,6 +360,9 @@ def branch(repo_root, repo, pr, *, remote=None, env=None, run=None):
         # axis: work pushed after the PR's head is never deleted — see bite-proof record c8_cloud_cleanup
         if sha != head_sha:
             return _refusal("branch-moved")
+        # axis: the delete goes only to the repository the checks read, never to a fork, mirror or other push URL
+        if not _push_destination_ok(repo_root, repo, remote, env, run):
+            return _refusal("push-destination-mismatch")
         # A ref deletion guarded by a lease, never a history rewrite: the server applies it only while the
         # ref still equals the PR's head sha.
         # axis: the lease makes the delete lose to a push that lands after the read above — see bite-proof record c8_cloud_cleanup
@@ -364,8 +399,7 @@ def main(argv=None):
         sub.add_argument("--repo-root", required=True)
         sub.add_argument("--repo", required=True)
         sub.add_argument("--pr", required=True)
-        if name == "plan":
-            sub.add_argument("--launch-id")
+        sub.add_argument("--launch-id")
         if name == "record":
             sub.add_argument("--msg-id", required=True)
             sub.add_argument("--outcome", required=True)
@@ -379,9 +413,10 @@ def main(argv=None):
     if args.verb == "plan":
         result = plan(args.repo_root, args.repo, args.pr, launch_id=args.launch_id)
     elif args.verb == "record":
-        result = record(args.repo_root, args.repo, args.pr, args.msg_id, args.outcome)
+        result = record(args.repo_root, args.repo, args.pr, args.msg_id, args.outcome,
+                        launch_id=args.launch_id)
     else:
-        result = branch(args.repo_root, args.repo, args.pr, remote=args.remote)
+        result = branch(args.repo_root, args.repo, args.pr, remote=args.remote, launch_id=args.launch_id)
     sys.stdout.write(json.dumps(result) + "\n")
     return 1 if result.get("ok") is False else 0
 
