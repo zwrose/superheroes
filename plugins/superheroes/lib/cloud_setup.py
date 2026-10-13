@@ -343,10 +343,14 @@ def gardening_lines(cwd, today=None, next_pass_days=7, root=None):
     is read for whichever Claude account the builders run on. No records, no lines. Each line is
     ``{"account", "mark", "line"}``; a record that cannot be read gives the unreadable line."""
     directory = os.path.dirname(record_path(cwd, "x", root))
+    # a failed-check marker sits beside its record and is not a record
     try:
-        names = sorted(n for n in os.listdir(directory) if n.endswith(".json"))
-    except OSError:
+        names = sorted(n for n in os.listdir(directory)
+                       if n.endswith(".json") and not n.endswith(".failed-check.json"))
+    except FileNotFoundError:
         return []
+    except OSError:
+        return [{"account": None, "mark": None, "line": "Cloud reviewer pass: the setup record could not be read."}]
     if today is None:
         today = datetime.date.today()
     elif isinstance(today, str):
@@ -357,6 +361,13 @@ def gardening_lines(cwd, today=None, next_pass_days=7, root=None):
         try:
             with open(os.path.join(directory, name), encoding="utf-8") as fh:
                 account = json.load(fh)["account"]
+            import cloud_check  # lazy: cloud_check imports this module
+            # axis: a failed or unreadable check marker makes the saved lapse date stale, as cloud_parked reads it
+            if cloud_check.read_failed_check(cwd, account, root) is not None:
+                lines.append({"account": account, "mark": "Renew now", "line":
+                              "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
+                              "Run the pass command and paste the new pass into the environment."})
+                continue
             got = read(cwd, account, root)
             record = got["record"] if got["state"] == "ready" else None
         except Exception:

@@ -119,3 +119,24 @@ def test_the_cli_prints_the_lines_and_a_bad_today_exits_1(w, capsys):
     for bad in ("2026-13-01", "tomorrow", ""):
         assert CS.main(base + ["--today", bad]) == 1
         assert json.loads(capsys.readouterr().out) == {"reason": "today-invalid"}
+
+
+def test_a_failed_check_marker_makes_the_saved_date_stale_and_is_not_a_record(w):
+    _record(w, ACCOUNT, "2026-10-25")
+    marker = CS.record_path(w[0], ACCOUNT, w[1])[:-len(".json")] + ".failed-check.json"
+    with open(marker, "w", encoding="utf-8") as fh:
+        json.dump({"schema": "cloud-check-failed/1", "account": ACCOUNT, "failedParts": ["reviewer"]}, fh)
+    [got] = _lines(w)
+    assert got["account"] == ACCOUNT and got["mark"] == "Renew now"
+    assert "last reviewer check failed" in got["line"] and "Nothing to do" not in got["line"]
+    assert RENEW in got["line"]
+
+
+def test_an_unreadable_setup_directory_is_one_unreadable_line(w, monkeypatch):
+    _record(w, ACCOUNT, "2026-10-25")
+
+    def _denied(path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(os, "listdir", _denied)
+    assert _lines(w) == [{"account": None, "mark": None, "line": UNREADABLE}]

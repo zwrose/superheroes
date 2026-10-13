@@ -217,12 +217,14 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    pushed branch stays for the vet, a renewed review or a recovery.
 2. **Plan, then ask.** Run `python3 -B <plugin root>/lib/cloud_cleanup.py plan --repo-root <root>
    --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup` with `alreadyDelivered`, send
-   nothing and go to the branch step. On any other `cleanup`, first persist the attempt: run
-   `cloud_cleanup.py record --repo-root <root> --repo <owner/name> --pr <number> --msg-id <id>
-   --outcome pending`, with the message id you will send under. Only then send the plan's
+   nothing and go to the branch step. On any other `cleanup`, first persist the attempt under the
+   message id the send will carry. For another account, run the relay's `ensure` and `compose` first
+   (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
+   the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
+   id, so use `same-account-<pr number>`. Then run `cloud_cleanup.py record --repo-root <root> --repo
+   <owner/name> --pr <number> --msg-id <id> --outcome pending`. Only then send the plan's
    `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
-   through the relay exactly as the steps in `skills/showrunner/reference/wave-watch.md` § Answering a
-   builder note say (`ensure`, `compose`, send, `check`). Then run `record` with the same message id and
+   by the relay's send and `check`, as that section says. Then run `record` with the same message id and
    the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
    when nothing can have reached the builder. When `plan` was run with `--launch-id`, pass the same
    `--launch-id` to every `record` and to `branch`. A plan whose `request` is already `pending` or
