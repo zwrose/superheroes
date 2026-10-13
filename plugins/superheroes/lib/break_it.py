@@ -23,18 +23,38 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from git_routing import GIT_ROUTING_VARS  # noqa: E402
+import readout  # noqa: E402  (the band's fail-closed scrub seam)
 
 SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
+REDACTED_FIELD = "suggestionRedacted"
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
 KEPT, KEPT_MISSING, KEPT_CHANGED, KEPT_NOT_REGULAR, KEPT_FAILING, KEPT_UNRESOLVED = (
     "kept", "missing", "changed", "not-regular", "failing", "unresolved")
 
-_HEADER = "break-it-test v1"
+# The one hand-kept home of the block grammar. The test role's panel order renders it; parse_block
+# reads its header, field prefixes and separator from it.
+BLOCK_TEMPLATE = "\n".join([
+    "break-it-test v1",
+    "path: <the same repo-relative path as `file`>",
+    "run: <one command, run from the repository root, that runs only this test file>",
+    "---",
+    "<the complete file content>",
+])
+RUN_RULES = (
+    "The loop runs `run` without a shell, from a copy of the repository that holds its tracked "
+    "files only: one command, optionally led by `NAME=value` settings, with no pipes, redirects, "
+    "`;`, `&&`, `||`, backticks or `$(`. A command that needs anything else is not run.")
+
+_TEMPLATE_LINES = BLOCK_TEMPLATE.split("\n")
+_HEADER = _TEMPLATE_LINES[0]
+_PATH_PREFIX = _TEMPLATE_LINES[1].partition(" ")[0]
+_RUN_PREFIX = _TEMPLATE_LINES[2].partition(" ")[0]
+_SEPARATOR = _TEMPLATE_LINES[3]
 _GIT_TIMEOUT = 120
 _ENV_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _SHELL_TOKENS = frozenset(["|", "||", "&", "&&", ";", "<", ">", ">>", "2>", "&>"])
@@ -151,21 +171,24 @@ def _path_unsafe(path):
 
 def parse_block(text):
     """``({"path", "run", "content", "sha256"}, None)`` for a well-formed ``break-it-test v1``
-    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact. This
-    implements the block specification in ``agents/test-role.md`` (Break-it tests), which is the
-    one home of the grammar; nothing else restates it."""
+    block, else ``(None, reason)``. The content after the ``---`` line is kept byte-exact. The
+    grammar's one home is ``BLOCK_TEMPLATE``; the test role's panel order renders it and nothing
+    else restates it."""
     if not isinstance(text, str):
         return None, "block-not-a-string"
     parts = text.split("\n", 4)
+    # axis: the header is read from BLOCK_TEMPLATE, so the parser and the rendered grammar cannot drift apart
     if parts[0] != _HEADER:
         return None, "block-header-missing"
-    path = parts[1][len("path:"):].strip() if len(parts) > 1 and parts[1].startswith("path:") else ""
+    path = (parts[1][len(_PATH_PREFIX):].strip()
+            if len(parts) > 1 and parts[1].startswith(_PATH_PREFIX) else "")
     if not path:
         return None, "block-path-missing"
-    run = parts[2][len("run:"):].strip() if len(parts) > 2 and parts[2].startswith("run:") else ""
+    run = (parts[2][len(_RUN_PREFIX):].strip()
+           if len(parts) > 2 and parts[2].startswith(_RUN_PREFIX) else "")
     if not run:
         return None, "block-run-missing"
-    if len(parts) < 4 or parts[3] != "---":
+    if len(parts) < 4 or parts[3] != _SEPARATOR:
         return None, "block-separator-missing"
     # axis: an absolute, backslashed or dot-segment path is refused before anything is written — see bite-proof record wo_a_1800_break-it
     if _path_unsafe(path):
@@ -216,6 +239,8 @@ def parse_command(run):
 
 def _record(head, block, outcome, reason=None, exit_code=None, output=""):
     block = block if isinstance(block, dict) else {}
+    # axis: run output is subprocess text the test or the tested code wrote; it passes the fail-closed scrub before any record carries it
+    output = readout.scrub(output)[0] if output else ""
     return {"schema": SCHEMA, "role": ROLE, "path": block.get("path"),
             "command": block.get("run"), "head": head, "sha256": block.get("sha256"),
             "outcome": outcome, "reason": reason, "exitCode": exit_code, "output": output}
@@ -285,7 +310,12 @@ def _kill_group(pid, sig=signal.SIGKILL):
 
 
 def _tagged_pids(token):
-    """Pids of processes whose environment carries ``token`` (inherited through any session)."""
+    """Pids of processes whose environment carries ``token`` (inherited through any session).
+
+    On macOS, ``ps -E`` cannot read the environment of Apple's system programs (such as
+    ``/bin/sleep``). So a detached worker running one, after it has left the copy's directory,
+    escapes this net. The session kill and the in-copy working-directory net still apply.
+    """
     needle = (_TOKEN_ENV + "=" + token).encode()
     found = []
     if os.path.isdir("/proc/self"):
@@ -382,6 +412,27 @@ def _write_confined(copy, rel, content):
     return None
 
 
+def _already_kept(copy, rel, sha):
+    """True when ``rel`` is already a regular file in ``copy`` (no symlink on the way) whose bytes
+    hash to ``sha`` — the test was kept in the change, so it is run as it stands."""
+    parts = rel.split("/")
+    current = copy
+    try:
+        for part in parts[:-1]:
+            current = os.path.join(current, part)
+            if not stat.S_ISDIR(os.lstat(current).st_mode):
+                return False
+        target = os.path.join(current, parts[-1])
+        if not stat.S_ISREG(os.lstat(target).st_mode):
+            return False
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    return hashlib.sha256(data).hexdigest() == sha
+
+
 def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     def rec(outcome, reason=None, exit_code=None, output=""):
         return _record(head, block, outcome, reason, exit_code, output)
@@ -399,6 +450,9 @@ def _run_in_copy(repo_root, d, copy, head, block, argv, env, timeout, write):
     if added.returncode != 0:
         return rec(OUTCOME_NOT_RUN, "copy-failed",
                    output=_tail_text(added.stderr, True))
+    # axis: a target already in the copy with the block's own bytes is the kept test; it runs as it stands, never `path-exists`
+    if write and _already_kept(copy, block["path"], block.get("sha256")):
+        write = False
     if write:
         try:
             refusal = _write_confined(copy, block["path"], block["content"])
@@ -512,8 +566,12 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             kept.append(copy)
             continue
         block, refusal = parse_block(copy.get("suggestion"))
+        # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so the finding still earns the scope exemption and reaches the verifier
+        redacted = not refusal and copy.get(REDACTED_FIELD) is True
+        if redacted:
+            refusal = "suggestion-redacted"
         if refusal:
-            record = _not_run(head, block, refusal)
+            record = _not_run(head, None if redacted else block, refusal)
         elif block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
@@ -524,8 +582,16 @@ def intercept(findings, repo_root, head, *, runner=run_one):
             continue
         copy[RUN_FIELD] = record
         kept.append(copy)
-        exempt_ids.add(id(copy))
+        # axis: only a well-formed block on its own file at line 1 buys the scope exemption; a malformed one keeps ordinary scope checking
+        if block and block["path"] == copy.get("file") and _coerce_line(copy.get("line")) == (True, 1):
+            exempt_ids.add(id(copy))
     return kept, runs, exempt_ids
+
+
+def _coerce_line(value):
+    # imported late: engine_adapter's pinned import closure must not gain session_contract
+    from session_contract import coerce_line
+    return coerce_line(value)
 
 
 def check_kept(repo_root, base, head, record, *, runner=run_one):

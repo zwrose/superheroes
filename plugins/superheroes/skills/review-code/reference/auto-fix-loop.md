@@ -6,6 +6,7 @@
 3. [Fixer Subagent Prompt](#fixer-subagent-prompt)
 4. [Verification Rules (for subagents)](#verification-rules-for-subagents)
 5. [Common Mistakes](#common-mistakes)
+6. [Break-it tests](#break-it-tests)
 
 ---
 
@@ -663,6 +664,12 @@ These are the base rubric's binding verification rules, restated in every subage
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
 | Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).                  |
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. When no profile resolves, every run gets a provisional strict profile. |
+
+---
+
+## Break-it tests
+
+On a full panel, the driver runs each break-it test the test role wrote before it compiles the round's findings. Each one runs in a throwaway detached copy of the reviewed head (`lib/break_it.py`), and the command and output are recorded under the test role's name in the round record's `breakItRuns`. A test that passes means the change held, and the finding is dropped. A test that fails, or could not run, stays a finding. The fixer keeps the test in the change. Before the loop certifies `converged`, it checks that each fixed break-it finding's test is in the final diff with its exact bytes and passes at the final head (`breakItKept`); otherwise it parks with certification withheld. The test role never writes into the repository.
 
 ---
 

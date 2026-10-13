@@ -1,7 +1,6 @@
 import copy
 import hashlib
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -51,15 +50,9 @@ def repo(tmp_path):
     return root
 
 
-_ROLE_FILE = os.path.join(os.path.dirname(_LIB), "agents", "test-role.md")
-
-
 def _template():
-    """The block specification's lines, read from the one home of the grammar (the test role file)."""
-    with open(_ROLE_FILE, encoding="utf-8") as fh:
-        found = re.findall(r"```\n(break-it-test v1\n.*?)\n```", fh.read(), re.DOTALL)
-    assert len(found) == 1
-    lines = found[0].split("\n")
+    """The block grammar's lines, read from the one home of the grammar (`break_it.BLOCK_TEMPLATE`)."""
+    lines = break_it.BLOCK_TEMPLATE.split("\n")
     assert len(lines) == 5 and lines[3] == "---"
     return lines
 
@@ -92,7 +85,7 @@ def _fake(outcome, calls=None):
 
 def _finding(path, **extra):
     block = _wire(path, "%s %s" % (PY, path), "assert True\n")
-    out = {"title": "Break-it: %s" % path, "file": path, "taxonomy": break_it.TAXONOMY,
+    out = {"title": "Break-it: %s" % path, "file": path, "line": 1, "taxonomy": break_it.TAXONOMY,
            "suggestion": block}
     out.update(extra)
     return out
@@ -130,7 +123,7 @@ def test_t1_parse_block_round_trips_and_refuses():
     assert break_it.parse_block(good)[1] is None
 
 
-def test_parse_block_follows_the_specification_in_the_test_role_file():
+def test_parse_block_follows_block_template():
     good = _wire("tests/test_x.py", "python tests/test_x.py", "z\n")
     block, refusal = break_it.parse_block(good)
     assert refusal is None and block["path"] == "tests/test_x.py" and block["content"] == "z\n"
@@ -189,6 +182,23 @@ def test_t6_run_one_refuses_a_path_the_head_tracks(repo):
     record = break_it.run_one(str(repo), head, block)
     assert (record["outcome"], record["reason"]) == ("not-run", "path-exists")
     assert (repo / "tests/test_t.py").read_text() == "assert False, 'tracked'\n"
+
+
+# T6b
+def test_t6b_run_one_runs_a_target_that_already_holds_the_blocks_bytes(repo):
+    content = "assert False, 'kept and failing'\n"
+    _write(repo, "tests/test_t.py", content)
+    head = _commit(repo, "kept")
+    record = break_it.run_one(str(repo), head, _block("tests/test_t.py", content))
+    assert record["outcome"] == "failed" and record["reason"] is None
+    assert "kept and failing" in record["output"]
+
+
+def test_t6b_run_one_still_refuses_a_target_holding_other_bytes(repo):
+    _write(repo, "tests/test_t.py", "assert True\n")
+    head = _commit(repo, "tracked")
+    record = break_it.run_one(str(repo), head, _block("tests/test_t.py", "assert True  # weakened\n"))
+    assert (record["outcome"], record["reason"]) == ("not-run", "path-exists")
 
 
 # T7
@@ -270,6 +280,26 @@ def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, m
     pid = int(pidfile.read_text())
     try:
         assert _gone(pid), "the detached worker outlived run_one"
+    finally:
+        if not _gone(pid):
+            os.kill(pid, 9)
+
+
+def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, monkeypatch):
+    # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the copy's directory but kept its environment, so only the environment-tag net can catch it; the worker is a Python child because macOS hides a system program's environment from `ps -E`.
+    marker = 'PROC_ROOT = "/proc"'
+    assert marker in break_it._REAPER
+    monkeypatch.setattr(break_it, "_REAPER", break_it._REAPER.replace(marker, 'PROC_ROOT = "/nonexistent"'))
+    pidfile = tmp_path / "worker.pid"
+    content = ("import os, subprocess\n"
+               "p = subprocess.Popen([%r, '-c', 'import time; time.sleep(60)'], start_new_session=True, cwd='/')\n"
+               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % sys.executable
+    block = _block("tests/test_w.py", content,
+                   run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
+    assert break_it.run_one(str(repo), _head(repo), block)["outcome"] == "passed"
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), "the detached worker that left the copy outlived run_one"
     finally:
         if not _gone(pid):
             os.kill(pid, 9)
@@ -393,11 +423,12 @@ def test_t12_intercept_runs_every_finding_and_refuses_a_path_mismatch(repo):
     calls.clear()
     kept, runs, exempt = break_it.intercept([mismatch], str(repo), "H", runner=_fake("passed", calls))
     assert calls == []
-    assert kept[0]["breakItRun"]["reason"] == "path-mismatch" and id(kept[0]) in exempt
+    assert kept[0]["breakItRun"]["reason"] == "path-mismatch" and id(kept[0]) not in exempt
     bad = _finding("t/real.py", suggestion="not a block")
     kept, runs, exempt = break_it.intercept([bad], str(repo), "H", runner=_fake("passed", calls))
     assert kept[0]["breakItRun"]["reason"] == "block-header-missing"
     assert kept[0]["breakItRun"]["sha256"] is None and calls == []
+    assert id(kept[0]) not in exempt
 
 
 # T13
