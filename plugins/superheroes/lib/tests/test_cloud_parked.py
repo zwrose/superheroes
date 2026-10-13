@@ -900,6 +900,16 @@ def test_t9_a_lane_a_successor_replaced_is_listed_apart_and_never_sent_back(w):
     assert _entries(w)[0]["outcome"] is None
 
 
+def test_a_park_after_the_original_lane_was_superseded_binds_to_the_replacement(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _supersede(w, "l-old")
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-new"
+
+
 def test_a_lane_another_lane_replaced_is_still_sent_back(w):
     _lane(w, "l-keep", 101, "keep-session", "a")
     _park(w, 10, issue=101)

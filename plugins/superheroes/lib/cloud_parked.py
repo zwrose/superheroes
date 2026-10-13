@@ -258,7 +258,7 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     parked_on = _park_day(parks[-1].get("created_at"))
     park_id = parks[-1].get("id")
     park_id = park_id if isinstance(park_id, (str, int)) and not isinstance(park_id, bool) else None
-    if known and known[0]["outcome"] in ("sent-back", UNCERTAIN, "owner-let-through"):
+    if known and known[0]["outcome"] in (None, "sent-back", UNCERTAIN, "owner-let-through"):
         seen = known[0].get(_PARK_KEY)
         newer = park_id != seen if (park_id is not None and seen is not None) else (
             bool(parked_on) and parked_on > known[0]["parkedOn"])
@@ -272,7 +272,9 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
             return _refusal("pr-read-failed")
         issues = _linked_issues(pull.get("body"), repo)
         launch_id, _, ledger_reason = (
-            _lane(repo_root, issues, env, known[0].get(_LAUNCH_KEY) if known else None,
+            _lane(repo_root, issues, env,
+                  # axis: a park after the original lane was superseded binds to the replacement, not the superseded launch
+                  known[0].get(_LAUNCH_KEY) if known and known[0].get(_LAUNCH_KEY) not in _sib("cloud_recover").superseded_ids(repo_root, env)[0] else None,
                   reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)

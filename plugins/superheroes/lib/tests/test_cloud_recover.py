@@ -653,6 +653,30 @@ def test_a_recorded_handover_head_picks_the_one_pushed_branch_that_carries_it(w)
     assert chosen["premise"]["baseCommit"] == w.base
 
 
+def test_an_adopted_branch_without_the_issue_number_is_found(w):
+    head = _push(w, "feature/login", "a")
+    _lane(w, "l1", premise=dict(_premise(w, 17), adoptsBranch="feature/login"))
+    w.gh.comments = [_comment(_handover_body(head))]
+    assert _assess(w, state="idle")["verdict"] == "stopped"
+    _died(w, "l1")
+    assert _successor(w)["branch"] == "feature/login"
+
+
+def test_a_working_session_is_not_stopped_by_an_earlier_handover(w):
+    _lane(w, "l1")
+    w.gh.comments = [_comment(_handover_body("a" * 40))]
+    assert _assess(w, state="working", age=60)["verdict"] == "working"
+
+
+def test_a_later_working_reading_withdraws_the_stop_authorization(w):
+    _push(w, BRANCH, "a")
+    _lane(w, "l1")
+    assert _assess(w, state="failed")["verdict"] == "stopped"
+    _died(w, "l1")
+    assert _assess(w, state="working", age=60)["verdict"] == "working"
+    assert _successor(w) == {"ok": False, "reason": "lane-not-assessed-stopped"}
+
+
 def test_a_handover_head_carried_by_two_pushed_branches_is_ambiguous(w):
     head = _push(w, "issue-17-a", "a")
     _git(w.builder, "push", "-q", "origin", "issue-17-a:refs/heads/issue-17-b")

@@ -171,7 +171,12 @@ def _record(repo_root, section, launch_id, entry, *, env=None, keep=None):
         answer = keep(data[section].get(launch_id)) if keep is not None else None
         if answer is not None:
             return answer
-        data[section][launch_id] = entry
+        if entry is None:
+            if launch_id not in data[section]:
+                return {"ok": True}
+            del data[section][launch_id]
+        else:
+            data[section][launch_id] = entry
         return {"ok": True} if _save(path, data) else _refusal("recover-state-unwritable")
     finally:
         fl.release(lock)
@@ -262,10 +267,10 @@ def _branch_entry(repo_root, repo, name, sha, env, run):
                 pushTimeSource="commit" if pushed_at is None else "push")
 
 
-def pushed(repo_root, issue, *, repo, env=None, run=None):
+def pushed(repo_root, issue, *, repo, adopted=None, env=None, run=None):
     """The work pushed for an issue: every remote branch carrying the issue number as a whole number,
     each with its head, commit time and push time. `newest` is the one branch when there is exactly one
-    and it was read cleanly; with several, `ambiguous`."""
+    and it was read cleanly; with several, `ambiguous`. The lane's `adopted` branch is kept whatever its name."""
     env = _env(env)
     bad = _inputs(repo=repo, issue=issue)
     if bad:
@@ -279,7 +284,7 @@ def pushed(repo_root, issue, *, repo, env=None, run=None):
     kept = {}
     for line in out.splitlines():
         sha, _, ref = line.partition("\t")
-        if _SHA_RE.match(sha) and ref.startswith("refs/heads/") and whole.search(ref[len("refs/heads/"):]):
+        if _SHA_RE.match(sha) and ref.startswith("refs/heads/") and (whole.search(ref[len("refs/heads/"):]) or ref == "refs/heads/%s" % adopted):
             kept[ref[len("refs/heads/"):]] = sha
     branches = [_branch_entry(repo_root, repo, name, kept[name], env, run) for name in sorted(kept)]
     newest = branches[0] if len(branches) == 1 and "reason" not in branches[0] else None
@@ -314,13 +319,13 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     # axis: positive stop evidence recovers at once, whatever the lane's GitHub activity age says
     if session_state in _STOP_STATES:
         out["verdict"], out["evidence"] = "stopped", "session-" + session_state
+    # axis: a working or blocked session with recent activity is never recovered while it could still be working, whatever an earlier handover says
+    elif fresh:
+        out["verdict"] = "working"
     elif handover is not None:
         out["verdict"], out["evidence"] = "stopped", "handover"
     elif session_state == "unread":
         out["verdict"], out["evidence"] = "unresolved", "session-unread"
-    # axis: a working or blocked session with recent activity is never recovered while it could still be working
-    elif fresh:
-        out["verdict"] = "working"
     elif session_state in _LIVE_STATES and age is None:
         out["verdict"], out["evidence"] = "unresolved", "activity-unknown"
     else:
@@ -329,7 +334,10 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
             return path
         out["verdict"] = "awaiting-handover" if launch_id in state["asks"] else "ask-to-push"
     if out["verdict"] != "stopped":
-        return out
+        # axis: a newer non-stopped reading withdraws an earlier stop authorization
+        wrote = _record(repo_root, "assessed", launch_id, None, env=env)
+        # an unreadable state also refuses every successor, so only another failure to withdraw it is surfaced
+        return out if wrote["ok"] or wrote["reason"] == "recover-state-unreadable" else wrote
     if out["evidence"] == "handover":
         out["stoppedAt"] = _epoch(handover["createdAt"])
     elif _is_number(age) and age >= 0:
@@ -424,7 +432,7 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     if not isinstance(premise, dict):
         return _refusal("lane-premise-unreadable")
     premise = {k: v for k, v in premise.items() if k not in _LAUNCHER_STAMPED}
-    found = pushed(repo_root, info["issue"], repo=repo, env=env, run=run)
+    found = pushed(repo_root, info["issue"], repo=repo, adopted=premise.get("adoptsBranch"), env=env, run=run)
     if not found["ok"]:
         return found
     entry, refused = _adopted(found, assessed.get("handoverSha"))
