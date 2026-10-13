@@ -195,11 +195,11 @@ def _assert_fold_equivalent(tmp_path, phase, build, cfg=None, respond_factory=No
     out_hand = RD.cmd_submit(d_hand, n_hand["phase"], n_hand["attempt"],
                              n_hand["expectedStateHash"],
                              dict(hand_artifact, **(
-                                 {"reviewerVendor": RD._nonpanel_selection(state_asm, d_hand)[0]}
+                                 {"reviewerVendor": RD._nonpanel_selection(state_asm, d_hand, phase)[0]}
                                  if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})))
     assert out_hand["ok"] is True, out_hand
     # a hand submit of a single-seat reviewer phase names the vendor it was dispatched on
-    claim = ({"reviewerVendor": RD._nonpanel_selection(state_asm, d_asm)[0]}
+    claim = ({"reviewerVendor": RD._nonpanel_selection(state_asm, d_asm, phase)[0]}
              if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})
     out_asm = RD.cmd_submit(d_asm, n_asm["phase"], n_asm["attempt"],
                             n_asm["expectedStateHash"], dict(artifact, **claim))
@@ -567,7 +567,7 @@ def test_missing_scoped_finder_refuses_where_an_empty_artifact_would_certify(tmp
     d2, n2, _state2 = _at(tmp_path, RD.P_SCOPED, respond=_responder(
         round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE), name="counterfactual")
     assert RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"],
-                         {"findings": [], "reviewerVendor": RD._nonpanel_selection(_state2, d2)[0]})["ok"]
+                         {"findings": [], "reviewerVendor": RD._nonpanel_selection(_state2, d2, RD.P_SCOPED)[0]})["ok"]
     payload = _drive_on(d2, _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     assert payload["verdict"] == "converged", payload
     assert payload["certification"]["shape"] is not None, payload

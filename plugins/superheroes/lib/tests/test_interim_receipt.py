@@ -59,7 +59,7 @@ def _fold_verifiers(state, findings, verdicts):
     staged = verification.stage_ids(findings)
     state["_toVerify"] = staged
     RD._fold_verifiers(state, state["config"], {"verdicts": verdicts,
-                                                "verifierVendor": RD._nonpanel_selection(state)[0]})
+                                                "verifierVendor": RD._nonpanel_selection(state, None, RD.P_VERIFIERS)[0]})
 
 
 # --- per-pass append --------------------------------------------------------------------------

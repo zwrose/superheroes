@@ -100,8 +100,9 @@ def test_an_earlier_nonfixer_maker_family_is_barred_from_the_transport_row(monke
 @pytest.mark.parametrize("phase", NONPANEL)
 def test_no_makers_and_no_fixer_keeps_the_reviewer_engine_exactly(monkeypatch, phase):
     monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("claude", RD.VENDOR_SOURCE_DEFAULTED))
-    row = RD._seat_transport_row(_state(vendors=["claude"]), phase, "seat", 0,
-                                 {"vendors": ["claude"]}, {}, "/repo")
+    # a native `claude` seat takes the host's family from the seat map: the session carries an honest one
+    cfg = {"vendors": ["claude"], "seatMap": {"hostFamily": "anthropic"}}
+    row = RD._seat_transport_row(_state(**cfg), phase, "seat", 0, cfg, {}, "/repo")
     assert row["vendor"] == "claude" and row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED
 
 
@@ -244,7 +245,7 @@ def _library_verifier_fold(monkeypatch, verifier):
     monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("claude", RD.VENDOR_SOURCE_CONFIGURED))
     cfg = {"vendors": ["claude", "codex"], "fixerVendor": "claude"}
     state = RD.new_state(cfg)
-    assert RD._nonpanel_selection(state)[0] == "codex"
+    assert RD._nonpanel_selection(state, None, RD.P_VERIFIERS)[0] == "codex"
     state["_toVerify"] = [{"severity": "Important", "file": "a.py", "line": 1, "body": "b"}]
     artifact = RD._run_seam({"verifier": verifier}, RD.P_VERIFIERS, {"clusters": [{"ids": ["v0"]}]},
                             state, state["config"])

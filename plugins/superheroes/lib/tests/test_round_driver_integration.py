@@ -297,12 +297,16 @@ def _auditor_vendor_for(state):
     by_id = {t.get("id"): t.get("auditorVendor") for t in targets if isinstance(t, dict)}
     # A verifier / gap-sweep / scoped seat runs on the driver's selected non-maker vendor; its result
     # counts only when the runner's execution evidence names that vendor.
-    selected = round_driver._nonpanel_selection(state)[0] or "claude"
+    selected = {phase: round_driver._nonpanel_selection(state, None, phase)[0] or "claude"
+                for phase in round_driver._NONPANEL_REVIEWER_PHASES}
 
     def vendor_for(seat):
-        if (seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX)
-                or seat in (round_adapters.SEAT_GAPSWEEP, round_adapters.SEAT_SCOPED)):
-            return selected
+        if seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX):
+            return selected[round_driver.P_VERIFIERS]
+        if seat == round_adapters.SEAT_GAPSWEEP:
+            return selected[round_driver.P_GAPSWEEP]
+        if seat == round_adapters.SEAT_SCOPED:
+            return selected[round_driver.P_SCOPED]
         return by_id.get(seat, "claude")
     return vendor_for
 
