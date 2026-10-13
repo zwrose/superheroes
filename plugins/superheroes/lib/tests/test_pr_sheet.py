@@ -502,7 +502,7 @@ def test_the_full_walk_is_carried_through():
     assert walk["picturesFrom"] == advisor["walk"]["picturesFrom"]
     p1, p2, p3, p4, f1 = walk["stops"]
     assert [s["id"] for s in walk["stops"]] == ["p1", "p2", "p3", "p4", "f1"]
-    assert list(p1) == ["id", "title", "pr", "group", "kind", "steps", "expect", "pictures"]
+    assert list(p1) == ["id", "key", "title", "pr", "group", "kind", "steps", "expect", "pictures"]
     assert p1["steps"] == advisor["walk"]["stops"][0]["steps"] and p1["group"] == "On your phone"
     assert p1["pictures"] == [{"src": FIXED_SRC, "alt": "The empty cart", "caption": "Where you start"},
                               {"src": FIXED_SRC, "alt": "The paid order"}]
@@ -757,3 +757,40 @@ def test_a_failed_write_removes_the_pictures_this_run_created(tmp_path, monkeypa
     assert not out.exists() and list(tmp_path.glob("**/*.tmp")) == []
     assert picture_names(tmp_path) == ([kept.name] if existing else [])
     assert (tmp_path / "pictures").exists() is existing
+
+
+def _keys_of(advisor):
+    return {s["id"]: s["key"] for s in build(bundle(WALK)[0], advisor)["prSheet"]["walk"]["stops"]}
+
+
+def test_a_walk_stop_key_is_stable_under_reordered_open_fields_and_matches_the_schema_pattern():
+    # Axis: the key is a pure function of what the stop shows, whatever order the advisor wrote the open fields in.
+    advisor = bundle(WALK)[1]
+    before = _keys_of(advisor)
+    advisor["walk"]["open"] = dict(reversed(list(advisor["walk"]["open"].items())))
+    assert _keys_of(advisor) == before
+    pattern = SCHEMA["$defs"]["walkStop"]["properties"]["key"]["pattern"]
+    assert all(re.fullmatch(pattern, k) and k.startswith(i + "-") for i, k in before.items())
+    assert len(set(before.values())) == len(before)
+
+
+def _edits():
+    def stop(**kw):
+        return lambda a: a["walk"]["stops"][0].update(kw)
+    return [stop(title="Pay twice"), stop(steps=["Only one step"]), stop(expect="Something else."),
+            stop(group="Elsewhere"), stop(kind="look", steps=[]), stop(optional=True), stop(notWalked="No access."),
+            stop(pictures=[]), lambda a: a["walk"]["stops"][0]["pictures"][0].update(alt="Another alt"),
+            lambda a: a["walk"]["stops"][0]["pictures"][0].update(caption="Another caption"),
+            lambda a: a["walk"]["stops"][0]["pictures"].pop(0),
+            lambda a: a["walk"]["open"].update(url="https://other.example.test"),
+            lambda a: a["walk"].update(note="Walk at your desk.")]
+
+
+@pytest.mark.parametrize("edit", _edits())
+def test_a_walk_stop_key_changes_when_anything_it_shows_changes(edit):
+    # Axis: any shown field, or the walk's open or note, gives the stop a new key; the id prefix stays.
+    advisor = bundle(WALK)[1]
+    before = _keys_of(advisor)["p1"]
+    edit(advisor)
+    after = _keys_of(advisor)["p1"]
+    assert after != before and after.startswith("p1-")

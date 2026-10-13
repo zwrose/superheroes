@@ -71,6 +71,7 @@
       "stops": [
         {
           "id": "retry-loop",
+          "key": "retry-loop-16d385610603",
           "title": "The retry loop",
           "pr": 214,
           "group": "Payments",
@@ -83,6 +84,7 @@
         },
         {
           "id": "payment-tests",
+          "key": "payment-tests-d4192db6035a",
           "title": "The new payment tests",
           "pr": 214,
           "group": "Payments",

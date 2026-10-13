@@ -1978,11 +1978,8 @@
     let assetsAsk = null;
     let uploads = 0;
 
-    // One walk stop, all plain text: its parts and pictures, then its answers saved at walk/<id>; a Problem opens the fix block.
+    // One walk stop, all plain text: its parts and pictures, then its answers saved at walk/<key>; a Problem opens the fix block.
     function buildStop(stop, walk) {
-      // The stop's store key is its id plus a hash (FNV-1a) of what is shown, so a republished stop that changed starts unanswered.
-      const shown = JSON.stringify([stop.pr, stop.kind, stop.group, walk.open, walk.note, stop.title, stop.steps, stop.expect, stop.pictures.map(function (picture) { return [picture.src || null, picture.alt, picture.caption || null]; })]);
-      stop.key = stop.id + "-" + Array.prototype.reduce.call(shown, function (hash, _, index) { return Math.imul(hash ^ shown.charCodeAt(index), 16777619) >>> 0; }, 2166136261).toString(16);
       const article = prSection("article", "stop-" + stop.id, "sh-box");
       const meta = document.createElement("div");
       meta.appendChild(textElement("span", "sh-tag", (sheetKind === "stack" ? fill(prWords.walkStopPr, { pr: stop.pr }) + " " : "") + stop.id.toUpperCase()));

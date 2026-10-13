@@ -387,9 +387,10 @@
       "description": "One stop of the walk: a try stop is walked by hand, a look stop is a screen that cannot be reached by hand and is only looked at.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "pr", "group", "kind", "steps", "expect", "pictures"],
+      "required": ["id", "key", "title", "pr", "group", "kind", "steps", "expect", "pictures"],
       "properties": {
         "id": {"description": "The id of the stop.", "$ref": "#/$defs/id"},
+        "key": {"description": "Names the stop's stored answer at walk/<key>; changes when anything the stop shows, or the walk's open or note, changes.", "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{12}$"},
         "title": {"description": "The stop's title.", "type": "string", "minLength": 1},
         "pr": {"description": "The number of the PR the stop belongs to.", "type": "integer", "minimum": 1},
         "group": {"description": "The named group the stop is listed under.", "type": "string", "minLength": 1},
@@ -470,7 +471,7 @@
       ]
     },
     "walkAnswer": {
-      "description": "The document a PR sheet stores for one walk stop, at walk/<stop id>-<hash of the stop as shown> in the sheet's own store. Each document is written whole on every change and the owner's last tap counts. Works is offered on a try stop and Looks right on a look stop; the other counts as unanswered. A fix is chosen only on a Problem. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a PR sheet stores for one walk stop, at walk/<stop key> in the sheet's own store. Each document is written whole on every change and the owner's last tap counts. Works is offered on a try stop and Looks right on a look stop; the other counts as unanswered. A fix is chosen only on a Problem. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["answer", "fix", "note", "shots"],

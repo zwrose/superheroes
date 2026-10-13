@@ -840,10 +840,10 @@ def _pr_kind_sheet(kind):
         "alreadyDecided": [],
         "history": ["2 rounds ran."],
         "walk": {"open": {"label": "Open it"}, "picturesFrom": "the advisor's account", "stops": [
-            {"id": "schema", "title": "The schema", "pr": 1724, "group": "Stops", "kind": "look", "steps": [], "expect": "A table.", "pictures": []}]},
+            {"id": "schema", "key": "schema-0123456789ab", "title": "The schema", "pr": 1724, "group": "Stops", "kind": "look", "steps": [], "expect": "A table.", "pictures": []}]},
     }
     if kind == "stack":
-        body["walk"]["stops"].append({"id": "builder", "title": "The builder", "pr": 1725, "group": "Stops", "kind": "look", "steps": [],
+        body["walk"]["stops"].append({"id": "builder", "key": "builder-0123456789ab", "title": "The builder", "pr": 1725, "group": "Stops", "kind": "look", "steps": [],
                                       "expect": "A script.", "pictures": []})
         body["prs"] = [{"number": 1724, "title": "The schema", "commit": "662d4487"},
                        {"number": 1725, "title": "The builder", "commit": "abcdef0"}]

@@ -435,7 +435,7 @@ def pr_options():
 
 
 def walk_stop(stop_id, pr, **more):
-    return {"id": stop_id, "title": "The " + stop_id, "pr": pr, "group": "On your phone", "kind": "try", "steps": ["Open it"],
+    return {"id": stop_id, "key": stop_id + "-0123456789ab", "title": "The " + stop_id, "pr": pr, "group": "On your phone", "kind": "try", "steps": ["Open it"],
             "expect": "It works.", "pictures": [], **more}
 
 
@@ -670,6 +670,8 @@ BAD_WALKS = {
     "walk-without-pictures-from": lambda w: w.pop("picturesFrom"),
     "no-stops": lambda w: w.update(stops=[]),
     "stop-unknown-key": lambda w: set_in(w, "extra", 1),
+    "stop-without-key": lambda w: w["stops"][0].pop("key"),
+    "stop-key-not-hashed": lambda w: set_in(w, "key", "p1"),
     "stop-without-pictures": lambda w: w["stops"][0].pop("pictures"),
     "stop-empty-group": lambda w: set_in(w, "group", ""),
     "stop-optional-not-boolean": lambda w: set_in(w, "optional", "yes"),

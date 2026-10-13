@@ -65,6 +65,7 @@
       "stops": [
         {
           "id": "gift-card-table",
+          "key": "gift-card-table-18668f855294",
           "title": "The gift-card table",
           "pr": 5,
           "group": "Gift cards",
@@ -75,6 +76,7 @@
         },
         {
           "id": "checkout-redeem",
+          "key": "checkout-redeem-449ec5af939f",
           "title": "Spending a card at checkout",
           "pr": 6,
           "group": "Gift cards",

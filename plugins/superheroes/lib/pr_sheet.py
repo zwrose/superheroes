@@ -282,7 +282,7 @@ def _check_walk(walk, allowed, problems):
     if not (isinstance(walk["stops"], list) and walk["stops"]):
         problems.append("walk needs at least one stop")
         return
-    for stop in _check_list("walk stops", walk["stops"], *_shape(_STOP, ("steps", "pictures")), problems):
+    for stop in _check_list("walk stops", walk["stops"], *_shape(_STOP, ("key", "steps", "pictures")), problems):
         w, steps, pictures = f"walk stop {stop['id']}", stop.get("steps", []), stop.get("pictures", [])
         if not _num(stop["pr"]):
             problems.append(f"{w} needs pr, an integer 1 or more")
@@ -339,8 +339,12 @@ def _walk(walk, place):
     stops = [{"id": s["id"], "title": s["title"], "pr": s["pr"], "group": s["group"], "kind": s["kind"],
               "steps": list(s.get("steps", [])), "expect": s["expect"], "pictures": [picture(p) for p in s.get("pictures", [])],
               **{k: s[k] for k in ("optional", "notWalked") if k in s}} for s in walk["stops"]]
-    return {"open": dict(walk["open"]), **({"note": walk["note"]} if "note" in walk else {}),
-            "picturesFrom": walk["picturesFrom"], "stops": stops}
+    head = {"open": dict(walk["open"]), **({"note": walk["note"]} if "note" in walk else {})}
+    keyed = []
+    for s in stops:  # the key names the stop's stored answer and changes when anything the stop shows does
+        shown = json.dumps([s, head], sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        keyed.append({"id": s["id"], "key": s["id"] + "-" + hashlib.sha256(shown.encode("utf-8")).hexdigest()[:12], **{k: v for k, v in s.items() if k != "id"}})
+    return {**head, "picturesFrom": walk["picturesFrom"], "stops": keyed}
 
 
 def build(records, advisor, words, place=None):
