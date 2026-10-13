@@ -222,21 +222,22 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
    the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
    id, so use `same-account-<pr number>`. Then run `cloud_cleanup.py record --repo-root <root> --repo
-   <owner/name> --pr <number> --msg-id <id> --outcome pending`. That write is the reservation to send:
-   when it is refused (`request-in-progress` or `request-uncertain`), another caller holds the request,
-   so send nothing and go on. Only when it succeeds, send the plan's
+   <owner/name> --pr <number> --msg-id <id> --outcome pending --launch-id <the plan's launchId>`. That write is the
+   reservation to send: when it is refused (`request-in-progress`, `request-uncertain` or
+   `request-delivered`), another caller holds or has settled the request, so send nothing and go on. Only when it succeeds, send the plan's
    `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
    by the relay's send and `check`, as that section says. Then run `record` with the same message id and
    the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
-   when nothing can have reached the builder. When `plan` was run with `--launch-id`, pass the same
-   `--launch-id` to every `record` and to `branch`. A plan whose `request` is already `pending` or
+   when nothing can have reached the builder. Pass the plan's `launchId` as `--launch-id` to every `record`
+   and to `branch`, so each settles the lane that was planned. A plan whose `request` is already `pending` or
    `uncertain` is a resume after an unconfirmed send: send nothing, record `uncertain` for that
    request's message id, and go on. A request in either state is never sent a second time.
 3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other
    outcome, tell the owner that the archive request to that build's session could not be confirmed
    and that its session stays listed. Ask nothing of the owner: the only step the owner is ever asked
    for is the one tap on the archive prompt.
-4. **The branch.** Run `cloud_cleanup.py branch --repo-root <root> --repo <owner/name> --pr <number>`.
+4. **The branch.** Run `cloud_cleanup.py branch --repo-root <root> --repo <owner/name> --pr <number>
+   --launch-id <the plan's launchId>`.
    GitHub deletes the pull request's branch when the repository deletes merged branches; otherwise
    this step deletes it through GitHub, only while it still points at the pull request's head. It reports `deleted: false` with
    `already: "absent"` when the branch was already gone. A refusal (`branch-moved`, `branch-in-use`,

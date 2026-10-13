@@ -570,6 +570,16 @@ def test_a_pending_write_over_an_uncertain_request_is_refused_even_for_the_same_
     assert _record(w, "m-1", "pending") == {"ok": False, "reason": "request-uncertain"}
 
 
+def test_a_pending_write_after_another_caller_delivered_is_refused_and_leaves_the_delivered_receipt(w):
+    _lane(w, "l-1", 101)
+    stale = _plan(w)
+    assert stale["archiveText"]
+    assert _record(w, "m-1", "pending")["ok"] and _record(w, "m-1", "delivered")["ok"]
+    assert _record(w, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "delivered")]
+
+
 def test_a_final_outcome_for_the_pending_message_id_replaces_the_reservation(w):
     _lane(w, "l-1", 101)
     msg_id = "same-account-%d" % PR

@@ -5,7 +5,7 @@
   cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--launch-id ID]
 
 A plan whose request is already `delivered` carries `archiveText: null` and `alreadyDelivered: true`: the
-caller sends nothing, and goes on to `branch`. A `--launch-id` given to `plan` is given again to `record`
+caller sends nothing, and goes on to `branch`. The plan's launch id is given as `--launch-id` to `record`
 and `branch`, so all three act on the one lane. The caller records `pending` before it sends; a later
 `delivered`, `uncertain` or `failed` for the same msg id replaces it. A `pending` or `uncertain` request
 found on resume is never sent a second time on its own.
@@ -314,6 +314,9 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
         return path
     texts = {"merged": OWNER_MESSAGE_MERGED, "closed": OWNER_MESSAGE_CLOSED}
     old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"])), None)
+    # axis: a pending write over a delivered receipt grants no reservation, so a caller holding a stale plan sends nothing
+    if old is not None and old["outcome"] == "delivered" and outcome == "pending":
+        return _refusal("request-delivered")
     if old is not None and old["outcome"] == "delivered":
         return {"ok": True, "already": True, "request": old, "ownerMessage": texts[got["outcome"]] % number}
     # axis: a pending write is an exclusive send reservation, refused whatever its message id when a request is already pending or uncertain
