@@ -21,26 +21,17 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_builder  # noqa: E402
-import cloud_ready  # noqa: E402
 import cloud_recover as CR  # noqa: E402
 import heartbeat  # noqa: E402
 import launch_ledger as ll  # noqa: E402
-import launch_place  # noqa: E402
-import launch_report  # noqa: E402
 import launcher as L  # noqa: E402
 
 REPO = "owner/repo"
 BATCH = "b-recover"
 WINDOW = heartbeat.LIVENESS_QUIET_WINDOW_SECONDS
-HEADER = "Builder handover (cloud build)."
+HEADER = cloud_builder.HANDOVER_HEADER
 UTC = datetime.timezone.utc
 BRANCH = "issue-17-work"
-
-
-@pytest.fixture(autouse=True)
-def _handover_header(monkeypatch):
-    """The handover header is the sibling module's constant; pin it so these tests do not depend on it having landed."""
-    monkeypatch.setattr(cloud_builder, "HANDOVER_HEADER", HEADER, raising=False)
 
 
 def _handover_body(sha):
@@ -152,9 +143,12 @@ def _push(w, branch, name, when=None):
 
 
 def _premise(w, issue):
+    """A reserved premise the launcher accepts (once its own stamps are gone), with the stamps it adds."""
     return {"issue": issue, "surfaces": ["plugins/x"], "batchId": BATCH, "baseCommit": w.base, "stack": 2,
-            "layerPosition": 2, "adopts": 99, "placeCall": {"place": "cloud", "pointedAtCloud": True},
-            "standingExclusions": {"merge": True}}
+            "layerPosition": 2, "adopts": 99, "maxRunMinutes": 240, "bashMaxTimeoutMs": 900000,
+            "grantScope": {"applicable": False, "reason": "no grant in this lane"},
+            "ownerCapability": {"applicable": False, "reason": "no owner capability in this lane"},
+            "placeCall": {"place": "cloud", "pointedAtCloud": True}, "standingExclusions": {"merge": True}}
 
 
 def _lane(w, launch_id, issue=17, *, premise=None, start_age=7200):
@@ -269,8 +263,7 @@ def test_an_unknown_lane_a_local_lane_and_an_unreadable_ledger_are_refused(w, mo
     assert _assess(w, "nope")["reason"] == "lane-unknown"
     _local_lane(w, "local-1")
     for call in (lambda: _assess(w, "local-1"), lambda: CR.ask(w.root, "local-1"),
-                 lambda: CR.asked(w.root, "local-1"), lambda: _successor(w, "local-1"),
-                 lambda: CR.relaunch_refusal(w.root, "local-1", repo=REPO, run=w.gh)):
+                 lambda: CR.asked(w.root, "local-1"), lambda: _successor(w, "local-1")):
         assert call() == {"ok": False, "reason": "lane-not-cloud"}
     with monkeypatch.context() as scoped:
         scoped.setattr(ll, "fold", lambda records: {"ok": False, "reason": "fold-x", "launches": {}})
@@ -474,8 +467,8 @@ def test_t4_a_stalled_builder_that_answers_is_recovered_from_the_head_it_handed_
     assert (out["verdict"], out["evidence"], out["handover"]["sha"]) == ("stopped", "handover", newer)
     _died(w, "l1")
     got = _successor(w)
-    assert got["ok"] is True and got["premise"]["baseCommit"] == newer != first
-    assert got["premise"]["adoptsBranch"] == BRANCH
+    assert got["ok"] is True and got["premise"]["adoptsHead"] == newer != first
+    assert got["premise"]["adoptsBranch"] == BRANCH and got["premise"]["baseCommit"] == w.base
 
 
 def test_a_handover_head_that_is_not_pushed_gives_no_successor(w):
@@ -535,16 +528,21 @@ def test_t1_the_successor_premise_adopts_the_pushed_branch_and_passes_the_launch
     assert got["ok"] is True and got["neverPushed"] is False and got["branch"] == BRANCH and got["sha"] == sha
     assert (got["pushedAt"], got["pushTimeSource"]) == (_at(9, 55), "push")
     premise = got["premise"]
-    assert premise["baseCommit"] == sha and premise["adoptsBranch"] == BRANCH
+    assert premise["baseCommit"] == w.base != sha  # the lane's own base is kept; the pushed work rides beside it
+    assert premise["adoptsBranch"] == BRANCH and premise["adoptsHead"] == sha
     assert "placeCall" not in premise and "standingExclusions" not in premise
     original = _premise(w, 17)
-    for key in ("issue", "surfaces", "batchId", "stack", "layerPosition", "adopts"):
+    for key in set(original) - set(CR._LAUNCHER_STAMPED):
         assert premise[key] == original[key]
-    assert _has_object(w.root, sha)  # the launch boundary resolves the pushed head in this clone
+    assert _has_object(w.root, sha)  # the pushed head was fetched into this clone
+    accepted = L.validate_premise(premise, w.root)  # the real launcher check, not a stand-in
+    assert accepted["ok"] is True and accepted["resolvedBaseCommit"] == w.base
+    assert L.validate_premise(dict(premise, adoptsHead="abc"), w.root)["reason"] == "premise-adopts-head-invalid"
     stamp = _placement("cloud")
     result, seen = _cli_launch(w, tmp_path, monkeypatch, premise, stamp)
     assert result.get("reason") != "premise-place-call-caller-set" and result["ok"] is True
-    assert seen["premise"]["adoptsBranch"] == BRANCH and seen["premise"]["baseCommit"] == sha
+    assert seen["premise"]["adoptsBranch"] == BRANCH and seen["premise"]["adoptsHead"] == sha
+    assert seen["premise"]["baseCommit"] == w.base
     assert seen["premise"]["placeCall"] == stamp and seen["kwargs"]["place"] == "cloud"
     assert _state(w)["superseded"]["l1"]["branch"] == BRANCH and _state(w)["superseded"]["l1"]["sha"] == sha
 
@@ -562,20 +560,22 @@ def test_t2_when_the_cloud_is_not_ready_the_same_premise_reaches_the_local_path(
     stamp = _placement("local", reason="version")
     result, seen = _cli_launch(w, tmp_path, monkeypatch, premise, stamp)
     assert result["ok"] is True and result["placeCall"] == stamp
-    assert seen["premise"]["adoptsBranch"] == BRANCH and seen["premise"]["baseCommit"] == sha
+    assert seen["premise"]["adoptsBranch"] == BRANCH and seen["premise"]["adoptsHead"] == sha
+    assert seen["premise"]["baseCommit"] == w.base
     assert "place" not in seen["kwargs"] and seen["kwargs"]["slot"] is None
 
 
 def test_t6_a_lane_that_never_pushed_is_relaunched_from_its_original_base(w):
     _push(w, "issue-18-work", "other")
-    stale = dict(_premise(w, 17), adoptsBranch="stale-branch")
+    stale = dict(_premise(w, 17), adoptsBranch="stale-branch", adoptsHead="f" * 40)
     _lane(w, "l1", premise=stale)
     assert _assess(w, state="absent")["verdict"] == "stopped"
     _died(w, "l1")
     got = _successor(w)
     assert got["ok"] is True and got["neverPushed"] is True
     assert (got["branch"], got["sha"], got["pushedAt"]) == (None, None, None)
-    assert got["premise"]["baseCommit"] == w.base and "adoptsBranch" not in got["premise"]
+    assert got["premise"]["baseCommit"] == w.base
+    assert "adoptsBranch" not in got["premise"] and "adoptsHead" not in got["premise"]
     assert "placeCall" not in got["premise"] and "standingExclusions" not in got["premise"]
     assert _state(w)["superseded"]["l1"]["branch"] is None
     assert CR.message(17, place="cloud", stopped_at=_at(10, 0), never_pushed=True, tz=UTC)["text"] == (
@@ -583,27 +583,44 @@ def test_t6_a_lane_that_never_pushed_is_relaunched_from_its_original_base(w):
         "in a new cloud session.")
 
 
-def test_e7_e17_several_branches_need_the_advisor_to_name_one(w):
+def test_e4_two_qualifying_branches_give_no_successor_and_there_is_no_way_to_name_one(w, capsys):
     _push(w, "issue-17-a", "a")
-    named = _push(w, "issue-17-b", "b")
+    _push(w, "issue-17-b", "b")
     _lane(w, "l1")
     got = CR.pushed(w.root, 17, repo=REPO, run=w.gh)
     assert got["ambiguous"] is True and got["newest"] is None and len(got["branches"]) == 2
     assert _assess(w, state="failed")["verdict"] == "stopped"
     _died(w, "l1")
     assert _successor(w) == {"ok": False, "reason": "pushed-branch-ambiguous"}
-    assert _successor(w, branch="issue-17-c") == {"ok": False, "reason": "branch-not-found"}
-    assert _successor(w, branch="issue-18-x") == {"ok": False, "reason": "branch-not-found"}
-    chosen = _successor(w, branch="issue-17-b")
-    assert chosen["ok"] is True and chosen["premise"]["baseCommit"] == named
-    assert chosen["premise"]["adoptsBranch"] == "issue-17-b"
+    with pytest.raises(TypeError):
+        _successor(w, branch="issue-17-b")
+    assert CR.main(["successor", "--repo-root", w.root, "--launch-id", "l1", "--repo", REPO,
+                    "--branch", "issue-17-b"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "usage"}
+    assert "l1" not in _state(w)["superseded"]
 
 
-def test_a_branch_named_for_a_lane_that_pushed_nothing_is_not_found(w):
+def test_a_recorded_handover_head_picks_the_one_pushed_branch_that_carries_it(w):
+    _push(w, "issue-17-a", "a")
+    named = _push(w, "issue-17-b", "b")
     _lane(w, "l1")
-    assert _assess(w, state="failed")["verdict"] == "stopped"
+    w.gh.comments = [_comment(_handover_body(named))]
+    assert _assess(w, state="idle")["verdict"] == "stopped"
     _died(w, "l1")
-    assert _successor(w, branch=BRANCH) == {"ok": False, "reason": "branch-not-found"}
+    chosen = _successor(w)
+    assert chosen["ok"] is True and chosen["branch"] == "issue-17-b" and chosen["sha"] == named
+    assert chosen["premise"]["adoptsBranch"] == "issue-17-b" and chosen["premise"]["adoptsHead"] == named
+    assert chosen["premise"]["baseCommit"] == w.base
+
+
+def test_a_handover_head_carried_by_two_pushed_branches_is_ambiguous(w):
+    head = _push(w, "issue-17-a", "a")
+    _git(w.builder, "push", "-q", "origin", "issue-17-a:refs/heads/issue-17-b")
+    _lane(w, "l1")
+    w.gh.comments = [_comment(_handover_body(head))]
+    assert _assess(w, state="idle")["verdict"] == "stopped"
+    _died(w, "l1")
+    assert _successor(w) == {"ok": False, "reason": "pushed-branch-ambiguous"}
 
 
 def test_a_branch_that_could_not_be_read_cleanly_is_never_taken_for_no_work(w, monkeypatch):
@@ -614,7 +631,6 @@ def test_a_branch_that_could_not_be_read_cleanly_is_never_taken_for_no_work(w, m
     monkeypatch.setattr(CR, "pushed", lambda *a, **k: {"ok": True, "issue": 17, "branches": [moved],
                                                        "newest": None, "ambiguous": False})
     assert _successor(w) == {"ok": False, "reason": "pushed-branch-unreadable"}
-    assert _successor(w, branch=BRANCH) == {"ok": False, "reason": "branch-moved-during-read"}
 
 
 def test_a_remote_that_cannot_be_read_refuses_the_successor(w):
@@ -716,78 +732,42 @@ def test_message_checks_its_arguments():
     assert CR.message(17, place="cloud", stopped_at="noon")["reason"] == "time-invalid"
 
 
-# ---------------------------------------------------------------- a refusal at intake
+# ---------------------------------------------------------------- the one input check
 
 
-def _refused_lane(w, launch_id="l1", outcome="refusal", comment_age=600):
-    _lane(w, launch_id)
-    _died(w, launch_id, outcome)
-    w.gh.comments = [_comment(cloud_builder._refusal_comment("plugin-version-mismatch", running="0.41.0",
-                                                             launched="0.42.0"), comment_age)]
+def test_inputs_judges_only_the_arguments_it_is_handed_and_in_a_fixed_order():
+    assert CR._inputs() is None
+    assert CR._inputs(repo=REPO, issue=17, launch_id="l1", session_state="idle", activity_age_seconds=None,
+                      place="local", stopped_at=None, pushed_at=1.5, push_time_source="commit") is None
+    assert CR._inputs(place="mars") == "place-invalid"  # nothing else handed over, nothing else judged
+    assert CR._inputs(issue=0, repo="nope") == "repo-invalid"  # the order is fixed, not the call's keyword order
+    assert CR._inputs(push_time_source="clock", session_state="sleeping") == "session-state-invalid"
 
 
-def test_t7_a_version_refusal_relaunches_with_the_cloud_s_reported_version(w):
-    _refused_lane(w)
-    got = CR.relaunch_refusal(w.root, "l1", repo=REPO, run=w.gh)
-    assert got["ok"] is True and (got["cloudVersion"], got["advisorVersion"]) == ("0.41.0", "0.42.0")
-    premise = got["premise"]
-    assert premise["reportedCloud"] == {"pluginVersion": "0.41.0"} and cloud_ready.valid_reported(premise["reportedCloud"])
-    assert "placeCall" not in premise and "standingExclusions" not in premise
-    assert premise["baseCommit"] == w.base and premise["issue"] == 17
-
-    def readiness(cwd, reported=None, root=None, env=None):
-        return {"setting": True, "ready": False, "reason": "version", "advisorVersion": "0.42.0",
-                "cloudVersion": (reported or {}).get("pluginVersion"), "failedCheck": None, "environment": None}
-
-    placement = launch_place.route(w.root, premise, None, readiness_fn=readiness, needs_fn=lambda cwd, p, root=None: [])
-    assert placement["place"] == "local" and placement["reason"] == "version"
-    assert (placement["cloudVersion"], placement["advisorVersion"]) == ("0.41.0", "0.42.0")
-    report = launch_report.render_report([{"issue": 17, "placeCall": placement}])
-    assert "0.41.0" in report and "0.42.0" in report
-
-
-def test_a_version_refusal_without_its_comment_is_refused(w):
-    _refused_lane(w)
-    w.gh.comments = [_comment("Builder refusal (cloud build).\n\nsomething else"), _comment("plain chatter", 300, 2),
-                     _comment(cloud_builder._refusal_comment("cloud-environment-mismatch", actual="a", expected="b"), 200, 3)]
-    assert CR.relaunch_refusal(w.root, "l1", repo=REPO, run=w.gh) == {"ok": False, "reason": "refusal-comment-missing"}
+_BAD_INPUTS = [
+    ("repo-shape", lambda w: CR.pushed(w.root, 17, repo="not a repo", run=w.gh), "repo-invalid"),
+    ("repo-type", lambda w: CR.successor(w.root, "l1", repo=None, run=w.gh), "repo-invalid"),
+    ("issue-zero", lambda w: CR.pushed(w.root, 0, repo=REPO, run=w.gh), "issue-invalid"),
+    ("issue-bool", lambda w: CR.message(True, place="cloud", stopped_at=None), "issue-invalid"),
+    ("launch-id-empty", lambda w: CR.ask(w.root, ""), "launch-id-invalid"),
+    ("launch-id-type", lambda w: CR.asked(w.root, 7), "launch-id-invalid"),
+    ("launch-id-assess", lambda w: _assess(w, launch_id=""), "launch-id-invalid"),
+    ("launch-id-successor", lambda w: _successor(w, launch_id=None), "launch-id-invalid"),
+    ("session-state", lambda w: _assess(w, state="sleeping"), "session-state-invalid"),
+    ("activity-age-text", lambda w: _assess(w, state="idle", age="soon"), "activity-age-invalid"),
+    ("activity-age-nan", lambda w: _assess(w, state="idle", age=float("nan")), "activity-age-invalid"),
+    ("place", lambda w: CR.message(17, place="mars", stopped_at=None), "place-invalid"),
+    ("time-stopped", lambda w: CR.message(17, place="cloud", stopped_at="noon"), "time-invalid"),
+    ("time-pushed", lambda w: CR.message(17, place="cloud", stopped_at=None, pushed_at=float("inf")), "time-invalid"),
+    ("push-time-source", lambda w: CR.message(17, place="cloud", stopped_at=None, push_time_source="clock"),
+     "push-time-source-invalid"),
+]
 
 
-def test_e16_a_refusal_comment_older_than_the_lane_is_ignored(w):
-    _refused_lane(w, comment_age=9000)
-    assert CR.relaunch_refusal(w.root, "l1", repo=REPO, run=w.gh)["reason"] == "refusal-comment-missing"
-
-
-def test_a_refusal_whose_comments_cannot_be_read_is_refused(w):
-    _refused_lane(w)
-    w.gh.comments_fail = True
-    assert CR.relaunch_refusal(w.root, "l1", repo=REPO, run=w.gh) == {"ok": False, "reason": "comments-unreadable"}
-
-
-def test_only_an_ended_refusal_lane_is_relaunched_this_way(w):
-    _lane(w, "live")
-    assert CR.relaunch_refusal(w.root, "live", repo=REPO, run=w.gh)["reason"] == "lane-not-ended"
-    _refused_lane(w, "gone", outcome="died")
-    assert CR.relaunch_refusal(w.root, "gone", repo=REPO, run=w.gh)["reason"] == "lane-not-refusal"
-
-
-# ---------------------------------------------------------------- the showrunner-resume row
-
-
-def test_t8_the_resume_row_follows_the_cloud_lane_evidence():
-    assert CR.resume_row(session_state="working", activity_age_seconds=100) == {"ok": True, "row": "re-arm"}
-    assert CR.resume_row(session_state="blocked", activity_age_seconds=WINDOW)["row"] == "re-arm"
-    assert CR.resume_row(session_state="failed")["row"] == "adopt"
-    assert CR.resume_row(session_state="archived", activity_age_seconds=10)["row"] == "adopt"
-    assert CR.resume_row(session_state="absent")["row"] == "adopt"
-    assert CR.resume_row(session_state="idle", handover=True)["row"] == "adopt"
-    assert CR.resume_row(session_state="idle")["row"] == "unresolved"
-    assert CR.resume_row(session_state="idle", activity_age_seconds=WINDOW + 1)["row"] == "unresolved"
-    assert CR.resume_row(session_state="working", activity_age_seconds=WINDOW + 1)["row"] == "unresolved"
-    assert CR.resume_row(session_state="working", activity_age_seconds=-1)["row"] == "unresolved"
-    assert CR.resume_row(session_state="working")["row"] == "unresolved"
-    assert CR.resume_row(session_state="unread")["row"] == "unresolved"
-    assert CR.resume_row(session_state="dozing") == {"ok": False, "reason": "session-state-invalid"}
+@pytest.mark.parametrize("call,token", [c[1:] for c in _BAD_INPUTS], ids=[c[0] for c in _BAD_INPUTS])
+def test_e8_every_verb_refuses_an_input_the_shared_check_rejects(w, call, token):
+    _lane(w, "l1")  # a real lane, so only the input check can be what refuses
+    assert call(w) == {"ok": False, "reason": token}
 
 
 # ---------------------------------------------------------------- the command line
@@ -798,10 +778,8 @@ _CENSUS = {
     "assess": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO, "--session-state", "idle"],
     "ask": ["--repo-root", "{root}", "--launch-id", "l-none"],
     "asked": ["--repo-root", "{root}", "--launch-id", "l-none", "--uncertain"],
-    "successor": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO, "--branch", "b"],
+    "successor": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
     "message": ["--issue", "17", "--place", "cloud", "--stopped-at", "1760000000", "--pushed-at", "1759999000"],
-    "relaunch-refusal": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
-    "resume-row": ["--session-state", "working", "--activity-age-seconds", "100", "--handover"],
 }
 
 

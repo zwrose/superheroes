@@ -2124,18 +2124,28 @@ def _builder_check_for(launch_id, info):
     )
 
 
-def _local_transcript_exists(info):
-    """True unless the lane's recorded session transcript is positively absent.
+TRANSCRIPT_FOUND = "found"
+TRANSCRIPT_AMBIGUOUS = "ambiguous"
+TRANSCRIPT_UNREADABLE = "unreadable"
 
-    Resolved by the wave watch's own locator; an ambiguous or unreadable lookup counts as present
-    (fail closed), because the transcript appears only once a builder started.
+
+def _local_transcript_lookup(info):
+    """`found`, `ambiguous` or `unreadable`, or None when the lane's recorded session transcript is
+    positively absent.
+
+    Resolved by the wave watch's own locator; an ambiguous or unreadable lookup is not absence (fail
+    closed), because the transcript appears only once a builder started.
     """
     import wave_watch  # lazy: wave_watch imports this module
 
     mtime, ambiguous, unresolved = wave_watch._session_transcript_mtime(
         info.get("sessionId"), os.environ, info.get("configDir"),
     )
-    return mtime is not None or ambiguous or unresolved
+    if mtime is not None:
+        return TRANSCRIPT_FOUND
+    if ambiguous:
+        return TRANSCRIPT_AMBIGUOUS
+    return TRANSCRIPT_UNREADABLE if unresolved else None
 
 
 _OWNERSHIP_LOCK_PREFIX = "ownership-"
@@ -2283,11 +2293,17 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
             return _repair_refusal(
                 REPAIR_BUILDER_MAY_EXIST, check=_builder_check_for(launch_id, info),
             )
-        if info.get("place") != PLACE_CLOUD and _local_transcript_exists(info):
+        transcript = _local_transcript_lookup(info) if info.get("place") != PLACE_CLOUD else None
+        if transcript is not None:
+            # axis: the refusal names which lookup answer stopped the repair — a found transcript proves a builder started, an ambiguous or unreadable lookup only fails to rule one out
+            said = {
+                TRANSCRIPT_FOUND: "the lane's session transcript exists, so a builder started",
+                TRANSCRIPT_AMBIGUOUS: "more than one transcript carries the lane's session id, so a builder may have started",
+                TRANSCRIPT_UNREADABLE: "the lane's session transcript could not be read, so a builder may have started",
+            }[transcript]
             return _repair_refusal(
-                REPAIR_BUILDER_MAY_EXIST,
-                check="the lane's session transcript exists, so a builder started: %s"
-                % _builder_check_for(launch_id, info),
+                REPAIR_BUILDER_MAY_EXIST, check="%s: %s" % (said, _builder_check_for(launch_id, info)),
+                transcript=transcript,
             )
         evidence = "%s [no builder: %s]" % (evidence.strip(), no_builder_evidence.strip())
         terminal = terminalize(

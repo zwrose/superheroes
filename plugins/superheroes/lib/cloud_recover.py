@@ -1,25 +1,23 @@
-"""The advisor's recovery of a stopped cloud builder: what it pushed, whether it may be replaced,
-the ask to push, the successor's premise, and the board's words.
+"""The advisor's recovery of a stopped cloud builder: what it pushed, whether it may be replaced, the ask
+to push, the successor's premise, and the board's words.
 
   cloud_recover.py pushed --repo-root D --repo O/N --issue N
   cloud_recover.py assess --repo-root D --launch-id L --repo O/N --session-state S [--activity-age-seconds N]
   cloud_recover.py ask --repo-root D --launch-id L
   cloud_recover.py asked --repo-root D --launch-id L [--uncertain]
-  cloud_recover.py successor --repo-root D --launch-id L --repo O/N [--branch B]
+  cloud_recover.py successor --repo-root D --launch-id L --repo O/N
   cloud_recover.py message --issue N --place cloud|local [--stopped-at EPOCH] [--pushed-at EPOCH]
                            [--never-pushed] [--push-time-source push|commit]
-  cloud_recover.py relaunch-refusal --repo-root D --launch-id L --repo O/N
-  cloud_recover.py resume-row --session-state S [--activity-age-seconds N] [--handover]
 
-A successor is composed only for a cloud lane the launch ledger already records as terminal, after
-`assess` returned `stopped` on positive stop evidence or a confirmed handover, so no path through this
-module helps two builders work one issue.
+A successor is composed only for a cloud lane the launch ledger records as ended and `assess` recorded as
+`stopped` (positive stop evidence or a confirmed handover), so no path through this module helps two
+builders work one issue. Every verb checks its inputs through the one `_inputs`.
 
-Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
-`env=None` (a mapping; default the process environment), and one that runs a command also takes
-`run=None` (default `subprocess.run`). Every function returns a plain dict; an expected failure is a
-result with a `reason` token, never a raise. The CLI prints one JSON object and exits 1 on a refusal.
-State is `cloud-recover.json`, beside the launch ledger, written only with `store_core.atomic_write`.
+Stdlib plus plugin imports only. A function that reads the environment takes `env=None` (a mapping; default
+the process environment), and one that runs a command also takes `run=None` (default `subprocess.run`).
+Every function returns a plain dict; an expected failure is a result with a `reason` token, never a raise.
+The CLI prints one JSON object and exits 1 on a refusal. State is `cloud-recover.json`, beside the launch
+ledger, written only with `store_core.atomic_write`.
 """
 import argparse
 import datetime
@@ -51,7 +49,6 @@ _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\
 _PUSH_SOURCES = ("push", "commit")
 _PLACES = ("cloud", "local")
 _LAUNCHER_STAMPED = ("placeCall", "standingExclusions")
-_VERSION_GROUP = r"(?P<%s>\d+\.\d+\.\d+)"
 
 
 def _sib(name):
@@ -86,20 +83,31 @@ def _epoch(stamp):
         return None
 
 
-def _check_repo(repo):
-    if isinstance(repo, str) and _sib("cloud_builder")._REPO_RE.match(repo):
-        return None
-    return _refusal("repo-invalid")
+_INPUT_CHECKS = (  # the order in which the first refusal is chosen
+    ("repo", "repo-invalid", lambda v: isinstance(v, str) and _sib("cloud_builder")._REPO_RE.match(v)),
+    ("issue", "issue-invalid", lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0),
+    ("launch_id", "launch-id-invalid", lambda v: isinstance(v, str) and v != ""),
+    ("session_state", "session-state-invalid", lambda v: v in SESSION_STATES),
+    ("activity_age_seconds", "activity-age-invalid", lambda v: v is None or _is_number(v)),
+    ("place", "place-invalid", lambda v: v in _PLACES),
+    ("stopped_at", "time-invalid", lambda v: v is None or _is_number(v)),
+    ("pushed_at", "time-invalid", lambda v: v is None or _is_number(v)),
+    ("push_time_source", "push-time-source-invalid", lambda v: v in _PUSH_SOURCES),
+)
 
 
-# ---------------------------------------------------------------- the state file
+def _inputs(**given):
+    """The first refusal token for the arguments handed in (only those), or None when all are sound."""
+    # axis: every verb's inputs are judged here, and only the arguments it hands over, so no verb acts on one it never checked
+    for name, token, sound in _INPUT_CHECKS:
+        if name in given and not sound(given[name]):
+            return token
+    return None
 
 
 def _state_path(repo_root, env):
     where = _sib("launch_ledger").ledger_path(repo_root, env)
-    if not where["ok"]:
-        return None
-    return os.path.join(os.path.dirname(where["path"]), STATE_NAME)
+    return os.path.join(os.path.dirname(where["path"]), STATE_NAME) if where["ok"] else None
 
 
 def _well_formed(data):
@@ -112,8 +120,8 @@ def _well_formed(data):
 
 
 def _load(repo_root, env):
-    """(state path, state dict with every section present) or (refusal, None). A missing file is no
-    state; any other file that is not a well-formed state is refused and left alone."""
+    """(state path, state with every section present) or (refusal, None). A missing file is no state; any
+    other file that is not well formed is refused and left alone."""
     path = _state_path(repo_root, env)
     if path is None:
         return _refusal("recover-state-unreadable"), None
@@ -138,60 +146,42 @@ def _save(path, data):
     return True
 
 
-def _locked(fn):
-    """Run a writer under one per-repository lock beside the state file, so its read-modify-write is not
-    interleaved with another writer's. The state is re-read inside the lock by the writer itself."""
-    def wrapper(repo_root, *args, env=None, **kwargs):
-        env = _env(env)
-        path = _state_path(repo_root, env)
-        if path is None:
-            return _refusal("recover-state-unreadable")
-        lock = path + ".lock"
-        fl = _sib("file_lock")
-        deadline = time.monotonic() + _LOCK_WAIT_SECONDS
-        while True:
-            try:
-                fl.acquire(lock, reclaim_dead_holder=True)
-                break
-            except fl.LockHeld:
-                if time.monotonic() >= deadline:
-                    return _refusal("recover-state-busy")
-                time.sleep(0.05)
-        try:
-            return fn(repo_root, *args, env=env, **kwargs)
-        finally:
-            fl.release(lock)
-    wrapper.__name__, wrapper.__doc__ = fn.__name__, fn.__doc__
-    return wrapper
-
-
-@_locked
 def _record(repo_root, section, launch_id, entry, *, env=None, keep=None):
-    """Write `entry` under `section[launch_id]`. With `keep`, called with the entry already there (or
-    None): a non-None answer is returned instead of writing, and the state is left alone."""
-    path, data = _load(repo_root, env)
-    if data is None:
-        return path
-    if keep is not None:
-        answer = keep(data[section].get(launch_id))
+    """Write `entry` under `section[launch_id]`, under one per-repository lock beside the state file so the
+    read-modify-write is not interleaved with another writer's. With `keep`, called with the entry already
+    there (or None): a non-None answer is returned instead of writing, and the state is left alone."""
+    env = _env(env)
+    path = _state_path(repo_root, env)
+    if path is None:
+        return _refusal("recover-state-unreadable")
+    lock, fl = path + ".lock", _sib("file_lock")
+    deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fl.acquire(lock, reclaim_dead_holder=True)
+            break
+        except fl.LockHeld:
+            if time.monotonic() >= deadline:
+                return _refusal("recover-state-busy")
+            time.sleep(0.05)
+    try:
+        path, data = _load(repo_root, env)
+        if data is None:
+            return path
+        answer = keep(data[section].get(launch_id)) if keep is not None else None
         if answer is not None:
             return answer
-    data[section][launch_id] = entry
-    if not _save(path, data):
-        return _refusal("recover-state-unwritable")
-    return {"ok": True}
+        data[section][launch_id] = entry
+        return {"ok": True} if _save(path, data) else _refusal("recover-state-unwritable")
+    finally:
+        fl.release(lock)
 
 
 def superseded_ids(repo_root, env=None):
     """(the launch ids a successor was composed for, whether the state could be read). A missing file
     is readable and empty; an unreadable one is not, and the caller treats every lane as possibly superseded."""
     path, data = _load(repo_root, _env(env))
-    if data is None:
-        return set(), False
-    return set(data["superseded"]), True
-
-
-# ---------------------------------------------------------------- the lane
+    return (set(), False) if data is None else (set(data["superseded"]), True)
 
 
 def _lane(repo_root, launch_id, env):
@@ -199,9 +189,7 @@ def _lane(repo_root, launch_id, env):
     launch id is not in it, or the lane is not a cloud lane."""
     ll = _sib("launch_ledger")
     got = ll.read(repo_root, env=env)
-    if got["state"] not in ("ok", "missing"):
-        return None, None, _refusal("launch-ledger-unreadable")
-    fold = ll.fold(got["records"])
+    fold = ll.fold(got["records"]) if got["state"] in ("ok", "missing") else {}
     if not fold.get("ok"):
         return None, None, _refusal("launch-ledger-unreadable")
     info = fold["launches"].get(launch_id)
@@ -209,63 +197,40 @@ def _lane(repo_root, launch_id, env):
         return None, None, _refusal("lane-unknown")
     if info["place"] != ll.PLACE_CLOUD:
         return None, None, _refusal("lane-not-cloud")
-    reserved = next((r for r in got["records"]
-                     if r.get("event") == "reserved" and r.get("launchId") == launch_id), None)
+    reserved = next((r for r in got["records"] if r.get("event") == "reserved" and r.get("launchId") == launch_id), None)
     return info, reserved, None
 
 
-def _lane_start(info):
-    stamp = info.get("startedTs", info.get("reservedTs"))
-    return stamp if _is_number(stamp) else None
-
-
-def _comments_since(repo, issue, since, env, run):
-    """The issue's comments created at or after `since` (epoch seconds), each with its parsed time; None
-    when the read failed. A comment without a readable creation time is not kept."""
+def _handover(repo, issue, since, env, run):
+    """(the newest handover comment created at or after `since` as a dict or None, whether the comments
+    were read). A comment without a readable creation time or a whole handover body is not kept."""
     cb = _sib("cloud_builder")
     endpoint = "repos/%s/issues/%d/comments?since=%s" % (repo, issue, _iso(since))
     code, out = cb._gh(run, ["api", "--paginate", endpoint], cb._git_env(env))
     try:
-        found = _sib("pr_comment")._parse_paginated_arrays(out) if code == 0 else None
+        comments = _sib("pr_comment")._parse_paginated_arrays(out) if code == 0 else None
     except (ValueError, TypeError):
-        return None
-    if found is None or not all(isinstance(c, dict) for c in found):
-        return None
-    kept = []
-    for comment in found:
-        created = _epoch(comment.get("created_at"))
-        if created is not None and created >= since and isinstance(comment.get("body"), str):
-            kept.append((created, comment))
-    return kept
-
-
-def _handover(repo, issue, since, env, run):
-    """(the newest handover comment as a dict or None, whether the comments were read)."""
-    header = getattr(_sib("cloud_builder"), "HANDOVER_HEADER", None)
-    comments = _comments_since(repo, issue, since, env, run) if isinstance(header, str) else None
-    if comments is None:
+        comments = None
+    if comments is None or not all(isinstance(c, dict) for c in comments):
         return None, False
     found = []
-    for created, comment in comments:
-        body = comment["body"].strip()
-        sha = _HANDOVER_SHA_RE.search(body)
-        if body.startswith(header) and sha:
+    for comment in comments:
+        created, body = _epoch(comment.get("created_at")), comment.get("body")
+        sha = _HANDOVER_SHA_RE.search(body.strip()) if isinstance(body, str) else None
+        if created is not None and created >= since and sha and body.strip().startswith(cb.HANDOVER_HEADER):
             found.append((created, comment, sha.group(1)))
     if not found:
         return None, True
-    created, comment, sha = max(found, key=lambda t: t[0])
+    _, comment, sha = max(found, key=lambda t: t[0])
     return {"commentId": comment.get("id"), "url": comment.get("html_url"), "sha": sha,
             "createdAt": comment["created_at"]}, True
-
-
-# ---------------------------------------------------------------- what the lane pushed
 
 
 def _push_time(repo, name, sha, env, run):
     """Epoch seconds GitHub recorded for the push that left `name` at `sha`; None when it cannot be told."""
     cb = _sib("cloud_builder")
-    endpoint = "repos/%s/activity?ref=%s&activity_type=push&per_page=30" % (
-        repo, urllib.parse.quote("refs/heads/" + name, safe="/"))
+    ref = "refs/heads/" + name
+    endpoint = "repos/%s/activity?ref=%s&activity_type=push&per_page=30" % (repo, urllib.parse.quote(ref, safe="/"))
     code, out = cb._gh(run, ["api", endpoint], cb._git_env(env))
     try:
         events = json.loads(out) if code == 0 else None
@@ -273,13 +238,8 @@ def _push_time(repo, name, sha, env, run):
         return None
     if not isinstance(events, list):
         return None
-    for event in events:
-        if not (isinstance(event, dict) and event.get("after") == sha):
-            continue
-        if isinstance(event.get("ref"), str) and event["ref"] != "refs/heads/" + name:
-            continue
-        return _epoch(event.get("timestamp"))
-    return None
+    return next((_epoch(e.get("timestamp")) for e in events if isinstance(e, dict) and e.get("after") == sha
+                 and (not isinstance(e.get("ref"), str) or e["ref"] == ref)), None)
 
 
 def _branch_entry(repo_root, repo, name, sha, env, run):
@@ -289,34 +249,27 @@ def _branch_entry(repo_root, repo, name, sha, env, run):
     entry = {"branch": name, "sha": sha}
     code, _ = cb._git(run, repo_root, ["fetch", "origin", "+refs/heads/%s:refs/remotes/origin/%s" % (name, name)], genv)
     if code != 0:
-        entry["reason"] = "branch-fetch-failed"
-        return entry
+        return dict(entry, reason="branch-fetch-failed")
     code, out = cb._git(run, repo_root, ["rev-parse", "refs/remotes/origin/" + name], genv)
     # axis: a branch whose fetched head is not the head the remote advertised was moving during the read — it is never named as the lane's work
     if code != 0 or out.strip() != sha:
-        entry["reason"] = "branch-moved-during-read"
-        return entry
+        return dict(entry, reason="branch-moved-during-read")
     code, out = cb._git(run, repo_root, ["log", "-1", "--format=%ct", sha], genv)
     if code != 0 or not re.fullmatch(r"\d+", out.strip()):
-        entry["reason"] = "commit-time-unreadable"
-        return entry
-    committed = int(out.strip())
-    pushed = _push_time(repo, name, sha, env, run)
-    entry.update({"committedAt": committed, "pushedAt": committed if pushed is None else pushed,
-                  "pushTimeSource": "commit" if pushed is None else "push"})
-    return entry
+        return dict(entry, reason="commit-time-unreadable")
+    committed, pushed_at = int(out.strip()), _push_time(repo, name, sha, env, run)
+    return dict(entry, committedAt=committed, pushedAt=committed if pushed_at is None else pushed_at,
+                pushTimeSource="commit" if pushed_at is None else "push")
 
 
 def pushed(repo_root, issue, *, repo, env=None, run=None):
     """The work pushed for an issue: every remote branch carrying the issue number as a whole number,
     each with its head, commit time and push time. `newest` is the one branch when there is exactly one
-    and it was read cleanly; with several, `ambiguous` and the advisor names the branch."""
+    and it was read cleanly; with several, `ambiguous`."""
     env = _env(env)
-    bad = _check_repo(repo)
+    bad = _inputs(repo=repo, issue=issue)
     if bad:
-        return bad
-    if not (isinstance(issue, int) and not isinstance(issue, bool) and issue > 0):
-        return _refusal("issue-invalid")
+        return _refusal(bad)
     cb = _sib("cloud_builder")
     code, out = cb._git(run, repo_root, ["ls-remote", "--heads", "origin"], cb._git_env(env))
     if code != 0:
@@ -333,49 +286,30 @@ def pushed(repo_root, issue, *, repo, env=None, run=None):
     return {"ok": True, "issue": issue, "branches": branches, "newest": newest, "ambiguous": len(branches) > 1}
 
 
-# ---------------------------------------------------------------- may the lane be recovered now
-
-
-def _check_state(session_state, activity_age_seconds):
-    if session_state not in SESSION_STATES:
-        return _refusal("session-state-invalid")
-    if activity_age_seconds is not None and not _is_number(activity_age_seconds):
-        return _refusal("activity-age-invalid")
-    return None
-
-
-def _fresh(session_state, age):
-    """A working or blocked session with GitHub activity inside the quiet window."""
-    window = _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS
-    return session_state in _LIVE_STATES and _is_number(age) and 0 <= age <= window
-
-
 def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, repo, env=None, run=None, now=None):
     """Whether the lane may be recovered now. `stopped` is returned only on positive stop evidence (the
     session failed, was archived or is gone) or a handover comment, and is recorded; every other verdict
     leaves the lane alone."""
     env = _env(env)
-    bad = _check_repo(repo)
+    bad = _inputs(repo=repo, launch_id=launch_id, session_state=session_state,
+                  activity_age_seconds=activity_age_seconds)
     if bad:
-        return bad
+        return _refusal(bad)
     info, _, refused = _lane(repo_root, launch_id, env)
     if refused:
         return refused
-    bad = _check_state(session_state, activity_age_seconds)
-    if bad:
-        return bad
     now = time.time() if now is None else now
     out = {"ok": True, "launchId": launch_id, "issue": info["issue"], "verdict": None, "evidence": None,
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
-           "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"),
-           "stoppedAt": None}
+           "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None}
     if info["terminal"]:
         out["verdict"] = "ended"
         return out
-    start = _lane_start(info)
-    handover, read = _handover(repo, info["issue"], start, env, run) if start is not None else (None, False)
+    start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
+    handover, read = _handover(repo, info["issue"], start, env, run) if _is_number(start) else (None, False)
     out["handover"], out["handoverRead"] = handover, "ok" if read else "failed"
-    age = activity_age_seconds
+    fresh = (session_state in _LIVE_STATES and _is_number(age)
+             and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
     # axis: positive stop evidence recovers at once, whatever the lane's GitHub activity age says
     if session_state in _STOP_STATES:
         out["verdict"], out["evidence"] = "stopped", "session-" + session_state
@@ -384,7 +318,7 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     elif session_state == "unread":
         out["verdict"], out["evidence"] = "unresolved", "session-unread"
     # axis: a working or blocked session with recent activity is never recovered while it could still be working
-    elif _fresh(session_state, age):
+    elif fresh:
         out["verdict"] = "working"
     elif session_state in _LIVE_STATES and age is None:
         out["verdict"], out["evidence"] = "unresolved", "activity-unknown"
@@ -405,12 +339,12 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     return out if wrote["ok"] else wrote
 
 
-# ---------------------------------------------------------------- the ask to push
-
-
 def ask(repo_root, launch_id, *, env=None):
     """The words that ask a stalled builder to push and hand over. Records nothing."""
     env = _env(env)
+    bad = _inputs(launch_id=launch_id)
+    if bad:
+        return _refusal(bad)
     info, _, refused = _lane(repo_root, launch_id, env)
     if refused:
         return refused
@@ -428,15 +362,17 @@ def asked(repo_root, launch_id, *, uncertain=False, env=None):
     """Record that the ask was sent: plain once it was delivered, `uncertain` when delivery could not be
     confirmed. Saying it again changes nothing, and `uncertain` never downgrades a delivered ask."""
     env = _env(env)
+    bad = _inputs(launch_id=launch_id)
+    if bad:
+        return _refusal(bad)
     _, _, refused = _lane(repo_root, launch_id, env)
     if refused:
         return refused
     outcome = "uncertain" if uncertain else "delivered"
 
     def keep(existing):
-        if existing is not None and (existing["outcome"] == outcome or existing["outcome"] == "delivered"):
-            return {"ok": True, "unchanged": True}
-        return None
+        same = existing is not None and (existing["outcome"] == outcome or existing["outcome"] == "delivered")
+        return {"ok": True, "unchanged": True} if same else None
 
     wrote = _record(repo_root, "asks", launch_id, {"askedAt": _iso(time.time()), "outcome": outcome},
                     env=env, keep=keep)
@@ -445,28 +381,10 @@ def asked(repo_root, launch_id, *, uncertain=False, env=None):
     return wrote
 
 
-# ---------------------------------------------------------------- the successor
-
-
-def _premise_of(reserved):
-    premise = reserved.get("premise") if isinstance(reserved, dict) else None
-    if not isinstance(premise, dict):
-        return None
-    return {k: v for k, v in premise.items() if k not in _LAUNCHER_STAMPED}
-
-
-def _base_branch(found, handover_sha, branch):
-    """(the branch entry to adopt or None for a never-pushed lane, refusal)."""
+def _adopted(found, handover_sha):
+    """(the pushed branch entry to adopt, or None for a never-pushed lane; refusal). A recorded handover
+    head names the entry; without one, only a single cleanly read branch is taken."""
     entries = found["branches"]
-    if branch is not None:
-        entry = next((b for b in entries if b["branch"] == branch), None)
-        if entry is None:
-            return None, _refusal("branch-not-found")
-        if "reason" in entry:
-            return None, _refusal(entry["reason"])
-        if handover_sha is not None and entry["sha"] != handover_sha:
-            return None, _refusal("handover-head-not-pushed")
-        return entry, None
     if handover_sha is not None:
         heads = [b for b in entries if b["sha"] == handover_sha and "reason" not in b]
         if not heads:
@@ -479,14 +397,14 @@ def _base_branch(found, handover_sha, branch):
     return found["newest"], None
 
 
-def successor(repo_root, launch_id, *, branch=None, repo, env=None, run=None):
-    """The premise a successor launch adopts: the lane's own premise with the launcher's stamps removed,
-    based on the lane's newest pushed work, or on the original base when it never pushed. Records the
-    supersession so the lane is never sent anything again."""
+def successor(repo_root, launch_id, *, repo, env=None, run=None):
+    """The premise a successor launch adopts: the lane's own premise with the launcher's stamps removed and
+    its `baseCommit` kept, carrying the lane's pushed work as `adoptsBranch` and `adoptsHead` (neither, when
+    it never pushed). Records the supersession so the lane is never sent anything again."""
     env = _env(env)
-    bad = _check_repo(repo)
+    bad = _inputs(repo=repo, launch_id=launch_id)
     if bad:
-        return bad
+        return _refusal(bad)
     info, reserved, refused = _lane(repo_root, launch_id, env)
     if refused:
         return refused
@@ -500,48 +418,40 @@ def successor(repo_root, launch_id, *, branch=None, repo, env=None, run=None):
     # axis: a lane terminalized without an assess that returned stopped never gets a successor
     if assessed.get("verdict") != "stopped":
         return _refusal("lane-not-assessed-stopped")
-    premise = _premise_of(reserved)
-    if premise is None:
+    premise = reserved.get("premise") if isinstance(reserved, dict) else None
+    if not isinstance(premise, dict):
         return _refusal("lane-premise-unreadable")
+    premise = {k: v for k, v in premise.items() if k not in _LAUNCHER_STAMPED}
     found = pushed(repo_root, info["issue"], repo=repo, env=env, run=run)
     if not found["ok"]:
         return found
-    entry, refused = _base_branch(found, assessed.get("handoverSha"), branch)
+    entry, refused = _adopted(found, assessed.get("handoverSha"))
     if refused:
         return refused
     if entry is None:
         premise.pop("adoptsBranch", None)
+        premise.pop("adoptsHead", None)
     else:
-        premise["baseCommit"], premise["adoptsBranch"] = entry["sha"], entry["branch"]
-    mark = {"at": _iso(time.time()), "branch": entry["branch"] if entry else None,
-            "sha": entry["sha"] if entry else None}
+        premise["adoptsBranch"], premise["adoptsHead"] = entry["branch"], entry["sha"]
+    mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     wrote = _record(repo_root, "superseded", launch_id, mark, env=env)
     if not wrote["ok"]:
         return wrote
     return {"ok": True, "launchId": launch_id, "issue": info["issue"], "premise": premise,
             "neverPushed": entry is None, "branch": mark["branch"], "sha": mark["sha"],
-            "pushedAt": entry["pushedAt"] if entry else None,
-            "pushTimeSource": entry["pushTimeSource"] if entry else None}
-
-
-# ---------------------------------------------------------------- the board's words
+            "pushedAt": entry and entry["pushedAt"], "pushTimeSource": entry and entry["pushTimeSource"]}
 
 
 def message(issue, *, place, stopped_at, pushed_at=None, never_pushed=False, push_time_source="push", tz=None):
     """What the board says to the owner about a recovered lane. Pure."""
-    if not (isinstance(issue, int) and not isinstance(issue, bool) and issue > 0):
-        return _refusal("issue-invalid")
-    if place not in _PLACES:
-        return _refusal("place-invalid")
-    if push_time_source not in _PUSH_SOURCES:
-        return _refusal("push-time-source-invalid")
-    if (stopped_at is not None and not _is_number(stopped_at)) or (pushed_at is not None and not _is_number(pushed_at)):
-        return _refusal("time-invalid")
-    if stopped_at is None:
-        first = "The cloud builder on #%d stopped." % issue
-    else:
-        clock = datetime.datetime.fromtimestamp(stopped_at, tz).strftime("%H:%M")
-        first = "The cloud builder on #%d stopped at %s." % (issue, clock)
+    bad = _inputs(issue=issue, place=place, stopped_at=stopped_at, pushed_at=pushed_at,
+                  push_time_source=push_time_source)
+    if bad:
+        return _refusal(bad)
+    first = "The cloud builder on #%d stopped" % issue
+    if stopped_at is not None:
+        first += " at " + datetime.datetime.fromtimestamp(stopped_at, tz).strftime("%H:%M")
+    first += "."
     where = "in a new cloud session" if place == "cloud" else "on your machine"
     if never_pushed:
         return {"ok": True, "text": "%s It never pushed, so I relaunched the build from the beginning %s." % (first, where)}
@@ -554,118 +464,30 @@ def message(issue, *, place, stopped_at, pushed_at=None, never_pushed=False, pus
     return {"ok": True, "text": text}
 
 
-# ---------------------------------------------------------------- a refusal at intake
-
-
-def relaunch_refusal(repo_root, launch_id, *, repo, env=None, run=None):
-    """The premise that relaunches a lane the cloud refused for a plugin-version mismatch, carrying the
-    version the cloud reported so the routing step sends the build to the owner's machine."""
-    env = _env(env)
-    bad = _check_repo(repo)
-    if bad:
-        return bad
-    info, reserved, refused = _lane(repo_root, launch_id, env)
-    if refused:
-        return refused
-    if not info["terminal"]:
-        return _refusal("lane-not-ended")
-    if not (info["terminalKind"] == "outcome" and info["outcome"] == "refusal"):
-        return _refusal("lane-not-refusal")
-    premise = _premise_of(reserved)
-    if premise is None:
-        return _refusal("lane-premise-unreadable")
-    cb = _sib("cloud_builder")
-    pattern = re.escape(cb.REFUSAL_TEXT["plugin-version-mismatch"])
-    for slot in ("running", "launched"):
-        pattern = pattern.replace(re.escape("{%s}" % slot), _VERSION_GROUP % slot)
-    start = _lane_start(info)
-    comments = _comments_since(repo, info["issue"], start, env, run) if start is not None else None
-    if comments is None:
-        return _refusal("comments-unreadable")
-    found = []
-    for created, comment in comments:
-        match = re.search(pattern, comment["body"])
-        if comment["body"].strip().startswith(cb.REFUSAL_HEADER) and match:
-            found.append((created, match))
-    if not found:
-        return _refusal("refusal-comment-missing")
-    match = max(found, key=lambda t: t[0])[1]
-    premise["reportedCloud"] = {"pluginVersion": match.group("running")}
-    return {"ok": True, "premise": premise, "cloudVersion": match.group("running"),
-            "advisorVersion": match.group("launched")}
-
-
-# ---------------------------------------------------------------- the showrunner-resume evidence
-
-
-def resume_row(*, session_state, activity_age_seconds=None, handover=False):
-    """The cloud-lane evidence for the showrunner-resume table. Pure."""
-    bad = _check_state(session_state, activity_age_seconds)
-    if bad:
-        return bad
-    if _fresh(session_state, activity_age_seconds):
-        row = "re-arm"
-    elif session_state in _STOP_STATES or handover:
-        row = "adopt"
-    else:
-        row = "unresolved"
-    return {"ok": True, "row": row}
-
-
-# ---------------------------------------------------------------- the command line
+_ROOT, _LAUNCH, _REPO = ("--repo-root", {}), ("--launch-id", {}), ("--repo", {})
+_VERBS = {  # verb: (function, required flags, optional flags); each flag is (name, add_argument options)
+    "pushed": (pushed, [_ROOT, _REPO, ("--issue", {"type": int})], []),
+    "assess": (assess, [_ROOT, _LAUNCH, _REPO, ("--session-state", {})],
+               [("--activity-age-seconds", {"type": float})]),
+    "ask": (ask, [_ROOT, _LAUNCH], []),
+    "asked": (asked, [_ROOT, _LAUNCH], [("--uncertain", {"action": "store_true"})]),
+    "successor": (successor, [_ROOT, _LAUNCH, _REPO], []),
+    "message": (message, [("--issue", {"type": int}), ("--place", {})],
+                [("--repo-root", {}), ("--stopped-at", {"type": float}), ("--pushed-at", {"type": float}),
+                 ("--never-pushed", {"action": "store_true"}), ("--push-time-source", {"default": "push"})]),
+}
 
 
 def _build_parser():
     parser = argparse.ArgumentParser(prog="cloud_recover.py")
     verbs = parser.add_subparsers(dest="verb", required=True)
-
-    def verb(name, *flags, root=True):
+    for name, (_, required, optional) in _VERBS.items():
         sub = verbs.add_parser(name)
-        if root:
-            sub.add_argument("--repo-root", required=True)
-        for flag, kind in flags:
-            sub.add_argument(flag, required=True, **({"type": kind} if kind else {}))
-        return sub
-
-    verb("pushed", ("--repo", None), ("--issue", int))
-    sub = verb("assess", ("--launch-id", None), ("--repo", None), ("--session-state", None))
-    sub.add_argument("--activity-age-seconds", type=float)
-    verb("ask", ("--launch-id", None))
-    verb("asked", ("--launch-id", None)).add_argument("--uncertain", action="store_true")
-    verb("successor", ("--launch-id", None), ("--repo", None)).add_argument("--branch")
-    sub = verb("message", ("--issue", int), ("--place", None), root=False)
-    sub.add_argument("--repo-root")
-    sub.add_argument("--stopped-at", type=float)
-    sub.add_argument("--pushed-at", type=float)
-    sub.add_argument("--never-pushed", action="store_true")
-    sub.add_argument("--push-time-source", default="push")
-    verb("relaunch-refusal", ("--launch-id", None), ("--repo", None))
-    sub = verb("resume-row", ("--session-state", None), root=False)
-    sub.add_argument("--repo-root")
-    sub.add_argument("--activity-age-seconds", type=float)
-    sub.add_argument("--handover", action="store_true")
+        for flag, options in required:
+            sub.add_argument(flag, required=True, **options)
+        for flag, options in optional:
+            sub.add_argument(flag, **options)
     return parser
-
-
-def _dispatch(args):
-    if args.verb == "pushed":
-        return pushed(args.repo_root, args.issue, repo=args.repo)
-    if args.verb == "assess":
-        return assess(args.repo_root, args.launch_id, session_state=args.session_state,
-                      activity_age_seconds=args.activity_age_seconds, repo=args.repo)
-    if args.verb == "ask":
-        return ask(args.repo_root, args.launch_id)
-    if args.verb == "asked":
-        return asked(args.repo_root, args.launch_id, uncertain=args.uncertain)
-    if args.verb == "successor":
-        return successor(args.repo_root, args.launch_id, branch=args.branch, repo=args.repo)
-    if args.verb == "message":
-        return message(args.issue, place=args.place, stopped_at=args.stopped_at, pushed_at=args.pushed_at,
-                       never_pushed=args.never_pushed, push_time_source=args.push_time_source)
-    if args.verb == "relaunch-refusal":
-        return relaunch_refusal(args.repo_root, args.launch_id, repo=args.repo)
-    return resume_row(session_state=args.session_state, activity_age_seconds=args.activity_age_seconds,
-                      handover=args.handover)
 
 
 def main(argv=None):
@@ -675,7 +497,10 @@ def main(argv=None):
         sys.stdout.write(json.dumps(_refusal("usage")) + "\n")
         return 0 if exc.code == 0 else 1
     try:
-        result = _dispatch(args)
+        given = {k: v for k, v in vars(args).items() if k != "verb"}
+        if args.verb == "message":
+            given.pop("repo_root")  # accepted and ignored: the board's words read no repository
+        result = _VERBS[args.verb][0](**given)
     except Exception:
         result = _refusal("recover-failed")
     sys.stdout.write(json.dumps(result) + "\n")
