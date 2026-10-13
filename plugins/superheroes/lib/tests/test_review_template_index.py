@@ -312,3 +312,30 @@ def test_an_index_with_two_rows_of_one_number_is_refused():
     assert any("214" in problem for problem in page["errors"])
     with_link = _with(_index(), lambda clone: clone["index"]["rows"][0].__setitem__("link", "http://not-https.example.test/x"))
     _assert_error_shown(_run_page(_sample_files(with_link), scenario="return null;"))
+
+
+# Bites on: a reader's or a no-store view of the index leaving a question's answer controls on, or writing an answer or a note the view cannot save.
+@pytest.mark.parametrize("host,message", [
+    ({"user": "viewer"}, "This sheet is read-only for you. Only its owner can answer."),
+    ({"db": "null"}, "Answers can't be saved in this view."),
+], ids=["non-owner", "no-store"])
+def test_a_reader_view_of_the_index_draws_the_questions_with_their_answers_off_and_writes_nothing(host, message):
+    page = _page(_index(cards=[_question(), _question("old-carts")]), """
+      const asked = ["old-orders", "old-carts"];
+      const out = { ids: ids(), labels: asked.map((id) => t.state(id).labels), off: asked.map((id) => t.state(id).disabled), gate: t.gate().message };
+      for (const id of asked) {
+        t.buttons(id).forEach((button) => t.fire(button, "click"));
+        t.note(id).value = "typed";
+        t.fire(t.note(id), "input");
+        t.fire(t.note(id), "change");
+      }
+      await t.tick();
+      out.sets = t.setLog();
+      out.pressed = asked.map((id) => t.state(id).pressed);
+      return out;
+    """, host=host)
+    result = page["result"]
+    assert result["ids"] == ["index-blocks", "index-group-needs-you", "index-group-being-fixed", "index-group-ready"]
+    assert result["labels"] == [["Keep them visible", "Hide them", "Something else"]] * 2
+    assert all(all(flags) for flags in result["off"]) and result["gate"] == message
+    assert result["sets"] == [] and result["pressed"] == [["false"] * 3] * 2

@@ -70,7 +70,7 @@
     "tapPicture": "Tap a picture to see it full size.",
     "pictureMissing": "A picture is missing: {alt}",
     "walkedAnswers": ["works", "looks-right", "problem"],
-    "walkAnswers": {"labels": {"works": "Works", "looks-right": "Looks right", "problem": "Problem", "skip": "Skip"}, "try": ["works", "problem", "skip"], "look": ["looks-right", "problem", "skip"]},
+    "walkAnswers": {"labels": {"works": "Works", "looks-right": "Looks right", "problem": "Problem", "skip": "Skip"}},
     "walkFixes": [
       {"id": "before-merge", "label": "Fix before merge", "consequence": "This goes back with your note and returns with a new sheet.", "sendsBack": true},
       {"id": "follow-up", "label": "Fix in a follow-up", "consequence": "This can still merge; a follow-up is filed with your note.", "sendsBack": false}
@@ -106,8 +106,8 @@
     "nothingToAcceptCount": "Nothing to accept",
     "mergeLocked": "{merge} · locked",
     "unlocks": "Unlocks when every item above is accepted: {accepted} of {total} so far.",
-    "resaveLegacy": "Merge stays locked: an earlier version of this page saved the answers on the cards numbered {numbers}. Clear each one and pick it again to save it afresh.",
-    "resaveNoRevision": "Merge stays locked: this browser can't mark the saved answers on the cards numbered {numbers} the way Merge needs. Answer them from a browser that can.",
+    "resaveLegacy": "Merge stays locked: an earlier version of this page saved the answers on these cards: {titles}. Clear each one and pick it again to save it afresh.",
+    "resaveNoRevision": "Merge stays locked: this browser can't mark the saved answers on these cards the way Merge needs: {titles}. Answer them from a browser that can.",
     "sendBack": "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
   },
   "index": {

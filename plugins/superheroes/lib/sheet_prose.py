@@ -9,6 +9,7 @@ the standard library only, so it runs under a plain python3.
 It refuses a data file it can't trust: one problem per line on stderr, nothing on stdout, exit 1.
 """
 import argparse
+import collections.abc
 import functools
 import json
 import math
@@ -24,18 +25,48 @@ ENFORCED = {
 }
 ANNOTATIONS = {"$schema", "title", "description", "$comment", "examples", "default", "$defs", "definitions"}
 
-# The owner-facing words a final sheet shares with the page: one file, theme/sheet-words.json, read by both.
-WORDS = json.loads((SCHEMA.parent / "sheet-words.json").read_text(encoding="utf-8"))
-HISTORY = WORDS["history"]
-TRACES_BOARD = WORDS["tracesBoard"]
-TRACES_NO_BOARD = WORDS["tracesNoBoard"]
-BOARD_SAVED = WORDS["boardSaved"]
-BOARD_NOT_SAVED = WORDS["boardNotSaved"]
-NEXT = WORDS["next"]
-ANSWERS = WORDS["answers"]
-PR = WORDS["pr"]
-PR_ANSWERS = WORDS["prAnswers"]
-INDEX = WORDS["index"]
+# The owner-facing words a final sheet shares with the page: one file, theme/sheet-words.json, read by both. They are
+# read on first use, so importing this module never fails on the file; a caller that needs them catches the failure.
+WORDS_PATH = SCHEMA.parent / "sheet-words.json"
+
+
+@functools.lru_cache(maxsize=None)
+def _read_words(path):
+    """The words file's content, read once per path; ValueError when it is not a JSON object, OSError when unreadable."""
+    with open(path, encoding="utf-8") as handle:
+        words = json.load(handle)
+    if not isinstance(words, dict):
+        raise ValueError("it must hold one JSON object")
+    return words
+
+
+class _Section(collections.abc.Mapping):
+    """A block of the words file (the whole file when no key is given), looked up in it each time it is read."""
+
+    def __init__(self, *keys):
+        self._keys = keys
+
+    def _block(self):
+        block = _read_words(WORDS_PATH)
+        for key in self._keys:
+            block = block[key]
+        return block
+
+    def __getitem__(self, key):
+        return self._block()[key]
+
+    def __iter__(self):
+        return iter(self._block())
+
+    def __len__(self):
+        return len(self._block())
+
+
+WORDS = _Section()
+ANSWERS = _Section("answers")
+PR = _Section("pr")
+PR_ANSWERS = _Section("prAnswers")
+INDEX = _Section("index")
 
 PR_KINDS = ("pr", "stack")
 
@@ -279,6 +310,8 @@ def _check_cross_fields(sheet):
             problems.append('Card "%s" recommends option "%s", which is not one of its options.' % (card["id"], picked))
     unsettled = sheet.get("remainder", {}).get("unsettled", [])
     problems += ['remainder.unsettled names "%s", which is not a card.' % i for i in unsettled if i not in card_ids]
+    stops = sheet.get("prSheet", {}).get("walk", {}).get("stops", [])
+    problems += ['Stop id "%s" is used more than once in the walk.' % i for i in _duplicates([stop["id"] for stop in stops])]
     rows = sheet.get("index", {}).get("rows", [])
     return problems + ['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
 
@@ -395,7 +428,7 @@ def _final_head(final):
     history, declined = final["history"], final["declinedFindings"]
     rounds = _plural(history["reviewRounds"], WORDS["roundNoun"])
     fixes = _plural(history["fixesMade"], WORDS["thingNoun"])
-    sentence = HISTORY.replace("{rounds}", rounds).replace("{fixes}", fixes).replace("{vet}", _text(history["vet"]))
+    sentence = WORDS["history"].replace("{rounds}", rounds).replace("{fixes}", fixes).replace("{vet}", _text(history["vet"]))
     lines = ["**%s.** %s" % (WORDS["historyHeading"], sentence), ""]
     if not declined:
         return lines + ["**%s.** %s" % (WORDS["declinedHeading"], WORDS["noDeclines"]), ""]
@@ -407,10 +440,10 @@ def _final_head(final):
 def _final_tail(final):
     """A final sheet's approval box and what happens next, ending with a blank line."""
     approval = final["approval"]
-    lines = ["**%s**" % WORDS["approveHeading"], "- " + (TRACES_BOARD if approval["approvedBoard"] else TRACES_NO_BOARD)]
+    lines = ["**%s**" % WORDS["approveHeading"], "- " + (WORDS["tracesBoard"] if approval["approvedBoard"] else WORDS["tracesNoBoard"])]
     if approval["approvedBoard"]:
-        lines.append("- " + (BOARD_SAVED if approval["boardSavedWithSpec"] else BOARD_NOT_SAVED))
-    return lines + ["- Answer: Approve or Not yet, with any note.", "- " + WORDS["doneStepInChat"], "", "**%s.** %s" % (WORDS["nextHeading"], NEXT), ""]
+        lines.append("- " + (WORDS["boardSaved"] if approval["boardSavedWithSpec"] else WORDS["boardNotSaved"]))
+    return lines + ["- Answer: Approve or Not yet, with any note.", "- " + WORDS["doneStepInChat"], "", "**%s.** %s" % (WORDS["nextHeading"], WORDS["next"]), ""]
 
 
 def _short(commit):
@@ -445,10 +478,13 @@ def _pr_what_changed(prsheet):
 
 
 def _pr_stop(number, stop, stack):
-    """One walk stop: its numbered title, then its steps, expectation, pictures, note and answers, indented."""
-    words = PR["walkAnswers"]
-    lines = ["%d. %s%s%s" % (number, _fill(PR["walkStopPr"], pr=str(stop["pr"])) + " " if stack else "", _text(stop["title"]),
-                            " · " + PR["optionalBadge"] if stop.get("optional") else "")]
+    """One walk stop: its numbered title with its id, then its steps, expectation, pictures, note and answers, indented.
+
+    The answers are offered as "<stop id> <label>", so an answer typed in the chat names the stop it is for.
+    """
+    labels, name = PR["walkAnswers"]["labels"], stop["id"]
+    lines = ["%d. %s%s (%s)%s" % (number, _fill(PR["walkStopPr"], pr=str(stop["pr"])) + " " if stack else "", _text(stop["title"]), name,
+                                 " · " + PR["optionalBadge"] if stop.get("optional") else "")]
     lines += ["   %s. %s" % (chr(97 + n), _text(step)) for n, step in enumerate(stop["steps"])]
     lines.append("   %s %s" % (PR["expectLabel" if stop["kind"] == "try" else "lookForLabel"], _text(stop["expect"])))
     for picture in stop["pictures"]:
@@ -456,24 +492,28 @@ def _pr_stop(number, stop, stack):
                               else "Picture: %s (%s)" % (_text(picture.get("caption", picture["alt"])), _text(picture["src"]))))
     if "notWalked" in stop:
         lines.append("   " + _fill(PR["notWalkedByAdvisor"], reason=_text(stop["notWalked"])))
-    return lines + ["   Answers: " + " / ".join(words["labels"][a] for a in words[stop["kind"]]),
-                    "   On Problem: " + " / ".join(fix["label"] for fix in PR["walkFixes"])]
+    return lines + ["   Answers: " + " / ".join("%s %s" % (name, labels[a]) for a in offered_walk_answers(stop["kind"])),
+                    "   On Problem: " + " / ".join("%s %s" % (name, fix["label"]) for fix in PR["walkFixes"])]
 
 
 def _pr_walk(sheet):
+    """The walk: its opening lines, then the stops in the order the sheet declares them.
+
+    A group's label is printed each time a stop's group differs from the previous stop's, so a group listed apart is
+    labelled again where it resumes; stops are never regrouped.
+    """
     walk, stack = sheet["prSheet"]["walk"], sheet["kind"] == "stack"
     opened = walk["open"]
     lines = ["**%s**" % PR["walkHeading"], "", " — ".join(_text(opened[k]) for k in ("label", "url", "detail") if k in opened)]
     lines += [_text(walk["note"])] if "note" in walk else []
     lines += [_fill(PR["advisorWalked"], **{"from": _text(walk["picturesFrom"])}), ""]
-    number = 0
-    for group in dict.fromkeys(stop["group"] for stop in walk["stops"]):
-        lines += ["*%s*" % _text(group), ""]
-        for stop in (stop for stop in walk["stops"] if stop["group"] == group):
-            number += 1
-            lines += _pr_stop(number, stop, stack)
-        lines.append("")
-    return lines
+    previous = None
+    for number, stop in enumerate(walk["stops"], 1):
+        if stop["group"] != previous:
+            lines += ([""] if previous is not None else []) + ["*%s*" % _text(stop["group"]), ""]
+            previous = stop["group"]
+        lines += _pr_stop(number, stop, stack)
+    return lines + [""]
 
 
 def _pr_folded(heading, entries):
@@ -490,6 +530,12 @@ def _offered_verdicts(kind):
     """The verdicts the schema's verdictsByKind lists for this kind of sheet, in button order: the page's own roster."""
     with open(SCHEMA, encoding="utf-8") as handle:
         return json.load(handle)["$defs"]["verdictsByKind"]["properties"][kind]["enum"]
+
+
+def offered_walk_answers(kind):
+    """The answers the schema's walkAnswersByKind lists for this kind of walk stop, in button order."""
+    with open(SCHEMA, encoding="utf-8") as handle:
+        return json.load(handle)["$defs"]["walkAnswersByKind"]["properties"][kind]["enum"]
 
 
 def _pr_body(sheet):
@@ -602,6 +648,10 @@ def main(argv=None) -> int:
     problems = check_sheet(sheet)
     if problems:
         return _refuse(problems)
+    try:
+        _read_words(WORDS_PATH)
+    except (OSError, ValueError) as error:
+        return _refuse(["The wording file %s can't be read: %s." % (WORDS_PATH, getattr(error, "strerror", None) or error)])
     sys.stdout.write(render(sheet))
     return 0
 

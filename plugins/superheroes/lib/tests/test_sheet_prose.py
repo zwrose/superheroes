@@ -414,6 +414,11 @@ def test_cross_field_rules_agree_between_page_and_prose():
         mutate(sheet)
         return sheet
 
+    def mutated_stack(mutate):
+        sheet = _pr_kind_sheet("stack")
+        mutate(sheet)
+        return sheet
+
     fixtures = [
         ("valid", _valid_sheet(), False),
         ("duplicate card id", mutated(lambda s: s["cards"][1].update(id="card-0")), True),
@@ -422,6 +427,8 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("recommendation names a missing option", mutated(lambda s: s["cards"][0]["recommendation"].update(optionId="maybe")), True),
         ("valid index", _index_sheet([_row(4, "ready"), _row(5, "needs-you")]), False),
         ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
+        ("valid stack with a walk", _pr_kind_sheet("stack"), False),
+        ("two walk stops share an id", mutated_stack(lambda s: s["prSheet"]["walk"]["stops"][1].update(id="schema")), True),
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -1117,9 +1124,8 @@ WALK_PICTURE_PATHS = {"The empty cart": "pictures/228215e2dae3.png", "The paid o
 
 def _expected_walk_prose():
     """The walk part as the page's words and the walk fixture give it; the layout (numbering, lettering, indent, order) is spelled out here."""
-    answers = PR_WORDS["walkAnswers"]
-    tail = ["   Answers: " + " / ".join(answers["labels"][a] for a in answers[kind]) for kind in ("try", "look")]
-    problem = "   On Problem: " + " / ".join(fix["label"] for fix in PR_WORDS["walkFixes"])
+    labels = PR_WORDS["walkAnswers"]["labels"]
+    offered = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["$defs"]["walkAnswersByKind"]["properties"]
     opened = WALK_INPUT["open"]
     lines = ["**%s**" % PR_WORDS["walkHeading"], "", "%s — %s — %s" % (opened["label"], opened["url"], opened["detail"]), WALK_INPUT["note"],
              PR_WORDS["advisorWalked"].replace("{from}", WALK_INPUT["picturesFrom"]), ""]
@@ -1129,7 +1135,7 @@ def _expected_walk_prose():
             lines += ([""] if group is not None else []) + ["*%s*" % stop["group"], ""]
             group = stop["group"]
         number += 1
-        lines.append("%d. %s%s" % (number, stop["title"], " · " + PR_WORDS["optionalBadge"] if stop.get("optional") else ""))
+        lines.append("%d. %s (%s)%s" % (number, stop["title"], stop["id"], " · " + PR_WORDS["optionalBadge"] if stop.get("optional") else ""))
         lines += ["   %s. %s" % (chr(97 + n), step) for n, step in enumerate(stop.get("steps", []))]
         lines.append("   %s %s" % (PR_WORDS["expectLabel" if stop["kind"] == "try" else "lookForLabel"], stop["expect"]))
         for picture in stop.get("pictures", []):
@@ -1139,7 +1145,8 @@ def _expected_walk_prose():
                 lines.append("   Picture: %s (%s)" % (picture.get("caption", picture["alt"]), WALK_PICTURE_PATHS[picture["alt"]]))
         if "notWalked" in stop:
             lines.append("   " + PR_WORDS["notWalkedByAdvisor"].replace("{reason}", stop["notWalked"]))
-        lines += [tail[stop["kind"] == "look"], problem]
+        lines += ["   Answers: " + " / ".join("%s %s" % (stop["id"], labels[a]) for a in offered[stop["kind"]]["enum"]),
+                  "   On Problem: " + " / ".join("%s %s" % (stop["id"], fix["label"]) for fix in PR_WORDS["walkFixes"])]
     return "\n".join(lines) + "\n\n"
 
 
@@ -1161,11 +1168,40 @@ def test_prose_prints_the_walk_with_its_stops_in_groups(tmp_path):
     assert re.findall(r"https?://\S+", out) == ["https://shop.example.test"]
 
 
+# Bites on: the chat walk leaving a stop's id off its title line, or offering answers a typed reply cannot tie to a stop.
+def test_prose_shows_each_stops_id_on_its_title_line_and_offers_id_prefixed_answers(tmp_path):
+    # Axis: a try stop and a look stop each show "(<id>)" on the title line, and every answer and every fix choice is offered as "<id> <label>".
+    out = _prose_of(tmp_path, _walk_sheet(tmp_path))
+    assert "1. Pay with a card that fails once (p1)\n" in out and "5. The gave-up screen (f1)\n" in out
+    assert "   Answers: p1 Works / p1 Problem / p1 Skip\n   On Problem: p1 Fix before merge / p1 Fix in a follow-up\n" in out
+    assert "   Answers: f1 Looks right / f1 Problem / f1 Skip\n   On Problem: f1 Fix before merge / f1 Fix in a follow-up\n" in out
+    assert "3. Pay with a second card (p3) · Optional\n" in out
+
+
+# Bites on: the chat walk regrouping stops by first appearance, so a group listed apart is printed in one place and the stops lose their declared order.
+def test_prose_prints_the_stops_in_declared_order_with_a_group_label_wherever_the_group_changes(tmp_path):
+    # Axis: groups A, B, A, A, B print A's label twice, in place, and the stops keep their declared numbering.
+    sheet = _walk_sheet(tmp_path)
+    for stop, group in zip(sheet["prSheet"]["walk"]["stops"], "ABAAB"):
+        stop["group"] = group
+    out = _prose_of(tmp_path, sheet)
+    block = out[out.index("**%s**" % PR_WORDS["walkHeading"]):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
+    seen = []
+    for line in block.splitlines():
+        title = re.match(r"(\d+)\. .* \((\w+)\)", line)
+        label = re.fullmatch(r"\*([^*]+)\*", line)
+        if label:
+            seen.append(label.group(1))
+        elif title:
+            seen.append("%s:%s" % title.groups())
+    assert seen == ["A", "1:p1", "B", "2:p2", "A", "3:p3", "4:p4", "B", "5:f1"]
+
+
 def test_prose_of_a_stack_walk_numbers_the_stops_and_names_their_prs(tmp_path):
     # Axis: on a stack each numbered stop is prefixed with its PR, numbered across the whole walk.
     out = _prose_of(tmp_path, _sample("stack"))
-    assert "1. #5 The gift-card table\n" in out and "2. #6 Spending a card at checkout\n" in out
-    assert "Look for: The new table in the admin view.\n" in out and "   Answers: Looks right / Problem / Skip\n" in out
+    assert "1. #5 The gift-card table (gift-card-table)\n" in out and "2. #6 Spending a card at checkout (checkout-redeem)\n" in out
+    assert "Look for: The new table in the admin view.\n" in out and "   Answers: gift-card-table Looks right / gift-card-table Problem / gift-card-table Skip\n" in out
 
 
 def test_prose_of_a_sheet_with_no_walk_has_no_walk_part(tmp_path):

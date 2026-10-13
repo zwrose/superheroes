@@ -313,6 +313,11 @@ SCHEMA = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
 REVISION = re.compile(SCHEMA["$defs"]["answer"]["properties"]["revision"]["pattern"])
 
 
+def _titles(cards):
+    """How the recovery line names cards: each card's question in curly quotes, in card order, joined with commas."""
+    return ", ".join("\u201c%s\u201d" % card["question"] for card in cards)
+
+
 def _revision_at(position):
     """A well-formed revision for the stored answer at a position in the card list, different for each."""
     return "%016x" % (0xA11CE0 + position)
@@ -1512,7 +1517,18 @@ def test_without_a_random_source_answers_save_without_a_revision_and_the_merge_c
     assert not [path for path in written if path.startswith("verdict/")]
     assert page["result"]["view"]["disabled"] is True and page["result"]["view"]["pressed"] == ["false", "false"]
     # The lock says why and which cards are affected, and that this browser is the reason.
-    assert page["result"]["view"]["line"] == _fill(PW["resaveNoRevision"], numbers="1, 2, 3")
+    assert page["result"]["view"]["line"] == _fill(PW["resaveNoRevision"], titles=_titles(PR_SAMPLE["cards"]))
+
+
+# Bites on: the recovery line naming a card by its position instead of its title, or reading a title as markup: the one card saved without a revision is named by its question, set as text.
+def test_the_recovery_line_names_one_card_by_its_question_as_text():
+    question = "Keep <b>old</b> orders & \"quotes\"?"
+    sheet = _with(PR_SAMPLE, lambda clone: clone["cards"][1].update(question=question))
+    docs = _accepted_answers(sheet)
+    del docs[1]["data"]["revision"]
+    page = _lock(sheet, "return lockView();", host={"collections": {"answers": docs}})
+    assert page["result"]["line"] == _fill(PW["resaveLegacy"], titles=_titles(sheet["cards"][1:2]))
+    assert "<b>" in page["result"]["line"] and "\u201c" + question + "\u201d" in page["result"]["line"]
 
 
 # Bites on: the generator typing the revision width instead of reading the schema's pattern (a format it cannot make must give no revision).
@@ -1542,7 +1558,7 @@ def test_answers_saved_without_a_revision_keep_merge_locked_as_the_index_reads_i
     """, host={"collections": {"answers": docs}})["result"]
     assert page["initial"]["disabled"] is True and page["after"]["pressed"] == ["false", "false"] and page["writes"] == []
     # Every card shows Saved and accepted, so the lock must say which cards to save again and how (the unlock line alone is hidden at 3 of 3).
-    assert page["initial"]["line"] == _fill(PW["resaveLegacy"], numbers="1, 2, 3")
+    assert page["initial"]["line"] == _fill(PW["resaveLegacy"], titles=_titles(PR_SAMPLE["cards"]))
     assert page["after"]["line"] == page["initial"]["line"]
     assert page["after"]["verdictSave"] != "Saved"
     sheet_bytes = _sample_files(PR_SAMPLE)["sheet.json"]["body"].encode("utf-8")

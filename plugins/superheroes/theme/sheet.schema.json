@@ -587,6 +587,15 @@
         "stack": {"enum": ["merge", "not-yet"]}
       }
     },
+    "walkAnswersByKind": {
+      "description": "Which answers each kind of walk stop offers, in button order, by the stop's kind: the one home of that list. The page builds a stop's answer buttons from it and restores a stored answer only when the stop's own kind offers it, the chat prose lists the same answers, and the sheet builder counts a stored answer only when the stop's kind offers it. The words on the buttons are in sheet-words.json. A schema without this definition leaves the walk's answers off. This is not part of the data file: no property of the sheet refers to it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "try": {"enum": ["works", "problem", "skip"]},
+        "look": {"enum": ["looks-right", "problem", "skip"]}
+      }
+    },
     "card": {
       "description": "One call the owner has to make, with the question, the context the sending session writes, and the options and recommendation if there are any.",
       "type": "object",

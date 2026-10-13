@@ -728,12 +728,59 @@ def test_a_rerun_over_an_existing_folder_leaves_the_pictures_untouched(tmp_path)
     # Axis: a picture file already at its content-addressed name is not rewritten, and a second run succeeds.
     first = run_walk(tmp_path)
     assert first.returncode == 0, first.stderr
+    for name in PICTURE_FILES:
+        assert (tmp_path / "out" / src_of(name)).read_bytes() == (FIXTURES / "elsewhere" / name).read_bytes(), name
     path = tmp_path / "out" / src_of("cart-paid.png")
     path.write_bytes(b"left alone")
     second = run_walk(tmp_path)
     assert second.returncode == 0, second.stderr
     assert path.read_bytes() == b"left alone"
+    for name in PICTURE_FILES:
+        if name != "cart-paid.png":
+            assert (tmp_path / "out" / src_of(name)).read_bytes() == (FIXTURES / "elsewhere" / name).read_bytes(), name
     assert json.loads(second.stdout)["pictures"] == json.loads(first.stdout)["pictures"]
+
+
+WORDS_CASES = [(None, "could not be read as JSON"), ("{not json", "could not be read as JSON"), ("[]", "must hold one JSON object"),
+               ("null", "must hold one JSON object"), ('{"pr": 1}', "has no pr block")]
+
+
+@pytest.mark.parametrize("command", ["build", "index"])
+@pytest.mark.parametrize("content,said", WORDS_CASES, ids=["missing", "not-json", "array", "null", "no-pr-block"])
+def test_a_words_file_that_cannot_be_used_is_a_refusal_that_names_it(tmp_path, monkeypatch, capsys, command, content, said):
+    # Axis: a words file that is missing, not JSON, JSON but not an object, or an object without the blocks the command reads, refuses with its path in the problem, exit 1, and writes nothing.
+    words = tmp_path / "words.json"
+    if content is not None:
+        words.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(pr_sheet, "WORDS_PATH", str(words))
+    out = tmp_path / "out" / "sheet.json"
+    out.parent.mkdir()
+    args = ["build", "--record", str(FIXTURES / "record-small.json"), "--input", str(FIXTURES / "input-small.json")] if command == "build" \
+        else ["index", "--input", str(FIXTURES / "index-input.json")]
+    code = pr_sheet.main([*args, "--out", str(out)])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1 and result["ok"] is False
+    assert result["problems"], result
+    assert result["problems"][0].startswith(str(words) + " could not be read") and said in result["problems"][0], result["problems"]
+    assert list(out.parent.iterdir()) == []
+
+
+def test_a_broken_words_file_does_not_stop_the_builder_at_import(tmp_path):
+    # Axis: the builder in a copy of the plugin whose words file is not JSON still starts and refuses in JSON, rather than ending in a traceback at import.
+    plugin = tmp_path / "plugin"
+    (plugin / "lib").mkdir(parents=True)
+    for source in LIB.glob("*.py"):
+        shutil.copy(source, plugin / "lib" / source.name)
+    shutil.copytree(THEME, plugin / "theme")
+    (plugin / "theme" / "sheet-words.json").write_text("{not json", encoding="utf-8")
+    out = tmp_path / "out" / "sheet.json"
+    out.parent.mkdir()
+    done = subprocess.run([sys.executable, "-B", str(plugin / "lib" / "pr_sheet.py"), "build", "--record", str(FIXTURES / "record-small.json"),
+                           "--input", str(FIXTURES / "input-small.json"), "--out", str(out)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1 and "Traceback" not in done.stderr, done.stderr
+    result = json.loads(done.stdout)
+    assert result["ok"] is False and len(result["problems"]) == 1 and "sheet-words.json could not be read as JSON" in result["problems"][0]
+    assert list(out.parent.iterdir()) == []
 
 
 @pytest.mark.parametrize("existing", [False, True], ids=["fresh-folder", "one-picture-already-there"])

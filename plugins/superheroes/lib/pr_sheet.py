@@ -8,7 +8,7 @@ CLI:
 On success it writes the data file to --out and each walk picture it could copy to pictures/ beside it, prints
 {"ok": true, "out": ..., "cards": N, "pictures": [the sheet's picture paths]} and exits 0.
 On a refusal it writes nothing, prints {"ok": false, "problems": [...]} (one line each) and exits 1; an
-unreadable or non-JSON file is a refusal problem that names the file. `index` prints
+unreadable or non-JSON file, the words file included, is a refusal problem that names the file. `index` prints
 {"ok": true, "out": ..., "cards": N, "pictures": [...], "rows": N} on success and refuses the same way; if
 writing fails it removes the pictures that run created. --record is for `build` only, --answers for `index` only.
 
@@ -545,7 +545,7 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
         sends_back = sends_back or (picked is not None and picked.get("sendsBack") is True)
     for stop in stops:
         doc = walks.get(stop["key"])
-        if not (sheet_prose.fits_definition("walkAnswer", doc) and doc["answer"] in words["walkAnswers"][stop["kind"]] and (doc["fix"] is None or doc["fix"] in fixes)):
+        if not (sheet_prose.fits_definition("walkAnswer", doc) and doc["answer"] in sheet_prose.offered_walk_answers(stop["kind"]) and (doc["fix"] is None or doc["fix"] in fixes)):
             # As the page restores it: a stored Problem whose fix is no longer offered, or whose document is malformed, stays a Problem with no fix and keeps blocking.
             if isinstance(doc, dict) and doc.get("answer") == "problem":
                 walked, blocking = walked + 1, True
@@ -563,6 +563,21 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
               and covered is not None and set(verdict["covers"]) == covered)
     state = "being-fixed" if sends_back else "ready" if stands else "needs-you"
     return {"state": state, "accepted": accepted, "total": len(cards), "walked": walked, "walkTotal": len(stops)}
+
+
+_WORD_BLOCKS = {"build": ("pr",), "index": ("pr", "prAnswers", "answers", "index")}
+
+
+def _load_words(command, problems):
+    """The words file as an object holding the blocks this command reads, or None after naming what is wrong with it."""
+    found = []
+    words = _load(WORDS_PATH, found)
+    if not found and not isinstance(words, dict):
+        found.append(f"{WORDS_PATH} could not be read: it must hold one JSON object")
+    elif not found:
+        found.extend(f"{WORDS_PATH} could not be read: it has no {name} block" for name in _WORD_BLOCKS[command] if not isinstance(words.get(name), dict))
+    problems.extend(found)
+    return None if found else words
 
 
 def _store(raw, where, problems):
@@ -781,7 +796,8 @@ def main(argv=None):
         parser.error("--record is only for build")
     try:
         paths = [*args.record, args.input, WORDS_PATH] if args.command == "build" else [args.input, WORDS_PATH, *([args.answers] if args.answers else [])]
-        loaded = [_load(p, problems) for p in paths]
+        words_at = len(args.record) + 1 if args.command == "build" else 1
+        loaded = [_load_words(args.command, problems) if n == words_at else _load(p, problems) for n, p in enumerate(paths)]
         if problems:
             raise Refusal(problems)
         staged, created, folder, base = {}, [], pathlib.Path(args.out).parent, pathlib.Path(args.input).parent
