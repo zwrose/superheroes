@@ -408,6 +408,34 @@ def test_local_terminal_repair_refuses_when_the_session_transcript_exists(tmp_pa
     assert ll.read(repo)["records"] == before
 
 
+def test_local_terminal_repair_refuses_when_the_transcript_lookup_is_unresolved(
+    tmp_path, monkeypatch,
+):
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "projects").write_text("not a directory")
+    repo, _session = _local_lane_with_session(tmp_path, monkeypatch, cfg)
+    before = ll.read(repo)["records"]
+    result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
+    assert result["ok"] is False and result["reason"] == "builder-may-exist"
+    assert ll.read(repo)["records"] == before
+
+
+def test_local_terminal_repair_refuses_when_the_transcript_matches_in_two_buckets(
+    tmp_path, monkeypatch,
+):
+    cfg = tmp_path / "cfg"
+    repo, session = _local_lane_with_session(tmp_path, monkeypatch, cfg)
+    for name in ("bucket-a", "bucket-b"):
+        bucket = cfg / "projects" / name
+        bucket.mkdir(parents=True)
+        (bucket / (session + ".jsonl")).write_text("{}\n")
+    before = ll.read(repo)["records"]
+    result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
+    assert result["ok"] is False and result["reason"] == "builder-may-exist"
+    assert ll.read(repo)["records"] == before
+
+
 # --- refusals ----------------------------------------------------------------------------------
 
 

@@ -2268,19 +2268,15 @@ def repair_never_started(repo_root, launch_id, *, pending_started=None, evidence
         owner = _launch_ownership_lock_path_or_none(repo_root, launch_id, env)
         if owner is None:
             return _repair_refusal("launch-ownership-lock-unavailable")
-        # Checked before the lock is taken, so a holder whose death was never confirmed is
-        # refused with its lock file untouched (acquisition would reclaim and replace it).
-        if file_lock.stale_reason(owner, reclaim_dead_holder=True) in _REPAIR_UNCONFIRMED_RECLAIMS:
-            return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
+        # The unconfirmed classes are refused inside the guarded reclaim, before the original lock
+        # is unlinked or replaced, so uncertain ownership evidence is never destroyed.
         try:
-            _reclaimed, reclaim_reason = file_lock.acquire_with_reason(
-                owner, reclaim_dead_holder=True,
+            file_lock.acquire_with_reason(
+                owner, reclaim_dead_holder=True, refuse_reasons=_REPAIR_UNCONFIRMED_RECLAIMS,
             )
         except file_lock.LockHeld:
             return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
         owned = owner
-        if reclaim_reason in _REPAIR_UNCONFIRMED_RECLAIMS:
-            return _repair_refusal(REPAIR_LANE_MAY_BE_LAUNCHING)
         # axis: the terminal repair is an operator assertion that no builder exists; nothing here
         # can see a cloud session, so it is required and recorded rather than inferred.
         if not isinstance(no_builder_evidence, str) or not no_builder_evidence.strip():

@@ -247,7 +247,7 @@ def _publish_lock(lock_path, holder_info):
             pass
 
 
-def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False):
+def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False, refuse_reasons=()):
     guard_path = lock_path + ".reclaim"
     try:
         fd = os.open(guard_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -270,6 +270,10 @@ def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False):
         reason = stale_reason(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder)
         if reason is None:
             return False, None
+        if reason in refuse_reasons:
+            # Judged under the reclaim guard, so the class acted on is the class refused: the
+            # original lock is left untouched (neither unlinked nor replaced).
+            return False, None
         try:
             os.unlink(lock_path)
         except FileNotFoundError:
@@ -288,7 +292,7 @@ def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False):
 ACQUIRE_RETRY_LIMIT = 3
 
 
-def acquire_with_reason(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
+def acquire_with_reason(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False, refuse_reasons=()):
     """Acquire the lock. Returns (reclaimed, reason).
 
     ``reclaimed`` is True when a stale lock was reclaimed, else False. ``reason`` is the
@@ -297,6 +301,9 @@ def acquire_with_reason(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
     `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
     TTL (#862); a live holder on THIS host still raises LockHeld (a foreign-host holder is
     protected by its TTL instead — see the module docstring).
+
+    `refuse_reasons` names staleness classes the caller will not accept a reclaim for: when the
+    guarded check lands on one, the lock is left exactly as found and LockHeld is raised.
 
     Raises only LockHeld — never propagates OSError from publish or directory setup."""
     try:
@@ -316,6 +323,7 @@ def acquire_with_reason(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
                 raise LockHeld(read_holder(lock_path)) from None
             reclaimed, reason = _reclaim_stale_lock(
                 lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder,
+                refuse_reasons=refuse_reasons,
             )
             if reclaimed:
                 return True, reason
