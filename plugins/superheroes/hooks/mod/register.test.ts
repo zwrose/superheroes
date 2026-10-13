@@ -3,10 +3,13 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
 import { CHECKPOINT_INFO } from './checkpoint-block'
+import { SNOOZE_STEP_TOKENS } from './decide'
 
 // What the stubbed lib/compaction_directive.py answers: a process result, or
 // `null` for a CLI that cannot run at all (missing, timed out).
 type Cli = { exitCode: number; stdout: string } | null
+// a CLI stub may hold its answer (a promise) to overlap events
+type CliAnswer = Cli | Promise<Cli>
 
 const SESSION = 'sess-1'
 const HISTORY = [{ role: 'user' as const, text: 'hello', toolUses: [] }]
@@ -101,7 +104,7 @@ type Rig = {
 // bottoms, each recording what reached it.
 function rig(
   on: On,
-  cli: (argv: readonly string[]) => Cli,
+  cli: (argv: readonly string[]) => CliAnswer,
   options: {
     isIdBroken?: boolean
     isEnvBroken?: boolean
@@ -110,6 +113,7 @@ function rig(
     isCommandBroken?: boolean
     manifest?: string | null
     compactFailures?: number
+    compactSkip?: string
   } = {},
 ): Rig {
   const r: Rig = {
@@ -134,11 +138,11 @@ function rig(
   on('session.id', () =>
     options.isIdBroken ? { deny: 'no session id' } : { value: SESSION },
   )
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
     r.argv.push([...e.argv])
     r.order.push(`cli:${e.argv[3]}`)
     r.stdins.push(e.init?.stdin)
-    const out = cli(e.argv)
+    const out = await cli(e.argv)
 
     return out === null
       ? { deny: 'cannot start' }
@@ -211,7 +215,7 @@ function rig(
       throw new Error('a turn is running')
     }
 
-    return { messages: SUMMARY }
+    return options.compactSkip === undefined ? { messages: SUMMARY } : { skip: options.compactSkip }
   })
   // the engine's own band, which the mod's draws in place of only while it has something to say
   on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
@@ -676,8 +680,9 @@ test('a measurement after the turn, before the compaction runs, starts no second
   expect(r.seen).toHaveLength(1)
   expect(r.toasts).toEqual([SUCCESS])
 
-  // resolved: the checkpoint is cleared and a later one may run
+  // resolved: the checkpoint is cleared, and a later one may run once the context has grown
   await measure($, r, PAST)
+  await measure($, r, PAST + SNOOZE_STEP_TOKENS)
   await r.clock.settle()
 
   expect(r.commands).toEqual([COMMAND, COMMAND])
@@ -1047,4 +1052,117 @@ test('the band is absent while a checkpoint runs', async ($, on) => {
 
   expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'now' })).toBeUndefined()
+})
+
+test('two measurements overlapping the first start run one checkpoint', async ($, on) => {
+  let release = () => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  // the first start waits inside readNotes, on the path answer
+  const r = rig(on, async argv => {
+    if (argv[3] === 'path') {
+      await held
+    }
+
+    return saveAnswer
+  })
+
+  await start($)
+  r.usage = usageAt(PAST)
+
+  const event = { context: { tokens: PAST, window: 1000000 }, rateLimits: [], changed: ['context' as const] }
+  const both = [$.session.measure(event), $.session.measure(event)]
+
+  await r.clock.settle()
+  release()
+  await Promise.all(both)
+  await r.clock.settle()
+
+  // without the isStarting guard the second start also passes the running-checkpoint check
+  expect(r.commands).toEqual([COMMAND])
+  expect(r.sets.filter(([key, value]) => key === 'checkpoint' && value !== null)).toHaveLength(1)
+})
+
+test('a turn that begins while the start reads the notes: nothing is recorded or run', async ($, on) => {
+  // the turn lands while the start awaits its path answer
+  const r = rig(on, async argv => {
+    if (argv[3] === 'path') {
+      await $.turn.start({ text: 'work', turnId: 't1' })
+    }
+
+    return saveAnswer
+  })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+  expect(r.sets.filter(([key]) => key === 'checkpoint')).toEqual([])
+})
+
+test('compaction that resolves as skipped is a failure: retried once, then the owner is told and the fill snoozed', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { compactSkip: 'vetoed by a hook' })
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+
+  await r.clock.advance(1000)
+  expect(r.compactAttempts).toBe(1)
+  expect(r.toasts).toEqual([])
+
+  await r.clock.advance(1000)
+  expect(r.compactAttempts).toBe(2)
+  expect(r.toasts).toEqual([`${COMPACT_FAILED} (vetoed by a hook)`])
+
+  await r.clock.advance(60000)
+  expect(r.compactAttempts).toBe(2)
+
+  await measure($, r, PAST)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('an interrupted checkpoint turn is cancelled: no compaction, snoozed to the start fill', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await $.turn.complete({ answer: block('notes'), durationMs: 10, isAborted: true, turnId: 't1', reason: 'aborted' })
+  await r.clock.advance(5000)
+
+  expect(r.seen).toHaveLength(0)
+  expect(r.toasts).toContain('Auto-checkpoint cancelled: the turn was interrupted')
+
+  await measure($, r, PAST)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('after a successful compaction the context must grow before an automatic run repeats', { options: { autoCheckpointTokens: 100000 } }, async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+  const FILL = 150000
+
+  await start($)
+  await measure($, r, FILL)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(1000)
+  expect(r.toasts).toEqual([SUCCESS])
+
+  // still above the trigger after the compaction: nothing runs, and it is the only such measurement
+  await measure($, r, FILL)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND])
+
+  await measure($, r, FILL + SNOOZE_STEP_TOKENS)
+  await r.clock.settle()
+  expect(r.commands).toEqual([COMMAND, COMMAND])
 })

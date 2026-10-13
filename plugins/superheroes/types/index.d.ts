@@ -12,6 +12,8 @@ declare module 'claude-code' {
       checkpoint: { startedAt: number; tokens?: number; notesBefore?: string | null; compacting?: boolean } | null
       // the fill below which a Snooze holds the automatic run back
       snoozeUntilTokens: number | null
+      // set when a compaction succeeded: the next measurement snoozes to its fill, once
+      rearmAfterCompact: boolean
       // the last decision's showBand: the band draws from this
       band: boolean
     }

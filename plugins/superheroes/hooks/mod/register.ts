@@ -38,6 +38,7 @@ const isTurnActive = { plugin: 'superheroes', key: 'isTurnActive' } as const
 const checkpoint = { plugin: 'superheroes', key: 'checkpoint' } as const
 const snoozeUntilTokens = { plugin: 'superheroes', key: 'snoozeUntilTokens' } as const
 const band = { plugin: 'superheroes', key: 'band' } as const
+const rearmAfterCompact = { plugin: 'superheroes', key: 'rearmAfterCompact' } as const
 
 // True while a checkpoint is being started: two measurements must not both start one.
 let isStarting = false
@@ -151,12 +152,6 @@ async function startCheckpoint($: EngineInterface, isNow = false): Promise<void>
     if ((await runningCheckpoint($)) !== null) {
       return
     }
-    if (isNow && (await $.state.get(isTurnActive)).value === true) {
-      $.ui.toast('Auto-checkpoint: wait for the current turn to finish')
-
-      return
-    }
-
     const notesBefore = await readNotes($)
     // the fill it started at: a checkpoint that ends without compacting snoozes to it
     let tokens: number | undefined
@@ -165,6 +160,15 @@ async function startCheckpoint($: EngineInterface, isNow = false): Promise<void>
       tokens = (await $.session.usage()).context.tokens
     } catch {
       // an unread fill only means no snooze when this checkpoint is skipped
+    }
+
+    // a turn may have begun while the notes and fill were read: write nothing then
+    if ((await $.state.get(isTurnActive)).value === true) {
+      if (isNow) {
+        $.ui.toast('Auto-checkpoint: wait for the current turn to finish')
+      }
+
+      return
     }
 
     await $.state.set(checkpoint, { startedAt: await $.clock.now(), tokens, ...(notesBefore === undefined ? {} : { notesBefore }) })
@@ -202,6 +206,13 @@ async function evaluate($: EngineInterface, options: unknown): Promise<void> {
     context.breakdown?.autoCompactThreshold,
     context.breakdown?.isAutoCompactEnabled ?? false,
   )
+  // the first measurement after a successful compaction: context must grow from here
+  // before an automatic run repeats, however low the trigger is
+  if ((await $.state.get(rearmAfterCompact)).value === true) {
+    await $.state.set(snoozeUntilTokens, snooze(context.tokens))
+    await $.state.set(rearmAfterCompact, false)
+  }
+
   const snoozed = (await $.state.get(snoozeUntilTokens)).value
   const decision = decide({
     tokens: context.tokens,
@@ -274,9 +285,17 @@ async function forgetFill($: EngineInterface): Promise<void> {
 function compactSoon($: EngineInterface, isRetry = false): void {
   $.clock.after(COMPACT_DELAY_MS, async () => {
     let didFail = false
+    let skipReason = ''
 
     try {
-      await $.session.compact()
+      const res = await $.session.compact()
+
+      // a vetoed compaction resolves with a skip: the context did not shrink
+      if (typeof res?.skip === 'string') {
+        skipReason = ` (${res.skip})`
+        throw new Error(res.skip)
+      }
+      await $.state.set(rearmAfterCompact, true)
       $.ui.toast('Checkpointed and compacted')
     } catch (error) {
       if (!isRetry) {
@@ -285,7 +304,7 @@ function compactSoon($: EngineInterface, isRetry = false): void {
         return
       }
       note($, `compact: ${String(error)}`)
-      $.ui.toast('Auto-checkpoint saved the notes but could not compact')
+      $.ui.toast(`Auto-checkpoint saved the notes but could not compact${skipReason}`)
       didFail = true
     }
     try {
@@ -306,10 +325,17 @@ function compactSoon($: EngineInterface, isRetry = false): void {
 
 // Ends the checkpoint the finished main-loop turn belonged to: compacts once the notes
 // file changed, otherwise says why not. A failed save or an unreadable baseline never compacts.
-async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promise<void> {
+async function finishCheckpoint($: EngineInterface, saveFailed: boolean, isAborted: boolean): Promise<void> {
   const { value } = await $.state.get(checkpoint)
 
   if (!value || value.compacting) {
+    return
+  }
+
+  // an interrupted checkpoint turn is cancelled, whatever its reply saved
+  if (isAborted) {
+    await endWithoutCompacting($, value.tokens, 'Auto-checkpoint cancelled: the turn was interrupted')
+
     return
   }
 
@@ -326,13 +352,18 @@ async function finishCheckpoint($: EngineInterface, saveFailed: boolean): Promis
     await $.state.set(checkpoint, { ...value, compacting: true })
     compactSoon($)
   } else {
-    await $.state.set(checkpoint, null)
-    // the next automatic run waits for the fill to grow, or this would start again at once
-    if (typeof value.tokens === 'number') {
-      await $.state.set(snoozeUntilTokens, snooze(value.tokens))
-    }
-    $.ui.toast(`Auto-checkpoint skipped: ${why}; next try after more context`)
+    await endWithoutCompacting($, value.tokens, `Auto-checkpoint skipped: ${why}; next try after more context`)
   }
+}
+
+// Ends a checkpoint that will not compact: cleared, snoozed to the fill it started at (or this
+// would start again at once), and the owner told.
+async function endWithoutCompacting($: EngineInterface, tokens: number | undefined, message: string): Promise<void> {
+  await $.state.set(checkpoint, null)
+  if (typeof tokens === 'number') {
+    await $.state.set(snoozeUntilTokens, snooze(tokens))
+  }
+  $.ui.toast(message)
 }
 
 export const register: Register = (on, options) => {
@@ -478,7 +509,7 @@ export const register: Register = (on, options) => {
       }
 
       try {
-        await finishCheckpoint($, warning !== null)
+        await finishCheckpoint($, warning !== null, e.isAborted)
       } catch (error) {
         await abandonCheckpoint($, error)
       }

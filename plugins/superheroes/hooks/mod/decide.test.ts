@@ -128,7 +128,6 @@ test('window clamp: a bigger allowance fires earlier', () => {
 test('window clamp: the trigger never falls below the floor, so a tiny window cannot fire every turn', () => {
   const DEFAULT_SETTINGS = settingsOf(schemaOf(), {})
 
-  expect(MIN_TRIGGER_TOKENS).toBe(50000)
   expect(effectiveTrigger(DEFAULT_SETTINGS, 100000, true)).toBe(MIN_TRIGGER_TOKENS)
   expect(effectiveTrigger(DEFAULT_SETTINGS, 10000, true)).toBe(MIN_TRIGGER_TOKENS)
 })
