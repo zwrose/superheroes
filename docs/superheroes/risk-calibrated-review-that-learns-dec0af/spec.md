@@ -377,8 +377,10 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **UFR-5.** If a review session is damaged partway, then the plugin shall repair it and carry on, and shall not abandon it. (source: Canon 2026-10-10-d6064e1d-11)
   - *Acceptance:* Given a session damaged after its second round, when the review resumes, then every finding and outcome from the first two rounds is still in the record. (source: Canon 2026-10-10-d6064e1d-11)
 
-**UFR-6.** If the PR's head commit moves after its sheet was published, then the plugin shall replace the sheet with an unsigned one for the new commit. (source: Canon 2026-10-09-d6064e1d-7)
-  - *Acceptance:* Given answers saved on the old sheet, when the new sheet opens, then it shows "This PR changed", keeps the answers to unchanged items, and starts the merge verdict over. (source: board · 3 Big PR sheet)
+**UFR-6.** If the PR's head commit moves after its sheet was published, then the plugin shall replace the sheet with an unsigned one for the new commit when the move carries a material consequence, and otherwise shall carry the sheet's answers and merge verdict forward to the new commit with a dated note. (source: Canon 2026-10-09-d6064e1d-7; Canon 2026-10-13-dcc2b5e5-2)
+  - *Acceptance:* Given answers saved on the old sheet and a head move with a material consequence, when the new sheet opens, then it shows "This PR changed", keeps the answers to unchanged items, and starts the merge verdict over. (source: board · 3 Big PR sheet)
+  - *Acceptance:* Given a saved "Merge" verdict and a head move with no material consequence (a base update with no conflict, a mechanical bring-current of a stack, or a craft fix), when the sheet for the new commit opens, then it shows a dated note saying what moved and why it is not material, and the verdict still stands. (source: Canon 2026-10-13-dcc2b5e5-2)
+  - *Acceptance (rule):* Whether a head move is material is judged by the material-consequence line; doubt counts as material. A merge word given for a batch of PRs stays good through routine updates. (source: Canon 2026-10-13-dcc2b5e5-2; Canon 2026-10-08-039e3d39-1; Canon 2026-10-08-039e3d39-3)
 
 **UFR-7.** If the chat answer and the index answer to one batch-1 question disagree, then the advisor shall ask the owner which one stands. (source: Canon 2026-10-09-d6064e1d-6)
   - *Acceptance:* Given "Keep them visible" on the index and "hide them" in the chat, when the advisor reads both, then the advisor acts on neither until the owner answers. (source: board · 1 The index)
@@ -477,7 +479,7 @@ Scheduling the amendments to the approved specs is the advisor's. (source: Canon
 
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-13 (owner-stamped, substantive):** a merge verdict survives a head move that carries no material consequence; only a material change republishes the sheet unsigned. The owner's words, in the advisor's chat on 2026-10-13: "the only time a re-sign should be needed is a material change to the PR" and "merge trains are impossible to authorize as a batch with this logic". Canon 2026-10-13-dcc2b5e5-2 replaces the head-move clause of Canon 2026-10-09-d6064e1d-7. The new child C12 (#1856) builds it. Sections touched: When things go wrong (UFR-6), Amendments; the register (R8) and the coverage map (UFR-6 rows).
 
 ## Coverage
 
