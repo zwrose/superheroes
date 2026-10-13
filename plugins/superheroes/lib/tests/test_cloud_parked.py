@@ -243,7 +243,7 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     out = _send(w)
     assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
-        "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
+        "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
     assert _entries(w)[0]["outcome"] is None
 
 
@@ -980,3 +980,28 @@ def test_a_recover_state_that_cannot_be_read_sends_nothing_back(w):
     assert out["unread"] == [{"pr": 10, "reason": "recover-state-unreadable"}]
     with open(_recover_file(w), encoding="utf-8") as fh:
         assert fh.read() == "{not json"
+
+
+def test_a_rebind_stays_on_the_superseded_lanes_own_issue(w):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    w.gh.comments[10] = [_lapsed_comment(10)]
+    w.gh.pulls[10] = {"state": "open", "merged": False, "body": "Closes #101, closes #102", "head": {"sha": "h1"}}
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    _supersede(w, "l-old")
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    _lane(w, "l-other", 102, "other-session", "b", ts=RELAUNCHED)
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert _entries(w)[0]["launchId"] == "l-new"
+
+
+def test_an_acknowledgement_for_a_replaced_park_records_nothing(w):
+    _lane(w, "l-1", 101, "session-1", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    item = _send(w)["sendBack"][0]
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["kind"] == "lapsed-pass"
+    assert CP.sent(w.repo, REPO, 10, park_id=item["parkId"], env=w.env) == {"ok": False, "reason": "park-changed"}
+    assert _entries(w)[0]["outcome"] is None
+    assert CP.sent(w.repo, REPO, 10, park_id="1010", env=w.env)["action"] == "written"

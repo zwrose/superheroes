@@ -276,10 +276,12 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         # axis: an unreadable recovery record refuses before the park id is saved, so a retry can still rebind to the replacement
         if old and not recover_readable:
             return _refusal("recover-state-unreadable")
+        rebind = bool(old) and old in superseded
+        if rebind:
+            _, was, why = _lane(repo_root, issues, env, old)
+            issues = [was["issue"]] if was else issues
         launch_id, _, ledger_reason = (
-            _lane(repo_root, issues, env,
-                  # axis: a park after the original lane was superseded binds to the replacement, not the superseded launch
-                  old if old not in superseded else None,
+            _lane(repo_root, issues, env, None if rebind else old,
                   reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
@@ -348,6 +350,7 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             out["superseded"].append({"pr": e["pr"], "launchId": launch_id})
             continue
         out["sendBack"].append({"pr": e["pr"], "repo": e["repo"], "issue": issue, "launchId": launch_id,
+                                _PARK_KEY: e.get(_PARK_KEY),
                                 "cloudSessionName": lane["cloudSessionName"],
                                 "configDir": lane.get("configDir"), "message": SEND_BACK_MESSAGE})
     # axis: a lane superseded while a later entry's GitHub reads ran is not sent to; the last read decides
@@ -363,7 +366,7 @@ def send_back(repo_root, today=None, *, env=None, run=None):
 
 
 @_locked
-def sent(repo_root, repo, pr, *, uncertain=False, env=None):
+def sent(repo_root, repo, pr, *, uncertain=False, park_id=None, env=None):
     """Record one parked PR as sent back, once its message was delivered; with `uncertain`, as sent with
     delivery unconfirmed. Saying it twice changes nothing, and `uncertain` never downgrades a confirmed send."""
     env = os.environ if env is None else env
@@ -377,6 +380,8 @@ def sent(repo_root, repo, pr, *, uncertain=False, env=None):
     if not found:
         return _refusal("not-parked")
     entry = found[0]
+    if park_id is not None and str(entry.get(_PARK_KEY)) != str(park_id):
+        return _refusal("park-changed")
     if entry["outcome"] in ("closed", "owner-let-through"):
         return _refusal("already-decided")
     outcome = UNCERTAIN if uncertain else "sent-back"
@@ -399,6 +404,7 @@ def main(argv=None):
             sub.add_argument("--pr", required=True)
         if name == "sent":
             sub.add_argument("--uncertain", action="store_true")
+            sub.add_argument("--park-id")
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     except SystemExit as exc:
@@ -407,7 +413,7 @@ def main(argv=None):
     if args.verb == "notice":
         result = notice(args.repo_root, args.repo, args.pr)
     elif args.verb == "sent":
-        result = sent(args.repo_root, args.repo, args.pr, uncertain=args.uncertain)
+        result = sent(args.repo_root, args.repo, args.pr, uncertain=args.uncertain, park_id=args.park_id)
     else:
         result = send_back(args.repo_root)
     sys.stdout.write(json.dumps(result) + "\n")

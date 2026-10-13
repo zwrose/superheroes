@@ -280,9 +280,10 @@ account that is `SendMessage`. On another account (`configDir`) it is the relay'
 
 - After a direct `SendMessage` returns `success: true`, or the relay's `check` returns
   `delivered: true`, run `python3 -B <plugin root>/lib/cloud_parked.py sent --repo-root <root>
-  --repo <owner/name> --pr <n>`. A second call is `unchanged`.
+  --repo <owner/name> --pr <n> --park-id <the item's parkId>` (omit it when null). A second call is
+  `unchanged`; `park-changed` means a newer park replaced it, so record nothing.
 - After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed`, run `sent --uncertain`
-  (not plain `sent`) with the same `--repo-root`, `--repo` and `--pr`, and tell the owner. The builder
+  (not plain `sent`) with the same `--repo-root`, `--repo`, `--pr` and `--park-id`, and tell the owner. The builder
   may already hold the text, so never resend it automatically. `send-back` never lists the PR for
   sending again, but lists it under `uncertain` every time. A later plain `sent` records it as sent.
 - After an `ensure` refusal or `relay-send-failed`, do not run `sent`. Nothing reached the builder,
