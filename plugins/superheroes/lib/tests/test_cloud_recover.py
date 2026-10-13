@@ -608,13 +608,16 @@ def test_t6_a_lane_that_never_pushed_is_relaunched_from_its_original_base(w):
     _lane(w, "l1", premise=stale)
     assert _assess(w, state="absent")["verdict"] == "stopped"
     _died(w, "l1")
-    got = _successor(w)
+    assert _successor(w)["reason"] == "pushed-work-unknown"  # no matching branch is not proof of no pushed work
+    assert _successor(w, never_pushed_evidence=" ") == {"ok": False, "reason": "never-pushed-evidence-invalid"}
+    got = _successor(w, never_pushed_evidence="remote branches and PRs for #17")
     assert got["ok"] is True and got["neverPushed"] is True
     assert (got["branch"], got["sha"], got["pushedAt"]) == (None, None, None)
     assert got["premise"]["baseCommit"] == w.base
     assert "adoptsBranch" not in got["premise"] and "adoptsHead" not in got["premise"]
     assert "placeCall" not in got["premise"] and "standingExclusions" not in got["premise"]
     assert _state(w)["superseded"]["l1"]["branch"] is None
+    assert _state(w)["superseded"]["l1"]["neverPushedEvidence"] == "remote branches and PRs for #17"
     assert CR.message(17, place="cloud", stopped_at=_at(10, 0), never_pushed=True, tz=UTC)["text"] == (
         "The cloud builder on #17 stopped at 10:00. It never pushed, so I relaunched the build from the beginning "
         "in a new cloud session.")

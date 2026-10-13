@@ -5,7 +5,7 @@ to push, the successor's premise, and the board's words.
   cloud_recover.py assess --repo-root D --launch-id L --repo O/N --session-state S [--activity-age-seconds N]
   cloud_recover.py ask --repo-root D --launch-id L
   cloud_recover.py asked --repo-root D --launch-id L [--uncertain]
-  cloud_recover.py successor --repo-root D --launch-id L --repo O/N
+  cloud_recover.py successor --repo-root D --launch-id L --repo O/N [--never-pushed 'what was checked']
   cloud_recover.py message --issue N --place cloud|local [--stopped-at EPOCH] [--pushed-at EPOCH]
                            [--never-pushed] [--push-time-source push|commit]
 
@@ -92,6 +92,7 @@ _INPUT_CHECKS = (  # the order in which the first refusal is chosen
     ("stopped_at", "time-invalid", lambda v: v is None or _is_number(v)),
     ("pushed_at", "time-invalid", lambda v: v is None or _is_number(v)),
     ("push_time_source", "push-time-source-invalid", lambda v: v in _PUSH_SOURCES),
+    ("never_pushed_evidence", "never-pushed-evidence-invalid", lambda v: v is None or (isinstance(v, str) and v.strip() != "")),
 )
 
 
@@ -397,12 +398,13 @@ def _adopted(found, handover_sha):
     return found["newest"], None
 
 
-def successor(repo_root, launch_id, *, repo, env=None, run=None):
+def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=None, run=None):
     """The premise a successor launch adopts: the lane's own premise with the launcher's stamps removed and
     its `baseCommit` kept, carrying the lane's pushed work as `adoptsBranch` and `adoptsHead` (neither, when
-    it never pushed). Records the supersession so the lane is never sent anything again."""
+    it never pushed, which needs `never_pushed_evidence`, a line naming what was checked). Records the
+    supersession so the lane is never sent anything again."""
     env = _env(env)
-    bad = _inputs(repo=repo, launch_id=launch_id)
+    bad = _inputs(repo=repo, launch_id=launch_id, never_pushed_evidence=never_pushed_evidence)
     if bad:
         return _refusal(bad)
     info, reserved, refused = _lane(repo_root, launch_id, env)
@@ -429,6 +431,9 @@ def successor(repo_root, launch_id, *, repo, env=None, run=None):
     if refused:
         return refused
     if entry is None:
+        if never_pushed_evidence is None:
+            # axis: absence of a matching branch is not proof of no pushed work, as a branch whose name lacks the issue number is not seen
+            return dict(_refusal("pushed-work-unknown"), note="a branch whose name does not carry the issue number is not seen; check the remote's branches and the issue's pull requests, then pass --never-pushed <what was checked>")
         premise.pop("adoptsBranch", None)
         premise.pop("adoptsHead", None)
     else:
@@ -447,6 +452,8 @@ def successor(repo_root, launch_id, *, repo, env=None, run=None):
             if len(prs) == 1 and isinstance(prs[0], dict) and isinstance(prs[0].get("number"), int):
                 premise["adopts"] = prs[0]["number"]
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
+    if entry is None:
+        mark["neverPushedEvidence"] = never_pushed_evidence
     wrote = _record(repo_root, "superseded", launch_id, mark, env=env)
     if not wrote["ok"]:
         return wrote
@@ -484,7 +491,7 @@ _VERBS = {  # verb: (function, required flags, optional flags); each flag is (na
                [("--activity-age-seconds", {"type": float})]),
     "ask": (ask, [_ROOT, _LAUNCH], []),
     "asked": (asked, [_ROOT, _LAUNCH], [("--uncertain", {"action": "store_true"})]),
-    "successor": (successor, [_ROOT, _LAUNCH, _REPO], []),
+    "successor": (successor, [_ROOT, _LAUNCH, _REPO], [("--never-pushed", {"dest": "never_pushed_evidence"})]),
     "message": (message, [("--issue", {"type": int}), ("--place", {})],
                 [("--repo-root", {}), ("--stopped-at", {"type": float}), ("--pushed-at", {"type": float}),
                  ("--never-pushed", {"action": "store_true"}), ("--push-time-source", {"default": "push"})]),
