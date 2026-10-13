@@ -448,6 +448,20 @@ def test_a_schema_without_the_walk_answer_rule_leaves_the_walk_off_and_writes_no
     assert result["walkWrites"] == []
 
 
+# Bites on: walk controls left on when the walk-answer rule lacks an answer the wording file offers, so a saved Works is lost on reopen.
+def test_a_schema_whose_walk_answers_lack_an_offered_value_leaves_the_walk_off_and_writes_nothing():
+    schema = json.loads((Path(pr_sheet.__file__).resolve().parents[1] / "theme" / "sheet.schema.json").read_text(encoding="utf-8"))
+    schema["$defs"]["walkAnswer"]["properties"]["answer"]["enum"].remove("works")
+    page = _page(WALK_SHEET, WALK + """
+      const out = { off: walkControls().map((node) => node.disabled) };
+      t.click(btn("p1", "Works"));
+      await t.tick();
+      out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
+      return out;
+    """, schema=schema)
+    assert page["result"]["off"] and all(page["result"]["off"]) and page["result"]["walkWrites"] == []
+
+
 def _walk_docs(written):
     return [{"id": path.split("/", 1)[1], "data": body} for path, body in written.items() if path.startswith("walk/")]
 
@@ -1090,3 +1104,20 @@ def test_a_stop_changed_behind_emoji_or_in_a_caption_starts_unanswered():
         assert page["result"]["pressed"] == ["false"] * 3 and page["result"]["note"] == ""
         saved = _page(before, WALK + "await choose('p1', 'Works'); return t.setLog().map((item) => item.path);")
         assert saved["result"] == [_path("p1", before)]
+
+
+# Axis: a stop's group and the walk's open box and note are part of its key, so a walk republished for another device or place starts unanswered.
+def test_a_changed_group_or_open_detail_starts_the_stop_unanswered():
+    def group(clone):
+        next(s for s in clone["prSheet"]["walk"]["stops"] if s["id"] == "p1")["group"] = "On your desktop"
+        return clone
+
+    def detail(clone):
+        clone["prSheet"]["walk"]["open"]["detail"] = "Use a desktop browser."
+        return clone
+
+    for change in (group, detail):
+        changed = _with(WALK_SHEET, change)
+        assert _path("p1", changed) != _path("p1")
+        page = _page(changed, WALK + "return stopState('p1');", host={"collections": {"walk": [{"id": _path("p1")[5:], "data": _body("works", None, "old")}]}})
+        assert page["result"]["pressed"] == ["false"] * 3 and page["result"]["note"] == ""

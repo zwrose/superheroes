@@ -1979,9 +1979,9 @@
     let uploads = 0;
 
     // One walk stop, all plain text: its parts and pictures, then its answers saved at walk/<id>; a Problem opens the fix block.
-    function buildStop(stop) {
+    function buildStop(stop, walk) {
       // The stop's store key is its id plus a hash (FNV-1a) of what is shown, so a republished stop that changed starts unanswered.
-      const shown = JSON.stringify([stop.pr, stop.kind, stop.title, stop.steps, stop.expect, stop.pictures.map(function (picture) { return [picture.src || null, picture.alt, picture.caption || null]; })]);
+      const shown = JSON.stringify([stop.pr, stop.kind, stop.group, walk.open, walk.note, stop.title, stop.steps, stop.expect, stop.pictures.map(function (picture) { return [picture.src || null, picture.alt, picture.caption || null]; })]);
       stop.key = stop.id + "-" + Array.prototype.reduce.call(shown, function (hash, _, index) { return Math.imul(hash ^ shown.charCodeAt(index), 16777619) >>> 0; }, 2166136261).toString(16);
       const article = prSection("article", "stop-" + stop.id, "sh-box");
       const meta = document.createElement("div");
@@ -2095,7 +2095,7 @@
       walkStops = walk.stops;
       walk.stops.map(function (stop) { return stop.group; }).filter(function (group, index, all) { return all.indexOf(group) === index; }).forEach(function (group) {
         section.appendChild(textElement("p", "sh-label", group));
-        walk.stops.filter(function (stop) { return stop.group === group; }).forEach(function (stop) { section.appendChild(buildStop(stop)); });
+        walk.stops.filter(function (stop) { return stop.group === group; }).forEach(function (stop) { section.appendChild(buildStop(stop, walk)); });
       });
       return section;
     }
@@ -2427,6 +2427,9 @@
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema, sheet.kind);
       walkRule = isObject(schema.$defs) && isObject(schema.$defs.walkAnswer) ? { root: schema, rule: schema.$defs.walkAnswer } : null;
+      // The walk stays off unless every answer and fix the words offer fits the walk-answer rule, so a saved pick is one a reopen restores.
+      if (walkRule !== null && prWords !== null && !prWords.walkAnswers.try.concat(prWords.walkAnswers.look).map(function (answer) { return [answer, null]; }).concat(prWords.walkFixes.map(function (fix) { return ["problem", fix.id]; }))
+        .every(function (pair) { return fitsRule(walkRule.root, walkRule.rule, { answer: pair[0], fix: pair[1], note: "", shots: [] }); })) walkRule = null;
       render(sheet);
       if (wordsProblem !== null) {
         // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.
