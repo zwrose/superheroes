@@ -405,6 +405,7 @@ def test_local_terminal_repair_refuses_when_the_session_transcript_exists(tmp_pa
     before = ll.read(repo)["records"]
     result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
     assert result["ok"] is False and result["reason"] == "builder-may-exist"
+    assert result["transcript"] == "found" and "transcript exists" in result["check"]
     assert ll.read(repo)["records"] == before
 
 
@@ -418,6 +419,7 @@ def test_local_terminal_repair_refuses_when_the_transcript_lookup_is_unresolved(
     before = ll.read(repo)["records"]
     result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
     assert result["ok"] is False and result["reason"] == "builder-may-exist"
+    assert result["transcript"] == "unreadable" and "could not be read" in result["check"]
     assert ll.read(repo)["records"] == before
 
 
@@ -433,6 +435,7 @@ def test_local_terminal_repair_refuses_when_the_transcript_matches_in_two_bucket
     before = ll.read(repo)["records"]
     result = ll.repair_never_started(repo, "l1", evidence="never ran", no_builder_evidence=NB)
     assert result["ok"] is False and result["reason"] == "builder-may-exist"
+    assert result["transcript"] == "ambiguous" and "more than one transcript" in result["check"]
     assert ll.read(repo)["records"] == before
 
 
