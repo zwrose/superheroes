@@ -52,6 +52,18 @@ These retirements ship in the same release as the review record, and never apart
 - A board's design system now comes from the project's own design-system files (tokens, stylesheets, components). A project whose design system lives only in Claude Design gets the "no design system" board until it keeps its design-system files in the project.
 - A project whose Canon holds Claude Design rulings may leave them; nothing reads them any more.
 
+### Vet slot: builder content in the slot span refuses
+
+- `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.
+- A PR body that keeps its DoD table or other marked sections in that span must move them below the build-record marker before the advisor's write will run. The advisor's own slot text and the builder's reminder comment still write as before.
+
+### Canon: the write helper and the chat-ruling record
+
+- A project's advisor, and every other session, now writes Canon through `lib/canon.py`: `hold` for a ruling held on the collector, `append` for a new entry or held lines. Each takes a declared ground (`owner-call`, `principle`, `ceded-call` or `take-back`) and mints the id.
+- The helper refuses, with `canon-stays-out` and the record's home, an entry whose declared ground is a go-word (launch, merge, release, tier, filing, force-push), a collector disposition, or filing or phase bookkeeping. It recognizes only a ruling that is a collector disposition, owner's words that are a bare go-word, and a ruling that records filing with an issue reference. An act written as a full ruling sentence under a valid ground is not caught, so the session's own ground and the advisor's vet still have to catch it. A project whose advisor logged those into Canon from a project memory should drop that memory; the refusal names where each belongs.
+- A ruling given in chat now gets the standard chat-ruling record: one dated collector comment quoting the owner's words (`canon.py ruling-record --post` returns its permalink). An issue Anchor cites that permalink, so Canon is no longer the only reachable record of a chat ruling.
+- Nothing already in Canon changes, and no sweep is owed. Until a project adopts this release, its advisor writes Canon by hand as before.
+
 ### The test role
 
 - The review panel's test seat is now the test role. Its agent is `test-role`, and its findings file and the `Test` dimension are unchanged. The `test-reviewer` agent is gone.
