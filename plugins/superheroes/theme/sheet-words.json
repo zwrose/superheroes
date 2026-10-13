@@ -106,5 +106,29 @@
     "mergeLocked": "{merge} · locked",
     "unlocks": "Unlocks when every item above is accepted: {accepted} of {total} so far.",
     "sendBack": "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
+  },
+  "index": {
+    "title": "Waiting on you",
+    "blocksHeading": "Blocks work",
+    "nothingBlocking": "Nothing is blocking work right now.",
+    "questionKind": "Blocks work",
+    "firstAnswerCounts": "Answer here or in the chat; whichever comes first counts. When the chat and the index disagree, the advisor asks.",
+    "groups": {"needs-you": "Needs you", "being-fixed": "Being fixed", "ready": "Ready"},
+    "rowPr": "#{number} · {title}",
+    "rowStack": "Stack #{number} · {title}",
+    "accepted": "{accepted} of {total} accepted",
+    "nothingToAccept": "Nothing to accept",
+    "walked": "{walked} of {total} walked",
+    "mergesAt": "merges {ordinal}",
+    "ordinals": ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"],
+    "mergesAtNumber": "merges at place {place}",
+    "beingFixed": "Going back for a fix · a new sheet comes after it",
+    "ready": "Merge verdict given",
+    "open": "Open ›",
+    "questionsOne": "1 question",
+    "questionsMany": "{count} questions",
+    "needYou": "{count} need you",
+    "nothingNeedsYou": "Nothing needs you",
+    "done": "When every sheet you meant to answer is saved, say \"done\" in the chat."
   }
 }

@@ -15,7 +15,8 @@ from jsonschema import Draft202012Validator
 import pr_sheet
 import review_record
 from provenance_patterns import PROVENANCE_PATTERNS
-from test_sheet_schema import check_sheet_problems
+from test_sheet_schema import check_sheet_problems, walk_stop
+from test_sheet_schema import pr_sheet as schema_pr_sheet
 
 LIB = Path(__file__).resolve().parents[1]
 THEME = LIB.parent / "theme"
@@ -837,3 +838,387 @@ def test_a_walk_stop_key_changes_when_a_copied_pictures_alt_or_caption_changes(e
     before = _placed_key(advisor, place)["p1"]
     edit(advisor["walk"]["stops"][0]["pictures"][0])
     assert _placed_key(advisor, place)["p1"] != before
+
+
+# --- the index: pr_state and the index builder ---
+
+REV_A, REV_B = "a" * 16, "b" * 16
+INDEX_WORDS = ALL_WORDS["index"]
+
+
+def state_sheet():
+    """A pr sheet with a leftover card (one option sends back), a closure card with no options, a try stop and a look stop."""
+    sheet = schema_pr_sheet()
+    sheet["prSheet"]["walk"]["stops"] = [walk_stop("t1", 1724), walk_stop("l1", 1724, kind="look", steps=[])]
+    return sheet
+
+
+STATE_SHEET = json.dumps(state_sheet(), indent=2).encode("utf-8")
+STATE_DIGEST = hashlib.sha256(STATE_SHEET).hexdigest()
+T1, L1 = "t1-0123456789ab", "l1-0123456789ab"
+MATCHING = [f"answers/leftover@{REV_A}", f"answers/closure@{REV_A}"]
+
+
+def card_doc(answer, option=None, revision=REV_A, **more):
+    return {"answer": answer, "optionId": option, "note": "", **({"revision": revision} if revision else {}), **more}
+
+
+def walk_doc(answer, fix=None, **more):
+    return {"answer": answer, "fix": fix, "note": "", "shots": [], **more}
+
+
+def merge_doc(covers=None, digest=STATE_DIGEST, **more):
+    doc = {"verdict": "merge", "note": "", "sheet": digest, "covers": MATCHING if covers is None else covers}
+    return {**doc, **more}
+
+
+KEEP, SEND_BACK, ACCEPT = card_doc("option", "keep-it"), card_doc("option", "fix-before-merge"), card_doc("accept")
+ACCEPTED = {"leftover": KEEP, "closure": ACCEPT}
+
+
+def store_of(answers=None, walk=None, verdict=None, digest=STATE_DIGEST):
+    return {"answers": answers or {}, "walk": walk or {}, "verdict": {} if verdict is None else {digest: verdict}}
+
+
+# Each row: the store, then (state, accepted, total, walked, walkTotal). The sheet always has 2 cards and 2 stops.
+STATE_TABLE = {
+    "no-answers": ({}, ("needs-you", 0, 2, 0, 2)),
+    "all-accepted-no-merge": (store_of(ACCEPTED), ("needs-you", 2, 2, 0, 2)),
+    "merge-with-matching-covers": (store_of(ACCEPTED, verdict=merge_doc()), ("ready", 2, 2, 0, 2)),
+    "merge-with-a-stale-revision": (
+        store_of(ACCEPTED, verdict=merge_doc([f"answers/leftover@{REV_B}", f"answers/closure@{REV_A}"])), ("needs-you", 2, 2, 0, 2)),
+    "merge-covers-missing-a-card": (store_of(ACCEPTED, verdict=merge_doc([f"answers/leftover@{REV_A}"])), ("needs-you", 2, 2, 0, 2)),
+    "merge-covers-an-extra-entry": (
+        store_of(ACCEPTED, verdict=merge_doc(MATCHING + [f"answers/ghost@{REV_A}"])), ("needs-you", 2, 2, 0, 2)),
+    "merge-with-no-covers": (store_of(ACCEPTED, verdict={k: v for k, v in merge_doc().items() if k != "covers"}), ("needs-you", 2, 2, 0, 2)),
+    "merge-on-an-old-digest": (
+        {**store_of(ACCEPTED), "verdict": {"f" * 64: merge_doc(digest="f" * 64)}}, ("needs-you", 2, 2, 0, 2)),
+    "merge-whose-sheet-is-another-digest": (
+        {**store_of(ACCEPTED), "verdict": {STATE_DIGEST: merge_doc(digest="f" * 64)}}, ("needs-you", 2, 2, 0, 2)),
+    "merge-while-a-card-is-discuss": (
+        store_of({"leftover": KEEP, "closure": card_doc("discuss")}, verdict=merge_doc()), ("needs-you", 1, 2, 0, 2)),
+    "not-yet": (store_of(ACCEPTED, verdict={"verdict": "not-yet", "note": "", "sheet": STATE_DIGEST}), ("needs-you", 2, 2, 0, 2)),
+    "a-card-answered-without-a-revision": (
+        store_of({"leftover": KEEP, "closure": card_doc("accept", revision=None)}, verdict=merge_doc()), ("needs-you", 2, 2, 0, 2)),
+    "sends-back-option": (store_of({"leftover": SEND_BACK, "closure": ACCEPT}), ("being-fixed", 1, 2, 0, 2)),
+    "sends-back-option-and-a-merge": (
+        store_of({"leftover": SEND_BACK, "closure": ACCEPT}, verdict=merge_doc()), ("being-fixed", 1, 2, 0, 2)),
+    "walk-problem-fix-before-merge": (
+        store_of(ACCEPTED, {T1: walk_doc("problem", "before-merge")}), ("being-fixed", 2, 2, 1, 2)),
+    "walk-problem-no-fix-and-a-merge": (
+        store_of(ACCEPTED, {T1: walk_doc("problem")}, merge_doc()), ("needs-you", 2, 2, 1, 2)),
+    "walk-problem-follow-up-and-a-merge": (
+        store_of(ACCEPTED, {T1: walk_doc("problem", "follow-up")}, merge_doc()), ("ready", 2, 2, 1, 2)),
+    "walk-works-and-looks-right-count": (
+        store_of(walk={T1: walk_doc("works"), L1: walk_doc("looks-right")}), ("needs-you", 0, 2, 2, 2)),
+    "walk-skip-is-not-walked": (store_of(walk={T1: walk_doc("skip")}), ("needs-you", 0, 2, 0, 2)),
+    "works-on-a-look-stop-is-not-offered": (store_of(walk={L1: walk_doc("works")}), ("needs-you", 0, 2, 0, 2)),
+    "looks-right-on-a-try-stop-is-not-offered": (store_of(walk={T1: walk_doc("looks-right")}), ("needs-you", 0, 2, 0, 2)),
+    "walk-fix-no-longer-offered": (store_of(walk={T1: walk_doc("problem", "later")}), ("needs-you", 0, 2, 0, 2)),
+    "option-no-longer-offered": (store_of({"leftover": card_doc("option", "gone"), "closure": ACCEPT}), ("needs-you", 1, 2, 0, 2)),
+    "accept-on-a-card-with-options-is-not-offered": (store_of({"leftover": ACCEPT, "closure": ACCEPT}), ("needs-you", 1, 2, 0, 2)),
+    "a-null-answer": (store_of({"leftover": card_doc(None), "closure": card_doc(None)}), ("needs-you", 0, 2, 0, 2)),
+    "wrong-shape-documents-are-ignored": (
+        {"answers": {"leftover": dict(KEEP, extra=1), "closure": "accept"},
+         "walk": {T1: {"answer": "works", "fix": None, "note": ""}, L1: dict(walk_doc("looks-right"), extra=1)},
+         "verdict": {STATE_DIGEST: dict(merge_doc(), extra=1)}}, ("needs-you", 0, 2, 0, 2)),
+    "a-bad-revision-is-ignored": (
+        store_of({"leftover": card_doc("option", "keep-it", revision="XYZ"), "closure": ACCEPT}), ("needs-you", 1, 2, 0, 2)),
+}
+
+
+# The same rule on a stack sheet: one card (the leftover, whose third option sends back), a look stop and a try stop.
+STACK_SHEET = json.dumps(built(STACK), indent=2).encode("utf-8")
+STACK_DIGEST = hashlib.sha256(STACK_SHEET).hexdigest()
+STACK_CARD, STACK_LOOK, STACK_TRY = "f-a64d7a0d1734", "gift-card-table-18668f855294", "checkout-redeem-449ec5af939f"
+STACK_TABLE = {
+    "stack-ready": (store_of({STACK_CARD: KEEP}, {STACK_LOOK: walk_doc("looks-right"), STACK_TRY: walk_doc("works")},
+                             merge_doc([f"answers/{STACK_CARD}@{REV_A}"], STACK_DIGEST), STACK_DIGEST), ("ready", 1, 1, 2, 2)),
+    "stack-being-fixed": (store_of({STACK_CARD: card_doc("option", "fix-before-merge")}, verdict=merge_doc([f"answers/{STACK_CARD}@{REV_A}"], STACK_DIGEST),
+                                   digest=STACK_DIGEST), ("being-fixed", 0, 1, 0, 2)),
+}
+SHEET_TABLE = [(STATE_SHEET, store, expected) for store, expected in STATE_TABLE.values()] + [(STACK_SHEET, *row) for row in STACK_TABLE.values()]
+
+
+@pytest.mark.parametrize("sheet, store, expected", SHEET_TABLE, ids=[*STATE_TABLE, *STACK_TABLE])
+def test_pr_state_truth_table(sheet, store, expected):
+    # Axis: the state and the counts for every combination of answers, walk results and verdict the rule reads, on a pr sheet and on a stack sheet.
+    state = pr_sheet.pr_state(sheet, store, WORDS)
+    assert (state["state"], state["accepted"], state["total"], state["walked"], state["walkTotal"]) == expected
+    assert list(state) == ["state", "accepted", "total", "walked", "walkTotal"]
+
+
+def test_pr_state_reads_the_words_file_when_given_none():
+    # Axis: with no words given, the walk fixes come from the words file, so a follow-up fix still lets a Merge stand.
+    store = store_of(ACCEPTED, {T1: walk_doc("problem", "follow-up")}, merge_doc())
+    assert pr_sheet.pr_state(STATE_SHEET, store)["state"] == "ready"
+
+
+def test_pr_state_of_a_sheet_with_no_cards_and_no_walk():
+    # Axis: with nothing to accept, a Merge that covers nothing stands, and without a Merge the PR needs the owner.
+    sheet = json.dumps(built(SMALL), indent=2).encode("utf-8")
+    digest = hashlib.sha256(sheet).hexdigest()
+    assert pr_sheet.pr_state(sheet, {}, WORDS) == {"state": "needs-you", "accepted": 0, "total": 0, "walked": 0, "walkTotal": 0}
+    merge = {"verdict": "merge", "note": "", "sheet": digest, "covers": []}
+    assert pr_sheet.pr_state(sheet, {"verdict": {digest: merge}}, WORDS)["state"] == "ready"
+    assert pr_sheet.pr_state(sheet, {"verdict": {digest: dict(merge, covers=[f"answers/ghost@{REV_A}"])}}, WORDS)["state"] == "needs-you"
+
+
+# --- the index builder ---
+
+def index_cli(source, out, answers=None, extra=()):
+    args = [sys.executable, "-B", str(LIB / "pr_sheet.py"), "index", "--input", str(source), "--out", str(out), *extra]
+    if answers is not None:
+        args += ["--answers", str(answers)]
+    return subprocess.run(args, capture_output=True, text=True, timeout=60)
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def index_world(tmp_path):
+    """The index fixture in tmp_path/in, with its three PRs' sheets built beside it: the small PR is ready, the big one
+    is being fixed and the stack needs the owner. Returns the input's path and the folder to write the index into."""
+    root = tmp_path / "in"
+    shutil.copytree(FIXTURES / "elsewhere", root / "elsewhere")
+    shutil.copy(FIXTURES / "index-input.json", root / "index-input.json")
+    for folder, case in (("small", SMALL), ("big", BIG), ("stack", STACK)):
+        (root / folder).mkdir()
+        done = cli([FIXTURES / r for r in case[0]], FIXTURES / case[1], root / folder / "sheet.json")
+        assert done.returncode == 0, done.stdout
+        write_json(root / folder / "store.json", {})
+    small = (root / "small" / "sheet.json").read_bytes()
+    digest = hashlib.sha256(small).hexdigest()
+    write_json(root / "small" / "store.json", {"verdict": {digest: {"verdict": "merge", "note": "", "sheet": digest, "covers": []}}})
+    big = json.loads((root / "big" / "sheet.json").read_text(encoding="utf-8"))
+    card = next(c for c in big["cards"] if any(o["sendsBack"] for o in c["options"]))
+    sends_back = next(o["id"] for o in card["options"] if o["sendsBack"])
+    write_json(root / "big" / "store.json", {"answers": {card["id"]: {"answer": "option", "optionId": sends_back, "note": "", "revision": REV_A}}})
+    (tmp_path / "out").mkdir()
+    return root / "index-input.json", tmp_path / "out"
+
+
+def run_index(tmp_path, mutate=None, answers=None):
+    source, out = index_world(tmp_path)
+    if mutate:
+        advisor = json.loads(source.read_text(encoding="utf-8"))
+        mutate(advisor, source.parent)
+        write_json(source, advisor)
+    return index_cli(source, out / "index.json", answers), out
+
+
+_INDEX_ROW_KEYS = ("number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt")
+
+
+def test_the_index_is_built_from_the_input_and_each_prs_sheet_and_store(tmp_path):
+    # Axis: one row per PR from its own sheet and store, grouped by pr_state and ordered by the merge order, plus the unanswered question with its copied picture.
+    done, out = run_index(tmp_path)
+    assert done.returncode == 0, done.stdout
+    sheet = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    picture = "pictures/" + hashlib.sha256((FIXTURES / "elsewhere" / "cart-empty.png").read_bytes()).hexdigest()[:pr_sheet.PICTURE_DIGEST] + ".png"
+    assert json.loads(done.stdout) == {"ok": True, "out": str(out / "index.json"), "cards": 1, "pictures": [picture], "rows": 3}
+    assert list(sheet) == ["schema", "kind", "title", "index", "cards"]
+    assert (sheet["kind"], sheet["title"]) == ("index", INDEX_WORDS["title"])
+    assert [(r["number"], r["kind"], r["title"], r["state"], r["mergesAt"]) for r in sheet["index"]["rows"]] == [
+        (211, "pr", "Reword the receipt page", "ready", 1),
+        (214, "pr", "Retry a failed payment", "being-fixed", 2),
+        (4, "stack", "Gift cards", "needs-you", None)]
+    small, big, stack = sheet["index"]["rows"]
+    assert (small["accepted"], small["total"], small["walked"], small["walkTotal"]) == (0, 0, 0, 0)
+    assert (big["accepted"], big["total"], big["walked"], big["walkTotal"]) == (0, 3, 0, 2)
+    assert (stack["total"], stack["walkTotal"], stack["link"]) == (1, 2, "https://sheets.example.test/stack-4")
+    assert list(small) == list(_INDEX_ROW_KEYS)
+    (question,) = sheet["cards"]
+    assert question["callKind"] == INDEX_WORDS["questionKind"] and question["warning"] is True
+    assert question["images"] == [{"src": picture, "alt": "The order list of a disabled account", "caption": "Today it is empty"}]
+    assert [o["id"] for o in question["options"]] == ["keep-visible", "hide-them"] and all("sendsBack" not in o for o in question["options"])
+    assert question["recommendation"]["optionId"] == "keep-visible"
+    assert (out / picture).read_bytes() == (FIXTURES / "elsewhere" / "cart-empty.png").read_bytes()
+    assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
+
+
+def test_an_index_with_no_questions_and_no_prs_is_built(tmp_path):
+    # Axis: empty questions, mergeOrder and prs are an index with no cards and no rows, not a refusal.
+    done, out = run_index(tmp_path, lambda adv, _: adv.update(questions=[], mergeOrder=[], prs=[]))
+    assert done.returncode == 0, done.stdout
+    sheet = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    assert sheet["cards"] == [] and sheet["index"] == {"rows": []} and json.loads(done.stdout)["pictures"] == []
+    assert check_sheet_problems(sheet) == []
+
+
+def test_rows_beyond_the_merge_order_keep_the_order_of_prs(tmp_path):
+    # Axis: with an empty merge order every row has no place and the rows stay in the order of prs; the order is by place otherwise.
+    done, out = run_index(tmp_path, lambda adv, _: adv.update(mergeOrder=[]))
+    assert done.returncode == 0, done.stdout
+    rows = json.loads((out / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
+    assert [(r["number"], r["mergesAt"]) for r in rows] == [(4, None), (214, None), (211, None)]
+    done, out = run_index(tmp_path / "again", lambda adv, _: adv.update(mergeOrder=[214, 211]))
+    rows = json.loads((out / "index.json").read_text(encoding="utf-8"))["index"]["rows"]
+    assert [(r["number"], r["mergesAt"]) for r in rows] == [(214, 1), (211, 2), (4, None)]
+
+
+def drop_key(key):
+    return lambda adv, _: adv.pop(key)
+
+
+def edit_question(change):
+    return lambda adv, _: change(adv["questions"][0])
+
+
+def edit_pr(change, n=0):
+    return lambda adv, root: change(adv["prs"][n], root)
+
+
+def point_at(key, text=None, content=None, source=None):
+    """Changes the stack entry to name a new file in its folder: text as it is, content as JSON, or a copy of source."""
+    def change(entry, root):
+        target = root / "stack" / "other.json"
+        if source is not None:
+            shutil.copy(source, target)
+        elif text is not None:
+            target.write_text(text, encoding="utf-8")
+        elif content is not None:
+            write_json(target, content)
+        entry[key] = "stack/other.json"
+    return edit_pr(change)
+
+
+INDEX_REFUSALS = {
+    "unknown-key": (lambda adv, _: adv.update(extra=1), "the index input has an unknown key extra"),
+    "missing-questions": (drop_key("questions"), "the index input is missing questions"),
+    "missing-prs": (drop_key("prs"), "the index input is missing prs"),
+    "wrong-schema": (lambda adv, _: adv.update(schema="index-input/2"), "the index input schema must be index-input/1"),
+    "duplicate-question-id": (lambda adv, _: adv["questions"].append(dict(adv["questions"][0])), "repeats the id old-orders"),
+    "option-with-sends-back": (edit_question(lambda q: q["options"][0].update(sendsBack=False)), "has an unknown key sendsBack"),
+    "no-options": (edit_question(lambda q: q.update(options=[])), "question old-orders needs at least one option"),
+    "duplicate-option-id": (edit_question(lambda q: q["options"][1].update(id="keep-visible")), "repeats the id keep-visible"),
+    "recommendation-names-no-option": (edit_question(lambda q: q["recommendation"].update(optionId="ghost")), "is not one of its options"),
+    "question-picture-missing": (edit_question(lambda q: q["pictures"][0].update(path="elsewhere/nothing.png")),
+                                 "question old-orders picture 1 (elsewhere/nothing.png) is a link, or cannot be read"),
+    "question-picture-a-link": (edit_question(lambda q: q["pictures"][0].update(path="https://example.com/a.png")),
+                                "question old-orders picture 1 (https://example.com/a.png) is a link, or cannot be read"),
+    "question-picture-wrong-suffix": (edit_question(lambda q: q["pictures"][0].update(path="index-input.json")), "cannot be read"),
+    "merge-order-names-a-missing-pr": (lambda adv, _: adv.update(mergeOrder=[211, 999]), "mergeOrder names PR #999, which is not in prs"),
+    "merge-order-repeats": (lambda adv, _: adv.update(mergeOrder=[211, 211]), "mergeOrder names a PR more than once"),
+    "merge-order-not-a-list": (lambda adv, _: adv.update(mergeOrder=211), "mergeOrder must be a list"),
+    "duplicate-pr-number": (lambda adv, _: adv["prs"].append(dict(adv["prs"][0])), "repeats the number 4"),
+    "http-link": (edit_pr(lambda pr, _: pr.update(link="http://sheets.example.test/stack-4")), "needs link to be an https link"),
+    "link-with-a-space": (edit_pr(lambda pr, _: pr.update(link="https://sheets.example.test/a b")), "needs link to be an https link"),
+    "number-mismatch": (lambda adv, _: (adv["prs"][1].update(number=215), adv.update(mergeOrder=[211, 215])),
+                        "its prSheet.number is 214, not 215"),
+    "sheet-missing": (edit_pr(lambda pr, _: pr.update(sheet="stack/nothing.json")), "stack/nothing.json could not be read as JSON"),
+    "sheet-not-json": (point_at("sheet", text="{not json"), "stack/other.json could not be read as JSON"),
+    "sheet-not-a-pr-sheet": (point_at("sheet", source=THEME / "sample-sheet.json"), "it is a remainder sheet, not a pr or stack sheet"),
+    "sheet-fails-the-check": (point_at("sheet", content={"schema": "superheroes-sheet/1"}), "PR #4: stack/other.json: "),
+    "store-missing": (edit_pr(lambda pr, _: pr.update(store="stack/nothing.json")), "stack/nothing.json could not be read as JSON"),
+    "store-not-json": (point_at("store", text="{not json"), "stack/other.json could not be read as JSON"),
+    "store-unknown-key": (point_at("store", content={"extra": {}}), "has an unknown key extra"),
+    "store-collection-not-an-object": (point_at("store", content={"answers": []}), "answers must be an object"),
+    "store-not-an-object": (point_at("store", content=[]), "must be an object"),
+}
+
+
+@pytest.mark.parametrize("mutate, expected", INDEX_REFUSALS.values(), ids=INDEX_REFUSALS.keys())
+def test_the_index_refuses_what_it_cannot_trust_and_writes_nothing(tmp_path, mutate, expected):
+    # Axis: each fail-closed edge of the index input, a PR's sheet and a PR's store is one refusal problem that names it, exit 1, no data file and no pictures folder.
+    done, out = run_index(tmp_path, mutate)
+    result = json.loads(done.stdout)
+    assert done.returncode == 1 and result["ok"] is False
+    assert [p for p in result["problems"] if expected in p], result["problems"]
+    assert list(out.iterdir()) == []
+
+
+def test_a_refusal_after_a_question_picture_was_found_leaves_no_picture_behind(tmp_path):
+    # Axis: a question with a good picture and a PR whose sheet is unreadable is refused with the pictures folder never created.
+    done, out = run_index(tmp_path, edit_pr(lambda pr, _: pr.update(sheet="stack/nothing.json")))
+    assert done.returncode == 1 and not (out / "pictures").exists() and not (out / "index.json").exists()
+
+
+def test_a_failed_write_removes_the_question_pictures_this_run_created(tmp_path, monkeypatch, capsys):
+    # Axis: when the index cannot be written after its question picture was, the run exits 1 and removes the picture and the folder it created.
+    source, out = index_world(tmp_path)
+    real = os.replace
+
+    def replace(src, dst):
+        if str(dst) == str(out / "index.json"):
+            raise OSError("disk full")
+        return real(src, dst)
+
+    monkeypatch.setattr(pr_sheet.os, "replace", replace)
+    code = pr_sheet.main(["index", "--input", str(source), "--out", str(out / "index.json")])
+    assert code == 1 and json.loads(capsys.readouterr().out) == {"ok": False, "problems": ["disk full"]}
+    assert list(out.iterdir()) == []
+
+
+ANSWER_OF_OLD_ORDERS = {"answer": "option", "optionId": "hide-them", "note": "", "revision": REV_A}
+
+
+def answers_file(tmp_path, doc, key="old-orders"):
+    return write_json(tmp_path / "answers.json", {"answers": {key: doc}})
+
+
+@pytest.mark.parametrize("doc", [ANSWER_OF_OLD_ORDERS, {"answer": "something-else", "optionId": None, "note": "Ask support first"}],
+                         ids=["an-option", "something-else"])
+def test_an_answered_question_leaves_the_index(tmp_path, doc):
+    # Axis: --answers holding an offered option, or Something else, for the question drops it, with its picture, and the rows stay.
+    done, out = run_index(tmp_path, answers=answers_file(tmp_path, doc))
+    assert done.returncode == 0, done.stdout
+    result = json.loads(done.stdout)
+    assert result["cards"] == 0 and result["pictures"] == [] and result["rows"] == 3
+    assert json.loads((out / "index.json").read_text(encoding="utf-8"))["cards"] == []
+    assert not (out / "pictures").exists()
+
+
+@pytest.mark.parametrize("doc, key", [
+    ({"answer": None, "optionId": None, "note": "", "revision": REV_A}, "old-orders"),
+    (dict(ANSWER_OF_OLD_ORDERS, extra=1), "old-orders"),
+    ({"answer": "option", "optionId": "gone", "note": ""}, "old-orders"),
+    ({"answer": "option", "optionId": None, "note": ""}, "old-orders"),
+    ({"answer": "accept", "optionId": None, "note": ""}, "old-orders"),
+    ("hide-them", "old-orders"),
+    (ANSWER_OF_OLD_ORDERS, "another-question"),
+], ids=["null-answer", "wrong-shape", "option-no-longer-offered", "option-without-id", "accept", "not-an-object", "answer-for-another-id"])
+def test_an_answer_that_does_not_fit_leaves_the_question_in(tmp_path, doc, key):
+    # Axis: a null answer, a wrong-shape document, an option the question no longer has and an answer for another id each leave the question on the index.
+    done, out = run_index(tmp_path, answers=answers_file(tmp_path, doc, key))
+    assert done.returncode == 0, done.stdout
+    assert json.loads(done.stdout)["cards"] == 1 and len(json.loads(done.stdout)["pictures"]) == 1
+
+
+def test_an_empty_answers_store_keeps_the_question_and_other_keys_are_refused(tmp_path):
+    # Axis: --answers holding {} keeps the question; a key outside answers, verdict and walk, a file that is not JSON and a missing file are refused.
+    done, _ = run_index(tmp_path / "a", answers=write_json(tmp_path / "empty.json", {}))
+    assert done.returncode == 0 and json.loads(done.stdout)["cards"] == 1
+    for name, content, expected in (("extra", {"extra": {}}, "the answers file has an unknown key extra"),
+                                    ("list", [], "the answers file must be an object")):
+        done, _ = run_index(tmp_path / name, answers=write_json(tmp_path / (name + ".json"), content))
+        assert done.returncode == 1 and expected in json.loads(done.stdout)["problems"][0]
+    (tmp_path / "bad.json").write_text("", encoding="utf-8")
+    for name in ("bad", "missing"):
+        done, _ = run_index(tmp_path / name, answers=tmp_path / (name + ".json"))
+        assert done.returncode == 1 and "could not be read as JSON" in json.loads(done.stdout)["problems"][0]
+
+
+def test_index_takes_no_record_and_build_takes_no_answers(tmp_path):
+    # Axis: --record is refused on index and --answers on build with a usage error (exit 2) that writes nothing; build still needs --record.
+    source, out = index_world(tmp_path)
+    done = index_cli(source, out / "index.json", extra=("--record", str(FIXTURES / "record-big.json")))
+    assert done.returncode == 2 and "--record is only for build" in done.stderr and list(out.iterdir()) == []
+    base = [sys.executable, "-B", str(LIB / "pr_sheet.py"), "build", "--input", str(FIXTURES / "input-big.json"), "--out", str(out / "sheet.json")]
+    done = subprocess.run([*base, "--record", str(FIXTURES / "record-big.json"), "--answers", str(source)], capture_output=True, text=True)
+    assert done.returncode == 2 and "--answers is only for index" in done.stderr
+    done = subprocess.run(base, capture_output=True, text=True)
+    assert done.returncode == 2 and "--record" in done.stderr and list(out.iterdir()) == []
+
+
+def test_the_input_fixture_is_the_documented_shape():
+    # Axis: the fixture names exactly the keys the builder's docstring lists for the index input.
+    advisor = load("index-input.json")
+    assert list(advisor) == ["schema", "questions", "mergeOrder", "prs"]
+    assert list(advisor["questions"][0]) == ["id", "question", "context", "options", "recommendation", "pictures"]
+    assert list(advisor["prs"][0]) == ["number", "link", "sheet", "store"]
+    for key in ("index-input/1", "mergeOrder", "{number, link, sheet, store}"):
+        assert key in pr_sheet.__doc__

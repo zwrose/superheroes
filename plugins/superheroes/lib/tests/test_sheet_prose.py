@@ -310,7 +310,7 @@ REFUSALS = {
     "invalid JSON": (lambda: "{not json", "not valid JSON"),
     "top level not an object": (lambda: "[1, 2]", "The data file must be object."),
     "wrong schema": (_mutated(lambda s: _set(s, "superheroes-sheet/2", "schema")), 'Schema must be "superheroes-sheet/1".'),
-    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain, pr, stack."),
+    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain, pr, stack, index."),
     "empty title": (_mutated(lambda s: _set(s, "", "title")), "Title must not be empty."),
     "empty cards": (_mutated(lambda s: _set(s, [], "cards")), "Cards must not be empty."),
     "missing section title": (_mutated(lambda s: _drop(s, "cards", 1, "context", 0, "title")), "Cards[1].context[0] has no title."),
@@ -400,7 +400,7 @@ def test_prose_script_carries_no_provenance():
         assert not re.search(pattern, source), "sheet_prose.py matches %s" % pattern
 
 
-# Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the four cross-field rules the schema description lists (or about a valid sheet).
+# Bites on: the page's checkSheet and the prose renderer's check disagreeing about any of the cross-field rules the schema description lists (or about a valid sheet).
 def test_cross_field_rules_agree_between_page_and_prose():
     import importlib.util
     from test_review_template import _run_check_sheet
@@ -420,6 +420,8 @@ def test_cross_field_rules_agree_between_page_and_prose():
         ("duplicate option id", mutated(lambda s: s["cards"][0]["options"][1].update(id="yes")), True),
         ("unsettled names a missing card", mutated(lambda s: s["remainder"].update(unsettled=["no-such-card"])), True),
         ("recommendation names a missing option", mutated(lambda s: s["cards"][0]["recommendation"].update(optionId="maybe")), True),
+        ("valid index", _index_sheet([_row(4, "ready"), _row(5, "needs-you")]), False),
+        ("two index rows share a number", _index_sheet([_row(4, "ready"), _row(5, "needs-you"), _row(4, "needs-you")]), True),
     ]
     page = _run_check_sheet([sheet for _, sheet, _ in fixtures])
     for (name, sheet, refused), page_problems in zip(fixtures, page):
@@ -1185,3 +1187,105 @@ def test_a_stacks_craft_and_decided_entries_name_their_pr_and_a_pr_sheets_do_not
     for entry in single["prSheet"]["craft"] + single["prSheet"]["alreadyDecided"]:
         assert "- %s — %s\n" % (entry["title"], entry["detail"]) in out
     assert "#214: " not in out
+
+
+# --- the index ---
+
+INDEX_WORDS = WORDS["index"]
+
+
+def _row(number, state, accepted=0, total=0, walked=0, walk_total=0, merges_at=None, kind="pr", title=None):
+    return {"number": number, "kind": kind, "title": title or "Title %d" % number, "link": "https://sheets.example.test/%d" % number,
+            "state": state, "accepted": accepted, "total": total, "walked": walked, "walkTotal": walk_total, "mergesAt": merges_at}
+
+
+def _index_sheet(rows, cards=None):
+    options = [{"id": "keep-visible", "label": "Keep them visible", "consequence": "Support can look up an old order."},
+               {"id": "hide-them", "label": "Hide them", "consequence": "A refund needs an engineer."}]
+    cards = [_card("old-orders", callKind=INDEX_WORDS["questionKind"], warning=True, question="Should old orders stay visible?",
+                   options=options)] if cards is None else cards
+    return {"schema": "superheroes-sheet/1", "kind": "index", "title": INDEX_WORDS["title"], "index": {"rows": rows}, "cards": cards}
+
+
+ROWS = [_row(211, "needs-you", merges_at=1), _row(214, "needs-you", 0, 2, 1, 4, merges_at=2, title="Retry a failed payment"),
+        _row(300, "needs-you", 1, 3, merges_at=11), _row(219, "being-fixed", title="Order export"),
+        _row(4, "ready", 2, 2, kind="stack", title="Gift cards")]
+
+
+# Bites on: the index prose dropping its title line, a question (with its pick answers), the first-answer line, a group heading, a row's name, caption or link, or the done line; or printing the groups out of order.
+def test_prose_renders_an_index(tmp_path):
+    out = _prose_of(tmp_path, _index_sheet(ROWS))
+    assert out == "\n".join([
+        "**Waiting on you**: 1 question.",
+        "",
+        "**Blocks work**",
+        "",
+        "1. **Should old orders stay visible?**",
+        "   - Kind of call: Blocks work (warning)",
+        "   - Where it stands:",
+        "     It reads one way.",
+        "   - Options:",
+        "     - a. Keep them visible: Support can look up an old order.",
+        "     - b. Hide them: A refund needs an engineer.",
+        "   - Answer: a, b, or Something else",
+        "",
+        "Answer here or in the chat; whichever comes first counts. When the chat and the index disagree, the advisor asks.",
+        "",
+        "**Needs you**",
+        "",
+        "- #211 · Title 211 — Nothing to accept · merges first — https://sheets.example.test/211",
+        "- #214 · Retry a failed payment — 0 of 2 accepted · 1 of 4 walked · merges second — https://sheets.example.test/214",
+        "- #300 · Title 300 — 1 of 3 accepted · merges at place 11 — https://sheets.example.test/300",
+        "",
+        "**Being fixed**",
+        "",
+        "- #219 · Order export — Nothing to accept · Going back for a fix · a new sheet comes after it — https://sheets.example.test/219",
+        "",
+        "**Ready**",
+        "",
+        "- Stack #4 · Gift cards — 2 of 2 accepted · Merge verdict given — https://sheets.example.test/4",
+        "",
+        'When every sheet you meant to answer is saved, say "done" in the chat.',
+        ""])
+
+
+# Bites on: the nothing-blocking line missing when no question is left, an empty group's heading printed, the title line's count, or the index failing the prose renderer.
+def test_prose_of_an_index_with_no_question_and_no_row_to_answer(tmp_path):
+    out = _prose_of(tmp_path, _index_sheet([_row(4, "ready")], cards=[]))
+    assert out.startswith("**Waiting on you**: Nothing needs you.\n\n**Blocks work**\n\nNothing is blocking work right now.\n\n")
+    assert "**Ready**" in out and "**Needs you**" not in out and "**Being fixed**" not in out
+    out = _prose_of(tmp_path, _index_sheet([_row(4, "needs-you"), _row(5, "needs-you"), _row(6, "ready")], cards=[]))
+    assert out.startswith("**Waiting on you**: 2 need you.\n")
+    assert _prose_of(tmp_path, _index_sheet([], cards=[])).endswith(INDEX_WORDS["done"] + "\n")
+
+
+CAPTIONS = [
+    (_row(1, "needs-you"), "Nothing to accept"),
+    (_row(1, "needs-you", merges_at=1), "Nothing to accept · merges first"),
+    (_row(1, "needs-you", 0, 2, 0, 4, merges_at=2), "0 of 2 accepted · 0 of 4 walked · merges second"),
+    (_row(1, "needs-you", 1, 1, 0, 0, merges_at=10), "1 of 1 accepted · merges tenth"),
+    (_row(1, "needs-you", 1, 1, 0, 0, merges_at=11), "1 of 1 accepted · merges at place 11"),
+    (_row(1, "needs-you", 0, 0, 3, 3), "Nothing to accept · 3 of 3 walked"),
+    (_row(1, "being-fixed", 1, 2, merges_at=1), "1 of 2 accepted · Going back for a fix · a new sheet comes after it"),
+    (_row(1, "ready", 2, 2, 1, 1, merges_at=1), "2 of 2 accepted · 1 of 1 walked · Merge verdict given"),
+]
+
+
+@pytest.mark.parametrize("row, caption", CAPTIONS, ids=[c for _, c in CAPTIONS])
+def test_an_index_rows_caption(row, caption):
+    # Axis: the caption is the accepted part (or Nothing to accept), the walked part when the PR has a walk, then the state part, joined with " · ".
+    assert _load_prose_module().row_caption(row) == caption
+
+
+def test_the_index_title_line_counts_the_questions():
+    # Axis: the title line counts the questions while any are left: one question, or N questions.
+    module = _load_prose_module()
+    one = _card("one", options=[{"id": "a", "label": "A", "consequence": "A."}])
+    assert module.render(_index_sheet([], cards=[one])).startswith("**Waiting on you**: 1 question.\n")
+    assert module.render(_index_sheet([], cards=[one, dict(one, id="two")])).startswith("**Waiting on you**: 2 questions.\n")
+
+
+# Bites on: the renderer's check letting two index rows share a number.
+def test_repeated_index_row_numbers_are_refused(tmp_path):
+    result = _render(tmp_path, _index_sheet([_row(4, "ready"), _row(5, "ready"), _row(4, "needs-you")]))
+    assert result.returncode == 1 and result.stdout == "" and result.stderr == "Index row number 4 is used more than once.\n"

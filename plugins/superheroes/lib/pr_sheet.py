@@ -3,11 +3,14 @@
 
 CLI:
   pr_sheet.py build --record FILE [--record FILE ...] --input FILE --out FILE
+  pr_sheet.py index --input FILE [--answers FILE] --out FILE
 
 On success it writes the data file to --out and each walk picture it could copy to pictures/ beside it, prints
 {"ok": true, "out": ..., "cards": N, "pictures": [the sheet's picture paths]} and exits 0.
 On a refusal it writes nothing, prints {"ok": false, "problems": [...]} (one line each) and exits 1; an
-unreadable or non-JSON file is a refusal problem that names the file.
+unreadable or non-JSON file is a refusal problem that names the file. `index` prints
+{"ok": true, "out": ..., "cards": N, "pictures": [...], "rows": N} on success and refuses the same way; if
+writing fails it removes the pictures that run created. --record is for `build` only, --answers for `index` only.
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
@@ -36,6 +39,31 @@ The advisor's input is one JSON object; any key not listed is refused.
 An option is {id, label, consequence, sendsBack}, all required, sendsBack a boolean, ids unique within the
 item. A recommendation is {text, reason, optionId?}; optionId must name one of the item's options and is
 refused where the options are "none".
+
+`index` builds the index sheet: the questions that block work, then a row for each PR with a sheet. Its input is one
+JSON object; any key not listed is refused.
+  schema         "index-input/1".
+  questions      A list, which may be empty, of {id, question, context, options, recommendation?, pictures}: id as
+                 above and unique; question a non-empty string; context a list of sections in the shape of a
+                 card's context; options at least 1 of {id, label, consequence}, ids unique, with no sendsBack;
+                 recommendation as above; pictures a list of {path, alt, caption?}, copied beside the data file
+                 like a walk's. A question's picture whose path is a link, or cannot be read as a picture file,
+                 is refused, never shown as missing.
+  mergeOrder     A list of PR numbers with no repeat, each one a number in prs: the order the PRs merge in.
+  prs            A list, which may be empty, of {number, link, sheet, store}: number unique; link an https link
+                 that opens the PR's sheet; sheet the path to that PR's published sheet.json; store the path to
+                 that sheet's store dump. A path is absolute or relative to the input's folder. The sheet must be
+                 a pr or stack sheet whose prSheet.number is the entry's number.
+A store dump is one JSON object, {"answers": {"<card id>": doc}, "verdict": {"<digest>": doc}, "walk": {"<stop
+key>": doc}}, where each doc is a stored document as the page writes it (the shapes are $defs/answer,
+$defs/verdict and $defs/walkAnswer in theme/sheet.schema.json). A key that is missing means an empty
+collection; any other top-level key is refused. The advisor assembles it from the sheet's store. --answers
+names a file in the same shape that holds the answers to the index's own questions; only "answers" is read.
+A question that --answers answers (an option the question offers, or Something else) is left out of the index.
+
+Each row's counts and state come from pr_state() below, its title and kind from the PR's own sheet, and its
+place in the merge order from mergeOrder. Rows are listed by place in the merge order, then the rest in the
+order of prs.
 """
 from __future__ import annotations
 
@@ -55,6 +83,7 @@ if _LIB_DIR not in sys.path:
 
 import review_findings_schema as rfs  # noqa: E402
 import review_record  # noqa: E402
+import sheet_prose  # noqa: E402
 
 WORDS_PATH = os.path.join(_LIB_DIR, os.pardir, "theme", "sheet-words.json")
 _FIXED, _SHOWN_WRONG, _CRAFT, _, _RULING = rfs.OUTCOMES
@@ -75,6 +104,14 @@ _WALK, _STOP = _SCHEMA["$defs"]["walk"], _SCHEMA["$defs"]["walkStop"]
 STOP_DIGEST = int(re.search(r"\{(\d+)\}", _STOP["properties"]["key"]["pattern"]).group(1))  # the stop key's digest width, from its schema pattern
 _KINDS = tuple(_STOP["properties"]["kind"]["enum"])
 _STEPS = {a["if"]["properties"]["kind"]["const"]: a["then"]["properties"]["steps"] for a in _STOP["allOf"]}
+# The stored documents' shapes, which pr_state reads, from the same schema.
+_DEFS = _SCHEMA["$defs"]
+_ANSWER, _WALK_ANSWER, _VERDICT, _INDEX_ROW = _DEFS["answer"], _DEFS["walkAnswer"], _DEFS["verdict"], _DEFS["indexRow"]
+_REVISION = re.compile(_ANSWER["properties"]["revision"]["pattern"])
+_COVERS = re.compile(_VERDICT["properties"]["covers"]["items"]["pattern"])
+_DIGEST = re.compile(_VERDICT["properties"]["sheet"]["pattern"])
+_LINK = re.compile(_INDEX_ROW["properties"]["link"]["pattern"])
+_STORE_KEYS = ("answers", "verdict", "walk")
 
 
 def _shape(d, inferred=()):
@@ -452,6 +489,247 @@ def build(records, advisor, words, place=None):
     return {"schema": "superheroes-sheet/1", "kind": kind, "title": advisor["title"], "prSheet": sheet, "cards": cards}
 
 
+def _pr_words():
+    with open(WORDS_PATH, encoding="utf-8") as handle:
+        return json.load(handle)["pr"]
+
+
+def _fits(doc, shape):
+    """True when doc is an object with every key the schema object requires and no key it does not list."""
+    return isinstance(doc, dict) and set(shape["required"]) <= set(doc) <= set(shape["properties"])
+
+
+def _matches(pattern, value):
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+def _fits_answer(doc):
+    """True when doc is a stored card answer: the shape of $defs/answer, optionId a string exactly when the answer is option."""
+    if not (_fits(doc, _ANSWER) and doc["answer"] in _ANSWER["properties"]["answer"]["enum"] and isinstance(doc["note"], str)):
+        return False
+    if "revision" in doc and not _matches(_REVISION, doc["revision"]):
+        return False
+    return _matches(_ID, doc["optionId"]) if doc["answer"] == "option" else doc["optionId"] is None
+
+
+def _fits_walk_answer(doc):
+    """True when doc is a stored walk result: the shape of $defs/walkAnswer, a fix only on a Problem."""
+    return (_fits(doc, _WALK_ANSWER) and doc["answer"] in _WALK_ANSWER["properties"]["answer"]["enum"]
+            and (doc["fix"] is None or (isinstance(doc["fix"], str) and doc["answer"] == "problem"))
+            and isinstance(doc["note"], str)
+            and isinstance(doc["shots"], list) and all(isinstance(s, str) and s for s in doc["shots"]))
+
+
+def _fits_verdict(doc):
+    """True when doc is a stored verdict: the shape of $defs/verdict, covers present on a Merge."""
+    if not (_fits(doc, _VERDICT) and doc["verdict"] in _VERDICT["properties"]["verdict"]["enum"]
+            and isinstance(doc["note"], str) and _matches(_DIGEST, doc["sheet"])):
+        return False
+    covers = doc.get("covers")
+    if "covers" in doc and not (isinstance(covers, list) and all(_matches(_COVERS, c) for c in covers) and len(set(covers)) == len(covers)):
+        return False
+    return doc["verdict"] != "merge" or "covers" in doc
+
+
+def _counted_answer(card, doc):
+    """doc when it is a stored answer this pr or stack sheet's card offers now, else None (the card is unanswered)."""
+    if not _fits_answer(doc):
+        return None
+    if card["options"]:
+        offered = doc["answer"] == "something-else" or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in card["options"]])
+    else:
+        offered = doc["answer"] in ("accept", "discuss")
+    return doc if offered else None
+
+
+def _collection(store, key):
+    found = store.get(key) if isinstance(store, dict) else None
+    return found if isinstance(found, dict) else {}
+
+
+def pr_state(sheet_bytes, store, words=None):
+    """Where one PR's published sheet stands, from the sheet's exact bytes and its store dump.
+
+    Returns {"state", "accepted", "total", "walked", "walkTotal"}. The state is being-fixed when a counted answer
+    sends the PR back, else ready when a Merge verdict stands, else needs-you. A Merge stands only on this exact
+    sheet, with every item accepted, no walk Problem left without a follow-up fix, and a covers that names exactly
+    the answers the store holds now. words is the "pr" block of sheet-words.json, read from the file when not given.
+    """
+    words = words or _pr_words()
+    digest, sheet = hashlib.sha256(sheet_bytes).hexdigest(), json.loads(sheet_bytes)
+    cards, stops = sheet["cards"], sheet["prSheet"].get("walk", {}).get("stops", [])
+    fixes = {f["id"]: f for f in words["walkFixes"]}
+    answers, walks = _collection(store, "answers"), _collection(store, "walk")
+    counted = {card["id"]: _counted_answer(card, answers.get(card["id"])) for card in cards}
+    accepted, sends_back, blocking, walked = 0, False, False, 0
+    for card in cards:
+        doc = counted[card["id"]]
+        if doc is None:
+            continue
+        picked = next((o for o in card["options"] if o["id"] == doc["optionId"]), None)
+        accepted += doc["answer"] == "accept" or (picked is not None and picked.get("sendsBack") is False)
+        sends_back = sends_back or (picked is not None and picked.get("sendsBack") is True)
+    for stop in stops:
+        doc = walks.get(stop["key"])
+        if not (_fits_walk_answer(doc) and doc["answer"] in words["walkAnswers"][stop["kind"]] and (doc["fix"] is None or doc["fix"] in fixes)):
+            continue
+        walked += doc["answer"] in ("works", "looks-right", "problem")
+        if doc["answer"] == "problem":
+            fix = fixes.get(doc["fix"])
+            blocking = blocking or fix is None or fix.get("sendsBack") is not False
+            sends_back = sends_back or (fix is not None and fix.get("sendsBack") is True)
+    revisions = [counted[card["id"]] and counted[card["id"]].get("revision") for card in cards]
+    covered = None if not all(revisions) else {f"answers/{card['id']}@{rev}" for card, rev in zip(cards, revisions)}
+    verdict = _collection(store, "verdict").get(digest)
+    stands = (_fits_verdict(verdict) and verdict["sheet"] == digest and verdict["verdict"] == "merge"
+              and accepted == len(cards) and not blocking
+              and covered is not None and set(verdict["covers"]) == covered)
+    state = "being-fixed" if sends_back else "ready" if stands else "needs-you"
+    return {"state": state, "accepted": accepted, "total": len(cards), "walked": walked, "walkTotal": len(stops)}
+
+
+def _store(raw, where, problems):
+    """The store dump's collections, each an object ({} when the key is missing); None after naming what is wrong."""
+    if not _keys(where, raw, (), _STORE_KEYS, problems):
+        return None
+    wrong = [f"{where} {k} must be an object" for k in _STORE_KEYS if k in raw and not isinstance(raw[k], dict)]
+    problems.extend(wrong)
+    return None if wrong else {k: raw.get(k, {}) for k in _STORE_KEYS}
+
+
+def _check_index_input(adv, problems):
+    """Collects the index input's problems."""
+    _keys("the index input", adv, ("schema", "questions", "mergeOrder", "prs"), (), problems)
+    if adv.get("schema") != "index-input/1":
+        problems.append("the index input schema must be index-input/1")
+    questions, ids = adv.get("questions"), []
+    if not isinstance(questions, list):
+        problems.append("questions must be a list")
+    for n, q in enumerate(questions if isinstance(questions, list) else [], 1):
+        where = f"questions entry {n}"
+        if not _keys(where, q, ("id", "question", "context", "options", "pictures"), ("recommendation",), problems):
+            continue
+        if not _matches(_ID, q["id"]):
+            problems.append(f"{where} needs an id of lowercase letters, digits and hyphens")
+        elif q["id"] in ids:
+            problems.append(f"{where} repeats the id {q['id']}")
+        ids.append(q["id"])
+        where = f"question {q['id']}"
+        if not _text(q["question"]):
+            problems.append(f"{where} needs a non-empty question")
+        if not isinstance(q["context"], list):
+            problems.append(f"{where} needs context to be a list of sections")
+        options = _check_list(f"{where}: options", q["options"], ("id", "label", "consequence"), (), problems)
+        if isinstance(q["options"], list) and not q["options"]:
+            problems.append(f"{where} needs at least one option")
+        rec = q.get("recommendation")
+        if "recommendation" in q and _keys(f"{where}: recommendation", rec, ("text", "reason"), ("optionId",), problems):
+            if not (_text(rec["text"]) and _text(rec["reason"])):
+                problems.append(f"{where}: recommendation needs a text and a reason")
+            if "optionId" in rec and rec["optionId"] not in [o["id"] for o in options]:
+                problems.append(f"{where}: recommendation optionId {rec['optionId']!r} is not one of its options")
+        if not isinstance(q["pictures"], list):
+            problems.append(f"{where} needs pictures to be a list")
+        for m, pic in enumerate(q["pictures"] if isinstance(q["pictures"], list) else [], 1):
+            if _keys(f"{where} picture {m}", pic, ("path", "alt"), ("caption",), problems) and not all(_text(pic[k]) for k in pic):
+                problems.append(f"{where} picture {m} needs a non-empty path and alt, and a non-empty caption when it has one")
+    prs, numbers = adv.get("prs"), []
+    if not isinstance(prs, list):
+        problems.append("prs must be a list")
+    for n, p in enumerate(prs if isinstance(prs, list) else [], 1):
+        where = f"prs entry {n}"
+        if not _keys(where, p, ("number", "link", "sheet", "store"), (), problems):
+            continue
+        if not _num(p["number"]):
+            problems.append(f"{where} needs number, an integer 1 or more")
+        elif p["number"] in numbers:
+            problems.append(f"{where} repeats the number {p['number']}")
+        numbers.append(p["number"])
+        if not _matches(_LINK, p["link"]):
+            problems.append(f"{where} needs link to be an https link")
+        problems.extend(f"{where} needs {k} to be a path" for k in ("sheet", "store") if not _text(p[k]))
+    order = adv.get("mergeOrder")
+    if not isinstance(order, list):
+        problems.append("mergeOrder must be a list")
+    for n in order if isinstance(order, list) else []:
+        if not _num(n):
+            problems.append(f"mergeOrder entry {n!r} must be an integer 1 or more")
+        elif n not in numbers:
+            problems.append(f"mergeOrder names PR #{n}, which is not in prs")
+    if isinstance(order, list) and len(set(map(repr, order))) != len(order):
+        problems.append("mergeOrder names a PR more than once")
+
+
+def _index_row(entry, base, order, words, problems):
+    """The index row for one PR entry, read from its sheet and store files; None after naming what is wrong."""
+    where = f"PR #{entry['number']}"
+    try:
+        sheet_bytes = pathlib.Path(base, entry["sheet"]).read_bytes()
+        sheet = json.loads(sheet_bytes)
+    except (OSError, ValueError) as err:
+        problems.append(f"{where}: {entry['sheet']} could not be read as JSON: {err}")
+        return None
+    found = sheet_prose.check_sheet(sheet)
+    if not found and sheet["kind"] not in sheet_prose.PR_KINDS:
+        found = [f"it is a {sheet['kind']} sheet, not a pr or stack sheet"]
+    elif not found and sheet["prSheet"]["number"] != entry["number"]:
+        found = [f"its prSheet.number is {sheet['prSheet']['number']}, not {entry['number']}"]
+    problems.extend(f"{where}: {entry['sheet']}: {p}" for p in found)
+    store_problems = []
+    raw = _load(pathlib.Path(base, entry["store"]), store_problems)
+    store = None if store_problems else _store(raw, f"{where} store {entry['store']}", store_problems)
+    problems.extend(store_problems)
+    if found or store is None:
+        return None
+    return {"number": entry["number"], "kind": sheet["kind"], "title": sheet["title"], "link": entry["link"],
+            **pr_state(sheet_bytes, store, words["pr"]),
+            "mergesAt": order.index(entry["number"]) + 1 if entry["number"] in order else None}
+
+
+def _answered(question, doc):
+    """True when doc is an answer the question offers: one of its options, or Something else."""
+    return _fits_answer(doc) and (doc["answer"] == "something-else"
+                                  or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in question["options"]]))
+
+
+def build_index(advisor, base, answers, words, place):
+    """Returns the index sheet as a dict, or raises Refusal with every problem found.
+
+    base is the folder the input's paths are relative to; answers is the --answers file's parsed content ({} when
+    there is none); words is the whole words file; place is the picture stager for the questions left on the index.
+    """
+    problems = []
+    if not isinstance(advisor, dict):
+        raise Refusal(["the index input must be an object"])
+    _check_index_input(advisor, problems)
+    given = _store(answers, "the answers file", problems)
+    if problems:
+        raise Refusal(problems)
+    rows = [_index_row(p, base, advisor["mergeOrder"], words, problems) for p in advisor["prs"]]
+    probe, cards = _stager(base, {}), []
+    for q in advisor["questions"]:
+        kept = not _answered(q, given["answers"].get(q["id"]))
+        images = []
+        for n, pic in enumerate(q["pictures"], 1):
+            src = (place if kept else probe)(pic["path"])
+            if src is None:
+                problems.append(f"question {q['id']} picture {n} ({pic['path']}) is a link, or cannot be read as a png, jpg, jpeg, gif or webp file")
+            images.append({"src": src, "alt": pic["alt"], **({"caption": pic["caption"]} if "caption" in pic else {})})
+        if kept:
+            card = {"id": q["id"], "callKind": words["index"]["questionKind"], "warning": True, "question": q["question"],
+                    "context": copy.deepcopy(q["context"]), "images": images,
+                    "options": [{k: o[k] for k in ("id", "label", "consequence")} for o in q["options"]]}
+            cards.append({**card, **({"recommendation": copy.deepcopy(q["recommendation"])} if "recommendation" in q else {})})
+    if problems:
+        raise Refusal(problems)
+    rows.sort(key=lambda r: (r["mergesAt"] is None, r["mergesAt"] or 0))
+    sheet = {"schema": "superheroes-sheet/1", "kind": "index", "title": words["index"]["title"], "index": {"rows": rows}, "cards": cards}
+    found = sheet_prose.check_sheet(sheet)
+    if found:
+        raise Refusal(found)
+    return sheet
+
+
 def _load(path, problems):
     try:
         return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
@@ -500,18 +778,30 @@ def _write_pictures(folder, staged, created):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Build a PR sheet's data file.")
-    parser.add_argument("command", choices=["build"])
-    parser.add_argument("--record", action="append", required=True)
+    parser = argparse.ArgumentParser(description="Build a PR sheet's data file, or the index's.")
+    parser.add_argument("command", choices=["build", "index"])
+    parser.add_argument("--record", action="append")
+    parser.add_argument("--answers")
     parser.add_argument("--input", required=True)
     parser.add_argument("--out", required=True)
     args, problems = parser.parse_args(argv), []
+    if args.command == "build" and not args.record:
+        parser.error("the following arguments are required: --record")
+    if args.command == "build" and args.answers:
+        parser.error("--answers is only for index")
+    if args.command == "index" and args.record:
+        parser.error("--record is only for build")
     try:
-        loaded = [_load(p, problems) for p in [*args.record, args.input, WORDS_PATH]]
+        paths = [*args.record, args.input, WORDS_PATH] if args.command == "build" else [args.input, WORDS_PATH, *([args.answers] if args.answers else [])]
+        loaded = [_load(p, problems) for p in paths]
         if problems:
             raise Refusal(problems)
-        staged, created, folder = {}, [], pathlib.Path(args.out).parent
-        sheet = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(pathlib.Path(args.input).parent, staged))
+        staged, created, folder, base = {}, [], pathlib.Path(args.out).parent, pathlib.Path(args.input).parent
+        if args.command == "build":
+            sheet, extra = build(loaded[:-2], loaded[-2], loaded[-1]["pr"], _stager(base, staged)), {}
+        else:
+            sheet = build_index(loaded[0], base, loaded[2] if args.answers else {}, loaded[1], _stager(base, staged))
+            extra = {"rows": len(sheet["index"]["rows"])}
         fresh = not (folder / "pictures").exists()
         try:
             _write_pictures(folder, staged, created)
@@ -523,7 +813,7 @@ def main(argv=None):
                 with contextlib.suppress(OSError):
                     (folder / "pictures").rmdir()
             raise
-        result, code = {"ok": True, "out": args.out, "cards": len(sheet["cards"]), "pictures": sorted(staged)}, 0
+        result, code = {"ok": True, "out": args.out, "cards": len(sheet["cards"]), "pictures": sorted(staged), **extra}, 0
     except (Refusal, OSError) as err:
         result, code = {"ok": False, "problems": err.problems if isinstance(err, Refusal) else [str(err)]}, 1
     print(json.dumps(result, ensure_ascii=False))

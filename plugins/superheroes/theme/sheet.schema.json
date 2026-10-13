@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Review sheet data file",
-  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids; stop ids are unique within the walk.",
+  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind: the remainder block, the final block, or the prSheet block of a sheet for one PR or for a stack of PRs that merges whole, or the index block of the index that lists every PR waiting on the owner. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids; stop ids are unique within the walk; row numbers are unique within the index.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "kind", "title", "cards"],
@@ -12,9 +12,9 @@
       "const": "superheroes-sheet/1"
     },
     "kind": {
-      "description": "Which sheet this is: a remainder sheet for a review that left findings unsettled, a final sheet for a finished review, a plain sheet with only cards, a pr sheet for one PR, or a stack sheet for one sheet over a stack of PRs that merges whole.",
+      "description": "Which sheet this is: a remainder sheet for a review that left findings unsettled, a final sheet for a finished review, a plain sheet with only cards, a pr sheet for one PR, a stack sheet for one sheet over a stack of PRs that merges whole, or an index that lists the questions that block work and every PR waiting on the owner.",
       "type": "string",
-      "enum": ["remainder", "final", "plain", "pr", "stack"]
+      "enum": ["remainder", "final", "plain", "pr", "stack", "index"]
     },
     "title": {
       "description": "The review's name, shown in the app bar.",
@@ -125,8 +125,12 @@
       "description": "The summary of one PR, or of a stack of PRs that merges whole, present only on a pr sheet or a stack sheet.",
       "$ref": "#/$defs/prSheet"
     },
+    "index": {
+      "description": "The list of PRs waiting on the owner, present only on an index.",
+      "$ref": "#/$defs/index"
+    },
     "cards": {
-      "description": "The calls the owner has to make, one card each. A remainder sheet or a plain sheet has at least one; a final sheet, a pr sheet or a stack sheet may have none when the review left no calls.",
+      "description": "The calls the owner has to make, one card each. A remainder sheet or a plain sheet has at least one; a final sheet, a pr sheet, a stack sheet or an index may have none when there are no calls left.",
       "type": "array",
       "items": {"$ref": "#/$defs/card"}
     }
@@ -174,9 +178,55 @@
       "description": "A remainder sheet or a plain sheet must have at least one card.",
       "if": {"properties": {"kind": {"enum": ["remainder", "plain"]}}, "required": ["kind"]},
       "then": {"properties": {"cards": {"minItems": 1}}}
+    },
+    {
+      "description": "An index must carry the index block and must carry none of the remainder block, the final block and the prSheet block.",
+      "if": {"properties": {"kind": {"const": "index"}}, "required": ["kind"]},
+      "then": {"required": ["index"], "not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}, {"required": ["prSheet"]}]}}
+    },
+    {
+      "description": "Every sheet but an index must not carry the index block.",
+      "if": {"properties": {"kind": {"enum": ["remainder", "final", "plain", "pr", "stack"]}}, "required": ["kind"]},
+      "then": {"not": {"required": ["index"]}}
+    },
+    {
+      "description": "On an index, every card is a question with options and no option sends anything back.",
+      "if": {"properties": {"kind": {"const": "index"}}, "required": ["kind"]},
+      "then": {"properties": {"cards": {"items": {"properties": {"options": {"minItems": 1, "items": {"not": {"required": ["sendsBack"]}}}}}}}}
     }
   ],
   "$defs": {
+    "index": {
+      "description": "The list of PRs waiting on the owner: one row for each, which may be none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rows"],
+      "properties": {
+        "rows": {
+          "description": "The rows of the index, in the order shown within each state.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/indexRow"}
+        }
+      }
+    },
+    "indexRow": {
+      "description": "One PR, or one stack, on the index, with the counts the row's caption shows.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "kind", "title", "link", "state", "accepted", "total", "walked", "walkTotal", "mergesAt"],
+      "properties": {
+        "number": {"description": "The PR's number, or the stack's number.", "type": "integer", "minimum": 1},
+        "kind": {"description": "Whether the row is one PR or a stack that merges whole.", "enum": ["pr", "stack"]},
+        "title": {"description": "The title of the PR's sheet.", "type": "string", "minLength": 1},
+        "link": {"description": "The link that opens the PR's sheet, which must be an https link.", "type": "string", "pattern": "^https://\\S+$"},
+        "state": {"description": "Where the PR stands: needs-you when it waits on the owner, being-fixed when it has gone back for a fix, ready when the owner has given a merge verdict.", "enum": ["needs-you", "being-fixed", "ready"]},
+        "accepted": {"description": "How many of the sheet's items are accepted.", "type": "integer", "minimum": 0},
+        "total": {"description": "How many items the sheet has.", "type": "integer", "minimum": 0},
+        "walked": {"description": "How many of the sheet's walk stops have a result.", "type": "integer", "minimum": 0},
+        "walkTotal": {"description": "How many walk stops the sheet has.", "type": "integer", "minimum": 0},
+        "mergesAt": {"description": "The place of the PR in the merge order, counting from 1, or null when it has none.", "type": ["integer", "null"], "minimum": 1}
+      }
+    },
     "commit": {
       "description": "A git commit id in lowercase hex, from seven to forty characters.",
       "type": "string",
@@ -445,6 +495,11 @@
         "note": {
           "description": "The owner's note on the card, an empty string when there is none.",
           "type": "string"
+        },
+        "revision": {
+          "description": "A fresh random value written with every save on a pr sheet or a stack sheet, so a Merge can name exactly the answers it was given for; other sheets never write it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
         }
       },
       "allOf": [
@@ -505,8 +560,21 @@
           "description": "The sheet revision this verdict belongs to: the SHA-256, in lowercase hex, of the exact bytes of the published sheet.json as the page fetched them. It equals <digest> in the document's path. A document whose digest differs from the current file's is not a verdict on this sheet.",
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "covers": {
+          "description": "On a pr sheet or a stack sheet, the answers a Merge was given for, one answers/<card id>@<revision> for each card. A Merge whose covers differs from the card answers the store holds now is not a Merge.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^answers/[a-z0-9][a-z0-9-]*@[0-9a-f]{16}$"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "description": "A Merge must name the answers it was given for.",
+          "if": {"properties": {"verdict": {"const": "merge"}}, "required": ["verdict"]},
+          "then": {"required": ["covers"]}
+        }
+      ]
     },
     "verdictsByKind": {
       "description": "Which verdicts each kind of sheet offers on its last card, in button order, by the sheet's kind. The page builds its verdict buttons from this list and restores a stored verdict only when its own kind offers it; a stored verdict outside its kind's list restores only its note. A remainder sheet or a plain sheet has no verdict. This is not part of the data file: no property of the sheet refers to it.",

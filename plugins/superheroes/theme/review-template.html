@@ -119,7 +119,8 @@
   // these in a form the reader does not implement, is refused whole before any sheet is checked, so
   // a sheet is never drawn against a rule this page cannot check. The rest is authored here
   // because a schema cannot express it: unique card ids, unique option ids within a card,
-  // unsettled ids that name real cards, and a recommendation that names one of its card's options.
+  // unsettled ids that name real cards, a recommendation that names one of its card's options, and unique
+  // index row numbers.
   const READ_RULES = [
     "type", "const", "enum", "minLength", "minimum", "minItems", "uniqueItems", "pattern", "required",
     "properties", "additionalProperties", "items", "$ref", "allOf", "if", "then", "not", "anyOf",
@@ -464,6 +465,17 @@
         }
       });
     }
+
+    const rowNumbers = new Set();
+    const reportedRows = new Set();
+    ((isObject(sheet.index) && Array.isArray(sheet.index.rows)) ? sheet.index.rows : []).forEach((row) => {
+      if (!isObject(row)) return;
+      if (rowNumbers.has(row.number) && !reportedRows.has(row.number)) {
+        reportedRows.add(row.number);
+        problems.push("Two index rows share the number " + row.number + ".");
+      }
+      rowNumbers.add(row.number);
+    });
 
     return problems;
   }

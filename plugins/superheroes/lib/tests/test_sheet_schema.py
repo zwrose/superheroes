@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+import sheet_prose
 from provenance_patterns import PROVENANCE_PATTERNS
 
 THEME = Path(__file__).resolve().parents[2] / "theme"
@@ -582,20 +583,24 @@ def without_descriptions(node):
 
 
 def with_pr_values(name, node):
-    """The base copy of an answer or verdict definition with the values layer 1b added to it."""
+    """The base copy of an answer or verdict definition with the additions the pr and stack sheets made to it."""
     if name == "answer":
         node["properties"]["answer"]["enum"].insert(-1, "accept")
         for part in node["allOf"]:
             if "enum" in part["if"]["properties"]["answer"]:
                 part["if"]["properties"]["answer"]["enum"].insert(-1, "accept")
+        node["properties"]["revision"] = {"type": "string", "pattern": "^[0-9a-f]{16}$"}
     else:
         node["properties"]["verdict"]["enum"].insert(node["properties"]["verdict"]["enum"].index("approve") + 1, "merge")
+        node["properties"]["covers"] = {"type": "array", "uniqueItems": True,
+                                        "items": {"type": "string", "pattern": "^answers/[a-z0-9][a-z0-9-]*@[0-9a-f]{16}$"}}
+        node["allOf"] = [{"if": {"properties": {"verdict": {"const": "merge"}}, "required": ["verdict"]}, "then": {"required": ["covers"]}}]
     return node
 
 
 @pytest.mark.parametrize("name", ["answer", "verdict"])
 def test_answer_and_verdict_definitions_differ_from_the_base_only_by_the_pr_values(name):
-    # Axis: apart from their descriptions, the answer and verdict documents equal the base commit's with only accept (before null, in both answer enums) and merge (after approve) added, because the page's readers still own them.
+    # Axis: apart from their descriptions, the answer and verdict documents equal the base commit's with only accept (before null, in both answer enums), the optional revision on an answer, merge (after approve), and on a verdict the optional covers with the rule that a Merge has it added, because the page's readers still own them.
     base = subprocess.run(["git", "show", "%s:%s" % (BASE_COMMIT, SCHEMA_IN_REPO)], cwd=THEME,
                           capture_output=True, text=True, check=True).stdout
     expected = with_pr_values(name, without_descriptions(json.loads(base)["$defs"][name]))
@@ -616,7 +621,8 @@ def test_accept_answer_with_an_option_is_refused():
 def test_merge_is_a_valid_verdict():
     # Axis: a pr sheet or a stack sheet stores merge at verdict/<digest> like the final sheet stores approve, and the verdict list is approve, merge, not-yet, null.
     digest = "a" * 64
-    assert document_errors("verdict", {"verdict": "merge", "note": "", "sheet": digest}) == []
+    assert document_errors("verdict", {"verdict": "merge", "note": "", "sheet": digest, "covers": []}) == []
+    assert document_errors("verdict", {"verdict": "merge", "note": "", "sheet": digest}) != []
     assert load_schema()["$defs"]["verdict"]["properties"]["verdict"]["enum"] == ["approve", "merge", "not-yet", None]
 
 
@@ -746,3 +752,157 @@ def test_walk_answer_documents_are_accepted(document):
 def test_walk_answer_documents_are_refused(document):
     # Axis: a fix on anything but a Problem, an unknown answer or fix, a missing or extra member and an empty screenshot id are refused.
     assert document_errors("walkAnswer", document) != []
+
+
+# --- the index, the answer revision and the Merge's covers ---
+
+def index_row(**more):
+    return {"number": 214, "kind": "pr", "title": "Retry a failed payment", "link": "https://sheets.example.test/pr-214",
+            "state": "needs-you", "accepted": 1, "total": 2, "walked": 0, "walkTotal": 3, "mergesAt": 1, **more}
+
+
+def index_sheet():
+    options = [{"id": "keep-visible", "label": "Keep them visible", "consequence": "Support can look up an old order."},
+               {"id": "hide-them", "label": "Hide them", "consequence": "A refund needs an engineer."}]
+    return {"schema": "superheroes-sheet/1", "kind": "index", "title": "Waiting on you",
+            "index": {"rows": [index_row(), index_row(number=4, kind="stack", state="ready", mergesAt=None)]},
+            "cards": [pr_card("old-orders", options)]}
+
+
+def test_an_index_validates_on_all_three_readers():
+    # Axis: a well-formed index, and one with no questions or no rows, is accepted by the schema, the page's check and the prose renderer's check.
+    empty_rows, no_cards = index_sheet(), index_sheet()
+    empty_rows["index"]["rows"] = []
+    no_cards["cards"] = []
+    for sheet in (index_sheet(), empty_rows, no_cards):
+        assert errors_for(sheet) == [] and check_sheet_problems(sheet) == [] and sheet_prose.check_sheet(sheet) == []
+
+
+def with_prs_block(sheet):
+    sheet["prSheet"] = pr_body()
+
+
+def with_remainder_block(sheet):
+    sheet["remainder"] = {"roundsRun": 1, "fixesMade": 1, "unsettled": []}
+
+
+def with_final_block(sheet):
+    sheet["final"] = final_sheet()["final"]
+
+
+def set_row(**more):
+    return lambda sheet: sheet["index"]["rows"][0].update(more)
+
+
+def pr_with_index(sheet):
+    sheet["index"] = {"rows": []}
+
+
+INDEX_RED_FIXTURES = [
+    ("index-without-index", index_sheet, lambda s: s.pop("index")),
+    ("index-with-pr-sheet", index_sheet, with_prs_block),
+    ("index-with-remainder", index_sheet, with_remainder_block),
+    ("index-with-final", index_sheet, with_final_block),
+    ("pr-sheet-with-index", pr_sheet, pr_with_index),
+    ("stack-sheet-with-index", stack_sheet, pr_with_index),
+    ("plain-with-index", index_sheet, lambda s: s.__setitem__("kind", "plain")),
+    ("index-card-without-options", index_sheet, lambda s: s["cards"][0].__setitem__("options", [])),
+    ("index-option-with-sends-back", index_sheet, lambda s: s["cards"][0]["options"][0].__setitem__("sendsBack", False)),
+    ("index-unknown-field", index_sheet, lambda s: s["index"].__setitem__("extra", 1)),
+    ("index-without-rows", index_sheet, lambda s: s["index"].pop("rows")),
+    ("row-bad-state", index_sheet, set_row(state="waiting")),
+    ("row-http-link", index_sheet, set_row(link="http://sheets.example.test/pr-214")),
+    ("row-link-with-a-space", index_sheet, set_row(link="https://sheets.example.test/a b")),
+    ("row-relative-link", index_sheet, set_row(link="sheets/pr-214")),
+    ("row-negative-count", index_sheet, set_row(accepted=-1)),
+    ("row-negative-walk-total", index_sheet, set_row(walkTotal=-1)),
+    ("row-fractional-count", index_sheet, set_row(total=1.5)),
+    ("row-number-zero", index_sheet, set_row(number=0)),
+    ("row-merges-at-zero", index_sheet, set_row(mergesAt=0)),
+    ("row-bad-kind", index_sheet, set_row(kind="plain")),
+    ("row-empty-title", index_sheet, set_row(title="")),
+    ("row-unknown-field", index_sheet, set_row(extra=1)),
+    ("row-missing-field", index_sheet, lambda s: s["index"]["rows"][0].pop("mergesAt")),
+]
+
+
+@pytest.mark.parametrize("build, change", [(b, c) for _, b, c in INDEX_RED_FIXTURES], ids=[n for n, _, _ in INDEX_RED_FIXTURES])
+def test_index_red_fixtures_are_refused_by_all_three_readers(build, change):
+    # Axis: each way of breaking the index's kind rules, its question cards or its rows is refused by the schema, the page's check and the prose renderer's check.
+    sheet = pr_mutated(change, build)
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+    assert sheet_prose.check_sheet(sheet) != []
+
+
+def test_the_kind_rules_name_the_index_beside_the_others():
+    # Axis: the kind list ends with index, and its description names the index.
+    kind = load_schema()["properties"]["kind"]
+    assert kind["enum"] == ["remainder", "final", "plain", "pr", "stack", "index"] and "index" in kind["description"]
+    assert "index" in load_schema()["properties"]["cards"]["description"]
+
+
+def test_repeated_index_row_numbers_are_refused_by_the_prose_check():
+    # Axis: the rule the schema cannot express is named in its description and refused once the sheet fits it.
+    twice = index_sheet()
+    twice["index"]["rows"][1]["number"] = 214
+    assert errors_for(twice) == []
+    assert sheet_prose.check_sheet(twice) == ["Index row number 214 is used more than once."]
+    assert "row numbers are unique within the index" in load_schema()["description"]
+
+
+REVISION = "0123456789abcdef"
+
+
+@pytest.mark.parametrize("revision", [REVISION, "f" * 16])
+def test_an_answer_may_carry_a_revision(revision):
+    # Axis: a stored answer may hold a 16-character lowercase-hex revision beside answer, optionId and note.
+    assert document_errors("answer", {"answer": "accept", "optionId": None, "note": "", "revision": revision}) == []
+
+
+@pytest.mark.parametrize("revision", ["", "XYZ", "0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "0123456789abcdeg", None, 5])
+def test_a_malformed_revision_is_refused(revision):
+    # Axis: a revision that is empty, upper case, short, long, non-hex, null or not a string is refused.
+    assert document_errors("answer", {"answer": "accept", "optionId": None, "note": "", "revision": revision}) != []
+
+
+def test_an_answer_without_a_revision_stays_valid():
+    # Axis: discovery's stored answers carry no revision and still fit, because revision is optional.
+    schema = load_schema()["$defs"]["answer"]
+    assert "revision" in schema["properties"] and "revision" not in schema["required"]
+    assert document_errors("answer", {"answer": "aligned", "optionId": None, "note": ""}) == []
+
+
+COVERS = [f"answers/leftover@{REVISION}", f"answers/closure-1@{REVISION}"]
+
+
+def merge_document(**more):
+    return {"verdict": "merge", "note": "", "sheet": "a" * 64, **more}
+
+
+def test_a_merge_names_the_answers_it_was_given_for():
+    # Axis: a Merge needs covers (which may be empty on a sheet with nothing to accept); Not yet, Approve and a cleared verdict need none.
+    assert document_errors("verdict", merge_document()) != []
+    assert document_errors("verdict", merge_document(covers=COVERS)) == []
+    assert document_errors("verdict", merge_document(covers=[])) == []
+    for verdict in ("not-yet", "approve", None):
+        assert document_errors("verdict", {"verdict": verdict, "note": "", "sheet": "a" * 64}) == []
+        assert document_errors("verdict", {"verdict": verdict, "note": "", "sheet": "a" * 64, "covers": COVERS}) == []
+
+
+@pytest.mark.parametrize("covers", [
+    ["leftover@" + REVISION], ["answers/leftover"], ["answers/leftover@" + REVISION[:-1]], ["answers/leftover@" + REVISION.upper()],
+    ["answers/Leftover@" + REVISION], ["answers/@" + REVISION], ["answers/leftover@" + REVISION + "0"], [REVISION], [5], [None],
+    [COVERS[0], COVERS[0]], "answers/leftover@" + REVISION, None, {"answers/leftover": REVISION},
+], ids=["no-prefix", "no-revision", "short", "upper", "upper-id", "no-id", "long", "bare-revision", "number", "null", "repeat", "string", "null-covers", "object"])
+def test_malformed_covers_are_refused(covers):
+    # Axis: covers that is not a list of unique answers/<card id>@<16 hex> strings is refused.
+    assert document_errors("verdict", merge_document(covers=covers)) != []
+
+
+@pytest.mark.parametrize("sample", sorted(p.name for p in THEME.glob("sample-*.json")))
+def test_every_shipped_sample_passes_the_prose_renderers_check(sample):
+    # Axis: each sample the plugin ships still fits the schema and the cross-field rules as sheet_prose reads them.
+    sheet = json.loads((THEME / sample).read_text(encoding="utf-8"))
+    assert sheet_prose.check_sheet(sheet) == []
+    assert errors_for(sheet) == []

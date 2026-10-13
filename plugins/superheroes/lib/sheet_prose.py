@@ -2,9 +2,9 @@
 """Render a review sheet's data file as numbered chat prose, for a host that can't show the sheet.
 
 Reads the same `sheet.json` the page draws and prints each card as a numbered item with its context,
-options and recommendation; a final sheet also prints its history, declined findings and approval. It checks the
-file against sheet.schema.json, read at run time by a small reader of the keywords that schema uses, plus the
-schema's four cross-field rules. A schema that uses a keyword the reader doesn't enforce is refused whole. It uses
+options and recommendation; a final sheet also prints its history, declined findings and approval, and an index
+prints its questions and then its PRs by state. It checks the file against sheet.schema.json, read at run time by a
+small reader of the keywords that schema uses, plus the schema's cross-field rules. A schema that uses a keyword the reader doesn't enforce is refused whole. It uses
 the standard library only, so it runs under a plain python3.
 It refuses a data file it can't trust: one problem per line on stderr, nothing on stdout, exit 1.
 """
@@ -34,6 +34,7 @@ NEXT = WORDS["next"]
 ANSWERS = WORDS["answers"]
 PR = WORDS["pr"]
 PR_ANSWERS = WORDS["prAnswers"]
+INDEX = WORDS["index"]
 
 PR_KINDS = ("pr", "stack")
 
@@ -276,7 +277,9 @@ def _check_cross_fields(sheet):
         if picked is not None and picked not in option_ids:
             problems.append('Card "%s" recommends option "%s", which is not one of its options.' % (card["id"], picked))
     unsettled = sheet.get("remainder", {}).get("unsettled", [])
-    return problems + ['remainder.unsettled names "%s", which is not a card.' % i for i in unsettled if i not in card_ids]
+    problems += ['remainder.unsettled names "%s", which is not a card.' % i for i in unsettled if i not in card_ids]
+    rows = sheet.get("index", {}).get("rows", [])
+    return problems + ['Index row number %d is used more than once.' % n for n in _duplicates([row["number"] for row in rows])]
 
 
 def check_sheet(sheet):
@@ -493,8 +496,55 @@ def _pr_body(sheet):
     return lines + ["**%s**" % PR["verdictHeading"], "", _fill(PR["verdictInChat"], choices=choices, merge=merge), ""]
 
 
+def row_caption(row, words=INDEX):
+    """The line under an index row's name: what is accepted, what is walked, then where the PR stands. The page keeps its own copy."""
+    parts = [_fill(words["accepted"], accepted=str(row["accepted"]), total=str(row["total"])) if row["total"] else words["nothingToAccept"]]
+    if row["walkTotal"] > 0:
+        parts.append(_fill(words["walked"], walked=str(row["walked"]), total=str(row["walkTotal"])))
+    if row["state"] == "being-fixed":
+        parts.append(words["beingFixed"])
+    elif row["state"] == "ready":
+        parts.append(words["ready"])
+    elif row["mergesAt"] is not None:
+        place, ordinals = row["mergesAt"], words["ordinals"]
+        parts.append(_fill(words["mergesAt"], ordinal=ordinals[place - 1]) if place <= len(ordinals) else _fill(words["mergesAtNumber"], place=str(place)))
+    return " · ".join(parts)
+
+
+def _index_body(sheet):
+    """An index's prose after its title line: the questions that block work, then the PRs by state, then the done line."""
+    cards, rows = sheet["cards"], sheet["index"]["rows"]
+    lines = ["**%s**" % INDEX["blocksHeading"], ""]
+    if not cards:
+        lines += [INDEX["nothingBlocking"], ""]
+    for number, card in enumerate(cards, 1):
+        lines += _render_card(number, card) + [""]
+    lines += [INDEX["firstAnswerCounts"], ""]
+    for state, heading in INDEX["groups"].items():
+        grouped = [row for row in rows if row["state"] == state]
+        if grouped:
+            lines += ["**%s**" % heading, ""]
+            for row in grouped:
+                label = _fill(INDEX["rowStack" if row["kind"] == "stack" else "rowPr"], number=str(row["number"]), title=_text(row["title"]))
+                lines.append("- %s — %s — %s" % (label, row_caption(row), _text(row["link"])))
+            lines.append("")
+    return lines + [INDEX["done"], ""]
+
+
+def _index_count(sheet):
+    """The count the index's title line carries: its questions while any are left, else how many PRs need the owner."""
+    cards = sheet["cards"]
+    if cards:
+        return INDEX["questionsOne"] if len(cards) == 1 else _fill(INDEX["questionsMany"], count=str(len(cards)))
+    needing = sum(row["state"] == "needs-you" for row in sheet["index"]["rows"])
+    return _fill(INDEX["needYou"], count=str(needing)) if needing else INDEX["nothingNeedsYou"]
+
+
 def render(sheet):
     """The sheet's prose as one string; the sheet must already have passed check_sheet."""
+    if sheet["kind"] == "index":
+        lines = ["**%s**: %s." % (_text(sheet["title"]), _index_count(sheet)), ""] + _index_body(sheet)
+        return "\n".join(line.rstrip() for line in lines[:-1]) + "\n"
     cards = sheet["cards"]
     lines = ["**%s**: %s for you." % (_text(sheet["title"]), _plural(len(cards), "item")), ""]
     if sheet["kind"] == "remainder":
