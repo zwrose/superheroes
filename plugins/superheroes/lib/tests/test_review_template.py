@@ -458,19 +458,21 @@ if (host.claude !== "missing") {
         });
       }
       if (name === "assets") {
-        // Absent: no picture store. "use-rejects": asking for it fails. "no-upload": a store that cannot upload.
-        // "ok" resolves each upload with the next asset, "reject" fails it, "hold" leaves it for the scenario to settle.
+        // The runtime's documented contract: a reader gets null. upload(blob) resolves {id: opaque 32-char string, url: "/_blob/<id>", sizeBytes, contentType}
+        // and fails with {code, message}. Absent: no picture store. "use-rejects": asking fails. "no-upload": a store that cannot upload.
+        // "ok" resolves each upload, "hold" leaves it for the scenario to settle, "reject" or any documented failure code rejects with that code.
+        const codes = ["invalid_request", "too_large", "unsupported_type", "quota_or_state", "rate_limited", "upstream_auth", "capability_disabled", "store_unavailable", "upstream_error", "not_granted"];
         if (host.assets === "use-rejects") return Promise.reject(new Error("no assets"));
-        if (host.assets === undefined) return Promise.resolve(null);
+        if (host.assets === undefined || host.user !== "owner") return Promise.resolve(null);
         if (host.assets === "no-upload") return Promise.resolve({});
         return Promise.resolve({
           upload: (file) => {
             const call = deferred();
             call.file = file;
             uploadLog.push(call);
-            const id = "asset-" + uploadLog.length;
-            if (host.assets === "ok") call.resolve({ id: id, url: "https://assets.example/" + id + ".png", sizeBytes: 12, contentType: "image/png" });
-            if (host.assets === "reject") call.reject({ code: "upstream_error" });
+            const id = "a1b2c3d4e5f60718293a4b5c" + String(uploadLog.length).padStart(8, "0");
+            if (host.assets === "ok") call.resolve({ id: id, url: "/_blob/" + id, sizeBytes: 12, contentType: "image/png" });
+            if (host.assets === "reject" || codes.includes(host.assets)) call.reject({ code: host.assets === "reject" ? "upstream_error" : host.assets, message: "upload failed" });
             return call.promise;
           },
         });

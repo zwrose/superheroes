@@ -2285,6 +2285,8 @@
       ready = true;
       syncControls();
       gate.hidden = true;
+      // A walk whose answers the schema cannot hold stays off, and the line says so.
+      if (walkStops.length > 0 && walkRule === null) say(SAY.noStore, false);
       // The owner lands on the first call still waiting for an answer, or on the first when none is.
       const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
       openIndex = waiting === -1 ? 0 : waiting;

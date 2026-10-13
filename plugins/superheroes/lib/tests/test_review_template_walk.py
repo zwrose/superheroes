@@ -19,6 +19,10 @@ from test_review_template_pr import PW, WORDS, _accepted_answers, _entry_lines, 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
 READ_FAILED = "Your saved answers couldn't be loaded."
+NO_STORE = "Answers can't be saved in this view."
+# The ids the fake picture store hands out: the runtime's opaque 32-character id, never the url.
+SHOT_1 = "a1b2c3d4e5f60718293a4b5c00000001"
+SHOT_2 = "a1b2c3d4e5f60718293a4b5c00000002"
 
 
 def _load(name):
@@ -429,7 +433,7 @@ def test_a_schema_without_the_walk_answer_rule_leaves_the_walk_off_and_writes_no
     schema = json.loads((Path(pr_sheet.__file__).resolve().parents[1] / "theme" / "sheet.schema.json").read_text(encoding="utf-8"))
     del schema["$defs"]["walkAnswer"]
     page = _page(WALK_SHEET, WALK + """
-      const out = { off: walkControls().map((node) => node.disabled), pick: pickOf("p1").disabled };
+      const out = { off: walkControls().map((node) => node.disabled), pick: pickOf("p1").disabled, gate: { hidden: t.gate().hidden, message: t.gate().message } };
       t.click(btn("p1", "Works"));
       await t.tick();
       out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
@@ -438,6 +442,7 @@ def test_a_schema_without_the_walk_answer_rule_leaves_the_walk_off_and_writes_no
     result = page["result"]
     assert result["off"] and all(result["off"]) and result["pick"] is True
     assert result["walkWrites"] == []
+    assert result["gate"] == {"hidden": False, "message": NO_STORE}
 
 
 # Bites on: walk controls left on when the walk-answer rule lacks an answer the wording file offers, so a saved Works is lost on reopen.
@@ -445,13 +450,14 @@ def test_a_schema_whose_walk_answers_lack_an_offered_value_leaves_the_walk_off_a
     schema = json.loads((Path(pr_sheet.__file__).resolve().parents[1] / "theme" / "sheet.schema.json").read_text(encoding="utf-8"))
     schema["$defs"]["walkAnswer"]["properties"]["answer"]["enum"].remove("works")
     page = _page(WALK_SHEET, WALK + """
-      const out = { off: walkControls().map((node) => node.disabled) };
+      const out = { off: walkControls().map((node) => node.disabled), gate: { hidden: t.gate().hidden, message: t.gate().message } };
       t.click(btn("p1", "Works"));
       await t.tick();
       out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
       return out;
     """, schema=schema)
     assert page["result"]["off"] and all(page["result"]["off"]) and page["result"]["walkWrites"] == []
+    assert page["result"]["gate"] == {"hidden": False, "message": NO_STORE}
 
 
 def _walk_docs(written):
@@ -508,7 +514,7 @@ def test_answered_stops_come_back_when_the_page_is_reopened():
     """, host={"assets": "ok"})
     written = first["result"]["written"]
     assert written == {
-        _path("p1"): _body("problem", "before-merge", "Declined twice", ["asset-1"]),
+        _path("p1"): _body("problem", "before-merge", "Declined twice", [SHOT_1]),
         _path("p2"): _body("works", None, "Sent at once"),
         _path("p3"): _body("skip"),
         _path("p4"): _body("problem", "follow-up", "Two charges"),
@@ -788,6 +794,43 @@ def test_without_a_picture_store_add_a_screenshot_says_so_and_turns_off(host):
     assert result["sets"] == [{"path": _path("p1"), "body": _body("problem")}]
 
 
+# Axis: a reader (non-owner) view gets no usable Add a screenshot: the host hands it no picture store, so nothing is asked for or uploaded.
+def test_a_non_owner_view_has_no_usable_add_a_screenshot():
+    page = _page(WALK_SHEET, WALK + """
+      t.click(pickOf("p1"));
+      await t.tick();
+      return { pick: pickOf("p1").disabled, uses: t.uses.slice(), uploads: t.uploads.length, sets: t.setLog() };
+    """, host={"user": "viewer", "assets": "ok"})
+    assert page["result"] == {"pick": True, "uses": ["db", "user"], "uploads": 0, "sets": []}
+
+
+# Axis: an upload the host fails with a documented code (capability_disabled, too_large) shows the failed line and writes nothing.
+@pytest.mark.parametrize("code", ["capability_disabled", "too_large"])
+def test_a_documented_upload_failure_shows_the_failed_line_and_writes_nothing(code):
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      return { line: shotLineOf("p1"), sets: t.setLog(), uploads: t.uploads.length };
+    """, host={"assets": code})
+    result = page["result"]
+    assert result["line"] == PW["screenshotFailed"] and result["uploads"] == 1
+    assert result["sets"] == [{"path": _path("p1"), "body": _body("problem")}]
+
+
+# Axis: the stored shot is the upload's 32-character id, never its /_blob url.
+def test_the_stored_shot_is_the_asset_id_never_the_url():
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      return t.setLog().pop().body.shots;
+    """, host={"assets": "ok"})
+    assert page["result"] == [SHOT_1] and len(SHOT_1) == 32 and not page["result"][0].startswith("/")
+
+
 # Axis: two uploaded screenshots are written as the document's shots in order and the line counts 2.
 def test_two_screenshots_are_saved_in_order_and_counted():
     page = _page(WALK_SHEET, WALK + """
@@ -809,8 +852,8 @@ def test_two_screenshots_are_saved_in_order_and_counted():
     assert result["picked"] == 1 and result["uploads"] == ["shot.png", "shot.png"]
     assert result["one"] == _fill(PW["screenshotsAdded"], count=1)
     assert result["two"] == {"line": _fill(PW["screenshotsAdded"], count=2), "pick": False, "save": "Saved"}
-    assert [item["body"] for item in result["sets"]] == [_body("problem"), _body("problem", None, "", ["asset-1"]), _body("problem", None, "", ["asset-1", "asset-2"])]
-    assert result["sets"][-1]["body"]["shots"] == ["asset-1", "asset-2"]
+    assert [item["body"] for item in result["sets"]] == [_body("problem"), _body("problem", None, "", [SHOT_1]), _body("problem", None, "", [SHOT_1, SHOT_2])]
+    assert result["sets"][-1]["body"]["shots"] == [SHOT_1, SHOT_2]
 
 
 # Axis: an upload the store rejects says the screenshot didn't upload, writes nothing, and leaves the button on.
@@ -864,7 +907,7 @@ def test_a_rejected_save_of_the_shots_shows_not_saved_with_try_again():
     assert "Not saved" in result["failed"]["save"] and result["failed"]["retry"] is True
     assert result["failed"]["line"] == _fill(PW["screenshotsAdded"], count=1)
     assert result["retried"] == {"save": "Saved", "line": _fill(PW["screenshotsAdded"], count=1)}
-    assert [item["body"] for item in result["sets"]] == [_body("problem"), _body("problem", None, "", ["asset-1"]), _body("problem", None, "", ["asset-1"])]
+    assert [item["body"] for item in result["sets"]] == [_body("problem"), _body("problem", None, "", [SHOT_1]), _body("problem", None, "", [SHOT_1])]
 
 
 # Axis: the app bar's accepted count leaves out an Accept that is in flight or failed and counts it once the store has saved it.
