@@ -455,6 +455,8 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     The collector used to be panel-scoped, so a reviewer-phase fallback folded safely to stdout and
     disclosed NOTHING. It now derives from the same predicate the channel folds on, so the
     disclosure cannot lag the fold."""
+    # axis: a defaulted reviewer vendor replaced by an independent one keeps `defaulted`, so the
+    # provenance gap is still disclosed — see bite-proof record wo_b_1797_seat_orders
     session_dir = str(tmp_path / ("disc-" + phase))
     os.makedirs(session_dir, exist_ok=True)
     out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
@@ -783,6 +785,10 @@ def _render_phase(phase, host_seat):
         "ratified_residuals": "",
         "residuals_provenance": "prov",
         "residuals_read_failure": None,
+        "threat_model": "",
+        "threat_model_read_failure": None,
+        "standing_rulings": [],
+        "standing_rulings_read_failure": None,
         "payload": {},
         "host_seat": host_seat,
         "placeholders": _phase_placeholders(phase, channel),

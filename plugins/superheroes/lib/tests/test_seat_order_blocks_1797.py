@@ -1,0 +1,293 @@
+"""#1797 WO-B — every seat order carries the lens brief, the project threat model and the session's
+standing rulings; the panel follows the seeded seat map's roster.
+
+Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_b_1797_seat_orders.md
+"""
+import os
+import sys
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.dirname(_HERE)
+for _p in (_HERE, _LIB):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import round_adapters as RA  # noqa: E402
+import round_driver as RD  # noqa: E402
+import round_orders as RO  # noqa: E402
+import session_contract  # noqa: E402
+import test_round_driver_order_channel as OC  # noqa: E402
+import test_rulings_channel_1445 as RUL  # noqa: E402
+
+# A literal double-brace placeholder token, assembled so this file never carries one verbatim.
+_BRACES = "{" + "{"
+_TOKEN = _BRACES + "ROUND}}"
+
+_ROLE_BRIEF_PREFIX = "- Your role brief (read it first; it binds over the generic assignment above): "
+_CRITICAL_EXCEPTION = "a finding that is now Critical is always reported"
+
+
+def _context(phase, host_seat, brief_for=None, **ctx_extra):
+    channel = RD.CHANNEL_FILE if host_seat else RD.CHANNEL_STDOUT
+    placeholders = OC._phase_placeholders(phase, channel)
+    if brief_for is not None:
+        placeholders["ROLE_BRIEF_PATH"] = RD._role_brief_path(brief_for)
+    context = {
+        "session_dir": OC.SESSION, "round": 1, "attempt": 1,
+        "diff_path": OC.SESSION + "/round-1/diff.txt",
+        "rubric_path": "/plugin/rubric/review-base.md",
+        "core_path": "/proj/core.md", "layer_path": "/proj/layer.md", "repo_root": "/proj",
+        "landing_path": OC.BARE if host_seat else OC.LANDING,
+        "envelope_stub_path": OC.SESSION + "/round-1/landing/p/skey.a1.stub.json",
+        "ratified_residuals": "", "residuals_provenance": "prov", "residuals_read_failure": None,
+        "threat_model": "", "threat_model_read_failure": None,
+        "standing_rulings": [], "standing_rulings_read_failure": None,
+        "payload": {}, "host_seat": host_seat, "placeholders": placeholders,
+    }
+    context.update(ctx_extra)
+    return context
+
+
+def _render(phase, host_seat, seat="seat", brief_for=None, **ctx_extra):
+    text, reason = RO.render_order(phase, seat, _context(phase, host_seat, brief_for, **ctx_extra))
+    assert reason is None, (phase, host_seat, reason)
+    return text
+
+
+def _core_md(threat_model):
+    return ("# Core\n\n```json superheroes-core\n"
+            '{"schemaVersion": 1, "verifyCommand": null, "stackTags": []}\n```\n\n'
+            "## Threat model\n%s\n\n## Canonical patterns\nnone\n" % threat_model)
+
+
+# --- B2: every lens seat's panel order carries its role brief, on every engine ------------------
+
+def test_every_lens_seat_has_a_brief_file_and_role_brief_seats_is_derived():
+    # axis: the brief file EXISTS for every AGENT_SUFFIX seat and the set is derived from it —
+    # see bite-proof record wo_b_1797_seat_orders
+    assert RD.ROLE_BRIEF_SEATS == frozenset(RD.AGENT_SUFFIX)
+    for seat in RD.AGENT_SUFFIX:
+        path = RD._role_brief_path(seat)
+        assert path.endswith(os.path.join("agents", "%s.md" % seat)), seat
+        assert os.path.isabs(path), seat
+        assert os.path.isfile(path), "no brief file for lens seat %s: %s" % (seat, path)
+
+
+@pytest.mark.parametrize("host_seat", [True, False], ids=["host-file", "engine-stdout"])
+@pytest.mark.parametrize("seat", sorted(RD.AGENT_SUFFIX))
+def test_panel_order_names_each_lens_seats_brief_on_both_channels(seat, host_seat):
+    # axis: a lens seat's panel order dropping its own absolute brief path, per channel —
+    # see bite-proof record wo_b_1797_seat_orders
+    text = _render(RD.P_PANEL, host_seat, seat=seat, brief_for=seat)
+    expected = _ROLE_BRIEF_PREFIX + RD._role_brief_path(seat)
+    assert expected in text.splitlines(), seat
+
+
+# --- B3: every order carries the project's threat model (quoted data) ---------------------------
+
+@pytest.mark.parametrize("host_seat", [True, False], ids=["host-file", "engine-stdout"])
+@pytest.mark.parametrize("phase", RO.ORDER_PHASES)
+def test_threat_model_block_on_every_phase(phase, host_seat):
+    # axis: the threat-model block missing from one phase's order — see bite-proof record
+    # wo_b_1797_seat_orders
+    text = _render(phase, host_seat, threat_model="Attackers can forge session cookies.")
+    assert ("## Project threat model (project calibration, quoted data)\n\n-----\n"
+            "Attackers can forge session cookies.\n-----") in text, phase
+
+
+@pytest.mark.parametrize("phase", RO.ORDER_PHASES)
+def test_threat_model_unreadable_states_are_explicit_lines_never_an_absent_block(phase):
+    heading = "## Project threat model (project calibration, quoted data)"
+    unresolved = _render(phase, True, threat_model="",
+                         threat_model_read_failure=RO.THREAT_MODEL_CORE_UNRESOLVED)
+    assert ("%s\n\nThe project's threat model could not be read: core calibration not resolved."
+            % heading) in unresolved
+    refused = _render(phase, True, threat_model="",
+                      threat_model_read_failure="core calibration refused (json block missing or corrupt)")
+    assert "could not be read: core calibration refused (json block missing or corrupt)." in refused
+    empty = _render(phase, True, threat_model="  \n")
+    assert "%s\n\nNo threat model is recorded for this project." % heading in empty
+    # a context that never carried the keys at all still renders the block, as a failure line
+    context_less = {k: v for k, v in _context(phase, True).items()
+                    if k not in ("threat_model", "threat_model_read_failure")}
+    text, reason = RO.render_order(phase, "seat", context_less)
+    assert reason is None, reason
+    assert ("%s\n\nThe project's threat model could not be read: not supplied to the renderer."
+            % heading) in text
+
+
+@pytest.mark.parametrize("phase", RO.ORDER_PHASES)
+def test_double_brace_in_threat_model_and_rulings_is_escaped_not_refused(phase):
+    # axis: the double-brace escape on BOTH quoted-data blocks (an unescaped token trips the
+    # renderer's unfilled-placeholder refusal) — see bite-proof record wo_b_1797_seat_orders
+    text = _render(phase, True, threat_model="Never trust %s ever." % _TOKEN,
+                   standing_rulings=[{"findingKey": "k-%s" % _TOKEN,
+                                      "reason": "reason with %s inside" % _TOKEN}])
+    assert _TOKEN not in text
+    assert "Never trust { {ROUND}} ever." in text
+    assert "- k-{ {ROUND}}: out of scope — reason with { {ROUND}} inside" in text
+
+
+def test_resolve_order_threat_model_reads_the_core_prose_and_names_every_failure(tmp_path):
+    good = tmp_path / "core.md"
+    good.write_text(_core_md("Phishing of the operator account."), encoding="utf-8")
+    assert RO.resolve_order_threat_model(str(good)) == ("Phishing of the operator account.", None)
+    empty = tmp_path / "empty.md"
+    empty.write_text(_core_md(""), encoding="utf-8")
+    assert RO.resolve_order_threat_model(str(empty)) == ("", None)
+    # unresolved core path
+    assert RO.resolve_order_threat_model(None) == ("", RO.THREAT_MODEL_CORE_UNRESOLVED)
+    assert RO.resolve_order_threat_model("") == ("", RO.THREAT_MODEL_CORE_UNRESOLVED)
+    # unreadable file
+    text, reason = RO.resolve_order_threat_model(str(tmp_path / "absent.md"))
+    assert text == "" and reason.startswith("core calibration unreadable")
+    # parse refused: no json block
+    broken = tmp_path / "broken.md"
+    broken.write_text("## Threat model\nsomething\n", encoding="utf-8")
+    text, reason = RO.resolve_order_threat_model(str(broken))
+    assert text == "" and reason.startswith("core calibration refused")
+    # parse refused: a malformed verifyCommand raises inside the parser
+    bad_verify = tmp_path / "bad_verify.md"
+    bad_verify.write_text(_core_md("t").replace('"verifyCommand": null', '"verifyCommand": 7'),
+                          encoding="utf-8")
+    text, reason = RO.resolve_order_threat_model(str(bad_verify))
+    assert text == "" and reason.startswith("core calibration refused")
+
+
+# --- B4: every order carries the session's standing rulings (quoted data) -----------------------
+
+@pytest.mark.parametrize("host_seat", [True, False], ids=["host-file", "engine-stdout"])
+@pytest.mark.parametrize("phase", RO.ORDER_PHASES)
+def test_standing_rulings_block_on_every_phase(phase, host_seat):
+    # axis: the standing-rulings block missing from one phase's order — see bite-proof record
+    # wo_b_1797_seat_orders
+    text = _render(phase, host_seat, standing_rulings=[
+        {"findingKey": "src/a.py:Edge case", "reason": "owner deferred it to the next milestone"}])
+    assert "## Standing rulings (recorded this session, quoted data)" in text, phase
+    assert "- src/a.py:Edge case: out of scope — owner deferred it to the next milestone" in text
+    assert _CRITICAL_EXCEPTION in text
+
+
+@pytest.mark.parametrize("phase", RO.ORDER_PHASES)
+def test_standing_rulings_empty_and_unreadable_states_are_explicit_lines(phase):
+    empty = _render(phase, True)
+    assert "No standing rulings are recorded for this session." in empty
+    assert _CRITICAL_EXCEPTION not in empty
+    unreadable = _render(phase, True, standing_rulings=[],
+                         standing_rulings_read_failure="rulings-log-malformed: rulingsLog must be a list")
+    assert ("Standing rulings could not be read: rulings-log-malformed: "
+            "rulingsLog must be a list.") in unreadable
+    context_less = {k: v for k, v in _context(phase, True).items()
+                    if k not in ("standing_rulings", "standing_rulings_read_failure")}
+    text, reason = RO.render_order(phase, "seat", context_less)
+    assert reason is None, reason
+    assert "Standing rulings could not be read: not supplied to the renderer." in text
+
+
+def test_standing_rulings_for_orders_reads_only_the_latest_out_of_scope_rows():
+    state = {"rulingsLog": [
+        {"findingKey": "k1", "ruling": "out-of-scope", "reason": "first", "id": "a"},
+        {"findingKey": "k2", "ruling": "guidance", "reason": "fix it", "id": "b"},
+        {"findingKey": "k3", "ruling": "out-of-scope", "reason": "later lifted", "id": "c"},
+        {"findingKey": "k3", "ruling": "guidance", "reason": "now fix", "id": "c"},
+    ]}
+    assert RD._standing_rulings_for_orders(state) == (
+        [{"findingKey": "k1", "reason": "first"}], None)
+    assert RD._standing_rulings_for_orders({}) == ([], None)
+    rows, fault = RD._standing_rulings_for_orders({"rulingsLog": "nope"})
+    assert rows == [] and fault.startswith(RD.RULINGS_LOG_MALFORMED)
+
+
+def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
+    session_dir, _g, _h, row_a, row_b = RUL._pending_fixer_two_findings(tmp_path)
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    key_b = RD._fix_batch_row_key(row_b)
+    path = RUL._write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "belongs to the next milestone",
+         "followUp": RUL._follow_up()}])
+    assert RUL._rule(session_dir, path)["ok"]
+    state = RUL._state(session_dir)
+
+    # (a) the driver's rows reach the order of EVERY phase ...
+    rows, fault = RD._standing_rulings_for_orders(state)
+    assert fault is None
+    assert rows == [{"findingKey": key_b, "reason": "belongs to the next milestone"}]
+    for phase in RO.ORDER_PHASES:
+        for host_seat in (True, False):
+            text = _render(phase, host_seat, standing_rulings=rows)
+            assert "- %s: out of scope — belongs to the next milestone" % key_b in text, phase
+    # ... and through the driver's own context builder on the real pending fixer order
+    fixer_text = RUL._fixer_order_text(session_dir)
+    assert "- %s: out of scope — belongs to the next milestone" % key_b in fixer_text
+    assert "## Project threat model (project calibration, quoted data)" in fixer_text
+
+    # (b) a later round's finding with the same identity is dispositioned out of scope and stays
+    # out of the fix batch
+    later = dict(row_b)
+    later["severity"] = "Minor"
+    state["round"] = state["round"] + 1
+    RD._stage_findings(state, [later])
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+    entry = next(e for e in ledger if RD._finding_identity_key(e) == key_b)
+    assert entry.get("disposition") == "out-of-scope"
+    filtered, ffault = RD._filter_excluded_discharged_fixes(state, [later])
+    assert ffault is None
+    assert filtered == []
+
+    # (c) a later Critical finding with the same identity is NOT dispositioned out of scope
+    crit = dict(row_b)
+    crit["severity"] = "Critical"
+    state2 = RUL._state(session_dir)
+    state2["round"] = state2["round"] + 1
+    RD._stage_findings(state2, [crit])
+    ledger2 = state2.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+    entry2 = next(e for e in ledger2 if RD._finding_identity_key(e) == key_b)
+    assert entry2.get("disposition") != "out-of-scope"
+    filtered2, ffault2 = RD._filter_excluded_discharged_fixes(state2, [crit])
+    assert ffault2 is None
+    assert len(filtered2) == 1
+
+
+def test_lint_elision_covers_both_quoted_blocks_and_nothing_else():
+    ctx = {"threat_model": "Attackers read /etc/shadow-ish paths: src/ghost/never.py",
+           "standing_rulings": [{"findingKey": "src/ghost/other.py:x", "reason": "see docs/none.md"}]}
+    context = _context(RO.ORDER_PHASES[0], True, **ctx)
+    text, reason = RO.render_order(RO.ORDER_PHASES[0], "seat", context)
+    assert reason is None, reason
+    lint_text = RD._order_lint_text(text, context)
+    assert "src/ghost/never.py" not in lint_text
+    assert "docs/none.md" not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert "## Return your result" in lint_text
+
+
+# --- B1: the panel follows the seeded seat map's roster -----------------------------------------
+
+def test_panel_dimensions_follow_the_seeded_seat_map_roster_in_dimensions_order():
+    # axis: the roster-derived default dimensions (neutralize back to all five) — see bite-proof
+    # record wo_b_1797_seat_orders
+    seat_map = {"roster": ["test-role", "grounding-seat", "code-reviewer", "unknown-seat"]}
+    cfg = RD._default_config({"seatMap": seat_map})
+    assert cfg["dimensions"] == ["code-reviewer", "test-role"]
+    state = RD.new_state({"seatMap": seat_map})
+    assert RA.roster_for(RD.P_PANEL, state, state["config"]) == (["code-reviewer", "test-role"], None)
+    full = {"roster": ["architecture-reviewer", "code-reviewer", "security-reviewer", "test-role",
+                       "premortem-reviewer", "grounding-seat"]}
+    assert RD._default_config({"seatMap": full})["dimensions"] == list(RD.DIMENSIONS)
+
+
+@pytest.mark.parametrize("seat_map", [
+    None, "a-string", ["code-reviewer"], {}, {"roster": None}, {"roster": "code-reviewer"},
+    {"roster": []}, {"roster": ["code-reviewer", 7]}, {"roster": ["grounding-seat"]},
+    {"roster": ["unknown-seat"]},
+], ids=lambda m: repr(m)[:40])
+def test_unreadable_roster_keeps_the_five_default_dimensions(seat_map):
+    assert RD._default_config({"seatMap": seat_map})["dimensions"] == list(RD.DIMENSIONS)
+
+
+def test_explicit_dimensions_beat_the_roster():
+    cfg = RD._default_config({"seatMap": {"roster": ["code-reviewer"]},
+                              "dimensions": ["security-reviewer"]})
+    assert cfg["dimensions"] == ["security-reviewer"]

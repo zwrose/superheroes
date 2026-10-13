@@ -138,7 +138,7 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
 - Architectural concerns (layering, module coupling) — that's `architecture-reviewer`'s domain. Two carve-outs you DO own locally, with their boundaries stated in "What to Flag": the diff-introduced **cognitive-complexity spike** (control-flow structure — but NOT raw file/function SIZE, which stays architecture's) and **YAGNI local code shape** (a dead param/flag/branch — but NOT module-level premature abstraction, which stays architecture's). Defer pure size and module-abstraction to architecture so the two agents never double-flag the same line.
 - Security implications of pattern violations — flag the missing auth/validation/ownership _as a pattern violation_; `security-reviewer` flags it _as a vulnerability_. Do not duplicate severity-Critical security framing here.
 - Any dimension the profile marks out of scope (e.g. general accessibility, if excluded). The three Self-usability breakage cases above are the only always-in-scope usability concerns — not general accessibility gaps.
-- Test quality: mock patterns, coverage, tests that check nothing, and test bloat. That goes to the test role (`test-role`).
+- Test quality: whether each changed test would fail if the code were wrong, tests that check nothing or pass by chance, test bloat, and break-it tests in risk areas. That goes to the test role (`test-role`).
 - Multi-step, systemic failure chains — concurrency races, partial-failure
   consistency across a multi-step write, dependency-failure stories, systemic
   resource exhaustion, migration/rollback risk — that's `premortem-reviewer`

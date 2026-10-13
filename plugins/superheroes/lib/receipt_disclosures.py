@@ -188,6 +188,29 @@ def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=
     return None, fixer_fam
 
 
+def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None):
+    """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
+
+    Barred families are the makers' plus the fixer's (a fixer is a maker by definition). The
+    preferred vendor wins when its reviewer family is known and not barred; otherwise the first live
+    vendor that qualifies. A family ``family_for`` cannot resolve is never independent, and the
+    fixer's own vendor never reviews its fix, whatever its family resolves to."""
+    barred = set(maker_families or ())
+    if fixer_vendor:
+        fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+        if fixer_fam is not None:
+            barred.add(fixer_fam)
+    candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor else [])
+    candidates += [v for v in live_vendors(config) if v not in candidates]
+    for v in candidates:
+        if fixer_vendor and v == fixer_vendor:
+            continue
+        cand_fam = model_registry.family_for("reviewer", v)
+        if cand_fam is not None and cand_fam not in barred:
+            return v, cand_fam
+    return None, None
+
+
 def unfilled_seats(seat_map):
     """Names of the seats the map marks `source == "unfilled"` (no candidate outside the makers)."""
     seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
@@ -596,6 +619,7 @@ __all__ = (
     "live_vendors",
     "independent_auditor",
     "independent_auditor_available",
+    "independent_reviewer",
     "unfilled_seats",
     "maker_families",
     "pinned_auditor_vendors",
