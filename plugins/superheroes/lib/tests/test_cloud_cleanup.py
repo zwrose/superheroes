@@ -1,11 +1,11 @@
 # plugins/superheroes/lib/tests/test_cloud_cleanup.py
 """Conformance: the cleanup after a cloud lane ends -- the archive request to its builder and the PR's
-branch. Every repository, ledger and state file is built under tmp_path. The `gh api` answers are a fake
-`run`; the lease delete goes to a real local bare git repository named as the remote; nothing touches the
-real home directory, clock or network."""
+branch. Every repository, ledger and state file is built under tmp_path. The `gh api` answers, the branch
+delete included, are a fake `run` that holds the repository's branches in memory; no git command runs
+against a remote, and nothing touches the real home directory, clock or network."""
 import json
 import os
-import subprocess
+import urllib.parse
 import sys
 from types import SimpleNamespace
 
@@ -24,45 +24,37 @@ REPO = "owner/name"
 BATCH = "b-cleanup"
 PR = 412
 BRANCH = "feature"
-IDENT = ["-c", "user.name=t", "-c", "user.email=t@t"]
-
-
-def _git(path, *args):
-    return subprocess.run(["git", "-C", str(path)] + list(args), check=True, capture_output=True, text=True).stdout.strip()
+HEAD = "a" * 40
+MOVED = "b" * 40
 
 
 class Gh:
-    """Fake `gh api` answering reads from dicts, with the branch reads taken live from the bare remote;
-    a `git` argv runs for real."""
+    """Fake `gh api` answering reads from dicts and a `branches` map (name -> sha), and recording every
+    argv it is given. A DELETE of a ref removes it from the map. Any non-gh argv is a failure."""
 
-    def __init__(self, bare):
-        self.bare = str(bare)
+    def __init__(self):
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
-        self.pushes = []
-        self.resolved, self.push_rewrites = None, ""
-
-    def _live(self, branch):
-        got = subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", "refs/heads/" + branch],
-                             capture_output=True, text=True)
-        return got.stdout.strip() or None
+        self.branches = {"main": "c" * 40, BRANCH: HEAD}
+        self.deletes, self.delete_result, self.before_delete = [], None, None
+        self.sticky = False
 
     def __call__(self, argv, **kw):
-        if argv[0] == "git":
-            # git's own rewriting is answered here: the fixture's insteadOf points the built URL at the local bare
-            # repository so the real push lands, while the guard is told what a real remote would resolve to
-            if "ls-remote" in argv:
-                return SimpleNamespace(returncode=0, stdout=(argv[-1] if self.resolved is None else self.resolved) + "\n", stderr="")
-            if "--get-regexp" in argv:
-                return SimpleNamespace(returncode=0 if self.push_rewrites else 1, stdout=self.push_rewrites, stderr="")
-            if "push" in argv:
-                self.pushes.append(list(argv))
-            return subprocess.run(argv, **kw)
+        assert argv[0] == "gh", argv
         self.calls.append(tuple(argv))
         path = argv[-1]
+        base = "repos/%s" % REPO
+        if "DELETE" in argv:
+            assert argv[:4] == ["gh", "api", "-X", "DELETE"], argv
+            self.deletes.append(list(argv))
+            if self.before_delete:
+                self.before_delete()
+            if self.delete_result is not None:
+                return self.delete_result
+            self.branches.pop(urllib.parse.unquote(path[len(base + "/git/refs/heads/"):]), None)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if path in self.broken:
             return SimpleNamespace(returncode=1, stdout="", stderr="gh: Server Error (HTTP 500)")
-        base = "repos/%s" % REPO
         if path.startswith(base + "/pulls/"):
             return SimpleNamespace(returncode=0, stdout=json.dumps(self.pulls[int(path.rsplit("/", 1)[1])]), stderr="")
         if path == base:
@@ -72,11 +64,10 @@ class Gh:
             return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps([p]) for p in self.open_prs) or "[]", stderr="")
         if path == base + "/branches?per_page=100":
             assert "--paginate" in argv
-            names = _git(self.bare, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
-            return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps([{"name": n}]) for n in names), stderr="")
+            return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps([{"name": n}]) for n in self.branches), stderr="")
         assert path.startswith(base + "/git/ref/heads/"), path
-        branch = path[len(base + "/git/ref/heads/"):]
-        sha = self.ref_override.get(branch) or self._live(branch)
+        branch = urllib.parse.unquote(path[len(base + "/git/ref/heads/"):])
+        sha = self.ref_override.get(branch) or self.branches.get(branch)
         if sha is None:
             return SimpleNamespace(returncode=1, stdout='{"message":"Not Found","status":"404"}',
                                    stderr="gh: Not Found (HTTP 404)")
@@ -105,24 +96,9 @@ def w(tmp_path, monkeypatch):
     root = _ledger_env(tmp_path, monkeypatch)
     env = {"HOME": str(tmp_path / "home"), "PATH": os.environ["PATH"], ll.LEDGER_ROOT_ENV: root}
     assert _declare(repo, BATCH, 4, env=env)["ok"]
-    bare, work = tmp_path / "remote.git", tmp_path / "work"
-    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
-    subprocess.run(["git", "init", "-q", str(work)], check=True)
-    (work / "f").write_text("1\n")
-    _git(work, "add", ".")
-    _git(work, *IDENT, "commit", "-q", "-m", "one")
-    _git(work, "branch", "-M", "main")
-    _git(work, "branch", BRANCH)
-    _git(work, "push", "-q", str(bare), "main", BRANCH)
-    head = _git(work, "rev-parse", "HEAD")
-    # the delete's URL is redirected to the local bare repository by git's own insteadOf, in a throwaway HOME
-    os.makedirs(env["HOME"], exist_ok=True)
-    with open(os.path.join(env["HOME"], ".gitconfig"), "w", encoding="utf-8") as fh:
-        for host in ("github.com", "ghe.example.com"):
-            fh.write('[url "%s"]\n\tinsteadOf = https://%s/%s.git\n' % (bare, host, REPO))
-    gh = Gh(bare)
-    gh.pulls[PR] = _pull(head_sha=head)
-    return SimpleNamespace(repo=repo, env=env, gh=gh, bare=bare, work=work, head=head)
+    gh = Gh()
+    gh.pulls[PR] = _pull(head_sha=HEAD)
+    return SimpleNamespace(repo=repo, env=env, gh=gh, head=HEAD)
 
 
 def _lane(w, launch_id, issue, session="session-a", place="cloud", outcome=None, ts=None):
@@ -156,14 +132,11 @@ def _state_file(w):
 
 
 def _remote_branches(w):
-    return _git(w.bare, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
+    return sorted(w.gh.branches)
 
 
-def _advance_remote(w):
-    (w.work / "f").write_text("2\n")
-    _git(w.work, *IDENT, "commit", "-q", "-am", "two")
-    _git(w.work, "push", "-q", str(w.bare), "HEAD:refs/heads/" + BRANCH)
-    return _git(w.work, "rev-parse", "HEAD")
+def _no_git(w):
+    return all(c[0] == "gh" for c in w.gh.calls)
 
 
 # ---------------------------------------------------------------- an open PR gets nothing
@@ -194,41 +167,66 @@ def test_a_merged_pr_whose_branch_the_repository_kept_is_deleted_and_the_listing
     assert _remote_branches(w) == ["main"]
 
 
-@pytest.mark.parametrize("resolved", ["https://github.com/owner/mirror.git", "https://example.com/owner/name.git",
-                                      "  ", "not a url"])
-def test_a_url_rewrite_to_another_repository_refuses_before_the_push_and_keeps_the_branch(w, resolved):
+def test_the_delete_is_one_gh_rest_call_for_the_checked_repository_and_no_git_command_runs(w):
     _lane(w, "l-1", 101)
-    w.gh.resolved = resolved
-    assert _branch(w) == {"ok": False, "reason": "push-destination-rewritten"}
-    assert w.gh.pushes == [] and BRANCH in _remote_branches(w)
-
-
-@pytest.mark.parametrize("resolved", ["git@github.com:Owner/Name.git", "ssh://git@github.com/owner/name"])
-def test_a_rewrite_to_the_same_repository_over_ssh_is_the_same_destination(w, resolved):
-    _lane(w, "l-1", 101)
-    w.gh.resolved = resolved
+    w.gh.pulls[PR] = _pull(head_sha=w.head, ref="feat/a#c&d")
+    w.gh.branches["feat/a#c&d"] = w.head
     assert _branch(w)["deleted"] is True
-    assert len(w.gh.pushes) == 1 and _remote_branches(w) == ["main"]
+    assert w.gh.deletes == [["gh", "api", "-X", "DELETE", "repos/owner/name/git/refs/heads/feat/a%23c%26d"]]
+    assert _no_git(w) and "feat/a#c&d" not in w.gh.branches
 
 
-def test_a_push_insteadof_prefix_matching_the_built_url_refuses_before_the_push(w):
+def test_the_delete_takes_its_host_from_gh_not_from_a_built_url(w):
     _lane(w, "l-1", 101)
-    w.gh.push_rewrites = "url.https://github.com/owner/mirror.git.pushinsteadof https://github.com/owner/name.git\n"
-    assert _branch(w) == {"ok": False, "reason": "push-destination-rewritten"}
-    assert w.gh.pushes == [] and BRANCH in _remote_branches(w)
-
-
-def test_a_push_insteadof_prefix_that_does_not_match_the_built_url_lets_the_delete_go(w):
-    _lane(w, "l-1", 101)
-    w.gh.push_rewrites = "url.ssh://x/.pushinsteadof https://github.com/other/\n"
+    w.env["GH_HOST"] = "ghe.example.com"
     assert _branch(w)["deleted"] is True
+    assert len(w.gh.deletes) == 1 and "ghe.example.com" not in " ".join(w.gh.deletes[0])
+
+
+def test_a_failed_delete_is_refused_with_the_first_line_and_the_branch_stays(w):
+    _lane(w, "l-1", 101)
+    w.gh.delete_result = SimpleNamespace(returncode=1, stdout="", stderr="\ngh: Resource not accessible (HTTP 403)\nmore")
+    assert _branch(w) == {"ok": False, "reason": "delete-refused", "detail": "gh: Resource not accessible (HTTP 403)"}
+    assert BRANCH in _remote_branches(w)
+
+
+def test_a_422_or_404_delete_with_the_branch_still_present_is_refused(w):
+    _lane(w, "l-1", 101)
+    for status in ("404", "422"):
+        w.gh.delete_result = SimpleNamespace(returncode=1, stdout="", stderr="gh: x (HTTP %s)" % status)
+        assert _branch(w) == {"ok": False, "reason": "delete-refused", "detail": "gh: x (HTTP %s)" % status}
+
+
+def test_a_422_or_404_delete_with_the_branch_absent_after_is_the_already_gone_case(w):
+    _lane(w, "l-1", 101)
+    for status in ("404", "422"):
+        w.gh.branches[BRANCH] = w.head
+        w.gh.delete_result = SimpleNamespace(returncode=1, stdout="", stderr="gh: x (HTTP %s)" % status)
+        w.gh.before_delete = lambda: w.gh.branches.pop(BRANCH, None)
+        assert _branch(w) == {"ok": True, "action": "cleanup", "branch": BRANCH, "deleted": False, "already": "absent",
+                              "listing": ["main"]}
+
+
+def test_a_delete_that_could_not_run_is_refused(w):
+    _lane(w, "l-1", 101)
+
+    class Boom(Gh):
+        def __call__(self, argv, **kw):
+            if "DELETE" in argv:
+                raise OSError("no gh")
+            return super().__call__(argv, **kw)
+    boom = Boom()
+    boom.__dict__.update(w.gh.__dict__)
+    got = CC.branch(w.repo, REPO, PR, env=w.env, run=boom)
+    assert got == {"ok": False, "reason": "delete-refused", "detail": ""}
 
 
 def test_a_branch_the_repository_already_deleted_is_a_success_that_deletes_nothing(w):
     _lane(w, "l-1", 101)
-    _git(w.bare, "branch", "-D", BRANCH)
+    del w.gh.branches[BRANCH]
     assert _branch(w) == {"ok": True, "action": "cleanup", "branch": BRANCH, "deleted": False, "already": "absent",
                           "listing": ["main"]}
+    assert w.gh.deletes == []
 
 
 def test_a_pr_closed_without_merging_gets_the_closed_words_and_its_branch_deleted(w):
@@ -243,19 +241,17 @@ def test_a_pr_closed_without_merging_gets_the_closed_words_and_its_branch_delete
 
 def test_a_branch_that_moved_past_the_prs_head_is_never_deleted(w):
     _lane(w, "l-1", 101)
-    moved = _advance_remote(w)
-    assert moved != w.head
+    w.gh.branches[BRANCH] = MOVED
     assert _branch(w) == {"ok": False, "reason": "branch-moved"}
-    assert BRANCH in _remote_branches(w)
+    assert BRANCH in _remote_branches(w) and w.gh.deletes == []
 
 
-def test_the_lease_rejects_a_delete_when_a_push_lands_after_the_read(w):
+def test_the_branch_sha_is_read_right_before_the_delete(w):
     _lane(w, "l-1", 101)
-    moved = _advance_remote(w)
-    w.gh.ref_override[BRANCH] = w.head  # the read still reports the PR's head: the push landed after it
-    out = _branch(w)
-    assert out["ok"] is False and out["reason"] == "delete-refused" and out["detail"]
-    assert _git(w.bare, "rev-parse", "refs/heads/" + BRANCH) == moved
+    assert _branch(w)["deleted"] is True
+    at = next(i for i, c in enumerate(w.gh.calls) if "DELETE" in c)
+    assert w.gh.calls[at - 1][-1] == "repos/%s/git/ref/heads/%s" % (REPO, BRANCH)
+    assert w.gh.calls[at + 1][-1] == "repos/%s/git/ref/heads/%s" % (REPO, BRANCH)
 
 
 def test_a_branch_an_open_pr_uses_as_its_base_is_kept(w):
@@ -302,7 +298,7 @@ def test_an_unreadable_read_refuses_and_never_reads_as_absent_or_open(w):
 
 def test_a_delete_the_read_back_does_not_confirm_is_refused(w):
     _lane(w, "l-1", 101)
-    w.gh.ref_override[BRANCH] = w.head  # the read keeps reporting the branch after the push
+    w.gh.ref_override[BRANCH] = w.head  # the read keeps reporting the branch after the delete
     out = _branch(w)
     assert out["ok"] is False and out["reason"] == "delete-unconfirmed"
 
@@ -504,30 +500,22 @@ def test_an_open_pr_head_in_a_differently_cased_repository_spelling_keeps_the_br
     assert BRANCH in _remote_branches(w)
 
 
-def test_the_delete_is_pushed_to_the_url_built_from_the_checked_repository(w):
+def test_a_receipt_saved_under_a_differently_cased_repository_is_found_by_plan_and_record(w):
     _lane(w, "l-1", 101)
-    assert _branch(w)["deleted"] is True
-    assert [p[-2:] for p in w.gh.pushes] == [["https://github.com/owner/name.git", ":refs/heads/" + BRANCH]]
-    assert _remote_branches(w) == ["main"]
-
-
-def test_the_delete_url_takes_its_host_from_gh_host(w):
-    _lane(w, "l-1", 101)
-    w.env["GH_HOST"] = "ghe.example.com"
-    assert _branch(w)["deleted"] is True
-    assert [p[-2] for p in w.gh.pushes] == ["https://ghe.example.com/owner/name.git"]
-    assert _remote_branches(w) == ["main"]
-
-
-def test_a_configured_remote_and_its_push_urls_are_never_read_or_pushed_to(w, tmp_path):
-    _lane(w, "l-1", 101)
-    mirror = tmp_path / "mirror.git"
-    subprocess.run(["git", "clone", "-q", "--bare", str(w.bare), str(mirror)], check=True)
-    _git(w.repo, "remote", "add", "origin", str(mirror))
-    _git(w.repo, "remote", "set-url", "--add", "--push", "origin", str(mirror))
-    assert _branch(w)["deleted"] is True
-    assert "feature" in _git(mirror, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
-    assert all("remote" not in p for p in w.gh.pushes) and all("origin" not in p for p in w.gh.pushes)
+    assert _record(w, "m-1", "delivered")["ok"]
+    with open(_state_file(w), encoding="utf-8") as fh:
+        saved = json.load(fh)
+    saved[0]["repo"] = "Owner/Name"
+    with open(_state_file(w), "w", encoding="utf-8") as fh:
+        json.dump(saved, fh)
+    got = _plan(w)
+    assert got["archiveText"] is None and got["alreadyDelivered"] is True and got["request"]["repo"] == "Owner/Name"
+    again = _record(w, "m-2", "delivered")
+    assert again["ok"] and again["already"] is True and again["request"]["msgId"] == "m-1"
+    saved[0]["outcome"] = "uncertain"
+    with open(_state_file(w), "w", encoding="utf-8") as fh:
+        json.dump(saved, fh)
+    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-uncertain"}
 
 
 def test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up(w):

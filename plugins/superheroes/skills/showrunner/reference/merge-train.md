@@ -236,7 +236,7 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    for is the one tap on the archive prompt.
 4. **The branch.** Run `cloud_cleanup.py branch --repo-root <root> --repo <owner/name> --pr <number>`.
    GitHub deletes the pull request's branch when the repository deletes merged branches; otherwise
-   this step deletes it, as a lease on the pull request's head sha. It reports `deleted: false` with
+   this step deletes it through GitHub, only while it still points at the pull request's head. It reports `deleted: false` with
    `already: "absent"` when the branch was already gone. A refusal (`branch-moved`, `branch-in-use`,
    `default-branch`, `head-repo-foreign`) is reported to the owner, never worked around.
 5. **What is left.** The session, until the owner taps Allow, and the lane's record. The branch is

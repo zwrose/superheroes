@@ -19,10 +19,12 @@ State is `cloud-cleanup.json`, beside the launch ledger, written only with `stor
 The cleanup acts only on a cloud lane whose PR is merged or closed, bound unambiguously to that PR,
 and never deletes a ref that is not exactly the PR's recorded head, that another open PR uses as head
 or base, or that is the default branch. An open PR gets nothing: no message, no deletion, no receipt.
-The branch is deleted by pushing to the URL built from the repository every check read
-(`https://<GH_HOST or github.com>/<owner>/<name>.git`); no configured remote or push URL is consulted,
-and the push is refused (`push-destination-rewritten`) when git's own URL rewriting would send it
-to any other host or repository.
+The branch is deleted through the same `gh api` channel every check used
+(`DELETE repos/<owner>/<name>/git/refs/heads/<branch>`), so the delete reaches exactly the repository the
+checks read, with the credential the reads already proved; no git command runs. The branch's sha is read
+again right before the delete and the delete is skipped if it moved. The REST delete has no expected-sha
+condition, so a push that lands between that last read and the delete is not caught; that window is accepted,
+because the pull request is already merged or closed and its builder is finished.
 """
 import argparse
 import datetime
@@ -50,7 +52,6 @@ OWNER_MESSAGE_CLOSED = ("#%d is closed. I've asked its cloud builder to archive 
 _RECEIPT_KEYS = ("repo", "pr", "session", "msgId", "outcome", "at")
 _LOCK_WAIT_SECONDS = 30
 _GH_TIMEOUT = 60
-_GIT_TIMEOUT = 120
 _SHA_RE = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
 _NOT_FOUND_RE = re.compile(r"HTTP 404|Not Found")
 
@@ -102,6 +103,12 @@ def _load(repo_root, env):
             for r in receipts)):
         return _refusal("cleanup-state-unreadable"), None
     return path, receipts
+
+
+def _same_receipt(receipt, repo, pr, session):
+    """Repository names compare without case (GitHub spells a repository as it likes); the receipt keeps
+    the spelling it was saved with."""
+    return (receipt["repo"].lower(), receipt["pr"], receipt["session"]) == (repo.lower(), pr, session)
 
 
 def _save(path, receipts):
@@ -262,8 +269,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     path, receipts = _load(repo_root, env)
     if receipts is None:
         return path, None
-    request = next((r for r in receipts if (r["repo"], r["pr"], r["session"]) == (repo, pr, session)),
-                   {"state": "none"})
+    request = next((r for r in receipts if _same_receipt(r, repo, pr, session)), {"state": "none"})
     head = pull.get("head")
     facts = {"branch": _name(head, "ref"), "headSha": _name(head, "sha"), "headRepo": _name(head, "repo", "full_name"),
              "baseRepo": _name(pull.get("base"), "repo", "full_name")}
@@ -307,8 +313,7 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     if receipts is None:
         return path
     texts = {"merged": OWNER_MESSAGE_MERGED, "closed": OWNER_MESSAGE_CLOSED}
-    key = (repo, number, got["session"])
-    old = next((r for r in receipts if (r["repo"], r["pr"], r["session"]) == key), None)
+    old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"])), None)
     if old is not None and old["outcome"] == "delivered":
         return {"ok": True, "already": True, "request": old, "ownerMessage": texts[got["outcome"]] % number}
     if old is not None and old["outcome"] in ("pending", "uncertain") and old["msgId"] != msg_id:
@@ -359,46 +364,6 @@ def _in_use(repo, branch, env, run):
     return False
 
 
-def _push_url(repo, env):
-    """The URL a deletion is pushed to: the repository every check read, on the host `gh` reads."""
-    return "https://%s/%s.git" % (env.get("GH_HOST") or "github.com", repo)
-
-
-def _git_read(runner, repo_root, args, env):
-    """(exit code, stdout) of one read-only git call; (None, "") when it could not run."""
-    try:
-        proc = runner(["git", "-C", repo_root] + list(args), capture_output=True, text=True, timeout=_GIT_TIMEOUT,
-                      env={k: v for k, v in env.items() if not k.startswith("GIT_")})
-    except Exception:
-        return None, ""
-    out = getattr(proc, "stdout", "")
-    code = getattr(proc, "returncode", None)
-    return (code if isinstance(code, int) else None), (out if isinstance(out, str) else "")
-
-
-def _push_destination_kept(repo_root, url, env, run):
-    """True only when a push to ``url`` goes to that same host and repository after git's own URL
-    rewriting (`insteadOf`, `pushInsteadOf`); False when it is rewritten elsewhere or cannot be told."""
-    store_core = _sib("store_core")
-    runner = subprocess.run if run is None else run
-    code, out = _git_read(runner, repo_root, ["ls-remote", "--get-url", url], env)
-    if code != 0:
-        return False
-    resolved, built = store_core.normalize_remote(out.strip()), store_core.normalize_remote(url)
-    if not resolved or not built or resolved.lower() != built.lower():
-        return False
-    code, out = _git_read(runner, repo_root, ["config", "--get-regexp", r"^url\..*\.pushinsteadof$"], env)
-    if code == 1:
-        return True
-    if code != 0:
-        return False
-    for line in out.splitlines():
-        prefix = line.partition(" ")[2].strip()
-        if prefix and url.startswith(prefix):
-            return False
-    return True
-
-
 def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
     """Delete the merged or closed PR's head branch, only while it is exactly the PR's recorded head."""
     env = os.environ if env is None else env
@@ -430,32 +395,25 @@ def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
         # axis: work pushed after the PR's head is never deleted — see bite-proof record c8_cloud_cleanup
         if sha != head_sha:
             return _refusal("branch-moved")
-        # axis: the delete goes only to the URL built from the repository the checks read, never to a configured remote, fork, mirror or other push URL
-        # A ref deletion guarded by a lease, never a history rewrite: the server applies it only while the
-        # ref still equals the PR's head sha.
-        # axis: the lease makes the delete lose to a push that lands after the read above — see bite-proof record c8_cloud_cleanup
-        url = _push_url(repo, env)
-        # axis: git's own URL rewriting never sends the delete to a repository the checks did not read
-        if not _push_destination_kept(repo_root, url, env, run):
-            return _refusal("push-destination-rewritten")
-        argv = ["git", "-C", repo_root, "push", "--porcelain",
-                "--force-with-lease=refs/heads/%s:%s" % (name, head_sha),
-                url, ":refs/heads/%s" % name]
-        runner = subprocess.run if run is None else run
-        try:
-            proc = runner(argv, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
-                          env={k: v for k, v in env.items() if not k.startswith("GIT_")})
-            code, out, err = proc.returncode, proc.stdout, proc.stderr
-        except Exception as exc:
-            code, out, err = None, "", str(exc)
+        # axis: the delete goes through the gh channel the checks read, so it targets exactly the checked repository
+        # The sha was read just above and is compared with the PR's head; the REST delete has no expected-sha
+        # condition, so a push landing between that read and this call is not caught (accepted: the PR is
+        # already merged or closed and its builder is finished).
+        code, out, err = _gh(run, ["api", "-X", "DELETE",
+                                   "repos/%s/git/refs/heads/%s" % (repo, urllib.parse.quote(name, safe="/"))], env)
         if code != 0:
-            lines = [ln for ln in ((err if isinstance(err, str) else "") or (out if isinstance(out, str) else "")
-                                   ).splitlines() if ln.strip()]
-            return _refusal("delete-refused", detail=lines[0] if lines else "")
-        _, why, absent = _ref_sha(repo, name, env, run)
-        if not absent:
-            return _refusal("delete-unconfirmed", detail=why or "branch-present")
-        deleted, already = True, None
+            # a 404 or 422 means the ref may already be gone: only an absent read-back says so
+            refused = _refusal("delete-refused", detail=next((ln for ln in (err or out).splitlines() if ln.strip()), ""))
+            if code is None or not re.search(r"HTTP (404|422)", out + "\n" + err):
+                return refused
+            _, why, absent = _ref_sha(repo, name, env, run)
+            if not absent:
+                return refused
+        else:
+            _, why, absent = _ref_sha(repo, name, env, run)
+            if not absent:
+                return _refusal("delete-unconfirmed", detail=why or "branch-present")
+            deleted, already = True, None
     names = _listing(repo, env, run)
     if names is None:
         return _refusal("branches-unreadable")

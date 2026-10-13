@@ -2,7 +2,7 @@
 
 Detectors: `plugins/superheroes/lib/tests/test_cloud_cleanup.py` (`T1`) and `plugins/superheroes/lib/tests/test_cloud_setup_gardening.py` (`T2`).
 Guarded elements (declared by the order): (1) the open-PR `none` return in `plan`; (2) the `branch-moved` sha check;
-(3) the lease on the delete; (4) the `branch-in-use` base check; (5) `record`'s delivered-only `ownerMessage`;
+(3) the final sha read right before the DELETE; (4) the `branch-in-use` base check; (5) `record`'s delivered-only `ownerMessage`;
 (6) the `Renew now` threshold. Each was neutralized by a targeted edit in the production file, the detector run alone
 as one `-k` selection, then restored by the inverse edit. The test files were never edited during the proofs.
 
@@ -12,7 +12,7 @@ in this session ("This command requires approval"), and `/usr/bin/python3 -m pyt
 `/root/.local/bin/pytest` is the pytest installed on this machine.
 
 Pinned condition: the fixtures set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` (in the `w` fixture of `T1`),
-because this machine's global git config signs every commit through a signer that is not running. What that pin makes
+because this machine's global git config signs every commit through a signer that is not running (the ledger fixture repository still uses git). What that pin makes
 unobservable: a developer's own git configuration (signing, hooks, aliases) acting on the fixture repositories.
 
 Greens: one green run of both files after all six restores (`35 passed`), not six single-node greens; the order's
@@ -41,42 +41,24 @@ FAILED tests/test_cloud_cleanup.py::test_an_open_pr_after_a_handback_or_a_park_g
 ## 2. The `branch-moved` sha check
 
 Axis: a branch whose head is not the PR's recorded head is never deleted (refusal token `branch-moved`).
+This is the comparison of element 3 seen from the refusal side; the delete is now a `gh api -X DELETE` call with no
+expected-sha condition, so this comparison is the only guard on the branch's sha. Its proof is recorded once, under 3.
+
+## 3. The final sha read right before the DELETE
+
+Axis: the branch's sha is read immediately before the DELETE and compared with the PR's head; a branch that moved is
+never deleted (`branch-moved`). A push that lands between that read and the DELETE is not caught: the accepted residual,
+stated in the module docstring and at the call site.
 
 - Neutralization (`branch`): `if sha != head_sha:` became `if False and sha != head_sha:`.
 - Node: `T1 -k test_a_branch_that_moved_past_the_prs_head_is_never_deleted`.
-- Red (unfiltered): `1 failed in 0.97s`; `{'reason': 'delete-refused'} != {'reason': 'branch-moved'}`. The lease (element 3) still
-  refused the delete and the branch stayed on the remote, so the red is on the refusal reason, not on a deletion. The two guards
-  are two lines of defence; this one is the one that names the cause.
-
-```
-E       assert {'ok': False,.../remote.git'"} == {'ok': False,...branch-moved'}
-E         Differing items:
-E         {'reason': 'delete-refused'} != {'reason': 'branch-moved'}
-FAILED tests/test_cloud_cleanup.py::test_a_branch_that_moved_past_the_prs_head_is_never_deleted
-1 failed, 25 deselected in 0.97s
-```
-
-- Restore: the inverse edit; `cloud_cleanup.py:329` reads `        if sha != head_sha:`.
-
-## 3. The lease on the delete
-
-Axis: a push that lands after the read makes the delete lose (`delete-refused`), never delete.
-
-- Neutralization (`branch`): the argv element `"--force-with-lease=refs/heads/%s:%s" % (name, head_sha),` removed, leaving a plain delete.
-- Node: `T1 -k test_the_lease_rejects_a_delete_when_a_push_lands_after_the_read`.
-- Red (unfiltered): `1 failed in 0.78s`. The plain delete went through and removed the advanced branch; the test's sticky read override then
-  made the read-back say `delete-unconfirmed`, so the assertion failed on `'delete-unconfirmed' == 'delete-refused'`.
-
-```
->       assert out["ok"] is False and out["reason"] == "delete-refused" and out["detail"]
-E       AssertionError: assert (False is False and 'delete-unconfirmed' == 'delete-refused'
-E         - delete-refused
-E         + delete-unconfirmed)
-FAILED tests/test_cloud_cleanup.py::test_the_lease_rejects_a_delete_when_a_push_lands_after_the_read
-1 failed, 25 deselected in 0.78s
-```
-
-- Restore: the inverse edit; `cloud_cleanup.py:335` reads `                "--force-with-lease=refs/heads/%s:%s" % (name, head_sha),`.
+- Red command (from the repository root): `scripts/pinned-python -B -m pytest plugins/superheroes/lib/tests/test_cloud_cleanup.py -q -k test_a_branch_that_moved_past_the_prs_head_is_never_deleted`.
+  Last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_branch_that_moved_past_the_prs_head_is_never_deleted` and `1 failed, 42 deselected in 15.67s`.
+  The branch was deleted where `{'ok': False, 'reason': 'branch-moved'}` was expected.
+- Restore: the inverse edit; `cloud_cleanup.py:396` reads `        if sha != head_sha:`.
+- Green command: the same command. Last line: `1 passed, 42 deselected in 0.72s`.
+- Not separately neutralized: the adjacency of the read and the DELETE (`test_the_branch_sha_is_read_right_before_the_delete`
+  pins that the call before the DELETE is the branch's ref read); that ordering is unproven by a red run.
 
 ## 4. The `branch-in-use` base check
 
