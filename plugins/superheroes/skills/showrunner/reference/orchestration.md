@@ -173,9 +173,11 @@ session listing for a session of the recorded name; when there is none, record t
 **A cloud-built stack layer.** A cloud builder cannot link its stack, because `gh stack link` and
 the membership read use GraphQL, so its build record lists the link as owed. At its handback, before
 the vet, link it from this machine with pull request numbers only when every planned layer from the
-bottom through it has a pull request (`rubric/native-stacks.md` § Each layer is a sub-issue, item
-4). When a lower planned layer still has none, the link stays owed: record it so in the vet
-receipt, and make it at the handback of the lane that completes that span, linking the whole span.
+bottom through it has a pull request and that span holds at least two, since a stack needs two
+(`rubric/native-stacks.md` § Each layer is a sub-issue, item 4). Otherwise the link stays owed (the
+bottom layer handing back alone, or a lower planned layer with none yet): record it so in the vet
+receipt, and make it at the handback of the lane that completes a span of two or more, linking the
+whole span. Until then, run no membership check on it.
 To link: `gh stack link <each member's pull request, bottom to top> <its pull request>`, which names
 every member and then the new layer (for a first pair, the lower and then the upper pull request).
 Then run `python3 -B <plugin root>/lib/stack_check.py list --pr <its pull request> --repo <owner/name>`

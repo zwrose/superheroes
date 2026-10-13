@@ -70,7 +70,9 @@ its steps uses GitHub's GraphQL interface. The launch's base commit is the head 
 which the launcher checked on the owner's machine before launch. The order names the layer below's
 branch.
 
-1. **Branch.** Intake leaves the clone at the base commit. Create the build branch there. Then run
+1. **Branch.** On a launch with no `Adopts branch:` line, intake leaves the clone at the base
+   commit: create the build branch there. On an adoption, intake leaves the clone on the adopted
+   branch: continue it and create no branch (§ Intake, step 5). Then run
    `git fetch origin <lower branch>` and check that `git rev-parse FETCH_HEAD` equals the base
    commit. This needs no pull request on the layer below. When the two differ, the layer below moved
    after the launch: bring it forward as step 2 says.
@@ -80,7 +82,9 @@ branch.
    build holds the layer below's current head.
 3. **Open the pull request with the layer below's branch as its base**, through REST:
    `gh api -X POST repos/<o>/<r>/pulls -f head=<branch> -f base=<lower branch> -f title=<title> -F body=@<body.md>`,
-   or through the session's GitHub tools with the same base. Check `base.ref` in the result.
+   or through the session's GitHub tools with the same base. Check `base.ref` in the result. An
+   adopted layer that already has an open pull request keeps it: find it with
+   `cloud_builder.py pr-json --repo <o>/<r> --branch <branch> --out <file>`, and open none.
 4. **Leave the link to the advisor.** `gh stack link` and the membership read use GraphQL, so the
    builder neither links nor quotes its `stackEntry` position. Its build record lists the link as a
    follow-up for the advisor, keyed like the rest, with the stack number and position the order
