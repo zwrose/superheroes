@@ -38,6 +38,7 @@ These retirements ship in the same release as the review record, and never apart
 
 - `pr_sheet.py build` makes a PR sheet's data file from the PR's review record and the advisor's input, `pr-sheet-input/1`, whose shape its module docstring defines. A stack that merges whole gets one sheet from all its records.
 - `theme/sheet.schema.json` gains the `pr` and `stack` sheet kinds, and on those kinds every option carries `sendsBack`. Discovery's remainder, final and plain sheets are unchanged.
+- A PR sheet's walk is answerable: Works (or Looks right on a look-only stop), Problem or Skip. A Problem asks whether to fix before merge or in a follow-up, and keeps the merge locked until it is answered. Its pictures are copied into the sheet's own published files, never linked by URL. The advisor's input `walk` is now an object (its shape is in `lib/pr_sheet.py`), and a PR sheet is published with the `assets` capability as well.
 
 ### Pilot: iPhone typing helper
 

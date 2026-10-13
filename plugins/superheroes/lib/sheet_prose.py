@@ -418,12 +418,36 @@ def _pr_what_changed(prsheet):
     return lines + [_fill(PR["describesCommit"], commit=_short(prsheet["commit"])), ""]
 
 
+def _pr_stop(number, stop, stack):
+    """One walk stop: its numbered title, then its steps, expectation, pictures, note and answers, indented."""
+    words = PR["walkAnswers"]
+    lines = ["%d. %s%s%s" % (number, _fill(PR["walkStopPr"], pr=str(stop["pr"])) + " " if stack else "", _text(stop["title"]),
+                            " · " + PR["optionalBadge"] if stop.get("optional") else "")]
+    lines += ["   %s. %s" % (chr(97 + n), _text(step)) for n, step in enumerate(stop["steps"])]
+    lines.append("   %s %s" % (PR["expectLabel" if stop["kind"] == "try" else "lookForLabel"], _text(stop["expect"])))
+    for picture in stop["pictures"]:
+        lines.append("   " + (_fill(PR["pictureMissing"], alt=_text(picture["alt"])) if picture.get("missing")
+                              else "Picture: %s (%s)" % (_text(picture.get("caption", picture["alt"])), _text(picture["src"]))))
+    if "notWalked" in stop:
+        lines.append("   " + _fill(PR["notWalkedByAdvisor"], reason=_text(stop["notWalked"])))
+    return lines + ["   Answers: " + " / ".join(words["labels"][a] for a in words[stop["kind"]]),
+                    "   On Problem: " + " / ".join(fix["label"] for fix in PR["walkFixes"])]
+
+
 def _pr_walk(sheet):
-    stack = sheet["kind"] == "stack"
-    lines = ["**%s**" % PR["walkHeading"], ""]
-    for stop in sheet["prSheet"]["walk"]:
-        lines.append("- " + (_fill(PR["walkStopPr"], pr=str(stop["pr"])) + " " if stack else "") + _text(stop["title"]))
-    return lines + [""]
+    walk, stack = sheet["prSheet"]["walk"], sheet["kind"] == "stack"
+    opened = walk["open"]
+    lines = ["**%s**" % PR["walkHeading"], "", " — ".join(_text(opened[k]) for k in ("label", "url", "detail") if k in opened)]
+    lines += [_text(walk["note"])] if "note" in walk else []
+    lines += [_fill(PR["advisorWalked"], **{"from": _text(walk["picturesFrom"])}), ""]
+    number = 0
+    for group in dict.fromkeys(stop["group"] for stop in walk["stops"]):
+        lines += ["*%s*" % _text(group), ""]
+        for stop in (stop for stop in walk["stops"] if stop["group"] == group):
+            number += 1
+            lines += _pr_stop(number, stop, stack)
+        lines.append("")
+    return lines
 
 
 def _pr_folded(heading, entries):
@@ -431,8 +455,9 @@ def _pr_folded(heading, entries):
     return ["**%s (%d)**" % (heading, len(entries)), ""] + ["- " + entry for entry in entries] + [""]
 
 
-def _pr_entry(found):
-    return "%s — %s" % (_text(found["title"]), _text(found["detail"]))
+def _pr_entry(found, stack):
+    return "%s%s — %s" % (_fill(PR["walkStopPr"], pr=str(found["pr"])) + ": " if stack and "pr" in found else "",
+                          _text(found["title"]), _text(found["detail"]))
 
 
 def _offered_verdicts(kind):
@@ -447,7 +472,7 @@ def _pr_body(sheet):
     lines = _pr_what_changed(prsheet)
     if "previousCommit" in prsheet:
         lines += ["**%s**" % PR["changedHeading"], "", _fill(PR["changed"], previous=_short(prsheet["previousCommit"])), ""]
-    if prsheet["walk"]:
+    if "walk" in prsheet:
         lines += _pr_walk(sheet)
     lines += ["**%s**" % PR["acceptingHeading"], ""]
     if not sheet["cards"]:
@@ -456,8 +481,8 @@ def _pr_body(sheet):
         lines += _render_card(number, card, PR_ANSWERS) + [""]
     stacked = [_fill(PR["walkStopPr"], pr=str(found["number"])) + " %s · %s" % (_text(found["title"]), _short(found["commit"]))
                for found in prsheet["prs"]] if stack else []
-    for heading, entries in ((PR["craftHeading"], [_pr_entry(found) for found in prsheet["craft"]]),
-                             (PR["decidedHeading"], [_pr_entry(found) for found in prsheet["alreadyDecided"]]),
+    for heading, entries in ((PR["craftHeading"], [_pr_entry(found, stack) for found in prsheet["craft"]]),
+                             (PR["decidedHeading"], [_pr_entry(found, stack) for found in prsheet["alreadyDecided"]]),
                              (PR["reviewHeading"], [_text(line) for line in prsheet["history"]]),
                              (PR["prsHeading"], stacked)):
         if entries:

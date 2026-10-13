@@ -57,23 +57,38 @@
       "#7: 1 rounds ran.",
       "#7: Checks were green, run on 3333333ccccccc3333333ccccccc3333333ccccc."
     ],
-    "walk": [
-      {
-        "id": "gift-card-table",
-        "title": "The gift-card table",
-        "pr": 5
+    "walk": {
+      "open": {
+        "label": "Open the test shop"
       },
-      {
-        "id": "checkout-redeem",
-        "title": "Spending a card at checkout",
-        "pr": 6
-      },
-      {
-        "id": "balance-page",
-        "title": "The balance on the account page",
-        "pr": 7
-      }
-    ],
+      "picturesFrom": "the advisor's own test shop",
+      "stops": [
+        {
+          "id": "gift-card-table",
+          "key": "gift-card-table-18668f855294",
+          "title": "The gift-card table",
+          "pr": 5,
+          "group": "Gift cards",
+          "kind": "look",
+          "steps": [],
+          "expect": "The new table in the admin view.",
+          "pictures": []
+        },
+        {
+          "id": "checkout-redeem",
+          "key": "checkout-redeem-449ec5af939f",
+          "title": "Spending a card at checkout",
+          "pr": 6,
+          "group": "Gift cards",
+          "kind": "try",
+          "steps": [
+            "Pay with a gift card"
+          ],
+          "expect": "The balance drops by the price.",
+          "pictures": []
+        }
+      ]
+    },
     "prs": [
       {
         "number": 5,

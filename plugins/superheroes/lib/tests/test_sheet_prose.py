@@ -839,10 +839,12 @@ def _pr_kind_sheet(kind):
         "craft": [],
         "alreadyDecided": [],
         "history": ["2 rounds ran."],
-        "walk": [{"id": "schema", "title": "The schema", "pr": 1724}],
+        "walk": {"open": {"label": "Open it"}, "picturesFrom": "the advisor's account", "stops": [
+            {"id": "schema", "key": "schema-0123456789ab", "title": "The schema", "pr": 1724, "group": "Stops", "kind": "look", "steps": [], "expect": "A table.", "pictures": []}]},
     }
     if kind == "stack":
-        body["walk"].append({"id": "builder", "title": "The builder", "pr": 1725})
+        body["walk"]["stops"].append({"id": "builder", "key": "builder-0123456789ab", "title": "The builder", "pr": 1725, "group": "Stops", "kind": "look", "steps": [],
+                                      "expect": "A script.", "pictures": []})
         body["prs"] = [{"number": 1724, "title": "The schema", "commit": "662d4487"},
                        {"number": 1725, "title": "The builder", "commit": "abcdef0"}]
     card = _card("leftover", options=[{"id": "keep-it", "label": "Keep it", "consequence": "Ships.", "sendsBack": False}])
@@ -909,11 +911,14 @@ def _pr_markers(sheet):
     markers += [PR_WORDS["ciLine"].replace("{state}", facts["ci"]["state"]).replace("{commit}", facts["ci"]["commit"][:7]),
                 PR_WORDS["laneLine"].replace("{lane}", facts["lane"]).replace("{reason}", facts["laneReason"]),
                 PR_WORDS["describesCommit"].replace("{commit}", part["commit"][:7]), "**%s**" % PR_WORDS["walkHeading"]]
-    markers += ["- %s%s" % ("#%d " % stop["pr"] if stack else "", stop["title"]) for stop in part["walk"]]
+    walk = part["walk"]
+    markers += [walk["open"]["label"], PR_WORDS["advisorWalked"].replace("{from}", walk["picturesFrom"])]
+    markers += ["%d. %s%s" % (number, "#%d " % stop["pr"] if stack else "", stop["title"]) for number, stop in enumerate(walk["stops"], 1)]
     markers.append("**%s**" % PR_WORDS["acceptingHeading"])
     markers += ["%d. **%s**" % (number, card["question"]) for number, card in enumerate(sheet["cards"], 1)]
-    folded = [(PR_WORDS["craftHeading"], ["%s — %s" % (e["title"], e["detail"]) for e in part["craft"]]),
-              (PR_WORDS["decidedHeading"], ["%s — %s" % (e["title"], e["detail"]) for e in part["alreadyDecided"]]),
+    entry = lambda e: "%s%s — %s" % ("#%d: " % e["pr"] if stack and "pr" in e else "", e["title"], e["detail"])
+    folded = [(PR_WORDS["craftHeading"], [entry(e) for e in part["craft"]]),
+              (PR_WORDS["decidedHeading"], [entry(e) for e in part["alreadyDecided"]]),
               (PR_WORDS["reviewHeading"], list(part["history"]))]
     if stack:
         folded.append((PR_WORDS["prsHeading"], ["#%d %s · %s" % (p["number"], p["title"], p["commit"][:7]) for p in part["prs"]]))
@@ -999,7 +1004,7 @@ def test_prose_of_a_pr_sheet_with_no_cards_says_nothing_is_to_be_accepted(tmp_pa
         sheet["cards"] = []
         out = _prose_of(tmp_path, sheet)
         assert "**%s**\n\n%s\n" % (PR_WORDS["acceptingHeading"], PR_WORDS["nothingToAccept"]) in out, kind
-        assert not re.search(r"^1\. ", out, re.M), kind
+        assert not re.search(r"^1\. ", out[out.index("**%s**" % PR_WORDS["acceptingHeading"]):], re.M), kind
         assert out.index(PR_WORDS["nothingToAccept"]) < out.index("**%s**" % PR_WORDS["verdictHeading"]) < out.index("Answer Merge"), kind
 
 
@@ -1008,7 +1013,8 @@ def test_prose_leaves_out_each_empty_part(tmp_path):
     for kind in ("pr", "stack"):
         sheet = _sample(kind)
         part = sheet["prSheet"]
-        part["whatChanged"]["caught"], part["walk"], part["craft"], part["alreadyDecided"], part["history"] = [], [], [], [], []
+        part["whatChanged"]["caught"], part["craft"], part["alreadyDecided"], part["history"] = [], [], [], []
+        del part["walk"]
         out = _prose_of(tmp_path, sheet)
         for heading in ("caughtHeading", "walkHeading", "craftHeading", "decidedHeading", "reviewHeading"):
             assert PR_WORDS[heading] not in out, (kind, heading)
@@ -1042,9 +1048,9 @@ def test_prose_escapes_markdown_in_a_pr_sheets_text(tmp_path):
     sheet = _sample("pr")
     sheet["prSheet"]["whatChanged"]["summary"] = "Adds *bold* and `code`"
     sheet["prSheet"]["craft"][0]["title"] = "A_b_c"
-    sheet["prSheet"]["walk"][0]["title"] = "[link](x)"
+    sheet["prSheet"]["walk"]["stops"][0]["title"] = "[link](x)"
     out = _prose_of(tmp_path, sheet)
-    assert "Adds \\*bold\\* and \\`code\\`" in out and "A\\_b\\_c — " in out and "- \\[link\\](x)" in out
+    assert "Adds \\*bold\\* and \\`code\\`" in out and "A\\_b\\_c — " in out and "1. \\[link\\](x)" in out
 
 
 # Bites on: the CLI refusing a pr sheet, or printing nothing for it.
@@ -1094,7 +1100,88 @@ def test_a_pattern_with_no_description_is_named_by_the_pattern(tmp_path, monkeyp
 def test_a_data_file_that_fails_the_check_is_still_refused_before_rendering(tmp_path):
     # Axis: a pr sheet that breaks a rule of the schema prints nothing on stdout and the problem on stderr, with exit 1.
     sheet = _sample("pr")
-    del sheet["prSheet"]["walk"]
+    del sheet["prSheet"]["history"]
     result = _render(tmp_path, sheet)
     assert result.returncode == 1 and result.stdout == ""
-    assert result.stderr == "PrSheet has no walk.\n"
+    assert result.stderr == "PrSheet has no history.\n"
+
+
+FIXTURES = PLUGIN / "lib" / "tests" / "fixtures" / "pr_sheet"
+WALK_INPUT = json.loads((FIXTURES / "input-walk.json").read_text(encoding="utf-8"))["walk"]
+# The sheet paths the builder gives the fixture's pictures (named by content), and the one picture it has no file for.
+WALK_PICTURE_PATHS = {"The empty cart": "pictures/228215e2dae3.png", "The paid order": "pictures/b601e7730818.png",
+                      "The gave-up screen": "pictures/33a85956073b.png"}
+
+
+def _expected_walk_prose():
+    """The walk part as the page's words and the walk fixture give it; the layout (numbering, lettering, indent, order) is spelled out here."""
+    answers = PR_WORDS["walkAnswers"]
+    tail = ["   Answers: " + " / ".join(answers["labels"][a] for a in answers[kind]) for kind in ("try", "look")]
+    problem = "   On Problem: " + " / ".join(fix["label"] for fix in PR_WORDS["walkFixes"])
+    opened = WALK_INPUT["open"]
+    lines = ["**%s**" % PR_WORDS["walkHeading"], "", "%s — %s — %s" % (opened["label"], opened["url"], opened["detail"]), WALK_INPUT["note"],
+             PR_WORDS["advisorWalked"].replace("{from}", WALK_INPUT["picturesFrom"]), ""]
+    number, group = 0, None
+    for stop in WALK_INPUT["stops"]:
+        if stop["group"] != group:
+            lines += ([""] if group is not None else []) + ["*%s*" % stop["group"], ""]
+            group = stop["group"]
+        number += 1
+        lines.append("%d. %s%s" % (number, stop["title"], " · " + PR_WORDS["optionalBadge"] if stop.get("optional") else ""))
+        lines += ["   %s. %s" % (chr(97 + n), step) for n, step in enumerate(stop.get("steps", []))]
+        lines.append("   %s %s" % (PR_WORDS["expectLabel" if stop["kind"] == "try" else "lookForLabel"], stop["expect"]))
+        for picture in stop.get("pictures", []):
+            if picture["path"].endswith("no-such-picture.png"):
+                lines.append("   " + PR_WORDS["pictureMissing"].replace("{alt}", picture["alt"]))
+            else:
+                lines.append("   Picture: %s (%s)" % (picture.get("caption", picture["alt"]), WALK_PICTURE_PATHS[picture["alt"]]))
+        if "notWalked" in stop:
+            lines.append("   " + PR_WORDS["notWalkedByAdvisor"].replace("{reason}", stop["notWalked"]))
+        lines += [tail[stop["kind"] == "look"], problem]
+    return "\n".join(lines) + "\n\n"
+
+
+def _walk_sheet(tmp_path):
+    """The data file the builder makes from the full walk fixture, with its pictures copied beside it."""
+    out = tmp_path / "sheet.json"
+    built = subprocess.run([sys.executable, "-B", str(PLUGIN / "lib" / "pr_sheet.py"), "build", "--record", str(FIXTURES / "record-big.json"),
+                            "--input", str(FIXTURES / "input-walk.json"), "--out", str(out)], capture_output=True, text=True)
+    assert built.returncode == 0, built.stdout
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+# Bites on: the walk prose dropping a stop's steps, expectation, picture caption, missing-picture line, not-walked line, optional mark, answers or fix choices, or leaving a picture's sheet path out (a look-only stop is unreviewable without it).
+def test_prose_prints_the_walk_with_its_stops_in_groups(tmp_path):
+    out = _prose_of(tmp_path, _walk_sheet(tmp_path))
+    block = out[out.index("**%s**" % PR_WORDS["walkHeading"]):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
+    assert block == _expected_walk_prose()
+    assert re.findall(r"pictures/\w+\.png", out) == ["pictures/228215e2dae3.png", "pictures/b601e7730818.png", "pictures/33a85956073b.png"]
+    assert re.findall(r"https?://\S+", out) == ["https://shop.example.test"]
+
+
+def test_prose_of_a_stack_walk_numbers_the_stops_and_names_their_prs(tmp_path):
+    # Axis: on a stack each numbered stop is prefixed with its PR, numbered across the whole walk.
+    out = _prose_of(tmp_path, _sample("stack"))
+    assert "1. #5 The gift-card table\n" in out and "2. #6 Spending a card at checkout\n" in out
+    assert "Look for: The new table in the admin view.\n" in out and "   Answers: Looks right / Problem / Skip\n" in out
+
+
+def test_prose_of_a_sheet_with_no_walk_has_no_walk_part(tmp_path):
+    # Axis: a pr sheet whose data file has no walk prints no walk heading and nothing of one.
+    sheet = _sample("pr")
+    del sheet["prSheet"]["walk"]
+    out = _prose_of(tmp_path, sheet)
+    assert PR_WORDS["walkHeading"] not in out and "Answers:" not in out and "On Problem:" not in out
+
+
+def test_a_stacks_craft_and_decided_entries_name_their_pr_and_a_pr_sheets_do_not(tmp_path):
+    # Axis: on a stack an entry that carries a pr is prefixed with that PR, and on a pr sheet no entry is.
+    stack = _sample("stack")
+    out = _prose_of(tmp_path, stack)
+    for entry in stack["prSheet"]["craft"] + stack["prSheet"]["alreadyDecided"]:
+        assert "- #%d: %s — %s\n" % (entry["pr"], entry["title"], entry["detail"]) in out
+    single = _sample("pr")
+    out = _prose_of(tmp_path, single)
+    for entry in single["prSheet"]["craft"] + single["prSheet"]["alreadyDecided"]:
+        assert "- %s — %s\n" % (entry["title"], entry["detail"]) in out
+    assert "#214: " not in out

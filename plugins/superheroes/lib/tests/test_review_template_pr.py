@@ -78,8 +78,9 @@ def _short(commit):
     return commit[:7]
 
 
-def _entry_lines(entries):
-    return [entry["title"] + " — " + entry["detail"] for entry in entries]
+def _entry_lines(entries, kind="pr"):
+    """A craft or already-decided entry reads "title — detail"; on a stack one that carries its PR starts with it."""
+    return [(_fill(PW["walkStopPr"], pr=entry["pr"]) + ": " if kind == "stack" and "pr" in entry else "") + entry["title"] + " — " + entry["detail"] for entry in entries]
 
 
 def _expected_what_changed(sheet):
@@ -110,7 +111,7 @@ def _expected_order(sheet):
     expected = ["pr-what-changed"]
     if "previousCommit" in prs:
         expected.append("pr-changed")
-    if prs["walk"]:
+    if "walk" in prs:
         expected.append("pr-walk")
     expected += ["pr-accepting"] + (["card"] * len(sheet["cards"]) or ["pr-nothing"])
     for key, part_id in (("craft", "pr-craft"), ("alreadyDecided", "pr-decided"), ("history", "pr-review")):
@@ -128,7 +129,8 @@ def _with_previous(sheet):
 def _emptied(sheet):
     def mutate(clone):
         clone["cards"] = []
-        for key in ("walk", "craft", "alreadyDecided", "history"):
+        clone["prSheet"].pop("walk", None)
+        for key in ("craft", "alreadyDecided", "history"):
             clone["prSheet"][key] = []
     return _with(sheet, mutate)
 
@@ -226,19 +228,29 @@ def test_this_pr_changed_shows_only_with_a_previous_commit():
     assert page["result"]["className"] == "sh-box"
 
 
-# Bites on: the walk out of order, a stop's PR not named on a stack (or named on a pr sheet), or an answer control on a stop.
+# Bites on: the walk's stops out of order, a stop's PR not named on a stack (or named on a pr sheet), or a stop without its own answer controls.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
 def test_the_walk_lists_the_stops_and_names_their_prs_on_a_stack(kind):
     page = _page(SAMPLES[kind], """
-      const node = part("pr-walk");
-      return { shape: shape(node), controls: t.all(node).filter((item) => item.tagName === "button" || item.tagName === "textarea").length };
+      const stops = t.all(part("pr-walk")).filter((item) => item.tagName === "article");
+      return stops.map((stop) => ({
+        id: stop.id,
+        tag: stop.children[0].children[0].textContent,
+        title: stop.children[1].textContent,
+        controls: t.all(stop).filter((item) => item.tagName === "button" || item.tagName === "textarea").length > 0,
+      }));
     """)
-    stops = SAMPLES[kind]["prSheet"]["walk"]
-    titles = [(_fill(PW["walkStopPr"], pr=stop["pr"]) + " " if kind == "stack" else "") + stop["title"] for stop in stops]
-    assert page["result"]["shape"] == [PW["walkHeading"], titles]
-    assert page["result"]["controls"] == 0
+    stops = SAMPLES[kind]["prSheet"]["walk"]["stops"]
+    groups = list(dict.fromkeys(stop["group"] for stop in stops))
+    ordered = [stop for group in groups for stop in stops if stop["group"] == group]
+    assert page["result"] == [{
+        "id": "stop-" + stop["id"],
+        "tag": (_fill(PW["walkStopPr"], pr=stop["pr"]) + " " if kind == "stack" else "") + stop["id"].upper(),
+        "title": stop["title"],
+        "controls": True,
+    } for stop in ordered]
     if kind == "stack":
-        assert titles[0] == "#5 The gift-card table"
+        assert page["result"][0]["tag"] == "#5 GIFT-CARD-TABLE"
 
 
 # Bites on: a card's parts out of order or one dropped; the options list drawn on a card with none; the Accept/Discuss pair or the options with Something else swapped.
@@ -492,7 +504,7 @@ def test_folded_parts_open_on_a_tap(kind):
     """ % json.dumps(ids))
     prs = sheet["prSheet"]
     headings = [PW["craftHeading"], PW["decidedHeading"], PW["reviewHeading"]] + ([PW["prsHeading"]] if kind == "stack" else [])
-    lines = [_entry_lines(prs["craft"]), _entry_lines(prs["alreadyDecided"]), list(prs["history"])]
+    lines = [_entry_lines(prs["craft"], kind), _entry_lines(prs["alreadyDecided"], kind), list(prs["history"])]
     if kind == "stack":
         lines.append(["#%d %s · %s" % (pr["number"], pr["title"], _short(pr["commit"])) for pr in prs["prs"]])
     assert [item["toggle"] for item in page["result"]["closed"]] == ["%s (%d)" % (heading, len(rows)) for heading, rows in zip(headings, lines)]
@@ -574,13 +586,14 @@ def test_data_text_is_drawn_as_text_and_links_open_in_a_new_tab():
     def mutate(clone):
         clone["prSheet"]["whatChanged"]["summary"] = tag + " see https://example.com/pr."
         clone["prSheet"]["whatChanged"]["caught"] = [tag]
-        clone["prSheet"]["walk"][0]["title"] = tag
+        clone["prSheet"]["walk"]["stops"][0]["title"] = tag
         clone["prSheet"]["craft"][0]["title"] = tag
         clone["prSheet"]["history"][0] = tag
     sheet = _with(PR_SAMPLE, mutate)
     page = _page(sheet, """
       const all = pageNodes().flatMap((node) => t.all(node));
-      return { tags: all.map((node) => node.tagName), texts: all.map((node) => node.textContent), links: t.links(part("pr-what-changed")) };
+      const outsideTheWalk = pageNodes().filter((node) => node.id !== "pr-walk").flatMap((node) => t.all(node));
+      return { tags: outsideTheWalk.map((node) => node.tagName), texts: all.map((node) => node.textContent), links: t.links(part("pr-what-changed")) };
     """)
     assert "img" not in page["result"]["tags"] and "b" not in page["result"]["tags"]
     assert tag in page["result"]["texts"]
@@ -1151,14 +1164,18 @@ def test_no_store_or_a_non_owner_gets_no_controls_and_no_clear(host):
 
 
 def _republished(sheet):
-    """The sheet published again with one more byte (a new title), so its digest is new and every card id is unchanged."""
-    return _with(sheet, lambda clone: clone.__setitem__("title", clone["title"] + " (second edition)"))
+    """The sheet published again for a new commit, naming the old one, so its digest is new and every card id is unchanged."""
+    def mutate(clone):
+        clone["prSheet"]["previousCommit"] = clone["prSheet"]["commit"]
+        clone["prSheet"]["commit"] = "0123456789abcdef0123456789abcdef01234567"
+    return _with(sheet, mutate)
 
 
 # Bites on: a verdict saved under the old digest restored on a republished sheet (UFR-6, R8), or an answer under a card id the new file still has not restored.
 def test_a_new_commit_starts_the_verdict_over_and_keeps_the_answers_of_unchanged_cards():
     again = _republished(PR_SAMPLE)
     assert _sheet_digest(again) != _sheet_digest(PR_SAMPLE)
+    assert again["prSheet"]["commit"] != PR_SAMPLE["prSheet"]["commit"] and again["prSheet"]["previousCommit"] == PR_SAMPLE["prSheet"]["commit"]
     assert [card["id"] for card in again["cards"]] == [card["id"] for card in PR_SAMPLE["cards"]]
     old = _sheet_digest(PR_SAMPLE)
     host = {"collections": {

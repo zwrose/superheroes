@@ -24,7 +24,7 @@
   .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
   .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
   .sheet-page :is(h2, h3, p, ul, blockquote) { margin: 0; }
-  .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
+  .sheet-page :is(.sh-card, .sh-box, .sheet-fix) > * + * { margin-top: 8px; }
   .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
   .sheet-page .sh-card > .sh-label { margin-top: 16px; }
   .sheet-page .sh-card > .sh-label + * { margin-top: 4px; }
@@ -64,6 +64,7 @@
   .sheet-viewer { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); position: fixed; z-index: 2; }
   .sheet-viewer-bar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
   .sheet-viewer-bar .sheet-viewer-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .sheet-viewer-zoom { display: flex; gap: 8px; }
   .sheet-viewer-frame { display: flex; overflow: auto; overscroll-behavior: contain; touch-action: none; }
   .sheet-viewer-frame img { display: block; flex: none; margin: auto; max-height: none; max-width: none; }
   .sheet-viewer-frame p { margin: auto; padding: 16px; }
@@ -101,6 +102,7 @@
     <div class="sheet-viewer-bar">
       <span id="sheet-viewer-caption" class="sh-label sheet-viewer-caption"></span>
       <span class="sh-caption">Pinch or double-tap to zoom.</span>
+      <span id="sheet-viewer-zoom" class="sheet-viewer-zoom"></span>
       <button id="sheet-viewer-close" class="sh-button" type="button">Close</button>
     </div>
     <div id="sheet-viewer-frame" class="sheet-viewer-frame">
@@ -694,6 +696,7 @@
     const viewer = document.getElementById("sheet-viewer");
     const viewerCaption = document.getElementById("sheet-viewer-caption");
     const viewerClose = document.getElementById("sheet-viewer-close");
+    const viewerZoom = document.getElementById("sheet-viewer-zoom");
     const viewerFrame = document.getElementById("sheet-viewer-frame");
     const viewerPicture = document.getElementById("sheet-viewer-picture");
     const sheetPage = document.querySelector(".sheet-page");
@@ -724,8 +727,8 @@
     // The zoom a Safari trackpad pinch began at; its scale is counted from there.
     let gestureStart = null;
 
-    function missingLine(alt) {
-      const line = textElement("p", "sh-caption", MISSING_PICTURE + alt);
+    function missingLine(alt, walkWords) {
+      const line = textElement("p", "sh-caption", walkWords ? fill(prWords.pictureMissing, { alt: alt }) : MISSING_PICTURE + alt);
       line.setAttribute("tabindex", "-1");
       return line;
     }
@@ -980,8 +983,8 @@
     }
 
     // A card's pictures. Each opens the image view by tap, Enter or Space; one that cannot load becomes a line
-    // saying so, with the card's other parts and the picture's caption left alone.
-    function buildImages(images) {
+    // saying so, with the card's other parts and the picture's caption left alone. A walk's pictures (walkWords) are plain text, and a missing one is that line from the start.
+    function buildImages(images, walkWords) {
       const wrap = document.createElement("div");
       wrap.className = "sheet-images";
       images.forEach(function (image) {
@@ -992,12 +995,13 @@
         const open = function () {
           if (!missing) openViewer(image, picture);
         };
-        picture.addEventListener("error", function () {
+        const lose = function () {
           missing = true;
-          const line = missingLine(image.alt);
+          const line = missingLine(image.alt, walkWords);
           figure.replaceChildren(line, ...Array.from(figure.children).filter(function (child) { return child !== picture; }));
           if (viewerOpener === picture) viewerOpener = line;
-        });
+        };
+        picture.addEventListener("error", lose);
         picture.addEventListener("click", open);
         picture.addEventListener("keydown", function (event) {
           if (event.key !== "Enter" && event.key !== " ") return;
@@ -1008,15 +1012,16 @@
         picture.addEventListener("keyup", function (event) {
           if (event.key === " ") open();
         });
-        picture.setAttribute("src", image.src);
+        if (image.missing !== true) picture.setAttribute("src", image.src);
         picture.setAttribute("alt", image.alt);
         picture.setAttribute("tabindex", "0");
         picture.setAttribute("role", "button");
         picture.setAttribute("aria-label", "Open picture: " + image.alt);
         figure.appendChild(picture);
         if (typeof image.caption === "string" && image.caption !== "") {
-          figure.appendChild(linkedElement("figcaption", "sh-caption", image.caption));
+          figure.appendChild((walkWords ? textElement : linkedElement)("figcaption", "sh-caption", image.caption));
         }
+        if (image.missing === true) lose();
         wrap.appendChild(figure);
       });
       return wrap;
@@ -1042,7 +1047,15 @@
     }
 
     function sameAnswer(one, other) {
-      return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note;
+      return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note && one.shots.length === other.shots.length && one.shots.every(function (id, index) { return id === other.shots[index]; });
+    }
+
+    function answerRow(label) {
+      const row = document.createElement("div");
+      row.className = "answer-row";
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", label);
+      return row;
     }
 
     // Nothing on the sheet may be edited before the saved answers are read.
@@ -1106,14 +1119,20 @@
     // settles the newest answer goes out next. The acknowledged answer is trusted only after a write
     // resolved: from the moment a write starts until it resolves it is unknown, so a rejected or stalled
     // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
-    // A state is always { answer, optionId, note }: a verdict is the answer, with no option.
+    // A state is always { answer, optionId, note, shots }: a verdict is the answer, with no option, and only a walk stop has shots.
+    // A spec may add pressed and unpick (when a choice shows pressed, what a second tap leaves), paint, enable, and an extra block that a second row joins.
     function addSaver(spec, article) {
       const choices = spec.choices;
-      const none = { answer: null, optionId: null, note: "" };
+      const none = { answer: null, optionId: null, note: "", shots: [] };
       let latest = none;
-      const unknown = { answer: undefined, optionId: undefined, note: undefined };
+      const unknown = { answer: undefined, optionId: undefined, note: undefined, shots: [] };
+      const pressed = spec.pressed || function (choice, state) { return state.answer === choice.answer && state.optionId === choice.optionId; };
+      const unpick = spec.unpick || function () { return { answer: null, optionId: null }; };
       let acked = none;
+      let lastSaved = none;
       let inFlight = null;
+      // Every state sent since the store's last acknowledgement: in flight, failed or stalled; any of them may be what the store holds.
+      let sent = [];
       let stalled = false;
       let stallTimer = null;
       let shown = "idle";
@@ -1125,10 +1144,8 @@
       // The answers whose button is held off by the page (the merge verdict's, while the sheet is locked): they stay off whatever setEnabled says.
       const heldAnswers = new Set();
 
-      const row = document.createElement("div");
-      row.className = "answer-row";
-      row.setAttribute("role", "group");
-      row.setAttribute("aria-label", spec.rowLabel);
+      const row = answerRow(spec.rowLabel);
+      const secondRow = choices.some(function (choice) { return choice.row === 2; }) ? spec.extra.appendChild(answerRow(spec.extraLabel)) : null;
       const buttons = choices.map(function (choice) {
         const button = textElement("button", "sh-button", choice.label);
         button.setAttribute("type", "button");
@@ -1137,13 +1154,10 @@
         button.addEventListener("click", function () {
           if (!spec.live() || heldAnswers.has(choice.answer)) return;
           // Tapping the pick again clears it; the note stays.
-          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
-          setLatest(picked
-            ? { answer: null, optionId: null, note: latest.note }
-            : { answer: choice.answer, optionId: choice.optionId, note: latest.note });
+          setLatest({ ...latest, ...(pressed(choice, latest) ? unpick(choice, latest) : { answer: choice.answer, optionId: choice.optionId }) });
           save();
         });
-        row.appendChild(button);
+        (choice.row === 2 ? secondRow : row).appendChild(button);
         return button;
       });
 
@@ -1157,13 +1171,13 @@
       keepInView(note);
       note.addEventListener("input", function () {
         if (!spec.live()) return;
-        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        setLatest({ ...latest, note: note.value });
         clearTimeout(timer);
         timer = setTimeout(save, NOTE_PAUSE_MS);
       });
       note.addEventListener("change", function () {
         if (!spec.live()) return;
-        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        setLatest({ ...latest, note: note.value });
         save();
       });
 
@@ -1174,11 +1188,11 @@
 
       function paint() {
         buttons.forEach(function (button, index) {
-          const choice = choices[index];
-          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
+          const picked = pressed(choices[index], latest);
           button.className = picked ? "sh-button sh-button--main" : "sh-button";
           button.setAttribute("aria-pressed", picked ? "true" : "false");
         });
+        if (spec.paint !== undefined) spec.paint(latest, noteLabel);
         refreshSheet();
       }
 
@@ -1237,7 +1251,7 @@
           return;
         }
         // The page can hold a write back (a card's, while a withdrawn Merge may still stand in the store); the line is then worked out by resume().
-        if (spec.mayWrite !== undefined && !spec.mayWrite()) {
+        if (spec.mayWrite !== undefined && !spec.mayWrite(latest)) {
           waiting = true;
           refreshSheet();
           return;
@@ -1249,6 +1263,7 @@
         const body = latest;
         waiting = false;
         inFlight = body;
+        sent.push(body);
         // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
         acked = unknown;
         stalled = false;
@@ -1274,14 +1289,17 @@
         inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
-        if (saved) acked = body;
+        if (saved) {
+          acked = lastSaved = body;
+          sent = [];
+        }
         // A note's pause is still running: it sends the newest state itself when it ends.
         if (timer !== null) {
           showStatus("saving");
           return;
         }
         if (!sameAnswer(latest, body)) {
-          send();
+          save();
           return;
         }
         showStatus(saved ? "saved" : "failed");
@@ -1296,9 +1314,10 @@
       spec.keep({
         // A stored document restores what the spec's rule lets it restore.
         restore: function (data) {
-          const state = spec.state(data);
+          const state = { shots: [], ...spec.state(data) };
           latest = state;
-          acked = state;
+          acked = lastSaved = state;
+          sent = [];
           note.value = state.note;
           paint();
           // What the store holds is what this state says, so the line shows it as saved; nothing restored stays quiet.
@@ -1306,15 +1325,20 @@
         },
         // Turns the controls (and a Try again on the save line) on or off.
         setEnabled: function (on) {
+          on = on && spec.live();
           switchedOn = on;
           buttons.forEach(function (button, index) { button.disabled = !on || heldAnswers.has(choices[index].answer); });
           note.disabled = !on;
           if (retryButton !== null) retryButton.disabled = !on;
+          if (spec.enable !== undefined) spec.enable(on);
         },
         unsaved: isUnsaved,
         // The pick the store has acknowledged, or null while anything of this saver is unsaved.
         confirmed: function () {
           return isUnsaved() ? null : { answer: acked.answer, optionId: acked.optionId };
+        },
+        acknowledged: function () {
+          return [lastSaved, ...sent, latest];
         },
         // Gives a choice's button its words, and holds it off (or lets the controls decide again).
         setChoice: function (answer, label, held) {
@@ -1336,7 +1360,11 @@
         // and the newest state is the last one the store gets.
         clear: function () {
           if (!spec.live()) return;
-          setLatest({ answer: null, optionId: null, note: latest.note });
+          setLatest({ ...latest, answer: null, optionId: null });
+          save();
+        },
+        addShot: function (id) {
+          setLatest({ ...latest, shots: latest.shots.concat([id]) });
           save();
         },
         // The latest pick (what the pressed button shows) and the kind the save line shows now.
@@ -1345,12 +1373,12 @@
         },
         // The latest pick and note, as they stand now.
         current: function () {
-          return { answer: latest.answer, optionId: latest.optionId, note: latest.note };
+          return latest;
         },
         // Re-runs a save that was held back: it goes out once mayWrite() allows; until then the line says Saving…, or Not saved (no Try again) when the page says what it waits on has failed or stalled.
         resume: function (lost) {
           if (!waiting) return;
-          if (spec.mayWrite()) save();
+          if (spec.mayWrite(latest)) save();
           else if (lost !== (shown === "stalled")) showStatus(lost ? "stalled" : "saving");
         },
         // Cuts a note's pause short: the pending save runs now.
@@ -1360,6 +1388,7 @@
       });
 
       article.appendChild(row);
+      if (spec.extra !== undefined) article.appendChild(spec.extra);
       article.appendChild(noteLabel);
       article.appendChild(note);
       article.appendChild(saveLine);
@@ -1382,6 +1411,11 @@
         answerWords.withoutOptions.forEach(function (value) { choices.push(plain(value)); });
       }
       return choices;
+    }
+
+    // A walk state blocks Merge when it is a Problem whose fix is none, unknown or one that sends the PR back: one home for the rule, read by lockVerdict and by the walk saver.
+    function blocking(pick) {
+      return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
     }
 
     // A card of a pr or stack sheet writes only while the store cannot end up holding a Merge beside the changed answer: not while the
@@ -1521,6 +1555,22 @@
       return button;
     }
 
+    // The answers that count a walk stop as walked; the walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
+    const WALKED = ["works", "looks-right", "problem"];
+    let walkStops = [];
+    let walkCount = textElement("span", "sh-label", "");
+    let walkLines = [];
+    let walkRule = null;
+
+    // How many items the store has acknowledged as accepted (Accept, or an option that does not send the PR back) and nothing of the item is unsaved.
+    function savedAcceptances() {
+      return items.filter(function (item) {
+        const held = controllers.get(item.id).confirmed();
+        const option = held === null ? undefined : item.options.find(function (candidate) { return candidate.id === held.optionId; });
+        return held !== null && (held.answer === "accept" || (option !== undefined && option.sendsBack === false));
+      }).length;
+    }
+
     // Moving to a different card puts the page back at its top; opening the card already open only refreshes.
     // The first landing after the saved answers load does not come through here.
     function openAt(index) {
@@ -1619,18 +1669,12 @@
       const answered = states.filter(function (state) { return state.answer !== null; });
       const chatting = answered.filter(openForChat);
 
-      // A card is accepted by the pick of Accept, or of an option that does not send the PR back.
-      const accepted = states.filter(function (state, index) {
-        if (state.answer === "accept") return true;
-        const option = state.optionId === null ? undefined : items[index].options.find(function (item) { return item.id === state.optionId; });
-        return option !== undefined && option.sendsBack === false;
-      }).length;
       const notLoaded = total + (total === 1 ? " item" : " items") + " · answers not loaded";
       // A final sheet may have no cards: there is then nothing to count, step through or list.
       if (onePage) {
         countHost.textContent = total === 0
           ? prWords.nothingToAcceptCount
-          : ready ? fill(prWords.acceptedCount, { accepted: accepted, total: total }) : notLoaded;
+          : ready ? fill(prWords.acceptedCount, { accepted: savedAcceptances(), total: total }) : notLoaded;
       } else {
         countHost.textContent = total === 0
           ? "Nothing left to answer"
@@ -1701,28 +1745,48 @@
     // back) while its saver holds nothing unsaved; the sheet is locked while any item is not. A card whose current pick
     // is an option that sends the PR back replaces the verdict's buttons, note and unlock line with the send-back message.
     // A Merge held while the sheet is locked is cleared through the verdict saver, so it queues behind any write in flight.
+    // A walk stop whose latest answer is a Problem with no fix chosen, or with anything of its saver unsaved, locks the merge too; stops not walked never do.
     function lockVerdict(states) {
       const total = items.length;
       const optionOf = function (index, optionId) {
         return optionId === null ? undefined : items[index].options.find(function (item) { return item.id === optionId; });
       };
-      const accepted = items.filter(function (item, index) {
-        const held = controllers.get(item.id).confirmed();
-        if (held === null) return false;
-        if (held.answer === "accept") return true;
-        const option = optionOf(index, held.optionId);
-        return option !== undefined && option.sendsBack === false;
-      }).length;
+      const accepted = savedAcceptances();
       const incomplete = accepted < total;
+      const walked = walkStops.map(function (stop) {
+        const controller = controllers.get("walk:" + stop.key);
+        return { optional: stop.optional === true, now: controller.current(), saved: controller.confirmed() || { answer: null }, unsaved: controller.unsaved(), acked: controller.acknowledged() };
+      });
+      const count = function (test) { return walked.filter(test).length; };
+      const fixOf = function (pick) {
+        return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
+      };
+      // A stop blocks while any state its store might hold does (see blocking).
+      // A Problem whose fix the store has not yet acknowledged counts too (acked[0] is the last saved pick), so a follow-up chosen over a held Problem stays locked until it lands; an edit beside a saved follow-up does not.
+      const open = count(function (item) {
+        const saved = item.acked[0];
+        return item.acked.some(blocking) || (item.unsaved && item.now.answer === "problem" && !(saved.answer === "problem" && saved.optionId === item.now.optionId));
+      });
       // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
-      const locked = incomplete || clearUnsaved;
+      const locked = incomplete || clearUnsaved || open > 0;
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
+      }) || walked.some(function (item) { return fixOf(item.now).sendsBack === true; });
+      const counts = [
+        open,
+        count(function (item) { return fixOf(item.saved).sendsBack === false; }),
+        count(function (item) { return !item.optional && !WALKED.includes(item.now.answer); }),
+      ];
+      ["walkProblems", "followUps", "notWalked"].forEach(function (name, index) {
+        walkLines[index].textContent = counts[index] === 0 ? "" : fill(prWords[name + (counts[index] === 1 ? "One" : "Many")], { count: counts[index] });
+        walkLines[index].hidden = counts[index] === 0 || sendsBack;
       });
+      walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return WALKED.includes(item.saved.answer); }), total: walked.length });
+      walkCount.hidden = !ready;
       const mergeLabel = verdictLabel("merge");
       verdictController.setChoice("merge", locked ? fill(prWords.mergeLocked, { merge: mergeLabel }) : mergeLabel, locked);
       verdictController.setShown(!sendsBack);
@@ -1828,11 +1892,25 @@
       "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
       "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "sendBack",
+      "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
+      "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
+      "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
     ];
+
+    function hasWalkWords(pr) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const answers = pr.walkAnswers;
+      const labelled = function (kind) {
+        return isObject(answers) && isObject(answers.labels) && Array.isArray(answers[kind]) && answers[kind].every(function (value) { return typeof answers.labels[value] === "string"; });
+      };
+      return labelled("try") && labelled("look") && Array.isArray(pr.walkFixes) && pr.walkFixes.every(function (fix) {
+        return isObject(fix) && ["id", "label", "consequence"].every(function (key) { return typeof fix[key] === "string"; }) && typeof fix.sendsBack === "boolean";
+      });
+    }
 
     function hasPrWords(words) {
       return words !== null && typeof words === "object" && typeof words.roundNoun === "string" && words.pr !== null
-        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; });
+        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr);
     }
 
     // The first seven characters of a commit, as every line of a pr sheet names one.
@@ -1890,18 +1968,145 @@
       return box;
     }
 
-    // The walk: the stops' titles in order; on a stack each stop also names its PR. It has no answer controls.
+    function boldLead(tag, className, bold, text) {
+      const element = textElement(tag, className, "");
+      element.replaceChildren(textElement("b", "", bold), document.createTextNode(" " + text));
+      return element;
+    }
+
+    // The host's picture store, asked for on the first tap of an Add a screenshot (null when there is none or it cannot upload), and the uploads in flight.
+    let assetsAsk = null;
+    let uploads = 0;
+
+    // One walk stop, all plain text: its parts and pictures, then its answers saved at walk/<key>; a Problem opens the fix block.
+    function buildStop(stop, walk) {
+      const article = prSection("article", "stop-" + stop.id, "sh-box");
+      const meta = document.createElement("div");
+      meta.appendChild(textElement("span", "sh-tag", (sheetKind === "stack" ? fill(prWords.walkStopPr, { pr: stop.pr }) + " " : "") + stop.id.toUpperCase()));
+      if (stop.optional === true) meta.appendChild(textElement("span", "sh-badge", prWords.optionalBadge));
+      article.replaceChildren(meta, textElement("h3", "sh-heading", stop.title));
+      if (stop.kind === "try") {
+        const steps = prSection("ol", "steps-" + stop.id, "sheet-walk-list");
+        stop.steps.forEach(function (step) { steps.appendChild(textElement("li", "", step)); });
+        article.appendChild(steps);
+      }
+      article.appendChild(boldLead("p", "expect", stop.kind === "try" ? prWords.expectLabel : prWords.lookForLabel, stop.expect));
+      if (stop.notWalked !== undefined) article.appendChild(textElement("p", "sh-caption", fill(prWords.notWalkedByAdvisor, { reason: stop.notWalked })));
+      if (stop.pictures.length > 0) article.appendChild(buildImages(stop.pictures, true));
+      if (stop.pictures.some(function (picture) { return picture.missing !== true; })) article.appendChild(textElement("p", "sh-caption", prWords.tapPicture));
+      const extra = prSection("div", "fix-" + stop.id, "sheet-fix");
+      extra.hidden = true;
+      const fixes = prSection("ul", "fixes-" + stop.id, "");
+      prWords.walkFixes.forEach(function (fix) { fixes.appendChild(boldLead("li", "", fix.label + ":", fix.consequence)); });
+      extra.replaceChildren(textElement("p", "sh-label", prWords.fixQuestion), fixes);
+      let controller = null;
+      let uploading = false;
+      const shotLine = textElement("span", "sh-caption", "");
+      const input = document.createElement("input");
+      input.setAttribute("type", "file");
+      input.setAttribute("accept", "image/png,image/jpeg,image/gif,image/webp");
+      input.hidden = true;
+      const pick = actionButton(prWords.addScreenshot, async function () {
+        if (!canEdit()) return;
+        assetsAsk = assetsAsk || withDeadline(function () { return window.claude.use("assets"); }).then(function (assets) {
+          return assets && typeof assets.upload === "function" ? assets : null;
+        }, function () { return null; });
+        pick.disabled = (await assetsAsk) === null;
+        if (pick.disabled) shotLine.textContent = prWords.screenshotUnavailable;
+        else input.click();
+      });
+      pick.disabled = true;
+      input.addEventListener("change", async function () {
+        const file = input.files && input.files[0];
+        input.value = "";
+        if (!file || !canEdit()) return;
+        uploading = true;
+        uploads += 1;
+        pick.disabled = true;
+        shotLine.textContent = prWords.screenshotUploading;
+        let id = null;
+        const real = (async function () { return (await (await assetsAsk).upload(file)).id; })();
+        real.then(function () { uploads -= 1; }, function () { uploads -= 1; });
+        try { id = await withDeadline(function () { return real; }); } catch (error) { id = null; }
+        uploading = false;
+        pick.disabled = false;
+        if (typeof id === "string" && id !== "") controller.addShot(id);
+        else {
+          shotLine.textContent = prWords.screenshotFailed;
+          // A stall is not a loss: an upload that lands after the deadline is still saved, once.
+          real.then(function (late) { if (typeof late === "string" && late !== "") controller.addShot(late); }, function () {});
+        }
+      });
+      addSaver({
+        choices: prWords.walkAnswers[stop.kind].map(function (value) { return { label: prWords.walkAnswers.labels[value], answer: value, optionId: null }; })
+          .concat(prWords.walkFixes.map(function (fix) { return { label: fix.label, answer: "problem", optionId: fix.id, row: 2 }; })),
+        rowLabel: "Your answer",
+        extra: extra,
+        extraLabel: prWords.fixQuestion,
+        noteId: "walk-note-" + stop.id,
+        path: "walk/" + stop.key,
+        live: function () { return canEdit() && walkRule !== null; },
+        // A Problem that sends the PR back waits while a saved Merge may still stand; any other answer, and a follow-up Problem that never blocks Merge, writes freely.
+        mayWrite: function (latest) { return !blocking(latest) || cardMayWrite(); },
+        // Problem shows pressed whichever fix is chosen, and tapping a chosen fix again leaves the Problem with no fix.
+        pressed: function (choice, latest) {
+          return choice.answer === latest.answer && (choice.optionId === latest.optionId || (choice.answer === "problem" && choice.optionId === null));
+        },
+        unpick: function (choice) { return { answer: choice.optionId === null ? null : "problem", optionId: null }; },
+        paint: function (latest, noteLabel) {
+          extra.hidden = latest.answer !== "problem";
+          noteLabel.textContent = latest.answer === "problem" ? prWords.problemNote : "Note";
+          if (!uploading && latest.shots.length > 0) shotLine.textContent = fill(prWords.screenshotsAdded, { count: latest.shots.length });
+        },
+        enable: function (on) { pick.disabled = !on; },
+        document: function (body) { return { answer: body.answer, fix: body.optionId, note: body.note, shots: body.shots }; },
+        // A stored document restores its pick only when it fits the walk-answer rule and names an answer and a fix offered; else only its text note.
+        state: function (data) {
+          const fits = walkRule !== null && fitsRule(walkRule.root, walkRule.rule, data)
+            && (data.answer === null || prWords.walkAnswers[stop.kind].includes(data.answer))
+            && (data.fix === null || prWords.walkFixes.some(function (fix) { return fix.id === data.fix; }));
+          if (fits) return { answer: data.answer, optionId: data.fix, note: data.note, shots: data.shots.slice() };
+          // A stored Problem whose fix is not offered, or whose document is malformed, stays a Problem with no fix, so it keeps blocking Merge.
+          return { answer: data.answer === "problem" ? "problem" : null, optionId: null, note: typeof data.note === "string" ? data.note : "", shots: [] };
+        },
+        keep: function (made) { controller = made; controllers.set("walk:" + stop.key, made); },
+      }, article);
+      extra.appendChild(prSection("div", "shots-" + stop.id, "save-line")).replaceChildren(pick, shotLine, input);
+      return article;
+    }
+
+    // The walk: the open box, the advisor's lines, then the stops, each group's label once before its first stop.
     function buildWalk(walk) {
       const section = prSection("section", "pr-walk", "sh-box");
-      const list = document.createElement("ol");
-      list.className = "sheet-walk-list";
-      walk.forEach(function (stop) {
-        const prefix = sheetKind === "stack" ? fill(prWords.walkStopPr, { pr: stop.pr }) + " " : "";
-        list.appendChild(linkedElement("li", "", prefix + stop.title));
+      walkCount = prSection("span", "walk-count", "sh-label");
+      const open = document.createElement("p");
+      if (walk.open.url === undefined) {
+        open.textContent = walk.open.label;
+      } else {
+        const link = textElement("a", "", walk.open.label + " ↗");
+        Object.entries({ href: walk.open.url, target: "_blank", rel: "noopener" }).forEach(function (pair) { link.setAttribute(pair[0], pair[1]); });
+        open.appendChild(link);
+      }
+      const box = prSection("div", "pr-walk-open", "sh-box");
+      box.replaceChildren(open, ...(walk.open.detail === undefined ? [] : [textElement("p", "sh-caption", walk.open.detail)]));
+      const head = prSection("div", "pr-walk-head", "sheet-stepper");
+      head.replaceChildren(textElement("h2", "", prWords.walkHeading), walkCount);
+      section.replaceChildren(head, box);
+      if (walk.note !== undefined) section.appendChild(textElement("p", "", walk.note));
+      section.appendChild(textElement("p", "sh-caption", fill(prWords.advisorWalked, { from: walk.picturesFrom })));
+      walkStops = walk.stops;
+      walk.stops.map(function (stop) { return stop.group; }).filter(function (group, index, all) { return all.indexOf(group) === index; }).forEach(function (group) {
+        section.appendChild(textElement("p", "sh-label", group));
+        walk.stops.filter(function (stop) { return stop.group === group; }).forEach(function (stop) { section.appendChild(buildStop(stop, walk)); });
       });
-      section.appendChild(textElement("h2", "", prWords.walkHeading));
-      section.appendChild(list);
       return section;
+    }
+
+    // The view's zoom buttons (pr and stack sheets): − and + step about the frame's centre, Fit goes back to the fitted size (a factor of 0 holds at 1).
+    function zoomButtons() {
+      return [[prWords.zoomOut, 1 / WHEEL_STEP_MAX], [prWords.zoomIn, WHEEL_STEP_MAX], [prWords.zoomFit, 0]].map(function (zoom) {
+        return actionButton(zoom[0], function () { zoomTo(scale * zoom[1], viewerFrame.clientWidth / 2, viewerFrame.clientHeight / 2); });
+      });
     }
 
     // A part that is folded away at load and opens its lines on a tap.
@@ -1934,6 +2139,7 @@
       sendBackLine.id = "verdict-send-back";
       sendBackLine.hidden = true;
       article.appendChild(unlockLine);
+      walkLines = ["walk-problems", "follow-ups", "not-walked"].map(function (name) { return article.appendChild(prSection("p", "verdict-" + name, "sh-caption")); });
       article.appendChild(sendBackLine);
       article.appendChild(textElement("p", "sh-caption", prWords.verdictCaption));
       return article;
@@ -1944,7 +2150,7 @@
     function prHead(prSheet, hasCards) {
       const parts = [buildWhatChanged(prSheet)];
       if (prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
-      if (prSheet.walk.length > 0) parts.push(buildWalk(prSheet.walk));
+      if (prSheet.walk !== undefined) parts.push(buildWalk(prSheet.walk));
       const accepting = textElement("h2", "", prWords.acceptingHeading);
       accepting.id = "pr-accepting";
       parts.push(accepting);
@@ -1958,7 +2164,7 @@
 
     // The parts below the cards: the folded parts that have something in them, then the merge verdict.
     function prTail(prSheet) {
-      const entryLine = function (entry) { return entry.title + " — " + entry.detail; };
+      const entryLine = function (entry) { return (sheetKind === "stack" && entry.pr !== undefined ? fill(prWords.walkStopPr, { pr: entry.pr }) + ": " : "") + entry.title + " — " + entry.detail; };
       const parts = [];
       if (prSheet.craft.length > 0) parts.push(buildFolded("pr-craft", prWords.craftHeading, prSheet.craft.map(entryLine)));
       if (prSheet.alreadyDecided.length > 0) parts.push(buildFolded("pr-decided", prWords.decidedHeading, prSheet.alreadyDecided.map(entryLine)));
@@ -1979,6 +2185,7 @@
       digestCaption = null;
       unlockLine = null;
       sendBackLine = null;
+      walkStops = [];
       historyBox.replaceChildren();
       finalHost.replaceChildren();
       items = sheet.cards.map(function (card, index) {
@@ -1990,6 +2197,7 @@
       onePage = onePageKind(sheetKind);
       sheetPage.className = onePage ? "sheet-page is-pr" : "sheet-page";
       prNumber = onePage ? sheet.prSheet.number : 0;
+      viewerZoom.replaceChildren(...(onePage ? zoomButtons() : []));
       footerHost.replaceChildren(...(onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
       openIndex = 0;
       expanded = false;
@@ -2026,8 +2234,8 @@
       return data === undefined || data === null || typeof data !== "object" || Array.isArray(data) ? null : data;
     }
 
-    function applyDocument(doc) {
-      const controller = controllers.get(doc.id);
+    function applyDocument(doc, key) {
+      const controller = controllers.get(key);
       const data = documentData(doc);
       if (controller === undefined || data === null) return;
       controller.restore(data);
@@ -2059,13 +2267,15 @@
         say(SAY.readFailed, restore);
       }, STALL_MS);
       try {
-        // A final sheet, a pr sheet and a stack sheet also read their verdict; a failed or stalled read of either is a failed read. The verdict
-        // lives under this revision's digest, so without a digest there is nothing of this revision to read.
-        const names = verdictKind(sheetKind) && sheetDigest !== null ? ["answers", "verdict"] : ["answers"];
-        const [saved, verdicts] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
+        // A final sheet, a pr sheet and a stack sheet also read their verdict, a sheet with a walk its walk answers; a failed or stalled read of any is a failed read.
+        // The verdict lives under this revision's digest, so without a digest there is nothing of this revision to read.
+        const names = ["answers"].concat(verdictKind(sheetKind) && sheetDigest !== null ? ["verdict"] : [], walkStops.length > 0 ? ["walk"] : []);
+        const read = {};
+        await Promise.all(names.map(async function (name) { read[name] = await store.collection(name).get(); }));
         if (ready) return;
-        saved.docs.forEach(applyDocument);
-        if (verdicts !== undefined) applyVerdict(verdicts);
+        read.answers.docs.forEach(function (doc) { applyDocument(doc, doc.id); });
+        if (read.verdict !== undefined) applyVerdict(read.verdict);
+        if (read.walk !== undefined) read.walk.docs.forEach(function (doc) { applyDocument(doc, "walk:" + doc.id); });
       } catch (error) {
         if (ready || attempt !== readAttempt) return;
         clearTimeout(readTimer);
@@ -2080,6 +2290,8 @@
       ready = true;
       syncControls();
       gate.hidden = true;
+      // A walk whose answers the schema cannot hold stays off, and the line says so.
+      if (walkStops.length > 0 && walkRule === null) say(SAY.noStore, false);
       // The owner lands on the first call still waiting for an answer, or on the first when none is.
       const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
       openIndex = waiting === -1 ? 0 : waiting;
@@ -2218,6 +2430,10 @@
       sheetDigest = verdictKind(sheet.kind) ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema, sheet.kind);
+      walkRule = isObject(schema.$defs) && isObject(schema.$defs.walkAnswer) ? { root: schema, rule: schema.$defs.walkAnswer } : null;
+      // The walk stays off unless every answer and fix the words offer fits the walk-answer rule, so a saved pick is one a reopen restores.
+      if (walkRule !== null && prWords !== null && !prWords.walkAnswers.try.concat(prWords.walkAnswers.look).map(function (answer) { return [answer, null]; }).concat(prWords.walkFixes.map(function (fix) { return ["problem", fix.id]; }))
+        .every(function (pair) { return fitsRule(walkRule.root, walkRule.rule, { answer: pair[0], fix: pair[1], note: "", shots: [] }); })) walkRule = null;
       render(sheet);
       if (wordsProblem !== null) {
         // The cards stay drawn; the line names the wording file's failure, and asking again loads the whole sheet afresh.
@@ -2252,6 +2468,7 @@
           if (controller.unsaved()) pending = true;
         });
         if (verdictController !== null && verdictController.unsaved()) pending = true;
+        if (uploads > 0) pending = true;
         if (!pending) return;
         event.preventDefault();
         event.returnValue = "";

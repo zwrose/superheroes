@@ -119,9 +119,9 @@ CENSUS = {
     "entry pr": PR + "craft/items/properties/pr",
     "review history": PR + "history",
     "walk": PR + "walk",
-    "walk stop id": PR + "walk/items/properties/id",
-    "walk stop title": PR + "walk/items/properties/title",
-    "walk stop pr": PR + "walk/items/properties/pr",
+    "walk stop id": PR + "walk/properties/stops/items/properties/id",
+    "walk stop title": PR + "walk/properties/stops/items/properties/title",
+    "walk stop pr": PR + "walk/properties/stops/items/properties/pr",
     "stack prs": PR + "prs",
     "stack pr number": PR + "prs/items/properties/number",
     "stack pr title": PR + "prs/items/properties/title",
@@ -434,6 +434,15 @@ def pr_options():
     ]
 
 
+def walk_stop(stop_id, pr, **more):
+    return {"id": stop_id, "key": stop_id + "-0123456789ab", "title": "The " + stop_id, "pr": pr, "group": "On your phone", "kind": "try", "steps": ["Open it"],
+            "expect": "It works.", "pictures": [], **more}
+
+
+def walk_body(stops):
+    return {"open": {"label": "Open the test shop"}, "picturesFrom": "the advisor's own account", "stops": stops}
+
+
 def pr_body():
     return {
         "number": 1724,
@@ -451,7 +460,7 @@ def pr_body():
         "craft": [{"title": "Kept the words in one file", "detail": "Both readers share it."}],
         "alreadyDecided": [{"title": "One sheet per PR", "detail": "The owner ruled so."}],
         "history": ["2 rounds ran."],
-        "walk": [{"id": "schema", "title": "The schema", "pr": 1724}],
+        "walk": walk_body([walk_stop("schema", 1724)]),
     }
 
 
@@ -468,7 +477,7 @@ def pr_sheet():
 def stack_sheet():
     body = pr_body()
     body["number"] = 1700
-    body["walk"] = [{"id": "schema", "title": "The schema", "pr": 1724}, {"id": "builder", "title": "The builder", "pr": 1725}]
+    body["walk"] = walk_body([walk_stop("schema", 1724), walk_stop("builder", 1725)])
     body["prs"] = [{"number": 1724, "title": "The schema", "commit": "662d4487"},
                    {"number": 1725, "title": "The builder", "commit": "abcdef0"}]
     sheet = pr_sheet()
@@ -609,3 +618,131 @@ def test_merge_is_a_valid_verdict():
     digest = "a" * 64
     assert document_errors("verdict", {"verdict": "merge", "note": "", "sheet": digest}) == []
     assert load_schema()["$defs"]["verdict"]["properties"]["verdict"]["enum"] == ["approve", "merge", "not-yet", None]
+
+
+PICTURE = {"src": "pictures/0123456789ab.png", "alt": "The cart", "caption": "Where you start"}
+LOOK = {"kind": "look", "steps": [], "pictures": [{"missing": True, "alt": "The screen"}]}
+
+
+def walk_sheet(change=None):
+    """A pr sheet whose walk has a try stop with a picture and a look stop with a missing one, after change(walk)."""
+    sheet = pr_sheet()
+    sheet["prSheet"]["walk"] = walk_body([walk_stop("p1", 1724, pictures=[dict(PICTURE)]), walk_stop("f1", 1724, **copy.deepcopy(LOOK))])
+    walk = sheet["prSheet"]["walk"]
+    if change:
+        change(walk)
+    return sheet
+
+
+def set_in(walk, key, value, stop=0):
+    walk["stops"][stop][key] = value
+
+
+GOOD_WALKS = {
+    "try-and-look": lambda w: None,
+    "optional": lambda w: set_in(w, "optional", True),
+    "not-walked": lambda w: set_in(w, "notWalked", "It needs a sign-in."),
+    "note-and-detail": lambda w: (w.update(note="Walk on your phone."), w["open"].update(url="http://shop.test", detail="Sign in.")),
+    "jpeg-picture": lambda w: w["stops"][0]["pictures"][0].update(src="pictures/0123456789ab.jpeg"),
+    "picture-without-caption": lambda w: w["stops"][0]["pictures"][0].pop("caption"),
+    "missing-with-caption": lambda w: w["stops"][1]["pictures"][0].update(caption="Where it ends"),
+    "no-pictures": lambda w: set_in(w, "pictures", []),
+}
+BAD_WALKS = {
+    "look-with-steps": lambda w: set_in(w, "steps", ["Open it"], 1),
+    "try-without-steps": lambda w: set_in(w, "steps", []),
+    "empty-step": lambda w: set_in(w, "steps", [""]),
+    "unknown-kind": lambda w: set_in(w, "kind", "scroll"),
+    "picture-src-is-a-url": lambda w: w["stops"][0]["pictures"][0].update(src="https://example.com/a.png"),
+    "picture-src-is-absolute": lambda w: w["stops"][0]["pictures"][0].update(src="/abs.png"),
+    "picture-src-climbs": lambda w: w["stops"][0]["pictures"][0].update(src="pictures/../x.png"),
+    "picture-src-not-12-hex": lambda w: w["stops"][0]["pictures"][0].update(src="pictures/abc.png"),
+    "picture-src-upper-hex": lambda w: w["stops"][0]["pictures"][0].update(src="pictures/0123456789AB.png"),
+    "picture-src-other-type": lambda w: w["stops"][0]["pictures"][0].update(src="pictures/0123456789ab.svg"),
+    "picture-src-and-missing": lambda w: w["stops"][0]["pictures"][0].update(missing=True),
+    "picture-missing-false": lambda w: w["stops"][1]["pictures"][0].update(missing=False),
+    "picture-without-alt": lambda w: w["stops"][0]["pictures"][0].pop("alt"),
+    "picture-unknown-key": lambda w: w["stops"][0]["pictures"][0].update(href="https://example.com"),
+    "open-url-is-javascript": lambda w: w["open"].update(url="javascript:x"),
+    "open-url-is-ftp": lambda w: w["open"].update(url="ftp://example.com"),
+    "open-without-label": lambda w: w["open"].pop("label"),
+    "walk-unknown-key": lambda w: w.update(extra=1),
+    "walk-without-pictures-from": lambda w: w.pop("picturesFrom"),
+    "no-stops": lambda w: w.update(stops=[]),
+    "stop-unknown-key": lambda w: set_in(w, "extra", 1),
+    "stop-without-key": lambda w: w["stops"][0].pop("key"),
+    "stop-key-not-hashed": lambda w: set_in(w, "key", "p1"),
+    "stop-without-pictures": lambda w: w["stops"][0].pop("pictures"),
+    "stop-empty-group": lambda w: set_in(w, "group", ""),
+    "stop-optional-not-boolean": lambda w: set_in(w, "optional", "yes"),
+    "stop-not-walked-empty": lambda w: set_in(w, "notWalked", ""),
+    "stop-pr-zero": lambda w: set_in(w, "pr", 0),
+}
+
+
+def test_walk_sheets_share_no_fixture_state():
+    # Axis: a change made to one walk sheet's nested look stop never reaches the next sheet built, so one case cannot leak into another.
+    walk_sheet(lambda w: w["stops"][1]["pictures"][0].update(missing=False))
+    sheet = walk_sheet()
+    assert errors_for(sheet) == [], errors_for(sheet)
+    assert check_sheet_problems(sheet) == []
+    assert LOOK["pictures"][0]["missing"] is True
+
+
+def test_a_pr_sheet_may_have_no_walk():
+    # Axis: a PR sheet with nothing to try has no walk part, and both readers accept it.
+    sheet = pr_sheet()
+    del sheet["prSheet"]["walk"]
+    assert errors_for(sheet) == [] and check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("change", GOOD_WALKS.values(), ids=GOOD_WALKS.keys())
+def test_good_walks_are_accepted_by_both_readers(change):
+    # Axis: a try stop, a look stop, optional and not-walked marks and pictures that are copied or missing are accepted by the schema and the page's check.
+    sheet = walk_sheet(change)
+    assert errors_for(sheet) == [], errors_for(sheet)
+    assert check_sheet_problems(sheet) == []
+
+
+@pytest.mark.parametrize("change", BAD_WALKS.values(), ids=BAD_WALKS.keys())
+def test_bad_walks_are_refused_by_both_readers(change):
+    # Axis: each way of breaking the walk's stops, steps, pictures or open link is refused by the schema and by the page's check.
+    baseline = walk_sheet()
+    assert errors_for(baseline) == [] and check_sheet_problems(baseline) == []
+    sheet = walk_sheet(change)
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+def test_a_walk_is_an_object_not_a_list():
+    # Axis: the old walk, a bare list of stops, is refused by both readers.
+    sheet = walk_sheet(lambda w: None)
+    sheet["prSheet"]["walk"] = sheet["prSheet"]["walk"]["stops"]
+    assert errors_for(sheet) != [] and check_sheet_problems(sheet) != []
+
+
+GOOD_WALK_ANSWERS = (
+    [{"answer": a, "fix": None, "note": "", "shots": []} for a in ("works", "looks-right", "problem", "skip", None)]
+    + [{"answer": "problem", "fix": f, "note": "It broke.", "shots": ["a1b2", "c3d4"]} for f in ("before-merge", "follow-up")])
+BAD_WALK_ANSWERS = {
+    "fix-on-works": {"answer": "works", "fix": "follow-up", "note": "", "shots": []},
+    "fix-on-looks-right": {"answer": "looks-right", "fix": "before-merge", "note": "", "shots": []},
+    "fix-on-skip": {"answer": "skip", "fix": "follow-up", "note": "", "shots": []},
+    "fix-on-null": {"answer": None, "fix": "before-merge", "note": "", "shots": []},
+    "unknown-answer": {"answer": "maybe", "fix": None, "note": "", "shots": []},
+    "no-shots": {"answer": "works", "fix": None, "note": ""},
+    "extra-key": {"answer": "works", "fix": None, "note": "", "shots": [], "extra": 1},
+    "empty-shot-id": {"answer": "problem", "fix": None, "note": "", "shots": [""]},
+}
+
+
+@pytest.mark.parametrize("document", GOOD_WALK_ANSWERS, ids=lambda d: "%s-%s-%d-shots" % (d["answer"], d["fix"], len(d["shots"])))
+def test_walk_answer_documents_are_accepted(document):
+    # Axis: a stored walk answer is any answer with no fix, or a Problem with either fix, with the asset ids of its screenshots.
+    assert document_errors("walkAnswer", document) == []
+
+
+@pytest.mark.parametrize("document", BAD_WALK_ANSWERS.values(), ids=BAD_WALK_ANSWERS.keys())
+def test_walk_answer_documents_are_refused(document):
+    # Axis: a fix on anything but a Problem, an unknown answer or fix, a missing or extra member and an empty screenshot id are refused.
+    assert document_errors("walkAnswer", document) != []

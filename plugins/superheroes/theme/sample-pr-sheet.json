@@ -63,18 +63,38 @@
       "security-reviewer did not run. No owner's word or standing ruling lets the PR go ahead without it.",
       "design-reviewer is from a maker's model family, so its review was not independent."
     ],
-    "walk": [
-      {
-        "id": "retry-loop",
-        "title": "The retry loop",
-        "pr": 214
+    "walk": {
+      "open": {
+        "label": "Open the test shop"
       },
-      {
-        "id": "payment-tests",
-        "title": "The new payment tests",
-        "pr": 214
-      }
-    ]
+      "picturesFrom": "the advisor's own test shop",
+      "stops": [
+        {
+          "id": "retry-loop",
+          "key": "retry-loop-16d385610603",
+          "title": "The retry loop",
+          "pr": 214,
+          "group": "Payments",
+          "kind": "try",
+          "steps": [
+            "Pay with a card that fails once"
+          ],
+          "expect": "The second try goes through.",
+          "pictures": []
+        },
+        {
+          "id": "payment-tests",
+          "key": "payment-tests-d4192db6035a",
+          "title": "The new payment tests",
+          "pr": 214,
+          "group": "Payments",
+          "kind": "look",
+          "steps": [],
+          "expect": "A green run in the checks.",
+          "pictures": []
+        }
+      ]
+    }
   },
   "cards": [
     {
