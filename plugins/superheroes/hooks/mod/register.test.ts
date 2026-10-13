@@ -273,6 +273,7 @@ function rig(
     return { text: '' }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.attach', (_$, e) => ({ clientId: e.clientId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('classic.SessionStart', () => ({}))
 

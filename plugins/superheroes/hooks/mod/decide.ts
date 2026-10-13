@@ -95,12 +95,12 @@ export type Decision = { showBand: boolean; fire: boolean; reason: string }
 // run, in every mode), running, below-heads-up, click-only, busy, below-trigger, snoozed,
 // or fire.
 export const decide = (input: DecideInput): Decision => {
-  const { tokens, trigger, mode, isIdle, isAttended, isRunning, snoozeUntilTokens } = input
+  const { tokens, trigger, mode, isIdle, isRunning, snoozeUntilTokens } = input
 
   if (mode === OFF_MODE) {
     return { showBand: false, fire: false, reason: 'off' }
   }
-  if (!isAttended) {
+  if (!input.isAttended) {
     return { showBand: false, fire: false, reason: 'headless' }
   }
   if (isRunning) {
