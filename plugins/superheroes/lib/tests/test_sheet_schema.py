@@ -915,9 +915,20 @@ def test_walk_answers_by_kind_is_the_one_home_of_the_answers_each_stop_kind_offe
     # Axis: the definition exists, lists a try stop's and a look stop's answers in button order, and says it is the one home of them.
     definition = load_schema()["$defs"]["walkAnswersByKind"]
     assert set(definition["properties"]) == {"try", "look"} and definition["additionalProperties"] is False
-    assert definition["properties"]["try"]["enum"] == ["works", "problem", "skip"]
-    assert definition["properties"]["look"]["enum"] == ["looks-right", "problem", "skip"]
+    for kind, found in definition["properties"].items():
+        assert found["enum"] and len(set(found["enum"])) == len(found["enum"])
+        assert sheet_prose.offered_walk_answers(kind) == found["enum"]
     assert "one home" in definition["description"] and "button order" in definition["description"]
     # Every answer a kind offers is one a stored walk answer can hold.
     stored = load_schema()["$defs"]["walkAnswer"]["properties"]["answer"]["enum"]
     assert {answer for found in definition["properties"].values() for answer in found["enum"]} <= set(stored)
+
+
+def test_prose_follows_a_reordered_walk_answer_list(tmp_path, monkeypatch):
+    # Axis: the prose renderer reads the walk answers from the schema, so a reordered list changes what it offers.
+    schema = load_schema()
+    schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"].reverse()
+    path = tmp_path / "sheet.schema.json"
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    monkeypatch.setattr(sheet_prose, "SCHEMA", path)
+    assert sheet_prose.offered_walk_answers("try") == schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"]

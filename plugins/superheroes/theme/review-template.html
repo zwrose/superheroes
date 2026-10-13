@@ -2665,6 +2665,9 @@
       walkRule = isObject(schema.$defs) && isObject(schema.$defs.walkAnswer) ? { root: schema, rule: schema.$defs.walkAnswer } : null;
       // The walk stays off unless the schema says which answers a stop offers and every answer and fix offered fits the walk-answer rule, so a saved pick is one a reopen restores.
       if (prWords !== null && walkOffered === null) walkRule = null;
+      // A stop whose kind the schema lists no answers for would offer fix buttons without a primary answer, so the walk stays off.
+      if (walkOffered !== null && isObject(sheet.prSheet) && isObject(sheet.prSheet.walk) && Array.isArray(sheet.prSheet.walk.stops)
+        && sheet.prSheet.walk.stops.some(function (stop) { return !isObject(stop) || !Array.isArray(walkOffered[stop.kind]); })) walkRule = null;
       if (walkRule !== null && prWords !== null && ![].concat(...Object.values(walkOffered)).map(function (answer) { return [answer, null]; }).concat(prWords.walkFixes.map(function (fix) { return ["problem", fix.id]; }))
         .every(function (pair) { return fitsRule(walkRule.root, walkRule.rule, { answer: pair[0], fix: pair[1], note: "", shots: [] }); })) walkRule = null;
       render(sheet);
