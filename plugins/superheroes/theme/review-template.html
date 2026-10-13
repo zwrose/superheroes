@@ -2012,6 +2012,7 @@
       pick.disabled = true;
       input.addEventListener("change", async function () {
         const file = input.files && input.files[0];
+        input.value = "";
         if (!file || !canEdit()) return;
         uploading = true;
         uploads += 1;
@@ -2034,8 +2035,10 @@
         noteId: "walk-note-" + stop.id,
         path: "walk/" + stop.key,
         live: canEdit,
-        // A Problem waits while a saved Merge may still stand; any other answer never touches the merge word.
-        mayWrite: function (latest) { return latest.answer !== "problem" || cardMayWrite(); },
+        // A Problem that sends the PR back waits while a saved Merge may still stand; any other answer, and a follow-up Problem that never blocks Merge, writes freely.
+        mayWrite: function (latest) {
+          return latest.answer !== "problem" || prWords.walkFixes.some(function (fix) { return fix.id === latest.optionId && fix.sendsBack === false; }) || cardMayWrite();
+        },
         // Problem shows pressed whichever fix is chosen, and tapping a chosen fix again leaves the Problem with no fix.
         pressed: function (choice, latest) {
           return choice.answer === latest.answer && (choice.optionId === latest.optionId || (choice.answer === "problem" && choice.optionId === null));

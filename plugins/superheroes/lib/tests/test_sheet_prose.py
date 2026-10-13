@@ -1119,8 +1119,8 @@ The advisor walked this first, except where a stop says otherwise; the pictures 
    a. Add an item to the cart
    b. Pay with the test card that declines once
    Expect: The second try goes through and the order is placed.
-   Picture: Where you start
-   Picture: The paid order
+   Picture: Where you start (pictures/228215e2dae3.png)
+   Picture: The paid order (pictures/b601e7730818.png)
    Answers: Works / Problem / Skip
    On Problem: Fix before merge / Fix in a follow-up
 2. Check the receipt email
@@ -1145,7 +1145,7 @@ The advisor walked this first, except where a stop says otherwise; the pictures 
 
 5. The gave-up screen
    Look for: A plain message and a way back to the cart.
-   Picture: After three failures
+   Picture: After three failures (pictures/33a85956073b.png)
    A picture is missing: The gave-up screen on a small phone
    Answers: Looks right / Problem / Skip
    On Problem: Fix before merge / Fix in a follow-up
@@ -1162,12 +1162,12 @@ def _walk_sheet(tmp_path):
     return json.loads(out.read_text(encoding="utf-8"))
 
 
-# Bites on: the walk prose dropping a stop's steps, expectation, picture caption, missing-picture line, not-walked line, optional mark, answers or fix choices, or printing a picture's path.
+# Bites on: the walk prose dropping a stop's steps, expectation, picture caption, missing-picture line, not-walked line, optional mark, answers or fix choices, or leaving a picture's sheet path out (a look-only stop is unreviewable without it).
 def test_prose_prints_the_walk_with_its_stops_in_groups(tmp_path):
     out = _prose_of(tmp_path, _walk_sheet(tmp_path))
     block = out[out.index("**Walk it**"):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
     assert block == WALK_PROSE
-    assert "pictures/" not in out and ".png" not in out
+    assert re.findall(r"pictures/\w+\.png", out) == ["pictures/228215e2dae3.png", "pictures/b601e7730818.png", "pictures/33a85956073b.png"]
     assert re.findall(r"https?://\S+", out) == ["https://shop.example.test"]
 
 

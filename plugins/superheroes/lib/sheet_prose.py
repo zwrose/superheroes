@@ -427,7 +427,7 @@ def _pr_stop(number, stop, stack):
     lines.append("   %s %s" % (PR["expectLabel" if stop["kind"] == "try" else "lookForLabel"], _text(stop["expect"])))
     for picture in stop["pictures"]:
         lines.append("   " + (_fill(PR["pictureMissing"], alt=_text(picture["alt"])) if picture.get("missing")
-                              else "Picture: " + _text(picture.get("caption", picture["alt"]))))
+                              else "Picture: %s (%s)" % (_text(picture.get("caption", picture["alt"])), _text(picture["src"]))))
     if "notWalked" in stop:
         lines.append("   " + _fill(PR["notWalkedByAdvisor"], reason=_text(stop["notWalked"])))
     return lines + ["   Answers: " + " / ".join(words["labels"][a] for a in words[stop["kind"]]),

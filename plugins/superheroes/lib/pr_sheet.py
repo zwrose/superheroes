@@ -69,6 +69,19 @@ _URL = re.compile(_SCHEMA["$defs"]["walk"]["properties"]["open"]["properties"]["
 _PICTURE = re.compile(_SCHEMA["$defs"]["walkPicture"]["anyOf"][0]["properties"]["src"]["pattern"])
 # The picture filename's digest length is read from that same pattern, so the schema alone sets it.
 PICTURE_DIGEST = int(re.search(r"\{(\d+)\}", _PICTURE.pattern).group(1))
+# The walk's keys, stop kinds and per-kind step rules come from the same schema; only the input's own
+# `path` picture key has no schema twin (the sheet carries src or missing instead).
+_WALK, _STOP = _SCHEMA["$defs"]["walk"], _SCHEMA["$defs"]["walkStop"]
+_KINDS = tuple(_STOP["properties"]["kind"]["enum"])
+_STEPS = {a["if"]["properties"]["kind"]["const"]: a["then"]["properties"]["steps"] for a in _STOP["allOf"]}
+
+
+def _shape(d, inferred=()):
+    """The (required, optional) key tuples of a schema object; inferred keys are optional in the input."""
+    req = tuple(k for k in d["required"] if k not in inferred)
+    return req, tuple(k for k in d["properties"] if k not in req)
+
+
 _LANES = review_record.LANES
 _RAN = review_record.RAN_STATES
 _RECORD_TYPES = (("lane", dict), ("finalCommit", dict), ("ci", dict), ("reviewers", list), ("findings", list),
@@ -258,30 +271,31 @@ def _check_input(adv, words, problems):
 
 
 def _check_walk(walk, allowed, problems):
-    if not _keys("walk", walk, ("open", "picturesFrom", "stops"), ("note",), problems):
+    if not _keys("walk", walk, *_shape(_WALK), problems):
         return
     problems.extend(f"walk {k} must be a non-empty string" for k in ("note", "picturesFrom") if k in walk and not _text(walk[k]))
     opened = walk["open"]
-    if _keys("walk open", opened, ("label",), ("url", "detail"), problems):
+    if _keys("walk open", opened, *_shape(_WALK["properties"]["open"]), problems):
         problems.extend(f"walk open {k} must be a non-empty string" for k in ("label", "detail") if k in opened and not _text(opened[k]))
         if "url" in opened and not (isinstance(opened["url"], str) and _URL.match(opened["url"])):
             problems.append("walk open url must be an http or https link")
     if not (isinstance(walk["stops"], list) and walk["stops"]):
         problems.append("walk needs at least one stop")
         return
-    for stop in _check_list("walk stops", walk["stops"], ("id", "title", "pr", "group", "kind", "expect"),
-                            ("steps", "optional", "notWalked", "pictures"), problems):
+    for stop in _check_list("walk stops", walk["stops"], *_shape(_STOP, ("steps", "pictures")), problems):
         w, steps, pictures = f"walk stop {stop['id']}", stop.get("steps", []), stop.get("pictures", [])
         if not _num(stop["pr"]):
             problems.append(f"{w} needs pr, an integer 1 or more")
         elif allowed is not None and stop["pr"] not in allowed:
             problems.append(f"{w} is for PR #{stop['pr']}, which is not in this sheet")
-        if stop["kind"] not in ("try", "look"):
-            problems.append(f'{w} needs kind to be "try" or "look"')
+        kind = stop["kind"]
+        rule = _STEPS.get(kind, {}) if kind in _KINDS else {}
+        if kind not in _KINDS:
+            problems.append(f"{w} needs kind to be " + " or ".join(f'"{k}"' for k in _KINDS))
         if not (isinstance(steps, list) and all(_text(t) for t in steps)):
             problems.append(f"{w} needs steps to be a list of non-empty strings")
-        elif (stop["kind"] == "try" and not steps) or (stop["kind"] == "look" and steps):
-            problems.append(f"{w} is a {stop['kind']} stop, so it {'needs at least one step' if stop['kind'] == 'try' else 'takes no steps'}")
+        elif len(steps) < rule.get("minItems", 0) or steps != rule.get("const", steps):
+            problems.append(f"{w} is a {kind} stop, so it {'needs at least one step' if 'minItems' in rule else 'takes no steps'}")
         if "optional" in stop and not isinstance(stop["optional"], bool):
             problems.append(f"{w} needs optional to be true or false")
         if "notWalked" in stop and not _text(stop["notWalked"]):

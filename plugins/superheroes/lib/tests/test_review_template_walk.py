@@ -87,9 +87,16 @@ const choose = async (id, label) => {
   t.click(btn(id, label));
   await t.tick();
 };
+// A browser keeps the chosen file in the input until its value is cleared, and fires no change for an unchanged selection.
 const shoot = async (id) => {
-  inputOf(id).files = [{ name: "shot.png" }];
-  t.fire(inputOf(id), "change");
+  const input = inputOf(id);
+  if (!input.modeled) {
+    Object.defineProperty(input, "value", { get: () => "", set(v) { if (v === "") this.files = []; } });
+    input.modeled = true;
+  }
+  if (input.files && input.files.length > 0) return;
+  input.files = [{ name: "shot.png" }];
+  t.fire(input, "change");
   await t.tick();
 };
 """
@@ -425,6 +432,18 @@ def test_works_is_written_at_once_and_the_saved_merge_stays():
 
 def _walk_docs(written):
     return [{"id": path.split("/", 1)[1], "data": body} for path, body in written.items() if path.startswith("walk/")]
+
+
+# Axis: beside a saved Merge, a follow-up Problem's note is written at once and the Merge stays, since a follow-up never blocks Merge.
+def test_a_follow_up_problem_note_is_written_beside_a_saved_merge():
+    held = _walk_docs({_path("p1"): _body("problem", "follow-up")})
+    page = _page(WALK_SHEET, WALK + """
+      t.type(noteOf("p1"), "Also slow", "change");
+      await t.tick();
+      return { sets: t.setLog(), merge: merge(), save: saveOf("p1") };
+    """, host={"collections": dict(MERGED["collections"], walk=held)})
+    assert page["result"] == {"sets": [{"path": _path("p1"), "body": _body("problem", "follow-up", "Also slow")}],
+                              "merge": dict(UNLOCKED, pressed="true"), "save": "Saved"}
 
 
 # Axis: every stop answered (each check answer, a Problem with each fix, notes, a screenshot) comes back from the store on a reopened page with its answers, notes, screenshots and the right walked count.
@@ -766,6 +785,20 @@ def test_a_rejected_upload_says_so_and_writes_nothing():
       return { before: before, sets: t.setLog().length, line: shotLineOf("p1"), pick: pickOf("p1").disabled, save: saveOf("p1"), uploads: t.uploads.length };
     """, host={"assets": "reject"})
     assert page["result"] == {"before": 1, "sets": 1, "line": PW["screenshotFailed"], "pick": False, "save": "Saved", "uploads": 1}
+
+
+# Axis: after a rejected upload the same screenshot can be chosen again and uploads again, because the page resets the file input.
+def test_the_same_screenshot_uploads_again_after_a_rejected_upload():
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      const first = { uploads: t.uploads.length, files: inputOf("p1").files.length };
+      await shoot("p1");
+      return { first: first, uploads: t.uploads.length, line: shotLineOf("p1"), pick: pickOf("p1").disabled };
+    """, host={"assets": "reject"})
+    assert page["result"] == {"first": {"uploads": 1, "files": 0}, "uploads": 2, "line": PW["screenshotFailed"], "pick": False}
 
 
 # Axis: a save of the shots that the store rejects shows Not saved with Try again, and the retry that lands shows Saved with the screenshot kept.
