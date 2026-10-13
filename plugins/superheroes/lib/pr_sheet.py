@@ -531,14 +531,23 @@ def _fits_verdict(doc):
     return doc["verdict"] != "merge" or "covers" in doc
 
 
-def _counted_answer(card, doc):
-    """doc when it is a stored answer this pr or stack sheet's card offers now, else None (the card is unanswered)."""
+def _pr_answer_words():
+    with open(WORDS_PATH, encoding="utf-8") as handle:
+        return json.load(handle)["prAnswers"]
+
+
+def _counted_answer(card, doc, answer_words):
+    """doc when it is a stored answer this pr or stack sheet's card offers now, else None (the card is unanswered).
+
+    What a card offers is read from answer_words (the prAnswers block of sheet-words.json), as the page reads it: the
+    plain answers listed for a card with options or without, and an option only when it is one of the card's own.
+    """
     if not _fits_answer(doc):
         return None
     if card["options"]:
-        offered = doc["answer"] == "something-else" or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in card["options"]])
+        offered = doc["answer"] in answer_words["withOptions"] or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in card["options"]])
     else:
-        offered = doc["answer"] in ("accept", "discuss")
+        offered = doc["answer"] in answer_words["withoutOptions"]
     return doc if offered else None
 
 
@@ -547,20 +556,22 @@ def _collection(store, key):
     return found if isinstance(found, dict) else {}
 
 
-def pr_state(sheet_bytes, store, words=None):
+def pr_state(sheet_bytes, store, words=None, answer_words=None):
     """Where one PR's published sheet stands, from the sheet's exact bytes and its store dump.
 
     Returns {"state", "accepted", "total", "walked", "walkTotal"}. The state is being-fixed when a counted answer
     sends the PR back, else ready when a Merge verdict stands, else needs-you. A Merge stands only on this exact
     sheet, with every item accepted, no walk Problem left without a follow-up fix, and a covers that names exactly
-    the answers the store holds now. words is the "pr" block of sheet-words.json, read from the file when not given.
+    the answers the store holds now. words is the "pr" block of sheet-words.json and answer_words its "prAnswers" block,
+    each read from the file when not given.
     """
     words = words or _pr_words()
+    answer_words = answer_words or _pr_answer_words()
     digest, sheet = hashlib.sha256(sheet_bytes).hexdigest(), json.loads(sheet_bytes)
     cards, stops = sheet["cards"], sheet["prSheet"].get("walk", {}).get("stops", [])
     fixes = {f["id"]: f for f in words["walkFixes"]}
     answers, walks = _collection(store, "answers"), _collection(store, "walk")
-    counted = {card["id"]: _counted_answer(card, answers.get(card["id"])) for card in cards}
+    counted = {card["id"]: _counted_answer(card, answers.get(card["id"]), answer_words) for card in cards}
     accepted, sends_back, blocking, walked = 0, False, False, 0
     for card in cards:
         doc = counted[card["id"]]
@@ -572,6 +583,9 @@ def pr_state(sheet_bytes, store, words=None):
     for stop in stops:
         doc = walks.get(stop["key"])
         if not (_fits_walk_answer(doc) and doc["answer"] in words["walkAnswers"][stop["kind"]] and (doc["fix"] is None or doc["fix"] in fixes)):
+            # As the page restores it: a stored Problem whose fix is no longer offered, or whose document is malformed, stays a Problem with no fix and keeps blocking.
+            if isinstance(doc, dict) and doc.get("answer") == "problem":
+                walked, blocking = walked + 1, True
             continue
         walked += doc["answer"] in ("works", "looks-right", "problem")
         if doc["answer"] == "problem":
@@ -682,7 +696,7 @@ def _index_row(entry, base, order, words, problems):
     if found or store is None:
         return None
     return {"number": entry["number"], "kind": sheet["kind"], "title": sheet["title"], "link": entry["link"],
-            **pr_state(sheet_bytes, store, words["pr"]),
+            **pr_state(sheet_bytes, store, words["pr"], words["prAnswers"]),
             "mergesAt": order.index(entry["number"]) + 1 if entry["number"] in order else None}
 
 

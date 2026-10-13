@@ -914,7 +914,11 @@ STATE_TABLE = {
     "walk-skip-is-not-walked": (store_of(walk={T1: walk_doc("skip")}), ("needs-you", 0, 2, 0, 2)),
     "works-on-a-look-stop-is-not-offered": (store_of(walk={L1: walk_doc("works")}), ("needs-you", 0, 2, 0, 2)),
     "looks-right-on-a-try-stop-is-not-offered": (store_of(walk={T1: walk_doc("looks-right")}), ("needs-you", 0, 2, 0, 2)),
-    "walk-fix-no-longer-offered": (store_of(walk={T1: walk_doc("problem", "later")}), ("needs-you", 0, 2, 0, 2)),
+    "walk-fix-no-longer-offered": (store_of(walk={T1: walk_doc("problem", "later")}), ("needs-you", 0, 2, 1, 2)),
+    "walk-problem-with-a-retired-fix-keeps-a-merge-from-standing": (
+        store_of(ACCEPTED, {T1: walk_doc("problem", "retired-fix")}, merge_doc()), ("needs-you", 2, 2, 1, 2)),
+    "walk-problem-document-missing-shots-keeps-a-merge-from-standing": (
+        store_of(ACCEPTED, {T1: {"answer": "problem", "fix": "follow-up", "note": ""}}, merge_doc()), ("needs-you", 2, 2, 1, 2)),
     "option-no-longer-offered": (store_of({"leftover": card_doc("option", "gone"), "closure": ACCEPT}), ("needs-you", 1, 2, 0, 2)),
     "accept-on-a-card-with-options-is-not-offered": (store_of({"leftover": ACCEPT, "closure": ACCEPT}), ("needs-you", 1, 2, 0, 2)),
     "a-null-answer": (store_of({"leftover": card_doc(None), "closure": card_doc(None)}), ("needs-you", 0, 2, 0, 2)),
@@ -946,6 +950,19 @@ def test_pr_state_truth_table(sheet, store, expected):
     state = pr_sheet.pr_state(sheet, store, WORDS)
     assert (state["state"], state["accepted"], state["total"], state["walked"], state["walkTotal"]) == expected
     assert list(state) == ["state", "accepted", "total", "walked", "walkTotal"]
+
+
+def test_pr_state_reads_the_offered_answers_from_the_answer_words():
+    # Axis: what a card offers comes from the prAnswers block given, so retiring Discuss there leaves a stored Discuss unanswered, as on the page.
+    words = json.loads(json.dumps(ALL_WORDS["prAnswers"]))
+    store = store_of({"leftover": KEEP, "closure": card_doc("discuss")})
+    assert pr_sheet.pr_state(STATE_SHEET, store, WORDS, words)["accepted"] == 1
+    words["withoutOptions"] = ["accept"]
+    store = store_of({"leftover": KEEP, "closure": ACCEPT}, verdict=merge_doc())
+    assert pr_sheet.pr_state(STATE_SHEET, store, WORDS, words)["state"] == "ready"
+    words["withoutOptions"] = ["discuss"]
+    state = pr_sheet.pr_state(STATE_SHEET, store, WORDS, words)
+    assert (state["state"], state["accepted"]) == ("needs-you", 1)
 
 
 def test_pr_state_reads_the_words_file_when_given_none():

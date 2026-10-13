@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import pr_sheet
+
 from test_review_template import (
     NO_DIGEST_LINE,
     THEME,
@@ -306,7 +308,9 @@ def _docs_for(card_id, answer, option_id=None, note="kept note"):
     return [{"id": card_id, "data": {"answer": answer, "optionId": option_id, "note": note}}]
 
 
-REVISION = re.compile(r"[0-9a-f]{16}")
+# The revision format is the sheet schema's answer.revision pattern, its one home.
+SCHEMA = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
+REVISION = re.compile(SCHEMA["$defs"]["answer"]["properties"]["revision"]["pattern"])
 
 
 def _revision_at(position):
@@ -1504,6 +1508,39 @@ def test_without_a_random_source_answers_save_without_a_revision_and_the_merge_c
         {"answer": "option", "optionId": "keep-it", "note": ""},
         {"answer": "option", "optionId": "ten-minutes", "note": ""},
     ]
-    assert [body["covers"] for path, body in written.items() if path.startswith("verdict/")] == [[]]
-    reopened = _lock(PR_SAMPLE, REOPENED, host={"collections": _collections(written)})["result"]
-    assert reopened["view"]["pressed"] == ["false", "false"] and reopened["sets"] == []
+    # Merge is locked while any card's answer has no revision, so no Merge with an incomplete covers is ever written.
+    assert not [path for path in written if path.startswith("verdict/")]
+    assert page["result"]["view"]["disabled"] is True and page["result"]["view"]["pressed"] == ["false", "false"]
+
+
+# Bites on: the generator typing the revision width instead of reading the schema's pattern (a format it cannot make must give no revision).
+@pytest.mark.parametrize("pattern, width", [("^[0-9a-f]{15}$", None), ("^[a-z]{16}$", None)], ids=["odd", "other-alphabet"])
+def test_the_revision_width_is_read_from_the_schema(pattern, width):
+    schema = copy.deepcopy(SCHEMA)
+    schema["$defs"]["answer"]["properties"]["revision"]["pattern"] = pattern
+    page = _page(PR_SAMPLE, """
+      t.click(t.button(CARD_A, "Accept"));
+      await t.tick();
+      return t.written();
+    """.replace("CARD_A", json.dumps(PR_SAMPLE["cards"][0]["id"])), schema=schema)
+    body = next(body for path, body in page["result"].items() if path.startswith("answers/"))
+    assert (len(body["revision"]) if "revision" in body else None) == width
+
+
+# Bites on: answers saved before revisions existed (accepted, no revision) leaving Merge unlocked so a tap shows Saved on a verdict that pr_state and a reopen reject.
+def test_answers_saved_without_a_revision_keep_merge_locked_as_the_index_reads_it():
+    docs = _accepted_answers(PR_SAMPLE)
+    for doc in docs:
+        del doc["data"]["revision"]
+    page = _lock(PR_SAMPLE, """
+      const initial = lockView();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { initial, after: lockView(), writes: verdictWrites() };
+    """, host={"collections": {"answers": docs}})["result"]
+    assert page["initial"]["disabled"] is True and page["after"]["pressed"] == ["false", "false"] and page["writes"] == []
+    assert page["after"]["verdictSave"] != "Saved"
+    sheet_bytes = _sample_files(PR_SAMPLE)["sheet.json"]["body"].encode("utf-8")
+    digest = _sheet_digest(PR_SAMPLE)
+    store = {"answers": {doc["id"]: doc["data"] for doc in docs}, "walk": {}, "verdict": {digest: _verdict_doc(PR_SAMPLE, "merge", covers=[])["data"]}}
+    assert pr_sheet.pr_state(sheet_bytes, store)["state"] == "needs-you"

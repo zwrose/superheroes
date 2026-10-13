@@ -549,7 +549,10 @@
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
       if (kinds.some(function (kind) { return !kind.carriesOption && typeof knownLabels[kind.value] !== "string"; })) return null;
       if (answerWords.withOptions.concat(answerWords.withoutOptions).some(function (value) { return !values.includes(value); })) return null;
-      return { root: schema, rule: rule, kinds: kinds };
+      // The revision's width comes from the schema's pattern (^[0-9a-f]{N}$ with N even); any other format is refused, so no revision is generated.
+      const shape = isObject(rule.properties.revision) && typeof rule.properties.revision.pattern === "string" ? /^\^\[0-9a-f\]\{(\d+)\}\$$/.exec(rule.properties.revision.pattern) : null;
+      const width = shape === null ? 0 : Number(shape[1]);
+      return { root: schema, rule: rule, kinds: kinds, revisionBytes: width > 0 && width % 2 === 0 ? width / 2 : 0 };
     }
 
     // True when the stored document fits the given rule of the schema (answer or verdict).
@@ -1444,12 +1447,13 @@
       return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
     }
 
-    // A fresh 16-hex revision for a body about to be sent; null when this browser has no random source, so the answer is sent without one
+    // A fresh revision (of the width the schema's pattern says) for a body about to be sent; null when this browser has no random source, so the answer is sent without one
     // and its card can never be covered by a Merge.
     function freshRevision() {
       try {
+        if (answerShape === null || answerShape.revisionBytes === 0) return null;
         if (typeof crypto === "undefined" || crypto === null || typeof crypto.getRandomValues !== "function") return null;
-        return Array.from(crypto.getRandomValues(new Uint8Array(8)), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+        return Array.from(crypto.getRandomValues(new Uint8Array(answerShape.revisionBytes)), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
       } catch (error) {
         return null;
       }
@@ -1840,7 +1844,9 @@
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
-      const locked = incomplete || clearUnsaved || open > 0;
+      // An accepted answer saved without a revision (an earlier page, or no random source) cannot be named by a Merge's covers, so Merge stays off until it is answered again.
+      const uncovered = coveredAnswers().length < total;
+      const locked = incomplete || uncovered || clearUnsaved || open > 0;
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
