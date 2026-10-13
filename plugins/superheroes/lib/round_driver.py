@@ -2814,12 +2814,9 @@ def _anchored_orders_manifest(state, session_dir, rnd, phase, attempt):
     return manifest
 
 
-def _recorded_phase_vendor(state, session_dir, phase):
-    """The vendor the dispatch of ``phase`` in the current round recorded at emission (its orders
-    manifest's per-seat ``vendor``), or None when nothing was emitted, the manifest does not verify
-    against the state-mirrored anchor, or the seats do not name exactly one vendor. The fold runs
-    after ``pending`` is cleared, so the dispatch is found through the mirrored emission anchors
-    (latest attempt of this round's phase). Never raises."""
+def _latest_emission_attempt(state, session_dir, phase):
+    """The latest attempt number of this round's ``phase`` dispatch the state-mirrored emission
+    anchors name, or None when none was emitted. Never raises."""
     anchors = state.get("_ordersAnchors")
     if not session_dir or not isinstance(anchors, dict):
         return None
@@ -2830,9 +2827,28 @@ def _recorded_phase_vendor(state, session_dir, phase):
         if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase \
                 and parts[2].isdigit() and (best is None or int(parts[2]) > best):
             best = int(parts[2])
+    return best
+
+
+def _emission_unverifiable(state, session_dir, phase):
+    """True when this round's ``phase`` dispatch recorded an emission anchor but its orders manifest
+    cannot be read or does not verify against it: the dispatch record is lost, so nothing it
+    ordered can be authenticated (fail closed — never a fallback to the live selection)."""
+    best = _latest_emission_attempt(state, session_dir, phase)
+    return best is not None and _anchored_orders_manifest(
+        state, session_dir, state.get("round"), phase, best) is None
+
+
+def _recorded_phase_vendor(state, session_dir, phase):
+    """The vendor the dispatch of ``phase`` in the current round recorded at emission (its orders
+    manifest's per-seat ``vendor``), or None when nothing was emitted, the manifest does not verify
+    against the state-mirrored anchor, or the seats do not name exactly one vendor. The fold runs
+    after ``pending`` is cleared, so the dispatch is found through the mirrored emission anchors
+    (latest attempt of this round's phase). Never raises."""
+    best = _latest_emission_attempt(state, session_dir, phase)
     if best is None:
         return None
-    manifest = _anchored_orders_manifest(state, session_dir, rnd, phase, best)
+    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best)
     seats = manifest.get("seats") if isinstance(manifest, dict) else None
     vendors = {entry.get("vendor") for entry in seats.values() if isinstance(entry, dict)} \
         if isinstance(seats, dict) else set()
@@ -2860,6 +2876,13 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
     # unproven family and folds like silence.
     selected, source = _nonpanel_selection(state, session_dir)
+    if selected is not None and verdicts and _emission_unverifiable(state, session_dir, P_VERIFIERS):
+        # The dispatch anchored an emission but its manifest is unreadable or tampered: the vendor
+        # it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
+        _record_round_append(state, "verifierProvenance", {
+            "expected": selected, "ran": None, "outcome": "verdicts-ignored",
+            "reason": "emission-manifest-unverifiable"})
+        verdicts = []
     # The dispatch recorded its vendor at emission; a preference edited while the verifiers ran must
     # not re-judge them against a selection nobody dispatched.
     recorded = _recorded_verifier_vendor(state, session_dir)
@@ -6704,6 +6727,12 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 # claim, which `_fold_verifiers` treats as a missing vendor claim.
                 artifact = dict(artifact)
                 artifact.setdefault("verifierSeatVendors", {})
+            elif phase == P_VERIFIERS and isinstance(artifact, dict):
+                # A hand artifact never carries durable execution evidence: its own per-seat
+                # provenance map is a courier claim, so it is dropped and the `verifierVendor`
+                # claim check decides.
+                artifact = {k: v for k, v in artifact.items()
+                            if k not in ("verifierSeatVendors", "verifierSeatProvenance")}
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)

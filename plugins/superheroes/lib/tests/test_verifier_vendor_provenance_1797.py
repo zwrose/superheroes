@@ -200,7 +200,22 @@ def test_a_maker_cluster_does_not_void_a_proven_cluster(tmp_path, monkeypatch):
 
 # --- v1: the fold authenticates against the vendor the dispatch recorded ----------------------------
 
-def _drive_with_preference_change(tmp_path, monkeypatch, source, name):
+def _tamper_emission_manifest(session_dir, state, phase, vendor):
+    """Rewrite every seat's vendor in the on-disk orders manifest, leaving the state-mirrored anchor
+    (and so the hash it demands) untouched."""
+    pend = state["pending"]
+    path = RD._orders_manifest_path(session_dir, pend["round"], phase, pend["attempt"])
+    manifest, err = RR.read_json(path)
+    assert err is None
+    for entry in manifest["seats"].values():
+        entry["vendor"] = vendor
+    RR.atomic_write_json(path, manifest)
+    assert RD._anchored_orders_manifest(state, session_dir, pend["round"], phase,
+                                        pend["attempt"]) is None
+    assert RD._emission_unverifiable(state, session_dir, phase)
+
+
+def _drive_with_preference_change(tmp_path, monkeypatch, source, name, tamper=None):
     import engine_pref
     pref = {"engine": "codex"}
     monkeypatch.setattr(engine_pref, "resolve_engine", lambda _role, _prefs: pref["engine"])
@@ -225,6 +240,8 @@ def _drive_with_preference_change(tmp_path, monkeypatch, source, name):
                                  "evidence": "read x"} for f in cluster.get("findings") or []]}
         IT._land(session_dir, state, pend, seat, payload, occurrence=occurrence)
         assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
+    if tamper is not None:
+        _tamper_emission_manifest(session_dir, IT._state(session_dir), RD.P_VERIFIERS, tamper)
     out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
     assert out["ok"], out
     return IT._state(session_dir)
@@ -415,3 +432,87 @@ def test_a_maker_executed_scoped_finder_does_not_converge_the_round_through_adva
 def test_a_recorded_vendor_scoped_finder_folds_through_advance(tmp_path, monkeypatch):
     _session_dir, out = _drive_scoped_with_source(tmp_path, monkeypatch, "codex", "scoped-codex")
     assert out["ok"] is True and out["folded"]["phase"] == RD.P_SCOPED, out
+
+
+# --- fail closed: an emission whose manifest cannot verify authenticates nothing --------------------------
+
+def test_verdicts_are_ignored_when_the_anchored_manifest_is_tampered(tmp_path, monkeypatch):
+    # the preference moved to cursor, so the live selection would accept a cursor verdict; the
+    # tampered manifest (anchor intact) must not release that fallback
+    state = _drive_with_preference_change(tmp_path, monkeypatch, "cursor", "pref-tampered",
+                                          tamper="cursor")
+    row = _provenance(state)
+    assert row["outcome"] == "verdicts-ignored" and row["reason"] == "emission-manifest-unverifiable"
+    assert not state["rounds"]["1"]["verify"]["drops"]
+    assert state["rounds"]["1"]["verify"]["unverified"]
+
+
+def test_a_hand_artifact_cannot_supply_its_own_per_seat_provenance(tmp_path):
+    # maker (claude) claims verifierVendor, while its own courier map says codex ran the seat
+    session_dir, state = _hand_verifier_session(tmp_path, "hand-seat-map")
+    staged = V.stage_ids(state["_toVerify"])
+    artifact = {"verdicts": [{"id": s["id"], "verdict": "REFUTED", "reason": "intentional"}
+                             for s in staged],
+                "verifierVendor": "claude",
+                "verifierSeatVendors": {s["id"]: "codex" for s in staged}}
+    out = RD.cmd_submit(session_dir, RD.P_VERIFIERS, state["pending"]["attempt"],
+                        RD.state_hash(state), artifact)
+    assert out["ok"], out
+    after = IT._state(session_dir)
+    assert not after["rounds"][str(state["round"])]["verify"]["drops"]
+    assert after["rounds"][str(state["round"])]["verifierProvenance"][-1]["outcome"] == "verdicts-ignored"
+
+
+def _hand_verifier_session(tmp_path, name):
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_VERIFIERS)
+    state = IT._state(session_dir)
+    state.pop("_advanceUsed", None)  # the same session, now answered by hand
+    RD.save_state(session_dir, state)
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
+    return session_dir, state
+
+
+def _drive_scoped_tampered(tmp_path, monkeypatch, name, tamper):
+    session_dir, gitdir, head_path = IT._bootstrap(
+        tmp_path, name=name, vendors=["claude", "codex", "cursor"], seatMap=None)
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_SCOPED)
+    state = IT._state(session_dir)
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
+    monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda _seat: "cursor"))
+    IT._land(session_dir, state, state["pending"], round_adapters.SEAT_SCOPED, {"findings": []})
+    assert IT._record(session_dir, round_adapters.SEAT_SCOPED)["ok"]
+    if tamper:
+        _tamper_emission_manifest(session_dir, IT._state(session_dir), RD.P_SCOPED, "cursor")
+    return session_dir, RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+def test_a_tampered_manifest_cannot_authenticate_an_unordered_finder(tmp_path, monkeypatch, tamper):
+    # codex was ordered; cursor ran. Rewriting the manifest to say cursor (anchor still in place)
+    # must not turn that into a recorded vendor: same refusal as the untampered control.
+    session_dir, out = _drive_scoped_tampered(tmp_path, monkeypatch, "scoped-tamper-%s" % tamper, tamper)
+    assert out["ok"] is False and out["reason"] == "assemble-refused", out
+    state = IT._state(session_dir)
+    assert not state.get("terminal") and state["pending"]["phase"] == RD.P_SCOPED
+
+
+def test_finder_hand_submit_is_authenticated_through_the_submit_path(tmp_path):
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name="hand-finder")
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_SCOPED)
+    state = IT._state(session_dir)
+    state.pop("_advanceUsed", None)
+    RD.save_state(session_dir, state)
+    attempt = state["pending"]["attempt"]
+    for bad in ({"findings": []}, {"findings": [], "reviewerVendor": "claude"}):
+        state = IT._state(session_dir)
+        out = RD.cmd_submit(session_dir, RD.P_SCOPED, attempt, RD.state_hash(state), bad)
+        assert out["ok"] is False and out["reason"] == "nonpanel-reviewer-unauthenticated", out
+        assert IT._state(session_dir)["pending"]["phase"] == RD.P_SCOPED
+    state = IT._state(session_dir)
+    out = RD.cmd_submit(session_dir, RD.P_SCOPED, attempt, RD.state_hash(state),
+                        {"findings": [], "reviewerVendor": "codex"})
+    assert out["ok"] is True, out

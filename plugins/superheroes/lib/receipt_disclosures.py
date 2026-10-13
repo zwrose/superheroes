@@ -188,28 +188,38 @@ def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=
     return None, fixer_fam
 
 
-def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None):
-    """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
-
-    Barred families are the makers' plus the fixer's (a fixer is a maker by definition). The
-    preferred vendor wins when its reviewer family is known and not barred; otherwise the first live
-    vendor that qualifies. A family ``family_for`` cannot resolve is never independent, and the
-    fixer's own vendor never reviews its fix, whatever its family resolves to."""
+def reviewer_ineligible(maker_families=frozenset(), fixer_vendor=None):
+    """Predicate ``(vendor) -> bool``: True when ``vendor`` may not review. The one home of the
+    reviewer-independence bar: barred families are the makers' plus the fixer's (a fixer is a maker
+    by definition); the fixer's own vendor never reviews its fix whatever its family resolves to; a
+    family ``family_for`` cannot resolve is never independent."""
     barred = set(maker_families or ())
     if fixer_vendor:
         fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
         if fixer_fam is not None:
             barred.add(fixer_fam)
+
+    def is_ineligible(vendor):
+        if fixer_vendor and vendor == fixer_vendor:
+            return True
+        fam = model_registry.family_for("reviewer", vendor)
+        return fam is None or fam in barred
+    return is_ineligible
+
+
+def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None):
+    """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
+
+    The preferred vendor wins when it is live and eligible (`reviewer_ineligible`); otherwise the
+    first live vendor that qualifies."""
+    ineligible = reviewer_ineligible(maker_families, fixer_vendor)
     live = list(live_vendors(config))
     candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
                   and preferred_vendor in live else [])
     candidates += [v for v in live if v not in candidates]
     for v in candidates:
-        if fixer_vendor and v == fixer_vendor:
-            continue
-        cand_fam = model_registry.family_for("reviewer", v)
-        if cand_fam is not None and cand_fam not in barred:
-            return v, cand_fam
+        if not ineligible(v):
+            return v, model_registry.family_for("reviewer", v)
     return None, None
 
 

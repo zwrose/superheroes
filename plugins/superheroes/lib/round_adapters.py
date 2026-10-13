@@ -285,23 +285,12 @@ PROVENANCE_SOURCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISP
 
 
 def _maker_barred(state, config):
-    """Predicate: True when a vendor sits in a maker family (the fixer's or any seat-map maker's), or
-    its reviewer family cannot be resolved. The same bar `receipt_disclosures.independent_reviewer`
-    applies when the driver selects a non-panel reviewer."""
+    """Predicate: True when a vendor may not review (maker family, the fixer's vendor, or an
+    unresolvable reviewer family) — `receipt_disclosures.reviewer_ineligible`, the same bar
+    `independent_reviewer` applies when the driver selects a non-panel reviewer."""
     cfg = config if isinstance(config, dict) else {}
-    fixer = cfg.get("fixerVendor")
-    barred = set(receipt_disclosures.accumulated_maker_families(state))
-    if fixer:
-        fixer_fam = model_registry.family_for("code-fixer", fixer)
-        if fixer_fam is not None:
-            barred.add(fixer_fam)
-
-    def is_barred(vendor):
-        if fixer and vendor == fixer:
-            return True
-        fam = model_registry.family_for("reviewer", vendor)
-        return fam is None or fam in barred
-    return is_barred
+    return receipt_disclosures.reviewer_ineligible(
+        receipt_disclosures.accumulated_maker_families(state), cfg.get("fixerVendor"))
 
 
 def _manifest_vendor_for_wrapped_seat(envelope, seat, occurrence, orders_manifest, is_barred):

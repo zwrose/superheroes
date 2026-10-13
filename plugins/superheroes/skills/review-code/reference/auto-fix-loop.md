@@ -89,7 +89,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
 > `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
 > stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
-> toward the panel, and the loop's behaviour is unchanged). A forfeit → the orchestrator re-runs the seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat; for the non-panel phases it is the driver's choice); with no such vendor live, the seat is recorded missing (`record-missing`) and counts as not run, and it is never re-run on the host model when the host's family is a maker and the
+> toward the panel, and the loop's behaviour is unchanged). A forfeit → the orchestrator re-runs the seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat; a forfeited non-panel seat is recorded seat-missing, or its result is ignored and disclosed; running it on another vendor takes a fresh emission); with no such vendor live, the seat is recorded missing (`record-missing`) and counts as not run, and it is never re-run on the host model when the host's family is a maker and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); the driver also records
 > the fall-open on the receipt from the orchestrator's `ranManifest` (`round-driver.md`,
 > `dispatch-panel`).
