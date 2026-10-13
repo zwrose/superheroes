@@ -259,6 +259,8 @@ rows, 3 Definition of done rows.
 | UFR-4 | 3 | rule | The stand-in that today needs no owner decision ends with this work. | **C5** |
 | UFR-5 | 1 | GWT | Given a session damaged after its second round, when the review resumes, then every finding and outcome from… | **C7** |
 | UFR-6 | 1 | GWT | Given answers saved on the old sheet, when the new sheet opens, then it shows "This PR changed", keeps the… | **C9** (C9-L1) |
+| UFR-6 | 2 | GWT | Given a saved "Merge" verdict and a head move with no material consequence, when the sheet for the new commit opens, then it shows a dated note… | **C12** |
+| UFR-6 | 3 | rule | Whether a head move is material is judged by the material-consequence line; doubt counts as material; a batch word stays good through routine updates. | **C12** |
 | UFR-7 | 1 | GWT | Given "Keep them visible" on the index and "hide them" in the chat, when the advisor reads both, then the… | **C8** |
 | UFR-8 | 1 | GWT | Given a stop whose picture could not be copied, when the sheet opens, then the stop says a picture is… | **C9** (C9-L2) |
 | UFR-9 | 1 | GWT | Given a stop that needs the owner's own sign-in, when the sheet opens, then that stop says the advisor did… | **C9** (C9-L2) |
