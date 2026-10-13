@@ -716,6 +716,29 @@ def test_a_parked_lane_that_later_handed_back_is_ended_not_stopped(w):
     assert _assess(w, state="archived")["verdict"] == "ended"
 
 
+def test_an_ended_assessment_withdraws_an_earlier_stop(w):
+    _lane(w, "l1")
+    _died(w, "l1", "park")
+    assert _assess(w, state="archived")["verdict"] == "stopped"
+    assert ll.record_outcome(w.root, "l1", "handback", "done")["ok"]
+    assert _assess(w, state="archived")["verdict"] == "ended"
+    assert _state(w)["assessed"] == {}
+
+
+def test_a_handback_recorded_during_the_successors_remote_reads_refuses_it(w):
+    _push(w, BRANCH, "a")
+    _lane(w, "l1")
+    _died(w, "l1", "park")
+    assert _assess(w, state="archived")["verdict"] == "stopped"
+
+    def run(argv, **kw):
+        if "ls-remote" in argv:
+            assert ll.record_outcome(w.root, "l1", "handback", "done")["ok"]
+        return w.gh(argv, **kw)
+    assert CR.successor(w.root, "l1", repo=REPO, run=run) == {"ok": False, "reason": "lane-not-assessed-stopped"}
+    assert _state(w)["superseded"] == {}
+
+
 def test_a_handover_head_carried_by_two_pushed_branches_is_ambiguous(w):
     head = _push(w, "issue-17-a", "a")
     _git(w.builder, "push", "-q", "origin", "issue-17-a:refs/heads/issue-17-b")

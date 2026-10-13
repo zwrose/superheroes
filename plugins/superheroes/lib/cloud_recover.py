@@ -303,6 +303,17 @@ def pushed(repo_root, issue, *, repo, adopted=None, env=None, run=None):
     return {"ok": True, "issue": issue, "branches": branches, "newest": newest, "ambiguous": len(branches) > 1}
 
 
+def _latest_outcome(info):
+    """The lane's current outcome: the latest reoutcome amendment, else the recorded one."""
+    return next((a["value"] for a in reversed(info.get("amendments") or []) if a["kind"] == _sib("launch_ledger").AMENDMENT_REOUTCOME), info.get("outcome"))
+
+
+def _withdrawn(repo_root, launch_id, out, env):
+    """`out`, once any stop authorization for the lane is withdrawn (an unreadable state is not surfaced, as it refuses every successor)."""
+    wrote = _record(repo_root, "assessed", launch_id, None, env=env)
+    return out if wrote["ok"] or wrote["reason"] == "recover-state-unreadable" else wrote
+
+
 def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, repo, env=None, run=None, now=None):
     """Whether the lane may be recovered now. `stopped` is returned only on positive stop evidence (the
     session failed, was archived or is gone) or a handover comment, and is recorded; every other verdict
@@ -320,10 +331,10 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
            "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None}
     # axis: a parked or died lane is still recoverable from current stop evidence until a successor is composed for it
-    latest = next((a["value"] for a in reversed(info.get("amendments") or []) if a["kind"] == _sib("launch_ledger").AMENDMENT_REOUTCOME), info.get("outcome"))
+    latest = _latest_outcome(info)
     if info["terminal"] and (latest not in ("park", "died") or _replaced(repo_root, launch_id, info, env)):
         out["verdict"] = "ended"
-        return out
+        return _withdrawn(repo_root, launch_id, out, env)
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
     handover, read = _handover(repo, info["issue"], start, env, run) if _is_number(start) else (None, False)
     out["handover"], out["handoverRead"] = handover, "ok" if read else "failed"
@@ -348,9 +359,7 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         out["verdict"] = "awaiting-handover" if launch_id in state["asks"] else "ask-to-push"
     if out["verdict"] != "stopped":
         # axis: a newer non-stopped reading withdraws an earlier stop authorization
-        wrote = _record(repo_root, "assessed", launch_id, None, env=env)
-        # an unreadable state also refuses every successor, so only another failure to withdraw it is surfaced
-        return out if wrote["ok"] or wrote["reason"] == "recover-state-unreadable" else wrote
+        return _withdrawn(repo_root, launch_id, out, env)
     if out["evidence"] == "handover":
         out["stoppedAt"] = _epoch(handover["createdAt"])
     entry = {"verdict": "stopped", "evidence": out["evidence"], "at": _iso(now), "stoppedAt": out["stoppedAt"],
@@ -479,6 +488,10 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     if entry is None:
         mark["neverPushedEvidence"] = never_pushed_evidence
+    # axis: a handback recorded during the remote reads above ends the lane's recovery, so the ledger is re-read just before the supersession is written
+    again, _, refused = _lane(repo_root, launch_id, env)
+    if refused or _latest_outcome(again) not in ("park", "died"):
+        return refused or _refusal("lane-not-assessed-stopped")
     wrote = _record(repo_root, "superseded", launch_id, mark, env=env, assessed=assessed)
     if not wrote["ok"]:
         return wrote
