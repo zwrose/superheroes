@@ -87,6 +87,8 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "verifyPasses": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
+    "breakItRuns": dict_list,
+    "breakItKept": dict_list,
 }
 
 
@@ -504,6 +506,24 @@ def build_degraded_prose(state, form, journal=None):
                 "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
                 "key while the fold recorded none for them — row-carried text is never rendered "
                 "as owner guidance" % (rkey, len(ggc)))
+        bir = declared.get("breakItRuns")
+        if bir:
+            not_run = [r for r in bir if r.get("outcome") == "not-run"]
+            if not_run:
+                degraded_out.append(
+                    "break-it-test-not-run (round %s): %d break-it test(s) could not be run (%s) "
+                    "— the finding was kept without a recorded failing run"
+                    % (rkey, len(not_run),
+                       ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
+        bik = declared.get("breakItKept")
+        if bik:
+            not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]
+            if not_kept:
+                degraded_out.append(
+                    "break-it-test-not-kept (round %s): %d fixed break-it test(s) not held in the "
+                    "final change (%s) — certification withheld"
+                    % (rkey, len(not_kept),
+                       ", ".join("%s: %s" % (r.get("path"), r.get("outcome")) for r in not_kept)))
         ovg = declared.get("orderVendorProvenanceGaps")
         if ovg:
             seats = []

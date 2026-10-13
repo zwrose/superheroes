@@ -721,8 +721,10 @@ above).
    [collector](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#collector) whose first line is an
    HTML comment naming `superheroes:canon-held`. Create the comment when none exists, and edit it in place. Mint
    the id by the contract's id rule, counting the held lines as already present, so a later
-   take-back can name it in its `supersedes:` field. When you next open a pull request, append the
-   held lines to Canon on its branch byte for byte, by the contract's write procedure, skipping any
+   take-back can name it in its `supersedes:` field. `${CLAUDE_PLUGIN_ROOT}/lib/canon.py hold` does both: given the
+   held comment's body, it returns the line and the new body, or refuses what Canon keeps out. When you next open a pull request, append the
+   held lines to Canon on its branch byte for byte, by the contract's write procedure
+   (`${CLAUDE_PLUGIN_ROOT}/lib/canon.py append --lines-file`), skipping any
    line whose id Canon already holds, and commit them at once. Confirm the commit as the contract
    says, then remove those lines from the held comment. Until it is committed, a held ruling binds
    only you. A held line is never edited; a correction is a new line that supersedes it.

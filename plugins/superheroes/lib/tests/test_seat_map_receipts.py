@@ -45,7 +45,7 @@ def test_seat_map_receipts_never_imports_upward_modules():
 
 def test_emit_receipt_seat_map_violations_union_survives_clean_round():
     """axis: round-1 violations survive a round-2 receipt with an empty violations list."""
-    breach = {"constraint": "maker-family", "seat": "test-reviewer", "reason": "round-1 breach"}
+    breach = {"constraint": "maker-family", "seat": "test-role", "reason": "round-1 breach"}
     map1 = _minimal_map(violations=[breach])
     map2 = _minimal_map(violations=[])
     state = {
@@ -341,7 +341,7 @@ def test_unjudgeable_receipts_whole_history_not_round_scoped():
 
 def test_emit_receipt_seat_map_merges_maker_families_and_roster():
     """axis: makerFamilies is the sorted union over every receipt; roster is last-wins."""
-    roster_1 = ["code-reviewer", "test-reviewer"]
+    roster_1 = ["code-reviewer", "test-role"]
     roster_2 = ["code-reviewer", "grounding-seat"]
     map1 = _minimal_map(makerFamilies=["anthropic"], roster=roster_1)
     map2 = _minimal_map(makerFamilies=["openai", "anthropic"], roster=roster_2)

@@ -16,7 +16,7 @@ There are two top-level paths, chosen at invocation:
 - **`--review-only`** → one review pass, then the presentation written to `$SESSION_DIR/round-1/presentation.md`. No commits. No questions that block waiting for an answer.
 - **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
 
-The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project calibration (`core.md` for threat model + canonical patterns, `review-crew.md` layer for scope/focus/conventions), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator never re-runs a specialist or chains a second **finder** pass within a round, because a finder that has exhausted the real issues starts fabricating (base rubric, "In-pass Chain-of-Verification & single-pass discipline"). It does run a fail-closed **per-finding verification** pass over the *already-emitted* findings at compile time — 3-state CONFIRMED/PLAUSIBLE/REFUTED verdicts with quoted evidence that never searches for new issues, distinct from re-running a finder (see `## Compile + Dedupe`). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
+The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-role`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project calibration (`core.md` for threat model + canonical patterns, `review-crew.md` layer for scope/focus/conventions), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator never re-runs a specialist or chains a second **finder** pass within a round, because a finder that has exhausted the real issues starts fabricating (base rubric, "In-pass Chain-of-Verification & single-pass discipline"). It does run a fail-closed **per-finding verification** pass over the *already-emitted* findings at compile time — 3-state CONFIRMED/PLAUSIBLE/REFUTED verdicts with quoted evidence that never searches for new issues, distinct from re-running a finder (see `## Compile + Dedupe`). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
 
 ## Invocation
 
@@ -181,7 +181,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
   - `architecture-reviewer` → `findings-architecture.json`
   - `code-reviewer` → `findings-code.json`
   - `security-reviewer` → `findings-security.json`
-  - `test-reviewer` → `findings-test.json`
+  - `test-role` → `findings-test.json`
   - `premortem-reviewer` → `findings-premortem.json`
 - **Session directory:** `$SESSION_DIR` (round 1 artifacts under `round-1/`)
 - **Focus notes:** the `--focus` argument, if any
@@ -216,7 +216,7 @@ Launch the round's scheduled specialists (round 1: all five) **by channel** — 
 | architecture-reviewer        | architecture                  | Architecture  |
 | code-reviewer                | code                          | Code          |
 | security-reviewer            | security                      | Security      |
-| test-reviewer                | test                          | Test          |
+| test-role                    | test                          | Test          |
 | premortem-reviewer           | premortem                     | Failure-Mode  |
 
 After dispatch, wait for all five agents to return. **Codex/cursor seats** run the native `dispatch-review` `--run-dir` + `--max-wait 540` continuation loop until terminal; **claude seats** are native subagents with their own lifecycle (the `await-dispatches` ruling's native-subagent exemption — the runner cannot dispatch them). The in-place fixer stays foreground by design (not an oversight). The **hand-rolled engine fallback** (`auto-fix-loop.md`) does not follow that native shape and still owes the limitation disclosure when used. No native-shape limitation disclosure is owed for seats dispatched through the runner or as claude native subagents under this skill. This skill owns the **bounds** of its own dispatches; the builder's `await-dispatches` rule owns the **channel** for what the builder launches. Full contract: `reference/auto-fix-loop.md` (Settled dispatch contract).

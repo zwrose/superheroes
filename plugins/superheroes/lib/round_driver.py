@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
+import break_it  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
@@ -78,6 +79,7 @@ import review_diff_bytes  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
+import risk_areas  # noqa: E402
 import review_round_policy  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import round_commit  # noqa: E402
@@ -97,11 +99,14 @@ from finding_identity import finding_identity, finding_label, normalize_title  #
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
 DIMENSIONS = round_phases.DIMENSIONS
 AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
-                "security-reviewer": "security", "test-reviewer": "test",
+                "security-reviewer": "security", "test-role": "test",
                 "premortem-reviewer": "premortem"}
 # The cross-cutting lenses always get the WHOLE diff even when a big diff is sharded per-lens —
 # architecture and failure-mode reasoning is non-local, so a shard would blind them.
 CROSS_CUTTING_LENSES = ("architecture-reviewer", "premortem-reviewer")
+# Seats whose panel order names their agent file as a role brief — a seat on another vendor never
+# sees its agent's system prompt, so the order is where the brief reaches it.
+ROLE_BRIEF_SEATS = frozenset({"test-role", "code-reviewer"})
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
@@ -488,6 +493,11 @@ FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 # Per-round disclosure channels `_fold_judgment` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
+
+# Per-round disclosure channels `_break_it_kept_step` records at the converge gate (not
+# `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and
+# `build_receipt` share the same home.
+TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
 
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
@@ -905,10 +915,12 @@ def _compile_by_anchor(findings):
     return out
 
 
-def mechanical_compile(findings, diff_text=None):
+def mechanical_compile(findings, diff_text=None, scope_exempt=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
       2. diff-scope check — drop findings whose (file,line) is not an anchor of the round diff;
+         `scope_exempt` is a set of `id()`s of input dicts the break-it intercept stamped itself —
+         only those skip this check, and any other finding's `breakItRun` stamp is stripped;
       4. dedupe by the per-LOCATION anchor (file, line, normalized-title) — higher severity wins,
          dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
          two distinct-line findings that share a title (a dropped blocker);
@@ -917,6 +929,7 @@ def mechanical_compile(findings, diff_text=None):
     if not isinstance(findings, list):
         findings = []
     valid = diff_scope.parse_diff_lines(diff_text) if diff_text is not None else None
+    exempt = scope_exempt if isinstance(scope_exempt, (set, frozenset)) else frozenset()
     kept, drops = [], []
     for f in findings:
         if not isinstance(f, dict):
@@ -932,7 +945,11 @@ def mechanical_compile(findings, diff_text=None):
             continue
         fc = dict(f)
         fc["line"] = line
-        if not _diff_scope_ok(fc, valid):
+        trusted = id(f) in exempt
+        if not trusted:
+            # axis: a stamp the seat supplied itself never survives compile — only the intercept's own copies carry one
+            fc.pop(break_it.RUN_FIELD, None)
+        if not trusted and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
             continue
@@ -2163,7 +2180,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
-        _fold_panel(state, config, artifact)
+        _fold_panel(state, config, artifact, session_dir=session_dir)
     elif phase == P_VERIFIERS:
         _fold_verifiers(state, config, artifact)
     elif phase == P_SYNTHESIS:
@@ -2311,7 +2328,44 @@ def panel_seat_key_fault(dimensions, artifact):
     return "; ".join(parts)
 
 
-def _fold_panel(state, config, artifact):
+def _break_it_scope(session_dir, state, config):
+    """The (repo root, head) the break-it intercept runs against; either may be None, which the
+    runner turns into a `head-unresolved` not-run."""
+    if session_dir:
+        return _resolve_repo_root(session_dir, state), _session_certified_head(session_dir, state)
+    return config.get("repoRoot"), config.get("headSha")
+
+
+def _break_it_run_keys(runs, compiled):
+    """Put the compiled finding's key on each run entry (the same (file, normalized title) match);
+    None for a passed run, and `droppedAtCompile` for a stamped finding compile still dropped."""
+    by_identity = {}
+    for f in compiled:
+        if isinstance(f, dict) and break_it.is_break_it(f):
+            by_identity.setdefault(
+                (f.get("file"), normalize_title(str(f.get("title") or ""))), f)
+    out = []
+    for run in runs:
+        entry = dict(run)
+        if entry.get("outcome") == break_it.OUTCOME_PASSED:
+            entry["findingKey"] = None
+        else:
+            match = by_identity.get((entry.get("file"), normalize_title(str(entry.get("title") or ""))))
+            stamp = match.get(break_it.RUN_FIELD) if match else None
+            if match is not None and isinstance(stamp, dict) and any(
+                    stamp.get(k) != entry.get(k) for k in ("sha256", "command", "reason")):
+                # axis: a run whose proposal compile merged away binds to no finding, so the kept-check sees only the surviving test
+                entry["findingKey"] = None
+                entry["supersededAtCompile"] = True
+            else:
+                entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
+                if match is None:
+                    entry["droppedAtCompile"] = True
+        out.append(entry)
+    return out
+
+
+def _fold_panel(state, config, artifact, session_dir=None):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
     :823-827 parity) but its findings ride the round record as UNVERIFIED/provisional — surfaced,
@@ -2334,6 +2388,7 @@ def _fold_panel(state, config, artifact):
     if unfilled and isinstance(seats, dict):
         seats = {dim: seat for dim, seat in seats.items() if dim not in unfilled}
     raw = []
+    break_it_raw = []
     seat_status = {}
     unverified = []
     missing_dims = []
@@ -2370,6 +2425,9 @@ def _fold_panel(state, config, artifact):
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
+            # axis: only the test role's own seat can trigger a run; the trust is the roster seat key, never the finding's own dimension or taxonomy
+            if dim == break_it.ROLE:
+                break_it_raw.append(g)
     if vacuous_dims:
         _record_round(state, "vacuousSeats", list(vacuous_dims))
         _decision(state, "seat-vacuous",
@@ -2384,7 +2442,29 @@ def _fold_panel(state, config, artifact):
                   "independent verification"
                   % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     incomplete = bool(missing_dims)
-    compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
+    # axis: the break-it tests run in a throwaway copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
+    repo_root, head = _break_it_scope(session_dir, state, config)
+    intercepted, runs, exempt = break_it.intercept(break_it_raw, repo_root, head)
+    # Every other seat's findings skip the intercept; the intercepted ones keep the place of the
+    # test role's first finding, so the original order holds.
+    break_it_ids = {id(g) for g in break_it_raw}
+    kept, placed = [], False
+    for g in raw:
+        if id(g) not in break_it_ids:
+            kept.append(g)
+        elif not placed:
+            kept.extend(intercepted)
+            placed = True
+    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt)
+    if runs:
+        runs = _break_it_run_keys(runs, compiled)
+        _record_round(state, "breakItRuns", runs)
+        _decision(state, "break-it-run",
+                  "%d run: %d failed, %d passed (dropped), %d not run"
+                  % (len(runs),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
+                     sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
     # (a missing seat) does NOT qualify — it neither counts a confirmation nor resets/reseeds the
@@ -4176,6 +4256,11 @@ def _audit_targets(state, config, audit_targets_map):
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
         }
+        if break_it.is_break_it(f):
+            # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
+            for carried in ("suggestion", "body", break_it.RUN_FIELD):
+                if f.get(carried) is not None:
+                    row[carried] = f[carried]
         if auditor_vendor is not None:
             row["auditorVendor"] = auditor_vendor
         targets.append(row)
@@ -4897,6 +4982,69 @@ def _fold_stall(state, config, artifact):
 
 # ---- terminal certification -----------------------------------------------------------------
 
+def _break_it_kept_step(state, config):
+    """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
+    final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
+    parked (certification withheld). A finding with any other disposition owes no check."""
+    for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        for run in (state["rounds"][rkey].get("breakItRuns") or []):
+            # axis: a failed or not-run break-it run that compile dropped never reaches verification, so it withholds certification
+            if (isinstance(run, dict) and run.get("droppedAtCompile") is True
+                    and run.get("outcome") != break_it.OUTCOME_PASSED):
+                _park_cannot_certify(
+                    state, "break-it run dropped at compile: %s (%s)"
+                    % (run.get("path"), run.get("outcome")))
+                return True
+    latest = {}
+    for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        for run in (state["rounds"][rkey].get("breakItRuns") or []):
+            if (isinstance(run, dict) and run.get("outcome") != break_it.OUTCOME_PASSED
+                    and isinstance(run.get("findingKey"), str) and run.get("findingKey")):
+                latest[run["findingKey"]] = run
+    if not latest:
+        return False
+    _, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        _park_cannot_certify(state, "break-it test not kept: disposition ledger fault (%s)" % fault)
+        return True
+    head = config.get(FIX_FOLD_HEAD_KEY) or config.get("headSha")
+    rows, failed = [], []
+    for key, run in latest.items():
+        entry = by_key.get(key)
+        disposition = entry.get("disposition") if isinstance(entry, dict) else None
+        if disposition is None:
+            # axis: an absent disposition is unresolved, never a waiver — retention is not checked, so certification is withheld
+            row = {"findingKey": key, "path": run.get("path"), "outcome": "unresolved",
+                   "reason": "no-disposition", "run": None}
+            rows.append(row)
+            failed.append(row)
+            continue
+        if disposition != "fixed":
+            rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
+                         "reason": disposition})
+            continue
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run)
+        row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
+               "reason": got.get("reason"), "run": got.get("run")}
+        rows.append(row)
+        # axis: a fixed break-it finding whose test is not kept parks, it never certifies
+        if got.get("outcome") != break_it.KEPT:
+            failed.append(row)
+    _record_round(state, "breakItKept", rows)
+    _decision(state, "break-it-kept",
+              "%d checked: %d kept, %d not kept, %d not required"
+              % (len(rows) - sum(1 for r in rows if r["outcome"] == "not-required"),
+                 sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
+                 sum(1 for r in rows if r["outcome"] == "not-required")))
+    if failed:
+        why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
+        _park_cannot_certify(
+            state, "break-it test not kept: %s (%s%s)"
+            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else ""))
+        return True
+    return False
+
+
 def _terminal_converged(state, config, full_panel, note=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
     qualifying full confirmation panel ran) or audited-chain (scoped certifying finish, no final
@@ -4913,6 +5061,9 @@ def _terminal_converged(state, config, full_panel, note=None):
         _park_cannot_certify(
             state, "panel incomplete — a configured lens never ran and no complete panel has since "
             "recovered the coverage; certification withheld")
+        return
+    # axis: the converge gate calls the kept check; without it a dropped break-it test certifies
+    if _break_it_kept_step(state, config):
         return
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
@@ -7322,6 +7473,87 @@ def _shipped_rubric_path():
     return os.path.join(_plugin_resource_root(), "rubric", "review-base.md")
 
 
+def _role_brief_path(seat_key):
+    """Absolute path of the seat's agent file when its panel order names one; else empty."""
+    if seat_key not in ROLE_BRIEF_SEATS:
+        return ""
+    return os.path.join(_plugin_resource_root(), "agents", "%s.md" % seat_key)
+
+
+_RISK_AREAS_MATCHED_SHOWN = 5
+_RISK_AREAS_GIT_TIMEOUT_S = 120
+
+
+def _risk_areas_unreadable(detail):
+    line = " ".join(str(detail).split()) or "unknown"
+    return "not set (changed-paths-unreadable: %s)" % line
+
+
+def _risk_areas_changed_paths(repo_root, base, head):
+    """(paths, None) for the change `base...head` touches, else (None, not-set text). Never raises."""
+    if not isinstance(base, str) or not base:
+        return None, _risk_areas_unreadable("base unresolved")
+    if not isinstance(head, str) or not head:
+        return None, _risk_areas_unreadable("head unresolved")
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "diff", "--name-only", "-z", "--no-renames",
+             "%s...%s" % (base, head)],
+            capture_output=True, timeout=_RISK_AREAS_GIT_TIMEOUT_S)
+    except FileNotFoundError:
+        return None, _risk_areas_unreadable("git not found")
+    except subprocess.TimeoutExpired:
+        return None, _risk_areas_unreadable("git diff timed out")
+    except OSError as exc:
+        return None, _risk_areas_unreadable("%s: %s" % (type(exc).__name__, exc))
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        return None, _risk_areas_unreadable(
+            "git diff exited %d: %s" % (proc.returncode, err) if err
+            else "git diff exited %d" % proc.returncode)
+    names = proc.stdout.decode("utf-8", "surrogateescape").split("\0")
+    return [name for name in names if name], None
+
+
+def _risk_areas_text(seat_key, repo_root, base, head):
+    """The test role's risk-areas clause: which of the project's risk areas the reviewed change
+    touches, as read by `risk_areas.touched` over every changed path. Empty for any other seat.
+    Never raises; a change that cannot be read says so rather than claiming it touches none."""
+    if seat_key != "test-role":
+        return ""
+    try:
+        paths, unreadable = _risk_areas_changed_paths(repo_root, base, head)
+        if unreadable is not None:
+            return unreadable
+        r = risk_areas.touched(repo_root, paths)
+        if r["riskAreas"] == "not-set":
+            detail = r.get("detail")
+            if isinstance(detail, str) and detail:
+                return "not set (%s: %s)" % (r["reason"], detail)
+            return "not set (%s)" % r["reason"]
+        if not r["touched"]:
+            return "none of this project's risk areas"
+        entries = []
+        for hit in r["touched"]:
+            matched = hit["matched"]
+            shown = ", ".join(matched[:_RISK_AREAS_MATCHED_SHOWN])
+            if len(matched) > _RISK_AREAS_MATCHED_SHOWN:
+                shown += ", +%d more" % (len(matched) - _RISK_AREAS_MATCHED_SHOWN)
+            entries.append("%s (matched: %s)" % (hit["area"]["name"], shown))
+        return "; ".join(entries)
+    except Exception as exc:  # the order render must never fail on this clause
+        return _risk_areas_unreadable("%s: %s" % (type(exc).__name__, exc))
+
+
+def _break_it_grammar_text(seat_key):
+    """The test role's break-it block grammar: the fenced `break_it.BLOCK_TEMPLATE` and the rules for
+    its `run` line, built only from the two `break_it` constants. Empty for any other seat."""
+    # axis: only the test role's order carries the grammar; every other seat's order stays free of it
+    if seat_key != "test-role":
+        return ""
+    return "```\n%s\n```\n\n%s" % (break_it.BLOCK_TEMPLATE, break_it.RUN_RULES)
+
+
 def _normalize_focus_notes(value):
     if value is None:
         return ""
@@ -7693,6 +7925,9 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
+    "ROLE_BRIEF_LINE",
+    "RISK_AREAS_LINE",
+    "BREAK_IT_GRAMMAR_BLOCK",
     "MODE",
     "MODE_EVIDENCE",
     "REPO",
@@ -8033,6 +8268,11 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "TARGET": meta.get("branch") or cfg.get("branch") or "unknown",
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
+            "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
+            "RISK_AREAS_TEXT": _risk_areas_text(
+                seat_key, repo_root, cfg.get("baseRef") or meta.get("baseRef"),
+                _session_certified_head(session_dir, state)),
+            "BREAK_IT_GRAMMAR_TEXT": _break_it_grammar_text(seat_key),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,

@@ -344,7 +344,7 @@ def test_cmd_submit_is_only_fold_caller_besides_run_loop():
 
 def test_submit_panel_seat_key_custom_dimensions(tmp_path):
     """Guard uses the configured roster from state, not the global DIMENSIONS default."""
-    narrow = ["code-reviewer", "test-reviewer"]
+    narrow = ["code-reviewer", "test-role"]
     d = str(tmp_path)
     n = _first_next(d, _cfg(dimensions=narrow))
     assert sorted(n["payload"]["dimensions"]) == sorted(narrow)
@@ -359,7 +359,7 @@ def test_submit_panel_seat_key_custom_dimensions(tmp_path):
     out2 = RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"], refused)
     assert out2["ok"] is False
     assert "architecture-reviewer" in out2["reason"]
-    assert "configured dimensions: code-reviewer, test-reviewer" in out2["reason"]
+    assert "configured dimensions: code-reviewer, test-role" in out2["reason"]
 
 
 def test_panel_seat_keys_explicit_shape():
@@ -3156,7 +3156,7 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
     records.write_text("[]")
 
     def reviewer(dim, tier, rnd, ctx):
-        if rnd == 1 and dim == "test-reviewer":
+        if rnd == 1 and dim == "test-role":
             return {"findings": [dict(_CHALLENGED_FINDING)]}
         if dim == "scoped-finder":
             return [dict(_CHALLENGED_FINDING)]
@@ -3168,7 +3168,7 @@ def test_challenged_coverage_recurrence_cannot_certify(tmp_path):
 
     result = RD.run_loop(
         _seams(reviewer=reviewer, fix_step=fix_step),
-        _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records), maxRounds=20))
+        _cfg_cert(dimensions=["test-role"], recordsPath=str(records), maxRounds=20))
     assert result["verdict"] == "cannot-certify"
     assert result["certificationShape"] is None
 
@@ -3182,7 +3182,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
     fired = {"scoped": 0}
 
     def reviewer(dim, tier, rnd, ctx):
-        if rnd == 1 and dim == "test-reviewer":
+        if rnd == 1 and dim == "test-role":
             return {"findings": [dict(_CHALLENGED_FINDING)]}
         if dim == "scoped-finder" and fired["scoped"] == 0:
             fired["scoped"] += 1
@@ -3196,7 +3196,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
 
     receipt = RD.run_loop(
         _seams(reviewer=reviewer, fix_step=fix_step),
-        _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records), maxRounds=20))
+        _cfg_cert(dimensions=["test-role"], recordsPath=str(records), maxRounds=20))
     assert receipt["verdict"] != "cannot-certify"
     assert fired["scoped"] == 1, "the scoped finder must fire over the real new surface"
 
@@ -3209,7 +3209,7 @@ def test_plain_recurring_finding_without_challenge_is_not_challenged_halt(tmp_pa
 # records it. Used by the all-channel producer test; NOT a second copy of the channel list — the test
 # asserts this map's keys equal the module constant's, so a new channel fails here too.
 _ALL_CHANNELS = {
-    "fellOpen": [{"seat": "test-reviewer", "configured": "codex", "reason": "forfeit",
+    "fellOpen": [{"seat": "test-role", "configured": "codex", "reason": "forfeit",
                   "ran": "claude"}],
     "fellOpenProvenanceMissing": ["security-reviewer"],
     "seatMapUnavailable": ["codex"],
@@ -3217,7 +3217,7 @@ _ALL_CHANNELS = {
                            "evidence": "alternative-live"}],
     "vacuousSeats": ["architecture-reviewer"],
     "engagedArtifactSeats": ["premortem-reviewer"],
-    "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
+    "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-role", "echo": "cursor",
                                                   "manifest": "codex"}]},
     "recordOrphansIgnored": ["code-reviewer"],
     "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
@@ -3230,12 +3230,15 @@ _ALL_CHANNELS = {
                               "disposition": "fix-with-guidance",
                               "userGuidance": "keep narrow"}],
     "gateGuidanceRowCarried": [{"index": 0, "title": "orphan row"}],
+    "breakItRuns": [{"role": "test-role", "path": "tests/test_x.py", "outcome": "failed",
+                     "findingKey": "k"}],
+    "breakItKept": [{"findingKey": "k", "path": "tests/test_x.py", "outcome": "kept"}],
 }
 
 
 def _seed_record(round_no, disclosures=None, **over):
     rec = {"schemaVersion": 2, "round": round_no, "kind": "baseline",
-           "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
+           "dimensions": {"test-role": {"status": "run", "confidence": "high",
                                             "tier": "reviewer-deep", "findings": []}},
            "findings": [], "coverageDecisions": []}
     if disclosures is not None:
@@ -3263,20 +3266,20 @@ def test_driver_persists_round_disclosures(tmp_path):
     """The driver writes per-round disclosure channels to round-records.json after each fold."""
     records = tmp_path / "round-records.json"
     records.write_text("[]")
-    cfg = _cfg_cert(dimensions=["test-reviewer", "code-reviewer"], recordsPath=str(records),
+    cfg = _cfg_cert(dimensions=["test-role", "code-reviewer"], recordsPath=str(records),
                maxRounds=8)
     RD.run_loop(_vacuous_round1_seams(), cfg)
 
     on_disk = json.loads(records.read_text())
     round1 = next(r for r in on_disk if r.get("round") == 1)
-    assert round1.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
+    assert round1.get("disclosures", {}).get("vacuousSeats") == ["test-role"]
 
 
 def test_producer_emits_the_whole_declared_channel_set(tmp_path):
     assert set(_ALL_CHANNELS) == set(RD.CARRIED_DISCLOSURE_CHANNELS), \
         "this fixture must cover exactly the restorable channel set"
     records = tmp_path / "round-records.json"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["rounds"]["1"] = dict(_ALL_CHANNELS)
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
@@ -3289,15 +3292,15 @@ def test_producer_normalizes_non_int_round_key_like_the_restorer(tmp_path):
     """A ledger record carrying round `1.0` must persist round 1's disclosures — the producer keys
     the rounds map through the shared `_round_disclosure_key` (int-normalized), never `str(1.0)`."""
     records = tmp_path / "round-records.json"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"vacuousSeats": ["test-role"]}
     rec = _seed_record(1)
     rec["round"] = 1.0
     state["_records"] = [rec]
     RD._persist_round_records(state, state["config"])
     on_disk = json.loads(records.read_text())
     out = next(r for r in on_disk if int(r.get("round")) == 1)
-    assert out.get("disclosures", {}).get("vacuousSeats") == ["test-reviewer"]
+    assert out.get("disclosures", {}).get("vacuousSeats") == ["test-role"]
 
 
 def test_round_disclosure_key_rejects_junk_and_never_aliases():
@@ -3317,8 +3320,8 @@ def test_producer_skips_block_for_non_integral_round_without_aliasing(tmp_path):
     """A `1.5` ledger record persists NO disclosure block (and does not crash on `inf`) —
     round 1's evidence must never be duplicated onto a junk-round record."""
     records = tmp_path / "round-records.json"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"vacuousSeats": ["test-role"]}
     rec_half = _seed_record(1)
     rec_half["round"] = 1.5
     rec_inf = _seed_record(2)
@@ -3332,8 +3335,8 @@ def test_producer_skips_block_for_non_integral_round_without_aliasing(tmp_path):
 
 def test_producer_omits_the_disclosures_key_when_no_channel_survives(tmp_path):
     records = tmp_path / "round-records.json"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
-    state["rounds"]["1"] = {"seatStatus": {"test-reviewer": "run"}, "roundKind": "baseline"}
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
+    state["rounds"]["1"] = {"seatStatus": {"test-role": "run"}, "roundKind": "baseline"}
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
     rec = next(r for r in json.loads(records.read_text()) if r.get("round") == 1)
@@ -3345,11 +3348,11 @@ def test_producer_writes_skeletons_not_evidence_bodies(tmp_path):
     finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
                "dimension": "Code", "body": big, "evidence": big}
     records = tmp_path / "round-records.json"
-    record = _seed_record(1, {"vacuousSeats": ["test-reviewer"]})
+    record = _seed_record(1, {"vacuousSeats": ["test-role"]})
     record["findings"] = [finding]
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["_records"] = [record]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state["rounds"]["1"] = {"vacuousSeats": ["test-role"]}
     RD._persist_round_records(state, state["config"])
     raw = records.read_text()
     assert big not in raw
@@ -3362,7 +3365,7 @@ def test_producer_replaces_a_preexisting_records_file_with_this_sessions_ledger(
     records = tmp_path / "round-records.json"
     records.write_text(json.dumps([_seed_record(1, {"vacuousSeats": ["x"]}),
                                    _seed_record(7, {"vacuousSeats": ["stale-seat"]})]))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["_records"] = [_seed_record(1)]
     state["rounds"]["1"] = {"vacuousSeats": ["live-seat"]}
     RD._persist_round_records(state, state["config"])
@@ -3378,7 +3381,7 @@ def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
         [_seed_record(1, {"vacuousSeats": ["x"]}), _seed_record(7, {"vacuousSeats": ["y"]})],
         indent=2) + "\n"
     records.write_text(initial_text)
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["_records"] = [
         _seed_record(1, {"vacuousSeats": ["a"]}),
         _seed_record(2, {"vacuousSeats": ["b"]}),
@@ -3401,9 +3404,9 @@ def test_producer_parks_when_the_durable_write_fails(tmp_path, monkeypatch):
 def test_producer_parks_when_the_atomic_write_raises_oserror(tmp_path, monkeypatch):
     records = tmp_path / "round-records.json"
     records.write_text("[]")
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["_records"] = [_seed_record(1)]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state["rounds"]["1"] = {"vacuousSeats": ["test-role"]}
 
     def _raise_oserror(path, data):
         raise OSError(13, "permission denied")
@@ -3420,11 +3423,11 @@ def test_producer_park_after_panel_fold_carries_toverify_findings(tmp_path, monk
     records.write_text("[]")
     finding = {"title": "panel-bug", "severity": "Important", "file": "f.py", "line": 1,
                "dimension": "Code"}
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["findings"] = []
     state["_toVerify"] = [finding]
     state["_records"] = [_seed_record(1)]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state["rounds"]["1"] = {"vacuousSeats": ["test-role"]}
 
     def _raise_oserror(path, data):
         raise OSError(5, "write-failed")
@@ -3440,7 +3443,7 @@ def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
     records = tmp_path / "round-records.json"
     initial_text = RD.review_memory.records_bytes([_seed_record(1)]).decode("utf-8")
     records.write_text(initial_text)
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     state["_records"] = []
     RD._persist_round_records(state, state["config"])
     assert records.read_text() == initial_text
@@ -3448,9 +3451,9 @@ def test_producer_empty_ledger_leaves_destination_unchanged(tmp_path):
 
 
 def test_producer_is_inert_without_a_records_path(tmp_path, monkeypatch):
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["_records"] = [_seed_record(1)]
-    state["rounds"]["1"] = {"vacuousSeats": ["test-reviewer"]}
+    state["rounds"]["1"] = {"vacuousSeats": ["test-role"]}
     persisted = []
     monkeypatch.setattr(RD.review_memory, "persist_record",
                         lambda *a, **k: persisted.append(a) or {"ok": True})
@@ -3486,7 +3489,7 @@ def _vacuous_round1_seams():
                "dimension": "Code"}
 
     def reviewer(dim, tier, rnd, ctx):
-        if rnd == 1 and dim == "test-reviewer":
+        if rnd == 1 and dim == "test-role":
             return {"vacuous": True, "findings": []}
         if rnd == 1 and dim == "code-reviewer":
             return {"findings": [dict(finding)]}
@@ -3513,7 +3516,7 @@ def test_prior_comments_unavailable_discloses_on_receipt(tmp_path):
 
 def test_prior_comments_unavailable_degraded_prose_on_receipt():
     """Round-recorded priorCommentsUnavailable must name the round and the missing prior comments."""
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {"1": {"priorCommentsUnavailable": True}}
     receipt = RD.build_receipt(state)
     prose = "\n".join(_round_disclosures(receipt, 1))
@@ -3527,7 +3530,7 @@ def test_prior_comments_unavailable_degraded_prose_on_receipt():
 
 def test_judgment_fail_closed_dispositions_degraded_on_receipt():
     """Fail-closed judgment folds disclose round and count on the receipt degraded list."""
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {"1": {"judgmentDispositions": [
         {"id": "f.py::widen the api@L1", "title": "widen the API",
          "disposition": "fix-as-suggested", "failClosed": True},
@@ -3543,7 +3546,7 @@ def test_judgment_fail_closed_dispositions_degraded_on_receipt():
 
 def test_judgment_valid_dispositions_not_degraded_on_receipt():
     """All-valid judgment dispositions must not add a fail-closed degradation line."""
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {"1": {"judgmentDispositions": [
         {"id": "f.py::widen the api@L1", "title": "widen the API",
          "disposition": "fix-as-suggested"},
@@ -3558,7 +3561,7 @@ def test_judgment_fail_closed_degraded_omits_guidance_and_title():
     """Fail-closed degradation names only round and count — never guidance text or finding titles."""
     distinctive_guidance = "ZQ_DISCLOSURE_MUST_NOT_LEAK_THIS_GUIDANCE"
     distinctive_title = "ZQ_DISCLOSURE_MUST_NOT_LEAK_THIS_TITLE"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {"1": {"judgmentDispositions": [
         {"id": "f.py::widen the api@L1", "title": distinctive_title,
          "disposition": "fix-as-suggested", "failClosed": True,
@@ -3573,7 +3576,7 @@ def test_judgment_fail_closed_degraded_omits_guidance_and_title():
 
 def test_judgment_fail_closed_degraded_per_round():
     """Fail-closed entries across multiple rounds each get their own degradation line."""
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {
         "1": {"judgmentDispositions": [
             {"id": "a", "disposition": "fix-as-suggested", "failClosed": True}]},
@@ -3590,7 +3593,7 @@ def test_judgment_fail_closed_degraded_per_round():
 
 def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
     """Malformed gap row recorded in-session is skipped at render; receipt still produced."""
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {"1": {"orderVendorProvenanceGaps": [{"seat": 7}]}}
     receipt = RD.build_receipt(state)
     assert isinstance(receipt["degraded"], list)
@@ -3601,7 +3604,7 @@ def test_order_vendor_gap_missing_occurrence_still_valid():
     """occurrence is optional on gap rows — well-shaped without it."""
     gaps = [{"seat": "architecture-reviewer"}]
     assert RD.CARRIED_DISCLOSURE_CHANNELS["orderVendorProvenanceGaps"](gaps)
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["rounds"] = {"1": {"orderVendorProvenanceGaps": gaps}}
     receipt = RD.build_receipt(state)
     ovg_lines = [d for d in receipt["degraded"] if "order-vendor-provenance-gap" in d]
@@ -3615,7 +3618,7 @@ def test_disclosure_block_survives_the_durable_skeleton(tmp_path):
     record without one gains no key."""
     rm = _load("review_memory")
     rec = rm.record_from_dimension_results(
-        1, "baseline", {"test-reviewer": {"status": "run", "findings": []}}, None, [], None,
+        1, "baseline", {"test-role": {"status": "run", "findings": []}}, None, [], None,
         disclosures={"vacuousSeats": ["architecture-reviewer"]})
     assert rec["disclosures"] == {"vacuousSeats": ["architecture-reviewer"]}
     assert rm.summarize_record(rec)["disclosures"] == {"vacuousSeats": ["architecture-reviewer"]}
@@ -3714,6 +3717,7 @@ def test_panel_round_channels_are_all_accounted_for():
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     judgment_fold = set(RD.JUDGMENT_FOLD_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
+    terminal_gate = set(RD.TERMINAL_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
     restorable = set(RD.CARRIED_DISCLOSURE_CHANNELS)
@@ -3721,6 +3725,9 @@ def test_panel_round_channels_are_all_accounted_for():
     assert fold_provenance <= restorable, (
         "fold provenance channels must be restorable: %s"
         % sorted(fold_provenance - restorable))
+    assert terminal_gate <= restorable, (
+        "terminal-gate disclosure channels must be restorable: %s"
+        % sorted(terminal_gate - restorable))
     assert submit_disclosure <= restorable, (
         "submit disclosure channels must be restorable: %s"
         % sorted(submit_disclosure - restorable))
@@ -3737,7 +3744,7 @@ def test_panel_round_channels_are_all_accounted_for():
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
     all_recorded = (recorded | fold_provenance | judgment_fold | submit_disclosure | order_emission
-                    | verifier_recorded | verifier_appended | verifier_fold)
+                    | terminal_gate | verifier_recorded | verifier_appended | verifier_fold)
     assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
@@ -4983,7 +4990,7 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
 def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_fixer_order(tmp_path):
     """E6: fold guidance reaches the export, the receipt and the rendered fixer order in one session."""
     records = tmp_path / "round-records.json"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
@@ -5023,7 +5030,7 @@ def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_
     records = tmp_path / "round-records.json"
     tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
     guidance_text = "keep the resume identity intact"
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     RD._route_judgment_blockers(state, [tradeoff])
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": _RESUME_IDENTITY_TRADEOFF_ID, "disposition": "fix-with-guidance",
@@ -5606,7 +5613,7 @@ def test_unattested_cross_vendor_map_refuses_unrun_review_not_probe_parked():
         "code-reviewer": "codex",
         "security-reviewer": "cursor",
         "architecture-reviewer": "claude",
-        "test-reviewer": "codex",
+        "test-role": "codex",
         "premortem-reviewer": "cursor",
     })
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
@@ -5953,7 +5960,7 @@ def test_emit_receipt_seat_map_non_evidence_scalar_last_wins():
 def test_emit_receipt_seat_map_distinct_degradation_rows_survive():
     """axis: emitted map dedupes identical rows but distinct degradation rows survive."""
     row_a = {"constraint": "same-family", "seat": "security-reviewer", "reason": "alpha"}
-    row_b = {"constraint": "same-family", "seat": "test-reviewer", "reason": "beta"}
+    row_b = {"constraint": "same-family", "seat": "test-role", "reason": "beta"}
     map1 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
     map1["degradations"] = [row_a]
     map2 = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -6174,7 +6181,7 @@ def test_fell_open_multi_seat_deterministic_disclosure_order():
         "architecture-reviewer": "claude",
         "code-reviewer": "codex",
         "security-reviewer": "cursor",
-        "test-reviewer": "codex",
+        "test-role": "codex",
         "premortem-reviewer": "cursor",
     })
     RD._fold_panel(state, state["config"], {
@@ -6192,7 +6199,7 @@ def test_fell_open_multi_seat_deterministic_disclosure_order():
          "reason": "forfeit-fell-open"},
     ]
     assert state["rounds"]["1"]["fellOpenProvenanceMissing"] == [
-        "premortem-reviewer", "test-reviewer"]
+        "premortem-reviewer", "test-role"]
     receipt = RD.build_receipt(state)
     fo_lines = [d for d in receipt["degraded"] if d.startswith("reviewer-fell-open (round")]
     assert len(fo_lines) == 2
@@ -6201,7 +6208,7 @@ def test_fell_open_multi_seat_deterministic_disclosure_order():
     prov_lines = [d for d in receipt["degraded"]
                   if d.startswith("reviewer-fell-open-provenance-unavailable")]
     assert len(prov_lines) == 1
-    assert "premortem-reviewer, test-reviewer" in prov_lines[0]
+    assert "premortem-reviewer, test-role" in prov_lines[0]
 
 
 def test_fell_open_two_rounds_deterministic_disclosure_order():
