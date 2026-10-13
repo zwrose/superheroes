@@ -1998,14 +1998,20 @@
       "blocksHeading", "nothingBlocking", "firstAnswerCounts", "rowPr", "rowStack", "accepted", "nothingToAccept", "walked", "mergesAt",
       "mergesAtNumber", "beingFixed", "ready", "open", "questionsOne", "questionsMany", "needYou", "nothingNeedsYou", "done",
     ];
-    const INDEX_STATES = ["needs-you", "being-fixed", "ready"];
-
-    function hasIndexWords(words) {
+    // The states an index row can have come from the schema (indexRow's state enum), the one home of that list; null when the schema gives none.
+    function readIndexStates(schema) {
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
-      if (!isObject(words) || !isObject(words.index) || !isObject(words.pr)) return false;
+      const defs = isObject(schema) && isObject(schema.$defs) ? schema.$defs : {};
+      const row = isObject(defs.indexRow) && isObject(defs.indexRow.properties) ? defs.indexRow.properties.state : undefined;
+      return isObject(row) && Array.isArray(row.enum) && row.enum.every(function (state) { return typeof state === "string"; }) ? row.enum : null;
+    }
+
+    function hasIndexWords(words, states) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      if (states === null || !isObject(words) || !isObject(words.index) || !isObject(words.pr)) return false;
       const index = words.index;
       return INDEX_WORD_KEYS.every(function (key) { return typeof index[key] === "string"; })
-        && isObject(index.groups) && INDEX_STATES.every(function (state) { return typeof index.groups[state] === "string"; })
+        && isObject(index.groups) && states.every(function (state) { return typeof index.groups[state] === "string"; })
         && Array.isArray(index.ordinals) && index.ordinals.every(function (ordinal) { return typeof ordinal === "string"; })
         && ["zoomOut", "zoomIn", "zoomFit"].every(function (key) { return typeof words.pr[key] === "string"; });
     }
@@ -2057,9 +2063,9 @@
       return section;
     }
 
-    // The parts of the index below its questions: one for each state that has a row, in the order the states are listed.
+    // The parts of the index below its questions: one for each state that has a row, in the order the wording file lists the groups (the order the chat prose uses too).
     function buildIndexGroups(rows) {
-      return INDEX_STATES.filter(function (state) { return rows.some(function (row) { return row.state === state; }); }).map(function (state) {
+      return Object.keys(indexWords.groups).filter(function (state) { return rows.some(function (row) { return row.state === state; }); }).map(function (state) {
         const section = prSection("section", "index-group-" + state, "sheet-index-group");
         section.appendChild(textElement("h2", "", indexWords.groups[state]));
         rows.filter(function (row) { return row.state === state; }).forEach(function (row) { section.appendChild(buildIndexRow(row)); });
@@ -2574,7 +2580,7 @@
           return;
         }
       }
-      if ((revisedKind(sheet.kind) && !hasPrWords(words)) || (sheet.kind === "index" && !hasIndexWords(words))) {
+      if ((revisedKind(sheet.kind) && !hasPrWords(words)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
         showErrors(["The sheet's wording file lacks words this sheet needs."]);
         return;
       }
