@@ -695,6 +695,27 @@ def test_a_later_working_reading_withdraws_the_stop_authorization(w):
     assert _successor(w) == {"ok": False, "reason": "lane-not-assessed-stopped"}
 
 
+def test_a_working_reading_during_successors_remote_reads_withdraws_the_stop_authorization(w):
+    _push(w, BRANCH, "a")
+    _lane(w, "l1")
+    assert _assess(w, state="failed")["verdict"] == "stopped"
+    _died(w, "l1")
+
+    def run(argv, **kw):
+        if "ls-remote" in argv:
+            assert _assess(w, state="working", age=60)["verdict"] == "working"
+        return w.gh(argv, **kw)
+    assert CR.successor(w.root, "l1", repo=REPO, run=run) == {"ok": False, "reason": "lane-not-assessed-stopped"}
+    assert _state(w)["superseded"] == {}
+
+
+def test_a_parked_lane_that_later_handed_back_is_ended_not_stopped(w):
+    _lane(w, "l1")
+    _died(w, "l1", "park")
+    assert ll.record_outcome(w.root, "l1", "handback", "done")["ok"]
+    assert _assess(w, state="archived")["verdict"] == "ended"
+
+
 def test_a_handover_head_carried_by_two_pushed_branches_is_ambiguous(w):
     head = _push(w, "issue-17-a", "a")
     _git(w.builder, "push", "-q", "origin", "issue-17-a:refs/heads/issue-17-b")

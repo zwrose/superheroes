@@ -146,7 +146,7 @@ def _save(path, data):
     return True
 
 
-def _record(repo_root, section, launch_id, entry, *, env=None, keep=None):
+def _record(repo_root, section, launch_id, entry, *, env=None, keep=None, assessed=None):
     """Write `entry` under `section[launch_id]`, under one per-repository lock beside the state file so the
     read-modify-write is not interleaved with another writer's. With `keep`, called with the entry already
     there (or None): a non-None answer is returned instead of writing, and the state is left alone."""
@@ -168,6 +168,8 @@ def _record(repo_root, section, launch_id, entry, *, env=None, keep=None):
         path, data = _load(repo_root, env)
         if data is None:
             return path
+        if assessed is not None and data["assessed"].get(launch_id) != assessed:
+            return _refusal("lane-not-assessed-stopped")
         answer = keep(data[section].get(launch_id)) if keep is not None else None
         if answer is not None:
             return answer
@@ -318,7 +320,8 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
            "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None}
     # axis: a parked or died lane is still recoverable from current stop evidence until a successor is composed for it
-    if info["terminal"] and (info.get("outcome") not in ("park", "died") or _replaced(repo_root, launch_id, info, env)):
+    latest = next((a["value"] for a in reversed(info.get("amendments") or []) if a["kind"] == _sib("launch_ledger").AMENDMENT_REOUTCOME), info.get("outcome"))
+    if info["terminal"] and (latest not in ("park", "died") or _replaced(repo_root, launch_id, info, env)):
         out["verdict"] = "ended"
         return out
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
@@ -476,7 +479,7 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     if entry is None:
         mark["neverPushedEvidence"] = never_pushed_evidence
-    wrote = _record(repo_root, "superseded", launch_id, mark, env=env)
+    wrote = _record(repo_root, "superseded", launch_id, mark, env=env, assessed=assessed)
     if not wrote["ok"]:
         return wrote
     return {"ok": True, "launchId": launch_id, "issue": info["issue"], "premise": premise,
