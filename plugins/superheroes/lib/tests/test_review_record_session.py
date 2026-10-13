@@ -317,13 +317,13 @@ def test_two_attempts_of_one_slot_keep_the_highest(tmp_path):
     s = Session(tmp_path)
     s.seat("code-reviewer", attempt=0)
     s.seat("code-reviewer", attempt=1, head=HEAD)
-    s.seat("test-reviewer", attempt=0).seat("test-reviewer", attempt=1, head=HEAD)
+    s.seat("test-role", attempt=0).seat("test-role", attempt=1, head=HEAD)
     s.rows.append({"outcome": "recorded", "cmd": "record-result", "phase": "dispatch-panel", "round": 1, "seat": 5})
     s.rows.append({"outcome": "recorded", "cmd": "record-result", "phase": None, "round": 1, "seat": "x"})
     account = rs.account_from_session(s.save(), extras())
     # bites on: the lower attempt of a slot winning over the higher one, or two attempts of one slot counting twice
     assert [(v["name"], v["commit"]) for v in account["reviewers"]] == [
-        ("code-reviewer (round 1)", HEAD), ("test-reviewer (round 1)", HEAD)]
+        ("code-reviewer (round 1)", HEAD), ("test-role (round 1)", HEAD)]
 
 
 @pytest.mark.parametrize("missing", [None, "", 5])

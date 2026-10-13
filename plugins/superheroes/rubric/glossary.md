@@ -376,3 +376,11 @@ The owner's word that the spec may go to the advisor's vet. It is not approval, 
 ### Review record
 
 The plain account of one PR's review, written when the review ends on any lane. It holds what was checked, which reviewers ran, every finding and what happened to it, CI on the final commit, and what is left. Each review session adds its own record comment to the PR and never edits an earlier one; each reviewer's raw output is kept in its own comment that the record links. The rule for writing it is in [the review record reference](../skills/review-code/reference/review-record.md).
+
+### Test role
+
+The review panel's test seat. For each changed test it asks whether the test would fail if the code were wrong, and it reports tests that check nothing, pass by chance, or bloat the change. It asks for no coverage outside the project's risk areas and raises no test-style findings. Its method is in [the test role's agent file](../agents/test-role.md).
+
+### Break-it test
+
+A test the [test role](#test-role) writes for a change that touches a risk area, to try to break the change on a named risky scenario. The review loop runs it in a throwaway copy of the change. A failing run becomes a finding, and the test stays with the change once that finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).

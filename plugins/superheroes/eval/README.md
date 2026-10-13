@@ -73,7 +73,7 @@ methodology and the base-rubric content**:
   - base rubric: `plugins/superheroes/rubric/review-base.md`
 
 where `<x>` is one of `architecture-reviewer`, `code-reviewer`,
-`security-reviewer`, `test-reviewer`.
+`security-reviewer`, `test-role`.
 
 Extract the four pieces of text up front, e.g.:
 
@@ -81,7 +81,7 @@ Extract the four pieces of text up front, e.g.:
 EVAL_DIR=plugins/superheroes/eval
 OUT=$(mktemp -d /tmp/review-ab-XXXX)
 
-for x in architecture-reviewer code-reviewer security-reviewer test-reviewer; do
+for x in architecture-reviewer code-reviewer security-reviewer test-role; do
   git show 5a05714:plugins/superheroes/agents/$x.md       > "$OUT/$x.baseline.md"
   cp        plugins/superheroes/agents/$x.md              "$OUT/$x.improved.md"
 done
