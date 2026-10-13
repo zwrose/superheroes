@@ -8888,3 +8888,25 @@ def test_iphone_external_contract_values_are_pinned():
     assert L.DEVICE_HUB_UNAVAILABLE == "unavailable"
     assert 0 < L._IPHONE_CEILING_SECONDS <= 90
     assert not hasattr(L, "_IPHONE_SPAWN_HEADROOM_SECONDS")
+
+
+@pytest.mark.parametrize("pair", [
+    {"adoptsBranch": "other-build", "adoptsHead": "a" * 40},
+    {"adoptsBranch": "b2", "adoptsHead": "c" * 40},
+])
+def test_stack_gate_adoption_pair_off_the_occupant_refuses(tmp_path, monkeypatch, pair):
+  # axis: the adoption pair must equal the adopted occupant's own headRefName and headRefOid
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=4242, **pair,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "adopts-branch-mismatch"
+
+
+def test_stack_gate_adoption_pair_matching_the_occupant_passes(tmp_path, monkeypatch):
+  # axis: the adoption pair equal to the occupant's branch and head passes the gate
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=4242,
+        adoptsBranch="b2", adoptsHead="a" * 40,
+    )
+    assert result["ok"] is True

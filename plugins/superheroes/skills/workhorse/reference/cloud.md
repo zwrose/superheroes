@@ -114,7 +114,7 @@ the issue, then carry on from the pushed head.
 ## When the advisor asks you to push
 
 A message from the advisor can ask you to push your work and hand the issue over, because another
-builder is about to take it. Do exactly that, once: push every commit you have; run
+builder is about to take it. Do exactly that, once: commit and push your in-progress work, including any untracked files it needs, so nothing is left in the working tree; if any of it cannot be committed or pushed, say so in a comment on the issue and do not post the handover; run
 `python3 -B <plugin root>/lib/cloud_builder.py handover --head <your pushed head sha>`; post its
 `comment` on the issue as it is; then stop working on the issue and end your turn. Never post a
 handover for a head you did not push. If the verb answers `head-invalid`, the head you gave is not a

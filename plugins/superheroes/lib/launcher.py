@@ -2225,6 +2225,12 @@ def _apply_stack_gate(
                 or member.get("baseRefName") != queried.get("headRefName")
             ):
                 return {"ok": False, "reason": "layer-position-occupied"}
+            # axis: the adoption pair names the branch and head the occupant actually holds — the launch continues the pair's branch, so a pair that differs from the occupant would record the stack pull request as taken over while the builder works a different branch
+            if "adoptsBranch" in stamped_premise and (
+                member.get("headRefName") != stamped_premise["adoptsBranch"]
+                or member.get("headRefOid") != stamped_premise["adoptsHead"]
+            ):
+                return {"ok": False, "reason": "adopts-branch-mismatch"}
             occupant_adopted = True
     # axis: an adoption premise whose position holds no pull request has nothing to adopt
     if adopts is not None and not occupant_adopted:

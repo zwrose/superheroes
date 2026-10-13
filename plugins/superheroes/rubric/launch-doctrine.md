@@ -178,7 +178,7 @@ quietly relaunch the work on the recovering session's own account.
 `stack` and `layerPosition`. When a pull request already occupies that position (layer 2 and up),
 it adds `adopts: <PR number>` naming it; the launcher lets it through only when that exact pull
 request is the member at `layerPosition` and sits on the layer below's head branch — any other
-occupant, or none, refuses (`layer-position-occupied`, `adopts-occupant-missing`). When no pull
+occupant, or none, refuses (`layer-position-occupied`, `adopts-occupant-missing`); a branch-and-head pair that differs from that member's own refuses (`adopts-branch-mismatch`). When no pull
 request holds the position yet, or the lane is the bottom layer, omit `adopts`
 (`premise-adopts-bottom-layer`). Never drop the stack fields to get past the gate: the ledger then
 loses the lane's stack membership.

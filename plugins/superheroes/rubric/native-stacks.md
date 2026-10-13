@@ -147,6 +147,8 @@ the premise shape change is in `TRANSITION.md`:
   the layer below's head branch (an adoption re-occupying its own position).
 - `adopts-occupant-missing` — the premise's `adopts` names a pull request, but no member holds the
   claimed `layerPosition`, so there is nothing to adopt.
+- `adopts-branch-mismatch` — the premise carries an adoption pair (`adoptsBranch`, `adoptsHead`) that
+  differs from the adopted member's own `headRefName` or `headRefOid`.
 - `premise-adopts-without-stack`, `premise-adopts-invalid`, `premise-adopts-bottom-layer` — `adopts`
   is present without the stack pair, is not a positive integer, or sits on `layerPosition` 1 (the
   bottom layer is never gated).
