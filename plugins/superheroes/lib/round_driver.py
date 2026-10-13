@@ -97,11 +97,14 @@ from finding_identity import finding_identity, finding_label, normalize_title  #
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
 DIMENSIONS = round_phases.DIMENSIONS
 AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
-                "security-reviewer": "security", "test-reviewer": "test",
+                "security-reviewer": "security", "test-role": "test",
                 "premortem-reviewer": "premortem"}
 # The cross-cutting lenses always get the WHOLE diff even when a big diff is sharded per-lens —
 # architecture and failure-mode reasoning is non-local, so a shard would blind them.
 CROSS_CUTTING_LENSES = ("architecture-reviewer", "premortem-reviewer")
+# Seats whose panel order names their agent file as a role brief — a seat on another vendor never
+# sees its agent's system prompt, so the order is where the brief reaches it.
+ROLE_BRIEF_SEATS = frozenset({"test-role", "code-reviewer"})
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
@@ -7306,6 +7309,13 @@ def _shipped_rubric_path():
     return os.path.join(_plugin_resource_root(), "rubric", "review-base.md")
 
 
+def _role_brief_path(seat_key):
+    """Absolute path of the seat's agent file when its panel order names one; else empty."""
+    if seat_key not in ROLE_BRIEF_SEATS:
+        return ""
+    return os.path.join(_plugin_resource_root(), "agents", "%s.md" % seat_key)
+
+
 def _normalize_focus_notes(value):
     if value is None:
         return ""
@@ -7677,6 +7687,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
+    "ROLE_BRIEF_LINE",
     "MODE",
     "MODE_EVIDENCE",
     "REPO",
@@ -8017,6 +8028,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "TARGET": meta.get("branch") or cfg.get("branch") or "unknown",
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
+            "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,

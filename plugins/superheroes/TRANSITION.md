@@ -64,6 +64,13 @@ These retirements ship in the same release as the review record, and never apart
 - A ruling given in chat now gets the standard chat-ruling record: one dated collector comment quoting the owner's words (`canon.py ruling-record --post` returns its permalink). An issue Anchor cites that permalink, so Canon is no longer the only reachable record of a chat ruling.
 - Nothing already in Canon changes, and no sweep is owed. Until a project adopts this release, its advisor writes Canon by hand as before.
 
+### The test role
+
+- The review panel's test seat is now the test role. Its agent is `test-role`, and its findings file and the `Test` dimension are unchanged. The `test-reviewer` agent is gone.
+- A `seatPins` entry under `test-reviewer` is read as the test role's pin, with nothing to rewrite. An explicit `test-role` pin wins.
+- The test role asks for no test coverage outside the project's risk areas and raises no test-style findings.
+- For a change that touches a risk area, the test role writes break-it tests. The review loop runs them in a throwaway copy of the change and keeps each one with the change once its finding is fixed.
+
 ### Configure: Risk and trust
 
 - Item 10 is renamed "Risk and trust", and its slug `threatModel` is replaced by `riskAndTrust`. Callers of `project_config.py get --item threatModel` or `set --item threatModel` now get `unknown-slug`.
