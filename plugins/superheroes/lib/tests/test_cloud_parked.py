@@ -784,7 +784,7 @@ def test_an_unconfirmed_send_is_never_resent_but_is_listed_every_time_until_a_ne
     for _ in range(2):
         out = _send(w)
         assert out["sendBack"] == []
-        assert out["uncertain"] == [{"pr": 10, "repo": REPO, "launchId": "l-a"}]
+        assert out["uncertain"] == [{"pr": 10, "repo": REPO, "launchId": "l-a", "parkId": _park_id(w, 10)}]
     w.gh.comments[10] = [_lapsed_comment(10, created_at="2026-10-08T10:00:00Z", cid=999)]
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     assert _entries(w)[0]["outcome"] is None
@@ -807,7 +807,9 @@ def test_a_plain_sent_confirms_an_unconfirmed_send_and_an_unconfirmed_one_never_
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)
     assert _uncertain(w, 10)["action"] == "written"
-    assert _sent(w, 10) == {"ok": True, "action": "written"}
+    item = _send(w)["uncertain"][0]
+    assert item["parkId"] is not None
+    assert CP.sent(w.repo, REPO, 10, park_id=item["parkId"], env=w.env) == {"ok": True, "action": "written"}
     assert _entries(w)[0]["outcome"] == "sent-back"
     assert _uncertain(w, 10) == {"ok": True, "action": "unchanged"}
     assert _entries(w)[0]["outcome"] == "sent-back"

@@ -285,7 +285,7 @@ account that is `SendMessage`. On another account (`configDir`) it is the relay'
 - After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed`, run `sent --uncertain`
   (not plain `sent`) with the same `--repo-root`, `--repo`, `--pr` and `--park-id`, and tell the owner. The builder
   may already hold the text, so never resend it automatically. `send-back` never lists the PR for
-  sending again, but lists it under `uncertain` every time. A later plain `sent` records it as sent.
+  sending again, but lists it under `uncertain` every time. A later plain `sent` with its `--park-id` records it.
 - After an `ensure` refusal or `relay-send-failed`, do not run `sent`. Nothing reached the builder,
   and the PR stays listed for the next `send-back`.
 

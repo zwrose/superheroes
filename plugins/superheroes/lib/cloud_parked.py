@@ -307,7 +307,7 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         return path
     out = {"ok": True, "sendBack": [], "skipped": [], "unread": [], "notRenewed": [], "noLane": [],
            "superseded": [],
-           "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY)}
+           "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY), _PARK_KEY: e.get(_PARK_KEY)}
                          for e in entries if e["outcome"] == UNCERTAIN]}
     changed = False
     for e in (e for e in entries if e["outcome"] is None):
