@@ -461,10 +461,10 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_VERIFIERS: {
         "required": ["verdicts"],
-        "optional": [],
+        "optional": ["verifierVendor"],
         "conditional": {},
         "enums": {},
-        "types": {"verdicts": "list-of-objects"},
+        "types": {"verdicts": "list-of-objects", "verifierVendor": "string"},
         "elements": {
             "verdicts": {
                 "required": ["id", "verdict", "reason"],

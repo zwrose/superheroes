@@ -310,8 +310,12 @@ _RISKY_DIFF = ("diff --git a/src/payments/charge.py b/src/payments/charge.py\n"
 
 
 def _reduced_state(tmp_path):
-    return RD.new_state({"repoRoot": str(tmp_path),
-                         "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
+    state = RD.new_state({"repoRoot": str(tmp_path),
+                          "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
+    # No diff was seeded, so the first-panel lane recheck halted the session at creation; these tests
+    # exercise the LATER heads from a session that is still running, so put it back at the first panel.
+    state.update({"terminal": None, "certification": None, "decisions": [], "step": RD.P_PANEL})
+    return state
 
 
 def _unknown_surface_dimensions(state, diff):
@@ -398,7 +402,7 @@ def _calibrated_reduced_state(tmp_path, monkeypatch):
     real_call = lane_call.call  # the real floor, pointed at the temp store; paths pass through untouched
     monkeypatch.setattr(lane_call, "call", lambda cwd, paths, proposed=None, root=None:
                         real_call(cwd, paths, proposed=proposed, root=store))
-    return RD.new_state({"repoRoot": repo,
+    return RD.new_state({"repoRoot": repo, "diff": _DOCS_DIFF,
                          "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
 
 
@@ -421,7 +425,8 @@ def test_the_verified_head_refresh_depends_on_the_paths_the_head_changed(tmp_pat
         clean, clean["config"], "a" * 40, panel_diff_seam=lambda *_: (_DOCS_DIFF, None))
     assert not clean.get("terminal")
     assert clean["config"]["dimensions"] == ["code-reviewer", "test-role"]
-    risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "seatMap": clean["config"]["seatMap"]})
+    risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "diff": _DOCS_DIFF,
+                         "seatMap": clean["config"]["seatMap"]})
     assert not RD._refresh_panel_diff_at_verified_head(
         risky, risky["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
     _assert_halted_lane_expanded(risky)
@@ -431,9 +436,42 @@ def test_the_unknown_surface_entry_depends_on_the_paths_the_head_changed(tmp_pat
     clean = _calibrated_reduced_state(tmp_path, monkeypatch)
     _kind, dims = _unknown_surface_dimensions(clean, _DOCS_DIFF)
     assert dims == ["code-reviewer", "test-role"]
-    risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "seatMap": clean["config"]["seatMap"]})
+    risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "diff": _DOCS_DIFF,
+                         "seatMap": clean["config"]["seatMap"]})
     risky["round"] = 2
     risky["_headDiffUnknown"] = True
     RD._enter_delta_round(risky, risky["config"], panel_diff_seam=lambda *_: (_RISKY_DIFF, None),
                           panel_head="a" * 40)
     _assert_halted_lane_expanded(risky)
+
+
+# --- the first panel is dispatched only after the lane basis is re-asked over the round-1 diff ----
+
+def test_a_reduced_seat_map_over_a_risky_round_one_diff_halts_before_any_panel_order(tmp_path, monkeypatch):
+    # axis: the seeded map's lane basis is rechecked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
+    clean = _calibrated_reduced_state(tmp_path, monkeypatch)
+    repo = clean["config"]["repoRoot"]
+    risky = RD.new_state({"repoRoot": repo, "diff": _RISKY_DIFF, "seatMap": clean["config"]["seatMap"]})
+    _assert_halted_lane_expanded(risky)
+    assert RD._advance(risky, risky["config"])["action"] == RD.P_TERMINAL
+
+
+def test_a_reduced_seat_map_over_a_clean_round_one_diff_proceeds_with_the_reduced_dimensions(tmp_path, monkeypatch):
+    state = _calibrated_reduced_state(tmp_path, monkeypatch)
+    assert not state.get("terminal")
+    nxt = RD._advance(state, state["config"])
+    assert nxt["action"] == RD.P_PANEL
+    assert nxt["payload"]["dimensions"] == ["code-reviewer", "test-role"]
+
+
+def test_a_reduced_seat_map_with_no_round_one_diff_halts_rather_than_assuming_clean(tmp_path):
+    state = RD.new_state({"repoRoot": str(tmp_path),
+                          "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
+    _assert_halted_lane_expanded(state)
+
+
+def test_the_lane_expanded_decision_token_is_owned_by_decision_kinds():
+    import decision_kinds
+    assert RD.LANE_EXPANDED_RECOMPOSE is decision_kinds.LANE_EXPANDED_RECOMPOSE
+    assert decision_kinds.LANE_EXPANDED_RECOMPOSE in decision_kinds.DECISION_KINDS
+    assert decision_kinds.map_terminal_cause("halted", decision_kinds.LANE_EXPANDED_RECOMPOSE) == {"kind": "loop", "reason": "detector"}

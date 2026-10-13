@@ -514,9 +514,11 @@ TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
 # unconditionally, not as a disclosure); `lensCoverage` is the panel's per-round coverage anchor
 # owned by the round that ran the panel; `verify` carries finding-shaped verifier evidence (drops,
 # downgrades, unverified, ambiguous) that round-records.json never stores — the receipt gets
-# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`).
+# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`); `verifierProvenance`
+# pairs the selected verifier vendor with the vendor that ran each wave's verdicts — the durable
+# per-seat records and the orders manifest already carry that pairing, so it is not restored.
 UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
-                               "verify")
+                               "verify", "verifierProvenance")
 
 def _round_disclosure_key(value):
     """The rounds-map key for a durable record's round value — one home for producer and restorer.
@@ -1163,7 +1165,7 @@ def _diff_changed_paths(diff_text):
     return paths
 
 
-LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
+LANE_EXPANDED_RECOMPOSE = decision_kinds.LANE_EXPANDED_RECOMPOSE
 
 
 def _reevaluate_lane_dimensions(state, config, diff_text):
@@ -1197,7 +1199,7 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
     state["terminal"] = "halted"
     state["certification"] = {
         "shape": None,
-        "reason": ("lane-expanded-recompose: this change now touches a risk area (or its risk cannot "
+        "reason": (LANE_EXPANDED_RECOMPOSE + ": this change now touches a risk area (or its risk cannot "
                    "be read), and the seat map was composed for a smaller roster — the review must "
                    "restart with a freshly composed seat map on the current head; certification "
                    "withheld")}
@@ -1331,6 +1333,8 @@ def new_state(config=None):
         "_records": [],
         "_coverage": [],
     }
+    # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
+    _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
     return state
 
 
@@ -2790,6 +2794,22 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # folds exactly like silence (every staged finding stays unverified), as an unseatable
         # audit target does.
         verdicts = []
+    # axis: the verdicts count only when the vendor that ran them is the driver's selected non-maker
+    # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
+    # unproven family and folds like silence.
+    selected, source = _nonpanel_selection(state, session_dir)
+    ran = artifact.get("verifierVendor")
+    if verdicts and selected is not None and (
+            (isinstance(ran, str) and ran.strip() and ran.strip() != selected)
+            or (source == VENDOR_SOURCE_INDEPENDENT and not (isinstance(ran, str) and ran.strip()))):
+        _record_round_append(state, "verifierProvenance", {
+            "expected": selected, "ran": ran if isinstance(ran, str) else None,
+            "outcome": "verdicts-ignored"})
+        verdicts = []
+    elif verdicts:
+        _record_round_append(state, "verifierProvenance", {
+            "expected": selected, "ran": ran.strip() if isinstance(ran, str) and ran.strip() else selected,
+            "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
@@ -5686,6 +5706,8 @@ def _run_seam(seams, action, payload, state, config):
         fault = verifier_results_fault(artifact)
         if fault is not None:
             return {"verdicts": [], "_verifierArtifactFault": fault}
+        # The library layer IS the orchestrator: it dispatches on the driver's selected vendor.
+        artifact["verifierVendor"] = _nonpanel_selection(state)[0]
         return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
@@ -6565,6 +6587,9 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = (None, "verified head: %s" % exc)
             else:
                 resolution = None
+            if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):
+                # Durable path: the seat ran the order the driver emitted for its own selection.
+                artifact = dict(artifact, verifierVendor=_nonpanel_selection(state, session_dir)[0])
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)
@@ -7830,10 +7855,15 @@ def _nonpanel_unseatable(state, session_dir=None):
     """True when no reviewer outside every maker family can be seated for the verifier / gap-sweep /
     scoped phases. The same decision `_emit_orders_manifest` records slots missing on, read on the
     fold side so a hand-`submit` session cannot fold a result for a slot that never ran."""
+    return _nonpanel_selection(state, session_dir)[0] is None
+
+
+def _nonpanel_selection(state, session_dir=None):
+    """`(vendor, source)` the non-panel reviewer selection stands on for this session."""
     cfg = state.get("config") or {}
     meta = _session_meta(session_dir) if session_dir else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    return _nonpanel_reviewer_vendor(state, cfg, repo_root)[0] is None
+    return _nonpanel_reviewer_vendor(state, cfg, repo_root)
 
 
 def effective_seat_map(state):

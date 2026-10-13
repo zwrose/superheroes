@@ -5,6 +5,8 @@ Holds the decision kinds, the driver's verdict names, the verdict-to-terminal-st
 (verdict, decision kind) cause table, with the two lookups over them. Stdlib-only leaf: it
 imports nothing from this plugin, so the round driver and the review record may both import it.
 """
+LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
+
 DECISION_KINDS = (
     "audit-echo-mismatch",
     "audit-provenance-fail",
@@ -21,7 +23,7 @@ DECISION_KINDS = (
     "judgment-fail-closed",
     "judgment-gate",
     "judgment-skip",
-    "lane-expanded-recompose",
+    LANE_EXPANDED_RECOMPOSE,
     "not-discharged",
     "panel-seat-missing",
     "receipt-missing-seat",
@@ -79,7 +81,7 @@ _TERMINAL_CAUSE_TABLE = {
     ("halted", "verify-fail"): {"kind": "loop", "reason": "detector"},
     ("halted", "verify-skip-but-configured"): {"kind": "loop", "reason": "detector"},
     ("halted", "verify-unresolved"): {"kind": "loop", "reason": "detector"},
-    ("halted", "lane-expanded-recompose"): {"kind": "loop", "reason": "detector"},
+    ("halted", LANE_EXPANDED_RECOMPOSE): {"kind": "loop", "reason": "detector"},
     ("halted", "round-ceiling"): {"kind": "non-loop", "reason": "budget"},
     ("held", "stall-choice"): {"kind": "loop", "reason": "latch"},
     ("stalled", "stall-choice"): {"kind": "loop", "reason": "latch"},

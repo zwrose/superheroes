@@ -58,7 +58,8 @@ def _finding(fid="v0", **over):
 def _fold_verifiers(state, findings, verdicts):
     staged = verification.stage_ids(findings)
     state["_toVerify"] = staged
-    RD._fold_verifiers(state, state["config"], {"verdicts": verdicts})
+    RD._fold_verifiers(state, state["config"], {"verdicts": verdicts,
+                                                "verifierVendor": RD._nonpanel_selection(state)[0]})
 
 
 # --- per-pass append --------------------------------------------------------------------------
