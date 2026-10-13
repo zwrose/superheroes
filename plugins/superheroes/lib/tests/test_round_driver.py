@@ -431,7 +431,7 @@ def _claim_reviewer(session_dir, phase, art):
     (`reviewerVendor`), which the driver requires when independence replaced the reviewer engine."""
     if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) and isinstance(art, dict) and "reviewerVendor" not in art:
         ok, state = RD.load_state(session_dir)
-        vendor = RD._nonpanel_selection(state, session_dir, phase)[0] if ok else None
+        vendor = RD._nonpanel_selection(state, session_dir)[0] if ok else None
         if vendor:
             return dict(art, reviewerVendor=vendor)
     return art

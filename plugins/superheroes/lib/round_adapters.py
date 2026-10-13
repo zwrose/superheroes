@@ -287,7 +287,7 @@ PROVENANCE_SOURCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISP
 def _maker_barred(state, config):
     """Predicate: True when a vendor may not review (maker family, the fixer's vendor, or an
     unresolvable reviewer family) — `receipt_disclosures.reviewer_ineligible`, the same bar
-    `nonpanel_reviewer` applies when the driver selects a non-panel reviewer — including the host
+    `independent_reviewer` applies when the driver selects a non-panel reviewer — including the host
     family a native seat takes from the seat map, so the two sides judge a vendor identically."""
     cfg = config if isinstance(config, dict) else {}
     return receipt_disclosures.reviewer_ineligible(

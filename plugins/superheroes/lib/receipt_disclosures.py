@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
-import liveness_cache
 import model_registry
-import seat_map
 import seat_map_receipts
 import session_contract
 from seat_map import is_unfilled as seat_is_unfilled
@@ -193,15 +191,7 @@ def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=
 # Sentinel for `reviewer_ineligible(host_family=...)`: judge every vendor by its registry family.
 HOST_FAMILY_REGISTRY = object()
 
-# The dispatched-cell roles of the non-panel phases (`model_registry.matrix_config` rows).
-NONPANEL_ROLE_VERIFIER = "verifier"
-NONPANEL_ROLE_FINDER = "reviewer-deep"
-NONPANEL_ROLES = (NONPANEL_ROLE_VERIFIER, NONPANEL_ROLE_FINDER)
-
 _SEAT_MAP_HOST_KEY = "hostFamily"
-_SEAT_MAP_CELLS_KEY = "nonPanelLiveCells"
-_SEAT_MAP_CELLS_SOURCE_KEY = "nonPanelLiveCellsSource"
-_CELLS_EVIDENCE_KEYS = (_SEAT_MAP_HOST_KEY, _SEAT_MAP_CELLS_KEY, _SEAT_MAP_CELLS_SOURCE_KEY)
 
 
 def host_family(seat_map_):
@@ -239,102 +229,23 @@ def reviewer_ineligible(maker_families=frozenset(), fixer_vendor=None,
     return is_ineligible
 
 
-def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None):
+def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), fixer_vendor=None,
+                         host_family=HOST_FAMILY_REGISTRY):
     """``(vendor, family)`` of a reviewer outside every maker family, else ``(None, None)``.
 
     The preferred vendor wins when it is live and eligible (`reviewer_ineligible`); otherwise the
-    first live vendor that qualifies."""
-    ineligible = reviewer_ineligible(maker_families, fixer_vendor)
+    first live vendor that qualifies. ``host_family`` is passed to `reviewer_ineligible`; when passed,
+    a native host seat's returned family is the host family."""
+    ineligible = reviewer_ineligible(maker_families, fixer_vendor, host_family=host_family)
     live = list(live_vendors(config))
     candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
                   and preferred_vendor in live else [])
     candidates += [v for v in live if v not in candidates]
     for v in candidates:
         if not ineligible(v):
-            return v, model_registry.family_for("reviewer", v)
-    return None, None
-
-
-def _nonpanel_cell_evidence(seat_map_):
-    """``(legacy, cells)``: ``legacy`` is True only when all three cell-proof keys are absent (a map
-    that predates them, or no map at all); otherwise ``cells`` is the set of normalized
-    ``(vendor, model, effort)`` triples the map proves live — empty unless the source is `probed` or
-    `synthesized` and `nonPanelLiveCells` is a list (malformed entries are skipped)."""
-    sm = seat_map_ if isinstance(seat_map_, dict) else {}
-    if not any(key in sm for key in _CELLS_EVIDENCE_KEYS):
-        return True, frozenset()
-    source = sm.get(_SEAT_MAP_CELLS_SOURCE_KEY)
-    raw = sm.get(_SEAT_MAP_CELLS_KEY)
-    if (source not in (liveness_cache.LIVE_CELLS_SOURCE_PROBED,
-                       liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED)
-            or not isinstance(raw, list)):
-        return False, frozenset()
-    cells = set()
-    for entry in raw:
-        normalized = seat_map._normalize_live_cell(entry)
-        if normalized is not None:
-            cells.add(normalized)
-    return False, frozenset(cells)
-
-
-def _dispatched_cell(role, vendor):
-    """The ``(vendor, model, effort)`` triple a non-panel ``role`` dispatches on ``vendor``, else None."""
-    if role not in NONPANEL_ROLES:
-        return None
-    cell = model_registry.matrix_config(role, vendor)
-    if cell is None:
-        return None
-    return (vendor, cell[0], cell[1])
-
-
-def nonpanel_cell_proven(config, seat_map_, vendor, role):
-    """True when ``vendor``'s dispatched cell for the non-panel ``role`` (`verifier` for verifiers,
-    `reviewer-deep` for gap sweep and scoped) is proven live: `claude` always (a host seat, never
-    probed — the panel's rule); on a legacy map (none of the three cell-proof keys) when the vendor is
-    live in ``config``; otherwise only when the map's `nonPanelLiveCells` lists the cell under a
-    `probed` / `synthesized` source. Any other shape proves nothing."""
-    if not isinstance(vendor, str) or not vendor:
-        return False
-    if vendor == "claude":
-        return True
-    legacy, cells = _nonpanel_cell_evidence(seat_map_)
-    if legacy:
-        return vendor in live_vendors(config)
-    cell = _dispatched_cell(role, vendor)
-    return cell is not None and cell in cells
-
-
-def nonpanel_candidates(config, seat_map_, role):
-    """The non-panel candidate pool for ``role``: `live_vendors(config)` followed by every registry
-    vendor (registry order) the map's `nonPanelLiveCells` proves for ``role`` and that is not
-    already listed. Candidates are not yet filtered by `nonpanel_cell_proven` or independence."""
-    out = list(live_vendors(config))
-    legacy, cells = _nonpanel_cell_evidence(seat_map_)
-    if legacy:
-        return out
-    for v in model_registry.VENDORS:
-        if v not in out and _dispatched_cell(role, v) in cells:
-            out.append(v)
-    return out
-
-
-def nonpanel_reviewer(config, seat_map_, role, preferred_vendor, maker_families=frozenset(),
-                      fixer_vendor=None):
-    """``(vendor, family)`` of the non-panel reviewer for ``role``, else ``(None, None)``: the first
-    candidate (the preferred vendor first when it is one) whose dispatched cell is proven live
-    (`nonpanel_cell_proven`) and that is outside every maker family (`reviewer_ineligible`, with
-    the seat map's host family standing for a native seat)."""
-    host = host_family(seat_map_)
-    ineligible = reviewer_ineligible(maker_families, fixer_vendor, host_family=host)
-    pool = nonpanel_candidates(config, seat_map_, role)
-    candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
-                  and preferred_vendor in pool else [])
-    candidates += [v for v in pool if v not in candidates]
-    for v in candidates:
-        if not nonpanel_cell_proven(config, seat_map_, v, role) or ineligible(v):
-            continue
-        native = v in model_registry.vendors() and not session_contract.runner_channel_vendor(v)
-        return v, (host if native else model_registry.family_for("reviewer", v))
+            native = (host_family is not HOST_FAMILY_REGISTRY and v in model_registry.vendors()
+                      and not session_contract.runner_channel_vendor(v))
+            return v, (host_family if native else model_registry.family_for("reviewer", v))
     return None, None
 
 
@@ -747,9 +658,6 @@ __all__ = (
     "independent_auditor",
     "independent_auditor_available",
     "independent_reviewer",
-    "nonpanel_reviewer",
-    "nonpanel_cell_proven",
-    "nonpanel_candidates",
     "host_family",
     "unfilled_seats",
     "maker_families",

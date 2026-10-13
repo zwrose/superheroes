@@ -38,7 +38,7 @@ def test_the_transport_row_carries_the_selected_vendor(tmp_path):
 def test_a_refuted_verdict_without_a_vendor_claim_does_not_clear_the_finding():
     # axis: a replaced (independent) selection needs the verifier's vendor before a REFUTED verdict counts
     state = _state()
-    selected, source = RD._nonpanel_selection(state, None, RD.P_VERIFIERS)
+    selected, source = RD._nonpanel_selection(state)
     assert selected == "codex" and source == RD.VENDOR_SOURCE_INDEPENDENT
     RD._fold_verifiers(state, state["config"], _refuted(state))
     assert len(state["_verified"]) == 1
@@ -80,7 +80,7 @@ def _drive_verifiers_with_source(tmp_path, monkeypatch, source, name):
     findings = [IT._blocking_finding("unchecked index", 2)]
     IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
     state = IT._state(session_dir)
-    assert RD._nonpanel_selection(state, session_dir, RD.P_VERIFIERS)[0] == "codex"
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
     pend = state["pending"]
     roster, reason = round_adapters.roster_for(RD.P_VERIFIERS, state, state.get("config") or {})
     assert reason is None and roster, (roster, reason)
@@ -133,7 +133,7 @@ def test_a_defaulted_reviewer_replaced_by_independence_still_needs_a_vendor_clai
     import engine_pref
     monkeypatch.setattr(engine_pref, "load_engine_prefs", lambda _root: {"readError": "boom"})
     state = _state()
-    selected, source = RD._nonpanel_selection(state, None, RD.P_VERIFIERS)
+    selected, source = RD._nonpanel_selection(state)
     assert selected == "codex" and source == RD.VENDOR_SOURCE_DEFAULTED
     RD._fold_verifiers(state, state["config"], _refuted(state))
     assert len(state["_verified"]) == 1
@@ -224,10 +224,10 @@ def _drive_with_preference_change(tmp_path, monkeypatch, source, name, tamper=No
     IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
                        RD.P_VERIFIERS)
     state = IT._state(session_dir)
-    assert RD._nonpanel_selection(state, session_dir, RD.P_VERIFIERS)[0] == "codex"
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
     assert RD._recorded_verifier_vendor(state, session_dir) == "codex"
     pref["engine"] = "cursor"   # the owner edits the reviewer preference while verifiers run
-    assert RD._nonpanel_selection(state, session_dir, RD.P_VERIFIERS)[0] == "cursor"
+    assert RD._nonpanel_selection(state, session_dir)[0] == "cursor"
     pend = state["pending"]
     roster, reason = round_adapters.roster_for(RD.P_VERIFIERS, state, state.get("config") or {})
     assert reason is None
@@ -270,8 +270,7 @@ def _drive_native_verifiers(tmp_path, name, fixer="codex", vendors=("claude", "c
     # a native `claude` seat takes the host's family from the seat map: give the session an honest one
     session_dir, gitdir, head_path = IT._bootstrap(
         tmp_path, name=name, fixerVendor=fixer, vendors=list(vendors),
-        seatMap={"hostFamily": "anthropic", "nonPanelLiveCellsSource": "synthesized",
-                 "nonPanelLiveCells": []})
+        seatMap={"hostFamily": "anthropic"})
     IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
                        RD.P_VERIFIERS)
     state = IT._state(session_dir)
@@ -294,7 +293,7 @@ def _drive_native_verifiers(tmp_path, name, fixer="codex", vendors=("claude", "c
 def test_a_native_claude_verdict_folds_with_dispatch_manifest_provenance(tmp_path):
     # codex made the change; claude is the independent verifier on a host seat (no runner evidence)
     session_dir, before, out = _drive_native_verifiers(tmp_path, "native-claude")
-    assert RD._nonpanel_selection(before, session_dir, RD.P_VERIFIERS)[0] == "claude"
+    assert RD._nonpanel_selection(before, session_dir)[0] == "claude"
     assert out["ok"], out
     state = IT._state(session_dir)
     assert _provenance(state) == {"expected": "claude", "ran": "claude",
@@ -416,7 +415,7 @@ def _drive_scoped_with_source(tmp_path, monkeypatch, source, name):
     IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
                        RD.P_SCOPED)
     state = IT._state(session_dir)
-    assert RD._nonpanel_selection(state, session_dir, RD.P_SCOPED)[0] == "codex"
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
     pend = state["pending"]
     monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda _seat: source))
     IT._land(session_dir, state, pend, round_adapters.SEAT_SCOPED, {"findings": []})
@@ -473,7 +472,7 @@ def _hand_verifier_session(tmp_path, name):
     state = IT._state(session_dir)
     state.pop("_advanceUsed", None)  # the same session, now answered by hand
     RD.save_state(session_dir, state)
-    assert RD._nonpanel_selection(state, session_dir, RD.P_VERIFIERS)[0] == "codex"
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
     return session_dir, state
 
 
@@ -483,7 +482,7 @@ def _drive_scoped_tampered(tmp_path, monkeypatch, name, tamper):
     IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
                        RD.P_SCOPED)
     state = IT._state(session_dir)
-    assert RD._nonpanel_selection(state, session_dir, RD.P_SCOPED)[0] == "codex"
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
     monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda _seat: "cursor"))
     IT._land(session_dir, state, state["pending"], round_adapters.SEAT_SCOPED, {"findings": []})
     assert IT._record(session_dir, round_adapters.SEAT_SCOPED)["ok"]
