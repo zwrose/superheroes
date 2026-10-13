@@ -1330,7 +1330,7 @@
           return isUnsaved() ? null : { answer: acked.answer, optionId: acked.optionId };
         },
         acknowledged: function () {
-          return lastSaved;
+          return inFlight === null ? [lastSaved] : [lastSaved, inFlight];
         },
         // Gives a choice's button its words, and holds it off (or lets the controls decide again).
         setChoice: function (answer, label, held) {
@@ -1748,12 +1748,13 @@
       const fixOf = function (pick) {
         return prWords.walkFixes.find(function (fix) { return pick.answer === "problem" && fix.id === pick.optionId; }) || {};
       };
-      const open = count(function (item) { return (item.now.answer === "problem" && (item.now.optionId === null || item.unsaved)) || (item.unsaved && item.acked.answer === "problem" && item.acked.optionId === null); });
+      const held = function (item, test) { return item.unsaved && item.acked.some(test); };
+      const open = count(function (item) { return (item.now.answer === "problem" && (item.now.optionId === null || item.unsaved)) || held(item, function (pick) { return pick.answer === "problem" && pick.optionId === null; }); });
       // A Merge taken away whose clear the store has not acknowledged (failed or stalled) still stands there, so Merge stays
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
-      const locked = incomplete || clearUnsaved || open > 0 || walked.some(function (item) { return item.unsaved && fixOf(item.acked).sendsBack === true; });
+      const locked = incomplete || clearUnsaved || open > 0 || walked.some(function (item) { return held(item, function (pick) { return fixOf(pick).sendsBack === true; }); });
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;

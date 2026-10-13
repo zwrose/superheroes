@@ -899,6 +899,23 @@ def test_a_saved_fix_before_merge_stays_blocking_until_its_replacement_is_saved(
     assert page["result"] == {"pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
 
 
+# Axis: a Problem whose write is still in flight keeps Merge locked when Works replaces it, until the Works lands.
+def test_a_problem_in_flight_stays_blocking_when_works_replaces_it():
+    page = _page(WALK_SHEET, WALK + LOCK + """
+      const out = {};
+      await choose("p1", "Problem");
+      await choose("p1", "Works");
+      out.pending = lock().merge;
+      t.sets[0].resolve();
+      await t.tick();
+      t.sets[1].resolve();
+      await t.tick();
+      out.landed = lock().merge;
+      return out;
+    """, host=dict(ACCEPTED, set="hold"))
+    assert page["result"] == {"pending": LOCKED, "landed": UNLOCKED}
+
+
 # Axis: an upload that never answers stops waiting at the deadline, says so, and gives the button and the leave-page guard back.
 def test_a_stalled_upload_gives_the_button_back_and_says_it_failed():
     page = _page(WALK_SHEET, WALK + """
