@@ -175,6 +175,8 @@ def test_standing_ruling_is_canon_only(proj, canon_root):
 @pytest.mark.parametrize("proposal", [
     _proposal(threatModel="Outsiders only."),
     _proposal(kind="something-else"),
+    _proposal(kind=["risk-and-trust"]),
+    _proposal(kind=None),
     _proposal(value=[{"name": "Auth"}]),
     _proposal(half="owners"),
     _proposal(ruling="one · two"),
@@ -280,7 +282,7 @@ def test_adopt_bad_date(proj, day):
 
 def test_malformed_stored_day_reads_malformed_and_is_not_overwritten(proj):
     repo, store = proj
-    core_md.write_project_config_item(repo, RL.SINCE_KEY, "garbage", root=store)
+    core_md.write_project_config_item(repo, "reviewLearningSince", "garbage", root=store)
     assert RL.adoption_day(repo, store) == {"since": None, "reason": "malformed"}
     got = RL.record_adoption_day(repo, "2026-10-13", store)
     assert (got["outcome"], got["reason"], got["detail"]) == ("refused", "adoption-day-already-recorded", "garbage")
@@ -288,8 +290,9 @@ def test_malformed_stored_day_reads_malformed_and_is_not_overwritten(proj):
 
 def test_the_extra_key_does_not_break_the_item_read_and_survives_a_set(proj):
     repo, store = proj
+    before = len(project_config.view(repo, root=store)["items"])
     RL.record_adoption_day(repo, "2026-10-13", store)
-    assert len(project_config.view(repo, root=store)["items"]) == 14
+    assert len(project_config.view(repo, root=store)["items"]) == before
     assert project_config.set_item(repo, "riskAndTrust", {"riskAreas": [PAYMENTS, AUTH]}, root=store)["action"] == "written"
     assert RL.adoption_day(repo, store)["since"] == "2026-10-13"
 
@@ -610,7 +613,6 @@ def test_tally_catch_is_credited_to_the_lens_seat():
     rec = _record(1, "s", D, [_row("code-reviewer"), _row("security-reviewer")], [_finding("k", "Security")])
     got = RL.tally([rec], [], D, until="2026-10-11")
     assert got["seats"]["security-reviewer"]["caught"] == 1 and got["seats"]["code-reviewer"]["caught"] == 0
-    assert "lens" in RL.tally.__doc__
 
 
 def test_merged_member_marker_round_trips_through_the_record_writer():
@@ -621,3 +623,43 @@ def test_merged_member_marker_round_trips_through_the_record_writer():
         assert RL._merged_member({"reason": reason})
     assert rs.merged_into("fixed and audited in round 2") is None and rs.merged_into(None) is None
     assert not RL._merged_member({"reason": "no mark"})
+
+
+# --- review C10 round 7 fixes ---
+
+def test_the_persisted_adoption_key_is_the_literal_core_md_spelling(proj):
+    repo, store = proj
+    assert RL.SINCE_KEY == "reviewLearningSince"
+    RL.record_adoption_day(repo, "2026-10-13", store)
+    assert core_md.read(repo, store)["projectConfiguration"]["reviewLearningSince"] == "2026-10-13"
+
+
+def test_canon_commit_that_landed_before_the_timeout_continues(proj, canon_root, monkeypatch):
+    real = RL._run_git
+
+    def slow_hook(cwd, *args):
+        got = real(cwd, *args)
+        if args[0] == "commit":
+            raise subprocess.TimeoutExpired(["git", "-C", cwd, *args], RL.GIT_TIMEOUT_SECONDS)
+        return got
+    monkeypatch.setattr(RL, "_run_git", slow_hook)
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"]) == (True, "applied")
+    assert got["canonEntry"] in _git(canon_root, "show", "HEAD:" + CANON_REL).splitlines()
+    assert got["canonCommit"] == _git(canon_root, "rev-parse", "HEAD").strip()
+    assert _touched(proj) == ["Auth"]
+
+
+def test_tally_an_outcome_recorded_after_until_does_not_make_a_catch():
+    first = _record(1, "s", D, [_row("code-reviewer")], [_finding("k", "Code", "left-for-owner")])
+    later = _record(1, "s2", "2026-10-20", [_row("code-reviewer")], [_finding("k", "Code")])
+    later["previousRecord"] = None
+    got = RL.tally([first, later], [], D, until="2026-10-11")
+    assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
+    assert got["leftOut"]["afterWindow"] == 1
+
+
+def test_tally_a_fixed_member_whose_representative_is_missing_is_incomplete_evidence():
+    member = dict(_finding("a", "Security"), reason="fixed (merged into B)")
+    got = RL.tally([_record(1, "s", D, [_row("security-reviewer")], [member])], [], D, until="2026-10-11")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})

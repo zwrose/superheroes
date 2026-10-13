@@ -101,7 +101,8 @@ def _owner_yes(approval):
 
 def _proposal_problem(p):
     """What is wrong with the whole proposal, or None. Nothing is written before this is None."""
-    keys = _KEYS.get(p.get("kind")) if isinstance(p, dict) else None
+    kind = p.get("kind") if isinstance(p, dict) else None
+    keys = _KEYS.get(kind) if isinstance(kind, str) else None
     if keys is None:
         return "kind must be 'risk-and-trust' or 'standing-ruling'"
     if set(p) - {SUPERSEDES_KEY} != keys or p.get("schema") != PROPOSAL_SCHEMA:
@@ -135,15 +136,50 @@ def _run_git(cwd, *args):
                           timeout=GIT_TIMEOUT_SECONDS, env=definition_doc._scrubbed_git_env())
 
 
+def _commit_landed(git_root, rel, before_head, line):
+    """Whether the commit this run made is in HEAD: True, False, or None when git cannot say.
+
+    A commit that errored or timed out may still have landed, since a hook after it can outlast the
+    timeout. It landed when HEAD moved off `before_head` and the committed Canon holds `line`. A git
+    read that fails is no evidence either way, so it is None, never False."""
+    try:
+        head = _run_git(git_root, "rev-parse", "HEAD")
+        if head.returncode != 0:
+            return False if before_head is None else None
+        if head.stdout.strip() == before_head:
+            return False
+        shown = _run_git(git_root, "show", "HEAD:" + rel)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return line in shown.stdout.splitlines() if shown.returncode == 0 else None
+
+
 def _commit_canon(res, line):
     """Canon's write procedure steps 7-8: commit only Canon's paths, then see the line in HEAD."""
     git_root = res["gitRoot"]
     rel = os.path.relpath(res["path"], git_root).replace(os.sep, "/")
     try:
+        before = _run_git(git_root, "rev-parse", "HEAD")
+        before_head = before.stdout.strip() if before.returncode == 0 else None
+    except (subprocess.TimeoutExpired, OSError):
+        before_head = None
+    failure = None
+    try:
         for args in (("add", "--", *res["commitPaths"]), ("commit", "-m", COMMIT_MESSAGE, "--", *res["commitPaths"])):
             got = _run_git(git_root, *args)
             if got.returncode != 0:
-                return None, "git %s failed: %s" % (args[0], (got.stderr or got.stdout).strip())
+                failure = "git %s failed: %s" % (args[0], (got.stderr or got.stdout).strip())
+                break
+    except subprocess.TimeoutExpired as exc:
+        failure = "git %s timed out after %ss" % (exc.cmd[3] if len(exc.cmd) > 3 else "command", GIT_TIMEOUT_SECONDS)
+    except OSError as exc:
+        failure = "git could not be run (%s: %s)" % (type(exc).__name__, exc)
+    if failure:
+        # a commit that errored or timed out continues only when HEAD shows it landed (project_config._commit_landed)
+        landed = _commit_landed(git_root, rel, before_head, line)
+        if landed is not True:
+            return None, failure + ("; git could not say whether the commit landed" if landed is None else "")
+    try:
         shown = _run_git(git_root, "show", "HEAD:" + rel)
         if shown.returncode != 0 or line not in shown.stdout.splitlines():
             return None, "HEAD:%s does not hold the appended line" % rel
@@ -260,7 +296,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return "beforeWindow" if d < low else "afterWindow" if d > end else None
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
-    seen, unattributed, incomplete = {}, 0, False  # incomplete: evidence went missing, so no count is a zero
+    seen, unattributed, incomplete = {}, 0, False
+    present, merged_fixed = collections.defaultdict(set), []  # per PR: finding ids/keys given, and the representatives fixed members name  # incomplete: evidence went missing, so no count is a zero
     given = {v for r in records if isinstance(r, dict) for v in (r.get("url"), r.get("id")) if isinstance(v, (str, int))} \
         if isinstance(records, list) else set()
     for rec in records if isinstance(records, list) else []:
@@ -306,11 +343,17 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                     reviews[seat].add((rec.get("pr"), rec.get("sessionId")))
         for f in rec.get("findings") or []:
             key = f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")
+            present[rec.get("pr")].update(v for v in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)) if v is not None)
+            if key is not None and _merged_member(f) and day <= end and f.get("outcome") == _FIXED:
+                merged_fixed.append((rec.get("pr"), review_record_session.merged_into(f.get("reason"))))
             if key is not None and not _merged_member(f):
                 hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "at": {}})
-                hit["fixed"] = hit["fixed"] or f.get("outcome") == _FIXED
+                # only an outcome recorded on or before the cutoff establishes a fix; a later record still dates the finding
+                hit["fixed"] = hit["fixed"] or (day <= end and f.get("outcome") == _FIXED)
                 at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))
                 at[1].update(_seats(f.get("reviewer")))
+    if any(rep not in present[pr] for pr, rep in merged_fixed):  # a fixed member whose representative is missing lost its catch
+        incomplete = True
     for hit in seen.values():  # a catch is dated by, and credited to, the earliest record that carries it, once
         earliest_day, seats = hit["at"][min(hit["at"])]
         if hit["fixed"] and not outside(earliest_day):
