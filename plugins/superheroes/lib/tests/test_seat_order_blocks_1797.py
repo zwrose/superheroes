@@ -375,19 +375,65 @@ def test_a_halted_session_dispatches_no_further_phase(tmp_path):
     _assert_halted_lane_expanded(state)
 
 
-def test_a_head_the_lane_call_clears_keeps_the_reduced_lenses(tmp_path, monkeypatch):
-    import lane_call
-    monkeypatch.setattr(lane_call, "call", lambda cwd, paths, proposed=None, root=None: {"floor": None})
-    state = _reduced_state(tmp_path)
-    _kind, dims = _unknown_surface_dimensions(state, _RISKY_DIFF)
-    assert dims == ["code-reviewer", "test-role"]
+_PAYMENTS_AREA = {"name": "Payments", "covers": ["src/payments/*"],
+                  "why": "Charges customers.", "undo": "Hard: a charge needs a refund."}
+_DOCS_DIFF = ("diff --git a/docs/readme.md b/docs/readme.md\n"
+              "--- a/docs/readme.md\n+++ b/docs/readme.md\n@@ -1 +1 @@\n-old\n+new\n")
 
 
-def test_a_clean_head_continues_with_the_reduced_dimensions(tmp_path, monkeypatch):
+def _calibrated_reduced_state(tmp_path, monkeypatch):
+    """A reduced session over a real repo whose core.md declares a ``src/payments/*`` risk area; the
+    real ``lane_call.call`` reads it (no stub)."""
+    import core_md
+    repo = str(tmp_path / "repo")
+    store = str(tmp_path / "store")
+    os.makedirs(repo)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    core_md.write(repo, {"verifyCommand": "npm test", "stackTags": ["node"],
+                         "threatModel": "single-user", "patterns": "- x: a.ts:1"},
+                  "confirmed", root=store, now="2026-06-26")
+    res = core_md.write_project_config_item(repo, core_md.RISK_AREAS_KEY, [_PAYMENTS_AREA], root=store)
+    assert res["action"] == "written"
     import lane_call
-    monkeypatch.setattr(lane_call, "call", lambda cwd, paths, proposed=None, root=None: {"floor": None})
-    state = _reduced_state(tmp_path)
-    assert RD._refresh_panel_diff_at_verified_head(
-        state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
-    assert not state.get("terminal")
+    real_call = lane_call.call  # the real floor, pointed at the temp store; paths pass through untouched
+    monkeypatch.setattr(lane_call, "call", lambda cwd, paths, proposed=None, root=None:
+                        real_call(cwd, paths, proposed=proposed, root=store))
+    return RD.new_state({"repoRoot": repo,
+                         "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
+
+
+def test_the_head_change_decision_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):
+    # axis: the lane call is asked about the paths the head diff names — a mutant substituting a fixed
+    # path passes only one of these two assertions
+    state = _calibrated_reduced_state(tmp_path, monkeypatch)
     assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
+    # a docs-only head touches no risk area: the reduced session continues
+    assert RD._reevaluate_lane_dimensions(state, state["config"], _DOCS_DIFF) is False
+    assert not state.get("terminal")
+    # a payments head touches the declared risk area: the session halts
+    assert RD._reevaluate_lane_dimensions(state, state["config"], _RISKY_DIFF) is True
+    _assert_halted_lane_expanded(state)
+
+
+def test_the_verified_head_refresh_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):
+    clean = _calibrated_reduced_state(tmp_path, monkeypatch)
+    assert RD._refresh_panel_diff_at_verified_head(
+        clean, clean["config"], "a" * 40, panel_diff_seam=lambda *_: (_DOCS_DIFF, None))
+    assert not clean.get("terminal")
+    assert clean["config"]["dimensions"] == ["code-reviewer", "test-role"]
+    risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "seatMap": clean["config"]["seatMap"]})
+    assert not RD._refresh_panel_diff_at_verified_head(
+        risky, risky["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
+    _assert_halted_lane_expanded(risky)
+
+
+def test_the_unknown_surface_entry_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):
+    clean = _calibrated_reduced_state(tmp_path, monkeypatch)
+    _kind, dims = _unknown_surface_dimensions(clean, _DOCS_DIFF)
+    assert dims == ["code-reviewer", "test-role"]
+    risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "seatMap": clean["config"]["seatMap"]})
+    risky["round"] = 2
+    risky["_headDiffUnknown"] = True
+    RD._enter_delta_round(risky, risky["config"], panel_diff_seam=lambda *_: (_RISKY_DIFF, None),
+                          panel_head="a" * 40)
+    _assert_halted_lane_expanded(risky)
