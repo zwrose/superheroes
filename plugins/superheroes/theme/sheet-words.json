@@ -69,6 +69,7 @@
     "optionalBadge": "Optional",
     "tapPicture": "Tap a picture to see it full size.",
     "pictureMissing": "A picture is missing: {alt}",
+    "walkedAnswers": ["works", "looks-right", "problem"],
     "walkAnswers": {"labels": {"works": "Works", "looks-right": "Looks right", "problem": "Problem", "skip": "Skip"}, "try": ["works", "problem", "skip"], "look": ["looks-right", "problem", "skip"]},
     "walkFixes": [
       {"id": "before-merge", "label": "Fix before merge", "consequence": "This goes back with your note and returns with a new sheet.", "sendsBack": true},
@@ -105,6 +106,32 @@
     "nothingToAcceptCount": "Nothing to accept",
     "mergeLocked": "{merge} · locked",
     "unlocks": "Unlocks when every item above is accepted: {accepted} of {total} so far.",
+    "resaveLegacy": "Merge stays locked: an earlier version of this page saved the answers on the cards numbered {numbers}. Clear each one and pick it again to save it afresh.",
+    "resaveNoRevision": "Merge stays locked: this browser can't mark the saved answers on the cards numbered {numbers} the way Merge needs. Answer them from a browser that can.",
     "sendBack": "You chose to fix something before merge, so this goes back for that fix. It returns with a new sheet; nothing to answer here."
+  },
+  "index": {
+    "title": "Waiting on you",
+    "blocksHeading": "Blocks work",
+    "nothingBlocking": "Nothing is blocking work right now.",
+    "questionKind": "Blocks work",
+    "firstAnswerCounts": "Answer here or in the chat; whichever comes first counts. When the chat and the index disagree, the advisor asks.",
+    "groups": {"needs-you": "Needs you", "being-fixed": "Being fixed", "ready": "Ready"},
+    "rowPr": "#{number} · {title}",
+    "rowStack": "Stack #{number} · {title}",
+    "accepted": "{accepted} of {total} accepted",
+    "nothingToAccept": "Nothing to accept",
+    "walked": "{walked} of {total} walked",
+    "mergesAt": "merges {ordinal}",
+    "ordinals": ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"],
+    "mergesAtNumber": "merges at place {place}",
+    "beingFixed": "Going back for a fix · a new sheet comes after it",
+    "ready": "Merge verdict given",
+    "open": "Open ›",
+    "questionsOne": "1 question",
+    "questionsMany": "{count} questions",
+    "needYou": "{count} need you",
+    "nothingNeedsYou": "Nothing needs you",
+    "done": "When every sheet you meant to answer is saved, say \"done\" in the chat."
   }
 }

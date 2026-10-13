@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import pr_sheet
+
 from test_review_template import (
     NO_DIGEST_LINE,
     THEME,
@@ -293,7 +295,7 @@ def test_accept_saves_with_an_empty_note_and_an_option_saves_its_id():
       await t.tick();
       return { sets: t.setLog(), save: t.saveText("f-e490915872bd"), pressed: t.state("f-e490915872bd").pressed };
     """)
-    bodies = [(item["path"], item["body"]) for item in page["result"]["sets"]]
+    bodies = [(item["path"], _without_revision(item["body"])) for item in page["result"]["sets"]]
     assert bodies == [
         ("answers/f-e490915872bd", {"answer": "accept", "optionId": None, "note": ""}),
         ("answers/f-a5cb88b79507", {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""}),
@@ -306,14 +308,45 @@ def _docs_for(card_id, answer, option_id=None, note="kept note"):
     return [{"id": card_id, "data": {"answer": answer, "optionId": option_id, "note": note}}]
 
 
+# The revision format is the sheet schema's answer.revision pattern, its one home.
+SCHEMA = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
+REVISION = re.compile(SCHEMA["$defs"]["answer"]["properties"]["revision"]["pattern"])
+
+
+def _revision_at(position):
+    """A well-formed revision for the stored answer at a position in the card list, different for each."""
+    return "%016x" % (0xA11CE0 + position)
+
+
 def _accepted_answers(sheet):
-    """The stored answers that leave a pr or stack sheet unlocked: accept on a card without options, else an option that does not send the PR back."""
+    """The stored answers that leave a pr or stack sheet unlocked: accept on a card without options, else an option that does not send the PR back. Each carries its revision."""
     docs = []
-    for card in sheet["cards"]:
+    for position, card in enumerate(sheet["cards"]):
         options = [option for option in card.get("options", []) if not option.get("sendsBack")]
         data = {"answer": "option", "optionId": options[0]["id"], "note": ""} if card.get("options") else {"answer": "accept", "optionId": None, "note": ""}
-        docs.append({"id": card["id"], "data": data})
+        docs.append({"id": card["id"], "data": dict(data, revision=_revision_at(position))})
     return docs
+
+
+def _covers(docs):
+    """What a Merge over these stored answers names: answers/<card id>@<revision>, sorted, for each document that carries a revision."""
+    return sorted("answers/%s@%s" % (doc["id"], doc["data"]["revision"]) for doc in docs if "revision" in doc["data"])
+
+
+def _without_revision(body):
+    """An answer the page wrote on a pr or stack sheet, minus its revision, once that is shown to be a well-formed one."""
+    assert set(body) == {"answer", "optionId", "note", "revision"}, body
+    assert REVISION.fullmatch(body["revision"]), body
+    return {key: value for key, value in body.items() if key != "revision"}
+
+
+def _without_covers(body, sheet=PR_SAMPLE):
+    """A verdict the page wrote on a pr or stack sheet, minus its covers, once those are shown to be sorted and to name every card of the sheet with a well-formed revision."""
+    covers = body["covers"]
+    assert covers == sorted(covers) and len(set(covers)) == len(covers), covers
+    assert [name.split("@")[0] for name in covers] == sorted("answers/" + card["id"] for card in sheet["cards"]), covers
+    assert all(REVISION.fullmatch(name.split("@")[1]) for name in covers), covers
+    return {key: value for key, value in body.items() if key != "covers"}
 
 
 # Bites on: a stored answer restored although the card does not offer it now (accept on a discovery card, aligned on a PR card), or a card that offers it not restoring it.
@@ -385,10 +418,11 @@ def test_the_merge_button_names_the_pr_or_the_stack_and_saves_like_the_final_ver
     assert result["merged"]["pressed"] == ["true", "false"]
     assert result["after"]["pressed"] == ["false", "true"]
     assert [item["path"] for item in result["sets"]] == ["verdict/" + digest] * 3
+    covers = _covers(_accepted_answers(sheet))
     assert [item["body"] for item in result["sets"]] == [
-        {"verdict": "merge", "note": "", "sheet": digest},
-        {"verdict": None, "note": "", "sheet": digest},
-        {"verdict": "not-yet", "note": "", "sheet": digest},
+        {"verdict": "merge", "note": "", "sheet": digest, "covers": covers},
+        {"verdict": None, "note": "", "sheet": digest, "covers": covers},
+        {"verdict": "not-yet", "note": "", "sheet": digest, "covers": covers},
     ]
     assert result["children"][:2] == ["h2", "div.answer-row"]
     assert result["captions"][-1] == {"hidden": False, "text": PW["verdictCaption"]}
@@ -404,9 +438,15 @@ EDIT_THE_NOTE = """
 """
 
 
-def _verdict_doc(sheet, verdict, note="my verdict note"):
+def _verdict_doc(sheet, verdict, note="my verdict note", covers=None):
+    """A stored verdict; a Merge on a pr or stack sheet covers the accepted answers of `_accepted_answers` unless told what it covers."""
     digest = _sheet_digest(sheet)
-    return {"id": digest, "data": {"verdict": verdict, "note": note, "sheet": digest}}
+    data = {"verdict": verdict, "note": note, "sheet": digest}
+    if covers is None and verdict == "merge" and sheet["kind"] in ("pr", "stack"):
+        covers = _covers(_accepted_answers(sheet))
+    if covers is not None:
+        data["covers"] = covers
+    return {"id": digest, "data": data}
 
 
 # Bites on: a PR sheet restoring a stored approve (or a final sheet a stored merge) as a pick; the verdict of the right kind not restoring; the verdict collection not read for a PR sheet.
@@ -735,7 +775,7 @@ def test_the_lock_follows_what_the_store_has_acknowledged(row):
 
 
 def test_the_lock_words_are_exactly_the_shared_contract():
-    for key in ("mergeLocked", "unlocks", "sendBack"):
+    for key in ("mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack"):
         words = copy.deepcopy(WORDS)
         del words["pr"][key]
         page = _run_page(_files(PR_SAMPLE, words), scenario="return { uses: t.uses, sets: t.sets.length };")
@@ -773,7 +813,7 @@ def test_a_note_pause_locks_until_the_note_is_saved():
     assert page["result"]["saved"]["disabled"] is False
     assert page["result"]["pausing"]["disabled"] is True and page["result"]["pausing"]["line"] == _fill(PW["unlocks"], accepted=2, total=3)
     assert page["result"]["after"]["disabled"] is False and page["result"]["after"]["line"] is None
-    assert page["result"]["sets"][-1] == {"answer": "accept", "optionId": None, "note": "because"}
+    assert _without_revision(page["result"]["sets"][-1]) == {"answer": "accept", "optionId": None, "note": "because"}
 
 
 # Bites on: a Merge saved and then lost to a card going to Discuss staying on the page or in the store (E5): the clear missing, or not keeping the note, or not written as the verdict's own document.
@@ -794,12 +834,12 @@ def test_a_saved_merge_is_cleared_when_a_card_goes_to_discuss():
     assert result["after"]["pressed"] == ["false", "false"] and result["after"]["note"] == "go ahead"
     assert result["after"]["disabled"] is True and result["after"]["label"] == _locked_label()
     cleared = {"verdict": None, "note": "go ahead", "sheet": digest}
-    assert result["writes"] == [
+    assert [_without_covers(body) for body in result["writes"]] == [
         {"verdict": None, "note": "go ahead", "sheet": digest},
         {"verdict": "merge", "note": "go ahead", "sheet": digest},
         cleared,
     ]
-    assert result["stored"] == cleared
+    assert _without_covers(result["stored"]) == cleared
 
 
 # Bites on: the clear writing straight to the store instead of queueing behind the verdict's write in flight (E6): a Merge still pending landing after the clear.
@@ -819,10 +859,10 @@ def test_a_clear_queues_behind_a_merge_still_in_flight():
       return { whileInFlight: whileInFlight, writes: verdictWrites(), stored: t.written()["verdict/%s"], after: lockView() };
     """ % digest, host=PENDING)
     result = page["result"]
-    assert result["whileInFlight"] == [{"verdict": "merge", "note": "", "sheet": digest}]
+    assert [_without_covers(body) for body in result["whileInFlight"]] == [{"verdict": "merge", "note": "", "sheet": digest}]
     cleared = {"verdict": None, "note": "", "sheet": digest}
-    assert result["writes"] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared]
-    assert result["stored"] == cleared
+    assert [_without_covers(body) for body in result["writes"]] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared]
+    assert _without_covers(result["stored"]) == cleared
     assert result["after"]["pressed"] == ["false", "false"] and result["after"]["disabled"] is True
 
 
@@ -853,7 +893,7 @@ def test_a_failed_clear_shows_not_saved_and_the_sheet_stays_locked():
     assert result["failed"]["disabled"] is True and result["failed"]["label"] == _locked_label()
     assert result["failed"]["pressed"] == ["false", "false"]
     cleared = {"verdict": None, "note": "", "sheet": digest}
-    assert result["retried"] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared, cleared]
+    assert [_without_covers(body) for body in result["retried"]] == [{"verdict": "merge", "note": "", "sheet": digest}, cleared, cleared]
     assert "Saved" in result["after"]["verdictSave"] and result["after"]["disabled"] is True
 
 
@@ -923,7 +963,7 @@ def test_an_answer_goes_out_only_after_the_clear_lands_and_a_rejected_answer_lea
     """, host=PENDING)
     result = page["result"]
     assert result["beforeClear"] == 1
-    assert result["afterClear"][-1] == {"answer": "discuss", "optionId": None, "note": ""} and len(result["afterClear"]) == 2
+    assert _without_revision(result["afterClear"][-1]) == {"answer": "discuss", "optionId": None, "note": ""} and len(result["afterClear"]) == 2
     assert "Not saved" in result["line"] and result["buttons"] == 1
     assert result["written"]["verdict/" + digest]["verdict"] is None
     assert result["written"]["answers/" + CARD_A]["answer"] == "accept"
@@ -943,7 +983,7 @@ def test_with_no_saved_merge_an_answer_change_is_written_at_once():
       return { sent: sent, line: t.saveText(A), verdictWrites: verdictWrites() };
     """, host=PENDING)
     result = page["result"]
-    assert result["sent"] == [{"answer": "accept", "optionId": None, "note": ""}, {"answer": "discuss", "optionId": None, "note": ""}]
+    assert [_without_revision(body) for body in result["sent"]] == [{"answer": "accept", "optionId": None, "note": ""}, {"answer": "discuss", "optionId": None, "note": ""}]
     assert result["line"] == "Saving…" and result["verdictWrites"] == []
 
 
@@ -959,7 +999,7 @@ def test_an_accepted_to_accepted_change_waits_for_the_clear_and_a_reopen_restore
       return { waiting: waiting, line: t.saveText(B), sent: answerWrites(B).length, written: t.written() };
     """, host=PENDING)
     result = page["result"]
-    assert result["waiting"]["sent"] == 1 and result["waiting"]["verdict"][-1] == {"verdict": None, "note": "", "sheet": digest}
+    assert result["waiting"]["sent"] == 1 and _without_covers(result["waiting"]["verdict"][-1]) == {"verdict": None, "note": "", "sheet": digest}
     assert result["sent"] == 1 and "Not saved" in result["line"]
     assert result["written"]["verdict/" + digest]["verdict"] == "merge"
     assert result["written"]["answers/" + CARD_B]["optionId"] == "keep-it"
@@ -995,7 +1035,7 @@ def test_a_card_waits_for_a_rejected_not_yet_after_a_saved_merge_and_writes_afte
     assert result["waiting"]["sent"] == 1
     assert "Not saved" in result["waiting"]["line"] and result["waiting"]["buttons"] == 0
     assert result["retrying"] == 1
-    assert result["sent"][-1] == {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""} and len(result["sent"]) == 2
+    assert _without_revision(result["sent"][-1]) == {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""} and len(result["sent"]) == 2
     assert "Saved" in result["after"] and "Not saved" not in result["after"]
 
 
@@ -1012,7 +1052,7 @@ def test_several_waiting_cards_write_once_each_in_card_order_after_the_clear_wit
       return { before: before, after: t.sets.slice(before).map((call) => [call.path, call.body]) };
     """, host=PENDING)
     result = page["result"]
-    assert result["after"] == [
+    assert [[path, _without_revision(body)] for path, body in result["after"]] == [
         ["answers/" + CARD_A, {"answer": "discuss", "optionId": None, "note": "why"}],
         ["answers/" + CARD_B, {"answer": "option", "optionId": "fix-in-a-follow-up", "note": ""}],
     ]
@@ -1035,7 +1075,7 @@ def test_a_note_typed_while_an_answer_waits_for_the_clear_writes_once_after_the_
     """, host=dict(PENDING, **TIMED))
     result = page["result"]
     assert result["waiting"] == {"sent": 1, "locked": True, "label": _locked_label()}
-    assert result["sent"][1:] == [{"answer": "discuss", "optionId": None, "note": "why not"}]
+    assert [_without_revision(body) for body in result["sent"][1:]] == [{"answer": "discuss", "optionId": None, "note": "why not"}]
     assert result["locked"] is True
 
 
@@ -1058,28 +1098,26 @@ def test_a_stalled_clear_shows_the_waiting_answer_as_not_saved_and_it_goes_out_a
     result = page["result"]
     assert "Not saved" in result["stalled"]["line"] and result["stalled"]["buttons"] == 0 and result["stalled"]["sent"] == 1
     assert result["retrying"] == 1
-    assert result["sent"][-1] == {"answer": "discuss", "optionId": None, "note": ""} and len(result["sent"]) == 2
+    assert _without_revision(result["sent"][-1]) == {"answer": "discuss", "optionId": None, "note": ""} and len(result["sent"]) == 2
 
 
 # Bites on: a stored Merge restored onto a sheet that is locked once its answers are restored (E8) staying a Merge, or being cleared when the sheet is not locked.
 def test_a_stored_merge_is_cleared_after_load_on_a_locked_sheet_and_kept_on_an_open_one():
     digest = _sheet_digest(PR_SAMPLE)
-    stored = {"id": digest, "data": {"verdict": "merge", "note": "my verdict note", "sheet": digest}}
 
     def answers(*rows):
-        return [{"id": card, "data": {"answer": answer, "optionId": option, "note": ""}} for card, answer, option in rows]
+        return [{"id": card, "data": {"answer": answer, "optionId": option, "note": "", "revision": _revision_at(position)}} for position, (card, answer, option) in enumerate(rows)]
 
-    locked = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": {
-        "answers": answers((CARD_A, "discuss", None), (CARD_B, "option", "keep-it"), (CARD_C, "option", "ten-minutes")),
-        "verdict": [stored],
-    }})
+    def merge_over(docs):
+        return {"id": digest, "data": {"verdict": "merge", "note": "my verdict note", "sheet": digest, "covers": _covers(docs)}}
+
+    held = answers((CARD_A, "discuss", None), (CARD_B, "option", "keep-it"), (CARD_C, "option", "ten-minutes"))
+    locked = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": {"answers": held, "verdict": [merge_over(held)]}})
     assert locked["result"]["view"]["pressed"] == ["false", "false"] and locked["result"]["view"]["note"] == "my verdict note"
     assert locked["result"]["view"]["disabled"] is True
-    assert locked["result"]["writes"] == [{"verdict": None, "note": "my verdict note", "sheet": digest}]
-    open_sheet = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": {
-        "answers": answers((CARD_A, "accept", None), (CARD_B, "option", "keep-it"), (CARD_C, "option", "ten-minutes")),
-        "verdict": [stored],
-    }})
+    assert locked["result"]["writes"] == [{"verdict": None, "note": "my verdict note", "sheet": digest, "covers": _covers(held)}]
+    held = answers((CARD_A, "accept", None), (CARD_B, "option", "keep-it"), (CARD_C, "option", "ten-minutes"))
+    open_sheet = _lock(PR_SAMPLE, "return { view: lockView(), writes: verdictWrites() };", host={"collections": {"answers": held, "verdict": [merge_over(held)]}})
     assert open_sheet["result"]["view"]["pressed"] == ["true", "false"] and open_sheet["result"]["view"]["disabled"] is False
     assert open_sheet["result"]["writes"] == []
 
@@ -1114,7 +1152,7 @@ def test_a_pick_that_sends_the_pr_back_replaces_the_verdict_with_its_message():
         assert result[name]["sendBack"] == {"row": True, "note": True, "message": PW["sendBack"]}, name
         assert result[name]["line"] is None, name
     assert result["settled"]["pressed"] == ["false", "false"]
-    assert result["writes"][-1] == {"verdict": None, "note": "", "sheet": digest}
+    assert _without_covers(result["writes"][-1]) == {"verdict": None, "note": "", "sheet": digest}
     assert result["cleared"]["sendBack"] == {"row": False, "note": False, "message": None}
     assert result["cleared"]["line"] == _fill(PW["unlocks"], accepted=2, total=3)
     assert result["back"]["line"] is None and result["back"]["disabled"] is False and result["back"]["label"] == "Merge #214"
@@ -1226,3 +1264,288 @@ def test_the_verdict_buttons_come_from_the_schemas_per_kind_list():
     del schema["$defs"]["verdictsByKind"]
     off = _page(PR_SAMPLE, "return verdictState();", schema=schema)
     assert off["result"]["labels"] == [] or all(off["result"]["disabled"])
+
+
+# The Merge bound to its answers. Every answer saved on a pr sheet or a stack sheet carries a fresh revision, and a Merge names
+# (covers) the answers/<card id>@<revision> it was given for; a Merge whose covers differs from the answers the store holds now is not a Merge.
+REVISION_SCENARIO = """
+  const id = elements["sheet-cards"].children.filter(isCard)[0].id.replace("card-", "");
+  t.click(t.buttons(id)[0]);
+  await t.tick();
+  t.click(t.buttons(id)[1]);
+  await t.tick();
+  t.click(t.buttons(id)[0]);
+  await t.tick();
+  t.type(t.note(id), "a note", "change");
+  await t.tick();
+  return t.setLog();
+"""
+
+
+# Bites on: a revision reused between two saves of one card (one constant, or one kept per card), a revision missing from a save, or one that is not 16 lowercase hex digits.
+@pytest.mark.parametrize("kind", ["pr", "stack"])
+def test_every_answer_save_carries_a_fresh_well_formed_revision(kind):
+    page = _page(SAMPLES[kind], REVISION_SCENARIO)
+    bodies = [item["body"] for item in page["result"]]
+    assert len(bodies) == 4
+    assert [_without_revision(body) for body in bodies][-1]["note"] == "a note"
+    revisions = [body["revision"] for body in bodies]
+    assert all(REVISION.fullmatch(revision) for revision in revisions)
+    assert len(set(revisions)) == 4, revisions
+
+
+# Bites on: a discovery card's answer document carrying a revision (the other kinds' writes must not move).
+def test_a_discovery_card_save_carries_no_revision():
+    sheet = _sheet(cards=[_plain_card("plan-day"), _card("fridge-check")])
+    page = _page(sheet, """
+      t.click(t.buttons("plan-day")[0]);
+      await t.tick();
+      t.click(t.buttons("fridge-check")[0]);
+      await t.tick();
+      t.type(t.note("fridge-check"), "noted", "change");
+      await t.tick();
+      return t.setLog();
+    """)
+    assert [item["body"] for item in page["result"]] == [
+        {"answer": "aligned", "optionId": None, "note": ""},
+        {"answer": "option", "optionId": "yes", "note": ""},
+        {"answer": "option", "optionId": "yes", "note": "noted"},
+    ]
+
+
+# Bites on: a Merge write that leaves out a card, names a revision the store was not given (an earlier save of the card, or the one in flight), or lists the names unsorted.
+def test_a_merge_write_covers_every_cards_acknowledged_revision():
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      t.type(t.note(A), "second thoughts", "change");
+      await t.tick();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { written: t.written(), verdict: verdictWrites(), answers: t.setLog().filter((item) => item.path.startsWith("answers/")) };
+    """)
+    result = page["result"]
+    held = {path.split("/", 1)[1]: body["revision"] for path, body in result["written"].items() if path.startswith("answers/")}
+    assert sorted(held) == sorted([CARD_A, CARD_B, CARD_C])
+    first = [item["body"]["revision"] for item in result["answers"] if item["path"] == "answers/" + CARD_A]
+    assert len(first) == 2 and held[CARD_A] == first[1] != first[0]
+    merge = result["verdict"][-1]
+    assert merge["verdict"] == "merge"
+    assert merge["covers"] == sorted("answers/%s@%s" % (card, revision) for card, revision in held.items())
+
+
+# Bites on: a stack sheet's Merge not carrying covers, or a final sheet's verdict gaining one.
+def test_a_stack_merge_covers_its_card_and_a_final_verdict_has_no_covers():
+    page = _page(STACK_SAMPLE, """
+      const id = elements["sheet-cards"].children.filter(isCard)[0].id.replace("card-", "");
+      t.click(t.button(id, "Keep it"));
+      await t.tick();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { written: t.written(), id: id };
+    """)
+    written = page["result"]["written"]
+    revision = written["answers/" + page["result"]["id"]]["revision"]
+    assert [body["covers"] for path, body in written.items() if path.startswith("verdict/")] == [["answers/%s@%s" % (page["result"]["id"], revision)]]
+    final = _sample_final()
+    stored = _run_page(_files(final), scenario="""
+      t.click(t.lastButton("Approve"));
+      await t.tick();
+      return t.setLog().filter((item) => item.path.startsWith("verdict/"));
+    """, host={"collections": {"answers": [], "verdict": []}})
+    assert [item["body"] for item in stored["result"]] == [{"verdict": "approve", "note": "", "sheet": _sheet_digest(final)}]
+
+
+def _store_of(*written):
+    """The store after pages wrote in turn: the accepted answers first, then what each page wrote, as the collections a reopened sheet reads."""
+    stored = {"answers/" + doc["id"]: dict(doc["data"]) for doc in _accepted_answers(PR_SAMPLE)}
+    for paths in written:
+        stored.update(paths)
+    return _collections(stored)
+
+
+REOPENED = "return { view: lockView(), a: t.state(A), b: t.state(B), writes: verdictWrites(), sets: t.setLog() };"
+
+
+def _page_a_merges():
+    """Page A, opened on the accepted answers: types a note and saves Merge. Returns what it wrote."""
+    page = _lock(PR_SAMPLE, """
+      t.type(verdictNote(), "go ahead", "change");
+      await t.tick();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { written: t.written(), view: lockView() };
+    """, host={"collections": _store_of()})
+    assert page["result"]["view"]["pressed"] == ["true", "false"]
+    return page["result"]["written"]
+
+
+# Bites on: a Merge restored although another page saved an answer after it was given (the covers comparison on restore): an accepted answer changed to another accepted answer, and an accepted card's note changed alone.
+@pytest.mark.parametrize("change,expected_note", [
+    ("t.click(t.button(B, 'Fix in a follow-up'));", None),
+    ("t.type(t.note(B), 'because', 'change');", "because"),
+], ids=["accepted-to-accepted", "note-only"])
+def test_a_merge_saved_on_one_page_does_not_stand_after_another_page_changed_an_accepted_answer(change, expected_note):
+    merge = _page_a_merges()
+    page_b = _lock(PR_SAMPLE, change + " await t.tick(); return { written: t.written(), sets: t.setLog(), a: t.state(A) };", host={"collections": _store_of()})
+    answers = {path: body for path, body in page_b["result"]["written"].items() if path.startswith("answers/")}
+    assert list(answers) == ["answers/" + CARD_B] and len(page_b["result"]["sets"]) == 1
+    old = next(doc["data"]["revision"] for doc in _accepted_answers(PR_SAMPLE) if doc["id"] == CARD_B)
+    assert REVISION.fullmatch(answers["answers/" + CARD_B]["revision"]) and answers["answers/" + CARD_B]["revision"] != old
+    reopened = _lock(PR_SAMPLE, REOPENED, host={"collections": _store_of(merge, answers)})["result"]
+    assert reopened["view"]["pressed"] == ["false", "false"] and reopened["view"]["note"] == "go ahead"
+    assert reopened["sets"] == [] and reopened["writes"] == []
+    assert reopened["b"]["pressed"].count("true") == 1 and (expected_note is None or reopened["b"]["note"] == expected_note)
+    assert reopened["view"]["disabled"] is False
+
+
+# Bites on: a Merge cleared although nothing changed after it was given.
+def test_a_reopen_of_an_unchanged_store_keeps_the_merge():
+    merge = _page_a_merges()
+    reopened = _lock(PR_SAMPLE, REOPENED, host={"collections": _store_of(merge)})["result"]
+    assert reopened["view"]["pressed"] == ["true", "false"] and reopened["view"]["note"] == "go ahead"
+    assert reopened["sets"] == [] and reopened["view"]["disabled"] is False
+
+
+# Bites on: a verdict note typed on a page whose Merge was given before another page changed an answer being written as though the Merge still stood: page A's covers come from what A acknowledged, which the store contradicts, so a reopen restores cleared.
+def test_a_verdict_note_typed_after_another_page_changed_an_answer_restores_cleared():
+    merge = _page_a_merges()
+    changed = _lock(PR_SAMPLE, "t.click(t.button(B, 'Fix in a follow-up')); await t.tick(); return t.written();", host={"collections": _store_of()})["result"]
+    answers = {path: body for path, body in changed.items() if path.startswith("answers/")}
+    typed = _lock(PR_SAMPLE, """
+      const restored = lockView();
+      t.type(verdictNote(), "go ahead, really", "change");
+      await t.tick();
+      return { restored: restored, sets: t.setLog(), written: t.written() };
+    """, host={"collections": _store_of(merge)})["result"]
+    assert typed["restored"]["pressed"] == ["true", "false"]
+    body = next(body for path, body in typed["written"].items() if path.startswith("verdict/"))
+    assert body["verdict"] == "merge" and body["note"] == "go ahead, really"
+    assert body["covers"] == _covers(_accepted_answers(PR_SAMPLE))
+    reopened = _lock(PR_SAMPLE, REOPENED, host={"collections": _store_of(answers, typed["written"])})["result"]
+    assert reopened["view"]["pressed"] == ["false", "false"] and reopened["view"]["note"] == "go ahead, really"
+    assert reopened["sets"] == []
+
+
+def _changed(index, name):
+    """One entry of `covers` replaced by a name for the same card with another revision."""
+    return lambda covers: covers[:index] + [covers[index].split("@")[0] + "@" + name] + covers[index + 1:]
+
+
+UNKNOWN = "answers/not-a-card@" + "1" * 16
+# What a stored Merge's covers can get wrong while still being a well-formed list: each one restores cleared.
+WRONG_COVERS = {
+    "stale-revision": _changed(0, "0" * 16),
+    "missing-a-card": lambda covers: covers[:-1],
+    "a-second-revision-for-a-card": lambda covers: covers + [covers[0].split("@")[0] + "@" + "2" * 16],
+    "duplicate-entry": lambda covers: covers + [covers[0]],
+    "names-a-card-not-on-the-sheet": lambda covers: covers[:-1] + [UNKNOWN],
+    "an-extra-card-not-on-the-sheet": lambda covers: covers + [UNKNOWN],
+    "empty": lambda covers: [],
+}
+
+
+# Bites on: a stored Merge restoring although its covers is not exactly the set of the stored answers (stale revision, a card missing, a card too many, a duplicate, an unknown card, empty).
+@pytest.mark.parametrize("name", sorted(WRONG_COVERS))
+def test_a_stored_merge_whose_covers_is_wrong_restores_cleared_with_no_write(name):
+    docs = _accepted_answers(PR_SAMPLE)
+    covers = WRONG_COVERS[name](_covers(docs))
+    page = _lock(PR_SAMPLE, REOPENED, host={"collections": {"answers": docs, "verdict": [_verdict_doc(PR_SAMPLE, "merge", covers=covers)]}})
+    result = page["result"]
+    assert result["view"]["pressed"] == ["false", "false"] and result["view"]["note"] == "my verdict note"
+    assert result["view"]["disabled"] is False
+    assert result["sets"] == []
+    assert result["a"]["pressed"] == ["true", "false"]
+
+
+# Bites on: the comparison depending on the order the names are stored in.
+def test_a_stored_merge_restores_whatever_order_its_covers_are_in():
+    docs = _accepted_answers(PR_SAMPLE)
+    covers = list(reversed(_covers(docs)))
+    result = _lock(PR_SAMPLE, REOPENED, host={"collections": {"answers": docs, "verdict": [_verdict_doc(PR_SAMPLE, "merge", covers=covers)]}})["result"]
+    assert result["view"]["pressed"] == ["true", "false"] and result["sets"] == []
+
+
+# Bites on: a stored Merge for a stack restoring on the pr sheet's rule only, or a covers that does not fit the schema (not a list, a name that is not answers/<id>@<16 hex>) restoring as a Merge.
+def test_a_stored_stack_merge_restores_and_a_malformed_covers_restores_cleared():
+    docs = _accepted_answers(STACK_SAMPLE)
+    stack = _page(STACK_SAMPLE, "return { view: verdictState(), sets: t.setLog() };", host={"collections": {"answers": docs, "verdict": [_verdict_doc(STACK_SAMPLE, "merge")]}})
+    assert stack["result"]["view"]["pressed"] == ["true", "false"] and stack["result"]["sets"] == []
+    for covers in ("answers/x@" + "1" * 16, {"answers": "x"}, ["answers/x@XYZ"], [3]):
+        page = _page(STACK_SAMPLE, "return { view: verdictState(), sets: t.setLog() };", host={"collections": {"answers": docs, "verdict": [_verdict_doc(STACK_SAMPLE, "merge", covers=covers)]}})
+        assert page["result"]["view"]["pressed"] == ["false", "false"] and page["result"]["view"]["note"] == "my verdict note", covers
+        assert page["result"]["sets"] == [], covers
+
+
+# Bites on: a card whose stored answer has no revision, or a malformed one, still counting toward a Merge that restores.
+@pytest.mark.parametrize("revision", [None, "XYZ", "A11CE2A11CE2A11C", "a11ce2"], ids=["none", "not-hex", "uppercase", "short"])
+def test_a_stored_answer_without_a_good_revision_can_never_be_covered(revision):
+    docs = _accepted_answers(PR_SAMPLE)
+    covered = _covers(docs)
+    if revision is None:
+        del docs[2]["data"]["revision"]
+    else:
+        docs[2]["data"]["revision"] = revision
+    for covers in (covered, _covers(docs)):
+        result = _lock(PR_SAMPLE, REOPENED, host={"collections": {"answers": docs, "verdict": [_verdict_doc(PR_SAMPLE, "merge", covers=covers)]}})["result"]
+        assert result["view"]["pressed"] == ["false", "false"] and result["view"]["note"] == "my verdict note", covers
+        assert result["sets"] == []
+    # A malformed revision does not fit the answer's schema, so the card shows unanswered; one that is only missing is still the answer.
+    page = _lock(PR_SAMPLE, "return t.state(C);", host={"collections": {"answers": docs}})["result"]
+    assert (page["pressed"].count("true") == 1) is (revision is None)
+
+
+# Bites on: answers written without a revision beside a Merge that then restores as one (no random source in the browser).
+def test_without_a_random_source_answers_save_without_a_revision_and_the_merge_cannot_stand():
+    page = _lock(PR_SAMPLE, """
+      await acceptAll();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { written: t.written(), view: lockView() };
+    """, host={"noRandom": True})
+    written = page["result"]["written"]
+    assert [body for path, body in written.items() if path.startswith("answers/")] == [
+        {"answer": "accept", "optionId": None, "note": ""},
+        {"answer": "option", "optionId": "keep-it", "note": ""},
+        {"answer": "option", "optionId": "ten-minutes", "note": ""},
+    ]
+    # Merge is locked while any card's answer has no revision, so no Merge with an incomplete covers is ever written.
+    assert not [path for path in written if path.startswith("verdict/")]
+    assert page["result"]["view"]["disabled"] is True and page["result"]["view"]["pressed"] == ["false", "false"]
+    # The lock says why and which cards are affected, and that this browser is the reason.
+    assert page["result"]["view"]["line"] == _fill(PW["resaveNoRevision"], numbers="1, 2, 3")
+
+
+# Bites on: the generator typing the revision width instead of reading the schema's pattern (a format it cannot make must give no revision).
+@pytest.mark.parametrize("pattern, width", [("^[0-9a-f]{15}$", None), ("^[a-z]{16}$", None)], ids=["odd", "other-alphabet"])
+def test_the_revision_width_is_read_from_the_schema(pattern, width):
+    schema = copy.deepcopy(SCHEMA)
+    schema["$defs"]["answer"]["properties"]["revision"]["pattern"] = pattern
+    page = _page(PR_SAMPLE, """
+      t.click(t.button(CARD_A, "Accept"));
+      await t.tick();
+      return t.written();
+    """.replace("CARD_A", json.dumps(PR_SAMPLE["cards"][0]["id"])), schema=schema)
+    body = next(body for path, body in page["result"].items() if path.startswith("answers/"))
+    assert (len(body["revision"]) if "revision" in body else None) == width
+
+
+# Bites on: answers saved before revisions existed (accepted, no revision) leaving Merge unlocked so a tap shows Saved on a verdict that pr_state and a reopen reject.
+def test_answers_saved_without_a_revision_keep_merge_locked_as_the_index_reads_it():
+    docs = _accepted_answers(PR_SAMPLE)
+    for doc in docs:
+        del doc["data"]["revision"]
+    page = _lock(PR_SAMPLE, """
+      const initial = lockView();
+      t.click(verdictRow()[0]);
+      await t.tick();
+      return { initial, after: lockView(), writes: verdictWrites() };
+    """, host={"collections": {"answers": docs}})["result"]
+    assert page["initial"]["disabled"] is True and page["after"]["pressed"] == ["false", "false"] and page["writes"] == []
+    # Every card shows Saved and accepted, so the lock must say which cards to save again and how (the unlock line alone is hidden at 3 of 3).
+    assert page["initial"]["line"] == _fill(PW["resaveLegacy"], numbers="1, 2, 3")
+    assert page["after"]["line"] == page["initial"]["line"]
+    assert page["after"]["verdictSave"] != "Saved"
+    sheet_bytes = _sample_files(PR_SAMPLE)["sheet.json"]["body"].encode("utf-8")
+    digest = _sheet_digest(PR_SAMPLE)
+    store = {"answers": {doc["id"]: doc["data"] for doc in docs}, "walk": {}, "verdict": {digest: _verdict_doc(PR_SAMPLE, "merge", covers=[])["data"]}}
+    assert pr_sheet.pr_state(sheet_bytes, store)["state"] == "needs-you"

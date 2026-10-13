@@ -44,6 +44,8 @@
   .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
   .sheet-page #sheet-final > * + * { margin-top: 16px; }
   .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
+  .sheet-page :is(.sheet-index-blocks, .sheet-index-group) { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-index-row { display: grid; gap: 4px; text-decoration: none; }
   .sheet-page .sheet-folded { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
   .sheet-page .sheet-folded ul { padding-left: 20px; }
   .sheet-page .sheet-folded .sh-button { justify-self: start; max-width: 100%; text-align: left; white-space: normal; }
@@ -119,7 +121,8 @@
   // these in a form the reader does not implement, is refused whole before any sheet is checked, so
   // a sheet is never drawn against a rule this page cannot check. The rest is authored here
   // because a schema cannot express it: unique card ids, unique option ids within a card,
-  // unsettled ids that name real cards, and a recommendation that names one of its card's options.
+  // unsettled ids that name real cards, a recommendation that names one of its card's options, and unique
+  // index row numbers.
   const READ_RULES = [
     "type", "const", "enum", "minLength", "minimum", "minItems", "uniqueItems", "pattern", "required",
     "properties", "additionalProperties", "items", "$ref", "allOf", "if", "then", "not", "anyOf",
@@ -465,6 +468,17 @@
       });
     }
 
+    const rowNumbers = new Set();
+    const reportedRows = new Set();
+    ((isObject(sheet.index) && Array.isArray(sheet.index.rows)) ? sheet.index.rows : []).forEach((row) => {
+      if (!isObject(row)) return;
+      if (rowNumbers.has(row.number) && !reportedRows.has(row.number)) {
+        reportedRows.add(row.number);
+        problems.push("Two index rows share the number " + row.number + ".");
+      }
+      rowNumbers.add(row.number);
+    });
+
     return problems;
   }
 </script>
@@ -535,7 +549,10 @@
       const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
       if (kinds.some(function (kind) { return !kind.carriesOption && typeof knownLabels[kind.value] !== "string"; })) return null;
       if (answerWords.withOptions.concat(answerWords.withoutOptions).some(function (value) { return !values.includes(value); })) return null;
-      return { root: schema, rule: rule, kinds: kinds };
+      // The revision's width comes from the schema's pattern (^[0-9a-f]{N}$ with N even); any other format is refused, so no revision is generated.
+      const shape = isObject(rule.properties.revision) && typeof rule.properties.revision.pattern === "string" ? /^\^\[0-9a-f\]\{(\d+)\}\$$/.exec(rule.properties.revision.pattern) : null;
+      const width = shape === null ? 0 : Number(shape[1]);
+      return { root: schema, rule: rule, kinds: kinds, revisionBytes: width > 0 && width % 2 === 0 ? width / 2 : 0 };
     }
 
     // True when the stored document fits the given rule of the schema (answer or verdict).
@@ -1121,6 +1138,7 @@
     // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
     // A state is always { answer, optionId, note, shots }: a verdict is the answer, with no option, and only a walk stop has shots.
     // A spec may add pressed and unpick (when a choice shows pressed, what a second tap leaves), paint, enable, and an extra block that a second row joins.
+    // A spec with revised set writes a fresh revision with every body it sends, and revisionOf gives the revision of a restored document.
     function addSaver(spec, article) {
       const choices = spec.choices;
       const none = { answer: null, optionId: null, note: "", shots: [] };
@@ -1130,6 +1148,8 @@
       const unpick = spec.unpick || function () { return { answer: null, optionId: null }; };
       let acked = none;
       let lastSaved = none;
+      // The revision the store holds for the acknowledged state, null while that is unknown or the state carries none.
+      let ackedRevision = null;
       let inFlight = null;
       // Every state sent since the store's last acknowledgement: in flight, failed or stalled; any of them may be what the store holds.
       let sent = [];
@@ -1261,11 +1281,14 @@
 
       function send() {
         const body = latest;
+        // A body that carries a revision gets a fresh one each time it is sent, and the revision stays with that send.
+        const revision = spec.revised === true ? freshRevision() : null;
         waiting = false;
         inFlight = body;
         sent.push(body);
         // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
         acked = unknown;
+        ackedRevision = null;
         stalled = false;
         clearTimeout(stallTimer);
         stallTimer = setTimeout(function () {
@@ -1276,21 +1299,22 @@
         let request;
         try {
           // The document written here has the shape the schema defines for this saver's path.
-          request = Promise.resolve(store.doc(spec.path).set(spec.document(body)));
+          request = Promise.resolve(store.doc(spec.path).set(spec.document(body, revision)));
         } catch (error) {
           request = Promise.reject(error);
         }
         // After the request is made: showing the status redraws the sheet, which may send another saver's held answer, and that must come after this one.
         showStatus("saving");
-        request.then(function () { settle(body, true); }, function () { settle(body, false); });
+        request.then(function () { settle(body, true, revision); }, function () { settle(body, false, null); });
       }
 
-      function settle(body, saved) {
+      function settle(body, saved, revision) {
         inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
         if (saved) {
           acked = lastSaved = body;
+          ackedRevision = revision;
           sent = [];
         }
         // A note's pause is still running: it sends the newest state itself when it ends.
@@ -1317,6 +1341,7 @@
           const state = { shots: [], ...spec.state(data) };
           latest = state;
           acked = lastSaved = state;
+          ackedRevision = spec.revisionOf === undefined ? null : spec.revisionOf(data, state);
           sent = [];
           note.value = state.note;
           paint();
@@ -1339,6 +1364,10 @@
         },
         acknowledged: function () {
           return [lastSaved, ...sent, latest];
+        },
+        // The revision of the document the store has acknowledged, or null while that is unknown or it has none.
+        revision: function () {
+          return ackedRevision;
         },
         // Gives a choice's button its words, and holds it off (or lets the controls decide again).
         setChoice: function (answer, label, held) {
@@ -1418,11 +1447,43 @@
       return pick.answer === "problem" && (prWords.walkFixes.find(function (fix) { return fix.id === pick.optionId; }) || {}).sendsBack !== false;
     }
 
+    // True when this browser can make a revision: the schema says how wide one is and a random source exists.
+    function canMakeRevision() {
+      return answerShape !== null && answerShape.revisionBytes !== 0
+        && typeof crypto !== "undefined" && crypto !== null && typeof crypto.getRandomValues === "function";
+    }
+
+    // A fresh revision (of the width the schema's pattern says) for a body about to be sent; null when this browser has no random source, so the answer is sent without one
+    // and its card can never be covered by a Merge.
+    function freshRevision() {
+      try {
+        if (!canMakeRevision()) return null;
+        return Array.from(crypto.getRandomValues(new Uint8Array(answerShape.revisionBytes)), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+      } catch (error) {
+        return null;
+      }
+    }
+
+    // The answers a Merge is given for: answers/<card id>@<revision> for every card whose acknowledged answer has a revision, sorted.
+    function coveredAnswers() {
+      return items.map(function (item) { return { id: item.id, revision: controllers.get(item.id).revision() }; })
+        .filter(function (entry) { return entry.revision !== null; })
+        .map(function (entry) { return "answers/" + entry.id + "@" + entry.revision; })
+        .sort();
+    }
+
+    // True when a stored Merge's covers names exactly the answers the cards were restored with: one for every card, each with a revision, and nothing else.
+    function coversHold(covers) {
+      if (!Array.isArray(covers) || new Set(covers).size !== covers.length) return false;
+      const held = coveredAnswers();
+      return held.length === items.length && covers.length === held.length && held.every(function (name) { return covers.includes(name); });
+    }
+
     // A card of a pr or stack sheet writes only while the store cannot end up holding a Merge beside the changed answer: not while the
     // verdict's acknowledged pick is Merge, and not while the verdict holds anything unsaved, whatever its latest pick (a clear or a
     // Not yet in flight, failed or stalled).
     function cardMayWrite() {
-      if (!onePageKind(sheetKind) || verdictController === null) return true;
+      if (!revisedKind(sheetKind) || verdictController === null) return true;
       const confirmed = verdictController.confirmed();
       if (confirmed !== null && confirmed.answer === "merge") return false;
       return !verdictController.unsaved();
@@ -1438,7 +1499,14 @@
         path: "answers/" + card.id,
         live: canEdit,
         mayWrite: cardMayWrite,
-        document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
+        revised: revisedKind(sheetKind),
+        document: function (body, revision) {
+          const doc = { answer: body.answer, optionId: body.optionId, note: body.note };
+          if (revision !== null) doc.revision = revision;
+          return doc;
+        },
+        // A restored answer's revision counts only when the card shows that answer; a document without one has none.
+        revisionOf: function (data, state) { return state.answer !== null && typeof data.revision === "string" ? data.revision : null; },
         // A stored document restores a pick only when it fits the schema's answer rule and the card offers
         // that answer now. A document that does not fit, or names an answer the card no longer offers,
         // restores only its note, and only when that is text.
@@ -1476,7 +1544,11 @@
         noteId: "verdict-note",
         path: "verdict/" + sheetDigest,
         live: function () { return canEdit() && verdictShape !== null && sheetDigest !== null; },
-        document: function (body) { return { verdict: body.answer, note: body.note, sheet: sheetDigest }; },
+        document: function (body) {
+          const doc = { verdict: body.answer, note: body.note, sheet: sheetDigest };
+          if (revisedKind(sheetKind)) doc.covers = coveredAnswers();
+          return doc;
+        },
         // A stored document restores a pick only when it fits the schema's verdict rule and the sheet's kind offers
         // that verdict; one that does not restores only its note, and only when that is text.
         state: function (data) {
@@ -1540,11 +1612,15 @@
     // One entry per card, in card order: { id, question, options, article, row }.
     let items = [];
     let sheetKind = "plain";
-    // A pr sheet or a stack sheet is one scrolling page: every card shown, no stepper and no item rows.
+    // A pr sheet, a stack sheet or the index is one scrolling page: every card shown, no stepper and no item rows.
     let onePage = false;
     // The PR's number (the stack's on a stack sheet) and the words under "pr" in sheet-words.json, for those two kinds.
     let prNumber = 0;
     let prWords = null;
+    // The index's words (the "index" block of sheet-words.json) and rows, and the zoom words an opened picture's buttons take (from "pr"); null or empty on other kinds.
+    let indexWords = null;
+    let indexRows = [];
+    let zoomWords = null;
     let openIndex = 0;
     let expanded = false;
 
@@ -1555,8 +1631,7 @@
       return button;
     }
 
-    // The answers that count a walk stop as walked; the walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
-    const WALKED = ["works", "looks-right", "problem"];
+    // The walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
     let walkStops = [];
     let walkCount = textElement("span", "sh-label", "");
     let walkLines = [];
@@ -1671,7 +1746,9 @@
 
       const notLoaded = total + (total === 1 ? " item" : " items") + " · answers not loaded";
       // A final sheet may have no cards: there is then nothing to count, step through or list.
-      if (onePage) {
+      if (sheetKind === "index") {
+        countHost.textContent = indexCount();
+      } else if (onePage) {
         countHost.textContent = total === 0
           ? prWords.nothingToAcceptCount
           : ready ? fill(prWords.acceptedCount, { accepted: savedAcceptances(), total: total }) : notLoaded;
@@ -1725,7 +1802,7 @@
         pair.next.disabled = openIndex === total - 1;
       });
 
-      footerHost.hidden = onePage;
+      footerHost.hidden = onePage && sheetKind !== "index";
       stepperHost.hidden = onePage || total === 0;
       bottomStepperHost.hidden = onePage || total === 0;
       itemsHost.hidden = onePage || total === 0;
@@ -1733,11 +1810,11 @@
       cardsHost.hidden = !onePage && total === 0;
       whyBox.hidden = sheetKind !== "remainder";
       historyBox.hidden = sheetKind !== "final";
-      finalHost.hidden = sheetKind !== "final" && !onePage;
+      finalHost.hidden = sheetKind !== "final" && !revisedKind(sheetKind);
       // The no-digest caption shows only once the sheet is ready, the schema says what a verdict is and this
       // browser can't work out which revision the sheet is: the last card's controls are then off, and this says why.
       if (digestCaption !== null) digestCaption.hidden = !(ready && verdictShape !== null && sheetDigest === null);
-      if (onePage && verdictController !== null) lockVerdict(states);
+      if (revisedKind(sheetKind) && verdictController !== null) lockVerdict(states);
     }
 
     // The merge verdict's lock, send-back and clear, worked out from the controllers and from nothing else. An item
@@ -1771,7 +1848,9 @@
       // off until that clear lands: accepting a card again must not bring the earlier verdict back as a current one.
       const verdictLost = verdictController.state().save === "failed" || verdictController.state().save === "stalled";
       const clearUnsaved = verdictController.state().answer === null && verdictLost;
-      const locked = incomplete || clearUnsaved || open > 0;
+      // An accepted answer saved without a revision (an earlier page, or no random source) cannot be named by a Merge's covers, so Merge stays off until it is answered again.
+      const uncovered = coveredAnswers().length < total;
+      const locked = incomplete || uncovered || clearUnsaved || open > 0;
       const sendsBack = states.some(function (state, index) {
         const option = optionOf(index, state.optionId);
         return option !== undefined && option.sendsBack === true;
@@ -1779,19 +1858,26 @@
       const counts = [
         open,
         count(function (item) { return fixOf(item.saved).sendsBack === false; }),
-        count(function (item) { return !item.optional && !WALKED.includes(item.now.answer); }),
+        count(function (item) { return !item.optional && !prWords.walkedAnswers.includes(item.now.answer); }),
       ];
       ["walkProblems", "followUps", "notWalked"].forEach(function (name, index) {
         walkLines[index].textContent = counts[index] === 0 ? "" : fill(prWords[name + (counts[index] === 1 ? "One" : "Many")], { count: counts[index] });
         walkLines[index].hidden = counts[index] === 0 || sendsBack;
       });
-      walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return WALKED.includes(item.saved.answer); }), total: walked.length });
+      walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return prWords.walkedAnswers.includes(item.saved.answer); }), total: walked.length });
       walkCount.hidden = !ready;
       const mergeLabel = verdictLabel("merge");
       verdictController.setChoice("merge", locked ? fill(prWords.mergeLocked, { merge: mergeLabel }) : mergeLabel, locked);
       verdictController.setShown(!sendsBack);
-      unlockLine.textContent = fill(prWords.unlocks, { accepted: accepted, total: total });
-      unlockLine.hidden = !incomplete || sendsBack;
+      // Cards the store holds as accepted with no revision (saved by an earlier page, or by a browser with no random source) are named, with what to do about it, so a locked Merge is never left unexplained.
+      const resave = items.map(function (item, index) { return index; }).filter(function (index) {
+        const held = controllers.get(items[index].id).confirmed();
+        const option = held === null ? undefined : items[index].options.find(function (candidate) { return candidate.id === held.optionId; });
+        return held !== null && (held.answer === "accept" || (option !== undefined && option.sendsBack === false)) && controllers.get(items[index].id).revision() === null;
+      });
+      const resaveText = resave.length === 0 ? "" : fill(canMakeRevision() ? prWords.resaveLegacy : prWords.resaveNoRevision, { numbers: resave.map(function (index) { return index + 1; }).join(", ") });
+      unlockLine.textContent = [incomplete ? fill(prWords.unlocks, { accepted: accepted, total: total }) : "", resaveText].filter(function (part) { return part !== ""; }).join(" ");
+      unlockLine.hidden = unlockLine.textContent === "" || sendsBack;
       sendBackLine.hidden = !sendsBack;
       if (ready && locked && verdictController.state().answer === "merge") verdictController.clear();
       // The answers held back until the verdict's write is acknowledged go out now, in card order; while that write has failed
@@ -1804,11 +1890,15 @@
     // too). Nothing here retypes them.
     let finalWords = null;
     function onePageKind(kind) {
+      return revisedKind(kind) || kind === "index";
+    }
+    // The kinds whose answers carry a revision and whose Merge covers them: a pr sheet and a stack sheet.
+    function revisedKind(kind) {
       return kind === "pr" || kind === "stack";
     }
     // The kinds that save a verdict at verdict/<digest>, and so need the wording file and the sheet's digest.
     function verdictKind(kind) {
-      return kind === "final" || onePageKind(kind);
+      return kind === "final" || revisedKind(kind);
     }
     function plural(count, noun) {
       return count + " " + noun + (count === 1 ? "" : "s");
@@ -1891,7 +1981,7 @@
       "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
       "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
-      "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "sendBack",
+      "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
       "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
       "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
@@ -1911,6 +2001,73 @@
     function hasPrWords(words) {
       return words !== null && typeof words === "object" && typeof words.roundNoun === "string" && words.pr !== null
         && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr);
+    }
+
+    // The words under "index" in sheet-words.json that the index is drawn from, the three zoom words it takes from "pr", and the shapes of groups and ordinals.
+    // A wording file without one of them cannot draw the index.
+    const INDEX_WORD_KEYS = [
+      "blocksHeading", "nothingBlocking", "firstAnswerCounts", "rowPr", "rowStack", "accepted", "nothingToAccept", "walked", "mergesAt",
+      "mergesAtNumber", "beingFixed", "ready", "open", "questionsOne", "questionsMany", "needYou", "nothingNeedsYou", "done",
+    ];
+    // The states an index row can have come from the schema (indexRow's state enum), the one home of that list; null when the schema gives none.
+    function readIndexStates(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const defs = isObject(schema) && isObject(schema.$defs) ? schema.$defs : {};
+      const row = isObject(defs.indexRow) && isObject(defs.indexRow.properties) ? defs.indexRow.properties.state : undefined;
+      return isObject(row) && Array.isArray(row.enum) && row.enum.every(function (state) { return typeof state === "string"; }) ? row.enum : null;
+    }
+
+    function hasIndexWords(words, states) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      if (states === null || !isObject(words) || !isObject(words.index) || !isObject(words.pr)) return false;
+      const index = words.index;
+      return INDEX_WORD_KEYS.every(function (key) { return typeof index[key] === "string"; })
+        && isObject(index.groups) && states.every(function (state) { return typeof index.groups[state] === "string"; })
+        && Array.isArray(index.ordinals) && index.ordinals.every(function (ordinal) { return typeof ordinal === "string"; })
+        && ["zoomOut", "zoomIn", "zoomFit"].every(function (key) { return typeof words.pr[key] === "string"; });
+    }
+
+    // The app bar's count: the questions while any are left, else how many PRs need the owner.
+    function indexCount() {
+      if (items.length > 0) return items.length === 1 ? indexWords.questionsOne : fill(indexWords.questionsMany, { count: items.length });
+      const needing = indexRows.filter(function (row) { return row.state === "needs-you"; }).length;
+      return needing > 0 ? fill(indexWords.needYou, { count: needing }) : indexWords.nothingNeedsYou;
+    }
+
+    // One row: a link that opens the PR's sheet in a new tab, holding its name, its caption and the word that says it opens.
+    function buildIndexRow(row) {
+      const link = document.createElement("a");
+      link.className = "sh-box sheet-index-row";
+      Object.entries({ href: row.link, target: "_blank", rel: "noopener" }).forEach(function (pair) { link.setAttribute(pair[0], pair[1]); });
+      link.replaceChildren(
+        textElement("span", "sh-label", fill(indexWords[row.kind === "stack" ? "rowStack" : "rowPr"], { number: row.number, title: row.title })),
+        textElement("span", "sh-caption", row.caption),
+        textElement("span", "", indexWords.open),
+      );
+      return link;
+    }
+
+    // The questions that block work, or the line that says there are none.
+    function buildIndexBlocks(articles) {
+      const section = prSection("section", "index-blocks", "sheet-index-blocks");
+      section.appendChild(textElement("h2", "", indexWords.blocksHeading));
+      if (articles.length === 0) {
+        section.appendChild(textElement("p", "", indexWords.nothingBlocking));
+      } else {
+        articles.forEach(function (article) { section.appendChild(article); });
+        section.appendChild(textElement("p", "sh-caption", indexWords.firstAnswerCounts));
+      }
+      return section;
+    }
+
+    // The parts of the index below its questions: one for each state that has a row, in the order the wording file lists the groups (the order the chat prose uses too).
+    function buildIndexGroups(rows) {
+      return Object.keys(indexWords.groups).filter(function (state) { return rows.some(function (row) { return row.state === state; }); }).map(function (state) {
+        const section = prSection("section", "index-group-" + state, "sheet-index-group");
+        section.appendChild(textElement("h2", "", indexWords.groups[state]));
+        rows.filter(function (row) { return row.state === state; }).forEach(function (row) { section.appendChild(buildIndexRow(row)); });
+        return section;
+      });
     }
 
     // The first seven characters of a commit, as every line of a pr sheet names one.
@@ -2102,9 +2259,9 @@
       return section;
     }
 
-    // The view's zoom buttons (pr and stack sheets): − and + step about the frame's centre, Fit goes back to the fitted size (a factor of 0 holds at 1).
+    // The view's zoom buttons (pr and stack sheets, and the index): − and + step about the frame's centre, Fit goes back to the fitted size (a factor of 0 holds at 1).
     function zoomButtons() {
-      return [[prWords.zoomOut, 1 / WHEEL_STEP_MAX], [prWords.zoomIn, WHEEL_STEP_MAX], [prWords.zoomFit, 0]].map(function (zoom) {
+      return [[zoomWords.zoomOut, 1 / WHEEL_STEP_MAX], [zoomWords.zoomIn, WHEEL_STEP_MAX], [zoomWords.zoomFit, 0]].map(function (zoom) {
         return actionButton(zoom[0], function () { zoomTo(scale * zoom[1], viewerFrame.clientWidth / 2, viewerFrame.clientHeight / 2); });
       });
     }
@@ -2188,27 +2345,31 @@
       walkStops = [];
       historyBox.replaceChildren();
       finalHost.replaceChildren();
+      // The kind is set before the cards are built: a card's saver reads it to decide whether its answers carry a revision.
+      sheetKind = sheet.kind;
       items = sheet.cards.map(function (card, index) {
         const article = buildCard(card);
-        fragment.appendChild(article);
+        if (sheet.kind !== "index") fragment.appendChild(article);
         return { id: card.id, question: card.question, options: card.options, article: article, row: actionButton("", function () { openAt(index); }) };
       });
-      sheetKind = sheet.kind;
       onePage = onePageKind(sheetKind);
       sheetPage.className = onePage ? "sheet-page is-pr" : "sheet-page";
-      prNumber = onePage ? sheet.prSheet.number : 0;
+      prNumber = revisedKind(sheetKind) ? sheet.prSheet.number : 0;
+      indexRows = sheetKind === "index" ? sheet.index.rows : [];
       viewerZoom.replaceChildren(...(onePage ? zoomButtons() : []));
-      footerHost.replaceChildren(...(onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
+      footerHost.replaceChildren(...(sheetKind === "index" ? [textElement("p", "sh-caption", indexWords.done)] : onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
       openIndex = 0;
       expanded = false;
       whyHeading.textContent = "Why only these " + sheet.cards.length;
       whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
       if (sheetKind === "final") buildFinal(sheet.final);
-      if (onePage) finalHost.replaceChildren(...prTail(sheet.prSheet));
+      if (revisedKind(sheetKind)) finalHost.replaceChildren(...prTail(sheet.prSheet));
       itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
-      cardsHost.replaceChildren(...(onePage ? prHead(sheet.prSheet, sheet.cards.length > 0) : []), fragment);
+      cardsHost.replaceChildren(...(sheetKind === "index"
+        ? [buildIndexBlocks(items.map(function (item) { return item.article; })), ...buildIndexGroups(sheet.index.rows)]
+        : [...(revisedKind(sheetKind) ? prHead(sheet.prSheet, sheet.cards.length > 0) : []), fragment]));
       status.hidden = true;
       refreshSheet();
     }
@@ -2241,13 +2402,15 @@
       controller.restore(data);
     }
 
-    // The last card's saved verdict puts its pick and note back, and counts as nothing on the sheet. Only this
-    // revision's own document is looked at (the one under its digest, and only when its own sheet field says
+    // The last card's saved verdict puts its pick and note back, and counts as nothing on the sheet. It is applied after the answers
+    // are, because a Merge is judged against them. Only this revision's own document is looked at (the one under its digest, and only when its own sheet field says
     // the same): another revision's document is never read, so nothing of it is restored.
     function applyVerdict(verdicts) {
       if (verdictController === null) return;
       const stored = documentData(verdicts.docs.find(function (doc) { return doc.id === sheetDigest; }));
-      if (stored !== null && typeof stored.sheet === "string" && stored.sheet === sheetDigest) verdictController.restore(stored);
+      if (stored === null || typeof stored.sheet !== "string" || stored.sheet !== sheetDigest) return;
+      // A Merge stands only on the answers it was given for, which are the ones the cards were just restored with; any other restores cleared, with its note, and nothing is written.
+      verdictController.restore(revisedKind(sheetKind) && stored.verdict === "merge" && !coversHold(stored.covers) ? { ...stored, verdict: null } : stored);
     }
 
     // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
@@ -2408,22 +2571,24 @@
         words = await withDeadline(function () { return fetchJson("sheet-words.json", "The sheet's wording file"); });
       } catch (problems) {
         wordsProblem = Array.isArray(problems) ? problems.join(" ") : problems === DEADLINE ? "The sheet's wording file did not answer in time." : "The sheet's wording file could not be loaded.";
-        // A final sheet, a pr sheet and a stack sheet can't be drawn without their words; any other sheet is drawn with its answer controls off.
-        if (verdictKind(sheet.kind)) {
+        // A final sheet, a pr sheet, a stack sheet and the index can't be drawn without their words; any other sheet is drawn with its answer controls off.
+        if (verdictKind(sheet.kind) || sheet.kind === "index") {
           showErrors([wordsProblem]);
           return;
         }
       }
-      if (onePageKind(sheet.kind) && !hasPrWords(words)) {
+      if ((revisedKind(sheet.kind) && !hasPrWords(words)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
         showErrors(["The sheet's wording file lacks words this sheet needs."]);
         return;
       }
       if (verdictKind(sheet.kind)) finalWords = words;
-      prWords = onePageKind(sheet.kind) ? words.pr : null;
+      prWords = revisedKind(sheet.kind) ? words.pr : null;
+      zoomWords = onePageKind(sheet.kind) ? words.pr : null;
+      indexWords = sheet.kind === "index" ? words.index : null;
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
       const wordsFile = isObject(words) ? words : {};
-      // A pr sheet and a stack sheet offer the prAnswers block; every other kind offers the answers block.
-      answerWords = (onePageKind(sheet.kind) ? wordsFile.prAnswers : wordsFile.answers) || null;
+      // A pr sheet and a stack sheet offer the prAnswers block; every other kind, the index too, offers the answers block.
+      answerWords = (revisedKind(sheet.kind) ? wordsFile.prAnswers : wordsFile.answers) || null;
       knownLabels = Object.assign({}, ...[wordsFile.answers, wordsFile.prAnswers].map(function (block) {
         return isObject(block) && isObject(block.labels) ? block.labels : {};
       }));
