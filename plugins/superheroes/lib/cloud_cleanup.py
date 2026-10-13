@@ -1,12 +1,14 @@
 """The advisor's cleanup after a cloud lane ends: the archive request to its builder and the PR's branch.
 
   cloud_cleanup.py plan   --repo-root D --repo O/N --pr P [--launch-id ID]
-  cloud_cleanup.py record --repo-root D --repo O/N --pr P --msg-id ID --outcome delivered|uncertain|failed [--launch-id ID]
+  cloud_cleanup.py record --repo-root D --repo O/N --pr P --msg-id ID --outcome pending|delivered|uncertain|failed [--launch-id ID]
   cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--remote URL] [--launch-id ID]
 
 A plan whose request is already `delivered` carries `archiveText: null` and `alreadyDelivered: true`: the
 caller sends nothing, and goes on to `branch`. A `--launch-id` given to `plan` is given again to `record`
-and `branch`, so all three act on the one lane.
+and `branch`, so all three act on the one lane. The caller records `pending` before it sends; a later
+`delivered`, `uncertain` or `failed` for the same msg id replaces it. A `pending` or `uncertain` request
+found on resume is never sent a second time on its own.
 
 Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
@@ -31,7 +33,7 @@ import urllib.parse
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_NAME = "cloud-cleanup.json"
-OUTCOMES = ("delivered", "uncertain", "failed")
+OUTCOMES = ("pending", "delivered", "uncertain", "failed")
 ARCHIVE_TEXT_MERGED = (
     "Pull request #%d is merged, so this build is finished. Archive your own session now with your "
     "session tool. If you have no tool that archives a session, post one line on your issue naming "
@@ -172,6 +174,16 @@ def _name(node, *keys):
     return node if isinstance(node, str) and node else None
 
 
+def _epoch(stamp):
+    """Epoch seconds of an ISO-8601 `created_at`; None when it is missing or not a timestamp."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def _plan(repo_root, repo, pr, launch_id, env, run):
     """(result, facts): the plan, and the PR facts the branch step reads. `facts` is None unless the
     plan is a cleanup."""
@@ -185,6 +197,9 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     if pull["state"] == "open":
         return {"ok": True, "action": "none", "reason": "pr-open"}, None
     outcome = "merged" if pull.get("merged") is True else "closed"
+    opened = _epoch(pull.get("created_at"))
+    if opened is None:
+        return _refusal("pr-unreadable"), None
     cp = _sib("cloud_parked")
     issues = cp._linked_issues(pull.get("body"), repo)
     if not issues:
@@ -194,7 +209,8 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         if found[0][2] is None and found[0][1] and found[0][1].get("issue") not in issues:
             return _refusal("lane-mismatch"), None
     else:
-        found = [cp._lane(repo_root, [issue], env) for issue in issues]
+        # axis: a lane reserved after the PR was opened cannot have built it, so the newest lane at or before the open — see bite-proof record c8_cloud_cleanup
+        found = [cp._lane(repo_root, [issue], env, reserved_by=opened) for issue in issues]
     for _, _, reason in found:
         if reason:
             return _refusal(reason), None
@@ -259,7 +275,7 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     old = next((r for r in receipts if (r["repo"], r["pr"], r["session"]) == key), None)
     if old is not None and old["outcome"] == "delivered":
         return {"ok": True, "already": True, "request": old, "ownerMessage": texts[got["outcome"]] % number}
-    if old is not None and old["outcome"] == "uncertain" and old["msgId"] != msg_id:
+    if old is not None and old["outcome"] in ("pending", "uncertain") and old["msgId"] != msg_id:
         return _refusal("request-uncertain")
     receipt = {"repo": repo, "pr": number, "session": got["session"], "msgId": msg_id, "outcome": outcome,
                "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}

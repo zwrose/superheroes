@@ -216,13 +216,18 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    for both. Never while the pull request is open, whether the builder handed back or parked: the
    pushed branch stays for the vet, a renewed review or a recovery.
 2. **Plan, then ask.** Run `python3 -B <plugin root>/lib/cloud_cleanup.py plan --repo-root <root>
-   --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup`, send its `archiveText` to the
-   lane's session: on the same account by `SendMessage`, on another account through the relay exactly
-   as the steps in `skills/showrunner/reference/wave-watch.md` § Answering a builder note say
-   (`ensure`, `compose`, send, `check`). Then run `cloud_cleanup.py record --repo-root <root> --repo
-   <owner/name> --pr <number> --msg-id <id> --outcome <outcome>`, where the outcome is `delivered`,
-   `uncertain` when the check could not confirm the text arrived, or `failed` when nothing can have
-   reached the builder. After `uncertain` the request is never sent a second time.
+   --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup` with `alreadyDelivered`, send
+   nothing and go to the branch step. On any other `cleanup`, first persist the attempt: run
+   `cloud_cleanup.py record --repo-root <root> --repo <owner/name> --pr <number> --msg-id <id>
+   --outcome pending`, with the message id you will send under. Only then send the plan's
+   `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
+   through the relay exactly as the steps in `skills/showrunner/reference/wave-watch.md` § Answering a
+   builder note say (`ensure`, `compose`, send, `check`). Then run `record` with the same message id and
+   the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
+   when nothing can have reached the builder. When `plan` was run with `--launch-id`, pass the same
+   `--launch-id` to every `record` and to `branch`. A plan whose `request` is already `pending` or
+   `uncertain` is a resume after an unconfirmed send: send nothing, record `uncertain` for that
+   request's message id, and go on. A request in either state is never sent a second time.
 3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other
    outcome, tell the owner that the archive request to that build's session could not be confirmed
    and that its session stays listed. Ask nothing of the owner: the only step the owner is ever asked

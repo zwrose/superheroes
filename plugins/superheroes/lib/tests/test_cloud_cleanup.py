@@ -24,7 +24,6 @@ REPO = "owner/name"
 BATCH = "b-cleanup"
 PR = 412
 BRANCH = "feature"
-OWNER_MERGED_412 = "#412 is merged. I've asked its cloud builder to archive itself. You'll get one prompt for it: tap Allow once."
 IDENT = ["-c", "user.name=t", "-c", "user.email=t@t"]
 
 
@@ -77,10 +76,12 @@ class Gh:
         return SimpleNamespace(returncode=0, stdout=json.dumps({"object": {"sha": sha}}), stderr="")
 
 
-def _pull(issues=(101,), state="closed", merged=True, head_sha=None, head_repo=REPO, ref=BRANCH):
+def _pull(issues=(101,), state="closed", merged=True, head_sha=None, head_repo=REPO, ref=BRANCH,
+          created_at="2100-01-01T00:00:00Z"):
     body = "Closes " + ", closes ".join("#%d" % i for i in issues) + "\n\nthe work" if issues else "the work"
     head = {"ref": ref, "sha": head_sha, "repo": {"full_name": head_repo} if head_repo else None}
-    return {"state": state, "merged": merged, "merged_at": "2026-10-12T10:00:00Z" if merged else None, "body": body,
+    return {"state": state, "merged": merged, "merged_at": "2026-10-12T10:00:00Z" if merged else None, "created_at": created_at,
+            "body": body,
             "head": head, "base": {"ref": "main", "repo": {"full_name": REPO}}}
 
 
@@ -112,8 +113,10 @@ def w(tmp_path, monkeypatch):
     return SimpleNamespace(repo=repo, env=env, gh=gh, bare=bare, work=work, head=head, remote=str(bare))
 
 
-def _lane(w, launch_id, issue, session="session-a", place="cloud", outcome=None):
+def _lane(w, launch_id, issue, session="session-a", place="cloud", outcome=None, ts=None):
     extra = {"place": "cloud", "cloudEnvironment": "env-fixture-one", "pluginVersion": "1.2.3"} if place == "cloud" else {}
+    if ts is not None:
+        extra["ts"] = ts
     got = ll.reserve(w.repo, _reserved(launch_id, BATCH, [launch_id], w.repo, issue=issue, **extra), env=w.env)
     assert got["ok"], got
     if session is not None:
@@ -302,13 +305,49 @@ def test_a_lane_without_a_session_name_is_unknown_and_the_plan_carries_the_lane_
 
 
 def test_the_plan_carries_the_lanes_facts_and_the_newest_cloud_lane_of_the_issue(w):
-    _lane(w, "l-1", 101, session="session-one", outcome="handback")
-    _lane(w, "l-2", 101, session="session-two")
+    _lane(w, "l-1", 101, session="session-one", outcome="handback", ts=_T1)
+    _lane(w, "l-2", 101, session="session-two", ts=_T2)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at="2023-11-17T00:00:00Z")  # opened after both lanes
     got = _plan(w)
     assert got == {"ok": True, "action": "cleanup", "outcome": "merged", "repo": REPO, "pr": PR, "issue": 101,
                    "launchId": "l-2", "session": "session-two", "sessionId": "session_01AbCdEf123", "configDir": None,
                    "archiveText": CC.ARCHIVE_TEXT_MERGED % PR, "request": {"state": "none"}, "branch": BRANCH,
                    "headSha": w.head}
+
+
+_T1, _T2, _OPENED = 1_700_000_000, 1_700_100_000, "2023-11-15T00:00:00Z"  # _OPENED is between them
+
+
+def test_an_older_pr_is_not_bound_to_a_lane_reserved_after_it_was_opened(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="handback", ts=_T1)
+    _lane(w, "l-2", 101, session="session-two", ts=_T2)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    got = _plan(w)
+    assert got["ok"] and got["session"] == "session-one" and got["launchId"] == "l-1"
+    assert got.get("session") != "session-two"
+    recorded = _record(w, "m-1", "delivered")
+    assert recorded["ok"] and recorded["request"]["session"] == "session-one"
+
+
+def test_a_pr_opened_before_every_lane_of_its_issue_has_no_cloud_lane(w):
+    _lane(w, "l-2", 101, session="session-two", ts=_T2)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}
+
+
+def test_an_explicit_launch_id_wins_over_the_pr_open_time(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="handback", ts=_T1)
+    _lane(w, "l-2", 101, session="session-two", ts=_T2)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    got = _plan(w, launch_id="l-2")
+    assert got["ok"] and got["session"] == "session-two"
+
+
+def test_a_pr_without_a_readable_open_time_is_unreadable(w):
+    _lane(w, "l-1", 101)
+    for bad in (None, "yesterday", 5):
+        w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=bad)
+        assert _plan(w) == {"ok": False, "reason": "pr-unreadable"}
 
 
 def test_an_argument_that_is_not_a_repository_or_a_pull_request_is_refused(w):
@@ -323,8 +362,8 @@ def test_an_argument_that_is_not_a_repository_or_a_pull_request_is_refused(w):
 def test_a_delivered_request_gives_the_owner_the_boards_words_and_is_never_overwritten(w):
     _lane(w, "l-1", 101)
     first = _record(w, "m-1", "delivered")
-    assert first["ok"] and first["ownerMessage"] == OWNER_MERGED_412
-    assert set(first["request"]) == {"repo", "pr", "session", "msgId", "outcome", "at"}
+    assert first["ok"] and first["ownerMessage"] == CC.OWNER_MESSAGE_MERGED % PR
+    assert set(first["request"]) == set(CC._RECEIPT_KEYS)
     assert (first["request"]["session"], first["request"]["msgId"], first["request"]["outcome"]) == ("session-a", "m-1", "delivered")
     second = _record(w, "m-2", "delivered")
     assert second["ok"] and second["already"] is True and second["request"]["msgId"] == "m-1"
@@ -356,8 +395,7 @@ def test_a_closed_pr_gets_the_closed_owner_message(w):
     _lane(w, "l-1", 101)
     w.gh.pulls[PR] = _pull(merged=False, head_sha=w.head)
     got = _record(w, "m-1", "delivered")
-    assert got["ownerMessage"] == ("#412 is closed. I've asked its cloud builder to archive itself. "
-                                   "You'll get one prompt for it: tap Allow once.")
+    assert got["ownerMessage"] == CC.OWNER_MESSAGE_CLOSED % PR
 
 
 def test_record_refuses_bad_arguments_and_an_unreadable_state_file_is_never_reset(w):
@@ -391,7 +429,9 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
 
 
 def test_the_owner_message_is_the_boards_words_byte_for_byte():
-    assert CC.OWNER_MESSAGE_MERGED % 412 == OWNER_MERGED_412
+    # the board's owner-approved text is an external contract, so it is the one literal pinned here
+    assert CC.OWNER_MESSAGE_MERGED % 412 == ("#412 is merged. I've asked its cloud builder to archive itself. "
+                                             "You'll get one prompt for it: tap Allow once.")
 
 
 # ---------------------------------------------------------------- review round 1
@@ -429,3 +469,25 @@ def test_a_push_destination_other_than_the_checked_repository_is_refused_before_
     assert BRANCH in _remote_branches(w)
     w.gh.push_url = "https://github.com/Owner/Name"
     assert _branch(w)["deleted"] is True
+
+
+def test_a_pending_request_is_written_before_the_send_and_replaced_by_the_outcome_of_the_same_message(w):
+    _lane(w, "l-1", 101)
+    pending = _record(w, "m-1", "pending")
+    assert pending["ok"] and pending["ownerMessage"] is None and pending["request"]["outcome"] == "pending"
+    assert _plan(w)["request"] == pending["request"]
+    done = _record(w, "m-1", "delivered")
+    assert done["ok"] and done["ownerMessage"] == CC.OWNER_MESSAGE_MERGED % PR
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "delivered")]
+
+
+def test_a_pending_request_found_on_resume_is_never_replaced_by_another_message(w):
+    _lane(w, "l-1", 101)
+    assert _record(w, "m-1", "pending")["ok"]
+    assert _record(w, "m-2", "pending") == {"ok": False, "reason": "request-uncertain"}
+    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-uncertain"}
+    settled = _record(w, "m-1", "uncertain")
+    assert settled["ok"] and settled["request"]["outcome"] == "uncertain"
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "uncertain")]
