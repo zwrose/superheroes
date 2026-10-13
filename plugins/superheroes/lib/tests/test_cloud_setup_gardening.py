@@ -131,13 +131,25 @@ def test_the_cli_refuses_a_missing_or_non_positive_next_pass_days(w, capsys):
 
 def test_a_failed_check_marker_makes_the_saved_date_stale_and_is_not_a_record(w):
     _record(w, ACCOUNT, "2026-10-25")
-    marker = CS.record_path(w[0], ACCOUNT, w[1])[:-len(".json")] + ".failed-check.json"
+    import cloud_check
+    marker = cloud_check.failed_check_path(w[0], ACCOUNT, w[1])
     with open(marker, "w", encoding="utf-8") as fh:
         json.dump({"schema": "cloud-check-failed/1", "account": ACCOUNT, "failedParts": ["reviewer"]}, fh)
     [got] = _lines(w)
     assert got["account"] == ACCOUNT and got["mark"] == "Renew now"
     assert "last reviewer check failed" in got["line"] and "Nothing to do" not in got["line"]
     assert RENEW in got["line"]
+
+
+def test_a_failed_check_marker_without_a_reviewer_failure_names_its_parts_and_does_not_ask_for_renewal(w):
+    import cloud_check
+    _record(w, ACCOUNT, "2026-10-25")
+    with open(cloud_check.failed_check_path(w[0], ACCOUNT, w[1]), "w", encoding="utf-8") as fh:
+        json.dump({"schema": "cloud-check-failed/1", "account": ACCOUNT, "failedParts": ["version"]}, fh)
+    [got] = _lines(w)
+    assert got["mark"] is None
+    assert "failed on version" in got["line"] and "run the setup check again" in got["line"].lower()
+    assert "renew" not in got["line"].lower() and "reviewer check failed" not in got["line"]
 
 
 def test_an_unreadable_setup_directory_is_one_unreadable_line(w, monkeypatch):

@@ -20,7 +20,9 @@ The cleanup acts only on a cloud lane whose PR is merged or closed, bound unambi
 and never deletes a ref that is not exactly the PR's recorded head, that another open PR uses as head
 or base, or that is the default branch. An open PR gets nothing: no message, no deletion, no receipt.
 The branch is deleted by pushing to the URL built from the repository every check read
-(`https://<GH_HOST or github.com>/<owner>/<name>.git`); no configured remote or push URL is consulted.
+(`https://<GH_HOST or github.com>/<owner>/<name>.git`); no configured remote or push URL is consulted,
+and the push is refused (`push-destination-rewritten`) when git's own URL rewriting would send it
+to any other host or repository.
 """
 import argparse
 import datetime
@@ -362,6 +364,41 @@ def _push_url(repo, env):
     return "https://%s/%s.git" % (env.get("GH_HOST") or "github.com", repo)
 
 
+def _git_read(runner, repo_root, args, env):
+    """(exit code, stdout) of one read-only git call; (None, "") when it could not run."""
+    try:
+        proc = runner(["git", "-C", repo_root] + list(args), capture_output=True, text=True, timeout=_GIT_TIMEOUT,
+                      env={k: v for k, v in env.items() if not k.startswith("GIT_")})
+    except Exception:
+        return None, ""
+    out = getattr(proc, "stdout", "")
+    code = getattr(proc, "returncode", None)
+    return (code if isinstance(code, int) else None), (out if isinstance(out, str) else "")
+
+
+def _push_destination_kept(repo_root, url, env, run):
+    """True only when a push to ``url`` goes to that same host and repository after git's own URL
+    rewriting (`insteadOf`, `pushInsteadOf`); False when it is rewritten elsewhere or cannot be told."""
+    store_core = _sib("store_core")
+    runner = subprocess.run if run is None else run
+    code, out = _git_read(runner, repo_root, ["ls-remote", "--get-url", url], env)
+    if code != 0:
+        return False
+    resolved, built = store_core.normalize_remote(out.strip()), store_core.normalize_remote(url)
+    if not resolved or not built or resolved.lower() != built.lower():
+        return False
+    code, out = _git_read(runner, repo_root, ["config", "--get-regexp", r"^url\..*\.pushinsteadof$"], env)
+    if code == 1:
+        return True
+    if code != 0:
+        return False
+    for line in out.splitlines():
+        prefix = line.partition(" ")[2].strip()
+        if prefix and url.startswith(prefix):
+            return False
+    return True
+
+
 def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
     """Delete the merged or closed PR's head branch, only while it is exactly the PR's recorded head."""
     env = os.environ if env is None else env
@@ -397,9 +434,13 @@ def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
         # A ref deletion guarded by a lease, never a history rewrite: the server applies it only while the
         # ref still equals the PR's head sha.
         # axis: the lease makes the delete lose to a push that lands after the read above — see bite-proof record c8_cloud_cleanup
+        url = _push_url(repo, env)
+        # axis: git's own URL rewriting never sends the delete to a repository the checks did not read
+        if not _push_destination_kept(repo_root, url, env, run):
+            return _refusal("push-destination-rewritten")
         argv = ["git", "-C", repo_root, "push", "--porcelain",
                 "--force-with-lease=refs/heads/%s:%s" % (name, head_sha),
-                _push_url(repo, env), ":refs/heads/%s" % name]
+                url, ":refs/heads/%s" % name]
         runner = subprocess.run if run is None else run
         try:
             proc = runner(argv, capture_output=True, text=True, timeout=_GIT_TIMEOUT,

@@ -345,8 +345,9 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
     directory = os.path.dirname(record_path(cwd, "x", root))
     # a failed-check marker sits beside its record and is not a record
     try:
+        import cloud_check  # lazy: cloud_check imports this module
         names = sorted(n for n in os.listdir(directory)
-                       if n.endswith(".json") and not n.endswith(".failed-check.json"))
+                       if n.endswith(".json") and not n.endswith(cloud_check.FAILED_CHECK_SUFFIX))
     except FileNotFoundError:
         return []
     except OSError:
@@ -361,12 +362,18 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
         try:
             with open(os.path.join(directory, name), encoding="utf-8") as fh:
                 account = json.load(fh)["account"]
-            import cloud_check  # lazy: cloud_check imports this module
             # axis: a failed or unreadable check marker makes the saved lapse date stale, as cloud_parked reads it
-            if cloud_check.read_failed_check(cwd, account, root) is not None:
-                lines.append({"account": account, "mark": "Renew now", "line":
-                              "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
-                              "Run the pass command and paste the new pass into the environment."})
+            marker = cloud_check.read_failed_check(cwd, account, root)
+            if marker is not None:
+                parts = [p for p in (marker.get("failedParts") or []) if isinstance(p, str)]
+                if marker.get("damaged") or not parts or "reviewer" in parts:
+                    lines.append({"account": account, "mark": "Renew now", "line":
+                                  "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
+                                  "Run the pass command and paste the new pass into the environment."})
+                else:
+                    lines.append({"account": account, "mark": None, "line":
+                                  "Cloud reviewer pass: the last cloud check failed on %s, so cloud builds stay off "
+                                  "until a check passes. Run the setup check again." % ", ".join(parts)})
                 continue
             got = read(cwd, account, root)
             record = got["record"] if got["state"] == "ready" else None

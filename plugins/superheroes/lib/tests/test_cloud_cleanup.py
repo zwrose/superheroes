@@ -40,6 +40,7 @@ class Gh:
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
         self.pushes = []
+        self.resolved, self.push_rewrites = None, ""
 
     def _live(self, branch):
         got = subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", "refs/heads/" + branch],
@@ -48,6 +49,12 @@ class Gh:
 
     def __call__(self, argv, **kw):
         if argv[0] == "git":
+            # git's own rewriting is answered here: the fixture's insteadOf points the built URL at the local bare
+            # repository so the real push lands, while the guard is told what a real remote would resolve to
+            if "ls-remote" in argv:
+                return SimpleNamespace(returncode=0, stdout=(argv[-1] if self.resolved is None else self.resolved) + "\n", stderr="")
+            if "--get-regexp" in argv:
+                return SimpleNamespace(returncode=0 if self.push_rewrites else 1, stdout=self.push_rewrites, stderr="")
             if "push" in argv:
                 self.pushes.append(list(argv))
             return subprocess.run(argv, **kw)
@@ -185,6 +192,36 @@ def test_a_merged_pr_whose_branch_the_repository_kept_is_deleted_and_the_listing
     assert out == {"ok": True, "action": "cleanup", "branch": BRANCH, "deleted": True, "already": None,
                    "listing": ["main"]}
     assert _remote_branches(w) == ["main"]
+
+
+@pytest.mark.parametrize("resolved", ["https://github.com/owner/mirror.git", "https://example.com/owner/name.git",
+                                      "  ", "not a url"])
+def test_a_url_rewrite_to_another_repository_refuses_before_the_push_and_keeps_the_branch(w, resolved):
+    _lane(w, "l-1", 101)
+    w.gh.resolved = resolved
+    assert _branch(w) == {"ok": False, "reason": "push-destination-rewritten"}
+    assert w.gh.pushes == [] and BRANCH in _remote_branches(w)
+
+
+@pytest.mark.parametrize("resolved", ["git@github.com:Owner/Name.git", "ssh://git@github.com/owner/name"])
+def test_a_rewrite_to_the_same_repository_over_ssh_is_the_same_destination(w, resolved):
+    _lane(w, "l-1", 101)
+    w.gh.resolved = resolved
+    assert _branch(w)["deleted"] is True
+    assert len(w.gh.pushes) == 1 and _remote_branches(w) == ["main"]
+
+
+def test_a_push_insteadof_prefix_matching_the_built_url_refuses_before_the_push(w):
+    _lane(w, "l-1", 101)
+    w.gh.push_rewrites = "url.https://github.com/owner/mirror.git.pushinsteadof https://github.com/owner/name.git\n"
+    assert _branch(w) == {"ok": False, "reason": "push-destination-rewritten"}
+    assert w.gh.pushes == [] and BRANCH in _remote_branches(w)
+
+
+def test_a_push_insteadof_prefix_that_does_not_match_the_built_url_lets_the_delete_go(w):
+    _lane(w, "l-1", 101)
+    w.gh.push_rewrites = "url.ssh://x/.pushinsteadof https://github.com/other/\n"
+    assert _branch(w)["deleted"] is True
 
 
 def test_a_branch_the_repository_already_deleted_is_a_success_that_deletes_nothing(w):
