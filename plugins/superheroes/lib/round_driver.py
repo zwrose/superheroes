@@ -2844,12 +2844,17 @@ def _latest_emission_attempt(state, session_dir, phase):
 
 
 def _emission_unverifiable(state, session_dir, phase):
-    """True when this round's ``phase`` dispatch recorded an emission anchor but its orders manifest
-    cannot be read or does not verify against it: the dispatch record is lost, so nothing it
-    ordered can be authenticated (fail closed — never a fallback to the live selection)."""
+    """The reason (truthy) when this round's ``phase`` dispatch recorded an emission anchor but its orders
+    manifest is unreadable, unverified, or names several vendors: nothing it ordered can be
+    authenticated (fail closed — never a fallback to the live selection)."""
     best = _latest_emission_attempt(state, session_dir, phase)
-    return best is not None and _anchored_orders_manifest(
-        state, session_dir, state.get("round"), phase, best) is None
+    if best is None:
+        return None
+    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best)
+    seats = manifest.get("seats") if isinstance(manifest, dict) else None
+    if len({e.get("vendor") for e in seats.values() if isinstance(e, dict)} if isinstance(seats, dict) else ()) > 1:
+        return "emission-manifest-mixed-vendors"  # one phase, several vendors: no single vendor to bind
+    return "emission-manifest-unverifiable" if manifest is None else None
 
 
 def _recorded_phase_vendor(state, session_dir, phase):
@@ -2898,12 +2903,12 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # unproven family and folds like silence.
     selected, source = _nonpanel_selection(state, session_dir)
     barred = receipt_disclosures.nonpanel_barred(state, config)
-    if selected is not None and verdicts and _emission_unverifiable(state, session_dir, P_VERIFIERS):
-        # The dispatch anchored an emission but its manifest is unreadable or tampered: the vendor
-        # it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
+    unverifiable = _emission_unverifiable(state, session_dir, P_VERIFIERS)
+    if selected is not None and verdicts and unverifiable:
+        # The dispatch anchored an emission but its manifest is unreadable, tampered or mixed: the
+        # vendor it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
         _record_round_append(state, "verifierProvenance", {
-            "expected": selected, "ran": None, "outcome": "verdicts-ignored",
-            "reason": "emission-manifest-unverifiable"})
+            "expected": selected, "ran": None, "outcome": "verdicts-ignored", "reason": unverifiable})
         verdicts = []
     # The dispatch recorded its vendor at emission; a preference edited while the verifiers ran must
     # not re-judge them against a selection nobody dispatched.
@@ -8097,9 +8102,11 @@ def _finder_hand_claim_fault(state, session_dir, phase, artifact):
     recorded at emission (the live selection when none was recorded), is required when the
     selection replaced the reviewer engine, and must pass the shared eligibility bar. An emission
     whose manifest no longer verifies authenticates nothing."""
-    if _emission_unverifiable(state, session_dir, phase):
-        return "%s dispatch recorded an emission whose orders manifest does not verify; the " \
-               "vendor it ordered is unknown, so no submitted artifact can be authenticated" % phase
+    unverifiable = _emission_unverifiable(state, session_dir, phase)
+    if unverifiable:
+        return "%s dispatch recorded an emission whose orders manifest does not verify (%s); the " \
+               "vendor it ordered is unknown, so no submitted artifact can be authenticated" \
+               % (phase, unverifiable)
     selected, source = _nonpanel_selection(state, session_dir)
     expected = _recorded_phase_vendor(state, session_dir, phase) or selected
     if expected is None:

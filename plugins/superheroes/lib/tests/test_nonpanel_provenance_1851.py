@@ -133,8 +133,7 @@ def test_t1_hand_finder_claim_other_than_recorded_is_refused(tmp_path, phase, se
                                        {"findings": [], "reviewerVendor": "codex"}) is None
 
 
-@pytest.mark.parametrize("phase", [RD.P_GAPSWEEP, RD.P_SCOPED])
-def test_t1_library_finder_reporting_another_vendor_parks(phase):
+def test_t1_library_finder_reporting_another_vendor_is_unauthenticated():
     state = _state()
     assert RD._nonpanel_selection(state)[0] == "codex"
     assert RD._library_finder_unauthenticated(state, "cursor") is True
@@ -229,6 +228,33 @@ def test_t2_library_gap_sweep_positive_control_selected_vendor_folds():
     assert calls >= 1 and not _parked(state) and state.get("terminal") != "cannot-certify"
 
 
+@pytest.mark.parametrize("vendor,parks", [("cursor", True), ("codex", False)])
+def test_t2_library_scoped_finder_that_does_not_authenticate_parks_the_loop(vendor, parks):
+    # axis: the run_loop guard covers the scoped finder too, not only the gap sweep (P9)
+    calls = {"scoped": 0}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if dim == "scoped-finder":
+            calls["scoped"] += 1
+            return {"findings": [], "vendor": vendor}
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+        return []
+
+    def fix_step(batch, rnd, payload):
+        return {"fixes": [], "headDiff": TRD.HEAD_NEW_SURFACE, "changedSubjects": ["Code"]}
+
+    _result, state = TRD._run_loop_capturing_state(
+        TRD._seams(reviewer=reviewer, fix_step=fix_step), TRD._cfg_cert())
+    assert calls["scoped"] >= 1
+    reason = str((state.get("certification") or {}).get("reason"))
+    assert (state.get("terminal") == "cannot-certify"
+            and reason.startswith("nonpanel-finder-unauthenticated:%s" % RD.P_SCOPED)) is parks, \
+        (state.get("terminal"), reason)
+    if parks:
+        assert calls["scoped"] == 1
+
+
 def test_t2_library_unseatable_selection_parks():
     state = _state(makers=["openai", "xai"])
     assert RD._nonpanel_selection(state) == (None, None)
@@ -312,9 +338,20 @@ def test_t3_recorded_claim_requirement_survives_a_preference_edit(tmp_path, monk
     RR.atomic_write_json(RD._orders_manifest_path(str(tmp_path), state["round"], phase, 0), manifest)
     state["_ordersAnchors"][RD._anchor_key(state["round"], phase, 0)] = {
         "manifestSha256": RR.sha256_text(RR.canonical(manifest))}
-    monkeypatch.setattr(RD, "_nonpanel_replaced", lambda *_a, **_k: False)  # the edited preference is codex
+    # the preference is edited: codex is now the configured reviewer, so nothing is replaced
+    monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda _root: ("codex", RD.VENDOR_SOURCE_CONFIGURED))
+    assert RD._nonpanel_selection(state, str(tmp_path)) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
+    assert not RD._nonpanel_replaced(state, "codex", str(tmp_path))
     fault = RD._finder_hand_claim_fault(state, str(tmp_path), phase, {"findings": []})
     assert fault is not None and "carries no `reviewerVendor`" in fault, fault
+    assert RD._finder_hand_claim_fault(state, str(tmp_path), phase,
+                                       {"findings": [], "reviewerVendor": "codex"}) is None
+    # control: an anchored manifest without `claimRequired` accepts the missing claim
+    manifest.pop("claimRequired")
+    RR.atomic_write_json(RD._orders_manifest_path(str(tmp_path), state["round"], phase, 0), manifest)
+    state["_ordersAnchors"][RD._anchor_key(state["round"], phase, 0)] = {
+        "manifestSha256": RR.sha256_text(RR.canonical(manifest))}
+    assert RD._finder_hand_claim_fault(state, str(tmp_path), phase, {"findings": []}) is None
 
 
 @pytest.mark.parametrize("artifact", [None, []])
@@ -436,3 +473,63 @@ def test_unauthenticated_library_finder_findings_are_retained_unverified():
     assert "expected=codex" in state["certification"]["reason"] and "reported=claude" in state["certification"]["reason"]
     kept = [f for f in state["findings"] if f.get("title") == "real defect"]
     assert len(kept) == 1 and kept[0]["unverified"] is True
+
+
+# --- review round 2 fixes: authenticated duplicates stay ambiguous; a mixed manifest binds nothing ---------
+
+def _mixed_emit(state, session_dir, phase):
+    """An anchored, hash-valid manifest whose seats name codex and cursor (a preference edited mid-emission)."""
+    manifest = _emit(state, session_dir, phase, "codex")
+    path = RD._orders_manifest_path(str(session_dir), state["round"], phase, 0)
+    manifest["seats"]["extra#0"] = {"vendor": "cursor", "channel": "stdout"}
+    RR.atomic_write_json(path, manifest)
+    state["_ordersAnchors"][RD._anchor_key(state["round"], phase, 0)] = {
+        "manifestSha256": RR.sha256_text(RR.canonical(manifest))}
+
+
+def test_mixed_manifest_verifier_verdicts_fold_as_silence(tmp_path):
+    state = _state()
+    _mixed_emit(state, tmp_path, RD.P_VERIFIERS)
+    assert RD._emission_unverifiable(state, str(tmp_path), RD.P_VERIFIERS) == "emission-manifest-mixed-vendors"
+    for ran in ("codex", "cursor"):  # neither the ordered nor the live vendor is authenticated
+        state_i = _state()
+        _mixed_emit(state_i, tmp_path, RD.P_VERIFIERS)
+        row, unverified = _fold(state_i, tmp_path, _seat_artifact(state_i, ran))
+        assert row == {"expected": "codex", "ran": None, "outcome": "verdicts-ignored",
+                       "reason": "emission-manifest-mixed-vendors"}
+        assert unverified == 1 and not state_i["rounds"]["1"]["verify"]["drops"]
+
+
+@pytest.mark.parametrize("phase,seat", FINDERS)
+def test_mixed_manifest_hand_finder_claim_is_refused(tmp_path, phase, seat):
+    state = _state()
+    _mixed_emit(state, tmp_path, phase)
+    for vendor in ("codex", "cursor"):
+        fault = RD._finder_hand_claim_fault(state, str(tmp_path), phase,
+                                            {"findings": [], "reviewerVendor": vendor})
+        assert fault is not None and "emission-manifest-mixed-vendors" in fault, fault
+
+
+def test_authenticated_seats_repeating_an_id_keep_both_verdicts_for_the_ambiguity_rule():
+    # axis: the adapter drops only unproven repeats; two codex seats that disagree stay ambiguous
+    state = _state()
+    state["_toVerify"] = [{"file": "a.py", "line": 1, "title": "defect", "severity": "Important"},
+                          {"file": "z.py", "line": 1, "title": "other", "severity": "Important"}]
+    seats = RA.roster_for(RD.P_VERIFIERS, state, state["config"])[0]
+    assert len(seats) == 2
+    vid = V.stage_ids(state["_toVerify"])[0]["id"]
+    envs = []
+    for seat, verdict in zip(seats, ("REFUTED", "CONFIRMED")):
+        env = P17._finder_envelope(seat, source="codex")
+        env["payload"] = {"verdicts": [{"id": vid, "verdict": verdict, "reason": "r", "evidence": "read x"}]}
+        envs.append(env)
+    manifest = {"seats": {RR.storage_key(seat, 0): {"vendor": "codex", "channel": "stdout"} for seat in seats}}
+    art, why = RA.assemble(RD.P_VERIFIERS, envs, state, state["config"], orders_manifest=manifest)
+    assert why is None, why
+    assert [v["verdict"] for v in art["verdicts"]] == ["REFUTED", "CONFIRMED"]
+    applied = V.apply_verdicts(V.stage_ids(state["_toVerify"]), art["verdicts"])
+    assert applied["ambiguous"] == [vid] and not applied["drops"]
+    # control: an unproven (cursor) seat repeating the id is still dropped
+    envs[1]["executionEvidence"] = {"source": "cursor"}
+    art, _why = RA.assemble(RD.P_VERIFIERS, envs, state, state["config"], orders_manifest=manifest)
+    assert [v["verdict"] for v in art["verdicts"]] == ["REFUTED"]

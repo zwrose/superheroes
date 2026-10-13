@@ -525,7 +525,7 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
         ran = {trusted[seat] for seat in landed if seat in trusted}
         if ran:
             artifact["verifierVendor"] = "+".join(sorted(ran))
-        # A verdict id supplied by several seats belongs to the first proven seat (else the first):
+        # A verdict id supplied by several seats is vouched by the first proven seat (else the first):
         # a barred or unproven seat repeating a proven seat's id never voids it.
         def _proven(seat):
             vendor = trusted.get(seat)
@@ -535,8 +535,11 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
             if isinstance(vid, str) and (vid not in seat_of_id or (
                     not _proven(seat_of_id[vid]) and _proven(seat))):
                 seat_of_id[vid] = seat
-        verdicts[:] = [v for seat, v in supplied
-                       if not isinstance(v.get("id"), str) or seat_of_id[v["id"]] == seat]
+        # Proven seats of one vendor repeating an id all stay, so the fold's ambiguity rule sees them.
+        verdicts[:] = [v for seat, v in supplied if not isinstance(v.get("id"), str)
+                       or seat_of_id[v["id"]] == seat or (
+                           _proven(seat) and _proven(seat_of_id[v["id"]])
+                           and trusted[seat] == trusted[seat_of_id[v["id"]]])]
         artifact["verifierSeatVendors"] = {
             vid: trusted.get(seat, "") for vid, seat in seat_of_id.items()}
         # A seat whose vendor is the driver's own manifest entry (a driver-wrapped host-seat landing,
