@@ -250,6 +250,24 @@ A session writes a ruling that passes the test in [What Canon holds](#what-canon
 to an owner call, a principle, or a ceded call or its take-back. It writes one ruling per entry.
 What stays out is never written.
 
+**Every session writes through the helper.** `python3 -B <plugin root>/lib/canon.py append` takes
+the entry's fields and a declared ground (`owner-call`, `principle`, `ceded-call` or `take-back`).
+It refuses an entry declared or recognized as something [What stays out, and where it
+goes](#what-stays-out-and-where-it-goes) keeps out, and its refusal names that record's home as the
+section's table and paragraphs give it. Beyond a declared stays-out ground, it recognizes only a
+narrow set of shapes: a ruling that is a collector disposition, owner's words that are a bare
+go-word, and a ruling that records filing with an issue reference. Free-form scheduling or phase
+wording is not recognized. The declared ground and What stays out still bind the session: an act
+written as a full ruling sentence under a valid ground is not caught by the helper. It runs steps 2
+to 6 below: it probes the default-branch copy, mints the id by the id rule, creates the file shape
+and the `.gitattributes` line, and appends one line. It prints the paths to commit; steps 1, 7 and
+8 stay the session's. `canon.py append --lines-file <file>` appends held lines byte for byte,
+skipping a line Canon already holds byte for byte and refusing a line whose id Canon holds with
+different text. `append` also takes the held comment (`--held-file`), so a new entry's id counts
+held lines. The go-verbs, and the closed vocabulary a bare go-word may use, are defined in the
+helper (`lib/canon.py`), so a sentence that merely begins with a go-verb is never refused. A refusal
+is the contract working: put the record in the home it names, never in Canon.
+
 1. Refresh the default branch, then run the lookup. Before the lookup, when an origin remote exists and
    the network is available, run `git fetch origin`, so a stale `origin/HEAD` does not hide a Canon
    the default branch already has. If the fetch could not run or failed, say so in the report. The

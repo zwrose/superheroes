@@ -23,11 +23,13 @@ import round_adapters  # noqa: E402
 # (`seat_bundle.resolve_entry`), so any dispatch entry imports it.
 _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "audits",
+    "break_it",  # the break-it contract vocabulary (marker, taxonomy) the adapter reads
     "claude_modes",
     "dispatch_allowlist",
     "dispatch_outcome",
     "engine_adapter",
     "finding_identity",
+    "git_routing",  # break_it's only sibling import
     "model_registry",
     "payload_contracts",
     "pr_comment",
