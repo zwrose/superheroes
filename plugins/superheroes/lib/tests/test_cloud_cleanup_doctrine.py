@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -22,6 +23,11 @@ _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 _PLUGINS = os.path.dirname(_PLUGIN)
 _REPO = os.path.dirname(_PLUGINS)
 _TESTS = os.path.join(_PLUGIN, "lib", "tests")
+_LIB = os.path.join(_PLUGIN, "lib")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import cloud_cleanup  # noqa: E402
 _BASE = "b300a85d64b4f339900509800ee6d9f60485c0f2"
 
 _REF = "skills/showrunner/reference"
@@ -30,7 +36,8 @@ _SKILL = "skills/showrunner/SKILL.md"
 _OWNER_DECISIONS = f"{_REF}/owner-decisions.md"
 _WAVE_WATCH = f"{_REF}/wave-watch.md"
 _TRANSITION = "TRANSITION.md"
-_DOCTRINE = (_MERGE_TRAIN, _SKILL, _OWNER_DECISIONS, _WAVE_WATCH, _TRANSITION)
+_CLOUD = "skills/workhorse/reference/cloud.md"
+_DOCTRINE = (_MERGE_TRAIN, _SKILL, _OWNER_DECISIONS, _WAVE_WATCH, _TRANSITION, _CLOUD)
 
 _HOME_HEADING = "## Cleaning up a finished cloud lane"
 _DUTIES_LABEL = "**The eight duties, a closed list.**"
@@ -191,6 +198,24 @@ def test_cleanup_procedure_has_one_home_and_the_others_point_to_it():
     pointer = "merge-train.md` § Cleaning up a finished cloud lane"
     for rel in (_SKILL, _WAVE_WATCH):
         assert pointer in _collapsed(os.path.join(_PLUGIN, rel)), rel
+
+
+def test_builder_side_of_the_archive_request():
+    text = _read(os.path.join(_PLUGIN, _CLOUD))
+    heading = "When the advisor asks you to archive your session"
+    assert text.split("\n").count(f"## {heading}") == 1
+    assert f"- [{heading}](#when-the-advisor-asks-you-to-archive-your-session)" in text.split("# Building")[0]
+
+    match = re.search(r"^## " + re.escape(heading) + r"\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    assert match, "the archive-request section was not found"
+    section = " ".join(match.group(1).split())
+    assert "act only after its `state` is `closed`" in section
+    assert "post one line on your issue naming the session tools you do have, and stop" in section
+    assert "Never delete a session" in section
+
+    for advisor_text in (cloud_cleanup.ARCHIVE_TEXT_MERGED, cloud_cleanup.ARCHIVE_TEXT_CLOSED):
+        assert "Archive your own session" in advisor_text
+        assert "post one line on your issue naming the session tools you do have" in advisor_text
 
 
 def _added_lines(rel):

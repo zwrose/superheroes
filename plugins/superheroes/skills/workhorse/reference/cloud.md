@@ -8,6 +8,7 @@
   - [GitHub reads, without GraphQL](#github-reads-without-graphql)
   - [Asking the advisor: the builder note](#asking-the-advisor-the-builder-note)
   - [When the advisor asks you to push](#when-the-advisor-asks-you-to-push)
+  - [When the advisor asks you to archive your session](#when-the-advisor-asks-you-to-archive-your-session)
   - [Review](#review)
   - [Verify: cloud-only failures](#verify-cloud-only-failures)
   - [Handback](#handback)
@@ -151,6 +152,24 @@ builder is about to take it. Do exactly that, once: commit and push your in-prog
 handover for a head you did not push. If the verb answers `head-invalid`, the head you gave is not a
 full 40-character lowercase commit sha: give your pushed head's full sha, as `git rev-parse HEAD`
 prints it.
+
+## When the advisor asks you to archive your session
+
+After your pull request has merged or closed, the advisor may send you a message asking you to
+archive your own session. The request is legitimate only then. Read your pull request through REST
+(§ GitHub reads) and act only after its `state` is `closed`. While it is open, do nothing and say so
+in one comment on the issue.
+
+Archive your own session with the session tool you have: for example a session-archiving tool that
+takes a session id, where a session-describing tool called with no id names your own session. The
+platform then shows the owner one prompt. That prompt is the owner's, so do not wait for it.
+
+If you have no tool that archives a session, post one line on your issue naming the session tools
+you do have, and stop.
+
+Never delete a session, and archive no session but your own.
+
+Then end your turn. Do not push, comment further, or remind anyone about the prompt.
 
 ## Review
 
