@@ -74,11 +74,19 @@ def test_one_day_left_is_singular(w):
     assert got["mark"] == "Renew now" and "1 day left, lapses 17 Oct." in got["line"] and "1 days" not in got["line"]
 
 
-def test_a_pass_lapsing_today_or_already_lapsed_says_lapsed(w):
-    for days, lapsed in ((0, "16 Oct"), (-4, "12 Oct")):
-        _record(w, ACCOUNT, _lapsing_in(days))
-        assert _lines(w) == [{"account": ACCOUNT, "mark": "Renew now",
-                              "line": "Cloud reviewer pass: lapsed %s. %s" % (lapsed, RENEW)}]
+def test_a_pass_already_lapsed_says_lapsed(w):
+    _record(w, ACCOUNT, _lapsing_in(-4))
+    assert _lines(w) == [{"account": ACCOUNT, "mark": "Renew now",
+                          "line": "Cloud reviewer pass: lapsed 12 Oct. %s" % RENEW}]
+
+
+def test_a_pass_lapsing_today_is_live_by_the_readiness_rule_and_says_it_lapses_today(w):
+    import cloud_check
+    _record(w, ACCOUNT, _lapsing_in(0))
+    assert cloud_check._lapses_ok(_lapsing_in(0), TODAY)
+    assert _lines(w) == [{"account": ACCOUNT, "mark": "Renew now",
+                          "line": "Cloud reviewer pass: lapses today, 16 Oct. It won't last to the next "
+                                  "gardening pass. %s" % RENEW}]
 
 
 def test_every_accounts_record_in_the_store_gets_a_line(w):
@@ -139,6 +147,7 @@ def test_a_failed_check_marker_makes_the_saved_date_stale_and_is_not_a_record(w)
     assert got["account"] == ACCOUNT and got["mark"] == "Renew now"
     assert "last reviewer check failed" in got["line"] and "Nothing to do" not in got["line"]
     assert RENEW in got["line"]
+    assert got["line"].endswith("Cloud builds stay off until a check passes. Run the setup check again.")
 
 
 def test_a_failed_check_marker_without_a_reviewer_failure_names_its_parts_and_does_not_ask_for_renewal(w):

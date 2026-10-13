@@ -547,9 +547,34 @@ def test_a_pending_request_is_written_before_the_send_and_replaced_by_the_outcom
 def test_a_pending_request_found_on_resume_is_never_replaced_by_another_message(w):
     _lane(w, "l-1", 101)
     assert _record(w, "m-1", "pending")["ok"]
-    assert _record(w, "m-2", "pending") == {"ok": False, "reason": "request-uncertain"}
+    assert _record(w, "m-2", "pending") == {"ok": False, "reason": "request-in-progress"}
     assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-uncertain"}
     settled = _record(w, "m-1", "uncertain")
     assert settled["ok"] and settled["request"]["outcome"] == "uncertain"
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "uncertain")]
+
+
+def test_a_second_pending_write_for_the_same_message_id_is_refused_and_holds_no_reservation(w):
+    _lane(w, "l-1", 101)
+    msg_id = "same-account-%d" % PR
+    assert _record(w, msg_id, "pending")["ok"]
+    assert _record(w, msg_id, "pending") == {"ok": False, "reason": "request-in-progress"}
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [(msg_id, "pending")]
+
+
+def test_a_pending_write_over_an_uncertain_request_is_refused_even_for_the_same_message_id(w):
+    _lane(w, "l-1", 101)
+    assert _record(w, "m-1", "pending")["ok"] and _record(w, "m-1", "uncertain")["ok"]
+    assert _record(w, "m-1", "pending") == {"ok": False, "reason": "request-uncertain"}
+
+
+def test_a_final_outcome_for_the_pending_message_id_replaces_the_reservation(w):
+    _lane(w, "l-1", 101)
+    msg_id = "same-account-%d" % PR
+    assert _record(w, msg_id, "pending")["ok"]
+    done = _record(w, msg_id, "failed")
+    assert done["ok"] and done["request"]["outcome"] == "failed"
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [(msg_id, "failed")]

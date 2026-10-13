@@ -316,6 +316,9 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"])), None)
     if old is not None and old["outcome"] == "delivered":
         return {"ok": True, "already": True, "request": old, "ownerMessage": texts[got["outcome"]] % number}
+    # axis: a pending write is an exclusive send reservation, refused whatever its message id when a request is already pending or uncertain
+    if old is not None and outcome == "pending" and old["outcome"] in ("pending", "uncertain"):
+        return _refusal("request-in-progress" if old["outcome"] == "pending" else "request-uncertain")
     if old is not None and old["outcome"] in ("pending", "uncertain") and old["msgId"] != msg_id:
         return _refusal("request-uncertain")
     receipt = {"repo": repo, "pr": number, "session": got["session"], "msgId": msg_id, "outcome": outcome,

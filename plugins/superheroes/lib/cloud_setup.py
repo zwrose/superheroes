@@ -325,16 +325,23 @@ def confirm_pass(cwd, account, lapses, *, environment=None, root=None):
     return _write(cwd, account, root, build)
 
 
-def _lapse_line(days, lapses, next_pass_days):
-    """(mark, line) for a pass with ``days`` left until it lapses on ``lapses``."""
+_CHECK_AGAIN = "cloud builds stay off until a check passes. Run the setup check again."
+_RENEW = "Run the pass command and paste the new pass into the environment."
+
+
+def _lapse_line(days, lapses, next_pass_days, live):
+    """(mark, line) for a pass with ``days`` left until it lapses on ``lapses``. ``live`` is the readiness
+    rule's answer (a lapse date equal to today is still live), so gardening and launch readiness agree."""
     when = "%d %s" % (lapses.day, lapses.strftime("%b"))
-    renew = "Run the pass command and paste the new pass into the environment."
+    if not live:
+        return "Renew now", "Cloud reviewer pass: lapsed %s. %s" % (when, _RENEW)
     # axis: a pass that will not last to the next gardening pass is marked Renew now — see bite-proof record c8_cloud_cleanup
     if days <= 0:
-        return "Renew now", "Cloud reviewer pass: lapsed %s. %s" % (when, renew)
+        return "Renew now", "Cloud reviewer pass: lapses today, %s. It won't last to the next gardening pass. %s" % (
+            when, _RENEW)
     if days <= next_pass_days:
         return "Renew now", "Cloud reviewer pass: %d %s left, lapses %s. It won't last to the next gardening pass. %s" % (
-            days, "day" if days == 1 else "days", when, renew)
+            days, "day" if days == 1 else "days", when, _RENEW)
     return None, "Cloud reviewer pass: %d days left, lapses %s. Nothing to do." % (days, when)
 
 
@@ -369,11 +376,11 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
                 if marker.get("damaged") or not parts or "reviewer" in parts:
                     lines.append({"account": account, "mark": "Renew now", "line":
                                   "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
-                                  "Run the pass command and paste the new pass into the environment."})
+                                  + _RENEW + " " + _CHECK_AGAIN[0].upper() + _CHECK_AGAIN[1:]})
                 else:
                     lines.append({"account": account, "mark": None, "line":
-                                  "Cloud reviewer pass: the last cloud check failed on %s, so cloud builds stay off "
-                                  "until a check passes. Run the setup check again." % ", ".join(parts)})
+                                  "Cloud reviewer pass: the last cloud check failed on %s, so %s"
+                                  % (", ".join(parts), _CHECK_AGAIN)})
                 continue
             got = read(cwd, account, root)
             record = got["record"] if got["state"] == "ready" else None
@@ -384,7 +391,8 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
                           "line": "Cloud reviewer pass: the setup record could not be read."})
             continue
         lapses = datetime.date.fromisoformat(record["passLapses"])
-        mark, line = _lapse_line((lapses - today).days, lapses, next_pass_days)
+        mark, line = _lapse_line((lapses - today).days, lapses, next_pass_days,
+                                 cloud_check._lapses_ok(record["passLapses"], today))
         lines.append({"account": account, "mark": mark, "line": line})
     return lines
 

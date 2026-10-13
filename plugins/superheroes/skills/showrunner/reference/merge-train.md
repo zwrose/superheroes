@@ -222,7 +222,9 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
    the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
    id, so use `same-account-<pr number>`. Then run `cloud_cleanup.py record --repo-root <root> --repo
-   <owner/name> --pr <number> --msg-id <id> --outcome pending`. Only then send the plan's
+   <owner/name> --pr <number> --msg-id <id> --outcome pending`. That write is the reservation to send:
+   when it is refused (`request-in-progress` or `request-uncertain`), another caller holds the request,
+   so send nothing and go on. Only when it succeeds, send the plan's
    `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
    by the relay's send and `check`, as that section says. Then run `record` with the same message id and
    the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
