@@ -126,8 +126,24 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     if vendors is not None:
         io_out.setdefault("seatMap", _assertable_seat_map(vendors, fixer_vendor))
 
+    base_reviewer = reviewer or default_reviewer
+
+    def finder_reporting_reviewer(dim, tier, rnd, ctx):
+        # Like the verifier above: the gap-sweep / scoped-finder callbacks report the vendor they ran
+        # on ({"findings": [...], "vendor": v}); with the default fixer `claude` the independent
+        # selection is `codex`, and an unreported finder result does not count once it replaced the
+        # reviewer engine (#1851 L4 K).
+        result = base_reviewer(dim, tier, rnd, ctx)
+        if dim not in ("gap-sweep", "scoped-finder"):
+            return result
+        if isinstance(result, list):
+            return {"findings": result, "vendor": "codex"}
+        if isinstance(result, dict):
+            return dict(result, vendor=result.get("vendor", "codex"))
+        return result
+
     return {
-        "reviewer": reviewer or default_reviewer,
+        "reviewer": finder_reporting_reviewer,
         "verifier": verifier or default_verifier,
         "synthesis": synthesis or default_synthesis,
         "auditor": auditor or default_auditor,

@@ -2877,6 +2877,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
     # unproven family and folds like silence.
     selected, source = _nonpanel_selection(state, session_dir)
+    barred = _adapters()._maker_barred(state, config)
     if selected is not None and verdicts and _emission_unverifiable(state, session_dir, P_VERIFIERS):
         # The dispatch anchored an emission but its manifest is unreadable or tampered: the vendor
         # it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
@@ -2905,7 +2906,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 ran_vendor = seat_vendors.get(vid) if isinstance(vid, str) else None
                 ran_vendor = ran_vendor.strip() if isinstance(ran_vendor, str) and ran_vendor.strip() \
                     else None
-                proven = ran_vendor == selected
+                proven = ran_vendor == selected and not barred(ran_vendor)
                 outcomes.setdefault(ran_vendor, proven)
                 if seat_provenance.get(vid) == round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST:
                     via_manifest.add(ran_vendor)
@@ -2914,6 +2915,8 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             for ran_vendor, proven in outcomes.items():
                 row = {"expected": selected, "ran": ran_vendor,
                        "outcome": "verdicts-folded" if proven else "verdicts-ignored"}
+                if ran_vendor == selected and not proven:
+                    row["reason"] = "vendor-ineligible"
                 if ran_vendor in via_manifest:
                     row["provenance"] = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
                 _record_round_append(state, "verifierProvenance", row)
@@ -2925,10 +2928,13 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # preference read's provenance) and on the durable path, which always carries the key.
         claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
                           or rebound or _nonpanel_replaced(state, selected, session_dir))
-        if verdicts and selected is not None and (
-                (claimed is not None and claimed != selected) or (claim_required and claimed is None)):
-            _record_round_append(state, "verifierProvenance", {
-                "expected": selected, "ran": claimed, "outcome": "verdicts-ignored"})
+        mismatch = (claimed is not None and claimed != selected) or (claim_required and claimed is None)
+        ineligible = not mismatch and selected is not None and barred(selected)
+        if verdicts and selected is not None and (mismatch or ineligible):
+            row = {"expected": selected, "ran": claimed, "outcome": "verdicts-ignored"}
+            if ineligible:
+                row["reason"] = "vendor-ineligible"
+            _record_round_append(state, "verifierProvenance", row)
             verdicts = []
         elif verdicts:
             _record_round_append(state, "verifierProvenance", {
@@ -5846,9 +5852,15 @@ def _run_seam(seams, action, payload, state, config):
         return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
-    if action == P_GAPSWEEP:
-        return {"findings": _reviewer_findings(
-            seams["reviewer"]("gap-sweep", DEEP, state["round"], payload))}
+    if action in (P_GAPSWEEP, P_SCOPED):
+        result = seams["reviewer"]("gap-sweep" if action == P_GAPSWEEP else "scoped-finder",
+                                   DEEP, state["round"], payload)
+        artifact = {"findings": _reviewer_findings(result)}
+        # The callback may report who ran: `{"findings": [...], "vendor": v}`; a bare list reports none.
+        vendor = result.get("vendor") if isinstance(result, dict) else None
+        if isinstance(vendor, str) and vendor.strip():
+            artifact["reviewerVendor"] = vendor.strip()
+        return artifact
     if action == P_AUDITS:
         # This library layer IS the orchestrator here: it records its OWN dispatch manifest
         # out-of-band from the auditor's results — {target-id: the vendor it seated}, read straight
@@ -5860,9 +5872,6 @@ def _run_seam(seams, action, payload, state, config):
                     for t in targets if isinstance(t, dict) and t.get("id") is not None}
         return {"results": seams["auditor"](payload.get("targets"), state["round"]),
                 "collectionManifest": manifest}
-    if action == P_SCOPED:
-        return {"findings": _reviewer_findings(
-            seams["reviewer"]("scoped-finder", DEEP, state["round"], payload))}
     if action == P_VERIFY:
         return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
     if action == P_FIXER:
@@ -6045,6 +6054,10 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
+            if action in (P_GAPSWEEP, P_SCOPED) and _library_finder_unauthenticated(
+                    state, artifact.pop("reviewerVendor", None)):
+                _park_cannot_certify(state, "nonpanel-finder-unauthenticated:%s" % action)
+                return _driver_receipt(state)
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
                       verified_head_resolution=_verified_head_at_fold(None, state),
@@ -8023,11 +8036,27 @@ def _nonpanel_selection(state, session_dir=None):
     return _nonpanel_reviewer_vendor(state, cfg, repo_root)
 
 
+def _library_finder_unauthenticated(state, reported):
+    """True when a library gap-sweep / scoped result does not count: no selectable reviewer, a
+    reported vendor that is not the selection or fails the eligibility bar, or no report when the
+    selection replaced the reviewer engine."""
+    selected, _source = _nonpanel_selection(state)
+    if selected is None:
+        return True
+    if reported is None:
+        return _nonpanel_replaced(state, selected)
+    return reported != selected or _adapters()._maker_barred(state, state.get("config"))(reported)
+
+
 def _finder_hand_claim_fault(state, session_dir, phase, artifact):
     """Reason string when a hand-submitted gap-sweep / scoped artifact does not authenticate its
     reviewer, else None: the vendor claim (`reviewerVendor`) must equal the vendor the dispatch
-    recorded at emission (the live selection when none was recorded), and is required when the
-    selection replaced the reviewer engine."""
+    recorded at emission (the live selection when none was recorded), is required when the
+    selection replaced the reviewer engine, and must pass the shared eligibility bar. An emission
+    whose manifest no longer verifies authenticates nothing."""
+    if _emission_unverifiable(state, session_dir, phase):
+        return "%s dispatch recorded an emission whose orders manifest does not verify; the " \
+               "vendor it ordered is unknown, so no submitted artifact can be authenticated" % phase
     selected, source = _nonpanel_selection(state, session_dir)
     expected = _recorded_phase_vendor(state, session_dir, phase) or selected
     if expected is None:
@@ -8042,6 +8071,10 @@ def _finder_hand_claim_fault(state, session_dir, phase, artifact):
     if required and claimed is None:
         return ("%s artifact carries no `reviewerVendor`; the selection replaced the reviewer "
                 "engine, so the vendor that ran must be claimed (expected %r)" % (phase, expected))
+    if _adapters()._maker_barred(state, state.get("config"))(expected):
+        return ("%s reviewer %r is ineligible (a maker family, the fixer's vendor, or an unresolvable "
+                "host family); its result is not the independent review that was ordered"
+                % (phase, expected))
     return None
 
 

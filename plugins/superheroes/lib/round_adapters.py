@@ -566,8 +566,8 @@ def _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest, is
     """Fault string when the single-seat finder (gap-sweep / scoped) result is not authenticated,
     else None. The executed vendor (runner `executionEvidence.source`, or the driver's own manifest
     vendor for a driver-wrapped host-seat landing) must equal the vendor the orders manifest recorded
-    at emission for the seat; anything else is a review that did not run, so the seat folds as
-    missing (the same refuse-fold a never-landed seat gets) rather than as "ran and found nothing".
+    at emission for the seat and pass the eligibility bar (``is_barred``); anything else is a review
+    that did not run, so the seat folds as missing (the same refuse-fold a never-landed seat gets) rather than as "ran and found nothing".
     `None` ``orders_manifest`` (no manifest supplied by the caller) leaves the check off."""
     if orders_manifest is None:
         return None
@@ -579,11 +579,12 @@ def _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest, is
             if isinstance(seats, dict) else None
         expected = entry.get("vendor") if isinstance(entry, dict) else None
         executed = trusted.get(seat)
-        if not isinstance(expected, str) or not expected or executed != expected:
+        ineligible = executed is not None and callable(is_barred) and is_barred(executed)
+        if not isinstance(expected, str) or not expected or executed != expected or ineligible:
             disclosures["unauthenticatedFinder"] = {"seat": seat, "executed": executed,
                                                      "recorded": expected}
-            return "missing-seat-refuse-fold:%s:unauthenticated-vendor:executed=%s:recorded=%s" % (
-                seat, executed, expected)
+            return "missing-seat-refuse-fold:%s:unauthenticated-vendor:executed=%s:recorded=%s%s" % (
+                seat, executed, expected, ":vendor-ineligible" if ineligible else "")
     return None
 
 
