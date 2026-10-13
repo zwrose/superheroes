@@ -34,6 +34,7 @@ TASK_ID_TRAILER = "Task-Id"
 # Re-export vacuous forfeit reason from dispatch_outcome (CONVENTIONS §11 Pattern 1). The
 # dispatch runner produces it; round_driver compares against it — consumers
 # import this name, never restate the literal.
+import break_it  # noqa: E402  (break-it contract vocabulary home; imports no engine_adapter)
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
@@ -1544,6 +1545,7 @@ def _scrub_findings(findings, *, echo_nonce=None):
         if not _finding_is_substantive(f, echo_nonce=echo_nonce):
             rejected.append({"entry": _render_rejection_entry(f), "reason": FINDING_REJECT_NO_SUBSTANCE})
             continue
+        f0 = f
         pre_scrubbed = dict(f)
         for key, val in pre_scrubbed.items():
             if key in _FINDING_STRUCTURAL_KEYS:
@@ -1555,6 +1557,10 @@ def _scrub_findings(findings, *, echo_nonce=None):
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
             g[key] = _scrub_finding_value(val)
+        if (break_it.is_break_it(g)
+                and g.get("suggestion") != review_findings_schema.normalize_member(f0).get("suggestion")):
+            # the suggestion carries executable test bytes; flag that the scrub altered them
+            g[break_it.REDACTED_FIELD] = True
         accepted.append(g)
     return accepted, rejected
 
