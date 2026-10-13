@@ -16,7 +16,7 @@
 
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv } from './argv'
+import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv, unmarkArgv } from './argv'
 import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
 import { decide, effectiveTrigger, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
@@ -291,6 +291,54 @@ async function steer<T extends { instructions?: string }>($: EngineInterface, e:
   return steered
 }
 
+// The one definition of the mod-presence signal: the mod exports this variable to the
+// session's Bash children with the session's own id as its value. The checkpoint skill reads
+// it back: its own id means the mod runs in THIS session and saves the reply's block; unset or
+// another id means no mod here. Called at session start and after a `/clear` (which starts a
+// new session id without a `session.start`).
+// `$.env.set` needs a literal name, so this call is the one home; the skill cites it.
+const announcePresence = async ($: EngineInterface): Promise<void> => {
+  await $.env.set('SUPERHEROES_COMPACT_MOD', await $.session.id())
+}
+
+// Where a compaction attempt began: the session and the clock before `steer` marks. Null
+// (fail open: no unmark) when either cannot be read.
+async function beginAttempt($: EngineInterface): Promise<{ sessionId: string; since: number } | null> {
+  try {
+    return { sessionId: await $.session.id(), since: await $.clock.now() }
+  } catch (error) {
+    note($, `session.compact attempt: ${String(error)}`)
+
+    return null
+  }
+}
+
+// An attempt that did not complete (the compaction threw or was skipped) leaves the marker
+// `steer` published, which would make the PreCompact fallback stay silent for a delivery that
+// never reached the summarizer. The CLI removes that marker only if it was stamped within the
+// attempt. Scheduled, never awaited: an aborted dispatch aborts the `$.process.run` made in it,
+// but a clock callback's run completes (measured on harness 2.1.296).
+async function unmarkLater($: EngineInterface, attempt: { sessionId: string; since: number } | null): Promise<void> {
+  if (attempt === null) {
+    return
+  }
+  try {
+    const until = await $.clock.now()
+
+    $.clock.after(0, async () => {
+      try {
+        const cli = await vocabulary($)
+
+        await directive($, unmarkArgv(cli, $.plugin.root, attempt.sessionId, attempt.since, until))
+      } catch (error) {
+        note($, `session.compact unmark: ${String(error)}`)
+      }
+    })
+  } catch (error) {
+    note($, `session.compact unmark: ${String(error)}`)
+  }
+}
+
 // The fill is about to drop: a Snooze and the band belong to the old fill.
 async function forgetFill($: EngineInterface): Promise<void> {
   try {
@@ -369,8 +417,9 @@ function compactSoon($: EngineInterface, options: unknown, startedAt: number, is
 async function finishCheckpoint($: EngineInterface, options: unknown, saveFailed: boolean, isAborted: boolean, turnId: string): Promise<void> {
   const { value } = await $.state.get(checkpoint)
 
-  // only the checkpoint command's own turn ends it: a user turn queued ahead of it does not
-  if (!value || value.compacting || value.turnId !== turnId) {
+  // only the checkpoint command's own turn ends it: a user turn queued ahead of it does not;
+  // a record past STALE_CHECKPOINT_MS is no checkpoint (`runningCheckpoint`'s rule)
+  if (!value || value.compacting || value.turnId !== turnId || (await runningCheckpoint($)) === null) {
     return
   }
 
@@ -438,12 +487,7 @@ export const register: Register = (on, options) => {
     }
 
     try {
-      // The one definition of the mod-presence signal: the mod exports this variable
-      // to the session's Bash children with the session's own id as its value. The
-      // checkpoint skill reads it back: its own id means the mod runs in THIS
-      // session and saves the reply's block; unset or another id means no mod here.
-      // `$.env.set` needs a literal name, so this call is the one home; the skill cites it.
-      await $.env.set('SUPERHEROES_COMPACT_MOD', await $.session.id())
+      await announcePresence($)
     } catch (error) {
       note($, `session.start: ${String(error)}`)
     }
@@ -458,6 +502,15 @@ export const register: Register = (on, options) => {
       note($, `classic.SessionStart: ${String(error)}`)
     }
 
+    // `/clear` fires no `session.start`: the presence signal must name the new session
+    if (e.source === 'clear') {
+      try {
+        await announcePresence($)
+      } catch (error) {
+        note($, `classic.SessionStart presence: ${String(error)}`)
+      }
+    }
+
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -467,13 +520,23 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
+    const attempt = await beginAttempt($)
     const steered = await steer($, e)
+    let result: Awaited<ReturnType<typeof next>>
 
-    const result = await next(steered)
+    try {
+      result = await next(steered)
+    } catch (error) {
+      await unmarkLater($, attempt)
+
+      throw error
+    }
 
     // published once the compaction is done: a measurement during it sees the old fill;
     // a skipped one keeps the Snooze and band
-    if (!('skip' in result)) {
+    if ('skip' in result) {
+      await unmarkLater($, attempt)
+    } else {
       await forgetFill($)
       try {
         await $.state.set(rearmAfterCompact, true)

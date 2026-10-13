@@ -15,6 +15,7 @@ export type CliVocabulary = {
   readonly mark: CliVerb<'sessionId'>
   readonly path: CliVerb<'sessionId'>
   readonly save: CliVerb<'sessionId'>
+  readonly unmark: CliVerb<'sessionId' | 'since' | 'until'>
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -59,6 +60,7 @@ export const parseVocabulary = (text: string): CliVocabulary => {
     mark: pick(verbs, 'mark', ['sessionId']),
     path: pick(verbs, 'path', ['sessionId']),
     save: pick(verbs, 'save', ['sessionId']),
+    unmark: pick(verbs, 'unmark', ['sessionId', 'since', 'until']),
   }
 }
 
@@ -98,6 +100,27 @@ export const markArgv = (
   vocabulary.mark.flags.sessionId,
   sessionId,
 ]
+
+// Removes the delivered marker of the attempt that ran from `since` to `until` (epoch ms).
+export const unmarkArgv = (
+  vocabulary: CliVocabulary,
+  pluginRoot: string,
+  sessionId: string,
+  since: number,
+  until: number,
+): string[] => {
+  const { verb, flags } = vocabulary.unmark
+
+  return [
+    ...base(pluginRoot, verb),
+    flags.sessionId,
+    sessionId,
+    flags.since,
+    String(since),
+    flags.until,
+    String(until),
+  ]
+}
 
 export const pathArgv = (
   vocabulary: CliVocabulary,

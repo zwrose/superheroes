@@ -39,7 +39,7 @@ def _mod_argvs(tmp_path, transcript):
     (out / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     (out / "run.mjs").write_text(
         "import { readFileSync } from 'node:fs'\n"
-        "import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv } from './argv.js'\n"
+        "import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv, unmarkArgv } from './argv.js'\n"
         "const [root, sid, transcript, owner, vocabularyFile] = process.argv.slice(2)\n"
         "const cli = parseVocabulary(readFileSync(vocabularyFile, 'utf8'))\n"
         "console.log(JSON.stringify({\n"
@@ -47,6 +47,8 @@ def _mod_argvs(tmp_path, transcript):
         "  mark: markArgv(cli, root, sid),\n"
         "  save: saveArgv(cli, root, sid),\n"
         "  path: pathArgv(cli, root, sid),\n"
+        "  unmarkIn: unmarkArgv(cli, root, sid, 0, 9000000000000000),\n"
+        "  unmarkOut: unmarkArgv(cli, root, sid, 0, 1000),\n"
         "}))\n", encoding="utf-8")
     r = subprocess.run([node, str(out / "run.mjs"), _PLUGIN_ROOT, SID, str(transcript), OWNER, _VOCABULARY],
                        capture_output=True, text=True, timeout=60)
@@ -98,3 +100,21 @@ def test_mod_argv_runs_through_the_real_cli_into_the_summarizer_text_and_the_mar
                           capture_output=True, text=True, timeout=30, cwd=cwd)
     assert hook.returncode == 0 and hook.stdout == ""
     assert not os.path.exists(out["markerPath"])
+
+
+def test_mod_unmark_argv_removes_a_marker_stamped_in_its_window_and_keeps_one_outside_it(tmp_path):
+    argvs = _mod_argvs(tmp_path, tmp_path / "t.jsonl")
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
+           "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")}
+    cwd = str(tmp_path)
+
+    code, marked, err = _exec(argvs["mark"], env, cwd)
+    assert code == 0 and os.path.exists(marked["path"]), err
+
+    code, out, err = _exec(argvs["unmarkOut"], env, cwd)
+    assert code == 0 and out == {"ok": True, "removed": False}, err
+    assert os.path.exists(marked["path"])
+
+    code, out, err = _exec(argvs["unmarkIn"], env, cwd)
+    assert code == 0 and out == {"ok": True, "removed": True}, err
+    assert not os.path.exists(marked["path"])

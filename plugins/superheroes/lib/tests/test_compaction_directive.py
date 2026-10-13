@@ -590,3 +590,184 @@ def test_cli_absolute_override_unaffected_by_process_cwd(tmp_path):
     code, out, _ = _run_in(session, {"HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
                            "path", "--session-id", SID)
     assert code == 0 and out["path"] == os.path.join(base, SID + ".md")
+
+
+# ---------------------------------------------------------------- unmark_attempt
+def _stamped(tmp_path, now_seconds, sid=SID):
+    env = _env(tmp_path)
+    path = cd.mark_delivered(sid, env, now=now_seconds)
+    return env, path
+
+
+def test_unmark_in_window_removes_the_marker_including_both_ends(tmp_path):
+    env, path = _stamped(tmp_path, 1000)
+    assert cd.unmark_attempt(SID, 999000, 1001000, env) is True
+    assert not os.path.exists(path)
+    for since, until in ((1000000, 1000000), (1000000, 2000000), (0, 1000000)):
+        cd.mark_delivered(SID, env, now=1000)
+        assert cd.unmark_attempt(SID, since, until, env) is True
+        assert not os.path.exists(path)
+
+
+@pytest.mark.parametrize("since,until", [(1000001, 2000000), (0, 999999), (2000000, 3000000)])
+def test_unmark_out_of_window_keeps_the_marker(tmp_path, since, until):
+    env, path = _stamped(tmp_path, 1000)
+    assert cd.unmark_attempt(SID, since, until, env) is False
+    assert os.path.exists(path)
+
+
+def test_unmark_missing_marker_is_false(tmp_path):
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, _env(tmp_path)) is False
+
+
+@pytest.mark.parametrize("content", ["", "not a number", "12.5", "\x00\x01"])
+def test_unmark_garbage_content_keeps_the_marker(tmp_path, content):
+    env = _env(tmp_path)
+    path = cd.delivered_marker_path(SID, env)
+    _touch(path, text=content)
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, env) is False
+    assert os.path.exists(path)
+
+
+def test_unmark_leaves_another_sessions_marker(tmp_path):
+    env, other = _stamped(tmp_path, 1000, sid="other-session")
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, env) is False
+    assert os.path.exists(other)
+
+
+@pytest.mark.parametrize("bad", ["../x", "", None])
+def test_unmark_invalid_session_id_is_false(tmp_path, bad):
+    assert cd.unmark_attempt(bad, 0, 10 ** 15, _env(tmp_path)) is False
+
+
+def test_unmark_unresolved_config_dir_is_false(tmp_path):
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, {"CLAUDE_CONFIG_DIR": "rel", "HOME": str(tmp_path)}) is False
+
+
+def test_cli_unmark_verb_removes_in_window_and_answers_ok_otherwise(tmp_path):
+    env = _env(tmp_path)
+    path = cd.mark_delivered(SID, env, now=1000)
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "0", "--until", "999999")
+    assert (code, out) == (0, {"ok": True, "removed": False})
+    assert os.path.exists(path)
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "999999", "--until", "1000001")
+    assert (code, out) == (0, {"ok": True, "removed": True})
+    assert not os.path.exists(path)
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "0", "--until", "1000001")
+    assert (code, out) == (0, {"ok": True, "removed": False})
+
+
+def test_cli_unmark_refusals(tmp_path):
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", "../x", "--since", "0", "--until", "1")
+    assert (code, out) == (1, {"ok": False, "reason": "session-id-invalid"})
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "soon", "--until", "1")
+    assert (code, out) == (1, {"ok": False, "reason": "window-invalid"})
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": "relative/home"}
+    r = subprocess.run([sys.executable, "-B", _SCRIPT, "unmark", "--session-id", SID, "--since", "0",
+                        "--until", "1"], env=env, capture_output=True, text=True, timeout=20, cwd=str(tmp_path))
+    assert r.returncode == 1
+    assert json.loads(r.stdout) == {"ok": False, "reason": "config-dir-unresolved"}
+
+
+# ---------------------------------------------------------------- reap
+NOW = 2000000000
+DAY = 86400
+OLD_NOTES = NOW - cd.NOTES_MAX_AGE_DAYS * DAY - 1
+FRESH_NOTES = NOW - cd.NOTES_MAX_AGE_DAYS * DAY + 1
+
+
+def _ckpt(tmp_path, name):
+    return os.path.join(cd.checkpoint_dir(_env(tmp_path)), name)
+
+
+def test_reap_removes_old_notes_and_keeps_newer_ones(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "new-one.md"), mtime=FRESH_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert not os.path.exists(_ckpt(tmp_path, "old-one.md"))
+    assert os.path.exists(_ckpt(tmp_path, "new-one.md"))
+
+
+def test_reap_removes_markers_past_the_delivery_window_and_keeps_newer_ones(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.delivered"), mtime=NOW - 121)
+    _touch(_ckpt(tmp_path, "new-one.delivered"), mtime=NOW - 119)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert not os.path.exists(_ckpt(tmp_path, "old-one.delivered"))
+    assert os.path.exists(_ckpt(tmp_path, "new-one.delivered"))
+
+
+def test_reap_never_touches_the_current_session(tmp_path):
+    _touch(_ckpt(tmp_path, SID + ".md"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, SID + ".delivered"), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert os.path.exists(_ckpt(tmp_path, SID + ".md"))
+    assert os.path.exists(_ckpt(tmp_path, SID + ".delivered"))
+
+
+def test_reap_ignores_names_that_are_not_a_session_id_with_a_known_suffix(tmp_path):
+    names = ["has space.md", ".md", "a.b.md", "a" * 129 + ".md", "x.txt", "x.md.bak", ".checkpoint.abc.tmp",
+             "x.delivered.old"]
+    for name in names:
+        _touch(_ckpt(tmp_path, name), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert all(os.path.exists(_ckpt(tmp_path, name)) for name in names)
+
+
+def test_reap_never_follows_or_removes_a_symlink(tmp_path):
+    target = tmp_path / "elsewhere" / "target.md"
+    _touch(str(target), mtime=OLD_NOTES)
+    os.makedirs(os.path.dirname(_ckpt(tmp_path, "x")), exist_ok=True)
+    os.symlink(str(target), _ckpt(tmp_path, "linked.md"))
+    os.symlink(str(tmp_path / "missing"), _ckpt(tmp_path, "dangling.delivered"))
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert os.path.islink(_ckpt(tmp_path, "linked.md"))
+    assert os.path.islink(_ckpt(tmp_path, "dangling.delivered"))
+    assert target.exists()
+
+
+def test_reap_does_not_recurse_or_remove_directories(tmp_path):
+    _touch(_ckpt(tmp_path, os.path.join("nested", "inner.md")), mtime=OLD_NOTES)
+    os.makedirs(_ckpt(tmp_path, "dir.md"))
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert os.path.exists(_ckpt(tmp_path, os.path.join("nested", "inner.md")))
+    assert os.path.isdir(_ckpt(tmp_path, "dir.md"))
+
+
+def test_reap_counts_every_file_it_removes(tmp_path):
+    for sid in ("a1", "b2", "c3"):
+        _touch(_ckpt(tmp_path, sid + ".md"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "d4.delivered"), mtime=NOW - 500)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 4
+
+
+def test_reap_defaults_to_the_wall_clock(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=time.time() - (cd.NOTES_MAX_AGE_DAYS + 1) * DAY)
+    _touch(_ckpt(tmp_path, "new-one.md"))
+    assert cd.reap(SID, _env(tmp_path)) == 1
+
+
+def test_reap_is_a_no_op_without_a_resolvable_dir_directory_or_session_id(tmp_path):
+    assert cd.reap(SID, {"CLAUDE_CONFIG_DIR": "rel", "HOME": str(tmp_path)}, now=NOW) == 0
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0     # no checkpoint directory yet
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    for bad in ("../x", "", None):
+        assert cd.reap(bad, _env(tmp_path), now=NOW) == 0
+    assert os.path.exists(_ckpt(tmp_path, "old-one.md"))
+
+
+def test_reap_resolves_a_relative_config_dir_against_cwd(tmp_path):
+    env = {"CLAUDE_CONFIG_DIR": "relcfg", "HOME": str(tmp_path)}
+    old = tmp_path / "relcfg" / "superheroes" / "checkpoints" / "old-one.md"
+    _touch(str(old), mtime=OLD_NOTES)
+    assert cd.reap(SID, env, cwd=str(tmp_path), now=NOW) == 1
+    assert not old.exists()
+
+
+def test_reap_never_raises(tmp_path, monkeypatch):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+
+    def boom(*_a, **_k):
+        raise OSError("scandir failed")
+
+    monkeypatch.setattr(os, "scandir", boom)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0

@@ -116,6 +116,11 @@ def main():
             "hookSpecificOutput": {"hookEventName": "SessionStart",
                                    "additionalContext": boot}}) + "\n")
     try:
+        import compaction_directive
+        compaction_directive.reap(payload.get("session_id"), cwd=cwd)
+    except Exception:
+        pass
+    try:
         import cache_markers
         swept = cache_markers.sweep_stale(_PLUGIN_ROOT)
         if swept:

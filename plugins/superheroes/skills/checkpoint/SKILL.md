@@ -24,6 +24,8 @@ lose) and it prints the **ready-to-paste `/compact` line**.
   does **not** need to re-invoke `/superheroes:showrunner`, `/superheroes:workhorse`, or
   `/superheroes:detective` by hand.
 
+Notes files older than `NOTES_MAX_AGE_DAYS` (in `lib/compaction_directive.py`) and stale delivery markers are removed at session start; a resumed session older than that gets its notes rewritten by its next checkpoint.
+
 ## Invocation
 
 | Form | Behavior |
