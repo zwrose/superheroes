@@ -894,3 +894,18 @@ def test_a_claude_synthesis_of_an_anthropic_made_change_leaves_no_synthesis_row_
     assert not any("synthesis" in v["name"] for v in rec["reviewers"])
     assert not any("synthesis" in str(m) for m in rec["missingReviews"])
     assert rec["missingReviews"] == [] and not rec.get("parked")
+
+
+def test_a_legacy_author_family_before_the_first_fix_stays_an_original_maker(tmp_path):
+    claude = {"vendor": "claude", "model": "sonnet-5.5"}
+    s = Session(tmp_path, config={"maxRounds": 7, "fixerVendor": "claude"},
+                rounds={"1": {"fix": {"fixes": []}}, "2": {}},
+                seatMapReceipts=[{"round": "0", "map": {"seats": {"code-reviewer": claude}, "authorFamily": "anthropic"}},
+                                 {"round": "1", "map": {"seats": {"code-reviewer": claude}, "makerFamilies": ["openai"]}}])
+    s.seat("code-reviewer", rnd=1, nonce="n1")
+    runs = {"/run/n1": (dict(GOOD_RUN, source="claude", engineModel="sonnet-5.5", runnerNonce="n1",
+                             viewHeadSha=EARLIER), None)}
+    account = rs.account_from_session(s.save(), extras(runDirs=["/run/n1"]), Fake(runs=runs).readers())
+    # bites on: a legacy authorFamily dropped from the pre-fix history, handing its original maker a delayed fromStep
+    assert not any(m["family"] == "anthropic" and "fromStep" in m for m in account["makers"])
+    assert any(m["family"] == "anthropic" for m in account["makers"])

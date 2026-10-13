@@ -305,8 +305,7 @@ def _original_maker_families(state, fix_round):
     folded before that round's fix); the seeded and legacy maps (non-numeric round) count."""
     early = [e for e in seat_map_receipts.receipts(state)
              if not str(e.get("round")).isdigit() or int(str(e["round"])) <= fix_round]
-    return (seat_map_receipts.maker_family_union(early) or frozenset()) \
-        | receipt_disclosures.maker_families(seat_map_receipts.effective_seat_map({**state, "seatMapReceipts": early, "seatMap": None}))
+    return receipt_disclosures.accumulated_maker_families({**state, "seatMapReceipts": early, "seatMap": None})
 
 
 def account_from_session(session_dir, extras, readers=None, raw_dir=None):
