@@ -170,10 +170,20 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
 
 # --- the tally (I4) ---
 
+def _stamp(value, day):
+    """The full instant a `writtenAt` names (naive reads as UTC); the day's midnight when only the date parses."""
+    try:
+        at = datetime.datetime.fromisoformat(value.strip().replace("Z", "+00:00").replace(" ", "T", 1))
+        return at if at.tzinfo else at.replace(tzinfo=datetime.timezone.utc)
+    except (ValueError, AttributeError):
+        return datetime.datetime.combine(day, datetime.time(), datetime.timezone.utc)
+
+
 def _seats(name):
     """The seats a reviewer row name or finding `reviewer` string names (rule 3)."""
     out = []
-    for part in name.split(",") if isinstance(name, str) else []:
+    # a merged finding label joins its dimensions with " + " (panel_tally._merge_dims, verification._union_dimensions)
+    for part in re.split(r"[,+]", name) if isinstance(name, str) else []:
         part = re.sub(r"\s*\(round \d+\)$", "", part.strip()).strip().lower()
         tokens = part.split()
         if len(tokens) > 1 and tokens[-1] in _KNOWN:
@@ -227,7 +237,11 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["malformed"] += 1
             incomplete = True
             continue
-        prev = rec.get("previousRecord")  # the link to the record before it, or null for the first
+        if "previousRecord" not in rec:  # the writer always emits it: absence is unknown ancestry, not a first record
+            left["malformed"] += 1
+            incomplete = True
+            continue
+        prev = rec["previousRecord"]  # the link to the record before it, or null for the first
         if prev is not None and not (isinstance(prev, dict) and any(prev.get(k) in given for k in ("url", "id") if prev.get(k) is not None)):
             left["malformed"] += 1
             incomplete = True
@@ -247,14 +261,15 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         for f in rec.get("findings") or []:
             key = f.get("findingKey") or f.get("id")
             if key is not None:
-                hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "days": {}})
+                hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "at": {}})
                 hit["fixed"] = hit["fixed"] or f.get("outcome") == "fixed"
-                hit["days"].setdefault(day, set()).update(_seats(f.get("reviewer")))
-    for hit in seen.values():  # a catch is dated by the earliest record that carries it, and counts once
-        earliest = min(hit["days"])
-        if hit["fixed"] and not outside(earliest):
-            unattributed += not hit["days"][earliest]
-            caught.update(hit["days"][earliest])
+                at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))
+                at[1].update(_seats(f.get("reviewer")))
+    for hit in seen.values():  # a catch is dated by, and credited to, the earliest record that carries it, once
+        earliest_day, seats = hit["at"][min(hit["at"])]
+        if hit["fixed"] and not outside(earliest_day):
+            unattributed += not seats
+            caught.update(seats)
     counts = {"missed": 0, "seenAndLeft": 0}
     for esc in escapes if isinstance(escapes, list) else []:
         day = _day(esc.get("reviewedAt")) if isinstance(esc, dict) else None

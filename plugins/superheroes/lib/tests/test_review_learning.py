@@ -271,7 +271,7 @@ def _finding(key, reviewer, outcome="fixed", fid=None):
 
 def _record(pr, session, day, rows, findings=()):
     return {"pr": pr, "sessionId": session, "writtenAt": day + "T10:00:00Z", "reviewers": list(rows),
-            "findings": list(findings)}
+            "findings": list(findings), "previousRecord": None}
 
 
 def _truth_table_records():
@@ -427,6 +427,35 @@ def test_tally_missing_earlier_record_reads_incomplete_and_a_full_chain_counts()
     assert got["measured"] is False and got["reason"] == "incomplete-evidence"
     full = RL.tally([first, last], [], D, until="2026-10-11")
     assert full["measured"] is True and full["seats"]["code-reviewer"]["caught"] == 0
+
+
+def test_tally_merged_plus_label_credits_every_reviewer():
+    import panel_tally
+    label = panel_tally._merge_dims({"dimension": "Code"}, {"dimension": "Security"})
+    assert label == "Code + Security"
+    rec = _record(1, "s", D, [_row("code-reviewer"), _row("security-reviewer")], [_finding("k", label)])
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["seats"]["code-reviewer"]["caught"] == 1 and got["seats"]["security-reviewer"]["caught"] == 1
+
+
+def test_tally_record_missing_previous_record_key_is_incomplete_evidence():
+    rec = _record(1, "s", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")])
+    del rec["previousRecord"]
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["measured"] is False and got["reason"] == "incomplete-evidence" and got["seats"] == {}
+    rec["previousRecord"] = None
+    assert RL.tally([rec], [], D, until="2026-10-11")["measured"] is True
+
+
+def test_tally_credits_only_the_earliest_record_not_its_whole_day():
+    rows = [_row("code-reviewer"), _row("security-reviewer")]
+    first = dict(_record(7, "s1", D, rows, [_finding("k", "Code")]), url="u1", writtenAt=D + "T09:00:00Z")
+    later = dict(_record(7, "s2", D, rows, [_finding("k", "Security")]), writtenAt=D + "T15:00:00Z",
+                 previousRecord={"url": "u1"})
+    for order in ([first, later], [later, first]):
+        got = RL.tally(order, [], D, until="2026-10-11")
+        assert got["seats"]["code-reviewer"]["caught"] == 1
+        assert got["seats"]["security-reviewer"]["caught"] == 0
 
 
 def test_supersedes_id_grammar_is_canons():
