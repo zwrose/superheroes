@@ -15,6 +15,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import round_adapters as RA  # noqa: E402
+import receipt_disclosures as RDS  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_orders as RO  # noqa: E402
 import seat_map as SM  # noqa: E402
@@ -347,3 +348,44 @@ def test_the_verify_then_panel_refresh_re_asks_the_lane_call(tmp_path, diff):
     assert RD._refresh_panel_diff_at_verified_head(
         state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (diff, None))
     assert state["config"]["dimensions"] == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]
+
+
+# --- the expanded roster is seated in the map dispatch reads ------------------------------------
+
+def _populated_reduced_state(tmp_path, **cfg):
+    reduced = SM.build(SM.BASE_ROSTER, ["claude", "codex"], "anthropic", None, 0)
+    reduced["laneBasis"] = {"floor": None}
+    assert "security-reviewer" not in reduced["seats"]
+    return RD.new_state(dict({"repoRoot": str(tmp_path), "seatMap": reduced,
+                              "vendors": ["claude", "codex"]}, **cfg))
+
+
+def test_a_risky_head_seats_the_restored_specialists_in_the_effective_map(tmp_path):
+    # axis: the lane expansion recomposes the governing seat map — see bite-proof record wo_a_1797_roster
+    state = _populated_reduced_state(tmp_path)
+    kind, dims = _unknown_surface_dimensions(state, _RISKY_DIFF)
+    assert dims == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]
+    effective = RD.effective_seat_map(state)
+    assert effective["laneBasis"]["floor"] == "full"
+    for seat in ("security-reviewer", "premortem-reviewer"):
+        assert effective["seats"][seat]["vendor"] == "codex"
+        assert RD._seat_dispatch_row(state, seat)["vendor"] == "codex"
+    # the next panel's orders carry the restored seats on codex (the row emission renders from)
+    cfg = state["config"]
+    for seat in ("security-reviewer", "premortem-reviewer"):
+        row = RD._seat_transport_row(state, RD.P_PANEL, seat, 0, cfg, {}, str(tmp_path))
+        assert row["vendor"] == "codex"
+
+
+def test_a_restored_specialist_with_no_composable_map_is_recorded_unfilled(tmp_path):
+    # fail-closed: the effective map has no liveVendors/authorFamily to compose from
+    state = _populated_reduced_state(tmp_path)
+    for key in ("liveVendors", "authorFamily"):
+        state["seatMapReceipts"][0]["map"].pop(key)
+        state["config"]["seatMap"].pop(key)
+    _unknown_surface_dimensions(state, _RISKY_DIFF)
+    effective = RD.effective_seat_map(state)
+    for seat in ("security-reviewer", "premortem-reviewer"):
+        assert SM.is_unfilled(effective["seats"][seat])
+    assert effective["seats"]["code-reviewer"]["vendor"]  # the reduced roster's seats are kept
+    assert {"security-reviewer", "premortem-reviewer"} <= set(RDS.unfilled_seats(effective))

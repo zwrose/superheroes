@@ -1187,9 +1187,63 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
     if not isinstance(new_basis, dict) or new_basis.get("floor") is None:
         return
     risky = seat_map.roster_for(new_basis)
-    config["dimensions"] = [d for d in DIMENSIONS
-                            if d in risky or d in (config.get("dimensions") or [])]
-    config["seatMap"] = dict(sm, laneBasis={"floor": new_basis.get("floor")})
+    before = list(config.get("dimensions") or [])
+    config["dimensions"] = [d for d in DIMENSIONS if d in risky or d in before]
+    restored = [d for d in config["dimensions"] if d not in before]
+    basis_out = {"floor": new_basis.get("floor")}
+    config["seatMap"] = dict(sm, laneBasis=basis_out)
+    if restored:
+        _recompose_expanded_seat_map(state, config, restored, basis_out)
+
+
+def _recompose_expanded_seat_map(state, config, restored, basis):
+    """Seat the specialists a lane expansion restored, in the map dispatch actually reads.
+
+    Dispatch and `_fold_panel` read `seat_map_receipts.effective_seat_map(state)`, which prefers the
+    latest receipt carrying seats over `config["seatMap"]`; so the expanded roster is composed with
+    the pure `seat_map.build` (no liveness probe) from the effective map's own facts and the makers
+    accumulated so far, and recorded as a receipt. Fail-closed: when the map cannot supply what
+    `build` needs, or `build` raises, each restored specialist is recorded as an unfilled seat — it
+    surfaces as planned-but-not-run, never dispatched on a maker family and never silently absent."""
+    effective = seat_map_receipts.effective_seat_map(state)
+    effective = effective if isinstance(effective, dict) else {}
+    composed = None
+    try:
+        live = effective.get("liveVendors")
+        author = effective.get("authorFamily")
+        if (isinstance(live, list) and live and isinstance(author, str) and author):
+            old_seats = effective.get("seats") if isinstance(effective.get("seats"), dict) else {}
+            pins = {name: {k: entry.get(k) for k in ("vendor", "model", "effort")}
+                    for name, entry in old_seats.items()
+                    if isinstance(entry, dict) and entry.get("source") == "pinned"}
+            narrative = effective.get("narrativeFamily")
+            seed = effective.get("seed")
+            composed = seat_map.build(
+                seat_map.PANEL_ROSTER, list(live), author,
+                narrative if isinstance(narrative, str) and narrative else None,
+                seed if isinstance(seed, int) and not isinstance(seed, bool) else 0,
+                pins=pins or None,
+                extra_maker_families=frozenset(
+                    receipt_disclosures.accumulated_maker_families(state)))
+    except Exception:  # noqa: BLE001 — a compose that cannot run is the fail-closed branch below
+        composed = None
+    if isinstance(composed, dict) and isinstance(composed.get("seats"), dict):
+        composed["laneBasis"] = dict(basis)
+    else:
+        composed = dict(effective)
+        seats = dict(composed.get("seats")) if isinstance(composed.get("seats"), dict) else {}
+        for name in restored:
+            if not isinstance(seats.get(name), dict):
+                seats[name] = seat_map._unfilled_cfg(
+                    seat_map.DEFAULT_TIER_BY_SEAT.get(name, "reviewer-deep"))
+        composed["seats"] = seats
+        composed["laneBasis"] = dict(basis)
+    receipts = state.get("seatMapReceipts")
+    if not isinstance(receipts, list):
+        receipts = []
+        state["seatMapReceipts"] = receipts
+    receipts.append({"round": str(state.get("round")), "map": composed})
+    config["seatMap"] = dict(composed)
 
 
 def _default_config(overrides=None):
@@ -2254,7 +2308,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     if phase == P_PANEL:
         _fold_panel(state, config, artifact, session_dir=session_dir)
     elif phase == P_VERIFIERS:
-        _fold_verifiers(state, config, artifact)
+        _fold_verifiers(state, config, artifact, session_dir=session_dir)
     elif phase == P_SYNTHESIS:
         _fold_synthesis(state, config, artifact)
     elif phase == P_GAPSWEEP:
@@ -2766,9 +2820,14 @@ def synthesis_staged_id_fault(state, artifact):
     return None
 
 
-def _fold_verifiers(state, config, artifact):
+def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
+    if _nonpanel_unseatable(state, session_dir):
+        # No verifier could be seated outside the makers: any verdict submitted never ran, so it
+        # folds exactly like silence (every staged finding stays unverified), as an unseatable
+        # audit target does.
+        verdicts = []
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
@@ -6912,6 +6971,18 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "collection-manifest-key"})
             return {"ok": False, "reason": fault}
+    if (not _via_advance and phase in (P_GAPSWEEP, P_SCOPED)
+            and _nonpanel_unseatable(state, session_dir)):
+        # No reviewer outside the makers' families can be seated: no order was emitted for this
+        # phase, so a hand artifact for it is not a review that ran. Refuse the fold (the advance
+        # path's refuse-fold policy for a single-seat phase) rather than let an empty artifact
+        # converge the round.
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                      "round": pending.get("round"), "attempt": attempt,
+                                      "outcome": "nonpanel-reviewer-unseatable"})
+        return {"ok": False, "reason": "nonpanel-reviewer-unseatable",
+                "detail": "no reviewer outside the makers' families can be seated for %s; no order "
+                          "was emitted and a submitted artifact is not a review that ran" % phase}
     if phase == P_VERIFIERS:
         fault = verifier_results_fault(artifact)
         if fault:
@@ -7790,6 +7861,16 @@ def _nonpanel_reviewer_vendor(state, config, repo_root):
         # the provenance gap is still real and the seat still folds to the stdout contract.
         return chosen, source
     return chosen, VENDOR_SOURCE_INDEPENDENT
+
+
+def _nonpanel_unseatable(state, session_dir=None):
+    """True when no reviewer outside every maker family can be seated for the verifier / gap-sweep /
+    scoped phases. The same decision `_emit_orders_manifest` records slots missing on, read on the
+    fold side so a hand-`submit` session cannot fold a result for a slot that never ran."""
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir) if session_dir else {}
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    return _nonpanel_reviewer_vendor(state, cfg, repo_root)[0] is None
 
 
 def effective_seat_map(state):
@@ -8781,7 +8862,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
                      or os.getcwd())
-        if _nonpanel_reviewer_vendor(state, cfg, repo_root)[0] is None:
+        if _nonpanel_unseatable(state, session_dir):
             # Every live vendor sits in a maker family: no reviewer can be seated for ANY slot of
             # this phase, on either channel (a hand-submit session has no runner-channel rule to
             # refuse under, but an unseatable slot still gets no order). The driver records each

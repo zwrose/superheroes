@@ -163,3 +163,44 @@ def test_unseatable_nonpanel_seat_gets_no_order_and_a_missing_record(tmp_path):
         assert not os.path.exists(RR.order_prompt_path(
             session_dir, pend["round"], pend["phase"], RR.storage_key(seat, occurrence),
             pend["attempt"]))
+
+
+# --- the hand-submit channel: the unseatable slots fold as not run, as an unseatable audit does ---
+
+def _hand_unseatable_session(tmp_path, name):
+    session_dir, gitdir, head_path = TRI._bootstrap(
+        tmp_path, name=name, vendors=["claude"], fixerVendor="claude")
+    TRI._drive_to_phase(session_dir, gitdir, [TRI._blocking_finding("bounds A", 2)], head_path,
+                        RD.P_VERIFIERS)
+    state = TRI._state(session_dir)
+    state.pop("_advanceUsed", None)  # the same session, now answered by hand
+    RD.save_state(session_dir, state)
+    return session_dir, state
+
+
+def test_hand_submitted_verdicts_for_an_unseatable_verifier_do_not_clear_a_finding(tmp_path):
+    # axis: the hand-submit fold of an unseatable verifier slot — see bite-proof record
+    # wo_b_1797_seat_orders
+    session_dir, state = _hand_unseatable_session(tmp_path, "b5-hand-verifiers")
+    import verification
+    staged = verification.stage_ids(state["_toVerify"])
+    assert staged
+    artifact = {"verdicts": [{"id": s["id"], "verdict": "REFUTED", "reason": "intentional"}
+                             for s in staged]}
+    out = RD.cmd_submit(session_dir, RD.P_VERIFIERS, state["pending"]["attempt"],
+                        RD.state_hash(state), artifact)
+    assert out["ok"], out
+    after = TRI._state(session_dir)
+    assert not any(d for d in (after["rounds"][str(state["round"])].get("verify") or {}).get("drops", []))
+    assert after["rounds"][str(state["round"])]["verify"]["unverified"]
+
+
+@pytest.mark.parametrize("phase", [RD.P_GAPSWEEP, RD.P_SCOPED])
+def test_hand_submit_of_an_unseatable_single_seat_review_phase_is_refused(tmp_path, phase):
+    session_dir, state = _hand_unseatable_session(tmp_path, "b5-hand-" + phase)
+    state["pending"] = dict(state["pending"], phase=phase)
+    RD.save_state(session_dir, state)
+    out = RD.cmd_submit(session_dir, phase, state["pending"]["attempt"],
+                        RD.state_hash(state), {"findings": []})
+    assert out["ok"] is False and out["reason"] == "nonpanel-reviewer-unseatable"
+    assert TRI._state(session_dir)["pending"]["phase"] == phase  # the step survives the refusal
