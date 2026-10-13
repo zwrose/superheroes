@@ -2318,6 +2318,9 @@ def _fold_panel(state, config, artifact):
     never silently dropped (coordination note 2)."""
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
+    # A submitted map never releases a seat the map already governing this round left unfilled.
+    unfilled = receipt_disclosures.unfilled_seats(
+        seat_map_receipts.round_governing_map(state, state["round"]))
     if seat_map:
         receipts = state.get("seatMapReceipts")
         if not isinstance(receipts, list):
@@ -2326,7 +2329,7 @@ def _fold_panel(state, config, artifact):
         receipts.append({"round": str(state["round"]), "map": dict(seat_map)})
     # A seat the governing map leaves unfilled never ran, whatever payload was submitted for it:
     # drop it so the dimension folds `missing` and none of its findings are credited.
-    unfilled = receipt_disclosures.unfilled_seats(
+    unfilled = unfilled | receipt_disclosures.unfilled_seats(
         seat_map_receipts.round_governing_map(state, state["round"]))
     if unfilled and isinstance(seats, dict):
         seats = {dim: seat for dim, seat in seats.items() if dim not in unfilled}

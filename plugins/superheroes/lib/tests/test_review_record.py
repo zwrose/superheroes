@@ -2323,3 +2323,29 @@ def test_reading_next_cli_prints_one_object_and_exits_zero(tmp_path, monkeypatch
     assert json.loads(capsys.readouterr().out)["next"] == "park"
     assert rr.main(["reading-next", "--run-dir", "a", "--maker-family", "anthropic"]) == 0
     assert json.loads(capsys.readouterr().out)["next"] == "rerun"
+
+
+def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
+    # axis: the CLI entry point; reading-next composed with the real persisted run record, no stand-in for _engine_run
+    import test_engine_dispatch as ted
+
+    def run(name, outputs):
+        run_dir = str(tmp_path / name)
+        ted.ED.dispatch_review(
+            seat=ted._codex_seat(), prompt_path=ted._valid_prompt(tmp_path), repo_root=ted._repo(tmp_path),
+            run_engine=ted.FakeRunner(outputs), build_view=ted._fake_build_view(tmp_path), run_dir=run_dir)
+        return run_dir
+
+    engaged = run("engaged", [(ted._VALID_FINDINGS_STDOUT, False, 0, "")])
+    forfeited = run("forfeited", [("not json", False, 0, ""), ("not json", False, 0, "")])
+    maps = tmp_path / "map.json"
+    maps.write_text(json.dumps(SEAT_MAP))
+    tail = ["--maker-family", "anthropic", "--seat-map", str(maps)]
+
+    def nxt(*dirs):
+        assert rr.main(["reading-next"] + [a for d in dirs for a in ("--run-dir", d)] + tail) == 0
+        return json.loads(capsys.readouterr().out)["next"]
+
+    assert nxt(engaged) == "accept"
+    assert nxt(forfeited) == "rerun"
+    assert nxt(forfeited, forfeited) == "move-up"

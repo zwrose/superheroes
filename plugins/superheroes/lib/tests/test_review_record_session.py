@@ -246,6 +246,16 @@ def test_an_unfilled_seat_is_listed_as_planned_and_not_run_even_with_no_slot_jou
     assert rows["code-reviewer (round 1)"]["ran"] is True
 
 
+def test_an_unfilled_seat_the_driver_never_schedules_is_not_a_missing_reviewer(tmp_path):
+    seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
+                          "grounding-seat": dict(UNFILLED_SEAT)}}
+    s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
+    s.seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras(), Fake().readers())
+    # bites on: the grounding seat (not on the driven path) parking a complete review as a missing reviewer
+    assert {v["name"] for v in account["reviewers"]} == {"code-reviewer (round 1)"}
+
+
 def test_an_unfilled_seat_the_driver_journaled_as_missing_is_still_listed_once_as_unfilled(tmp_path):
     seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
                           "security-reviewer": dict(UNFILLED_SEAT)}}

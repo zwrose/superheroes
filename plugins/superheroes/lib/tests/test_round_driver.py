@@ -7584,6 +7584,18 @@ def test_fold_panel_never_credits_an_unfilled_seats_findings_when_no_receipt_is_
     assert state["fullPanelRan"] is False
 
 
+def test_fold_panel_keeps_a_seeded_unfilled_seat_when_the_submitted_map_has_no_seats():
+    """An incomplete submitted map (no `seats`) does not release a seat the seeded map left unfilled."""
+    seats = {dim: {"vendor": "codex", "model": "m", "source": "default"} for dim in RD.DIMENSIONS}
+    seats["code-reviewer"] = dict(UNFILLED_SEAT)
+    state = RD.new_state(_cfg(seatMap={"seats": seats}))
+    RD._fold_panel(state, state["config"], {
+        "seats": {dim: {"findings": []} for dim in RD.DIMENSIONS},
+        "seatMap": {"makerFamilies": ["anthropic"]}})
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "missing"
+    assert state["fullPanelRan"] is False
+
+
 def _fix_state(config):
     state = RD.new_state(config)
     state["fixBatch"] = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]

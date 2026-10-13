@@ -213,7 +213,7 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     for rnd in sorted({k[1] for k in slots if k[0] == sc.PANEL_PHASE}
                       | {int(n) for n, rec in (state.get("rounds") or {}).items()
                          if str(n).isdigit() and isinstance(rec, dict) and "seatStatus" in rec}):
-        names = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd))
+        names = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) & set(round_phases.DIMENSIONS)
         if names:
             unfilled[rnd] = sorted(names)
     out, raw = [], []
