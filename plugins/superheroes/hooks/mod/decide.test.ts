@@ -171,12 +171,12 @@ test('settingsFrom: malformed or out-of-range values take their defaults', () =>
   expect(settingsOf(schema, { autoCheckpointMode: 3 }).mode).toBe(defaults.mode)
 })
 
-test('settingsFrom: the allowance is clamped below the threshold', () => {
+test('settingsFrom: the allowance is independent of the threshold', () => {
   const schema = schemaOf()
-  const settings = settingsOf(schema, { autoCheckpointTokens: 100000, autoCheckpointAllowance: 900000 })
+  const settings = settingsOf(schema, { autoCheckpointTokens: 500000, autoCheckpointAllowance: 700000 })
 
-  expect(settings.allowanceTokens).toBe(99999)
-  expect(settings.allowanceTokens).toBeLessThan(settings.thresholdTokens)
+  expect(settings.allowanceTokens).toBe(700000)
+  expect(effectiveTrigger(settings, AUTO_COMPACT, true)).toBe(267000)
   expect(settingsOf(schema, { autoCheckpointAllowance: 0 }).allowanceTokens).toBe(0)
 })
 

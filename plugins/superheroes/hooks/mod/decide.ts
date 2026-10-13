@@ -38,8 +38,8 @@ const numberSetting = (raw: unknown, { default: dflt, min, max }: Spec): number 
 
 // Coerces the plugin's options to settings. The manifest's `userConfig` (the parsed
 // object, passed as `schema`) is the one home of defaults, bounds and modes: anything
-// missing, malformed or out of range takes its default; the allowance is clamped into
-// [0, threshold). Null when the schema cannot answer: the caller then runs nothing.
+// missing, malformed or out of range takes its default; the allowance is kept as is
+// (headroom before the harness compacts, not a share of the threshold). Null when the schema cannot answer: the caller then runs nothing.
 export const settingsFrom = (options: unknown, schema: unknown): Settings | null => {
   const raw = asRecord(options)
   const thresholdTokens = numberSetting(raw.autoCheckpointTokens, specOf(schema, 'autoCheckpointTokens'))
@@ -52,7 +52,7 @@ export const settingsFrom = (options: unknown, schema: unknown): Settings | null
     return null
   }
 
-  return { thresholdTokens, allowanceTokens: Math.min(allowance, thresholdTokens - 1), mode: mode as string }
+  return { thresholdTokens, allowanceTokens: allowance, mode: mode as string }
 }
 
 // The fill at which the checkpoint runs. With the harness's own auto-compaction on

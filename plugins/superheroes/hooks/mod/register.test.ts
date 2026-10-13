@@ -102,6 +102,8 @@ type Rig = {
   // the notes file exists but cannot be read
   isUnreadable: boolean
   compactAttempts: number
+  // state writes the rig rejected
+  denied: number
 }
 
 // Registers the world beneath the mod: the CLI stub on `process.run`, the file
@@ -139,6 +141,7 @@ function rig(
     notes: 'old notes',
     isUnreadable: false,
     compactAttempts: 0,
+    denied: 0,
   }
 
   on('session.id', () =>
@@ -199,7 +202,9 @@ function rig(
     return { value: undefined }
   })
   on('state.set', (_$, e, next) => {
-    if (options.isStateBroken || e.key === options.brokenKey) {
+    if (options.isStateBroken || (e.key === options.brokenKey && e.value === null)) {
+      r.denied += 1
+
       return { deny: 'state locked' }
     }
     r.states.push(e.value)
@@ -1261,7 +1266,7 @@ test('a checkpoint that ends unchanged re-arms from its ending fill, not its sta
   expect(r.commands).toEqual([COMMAND, COMMAND])
 })
 
-test('a manual compaction that leaves 80000 with a 50000 trigger starts no checkpoint on the next measure', async ($, on) => {
+test('a manual compaction that leaves 80000 with a 50000 trigger starts no checkpoint on the next measure', { options: { autoCheckpointTokens: 50000 } }, async ($, on) => {
   const r = rig(on, () => saveAnswer)
 
   await start($)
@@ -1273,14 +1278,16 @@ test('a manual compaction that leaves 80000 with a 50000 trigger starts no check
 })
 
 test('a compaction that succeeded is never retried for a failed follow-up write', async ($, on) => {
-  const r = rig(on, () => saveAnswer, { brokenKey: 'rearmAfterCompact' })
+  const r = rig(on, () => saveAnswer, { brokenKey: 'checkpoint' })
 
   await start($)
   await measure($, r, PAST)
   await r.clock.settle()
   r.notes = 'fresh notes'
   await complete($, 'Done.')
-  await r.clock.advance(5000)
+  await r.clock.advance(60000)
 
+  // the checkpoint clear threw after the compaction ran: no retry follows it
+  expect(r.denied).toBe(1)
   expect(r.compactAttempts).toBe(1)
 })
