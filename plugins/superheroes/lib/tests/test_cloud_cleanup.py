@@ -39,7 +39,7 @@ class Gh:
         self.bare = str(bare)
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
-        self.push_url = "git@github.com:%s.git" % REPO
+        self.pushes = []
 
     def _live(self, branch):
         got = subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", "refs/heads/" + branch],
@@ -47,9 +47,9 @@ class Gh:
         return got.stdout.strip() or None
 
     def __call__(self, argv, **kw):
-        if argv[0] == "git" and argv[3:6] == ["remote", "get-url", "--push"]:
-            return SimpleNamespace(returncode=0, stdout=self.push_url + "\n", stderr="")
         if argv[0] == "git":
+            if "push" in argv:
+                self.pushes.append(list(argv))
             return subprocess.run(argv, **kw)
         self.calls.append(tuple(argv))
         path = argv[-1]
@@ -108,9 +108,14 @@ def w(tmp_path, monkeypatch):
     _git(work, "branch", BRANCH)
     _git(work, "push", "-q", str(bare), "main", BRANCH)
     head = _git(work, "rev-parse", "HEAD")
+    # the delete's URL is redirected to the local bare repository by git's own insteadOf, in a throwaway HOME
+    os.makedirs(env["HOME"], exist_ok=True)
+    with open(os.path.join(env["HOME"], ".gitconfig"), "w", encoding="utf-8") as fh:
+        for host in ("github.com", "ghe.example.com"):
+            fh.write('[url "%s"]\n\tinsteadOf = https://%s/%s.git\n' % (bare, host, REPO))
     gh = Gh(bare)
     gh.pulls[PR] = _pull(head_sha=head)
-    return SimpleNamespace(repo=repo, env=env, gh=gh, bare=bare, work=work, head=head, remote=str(bare))
+    return SimpleNamespace(repo=repo, env=env, gh=gh, bare=bare, work=work, head=head)
 
 
 def _lane(w, launch_id, issue, session="session-a", place="cloud", outcome=None, ts=None):
@@ -132,7 +137,7 @@ def _plan(w, **kw):
 
 
 def _branch(w):
-    return CC.branch(w.repo, REPO, PR, remote=w.remote, env=w.env, run=w.gh)
+    return CC.branch(w.repo, REPO, PR, env=w.env, run=w.gh)
 
 
 def _record(w, msg_id, outcome):
@@ -422,7 +427,7 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
     assert json.loads(capsys.readouterr().out)["archiveText"] == CC.ARCHIVE_TEXT_MERGED % PR
     assert CC.main(["record"] + base + ["--msg-id", "m-1", "--outcome", "delivered"]) == 0
     assert json.loads(capsys.readouterr().out)["ownerMessage"]
-    assert CC.main(["branch"] + base + ["--remote", w.remote]) == 0
+    assert CC.main(["branch"] + base) == 0
     assert json.loads(capsys.readouterr().out)["deleted"] is True
     assert CC.main(["branch"] + base[:-2] + ["--pr", "0"]) == 1
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "pr-invalid"}
@@ -451,7 +456,7 @@ def test_record_and_branch_keep_the_explicit_launch_selection(w):
     assert _record(w, "m-1", "delivered") == {"ok": False, "reason": "lane-ambiguous"}
     got = CC.record(w.repo, REPO, PR, "m-1", "delivered", launch_id="l-2", env=w.env, run=w.gh)
     assert got["ok"] and got["request"]["session"] == "session-b"
-    out = CC.branch(w.repo, REPO, PR, remote=w.remote, launch_id="l-2", env=w.env, run=w.gh)
+    out = CC.branch(w.repo, REPO, PR, launch_id="l-2", env=w.env, run=w.gh)
     assert out.get("deleted") is True, out
 
 
@@ -462,13 +467,45 @@ def test_an_open_pr_head_in_a_differently_cased_repository_spelling_keeps_the_br
     assert BRANCH in _remote_branches(w)
 
 
-def test_a_push_destination_other_than_the_checked_repository_is_refused_before_any_delete(w):
+def test_the_delete_is_pushed_to_the_url_built_from_the_checked_repository(w):
     _lane(w, "l-1", 101)
-    w.gh.push_url = "git@github.com:owner/mirror.git"
-    assert _branch(w) == {"ok": False, "reason": "push-destination-mismatch"}
-    assert BRANCH in _remote_branches(w)
-    w.gh.push_url = "https://github.com/Owner/Name"
     assert _branch(w)["deleted"] is True
+    assert [p[-2:] for p in w.gh.pushes] == [["https://github.com/owner/name.git", ":refs/heads/" + BRANCH]]
+    assert _remote_branches(w) == ["main"]
+
+
+def test_the_delete_url_takes_its_host_from_gh_host(w):
+    _lane(w, "l-1", 101)
+    w.env["GH_HOST"] = "ghe.example.com"
+    assert _branch(w)["deleted"] is True
+    assert [p[-2] for p in w.gh.pushes] == ["https://ghe.example.com/owner/name.git"]
+    assert _remote_branches(w) == ["main"]
+
+
+def test_a_configured_remote_and_its_push_urls_are_never_read_or_pushed_to(w, tmp_path):
+    _lane(w, "l-1", 101)
+    mirror = tmp_path / "mirror.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(w.bare), str(mirror)], check=True)
+    _git(w.repo, "remote", "add", "origin", str(mirror))
+    _git(w.repo, "remote", "set-url", "--add", "--push", "origin", str(mirror))
+    assert _branch(w)["deleted"] is True
+    assert "feature" in _git(mirror, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
+    assert all("remote" not in p for p in w.gh.pushes) and all("origin" not in p for p in w.gh.pushes)
+
+
+def test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    reserved = _reserved("l-2", BATCH, ["l-2"], w.repo, issue=101, place="cloud", cloudEnvironment="env-fixture-one",
+                         pluginVersion="1.2.3", ts=_T2)
+    reserved["premise"] = dict(reserved.get("premise") or {}, adopts=PR)
+    assert ll.reserve(w.repo, reserved, env=w.env)["ok"]
+    started = _started("l-2")
+    started.update(cloudSessionName="session-two", cloudSessionId="session_01AbCdEf123")
+    assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
+    assert _record(w, "m-1", "delivered")["request"]["session"] == "session-two"
 
 
 def test_a_pending_request_is_written_before_the_send_and_replaced_by_the_outcome_of_the_same_message(w):

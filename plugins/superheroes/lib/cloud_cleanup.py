@@ -2,7 +2,7 @@
 
   cloud_cleanup.py plan   --repo-root D --repo O/N --pr P [--launch-id ID]
   cloud_cleanup.py record --repo-root D --repo O/N --pr P --msg-id ID --outcome pending|delivered|uncertain|failed [--launch-id ID]
-  cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--remote URL] [--launch-id ID]
+  cloud_cleanup.py branch --repo-root D --repo O/N --pr P [--launch-id ID]
 
 A plan whose request is already `delivered` carries `archiveText: null` and `alreadyDelivered: true`: the
 caller sends nothing, and goes on to `branch`. A `--launch-id` given to `plan` is given again to `record`
@@ -19,6 +19,8 @@ State is `cloud-cleanup.json`, beside the launch ledger, written only with `stor
 The cleanup acts only on a cloud lane whose PR is merged or closed, bound unambiguously to that PR,
 and never deletes a ref that is not exactly the PR's recorded head, that another open PR uses as head
 or base, or that is the default branch. An open PR gets nothing: no message, no deletion, no receipt.
+The branch is deleted by pushing to the URL built from the repository every check read
+(`https://<GH_HOST or github.com>/<owner>/<name>.git`); no configured remote or push URL is consulted.
 """
 import argparse
 import datetime
@@ -184,6 +186,33 @@ def _epoch(stamp):
         return None
 
 
+def _adopting_successor(repo_root, lid, lane, pr, branch, env):
+    """(launchId, lane, refusal): the latest later cloud lane of the same issue whose premise adopts this PR
+    or its branch; the given lane when there is none. Read from the reserved records, which carry the premise
+    `cloud_recover.successor` wrote."""
+    ll = _sib("launch_ledger")
+    got = ll.read(repo_root, env=env)
+    if got["state"] not in ("ok", "missing", "tornTail"):
+        return None, {}, "launch-ledger-unreadable"
+    fold = ll.fold(got["records"])
+    if not fold.get("ok", True):
+        return None, {}, "launch-ledger-fold-failed"
+    premises = {r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"}
+
+    def adopts(premise):
+        return isinstance(premise, dict) and (
+            (premise.get("adopts") == pr and not isinstance(premise.get("adopts"), bool))
+            or (bool(branch) and premise.get("adoptsBranch") == branch))
+
+    later = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
+             if i["place"] == ll.PLACE_CLOUD and i["issue"] == lane.get("issue")
+             and i["reservedIndex"] > lane["reservedIndex"] and adopts(premises.get(k))]
+    if not later:
+        return lid, lane, None
+    best = max(later, key=lambda t: t[0])
+    return best[1], best[2], None
+
+
 def _plan(repo_root, repo, pr, launch_id, env, run):
     """(result, facts): the plan, and the PR facts the branch step reads. `facts` is None unless the
     plan is a cleanup."""
@@ -220,6 +249,11 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     if len(lanes) > 1:
         return _refusal("lane-ambiguous"), None
     lid, lane = lanes[0]
+    if not launch_id:
+        # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup
+        lid, lane, reason = _adopting_successor(repo_root, lid, lane, pr, _name(pull.get("head"), "ref"), env)
+        if reason:
+            return _refusal(reason), None
     session = lane.get("cloudSessionName")
     if not (isinstance(session, str) and session):
         return _refusal("lane-session-unknown"), None
@@ -323,29 +357,12 @@ def _in_use(repo, branch, env, run):
     return False
 
 
-def _push_destination_ok(repo_root, repo, remote, env, run):
-    """True only when the URL a push to `remote` (default `origin`) would use names `repo` on its host."""
-    target = remote if remote else "origin"
-    code, out, _ = _gh_git(run, ["git", "-C", repo_root, "remote", "get-url", "--push", target], env)
-    url = out.strip() if code == 0 and out.strip() else (target if remote else None)
-    norm = _sib("store_core").normalize_remote(url)
-    return bool(norm) and "/" in norm and norm.split("/", 1)[1].lower() == repo.lower()
+def _push_url(repo, env):
+    """The URL a deletion is pushed to: the repository every check read, on the host `gh` reads."""
+    return "https://%s/%s.git" % (env.get("GH_HOST") or "github.com", repo)
 
 
-def _gh_git(run, argv, env):
-    """(exit code, stdout, stderr) of one `git` call; (None, "", "") when it could not run at all."""
-    runner = subprocess.run if run is None else run
-    try:
-        proc = runner(argv, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
-                      env={k: v for k, v in env.items() if not k.startswith("GIT_")})
-    except Exception:
-        return None, "", ""
-    code, out, err = (getattr(proc, name, None) for name in ("returncode", "stdout", "stderr"))
-    return (code if isinstance(code, int) else None), (out if isinstance(out, str) else ""), \
-        (err if isinstance(err, str) else "")
-
-
-def branch(repo_root, repo, pr, *, remote=None, launch_id=None, env=None, run=None):
+def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
     """Delete the merged or closed PR's head branch, only while it is exactly the PR's recorded head."""
     env = os.environ if env is None else env
     got, facts = _plan(repo_root, repo, pr, launch_id, env, run)
@@ -376,15 +393,13 @@ def branch(repo_root, repo, pr, *, remote=None, launch_id=None, env=None, run=No
         # axis: work pushed after the PR's head is never deleted — see bite-proof record c8_cloud_cleanup
         if sha != head_sha:
             return _refusal("branch-moved")
-        # axis: the delete goes only to the repository the checks read, never to a fork, mirror or other push URL
-        if not _push_destination_ok(repo_root, repo, remote, env, run):
-            return _refusal("push-destination-mismatch")
+        # axis: the delete goes only to the URL built from the repository the checks read, never to a configured remote, fork, mirror or other push URL
         # A ref deletion guarded by a lease, never a history rewrite: the server applies it only while the
         # ref still equals the PR's head sha.
         # axis: the lease makes the delete lose to a push that lands after the read above — see bite-proof record c8_cloud_cleanup
         argv = ["git", "-C", repo_root, "push", "--porcelain",
                 "--force-with-lease=refs/heads/%s:%s" % (name, head_sha),
-                remote if remote else "origin", ":refs/heads/%s" % name]
+                _push_url(repo, env), ":refs/heads/%s" % name]
         runner = subprocess.run if run is None else run
         try:
             proc = runner(argv, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
@@ -419,8 +434,6 @@ def main(argv=None):
         if name == "record":
             sub.add_argument("--msg-id", required=True)
             sub.add_argument("--outcome", required=True)
-        if name == "branch":
-            sub.add_argument("--remote")
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     except SystemExit as exc:
@@ -432,7 +445,7 @@ def main(argv=None):
         result = record(args.repo_root, args.repo, args.pr, args.msg_id, args.outcome,
                         launch_id=args.launch_id)
     else:
-        result = branch(args.repo_root, args.repo, args.pr, remote=args.remote, launch_id=args.launch_id)
+        result = branch(args.repo_root, args.repo, args.pr, launch_id=args.launch_id)
     sys.stdout.write(json.dumps(result) + "\n")
     return 1 if result.get("ok") is False else 0
 
