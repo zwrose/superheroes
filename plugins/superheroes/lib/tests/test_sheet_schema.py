@@ -627,7 +627,7 @@ LOOK = {"kind": "look", "steps": [], "pictures": [{"missing": True, "alt": "The 
 def walk_sheet(change=None):
     """A pr sheet whose walk has a try stop with a picture and a look stop with a missing one, after change(walk)."""
     sheet = pr_sheet()
-    sheet["prSheet"]["walk"] = walk_body([walk_stop("p1", 1724, pictures=[dict(PICTURE)]), walk_stop("f1", 1724, **LOOK)])
+    sheet["prSheet"]["walk"] = walk_body([walk_stop("p1", 1724, pictures=[dict(PICTURE)]), walk_stop("f1", 1724, **copy.deepcopy(LOOK))])
     walk = sheet["prSheet"]["walk"]
     if change:
         change(walk)
@@ -680,6 +680,15 @@ BAD_WALKS = {
 }
 
 
+def test_walk_sheets_share_no_fixture_state():
+    # Axis: a change made to one walk sheet's nested look stop never reaches the next sheet built, so one case cannot leak into another.
+    walk_sheet(lambda w: w["stops"][1]["pictures"][0].update(missing=False))
+    sheet = walk_sheet()
+    assert errors_for(sheet) == [], errors_for(sheet)
+    assert check_sheet_problems(sheet) == []
+    assert LOOK["pictures"][0]["missing"] is True
+
+
 def test_a_pr_sheet_may_have_no_walk():
     # Axis: a PR sheet with nothing to try has no walk part, and both readers accept it.
     sheet = pr_sheet()
@@ -698,6 +707,8 @@ def test_good_walks_are_accepted_by_both_readers(change):
 @pytest.mark.parametrize("change", BAD_WALKS.values(), ids=BAD_WALKS.keys())
 def test_bad_walks_are_refused_by_both_readers(change):
     # Axis: each way of breaking the walk's stops, steps, pictures or open link is refused by the schema and by the page's check.
+    baseline = walk_sheet()
+    assert errors_for(baseline) == [] and check_sheet_problems(baseline) == []
     sheet = walk_sheet(change)
     assert errors_for(sheet) != []
     assert check_sheet_problems(sheet) != []
