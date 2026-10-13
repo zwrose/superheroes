@@ -66,7 +66,9 @@ Each finding below was ruled out of scope by the session's owner or advisor, wit
 Your result must carry a payload matching this shape:
 
 Required keys: findings
+Optional keys: reviewerVendor
 findings type: list-of-objects
+reviewerVendor type: string
 
 ## Return your result
 

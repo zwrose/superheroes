@@ -461,10 +461,10 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_VERIFIERS: {
         "required": ["verdicts"],
-        "optional": [],
+        "optional": ["verifierVendor"],
         "conditional": {},
         "enums": {},
-        "types": {"verdicts": "list-of-objects"},
+        "types": {"verdicts": "list-of-objects", "verifierVendor": "string"},
         "elements": {
             "verdicts": {
                 "required": ["id", "verdict", "reason"],
@@ -503,10 +503,10 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_GAPSWEEP: {
         "required": ["findings"],
-        "optional": [],
+        "optional": ["reviewerVendor"],
         "conditional": {},
         "enums": {},
-        "types": {"findings": "list-of-objects"},
+        "types": {"findings": "list-of-objects", "reviewerVendor": "string"},
         "elements": {
             "findings": {"required": [], "optional": [], "types": {}, "enums": {}},
         },
@@ -514,10 +514,10 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_SCOPED: {
         "required": ["findings"],
-        "optional": [],
+        "optional": ["reviewerVendor"],
         "conditional": {},
         "enums": {},
-        "types": {"findings": "list-of-objects"},
+        "types": {"findings": "list-of-objects", "reviewerVendor": "string"},
         "elements": {
             "findings": {"required": [], "optional": [], "types": {}, "enums": {}},
         },

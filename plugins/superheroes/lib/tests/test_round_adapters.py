@@ -193,10 +193,16 @@ def _assert_fold_equivalent(tmp_path, phase, build, cfg=None, respond_factory=No
     assert artifact is not None
 
     out_hand = RD.cmd_submit(d_hand, n_hand["phase"], n_hand["attempt"],
-                             n_hand["expectedStateHash"], hand_artifact)
+                             n_hand["expectedStateHash"],
+                             dict(hand_artifact, **(
+                                 {"reviewerVendor": RD._nonpanel_selection(state_asm, d_hand)[0]}
+                                 if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})))
     assert out_hand["ok"] is True, out_hand
+    # a hand submit of a single-seat reviewer phase names the vendor it was dispatched on
+    claim = ({"reviewerVendor": RD._nonpanel_selection(state_asm, d_asm)[0]}
+             if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})
     out_asm = RD.cmd_submit(d_asm, n_asm["phase"], n_asm["attempt"],
-                            n_asm["expectedStateHash"], artifact)
+                            n_asm["expectedStateHash"], dict(artifact, **claim))
     assert out_asm["ok"] is True, out_asm
 
     ok_h, after_hand = RD.load_state(d_hand)
@@ -277,17 +283,22 @@ def test_verifiers_assembles_verdicts_in_cluster_order(tmp_path):
     def build(n, state):
         clusters = n["payload"]["clusters"]
         assert clusters
+        # The executed vendor rides the artifact as the runner/manifest provenance names it (codex is
+        # the driver's selected non-maker vendor here), never the payload's own claim.
         hand = {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                             for c in clusters for i in c["ids"]]}
+                             for c in clusters for i in c["ids"]],
+                "verifierVendor": "codex"}
         envelopes = [
             _result_env(RA.VERIFIER_SEAT_PREFIX + c["key"],
                         {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                                      for i in c["ids"]]})
+                                      for i in c["ids"]]}, vendor="codex")
             for c in clusters]
-        return hand, envelopes, {}
+        manifest = {RA.VERIFIER_SEAT_PREFIX + c["key"]: {"vendor": "codex"} for c in clusters}
+        return hand, envelopes, {"dispatch_manifest": manifest}
 
     artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_VERIFIERS, build)
     assert artifact["verdicts"] == hand["verdicts"]
+    assert artifact["verifierVendor"] == "codex"
 
 
 def test_synthesis_passes_the_grouping_through(tmp_path):
@@ -556,7 +567,7 @@ def test_missing_scoped_finder_refuses_where_an_empty_artifact_would_certify(tmp
     d2, n2, _state2 = _at(tmp_path, RD.P_SCOPED, respond=_responder(
         round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE), name="counterfactual")
     assert RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"],
-                         {"findings": []})["ok"]
+                         {"findings": [], "reviewerVendor": RD._nonpanel_selection(_state2, d2)[0]})["ok"]
     payload = _drive_on(d2, _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     assert payload["verdict"] == "converged", payload
     assert payload["certification"]["shape"] is not None, payload
