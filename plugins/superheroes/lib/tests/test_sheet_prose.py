@@ -1107,50 +1107,38 @@ def test_a_data_file_that_fails_the_check_is_still_refused_before_rendering(tmp_
 
 
 FIXTURES = PLUGIN / "lib" / "tests" / "fixtures" / "pr_sheet"
-WALK_PROSE = """**Walk it**
+WALK_INPUT = json.loads((FIXTURES / "input-walk.json").read_text(encoding="utf-8"))["walk"]
+# The sheet paths the builder gives the fixture's pictures (named by content), and the one picture it has no file for.
+WALK_PICTURE_PATHS = {"The empty cart": "pictures/228215e2dae3.png", "The paid order": "pictures/b601e7730818.png",
+                      "The gave-up screen": "pictures/33a85956073b.png"}
 
-Open the test shop — https://shop.example.test — Sign in as the shop's test customer.
-Walk on your phone.
-The advisor walked this first, except where a stop says otherwise; the pictures come from the advisor's own test account, which you can't open.
 
-*On your phone*
-
-1. Pay with a card that fails once
-   a. Add an item to the cart
-   b. Pay with the test card that declines once
-   Expect: The second try goes through and the order is placed.
-   Picture: Where you start (pictures/228215e2dae3.png)
-   Picture: The paid order (pictures/b601e7730818.png)
-   Answers: Works / Problem / Skip
-   On Problem: Fix before merge / Fix in a follow-up
-2. Check the receipt email
-   a. Open the receipt email
-   Expect: It names the shop.
-   Answers: Works / Problem / Skip
-   On Problem: Fix before merge / Fix in a follow-up
-3. Pay with a second card · Optional
-   a. Pay with a second test card
-   Expect: The order is placed once.
-   Answers: Works / Problem / Skip
-   On Problem: Fix before merge / Fix in a follow-up
-4. Read the bank's test dashboard
-   a. Open the dashboard
-   b. Find the retried payment
-   Expect: One charge, not two.
-   The advisor didn't walk this stop: It needs your own sign-in to the bank's test dashboard.
-   Answers: Works / Problem / Skip
-   On Problem: Fix before merge / Fix in a follow-up
-
-*Failure screens · look only*
-
-5. The gave-up screen
-   Look for: A plain message and a way back to the cart.
-   Picture: After three failures (pictures/33a85956073b.png)
-   A picture is missing: The gave-up screen on a small phone
-   Answers: Looks right / Problem / Skip
-   On Problem: Fix before merge / Fix in a follow-up
-
-"""
+def _expected_walk_prose():
+    """The walk part as the page's words and the walk fixture give it; the layout (numbering, lettering, indent, order) is spelled out here."""
+    answers = PR_WORDS["walkAnswers"]
+    tail = ["   Answers: " + " / ".join(answers["labels"][a] for a in answers[kind]) for kind in ("try", "look")]
+    problem = "   On Problem: " + " / ".join(fix["label"] for fix in PR_WORDS["walkFixes"])
+    opened = WALK_INPUT["open"]
+    lines = ["**%s**" % PR_WORDS["walkHeading"], "", "%s — %s — %s" % (opened["label"], opened["url"], opened["detail"]), WALK_INPUT["note"],
+             PR_WORDS["advisorWalked"].replace("{from}", WALK_INPUT["picturesFrom"]), ""]
+    number, group = 0, None
+    for stop in WALK_INPUT["stops"]:
+        if stop["group"] != group:
+            lines += ([""] if group is not None else []) + ["*%s*" % stop["group"], ""]
+            group = stop["group"]
+        number += 1
+        lines.append("%d. %s%s" % (number, stop["title"], " · " + PR_WORDS["optionalBadge"] if stop.get("optional") else ""))
+        lines += ["   %s. %s" % (chr(97 + n), step) for n, step in enumerate(stop.get("steps", []))]
+        lines.append("   %s %s" % (PR_WORDS["expectLabel" if stop["kind"] == "try" else "lookForLabel"], stop["expect"]))
+        for picture in stop.get("pictures", []):
+            if picture["path"].endswith("no-such-picture.png"):
+                lines.append("   " + PR_WORDS["pictureMissing"].replace("{alt}", picture["alt"]))
+            else:
+                lines.append("   Picture: %s (%s)" % (picture.get("caption", picture["alt"]), WALK_PICTURE_PATHS[picture["alt"]]))
+        if "notWalked" in stop:
+            lines.append("   " + PR_WORDS["notWalkedByAdvisor"].replace("{reason}", stop["notWalked"]))
+        lines += [tail[stop["kind"] == "look"], problem]
+    return "\n".join(lines) + "\n\n"
 
 
 def _walk_sheet(tmp_path):
@@ -1165,8 +1153,8 @@ def _walk_sheet(tmp_path):
 # Bites on: the walk prose dropping a stop's steps, expectation, picture caption, missing-picture line, not-walked line, optional mark, answers or fix choices, or leaving a picture's sheet path out (a look-only stop is unreviewable without it).
 def test_prose_prints_the_walk_with_its_stops_in_groups(tmp_path):
     out = _prose_of(tmp_path, _walk_sheet(tmp_path))
-    block = out[out.index("**Walk it**"):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
-    assert block == WALK_PROSE
+    block = out[out.index("**%s**" % PR_WORDS["walkHeading"]):out.index("**%s**" % PR_WORDS["acceptingHeading"])]
+    assert block == _expected_walk_prose()
     assert re.findall(r"pictures/\w+\.png", out) == ["pictures/228215e2dae3.png", "pictures/b601e7730818.png", "pictures/33a85956073b.png"]
     assert re.findall(r"https?://\S+", out) == ["https://shop.example.test"]
 
