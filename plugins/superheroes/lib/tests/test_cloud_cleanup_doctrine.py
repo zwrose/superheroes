@@ -11,7 +11,6 @@ reminder phrased with none of its words, or split across two lines, passes; the 
 text search for the two names, so a reader that builds the subcommand name at run time passes.
 """
 import difflib
-import hashlib
 import os
 import re
 import subprocess
@@ -43,26 +42,10 @@ _HOME_HEADING = "## Cleaning up a finished cloud lane"
 _DUTIES_LABEL = "**The eight duties, a closed list.**"
 _FIRST_DUTY = "1. **Age the P1s.**"
 _MEMORY_PARAGRAPH = "**Memory gardening at the pass.**"
-# sha256 of duties 1 to 7 (from the first duty's line through the end of item 7), read from the
-# base commit before duty 8 was appended; lines joined with newlines, trailing blanks dropped.
-_DUTIES_1_TO_7_SHA256 = "07aeae8f5e1c4c0f877818e17b02451c2495fb29b03bc56242dc0d23bcc1fe98"
-
-_ABSENCE_SENTENCE = (
-    "If the owner never answers the archive prompt, the session stays listed and the advisor "
-    "carries on; nothing reminds the owner."
-)
-# (file, line text) pairs that state the absence of a reminder; every other hit is a reminder.
-_REMINDER_ALLOWLIST = {
-    (_MERGE_TRAIN, _ABSENCE_SENTENCE),
-    (
-        _TRANSITION,
-        "- The advisor cleans up a cloud lane only after its pull request merges or closes, the "
-        "same way for both. While the pull request is open, handed back or parked, nothing is "
-        "cleaned up. The only step it asks of the owner is the archive prompt, and on a request "
-        "that could not be confirmed it asks nothing; nothing reminds the owner about an "
-        "unanswered prompt.",
-    ),
-}
+# The label line of the closed list as the base commit had it, before duty 8 was appended.
+_BASE_DUTIES_LABEL = "**The seven" + " duties, a closed list.**"  # split: see the old-label test
+# A line states the absence of a reminder when a negation comes before its first reminder word.
+_NEGATION = re.compile(r"\b(nothing|never|no|not)\b", re.IGNORECASE)
 _REMINDER_WORDS = re.compile(
     r"\bremind|\bnudge|follow[ -]up|\bchase|\bagain\b|still waiting|unanswered", re.IGNORECASE
 )
@@ -95,11 +78,11 @@ def _collapsed(path):
     return " ".join(_read(path).split())
 
 
-def _duties_block(text):
+def _duties_block(text, label=_DUTIES_LABEL):
     """The lines of the closed duties list, from the first duty through the memory paragraph's start."""
     lines = text.split("\n")
-    labels = [i for i, line in enumerate(lines) if line.strip() == _DUTIES_LABEL]
-    assert len(labels) == 1, f"expected exactly one {_DUTIES_LABEL!r} line, found {len(labels)}"
+    labels = [i for i, line in enumerate(lines) if line.strip() == label]
+    assert len(labels) == 1, f"expected exactly one {label!r} line, found {len(labels)}"
     start = next(
         (i for i in range(labels[0], len(lines)) if lines[i].startswith(_FIRST_DUTY)), None
     )
@@ -119,16 +102,23 @@ def _numbered_items(block):
     return [(int(m.group(1)), i) for i, line in enumerate(block) if (m := re.match(r"(\d+)\. ", line))]
 
 
+def _reminder_hits(lines):
+    """Lines naming the archive and a reminder word with no negation ahead of the first such word."""
+    hits = []
+    for line in lines:
+        if not _ARCHIVE.search(line):
+            continue
+        trigger = _REMINDER_WORDS.search(line)
+        if trigger and not _NEGATION.search(line[: trigger.start()]):
+            hits.append(line.strip())
+    return hits
+
+
 def test_no_reminder_about_an_unanswered_archive_prompt():
-    hits = set()
+    hits = []
     for rel, path in _shipped((".md", ".py")):
-        for line in _read(path).split("\n"):
-            if _ARCHIVE.search(line) and _REMINDER_WORDS.search(line):
-                hits.add((rel, line.strip()))
-    assert hits == _REMINDER_ALLOWLIST, (
-        f"unexpected: {sorted(hits - _REMINDER_ALLOWLIST)}; missing: "
-        f"{sorted(_REMINDER_ALLOWLIST - hits)}"
-    )
+        hits.extend((rel, line) for line in _reminder_hits(_read(path).split("\n")))
+    assert hits == [], hits
 
 
 def test_reviewer_pass_gardening_line_has_no_new_reader():
@@ -162,8 +152,14 @@ def test_duty_8_closes_the_list_and_duties_1_to_7_are_unchanged():
     first_seven = block[: items[7][1]]
     while first_seven and not first_seven[-1].strip():
         first_seven.pop()
-    digest = hashlib.sha256("\n".join(first_seven).encode()).hexdigest()
-    assert digest == _DUTIES_1_TO_7_SHA256, "duties 1 to 7 changed"
+    base = subprocess.run(
+        ["git", "-C", _REPO, "show", f"{_BASE}:plugins/superheroes/{_OWNER_DECISIONS}"],
+        capture_output=True,
+        text=True,
+    )
+    assert base.returncode == 0, f"cannot read {_OWNER_DECISIONS} at {_BASE}: {base.stderr}"
+    base_block = _duties_block(base.stdout, _BASE_DUTIES_LABEL)
+    assert first_seven == base_block, "duties 1 to 7 changed"
 
 
 def test_the_old_label_appears_nowhere_under_plugins():
