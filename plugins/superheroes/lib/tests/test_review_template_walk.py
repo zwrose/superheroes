@@ -15,7 +15,7 @@ from test_review_template import (
     _sheet_digest,
     _with,
 )
-from test_review_template_pr import PW, WORDS, _accepted_answers, _entry_lines, _fill, _page
+from test_review_template_pr import PW, WORDS, _accepted_answers, _covers, _entry_lines, _fill, _page
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
 READ_FAILED = "Your saved answers couldn't be loaded."
@@ -387,7 +387,8 @@ def test_unwalked_stops_are_counted_but_never_lock_the_merge():
     assert result["all"]["line"] == NO_LINE and result["all"]["count"] == _fill(PW["walkCount"], walked=5, total=total)
 
 
-MERGED = {"collections": dict(ACCEPTED["collections"], verdict=[{"id": DIGEST, "data": {"verdict": "merge", "note": "", "sheet": DIGEST}}])}
+COVERS = _covers(ACCEPTED["collections"]["answers"])
+MERGED = {"collections": dict(ACCEPTED["collections"], verdict=[{"id": DIGEST, "data": {"verdict": "merge", "note": "", "sheet": DIGEST, "covers": COVERS}}])}
 
 
 # Axis: with a saved Merge, tapping Problem writes the verdict clear first and the walk document only after that clear resolves.
@@ -405,7 +406,7 @@ def test_a_problem_write_waits_for_the_merge_clear_to_land():
       return out;
     """, host=dict(MERGED, set="hold"))
     result = page["result"]
-    clear = {"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST}}
+    clear = {"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST, "covers": COVERS}}
     assert result["before"] == {"merge": dict(UNLOCKED, pressed="true"), "sets": []}
     assert result["tapped"]["sets"] == [clear] and result["tapped"]["save"] == "Saving…"
     assert result["cleared"]["sets"] == [clear, {"path": _path("p1"), "body": _body("problem")}]
@@ -545,7 +546,7 @@ def test_a_stored_problem_without_a_fix_beside_a_stored_merge_clears_the_merge()
     """, host={"collections": docs})
     result = page["result"]
     assert result["merge"] == LOCKED and result["problems"] == _line("walkProblems", 1)
-    assert result["sets"] == [{"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST}}]
+    assert result["sets"] == [{"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST, "covers": COVERS}}]
     assert result["stop"]["pressed"] == ["false", "true", "false"] and result["stop"]["note"] == "It hung"
 
 
@@ -1055,7 +1056,7 @@ def test_a_rejected_problem_write_keeps_merge_locked_until_a_replacement_lands()
     assert page["result"] == {"pending": LOCKED, "failed": LOCKED, "landed": UNLOCKED}
 
 
-_CLEAR = {"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST}}
+_CLEAR = {"path": "verdict/" + DIGEST, "body": {"verdict": None, "note": "", "sheet": DIGEST, "covers": COVERS}}
 
 
 # Axis: a restored Problem with Fix before merge beside a restored Merge clears that Merge.
