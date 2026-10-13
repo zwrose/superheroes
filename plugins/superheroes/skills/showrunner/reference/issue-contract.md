@@ -321,8 +321,16 @@ a paraphrase nobody downstream can check. The test is mechanical: **can the anch
 permalink to a dated record of the ruling?** Where the venue lives as a durable thread — a
 collector issue, a recorded sitting log — it can, and the permalink is the record (Pattern 2's
 board-pass permalink, below, is exactly this). A Canon entry's id, with the Canon file's path, is such a record. Where it cannot — a chat, a live conversation — the
-ruling test's own fallback governs: the owner **re-rules on the issue itself**, a dated owner
-comment or owner-stamped body line, which *is* the record, with its own date. Either way the
+session that heard the ruling makes **the standard chat-ruling record**: one dated comment on the
+project's [collector](../../../rubric/glossary.md#collector) that quotes the owner's words verbatim,
+with the UTC date and time and what the ruling decides. `lib/canon.py ruling-record` composes it
+and, with `--post`, posts it and returns its permalink; in a session that writes through its own
+GitHub tools, post the composed body and take the comment's URL. The anchor cites that permalink,
+and the ruling test resolves it like any collector record: dated, attributed by the quote, and
+superseded only by a later owner decision. A ruling that also passes Canon's test gets its Canon
+entry too; the collector record is what the anchor cites, never a reason to write a go-word into
+Canon. The ruling test's own fallback still stands: the owner may instead **re-rule on the issue
+itself**, a dated owner comment or owner-stamped body line, which *is* the record. Either way the
 anchor's location leg is a followable record, never a name. **This adds no new gate**: it spells
 out how the ruling test's existing reachability leg (above) is satisfied — an anchor that fails it
 was already unresolvable, and it takes the same stop-report path with the same advisor repair,
