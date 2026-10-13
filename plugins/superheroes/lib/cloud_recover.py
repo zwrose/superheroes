@@ -568,8 +568,10 @@ def message(issue, *, place, stopped_at, pushed_at=None, never_pushed=False, pus
         gap = stopped_at - pushed_at
         minutes = round(gap / 60)
         since = "push" if push_time_source == "push" else "pushed commit"
-        if gap < 60:
+        if gap <= 0:
             text += " No work since its last %s is lost." % since
+        elif gap < 60:
+            text += " Less than a minute of work since its last %s is being redone." % since
         elif minutes >= 120:
             text += " About %d hours of work since its last %s is being redone." % (round(minutes / 60), since)
         else:

@@ -99,8 +99,9 @@ class Gh:
         if "/comments?" in endpoint:
             if self.comments_fail:
                 return subprocess.CompletedProcess(argv, 1, "", "boom")
-            since = parse_qs(urlparse(endpoint).query)["since"][0]  # like GitHub: only comments updated after `since`
-            return subprocess.CompletedProcess(argv, 0, json.dumps([c for c in self.comments if c["created_at"] > since]), "")
+            since = parse_qs(urlparse(endpoint).query)["since"][0]  # like GitHub: only comments updated after `since`, not created
+            return subprocess.CompletedProcess(argv, 0, json.dumps(
+                [c for c in self.comments if c.get("updated_at", c["created_at"]) > since]), "")
         return subprocess.CompletedProcess(argv, 1, "", "unrouted")
 
 
@@ -111,7 +112,7 @@ def _event(branch, sha, timestamp):
 
 def _comment(body, age=600, cid=1):
     return {"id": cid, "html_url": "https://github.com/%s/issues/17#issuecomment-%d" % (REPO, cid),
-            "body": body, "created_at": _iso_ago(age)}
+            "body": body, "created_at": _iso_ago(age), "updated_at": _iso_ago(age)}
 
 
 @pytest.fixture
@@ -826,7 +827,12 @@ def test_t5_the_minutes_redone_are_counted_from_the_last_push(w):
     assert "About 1 minute of work" in text(60) and "1 minutes" not in text(60)
     assert text(0).endswith("No work since its last push is lost.")
     assert text(-300).endswith("No work since its last push is lost.")
-    assert text(59).endswith("No work since its last push is lost.")
+    assert text(0.5).endswith("Less than a minute of work since its last push is being redone.")
+    assert text(1).endswith("Less than a minute of work since its last push is being redone.")
+    assert text(30).endswith("Less than a minute of work since its last push is being redone.")
+    assert text(59).endswith("Less than a minute of work since its last push is being redone.")
+    assert text(30, push_time_source="commit").endswith(
+        "Less than a minute of work since its last pushed commit is being redone.")
     assert text(60).endswith("About 1 minute of work since its last push is being redone.")
     assert text(119 * 60).endswith("About 119 minutes of work since its last push is being redone.")
     assert text(120 * 60).endswith("About 2 hours of work since its last push is being redone.")
@@ -970,6 +976,12 @@ def test_a_refusal_comment_older_than_the_lane_is_ignored(w):
     assert _relaunch(w) == {"ok": False, "reason": "refusal-comment-missing"}
 
 
+def test_an_old_refusal_comment_edited_after_the_reservation_is_ignored(w):
+    _refused_lane(w)
+    w.gh.comments = [dict(_comment(MISMATCH, age=7200 + 3600), updated_at=_iso_ago(60))]  # made an hour before the reservation, edited a minute ago
+    assert _relaunch(w) == {"ok": False, "reason": "refusal-comment-missing"}
+
+
 def test_a_refusal_posted_after_the_reservation_but_before_the_start_receipt_counts(w):
     _refused_lane(w)  # reserved 7260 seconds ago, started 7200
     w.gh.comments = [_comment(MISMATCH, age=7230)]
@@ -979,7 +991,8 @@ def test_a_refusal_posted_after_the_reservation_but_before_the_start_receipt_cou
 def test_a_refusal_in_the_same_second_as_the_reservation_counts(w):
     _refused_lane(w)
     reserved = ll.fold(ll.read(w.root)["records"])["launches"]["l1"]["reservedTs"]
-    w.gh.comments = [dict(_comment(MISMATCH), created_at=datetime.datetime.fromtimestamp(int(reserved), UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))]
+    at = datetime.datetime.fromtimestamp(int(reserved), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    w.gh.comments = [dict(_comment(MISMATCH), created_at=at, updated_at=at)]
     assert _relaunch(w)["ok"] is True
 
 

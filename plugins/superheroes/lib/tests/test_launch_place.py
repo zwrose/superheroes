@@ -47,7 +47,6 @@ PAST = "2026-10-10"
 POLICY_OK = {"schemaVersion": 2, "location": "docs/superheroes", "visibility": "committed",
              "confirmed": True, "disclosures": []}
 PHONE = "the phone simulator"
-STACK = "GitHub's stack interface"
 CANON = "this project's Canon"
 SPECS = "this project's specs"
 BOTH = "this project's Canon and specs"
@@ -321,19 +320,20 @@ def test_machine_needs_is_empty_when_everything_is_in_the_repository(inrepo):
     assert LP.machine_needs(repo, {"iphoneCheck": False, "needs": []}, root=store) == []
 
 
-def test_machine_needs_orders_the_judgment_then_the_simulator_then_the_stack(inrepo):
+def test_machine_needs_orders_the_judgment_then_the_simulator_and_adds_nothing_for_a_stack(inrepo):
     repo, store = inrepo
     premise = {"needs": ["a signed-in browser", "", "  ", 7, None, "a signed-in browser",
                          PHONE],
                "iphoneCheck": True, "stack": {"layer": 2}}
-    assert LP.machine_needs(repo, premise, root=store) == ["a signed-in browser", PHONE, STACK]
+    assert LP.machine_needs(repo, premise, root=store) == ["a signed-in browser", PHONE]
 
 
 @pytest.mark.parametrize("premise,expected", [
     ({"iphoneCheck": True}, [PHONE]),
     ({"iphoneCheck": "yes"}, []),
     ({"iphoneCheck": 1}, []),
-    ({"stack": None}, [STACK]),
+    ({"stack": None}, []),
+    ({"stack": 7, "layerPosition": 3}, []),
     ({"needs": "a signed-in browser"}, []),
     ({"needs": ["a", "b"]}, ["a", "b"]),
 ])
@@ -529,9 +529,25 @@ def test_a_need_not_pointed_at_the_cloud_gives_no_reason():
     assert call["pointedAtCloud"] is False and call["by"] is None
 
 
+def test_C7s_a_stack_layer_with_the_cloud_ready_and_no_other_need_routes_to_the_cloud(monkeypatch):
+    monkeypatch.setattr(LP, "_canon_outside", lambda cwd, root: False)
+    monkeypatch.setattr(LP, "_specs_outside", lambda cwd, root: False)
+    call = LP.route("cwd", {"stack": 7, "layerPosition": 3}, None, readiness_fn=_fn())
+    assert call["place"] == "cloud" and call["reason"] is None and call["need"] is None
+    assert call["environment"] == ENVIRONMENT
+
+
+def test_C7s_a_stack_layer_that_needs_the_phone_simulator_still_routes_locally(monkeypatch):
+    monkeypatch.setattr(LP, "_canon_outside", lambda cwd, root: False)
+    monkeypatch.setattr(LP, "_specs_outside", lambda cwd, root: False)
+    call = LP.route("cwd", {"stack": 7, "layerPosition": 3, "iphoneCheck": True}, None, readiness_fn=_fn())
+    assert call["place"] == "local" and call["reason"] == "needs" and call["need"] == PHONE
+    assert LP.reason_text(call) == "It needs the phone simulator, which only your machine has."
+
+
 def test_several_needs_join_with_commas_and_a_final_and():
-    for things, text in (((PHONE,), PHONE), ((PHONE, STACK), PHONE + " and " + STACK),
-                         ((PHONE, STACK, CANON), PHONE + ", " + STACK + " and " + CANON)):
+    for things, text in (((PHONE,), PHONE), ((PHONE, "a signed-in browser"), PHONE + " and a signed-in browser"),
+                         ((PHONE, "a signed-in browser", CANON), PHONE + ", a signed-in browser and " + CANON)):
         call = LP.route("cwd", {}, None, readiness_fn=_fn(), needs_fn=_needs(*things))
         assert call["need"] == text
         assert LP.reason_text(call) == _needs_text(text)
