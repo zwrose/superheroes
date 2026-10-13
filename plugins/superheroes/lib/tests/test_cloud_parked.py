@@ -939,6 +939,23 @@ def test_a_first_lane_superseded_during_the_second_prs_read_is_not_sent_back(w):
     assert out["superseded"] == [{"pr": 10, "launchId": "l-a"}]
 
 
+def test_a_supersession_recorded_during_the_parked_state_save_still_fences_the_send_back(w, monkeypatch):
+    _lane(w, "l-old", 101, "old-session", "a", finished=True)
+    _park(w, 10, issue=101)
+    _park(w, 11)
+    _renew(w)
+    w.gh.pulls[11] = _pull(state="closed")
+    real_save = CP._save
+    def save_then_supersede(path, entries):
+        done = real_save(path, entries)
+        _supersede(w, "l-old")
+        return done
+    monkeypatch.setattr(CP, "_save", save_then_supersede)
+    out = _send(w)
+    assert out["sendBack"] == [] and out["superseded"] == [{"pr": 10, "launchId": "l-old"}]
+    assert {e["pr"]: e["outcome"] for e in _entries(w)} == {10: None, 11: "closed"}
+
+
 def test_a_park_after_the_original_lane_was_superseded_binds_to_the_replacement(w):
     _lane(w, "l-old", 101, "old-session", "a", finished=True)
     _park(w, 10, issue=101)

@@ -353,6 +353,8 @@ def send_back(repo_root, today=None, *, env=None, run=None):
                                 _PARK_KEY: e.get(_PARK_KEY),
                                 "cloudSessionName": lane["cloudSessionName"],
                                 "configDir": lane.get("configDir"), "message": SEND_BACK_MESSAGE})
+    if changed and not _save(path, entries):
+        return _refusal("parked-state-unwritable")
     # axis: a lane superseded while a later entry's GitHub reads ran is not sent to; the last read decides
     late, late_readable = _sib("cloud_recover").superseded_ids(repo_root, env) if out["sendBack"] else (set(), True)
     if not late_readable:
@@ -360,8 +362,6 @@ def send_back(repo_root, today=None, *, env=None, run=None):
         out["sendBack"] = []
     out["superseded"] += [{"pr": c["pr"], "launchId": c["launchId"]} for c in out["sendBack"] if c["launchId"] in late]
     out["sendBack"] = [c for c in out["sendBack"] if c["launchId"] not in late]
-    if changed and not _save(path, entries):
-        return _refusal("parked-state-unwritable")
     return out
 
 
