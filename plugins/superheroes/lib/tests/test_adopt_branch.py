@@ -16,6 +16,7 @@ from test_cloud_builder import ENV_ID, SHA, VERSION, FakeRun, _git, _launch, _se
 from test_launcher import L, _init_repo, _valid_premise
 
 BRANCH = "feature/adopted-1"
+HEAD = "b" * 40
 
 
 @pytest.fixture(autouse=True)
@@ -45,16 +46,16 @@ def _local_prompt(repo, premise):
 
 
 def test_cloud_prompt_names_the_branch_right_after_the_base_commit():
-    prompt = _cloud_prompt({"baseCommit": SHA, "adoptsBranch": BRANCH})
-    assert "Base commit: %s\nAdopts branch: %s\n\n" % (SHA, BRANCH) in prompt
+    prompt = _cloud_prompt({"baseCommit": SHA, "adoptsBranch": BRANCH, "adoptsHead": HEAD})
+    assert "Base commit: %s\nAdopts branch: %s at %s\n\n" % (SHA, BRANCH, HEAD) in prompt
 
 
 def test_local_prompt_names_branch_and_base_between_the_issue_and_the_rulings(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    premise = _valid_premise(repo, adoptsBranch=BRANCH)
+    premise = _valid_premise(repo, adoptsBranch=BRANCH, adoptsHead=HEAD)
     prompt = _local_prompt(repo, premise)
-    head = "%s\n\nIssue: #656\n\nAdopts branch: %s\nBase commit: %s\n\n" % (
-        L._WORKHORSE_CMD, BRANCH, premise["baseCommit"])
+    head = "%s\n\nIssue: #656\n\nAdopts branch: %s at %s\nBase commit: %s\n\n" % (
+        L._WORKHORSE_CMD, BRANCH, HEAD, premise["baseCommit"])
     assert prompt.startswith(head)
     assert prompt[len(head):].strip() != ""
 
@@ -71,13 +72,13 @@ def test_prompts_without_the_key_are_byte_identical_to_the_prior_prompts(tmp_pat
     assert "Adopts branch" not in cloud
     assert "Base commit: %s\n\n" % SHA in cloud
     # the same premise with the key adds exactly the one cloud line and nothing else
-    adopted = _cloud_prompt({"baseCommit": SHA, "adoptsBranch": BRANCH})
-    assert adopted.replace("\nAdopts branch: %s" % BRANCH, "", 1) == cloud
+    adopted = _cloud_prompt({"baseCommit": SHA, "adoptsBranch": BRANCH, "adoptsHead": HEAD})
+    assert adopted.replace("\nAdopts branch: %s at %s" % (BRANCH, HEAD), "", 1) == cloud
 
 
 def test_compose_refuses_a_malformed_branch_and_composes_nothing(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    result = L.compose_launch(repo, 656, _valid_premise(repo, adoptsBranch="a..b"))
+    result = L.compose_launch(repo, 656, _valid_premise(repo, adoptsBranch="a..b", adoptsHead=HEAD))
     assert result["ok"] is False
     assert result["reason"] == "premise-adopts-branch-invalid"
     assert "prompt" not in result
@@ -88,9 +89,10 @@ def test_compose_refuses_a_malformed_branch_and_composes_nothing(tmp_path):
 
 def test_validate_premise_accepts_a_valid_branch_and_stamps_it_untouched(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    result = L.validate_premise(_valid_premise(repo, adoptsBranch=BRANCH), repo)
+    result = L.validate_premise(_valid_premise(repo, adoptsBranch=BRANCH, adoptsHead=HEAD), repo)
     assert result["ok"] is True, result
     assert result["premise"]["adoptsBranch"] == BRANCH
+    assert result["premise"]["adoptsHead"] == HEAD
 
 
 @pytest.mark.parametrize("bad", [
@@ -99,7 +101,7 @@ def test_validate_premise_accepts_a_valid_branch_and_stamps_it_untouched(tmp_pat
 ])
 def test_validate_premise_refuses_a_malformed_branch(tmp_path, bad):
     repo = _init_repo(tmp_path / "repo")
-    result = L.validate_premise(_valid_premise(repo, adoptsBranch=bad), repo)
+    result = L.validate_premise(_valid_premise(repo, adoptsBranch=bad, adoptsHead=HEAD), repo)
     assert result["ok"] is False
     assert result["reason"] == "premise-adopts-branch-invalid"
 
@@ -107,7 +109,25 @@ def test_validate_premise_refuses_a_malformed_branch(tmp_path, bad):
 @pytest.mark.parametrize("good", ["a", "a" * 200, "feature/x-1.2_3", "0abc", "a.lockx"])
 def test_validate_premise_accepts_the_edges_of_the_shape(tmp_path, good):
     repo = _init_repo(tmp_path / "repo")
-    assert L.validate_premise(_valid_premise(repo, adoptsBranch=good), repo)["ok"] is True
+    assert L.validate_premise(_valid_premise(repo, adoptsBranch=good, adoptsHead=HEAD), repo)["ok"] is True
+
+
+@pytest.mark.parametrize("bad", [
+    "b" * 39, "b" * 41, "B" * 40, "g" * 40, HEAD + "\n", "", None, 7, True, [HEAD],
+])
+def test_validate_premise_refuses_a_malformed_head(tmp_path, bad):
+    repo = _init_repo(tmp_path / "repo")
+    result = L.validate_premise(_valid_premise(repo, adoptsBranch=BRANCH, adoptsHead=bad), repo)
+    assert result["ok"] is False and result["reason"] == "premise-adopts-head-invalid"
+
+
+def test_validate_premise_refuses_a_branch_without_a_head_and_a_head_without_a_branch(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    for extra in ({"adoptsBranch": BRANCH}, {"adoptsHead": HEAD}):
+        result = L.validate_premise(_valid_premise(repo, **extra), repo)
+        assert result["ok"] is False and result["reason"] == "premise-adopts-head-invalid"
+        composed = L.compose_launch(repo, 656, _valid_premise(repo, **extra))
+        assert composed["ok"] is False and composed["reason"] == "premise-adopts-head-invalid"
 
 
 def test_validate_premise_without_the_key_is_unchanged(tmp_path):
@@ -120,8 +140,9 @@ def test_validate_premise_without_the_key_is_unchanged(tmp_path):
 # ---------------------------------------------------------------- parse_launch
 
 
-def _adopt_launch(*values):
-    return _launch(extra="".join("Adopts branch: %s\n" % v for v in values))
+def _adopt_launch(*values, head=HEAD):
+    return _launch(extra="".join(
+        "Adopts branch: %s\n" % (v if " at " in v else "%s at %s" % (v, head)) for v in values))
 
 
 def test_parse_launch_adopt_line_absent_is_none_and_not_invalid():
@@ -132,7 +153,7 @@ def test_parse_launch_adopt_line_absent_is_none_and_not_invalid():
 
 def test_parse_launch_reads_the_adopted_branch():
     parsed = cb.parse_launch(_adopt_launch(BRANCH))
-    assert parsed["adoptsBranch"] == BRANCH
+    assert parsed["adoptsBranch"] == BRANCH and parsed["adoptsHead"] == HEAD
     assert "adoptsBranchInvalid" not in parsed
 
 
@@ -149,7 +170,14 @@ def test_parse_launch_a_malformed_branch_is_invalid(bad):
     assert parsed["adoptsBranchInvalid"] is True
 
 
-@pytest.mark.parametrize("text", ["Adopts branch:", "Adopts branch: ", "Adopts branch:x"])
+@pytest.mark.parametrize("text", [
+    "Adopts branch:", "Adopts branch: ", "Adopts branch:x",
+    "Adopts branch: %s" % BRANCH,
+    "Adopts branch: %s at %s" % (BRANCH, "b" * 39),
+    "Adopts branch: %s at %s" % (BRANCH, "B" * 40),
+    "Adopts branch: %s at %s extra" % (BRANCH, HEAD),
+    "Adopts branch: %s %s" % (BRANCH, HEAD),
+])
 def test_parse_launch_a_present_but_empty_or_unspaced_line_is_invalid(text):
     parsed = cb.parse_launch(_launch(extra=text + "\n"))
     assert parsed["adoptsBranchInvalid"] is True
@@ -162,8 +190,10 @@ def test_parse_launch_two_different_values_are_invalid():
 
 
 def test_the_launchers_adopt_prompt_parses_back():
-    parsed = cb.parse_launch(_cloud_prompt({"baseCommit": SHA, "adoptsBranch": BRANCH}))
+    parsed = cb.parse_launch(
+        _cloud_prompt({"baseCommit": SHA, "adoptsBranch": BRANCH, "adoptsHead": HEAD}))
     assert parsed["adoptsBranch"] == BRANCH and parsed["baseCommit"] == SHA
+    assert parsed["adoptsHead"] == HEAD
     assert "adoptsBranchInvalid" not in parsed
 
 
@@ -196,11 +226,18 @@ def _world(tmp_path):
     return work, origin, clone, main_sha, tip
 
 
-def _real_intake(clone, base, *values):
+def _real_intake(clone, base, head, *values):
     env = dict(os.environ)
     env[cloud_pass.ENVIRONMENT_ENV] = ENV_ID
     return cb.intake(str(clone), _launch(base=base, extra="".join(
-        "Adopts branch: %s\n" % v for v in values)), env=env, running_version=VERSION)
+        "Adopts branch: %s at %s\n" % (v, head) for v in values)), env=env,
+        running_version=VERSION)
+
+
+def _env_intake(clone, base):
+    env = dict(os.environ)
+    env[cloud_pass.ENVIRONMENT_ENV] = ENV_ID
+    return cb.intake(str(clone), _launch(base=base), env=env, running_version=VERSION)
 
 
 def _head_is_detached(clone):
@@ -209,8 +246,8 @@ def _head_is_detached(clone):
 
 
 def test_intake_starts_on_the_adopted_branch_at_its_pushed_head(tmp_path):
-    _, _, clone, _, tip = _world(tmp_path)
-    result = _real_intake(clone, tip, BRANCH)
+    _, _, clone, main_sha, tip = _world(tmp_path)
+    result = _real_intake(clone, main_sha, tip, BRANCH)
     assert result == {"ok": True, "outcome": None, "reason": None, "startedFrom": tip,
                       "branch": BRANCH, "pluginVersion": VERSION,
                       "comment": cb.INTAKE_ADOPT_TEXT.format(v=VERSION, sha=tip, branch=BRANCH)}
@@ -220,11 +257,11 @@ def test_intake_starts_on_the_adopted_branch_at_its_pushed_head(tmp_path):
 
 
 def test_intake_refuses_a_branch_that_moved_past_the_base(tmp_path):
-    work, _, clone, _, tip = _world(tmp_path)
+    work, _, clone, main_sha, tip = _world(tmp_path)
     _commit(work, "three")
     _git(work, "push", "origin", BRANCH)
     before = _git(clone, "rev-parse", "HEAD")
-    result = _real_intake(clone, tip, BRANCH)
+    result = _real_intake(clone, main_sha, tip, BRANCH)
     assert result["ok"] is False and result["reason"] == "adopted-branch-moved"
     assert result["startedFrom"] is None
     assert "adopted-branch-moved" in result["comment"]
@@ -232,16 +269,49 @@ def test_intake_refuses_a_branch_that_moved_past_the_base(tmp_path):
     assert _git(clone, "symbolic-ref", "--short", "HEAD") == "main"
 
 
+def test_intake_continues_a_stack_layer_whose_base_is_the_layer_below(tmp_path):
+    """The base commit is the layer below's head; the adopted head is a different, descendant sha."""
+    work, _, clone, main_sha, tip = _world(tmp_path)
+    assert tip != main_sha
+    result = _real_intake(clone, main_sha, tip, BRANCH)
+    assert result["ok"] is True and result["startedFrom"] == tip and result["branch"] == BRANCH
+    assert _git(clone, "rev-parse", "HEAD") == tip
+
+
+def test_intake_refuses_an_adopted_head_that_is_not_a_descendant_of_the_base(tmp_path):
+    work, _, clone, main_sha, tip = _world(tmp_path)
+    _git(work, "checkout", "-b", "side", main_sha)
+    side = _commit(work, "side")
+    _git(work, "push", "origin", "side")
+    # the base is the branch tip; the adopted branch is `side`, which does not contain it
+    result = _real_intake(clone, tip, side, "side")
+    assert result["ok"] is False and result["reason"] == "adopted-head-not-on-base"
+    assert _git(clone, "symbolic-ref", "--short", "HEAD") == "main"
+
+
+def test_intake_adopts_in_a_single_branch_shallow_clone(tmp_path):
+    work, origin, _, main_sha, tip = _world(tmp_path)
+    clone = tmp_path / "single"
+    _git(tmp_path, "clone", "--depth", "1", "--single-branch", "--branch", "main",
+         "file://%s" % origin, str(clone))
+    assert _git(clone, "config", "--get-all", "remote.origin.fetch") == (
+        "+refs/heads/main:refs/remotes/origin/main")
+    result = _real_intake(clone, main_sha, tip, BRANCH)
+    assert result["ok"] is True, result
+    assert _git(clone, "rev-parse", "HEAD") == tip
+    assert _git(clone, "rev-parse", "--abbrev-ref", "%s@{upstream}" % BRANCH) == "origin/" + BRANCH
+
+
 def test_intake_refuses_a_branch_absent_from_the_remote(tmp_path):
-    _, _, clone, main_sha, _ = _world(tmp_path)
-    result = _real_intake(clone, main_sha, "feature/gone")
+    _, _, clone, main_sha, tip = _world(tmp_path)
+    result = _real_intake(clone, main_sha, tip, "feature/gone")
     assert result["ok"] is False and result["reason"] == "adopted-branch-unfetchable"
     assert _git(clone, "symbolic-ref", "--short", "HEAD") == "main"
 
 
 def test_intake_without_the_line_checks_out_detached_as_before(tmp_path):
     _, _, clone, main_sha, _ = _world(tmp_path)
-    result = _real_intake(clone, main_sha)
+    result = _env_intake(clone, main_sha)
     assert result == {"ok": True, "outcome": None, "reason": None, "startedFrom": main_sha,
                       "branch": None, "pluginVersion": VERSION,
                       "comment": cb.INTAKE_TEXT.format(v=VERSION, sha=main_sha)}
@@ -250,15 +320,15 @@ def test_intake_without_the_line_checks_out_detached_as_before(tmp_path):
 
 
 def test_intake_with_a_malformed_line_refuses_and_checks_nothing_out(tmp_path):
-    _, _, clone, _, tip = _world(tmp_path)
-    result = _real_intake(clone, tip, "a..b")
+    _, _, clone, main_sha, tip = _world(tmp_path)
+    result = _real_intake(clone, main_sha, tip, "a..b")
     assert result["ok"] is False and result["reason"] == "adopts-branch-invalid"
     assert _git(clone, "symbolic-ref", "--short", "HEAD") == "main"
 
 
 def test_intake_with_two_different_lines_refuses_and_checks_nothing_out(tmp_path):
-    _, _, clone, _, tip = _world(tmp_path)
-    result = _real_intake(clone, tip, BRANCH, "feature/other")
+    _, _, clone, main_sha, tip = _world(tmp_path)
+    result = _real_intake(clone, main_sha, tip, BRANCH, "feature/other")
     assert result["ok"] is False and result["reason"] == "adopts-branch-invalid"
     assert _git(clone, "symbolic-ref", "--short", "HEAD") == "main"
 
@@ -268,15 +338,17 @@ def test_intake_with_two_different_lines_refuses_and_checks_nothing_out(tmp_path
 
 def _adopt_keys():
     tracking = "refs/remotes/origin/%s" % BRANCH
-    return {"fetch": "fetch origin +refs/heads/%s:%s" % (BRANCH, tracking),
+    return {"map": "remote set-branches --add origin %s" % BRANCH,
+            "ancestor": "merge-base --is-ancestor %s %s" % (SHA, HEAD),
+            "fetch": "fetch origin +refs/heads/%s:%s" % (BRANCH, tracking),
             "verify": "rev-parse --verify %s" % tracking,
-            "checkout": "checkout -B %s %s" % (BRANCH, SHA),
+            "checkout": "checkout -B %s %s" % (BRANCH, HEAD),
             "upstream": "branch --set-upstream-to=origin/%s %s" % (BRANCH, BRANCH)}
 
 
 def _recorded(answers=None, launch=None, version=VERSION, env=None):
     keys = _adopt_keys()
-    base = {keys["verify"]: (0, SHA + "\n")}
+    base = {keys["verify"]: (0, HEAD + "\n")}
     base.update(answers or {})
     run = FakeRun(base)
     result = cb.intake("/repo", launch if launch is not None else _adopt_launch(BRANCH),
@@ -289,9 +361,9 @@ def test_recorded_adopt_runs_the_base_checks_then_the_branch_steps_and_no_detach
     assert result["ok"] is True and result["branch"] == BRANCH
     keys = _adopt_keys()
     tails = [" ".join(a[3:]) for a in run.git_calls]
-    assert tails[-6:] == [
-        "fetch origin %s" % SHA, "cat-file -e %s^{commit}" % SHA, keys["fetch"], keys["verify"],
-        keys["checkout"], keys["upstream"]]
+    assert tails[-8:] == [
+        "fetch origin %s" % SHA, "cat-file -e %s^{commit}" % SHA, keys["map"], keys["fetch"],
+        keys["verify"], keys["ancestor"], keys["checkout"], keys["upstream"]]
     assert not any("--detach" in t for t in tails)
 
 
@@ -299,11 +371,18 @@ def test_recorded_adopt_runs_the_base_checks_then_the_branch_steps_and_no_detach
     ("checkout", "base-checkout-failed"),
     ("upstream", "adopted-branch-upstream-failed"),
     ("fetch", "adopted-branch-unfetchable"),
+    ("map", "adopted-branch-unfetchable"),
+    ("ancestor", "adopted-head-not-on-base"),
 ])
 def test_recorded_adopt_step_failures_are_refusals(step, reason):
     _, result = _recorded({_adopt_keys()[step]: (1, "")})
     assert result["ok"] is False and result["reason"] == reason
     assert result["startedFrom"] is None and "branch" not in result
+
+
+def test_recorded_a_tip_other_than_the_adopted_head_is_a_moved_refusal():
+    _, result = _recorded({_adopt_keys()["verify"]: (0, SHA + "\n")})
+    assert result["reason"] == "adopted-branch-moved"
 
 
 def test_recorded_unreadable_remote_tip_is_a_moved_refusal():

@@ -49,8 +49,6 @@ _REPO_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}\Z)[A-Za-z0-9_.-]
 _VERSION_LINE = re.compile(r"^Advisor plugin version: (.+)$")
 _ENVIRONMENT_LINE = re.compile(r"^Cloud environment: (.+)$")
 _BASE_LINE = re.compile(r"^Base commit: (.+)$")
-_ADOPTS_LINE = re.compile(r"^Adopts branch: (.+)$")
-_ADOPTS_PREFIX = "Adopts branch:"
 
 INTAKE_TEXT = (
     "Builder intake (cloud build). Plugin {v}. Commits from this build carry the cloud's own "
@@ -130,29 +128,28 @@ def _unique_line_value(lines, pattern):
 
 
 def _adopts_branch(lines):
-    """(branch, invalid) from the `Adopts branch:` lines. An absent line is (None, False); a line
-    that is malformed, fails the branch-name shape, or is stated twice with different values is
-    (None, True)."""
+    """(branch, head, invalid) from the `Adopts branch:` lines. An absent line is (None, None,
+    False); a line that is not well formed (the launcher owns the format), or stated twice with
+    different values, is (None, None, True)."""
+    launcher = _sibling("launcher")
     found = set()
     for line in lines:
-        if not line.startswith(_ADOPTS_PREFIX):
+        if not line.startswith(launcher.ADOPTS_PREFIX):
             continue
-        match = _ADOPTS_LINE.match(line)
-        if match is None:
-            return None, True
-        found.add(match.group(1).strip())
+        parsed = launcher.parse_adopts_line(line)
+        if parsed is None:
+            return None, None, True
+        found.add(parsed)
     if not found:
-        return None, False
+        return None, None, False
     if len(found) > 1:
-        return None, True
-    branch = found.pop()
-    if not _sibling("launcher").valid_adopts_branch(branch):
-        return None, True
-    return branch, False
+        return None, None, True
+    branch, head = found.pop()
+    return branch, head, False
 
 
 def parse_launch(text):
-    """advisorVersion, environment, baseCommit and adoptsBranch from the launch prompt text; None
+    """advisorVersion, environment, baseCommit, adoptsBranch and adoptsHead from the launch prompt text; None
     for a line that is missing, malformed, or stated twice with different values. A malformed or
     conflicting `Adopts branch:` line is not read as missing: it adds `adoptsBranchInvalid: True`."""
     lines = [line.strip() for line in text.splitlines()] if isinstance(text, str) else []
@@ -163,9 +160,10 @@ def parse_launch(text):
     base = _unique_line_value(lines, _BASE_LINE)
     if base is not None and not _SHA_RE.match(base):
         base = None
-    adopts, adopts_invalid = _adopts_branch(lines)
+    adopts, adopts_head, adopts_invalid = _adopts_branch(lines)
     parsed = {"advisorVersion": _unique_line_value(lines, _VERSION_LINE),
-              "environment": environment, "baseCommit": base, "adoptsBranch": adopts}
+              "environment": environment, "baseCommit": base, "adoptsBranch": adopts,
+              "adoptsHead": adopts_head}
     if adopts_invalid:
         parsed["adoptsBranchInvalid"] = True
     return parsed
@@ -240,24 +238,33 @@ def intake(repo_root, launch_text, *, env=None, run=None, running_version=None):
         return {"ok": True, "outcome": None, "reason": None, "startedFrom": sha, "branch": None,
                 "comment": INTAKE_TEXT.format(v=running, sha=sha), "pluginVersion": running}
 
+    head = launch["adoptsHead"]
     tracking = "refs/remotes/origin/%s" % branch
+    # axis: a single-branch clone maps only its first branch, and git sets an upstream only on a mapped remote-tracking ref — so the adopted branch is mapped before it is fetched
+    code, _ = _git(run, repo_root, ["remote", "set-branches", "--add", "origin", branch], genv)
+    if code != 0:
+        return _refused("adopted-branch-unfetchable")
     code, _ = _git(run, repo_root, ["fetch", "origin", "+refs/heads/%s:%s" % (branch, tracking)],
                    genv)
     if code != 0:
         return _refused("adopted-branch-unfetchable")
     code, tip = _git(run, repo_root, ["rev-parse", "--verify", tracking], genv)
-    # axis: the adopted branch's remote tip must equal the launch's base commit — a branch that moved since the launch was composed is refused, never continued — see bite-proof record adopt_branch
-    if code != 0 or tip.strip() != sha:
+    # axis: the adopted branch's remote tip must equal the adopted head the launch named — a branch that moved since the launch was composed is refused, never continued; the base commit is the stack gate's and may be a lower layer's head — see bite-proof record adopt_branch
+    if code != 0 or tip.strip() != head:
         return _refused("adopted-branch-moved")
-    code, _ = _git(run, repo_root, ["checkout", "-B", branch, sha], genv)
+    # axis: the adopted head must descend from the base commit — a branch unrelated to the base the launch named is refused, never continued
+    code, _ = _git(run, repo_root, ["merge-base", "--is-ancestor", sha, head], genv)
+    if code != 0:
+        return _refused("adopted-head-not-on-base")
+    code, _ = _git(run, repo_root, ["checkout", "-B", branch, head], genv)
     if code != 0:
         return _refused("base-checkout-failed")
     code, _ = _git(run, repo_root, ["branch", "--set-upstream-to=origin/%s" % branch, branch],
                    genv)
     if code != 0:
         return _refused("adopted-branch-upstream-failed")
-    return {"ok": True, "outcome": None, "reason": None, "startedFrom": sha, "branch": branch,
-            "comment": INTAKE_ADOPT_TEXT.format(v=running, sha=sha, branch=branch),
+    return {"ok": True, "outcome": None, "reason": None, "startedFrom": head, "branch": branch,
+            "comment": INTAKE_ADOPT_TEXT.format(v=running, sha=head, branch=branch),
             "pluginVersion": running}
 
 

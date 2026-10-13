@@ -1098,6 +1098,47 @@ def valid_adopts_branch(value):
     )
 
 
+_ADOPTS_HEAD_RE = re.compile(r"[0-9a-f]{40}")
+ADOPTS_PREFIX = "Adopts branch:"
+_ADOPTS_LINE_RE = re.compile(r"^Adopts branch: (\S+) at ([0-9a-f]{40})$")
+
+
+def valid_adopts_head(value):
+    """Whether `value` is a full 40-hex lowercase sha, the pushed head a successor adopts."""
+    return isinstance(value, str) and _ADOPTS_HEAD_RE.fullmatch(value) is not None
+
+
+def adopts_line(branch, head):
+    """The one prompt line that names an adopted branch and its pushed head. The composer writes
+    it and the cloud builder's parser reads it back: this is the only home of the format."""
+    return "%s %s at %s" % (ADOPTS_PREFIX, branch, head)
+
+
+def parse_adopts_line(line):
+    """(branch, head) from one `Adopts branch:` line, or None when the line is not well formed
+    (no ` at <40-hex>` part, a branch outside the name shape, a head not 40 lowercase hex)."""
+    match = _ADOPTS_LINE_RE.match(line)
+    if match is None or not valid_adopts_branch(match.group(1)):
+        return None
+    return match.group(1), match.group(2)
+
+
+def adopts_premise_reason(premise):
+    """The refusal token for a premise's adoption pair, or None when it is sound. `adoptsBranch`
+    must be a valid branch name, and it and `adoptsHead` (a full lowercase sha) come together:
+    either one without the other refuses with the head token."""
+    if not isinstance(premise, dict):
+        return None
+    has_branch = "adoptsBranch" in premise
+    if has_branch and not valid_adopts_branch(premise["adoptsBranch"]):
+        return "premise-adopts-branch-invalid"
+    if has_branch != ("adoptsHead" in premise):
+        return "premise-adopts-head-invalid"
+    if has_branch and not valid_adopts_head(premise["adoptsHead"]):
+        return "premise-adopts-head-invalid"
+    return None
+
+
 def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=None):
     """Validate premise stamp per contract C7. Never raises.
 
@@ -1229,10 +1270,10 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not cloud_ready.valid_reported(premise["reportedCloud"]):
             return _fail("premise-reported-cloud-invalid")
 
-    if "adoptsBranch" in premise:
-        # axis: adoptsBranch names the pushed branch a successor launch adopts — a string in the branch-name shape, else the builder would be told to check out a name git reads as an option or a path — see bite-proof record adopt_branch
-        if not valid_adopts_branch(premise["adoptsBranch"]):
-            return _fail("premise-adopts-branch-invalid")
+    # axis: adoptsBranch names the pushed branch a successor launch adopts — a string in the branch-name shape, else the builder would be told to check out a name git reads as an option or a path — and adoptsHead, its pushed head, travels with it as a full lowercase sha, else the builder could not tell a moved branch from the one handed over — see bite-proof record adopt_branch
+    adopts_reason = adopts_premise_reason(premise)
+    if adopts_reason is not None:
+        return _fail(adopts_reason)
 
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
@@ -1278,10 +1319,11 @@ def compose_launch(
         return _fail("compose-ruling-zero-absent")
 
     adopts = None
+    adopts_reason = adopts_premise_reason(premise)
+    if adopts_reason is not None:
+        return _fail(adopts_reason)
     if isinstance(premise, dict) and "adoptsBranch" in premise:
-        adopts = premise["adoptsBranch"]
-        if not valid_adopts_branch(adopts):
-            return _fail("premise-adopts-branch-invalid")
+        adopts = adopts_line(premise["adoptsBranch"], premise["adoptsHead"])
     version = None
     if cloud:
         version = plugin_version()
@@ -1296,7 +1338,7 @@ def compose_launch(
         base_line = "Base commit: %s" % base
         if adopts is not None:
             # axis: the cloud prompt names the adopted branch on its own line right after the base commit — see bite-proof record adopt_branch
-            base_line += "\nAdopts branch: %s" % adopts
+            base_line += "\n" + adopts
         prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n%s\n%s\n\n%s" % (
             _WORKHORSE_CMD, issue, version, environment_line, base_line, rulings_block,
         )
@@ -1304,7 +1346,7 @@ def compose_launch(
         local_base = premise.get("baseCommit")
         if not isinstance(local_base, str) or not local_base.strip():
             return _fail("premise-missing-field:baseCommit")
-        prompt = "%s\n\nIssue: #%s\n\nAdopts branch: %s\nBase commit: %s\n\n%s" % (
+        prompt = "%s\n\nIssue: #%s\n\n%s\nBase commit: %s\n\n%s" % (
             _WORKHORSE_CMD, issue, adopts, local_base, rulings_block,
         )
     else:

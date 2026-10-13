@@ -111,12 +111,12 @@ def test_parse_launch_reads_the_three_lines():
     text = "  Advisor plugin version: 1.2.3  \nnoise\n\tCloud environment: env_abc123\r\n" \
            "Base commit: %s\n" % SHA
     assert cb.parse_launch(text) == {"advisorVersion": "1.2.3", "environment": "env_abc123",
-                                     "baseCommit": SHA, "adoptsBranch": None}
+                                     "baseCommit": SHA, "adoptsBranch": None, "adoptsHead": None}
 
 
 def test_parse_launch_missing_lines_are_none():
     assert cb.parse_launch("nothing here") == {"advisorVersion": None, "environment": None,
-                                               "baseCommit": None, "adoptsBranch": None}
+                                               "baseCommit": None, "adoptsBranch": None, "adoptsHead": None}
     assert cb.parse_launch(None)["baseCommit"] is None
 
 
@@ -479,7 +479,7 @@ def test_the_launchers_cloud_prompt_passes_intake(tmp_path):
     assert composed["ok"] is True, composed
     parsed = cb.parse_launch(composed["prompt"])
     assert parsed == {"advisorVersion": composed["pluginVersion"],
-                      "environment": ENV_ID, "baseCommit": SHA, "adoptsBranch": None}
+                      "environment": ENV_ID, "baseCommit": SHA, "adoptsBranch": None, "adoptsHead": None}
 
 
 @pytest.mark.parametrize("content", ["{not json", "[1, 2]", "\"ok\"", None])

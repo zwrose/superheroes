@@ -43,14 +43,16 @@ notice, a review receipt.
    the launch's base commit. Create the build branch there, and post the result's `comment` as the
    first comment on the issue. It states three facts: a cloud build, the plugin version, and that
    commits carry the cloud's author name while the PR is under the owner's name. Never re-word it.
-5. When the launch carries `Adopts branch: <name>`, the result's `branch` names it and the clone is
-   on that branch at the launch's base commit, which is the branch's pushed head, with its upstream
-   set. Continue that branch: do not create a build branch, push to it with plain `git push`, and
-   post the result's `comment` as the first comment, as above. Beyond the refusals every launch can
-   get (step 3), the adopt steps add five, each naming what failed: `adopted-branch-moved` (the
-   branch moved past the head the launch named, so another builder may be on it),
-   `adopted-branch-unfetchable`, `base-checkout-failed`, `adopted-branch-upstream-failed` or
-   `adopts-branch-invalid`. Post it and end the lane as in step 3.
+5. When the launch carries `Adopts branch: <name> at <sha>`, the result's `branch` names it and the
+   clone is on that branch at the adopted head `<sha>`, the branch's pushed head, which descends
+   from the launch's base commit (for a stack layer the base is the layer below's head, so the two
+   differ), with its upstream set. Continue that branch: do not create a build branch, push to it
+   with plain `git push`, and post the result's `comment` as the first comment, as above. Beyond
+   the refusals every launch can get (step 3), the adopt steps add six, each naming what failed:
+   `adopted-branch-moved` (the branch moved past the head the launch named, so another builder
+   may be on it), `adopted-head-not-on-base` (the adopted head does not descend from the base
+   commit), `adopted-branch-unfetchable`, `base-checkout-failed`, `adopted-branch-upstream-failed`
+   or `adopts-branch-invalid`. Post it and end the lane as in step 3.
 
 ## Workspace
 
