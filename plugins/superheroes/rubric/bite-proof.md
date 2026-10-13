@@ -162,6 +162,18 @@ reads as rigor. A wall-clock-tight interleaving suite passed on an idle machine 
 load, and two earlier rounds had environment-normalizing tests hide blockers that were inert in
 production.
 
+## Running a proof
+
+- Select a detector by its **exact test node id**, never by `-k`. A `-k` substring can select
+  nothing and read green.
+- **Re-run every recorded proof on the final head.** Any edit after a proof was recorded can narrow
+  its detector and leave the proof stale.
+- An order names the **exact expected refusal token** for a detector that refuses. A wrong refusal
+  token counts as red.
+- Probe mechanics: **assert the target occurs exactly once** before replacing it, and re-read the
+  file after the write. Run under a pycache prefix or clear bytecode, so a stale compiled file
+  cannot hide the edit. After the revert, confirm the file is **byte-clean after the revert**.
+
 ## Who owes what
 
 - **The order's author (the build orchestrator)** — an order that adds or changes a detector

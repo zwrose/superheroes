@@ -25,7 +25,7 @@ def _cfg(**over):
 
 def _seed_record(round_no, **over):
     rec = {"schemaVersion": 2, "round": round_no, "kind": "baseline",
-           "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
+           "dimensions": {"test-role": {"status": "run", "confidence": "high",
                                             "tier": "reviewer-deep", "findings": []}},
            "findings": [], "coverageDecisions": []}
     rec.update(over)
@@ -41,8 +41,8 @@ def _unwritable_records_path(tmp_path):
 
 def _parking_state(tmp_path):
     """A state holding one ledger record whose records destination cannot be written."""
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=_unwritable_records_path(tmp_path))
-    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    cfg = _cfg(dimensions=["test-role"], recordsPath=_unwritable_records_path(tmp_path))
+    state = RD.new_state(_cfg(dimensions=["test-role"]))
     state["config"] = cfg
     state["_records"] = [_seed_record(1)]
     return state, cfg

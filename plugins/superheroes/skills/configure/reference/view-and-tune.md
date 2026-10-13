@@ -513,7 +513,8 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a review-panel seat to a vendor/model** → write the pin under `core.md`'s
   `enginePreferences.seatPins`. Valid seat keys are `architecture-reviewer`, `code-reviewer`,
-  `security-reviewer`, `test-reviewer`, `premortem-reviewer`, and `grounding-seat`; each pin is
+  `security-reviewer`, `test-role`, `premortem-reviewer`, and `grounding-seat` (a pin written under
+  the old `test-reviewer` key is read as the test role's pin); each pin is
   `{vendor, model?, effort?}` — a present `model` or `effort` must be a non-empty string or the whole
   pin is rejected into `invalidSeatPins` (an absent optional field is fine; a vendor-only pin uses the
   seat's default model). It feeds the review-code panel's `seat_map compose --pins`; a pin the
