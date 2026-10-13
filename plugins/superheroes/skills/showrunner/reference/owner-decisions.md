@@ -570,7 +570,8 @@ advisor run together to keep calibration honest.
    - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
      escapes only, counts only reviews dated on or after the adoption day and inside the condition
      window, and decides nothing. The advisor reads the counts and judges. Missing evidence reads
-     unmeasured, never zero.
+     unmeasured, never zero: a record or escape that is undated or has lost its reviewers or findings
+     turns the whole tally unmeasured (`incomplete-evidence`) instead of counting as nothing.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -683,7 +684,9 @@ say how it changes and what the advisor says when the owner finds a review slow.
   the owner's recorded yes: the answer, the owner's exact words, and where and when they were given. The
   command records the approval in Canon by Canon's write procedure
   ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)), then writes the Risk and
-  trust half the proposal changes. A standing ruling about leftovers is the Canon entry alone. The Canon
+  trust half the proposal changes. A proposal that replaces an earlier Canon ruling names it in an
+  optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
+  about leftovers is the Canon entry alone. The Canon
   entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
   which is the next PR it opens. It never goes on the branch of the PR whose sheet carried the proposal.
   A result other than `applied` is reported to the owner as it is, never as done. A `partial` result

@@ -17,7 +17,10 @@ import definition_doc  # noqa: E402
 import mode_registry  # noqa: E402
 import project_config  # noqa: E402
 import review_learning as RL  # noqa: E402
+import review_round_policy  # noqa: E402
+import review_seats  # noqa: E402
 import risk_areas  # noqa: E402
+import round_driver  # noqa: E402
 
 PAYMENTS = {"name": "Payments", "covers": ["src/payments/*"], "why": "Charges customers.",
             "undo": "Hard: a charge needs a refund."}
@@ -132,6 +135,22 @@ def test_valid_yes_records_canon_commits_and_applies(proj, canon_root):
     assert touched == {CANON_REL, "docs/superheroes/.gitattributes"}
     assert _git(canon_root, "rev-parse", "HEAD").strip() == got["canonCommit"] != before[2].strip()
     assert _touched(proj) == ["Auth"]
+
+
+def test_supersedes_is_validated_and_carried_into_canon(proj, canon_root):
+    old = _apply(proj, canon_root, {"schema": "calibration-proposal/1", "kind": "standing-ruling", "ruling": RULING}, APPROVAL)
+    old_id = old["canonEntry"].split("**")[1]
+    before = _state(proj, canon_root)
+    for bad in ("", "not-an-id", 7, None):
+        got = _apply(proj, canon_root, _proposal(supersedes=bad), APPROVAL)
+        assert (got["ok"], got["reason"]) == (False, "proposal-invalid"), bad
+    assert _state(proj, canon_root) == before
+    new = {"schema": "calibration-proposal/1", "kind": "standing-ruling", "ruling": "Auth is no longer a risk area.",
+           "supersedes": old_id}
+    got = _apply(proj, canon_root, new, APPROVAL)
+    assert (got["ok"], got["outcome"]) == (True, "applied")
+    assert "supersedes: " + old_id in got["canonEntry"]
+    assert got["canonEntry"] in _git(canon_root, "show", "HEAD:" + CANON_REL).splitlines()
 
 
 def test_standing_ruling_is_canon_only(proj, canon_root):
@@ -268,9 +287,7 @@ def _truth_table_records():
 def _escapes():
     return [{"pr": 1, "reviewedAt": "2026-10-09", "call": "missed", "record": "r"},
             {"pr": 2, "reviewedAt": D, "call": "missed", "record": "r"},
-            {"pr": 2, "reviewedAt": D, "call": "seen-and-left", "record": "r"},
-            {"pr": 3, "reviewedAt": "2026-10-11", "call": "other", "record": "r"},
-            {"pr": 3, "call": "missed"}]
+            {"pr": 2, "reviewedAt": D, "call": "seen-and-left", "record": "r"}]
 
 
 def test_tally_truth_table():
@@ -281,7 +298,7 @@ def test_tally_truth_table():
     assert got["seats"] == {"code-reviewer": {"reviews": 3, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
     assert got["unattributedCatches"] == 1
     assert got["escapes"] == {"missed": 1, "seenAndLeft": 1}
-    assert got["leftOut"] == {"beforeWindow": 2, "afterWindow": 0, "undated": 1, "malformed": 1}
+    assert got["leftOut"] == {"beforeWindow": 2, "afterWindow": 0, "undated": 0, "malformed": 0}
 
 
 # axis: the guarding test for the before-adoption exclusion — an event dated before the adoption day never counts
@@ -343,7 +360,8 @@ def test_tally_undated_and_malformed_records_contribute_nothing():
     bad = [{"pr": 1, "sessionId": "x", "reviewers": [_row("code-reviewer")], "findings": [_finding("k", "Code")]},
            {"pr": 1, "sessionId": "y", "writtenAt": "yesterday", "reviewers": [_row("code-reviewer")]}, "junk"]
     got = RL.tally(bad, [], D, until="2026-10-11")
-    assert got["seats"] == {} and got["unattributedCatches"] == 0
+    assert got["seats"] == {} and got["unattributedCatches"] is None  # unmeasured, never a zero
+    assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
     assert got["leftOut"]["undated"] == 2 and got["leftOut"]["malformed"] == 1
 
 
@@ -362,6 +380,30 @@ def test_tally_until_defaults_to_today_utc():
 ])
 def test_seat_normalization(name, seats):
     assert RL._seats(name) == seats
+
+
+def test_seat_dimension_mapping_has_one_home_with_dispatch():
+    # every dispatched seat is reachable from the learning loop's dimension names, derived from dispatch's own tables
+    assert RL.DIMENSION_SEAT is review_seats.DIMENSION_SEAT
+    assert round_driver.AGENT_SUFFIX is review_seats.AGENT_SUFFIX
+    assert review_round_policy.SUBJECT_FALLBACK is review_seats.SUBJECT_FALLBACK
+    for seat in round_driver.AGENT_SUFFIX:
+        label = round_driver._panel_dimension_label(seat)
+        assert RL.DIMENSION_SEAT[label.lower()] == seat
+        assert RL._seats(label) == [seat]
+
+
+def test_tally_incomplete_evidence_reads_unmeasured_never_zero():
+    refusal = {"ok": False, "reason": "review-record-unreadable"}
+    no_findings = {"pr": 1, "sessionId": "x", "writtenAt": "2026-10-05T00:00:00Z", "reviewers": [_row("code-reviewer")]}
+    for records, escapes in (([refusal], []), ([no_findings], []), (["junk"], []),
+                             ([{"pr": 1, "reviewers": [], "findings": []}], []),
+                             ([], [{"call": "missed"}]), ([], ["junk"]),
+                             ([], [{"reviewedAt": "2026-10-05", "call": "other"}])):
+        got = RL.tally(records, escapes, D, until="2026-10-11")
+        assert got["measured"] is False and got["reason"] == "incomplete-evidence", (records, escapes)
+        assert got["unattributedCatches"] is None and got["escapes"] == {"missed": None, "seenAndLeft": None}
+        assert got["seats"] == {}
 
 
 # --- the CLI ---

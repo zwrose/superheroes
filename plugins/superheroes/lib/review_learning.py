@@ -24,6 +24,7 @@ import canon  # noqa: E402
 import core_md  # noqa: E402
 import project_config  # noqa: E402
 import review_record  # noqa: E402
+import review_seats  # noqa: E402
 
 SINCE_KEY = "reviewLearningSince"
 PROPOSAL_SCHEMA = "calibration-proposal/1"
@@ -31,8 +32,9 @@ COMMIT_MESSAGE = "docs: record an approved calibration change in Canon"
 HALVES = ("riskAreas", "threatModel")
 _KEYS = {"risk-and-trust": {"schema", "kind", "half", "value", "ruling"},
          "standing-ruling": {"schema", "kind", "ruling"}}
-DIMENSION_SEAT = {"code": "code-reviewer", "test": "test-role", "architecture": "architecture-reviewer",
-                  "security": "security-reviewer", "failure-mode": "premortem-reviewer"}
+SUPERSEDES_KEY = "supersedes"  # optional on either kind: the Canon entry id a replacement retires
+_ENTRY_ID = re.compile(r"\d{4}-\d{2}-\d{2}-[0-9a-z]{8}-[1-9]\d*")
+DIMENSION_SEAT = review_seats.DIMENSION_SEAT
 _KNOWN = set(DIMENSION_SEAT) | set(DIMENSION_SEAT.values())
 
 
@@ -91,8 +93,11 @@ def _proposal_problem(p):
     keys = _KEYS.get(p.get("kind")) if isinstance(p, dict) else None
     if keys is None:
         return "kind must be 'risk-and-trust' or 'standing-ruling'"
-    if set(p) != keys or p["schema"] != PROPOSAL_SCHEMA:
-        return "a %s proposal is exactly %s with schema %s" % (p["kind"], sorted(keys), PROPOSAL_SCHEMA)
+    if set(p) - {SUPERSEDES_KEY} != keys or p.get("schema") != PROPOSAL_SCHEMA:
+        return "a %s proposal is exactly %s (plus an optional %s) with schema %s" % (
+            p["kind"], sorted(keys), SUPERSEDES_KEY, PROPOSAL_SCHEMA)
+    if SUPERSEDES_KEY in p and not (isinstance(p[SUPERSEDES_KEY], str) and _ENTRY_ID.fullmatch(p[SUPERSEDES_KEY])):
+        return "supersedes must be the id of the Canon entry being replaced (YYYY-MM-DD-xxxxxxxx-N)"
     try:
         canon._field("ruling", p["ruling"] if isinstance(p["ruling"], str) else "")
     except canon.Refusal as exc:
@@ -108,6 +113,8 @@ def _append_canon(canon_root, session_id, proposal, approval):
     argv = ["append", "--root=" + canon_root, "--session-id=" + str(session_id), "--ground=owner-call",
             "--scope=standing", "--ruling=" + proposal["ruling"], "--owners-words=" + approval["words"],
             "--where=" + approval["where"], "--date=" + approval["date"]]
+    if proposal.get(SUPERSEDES_KEY):
+        argv.append("--supersedes=" + proposal[SUPERSEDES_KEY])
     return canon.cmd_append(canon._parser().parse_args(argv))
 
 
@@ -193,14 +200,21 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return "beforeWindow" if d < low else "afterWindow" if d > end else None
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
-    seen, unattributed = {}, 0
+    seen, unattributed, incomplete = {}, 0, False  # incomplete: evidence went missing, so no count is a zero
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
         if not isinstance(rec, dict):
             left["malformed"] += 1
+            incomplete = True
             continue
         if day is None:
             left["undated"] += 1
+            incomplete = True
+            continue
+        # a record that lost its reviewers or findings (a refusal body, a partial read) is unknown coverage, not an empty review
+        if rec.get("ok") is False or not isinstance(rec.get("reviewers"), list) or not isinstance(rec.get("findings"), list):
+            left["malformed"] += 1
+            incomplete = True
             continue
         if outside(day):
             left[outside(day)] += 1
@@ -226,12 +240,16 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         label = {"missed": "missed", "seen-and-left": "seenAndLeft"}.get(esc.get("call")) if isinstance(esc, dict) else None
         if day is None and isinstance(esc, dict):
             left["undated"] += 1
+            incomplete = True
         elif label is None:
             left["malformed"] += 1
+            incomplete = True
         elif outside(day):
             left[outside(day)] += 1
         else:
             counts[label] += 1
+    if incomplete:  # missing evidence reads unmeasured, never zero (owner-decisions.md, the gardening pass)
+        return dict(out, measured=False, reason=out["reason"] or "incomplete-evidence", leftOut=left)
     out.update(seats={s: {"reviews": len(reviews[s]), "caught": caught[s]} for s in sorted(set(reviews) | set(caught))},
                unattributedCatches=unattributed, escapes=counts, leftOut=left)
     return out
