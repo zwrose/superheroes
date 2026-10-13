@@ -417,6 +417,12 @@ def handover_text(sha):
             "My pushed head is " + sha + ".")
 
 
+def handover_sha(body):
+    """The pushed head a whole handover comment (exactly `handover_text`'s words) names; None for any other body."""
+    match = isinstance(body, str) and re.search(r"([0-9a-f]{40})\.$", body.strip())
+    return match.group(1) if match and body.strip() == handover_text(match.group(1)) else None
+
+
 def pass_state(env=None, now=None):
     """The placed reviewer sign-in's state and lapse date, and whether this is a cloud session."""
     env = _env(env)

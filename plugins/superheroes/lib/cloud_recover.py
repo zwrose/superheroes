@@ -40,11 +40,10 @@ _STOP_STATES = ("failed", "archived", "absent")
 _LIVE_STATES = ("working", "blocked")
 PUSH_ASK = ("Another builder is about to take this issue over. Push every commit you have now, then post "
             "the handover comment on this issue: run python3 -B <plugin root>/lib/cloud_builder.py handover "
-            "--head <your pushed head sha> and post its output as it is. Then stop working on this issue "
+            "--head <your pushed head sha> and post the comment field of its output, as it is. Then stop working on this issue "
             "and end your turn.")
 _LOCK_WAIT_SECONDS = 30
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-_HANDOVER_SHA_RE = re.compile(r"My pushed head is ([0-9a-f]{40})(?![0-9a-f])")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 _PUSH_SOURCES = ("push", "commit")
 _PLACES = ("cloud", "local")
@@ -216,9 +215,9 @@ def _handover(repo, issue, since, env, run):
     found = []
     for comment in comments:
         created, body = _epoch(comment.get("created_at")), comment.get("body")
-        sha = _HANDOVER_SHA_RE.search(body.strip()) if isinstance(body, str) else None
-        if created is not None and created >= since and sha and body.strip().startswith(cb.HANDOVER_HEADER):
-            found.append((created, comment, sha.group(1)))
+        sha = cb.handover_sha(body)
+        if created is not None and created >= since and sha:
+            found.append((created, comment, sha))
     if not found:
         return None, True
     _, comment, sha = max(found, key=lambda t: t[0])
@@ -302,7 +301,8 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     out = {"ok": True, "launchId": launch_id, "issue": info["issue"], "verdict": None, "evidence": None,
            "handover": None, "handoverRead": None, "cloudSessionName": info.get("cloudSessionName"),
            "cloudSessionId": info.get("cloudSessionId"), "configDir": info.get("configDir"), "stoppedAt": None}
-    if info["terminal"]:
+    # axis: a parked or died lane is still recoverable from current stop evidence until a successor is composed for it
+    if info["terminal"] and (info.get("outcome") not in ("park", "died") or launch_id in superseded_ids(repo_root, env)[0]):
         out["verdict"] = "ended"
         return out
     start, age = info.get("startedTs", info.get("reservedTs")), activity_age_seconds
@@ -433,6 +433,19 @@ def successor(repo_root, launch_id, *, repo, env=None, run=None):
         premise.pop("adoptsHead", None)
     else:
         premise["adoptsBranch"], premise["adoptsHead"] = entry["branch"], entry["sha"]
+        if premise.get("layerPosition") not in (None, 1) and "adopts" not in premise:
+            # axis: a stack layer whose pull request now holds its position adopts that pull request, else the stack gate refuses the occupied position
+            cb = _sib("cloud_builder")
+            head = urllib.parse.quote("%s:%s" % (repo.split("/")[0], entry["branch"]), safe="")
+            code, out = cb._gh(run, ["api", "repos/%s/pulls?head=%s&state=open" % (repo, head)], cb._git_env(env))
+            try:
+                prs = json.loads(out) if code == 0 else None
+            except ValueError:
+                prs = None
+            if not isinstance(prs, list):
+                return _refusal("open-pr-unreadable")
+            if len(prs) == 1 and isinstance(prs[0], dict) and isinstance(prs[0].get("number"), int):
+                premise["adopts"] = prs[0]["number"]
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     wrote = _record(repo_root, "superseded", launch_id, mark, env=env)
     if not wrote["ok"]:

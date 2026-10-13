@@ -35,7 +35,13 @@ BRANCH = "issue-17-work"
 
 
 def _handover_body(sha):
-    return HEADER + "\n\nI pushed my work and stopped working on this issue. My pushed head is " + sha + "."
+    return cloud_builder.handover_text(sha)
+
+
+def _run_handover(sha):
+    proc = subprocess.run([sys.executable, "-B", cloud_builder.__file__, "handover", "--head", sha],
+                          capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
 
 
 def _clean_env(**extra):
@@ -73,6 +79,7 @@ class Gh:
 
     def __init__(self):
         self.comments, self.comments_fail, self.activity, self.calls = [], False, {}, []
+        self.pulls = []
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
@@ -85,6 +92,8 @@ class Gh:
             if events is None:
                 return subprocess.CompletedProcess(argv, 1, "", "boom")
             return subprocess.CompletedProcess(argv, 0, events if isinstance(events, str) else json.dumps(events), "")
+        if "/pulls?" in endpoint:
+            return subprocess.CompletedProcess(argv, 0, json.dumps(self.pulls), "")
         if "/comments?" in endpoint:
             if self.comments_fail:
                 return subprocess.CompletedProcess(argv, 1, "", "boom")
@@ -145,7 +154,7 @@ def _push(w, branch, name, when=None):
 def _premise(w, issue):
     """A reserved premise the launcher accepts (once its own stamps are gone), with the stamps it adds."""
     return {"issue": issue, "surfaces": ["plugins/x"], "batchId": BATCH, "baseCommit": w.base, "stack": 2,
-            "layerPosition": 2, "adopts": 99, "maxRunMinutes": 240, "bashMaxTimeoutMs": 900000,
+            "layerPosition": 2, "maxRunMinutes": 240, "bashMaxTimeoutMs": 900000,
             "grantScope": {"applicable": False, "reason": "no grant in this lane"},
             "ownerCapability": {"applicable": False, "reason": "no owner capability in this lane"},
             "placeCall": {"place": "cloud", "pointedAtCloud": True}, "standingExclusions": {"merge": True}}
@@ -341,12 +350,21 @@ def test_p6_a_lane_ended_without_an_assess_that_returned_stopped_never_gets_a_su
     assert _successor(w, "l2") == {"ok": False, "reason": "lane-not-assessed-stopped"}
 
 
-def test_a_lane_already_ended_in_the_ledger_assesses_as_ended_and_records_nothing(w):
+def test_a_lane_already_handed_back_in_the_ledger_assesses_as_ended_and_records_nothing(w):
     _lane(w, "l1")
-    _died(w, "l1")
+    _died(w, "l1", "handback")
     out = _assess(w, state="failed")
     assert out["ok"] is True and out["verdict"] == "ended"
     assert not os.path.exists(_state_file(w))
+
+
+def test_a_parked_lane_whose_session_failed_is_assessed_stopped_until_a_successor_is_composed(w):
+    _push(w, BRANCH, "a")
+    _lane(w, "l1")
+    _died(w, "l1", "park")
+    assert _assess(w, state="archived")["verdict"] == "stopped"
+    assert _successor(w)["ok"] is True
+    assert _assess(w, state="archived")["verdict"] == "ended"
 
 
 def test_assess_checks_its_arguments(w):
@@ -398,7 +416,8 @@ def test_e16_a_handover_comment_older_than_the_lane_is_ignored(w):
 
 
 @pytest.mark.parametrize("body", ["Builder handover (cloud build). I pushed.", "see " + _handover_body("a" * 40),
-                                  HEADER + "\n\nMy pushed head is " + "a" * 39 + "."])
+                                  HEADER + "\n\nMy pushed head is " + "a" * 39 + ".",
+                                  _handover_body("a" * 40).replace("stopped working", "am still working")])
 def test_a_comment_that_is_not_a_whole_handover_does_not_count(w, body):
     _lane(w, "l1")
     w.gh.comments = [_comment(body)]
@@ -420,7 +439,7 @@ def test_the_push_ask_is_the_agreed_words():
     assert CR.PUSH_ASK == (
         "Another builder is about to take this issue over. Push every commit you have now, then post the "
         "handover comment on this issue: run python3 -B <plugin root>/lib/cloud_builder.py handover --head "
-        "<your pushed head sha> and post its output as it is. Then stop working on this issue and end your turn.")
+        "<your pushed head sha> and post the comment field of its output, as it is. Then stop working on this issue and end your turn.")
 
 
 def test_p4_a_second_ask_after_the_first_was_delivered_is_refused(w):
@@ -462,7 +481,8 @@ def test_t4_a_stalled_builder_that_answers_is_recovered_from_the_head_it_handed_
     assert CR.ask(w.root, "l1")["reason"] == "already-asked"
     assert _assess(w, state="idle")["verdict"] == "awaiting-handover"
     newer = _push(w, BRANCH, "b")  # the builder answers the ask: pushes, then posts the handover
-    w.gh.comments = [_comment(_handover_body(newer))]
+    cb_out = _run_handover(newer)  # what the ask tells the builder to run, and its comment field is what it posts
+    w.gh.comments = [_comment(cb_out["comment"])]
     out = _assess(w, state="idle")
     assert (out["verdict"], out["evidence"], out["handover"]["sha"]) == ("stopped", "handover", newer)
     _died(w, "l1")
@@ -545,6 +565,23 @@ def test_t1_the_successor_premise_adopts_the_pushed_branch_and_passes_the_launch
     assert seen["premise"]["baseCommit"] == w.base
     assert seen["premise"]["placeCall"] == stamp and seen["kwargs"]["place"] == "cloud"
     assert _state(w)["superseded"]["l1"]["branch"] == BRANCH and _state(w)["superseded"]["l1"]["sha"] == sha
+
+
+def test_a_stack_layer_that_opened_its_pull_request_is_relaunched_through_the_real_stack_gate(w):
+    sha = _push(w, BRANCH, "a")  # the original layer-2 premise has no adopts: its pull request did not exist yet
+    _lane(w, "l1")
+    assert _assess(w, state="failed")["verdict"] == "stopped"
+    _died(w, "l1")
+    w.gh.pulls = [{"number": 99}]
+    premise = _successor(w)["premise"]
+    assert premise["adopts"] == 99
+    member = {"position": 2, "number": 99, "baseRefName": "layer-1", "headRefName": BRANCH, "headRefOid": sha}
+    below = {"position": 1, "headRefName": "layer-1", "headRefOid": w.base}
+    gate = L._apply_stack_gate(
+        dict(premise, **{"stack": 2}), w.base, w.root, {},
+        lambda *a, **k: {"ok": True, "pr": 5, "repo": REPO},
+        lambda **k: {"ok": True, "queried": below, "members": [member]})
+    assert gate["ok"] is True and gate["stackGate"]["adopts"] == 99
 
 
 def test_the_launch_boundary_does_refuse_a_premise_that_still_carries_the_launchers_stamp(w, tmp_path, monkeypatch):
