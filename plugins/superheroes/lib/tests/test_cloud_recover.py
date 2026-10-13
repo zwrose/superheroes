@@ -823,7 +823,13 @@ def test_t5_the_minutes_redone_are_counted_from_the_last_push(w):
 
     assert "About 6 minutes of work" in text(370)
     assert "About 1 minute of work" in text(60) and "1 minutes" not in text(60)
-    assert "About 0 minutes of work" in text(0) and "About 0 minutes of work" in text(-300)
+    assert text(0).endswith("No work since its last push is lost.")
+    assert text(-300).endswith("No work since its last push is lost.")
+    assert text(59).endswith("No work since its last push is lost.")
+    assert text(60).endswith("About 1 minute of work since its last push is being redone.")
+    assert text(119 * 60).endswith("About 119 minutes of work since its last push is being redone.")
+    assert text(120 * 60).endswith("About 2 hours of work since its last push is being redone.")
+    assert text(4320 * 60).endswith("About 72 hours of work since its last push is being redone.")
     assert text(1800, push_time_source="commit").endswith("About 30 minutes of work since its last pushed commit is being redone.")
     assert CR.message(17, place="local", stopped_at=_at(10, 0), pushed_at=_at(9, 54), tz=UTC)["text"] == (
         "The cloud builder on #17 stopped at 10:00. I recovered the lane from its pushed work on your machine. "
@@ -842,7 +848,7 @@ def test_t5_a_delayed_push_is_counted_from_the_push_not_the_commit(w):
     w.gh.activity.clear()  # the activity read fails: the commit time stands in, and the words say so
     entry = CR.pushed(w.root, 17, repo=REPO, run=w.gh)["newest"]
     assert entry["pushTimeSource"] == "commit"
-    assert "About 120 minutes of work since its last pushed commit" in CR.message(
+    assert "About 2 hours of work since its last pushed commit" in CR.message(
         17, place="cloud", stopped_at=stopped, pushed_at=entry["pushedAt"], push_time_source="commit", tz=UTC)["text"]
 
 
