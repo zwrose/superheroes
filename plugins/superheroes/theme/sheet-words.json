@@ -69,6 +69,7 @@
     "optionalBadge": "Optional",
     "tapPicture": "Tap a picture to see it full size.",
     "pictureMissing": "A picture is missing: {alt}",
+    "walkedAnswers": ["works", "looks-right", "problem"],
     "walkAnswers": {"labels": {"works": "Works", "looks-right": "Looks right", "problem": "Problem", "skip": "Skip"}, "try": ["works", "problem", "skip"], "look": ["looks-right", "problem", "skip"]},
     "walkFixes": [
       {"id": "before-merge", "label": "Fix before merge", "consequence": "This goes back with your note and returns with a new sheet.", "sendsBack": true},

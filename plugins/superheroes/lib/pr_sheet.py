@@ -550,7 +550,7 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
             if isinstance(doc, dict) and doc.get("answer") == "problem":
                 walked, blocking = walked + 1, True
             continue
-        walked += doc["answer"] in ("works", "looks-right", "problem")
+        walked += doc["answer"] in words["walkedAnswers"]
         if doc["answer"] == "problem":
             fix = fixes.get(doc["fix"])
             blocking = blocking or fix is None or fix.get("sendsBack") is not False
@@ -680,12 +680,6 @@ def _index_row(entry, base, order, words, problems):
     return {**row, "caption": _row_caption(row, words["index"])}
 
 
-def _answered(question, doc):
-    """True when doc is an answer the question offers: one of its options, or Something else."""
-    return sheet_prose.fits_definition("answer", doc) and (doc["answer"] == "something-else"
-                                  or (doc["answer"] == "option" and doc["optionId"] in [o["id"] for o in question["options"]]))
-
-
 def build_index(advisor, base, answers, words, place):
     """Returns the index sheet as a dict, or raises Refusal with every problem found.
 
@@ -702,7 +696,7 @@ def build_index(advisor, base, answers, words, place):
     rows = [_index_row(p, base, advisor["mergeOrder"], words, problems) for p in advisor["prs"]]
     probe, cards = _stager(base, {}), []
     for q in advisor["questions"]:
-        kept = not _answered(q, given["answers"].get(q["id"]))
+        kept = _counted_answer(q, given["answers"].get(q["id"]), words["answers"]) is None
         images = []
         for n, pic in enumerate(q["pictures"], 1):
             src = (place if kept else probe)(pic["path"])

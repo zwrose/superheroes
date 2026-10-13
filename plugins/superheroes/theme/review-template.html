@@ -1631,8 +1631,7 @@
       return button;
     }
 
-    // The answers that count a walk stop as walked; the walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
-    const WALKED = ["works", "looks-right", "problem"];
+    // The walk's stops, count and the verdict's three walk lines; the schema's walk-answer rule ({ root, rule }).
     let walkStops = [];
     let walkCount = textElement("span", "sh-label", "");
     let walkLines = [];
@@ -1859,13 +1858,13 @@
       const counts = [
         open,
         count(function (item) { return fixOf(item.saved).sendsBack === false; }),
-        count(function (item) { return !item.optional && !WALKED.includes(item.now.answer); }),
+        count(function (item) { return !item.optional && !prWords.walkedAnswers.includes(item.now.answer); }),
       ];
       ["walkProblems", "followUps", "notWalked"].forEach(function (name, index) {
         walkLines[index].textContent = counts[index] === 0 ? "" : fill(prWords[name + (counts[index] === 1 ? "One" : "Many")], { count: counts[index] });
         walkLines[index].hidden = counts[index] === 0 || sendsBack;
       });
-      walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return WALKED.includes(item.saved.answer); }), total: walked.length });
+      walkCount.textContent = fill(prWords.walkCount, { walked: count(function (item) { return prWords.walkedAnswers.includes(item.saved.answer); }), total: walked.length });
       walkCount.hidden = !ready;
       const mergeLabel = verdictLabel("merge");
       verdictController.setChoice("merge", locked ? fill(prWords.mergeLocked, { merge: mergeLabel }) : mergeLabel, locked);
