@@ -387,6 +387,34 @@ def test_a_carry_refusal_is_collected_with_the_other_problems():
     assert any("summary must be a non-empty string" in p for p in problems) and any("heads has PRs" in p for p in problems)
 
 
+@pytest.mark.parametrize("case, name", [(STACK, "stack"), (SMALL, "pr")])
+def test_a_carry_on_an_input_with_no_number_is_refused_not_a_crash(case, name):
+    # Bites on: the earlier-sheet comparison reading advisor["number"] after the input check already found it missing (a KeyError instead of a refusal).
+    # Axis: fail-closed edges 1 and 2: a stack or pr carry with no number is a collected Refusal that names the missing number.
+    records, advisor = bundle(case)
+    advisor.pop("number")
+    problems = problems_of(records, carry_input(advisor, CARRY_CASES[name][1]), sheet_bytes(built(case)))
+    assert any("number must be an integer, 1 or more" in problem for problem in problems)
+
+
+def test_the_cli_refuses_a_stack_carry_with_no_number_and_writes_nothing(tmp_path):
+    # Bites on: a stack carry with no number crashing the command with a traceback instead of printing the refusal.
+    # Axis: fail-closed edge 3: through the command, exit 1, one JSON line with ok false, and no output file.
+    (tmp_path / "earlier").mkdir()
+    records = [FIXTURES / name for name in STACK[0]]
+    assert cli(records, FIXTURES / STACK[1], tmp_path / "earlier" / "sheet.json").returncode == 0
+    advisor = carry_input(load(STACK[1]), CARRY_CASES["stack"][1])
+    advisor.pop("number")
+    source = tmp_path / "in.json"
+    source.write_text(json.dumps(advisor), encoding="utf-8")
+    out = tmp_path / "out.json"
+    done = cli(records, source, out)
+    assert done.returncode == 1 and not out.exists()
+    assert len(done.stdout.splitlines()) == 1
+    result = json.loads(done.stdout)
+    assert result["ok"] is False and any("number must be an integer, 1 or more" in problem for problem in result["problems"])
+
+
 def carry_world(tmp_path, advisor_edit=None):
     """The small PR's earlier sheet written to tmp_path/earlier/sheet.json, and a carried input beside tmp_path/in.json."""
     (tmp_path / "earlier").mkdir()

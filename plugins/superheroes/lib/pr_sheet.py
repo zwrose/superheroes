@@ -449,7 +449,8 @@ def build(records, advisor, words, place=None, previous=None):
         raise Refusal(["the advisor's input must be an object"])
     allowed = _check_input(advisor, words, problems)
     earlier = None
-    if "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems) and allowed is not None:
+    if "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems) and allowed is not None \
+            and _num(advisor.get("number")):  # a stack without a number is refused above, and the earlier sheet cannot be compared to it
         earlier = _check_previous(advisor, previous, problems)
     recs = [r for r in (_record(raw, n, problems) for n, raw in enumerate(records, 1)) if r]
     kind, number, have = advisor.get("kind"), advisor.get("number"), [r["pr"] for r in recs]
