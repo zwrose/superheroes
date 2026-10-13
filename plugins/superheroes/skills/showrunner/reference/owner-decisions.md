@@ -550,7 +550,8 @@ advisor run together to keep calibration honest.
    also records **the latest mutation run's survivors and kills per test file the run covered**. **A
    file no run covered reads as unmeasured for mutation, never as no kills**.
 8. **Read the reviewer pass, for a project with a cloud setup.** Run
-   `python3 -B <plugin root>/lib/cloud_setup.py gardening --cwd <root>` and say each line it returns
+   `python3 -B <plugin root>/lib/cloud_setup.py gardening --cwd <root> --next-pass-days 7` (seven, the
+   cadence trigger 1 above states) and say each line it returns
    as it is, with `Renew now` before a line that carries that mark. The line names the days left and the lapse date and, when the pass would lapse
    before the next pass is owed, the two hand steps: run the pass command, and paste the new pass into
    the cloud environment. A project with no cloud setup gets no line. **Nothing reads the pass's lapse

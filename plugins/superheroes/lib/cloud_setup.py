@@ -338,7 +338,7 @@ def _lapse_line(days, lapses, next_pass_days):
     return None, "Cloud reviewer pass: %d days left, lapses %s. Nothing to do." % (days, when)
 
 
-def gardening_lines(cwd, today=None, next_pass_days=7, root=None):
+def gardening_lines(cwd, next_pass_days, today=None, root=None):
     """The reviewer-pass line for the gardening pass, one per setup record in the project's store, so it
     is read for whichever Claude account the builders run on. No records, no lines. Each line is
     ``{"account", "mark", "line"}``; a record that cannot be read gives the unreadable line."""
@@ -416,7 +416,7 @@ def main(argv):
 
     gp = sub.add_parser("gardening")
     gp.add_argument("--today", default=None)
-    gp.add_argument("--next-pass-days", type=int, default=7)
+    gp.add_argument("--next-pass-days", type=int, default=None)
 
     for each in (rp, cp, pp, acp, gp):
         each.add_argument("--cwd", default=".")
@@ -426,6 +426,9 @@ def main(argv):
     cwd = os.path.abspath(args.cwd)
 
     if args.cmd == "gardening":
+        if args.next_pass_days is None or args.next_pass_days <= 0:
+            sys.stdout.write(json.dumps({"reason": "next-pass-days-invalid"}, indent=2) + "\n")
+            return 1
         if args.today is not None and not _date_ok(args.today):
             sys.stdout.write(json.dumps({"reason": "today-invalid"}, indent=2) + "\n")
             return 1

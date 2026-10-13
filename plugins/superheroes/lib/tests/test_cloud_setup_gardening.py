@@ -41,8 +41,8 @@ def w(tmp_path):
     return str(repo), str(tmp_path / "store")
 
 
-def _lines(w, **kw):
-    return CS.gardening_lines(w[0], today=TODAY, root=w[1], **kw)
+def _lines(w, next_pass_days=7):
+    return CS.gardening_lines(w[0], next_pass_days, today=TODAY, root=w[1])
 
 
 def test_a_pass_that_will_not_last_to_the_next_gardening_pass_is_marked_renew_now(w):
@@ -111,14 +111,22 @@ def test_a_corrupt_record_gives_the_unreadable_line(w):
 def test_the_cli_prints_the_lines_and_a_bad_today_exits_1(w, capsys):
     _record(w, ACCOUNT, "2026-10-25")
     base = ["gardening", "--cwd", w[0], "--root", w[1]]
-    assert CS.main(base + ["--today", "2026-10-16"]) == 0
+    assert CS.main(base + ["--today", "2026-10-16", "--next-pass-days", "7"]) == 0
     assert json.loads(capsys.readouterr().out) == {"lines": [
         {"account": ACCOUNT, "mark": None, "line": "Cloud reviewer pass: 9 days left, lapses 25 Oct. Nothing to do."}]}
     assert CS.main(base + ["--today", "2026-10-16", "--next-pass-days", "10"]) == 0
     assert json.loads(capsys.readouterr().out)["lines"][0]["mark"] == "Renew now"
     for bad in ("2026-13-01", "tomorrow", ""):
-        assert CS.main(base + ["--today", bad]) == 1
+        assert CS.main(base + ["--today", bad, "--next-pass-days", "7"]) == 1
         assert json.loads(capsys.readouterr().out) == {"reason": "today-invalid"}
+
+
+def test_the_cli_refuses_a_missing_or_non_positive_next_pass_days(w, capsys):
+    _record(w, ACCOUNT, "2026-10-25")
+    base = ["gardening", "--cwd", w[0], "--root", w[1], "--today", "2026-10-16"]
+    for extra in ([], ["--next-pass-days", "0"], ["--next-pass-days", "-3"]):
+        assert CS.main(base + extra) == 1
+        assert json.loads(capsys.readouterr().out) == {"reason": "next-pass-days-invalid"}
 
 
 def test_a_failed_check_marker_makes_the_saved_date_stale_and_is_not_a_record(w):
