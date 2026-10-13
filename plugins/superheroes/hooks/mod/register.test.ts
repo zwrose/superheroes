@@ -44,15 +44,16 @@ const USER_CONFIG = {
   autoCheckpointMode: { default: 'auto', options: ['auto', 'click-only', 'off'] },
 }
 
-// What the stubbed lib/compaction_cli.json reads as. The mod takes its vocabulary from that
-// file; the real file's agreement with the real CLI is lib/tests/test_compaction_mod_argv_1814.py.
+// What the stubbed lib/compaction_cli.json reads as: a test-local vocabulary whose flag spellings are
+// deliberately NOT the real ones, so these tests prove the argv is built from whatever the file holds.
+// The real spellings are proven against the real CLI by lib/tests/test_compaction_mod_argv_1814.py.
 const VOCABULARY = JSON.stringify({
   verbs: {
-    path: { sessionId: '--session-id' },
-    instructions: { sessionId: '--session-id', transcriptPath: '--transcript', userInstructions: '--user-instructions' },
-    mark: { sessionId: '--session-id' },
-    unmark: { sessionId: '--session-id', since: '--since', until: '--until' },
-    save: { sessionId: '--session-id' },
+    path: { sessionId: '--t-session' },
+    instructions: { sessionId: '--t-session', transcriptPath: '--t-transcript', userInstructions: '--t-instructions' },
+    mark: { sessionId: '--t-session' },
+    unmark: { sessionId: '--t-session', since: '--t-since', until: '--t-until' },
+    save: { sessionId: '--t-session' },
   },
 })
 
@@ -312,22 +313,22 @@ for (const trigger of ['manual', 'auto'] as const) {
     expect(nth(r.argv, 0)[1]).toBe('-B')
     expect(nth(r.argv, 0)[2]?.endsWith('/lib/compaction_directive.py')).toBe(true)
     expect(nth(r.argv, 0)[3]).toBe('instructions')
-    expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
-    expect(nth(r.argv, 0)).not.toContain('--user-instructions')
+    expect(flag(nth(r.argv, 0), '--t-session')).toBe(SESSION)
+    expect(nth(r.argv, 0)).not.toContain('--t-instructions')
     // the CLI publishes the marker atomically; the mod writes no file itself
     expect(nth(r.argv, 1)[3]).toBe('mark')
-    expect(flag(nth(r.argv, 1), '--session-id')).toBe(SESSION)
+    expect(flag(nth(r.argv, 1), '--t-session')).toBe(SESSION)
     expect(r.writes).toHaveLength(0)
     expect(r.order).toEqual(['cli:instructions', 'cli:mark', 'compact'])
   })
 }
 
-test("session.compact: the owner's /compact text is forwarded as --user-instructions", async ($, on) => {
+test("session.compact: the owner's /compact text is forwarded as --t-instructions", async ($, on) => {
   const r = rig(on, () => steer)
 
   await compact($, { instructions: 'keep the PR number' })
 
-  expect(flag(nth(r.argv, 0), '--user-instructions')).toBe('keep the PR number')
+  expect(flag(nth(r.argv, 0), '--t-instructions')).toBe('keep the PR number')
   expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
 })
 
@@ -336,7 +337,7 @@ test('session.compact: blank owner text is not forwarded', async ($, on) => {
 
   await compact($, { instructions: '  \n ' })
 
-  expect(nth(r.argv, 0)).not.toContain('--user-instructions')
+  expect(nth(r.argv, 0)).not.toContain('--t-instructions')
 })
 
 test('session.compact: the transcript the session started with is forwarded', async ($, on) => {
@@ -345,16 +346,16 @@ test('session.compact: the transcript the session started with is forwarded', as
   await $.classic.SessionStart({ source: 'startup', transcript_path: '/t/s.jsonl' })
   await compact($)
 
-  expect(flag(nth(r.argv, 0), '--transcript')).toBe('/t/s.jsonl')
+  expect(flag(nth(r.argv, 0), '--t-transcript')).toBe('/t/s.jsonl')
 })
 
-test('session.compact: no --transcript while the transcript is unknown', async ($, on) => {
+test('session.compact: no --t-transcript while the transcript is unknown', async ($, on) => {
   const r = rig(on, () => steer)
 
   await $.classic.SessionStart({ source: 'startup', transcript_path: '' })
   await compact($)
 
-  expect(nth(r.argv, 0)).not.toContain('--transcript')
+  expect(nth(r.argv, 0)).not.toContain('--t-transcript')
   expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
 })
 
@@ -398,7 +399,7 @@ const failures: [string, Cli, Options][] = [
   ['the session id throws', steer, { isIdBroken: true }],
   ['the vocabulary file cannot be read', steer, { vocabulary: null }],
   ['the vocabulary file is not JSON', steer, { vocabulary: '{ not json' }],
-  ['the vocabulary file lacks a verb', steer, { vocabulary: JSON.stringify({ verbs: { mark: { sessionId: '--session-id' } } }) }],
+  ['the vocabulary file lacks a verb', steer, { vocabulary: JSON.stringify({ verbs: { mark: { sessionId: '--t-session' } } }) }],
 ]
 
 for (const [name, cli, options] of failures) {
@@ -457,11 +458,11 @@ test('session.compact: next throws (Esc) — the error propagates and one unmark
   const markAt = nth(r.argvAt, r.argv.findIndex(argv => argv[3] === 'mark'))
   const unmark = nth(unmarks(r), 0)
 
-  expect(flag(unmark, '--session-id')).toBe(SESSION)
-  expect(Number(flag(unmark, '--since'))).toBeLessThanOrEqual(markAt)
-  expect(Number(flag(unmark, '--until'))).toBeGreaterThanOrEqual(markAt)
-  expect(Number(flag(unmark, '--since'))).toBe(1000)
-  expect(Number(flag(unmark, '--until'))).toBe(1500)
+  expect(flag(unmark, '--t-session')).toBe(SESSION)
+  expect(Number(flag(unmark, '--t-since'))).toBeLessThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-until'))).toBeGreaterThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-since'))).toBe(1000)
+  expect(Number(flag(unmark, '--t-until'))).toBe(1500)
 })
 
 test('session.compact: next resolves a skip — one unmark is scheduled for the attempt', async ($, on) => {
@@ -480,10 +481,10 @@ test('session.compact: next resolves a skip — one unmark is scheduled for the 
   const markAt = nth(r.argvAt, r.argv.findIndex(argv => argv[3] === 'mark'))
   const unmark = nth(unmarks(r), 0)
 
-  expect(Number(flag(unmark, '--since'))).toBeLessThanOrEqual(markAt)
-  expect(Number(flag(unmark, '--until'))).toBeGreaterThanOrEqual(markAt)
-  expect(Number(flag(unmark, '--since'))).toBe(1000)
-  expect(Number(flag(unmark, '--until'))).toBe(1500)
+  expect(Number(flag(unmark, '--t-since'))).toBeLessThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-until'))).toBeGreaterThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-since'))).toBe(1000)
+  expect(Number(flag(unmark, '--t-until'))).toBe(1500)
 })
 
 test('session.compact: a compaction that completes schedules no unmark', async ($, on) => {
@@ -613,7 +614,7 @@ test('turn.complete hands the checkpoint block to the CLI save verb on stdin, th
   expect(res).toEqual({ text: answer })
   expect(r.argv).toHaveLength(1)
   expect(nth(r.argv, 0)[3]).toBe('save')
-  expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
+  expect(flag(nth(r.argv, 0), '--t-session')).toBe(SESSION)
   expect(r.stdins).toEqual(['## Notes\n- one\n- two'])
   // the CLI owns the (atomic) file write; the mod writes nothing itself
   expect(r.writes).toHaveLength(0)

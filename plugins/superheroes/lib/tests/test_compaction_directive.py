@@ -786,22 +786,63 @@ def test_reap_removes_a_stale_file_and_leaves_only_the_lock_file(tmp_path):
     assert _ckpt_listing(tmp_path) == [".lock"]
 
 
-def test_reap_waits_for_the_lock_and_keeps_a_file_a_writer_refreshed_under_it(tmp_path):
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_a_production_save_waits_for_a_held_lock_before_publishing(tmp_path):
     path = _ckpt(tmp_path, "busy-one.md")
     _touch(path, mtime=OLD_NOTES, text="old")
-    base = os.path.dirname(path)
-    result = []
-    with cd._checkpoint_lock(base) as held:
+    saved = []
+    with cd._checkpoint_lock(os.path.dirname(path)) as held:    # a reaper mid-sweep
         assert held
-        reaper = threading.Thread(target=lambda: result.append(cd.reap(SID, _env(tmp_path), now=NOW)))
-        reaper.start()
-        reaper.join(0.3)
-        assert reaper.is_alive() and os.path.exists(path)   # waiting, nothing removed
-        _touch(path, mtime=NOW, text="fresh save")          # the writer publishes under the lock
+        writer = threading.Thread(target=lambda: saved.append(cd.save_notes("busy-one", "fresh save", _env(tmp_path))))
+        writer.start()
+        writer.join(0.3)
+        assert writer.is_alive() and _read(path) == "old"        # the real writer is held at publication
+    writer.join(10)
+    assert saved == [path] and _read(path) == "fresh save"
+
+
+def test_a_production_marker_write_waits_for_a_held_lock_before_publishing(tmp_path):
+    marker = cd.delivered_marker_path("busy-one", _env(tmp_path))
+    _touch(marker, text="old")
+    with cd._checkpoint_lock(os.path.dirname(marker)) as held:
+        assert held
+        writer = threading.Thread(target=lambda: cd.mark_delivered("busy-one", _env(tmp_path), now=5))
+        writer.start()
+        writer.join(0.3)
+        assert writer.is_alive() and _read(marker) == "old"
+    writer.join(10)
+    assert _read(marker) == "5000"
+
+
+def test_a_reap_holding_the_lock_removes_the_stale_file_before_the_save_lands(tmp_path, monkeypatch):
+    path = _ckpt(tmp_path, "busy-one.md")
+    _touch(path, mtime=OLD_NOTES, text="old")
+    in_sweep, release = threading.Event(), threading.Event()
+    real_scandir = os.scandir
+
+    def paused_scandir(target):
+        in_sweep.set()                  # the reaper holds the lock and the stale file still exists
+        assert release.wait(10)
+        return real_scandir(target)
+
+    monkeypatch.setattr(os, "scandir", paused_scandir)
+    result, saved = [], []
+    reaper = threading.Thread(target=lambda: result.append(cd.reap(SID, _env(tmp_path), now=NOW)))
+    reaper.start()
+    assert in_sweep.wait(10)
+    writer = threading.Thread(target=lambda: saved.append(cd.save_notes("busy-one", "fresh save", _env(tmp_path))))
+    writer.start()
+    writer.join(0.3)
+    assert writer.is_alive() and _read(path) == "old"          # the save cannot land mid-sweep
+    release.set()
     reaper.join(10)
-    assert result == [0]
-    with open(path, encoding="utf-8") as fh:
-        assert fh.read() == "fresh save"
+    writer.join(10)
+    assert result == [1] and saved == [path]
+    assert _read(path) == "fresh save"                         # swept first, then the fresh save published
 
 
 def test_concurrent_reaps_remove_each_stale_file_once_and_never_a_fresh_one(tmp_path):
