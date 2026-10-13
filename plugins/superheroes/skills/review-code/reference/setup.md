@@ -189,7 +189,7 @@ SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "
 AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
 ```
 
-A compose failure halts the review with compose's own error on stderr; there is no fall-open seat map. When the review halts with `lane-expanded-recompose`, the loop stops and never pushes, so in branch mode run Setup again into a fresh session (it reads local HEAD), while in PR mode Setup takes `HEAD_SHA` from the remote PR (`pr.json.headRefOid`), so whoever owns the branch first pushes the loop's local fix commits once they accept publishing them (an adopted build uses `git push origin HEAD:$PR_BRANCH`) and then runs Setup again into a fresh session on the updated PR head, the only way the fresh session reviews the fixes.
+A compose failure halts the review with compose's own error on stderr; there is no fall-open seat map. When the review halts with `lane-expanded-recompose`, the loop stops and never pushes, so in branch mode run Setup again into a fresh session (it reads local HEAD), while in PR mode compose and the review diff read local HEAD but Setup records the remote PR head (`pr.json.headRefOid`) as the session's `headSha`, the fresh session anchors its orders on that head and refuses reviewer results read from a different local head (`view-head-anchor-mismatch`), so the fixes are reviewable only once they are on the PR head: whoever owns the branch pushes them once they accept publishing them (an adopted build uses `git push origin HEAD:$PR_BRANCH`), then runs Setup again into a fresh session.
 
 An empty author family refuses before any seat is dispatched — the composed map would be unjudgeable for maker-family constraints.
 

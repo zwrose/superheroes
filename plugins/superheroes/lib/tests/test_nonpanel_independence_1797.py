@@ -145,16 +145,27 @@ def test_every_live_vendor_in_a_maker_family_leaves_the_seat_unseatable(monkeypa
 
 # --- emission: the unseatable seat gets no order, a seat-missing record instead -----------------
 
-def test_unseatable_nonpanel_seat_gets_no_order_and_a_missing_record(tmp_path):
+@pytest.mark.parametrize("phase", ["P_VERIFIERS", "P_GAPSWEEP", "P_SCOPED"])
+def test_unseatable_nonpanel_seat_gets_no_order_and_a_missing_record(tmp_path, phase):
+    phase = getattr(RD, phase)
     # axis: the unseatable non-panel seat getting NO order — see bite-proof record
     # wo_b_1797_seat_orders
     session_dir, gitdir, head_path = TRI._bootstrap(
-        tmp_path, name="b5-unseatable", vendors=["claude"], fixerVendor="claude")
+        tmp_path, name="b5-unseatable-" + phase, vendors=["claude"], fixerVendor="claude")
     TRI._drive_to_phase(session_dir, gitdir, [TRI._blocking_finding("bounds A", 2)], head_path,
                         RD.P_VERIFIERS)
     state = TRI._state(session_dir)
-    pend = state["pending"]
-    assert pend["phase"] == RD.P_VERIFIERS
+    pend = dict(state["pending"])
+    if phase != RD.P_VERIFIERS:
+        # An unseatable session never advances past verifiers, so emit the later phase's orders
+        # directly from the same state: the guard under test is the emission one.
+        pend["phase"] = phase
+        roster, reason = RA.roster_for(phase, state, state.get("config") or {})
+        assert reason is None and roster
+        RD._emit_orders_manifest(session_dir, state, pend["round"], phase, pend["attempt"], roster,
+                                 pending_payload=pend.get("payload"),
+                                 seat_map=RD._effective_seat_map(state))
+    assert pend["phase"] == phase
     roster, reason = RA.roster_for(pend["phase"], state, state.get("config") or {})
     assert reason is None and roster
     manifest_path = RD._orders_manifest_path(session_dir, pend["round"], pend["phase"], pend["attempt"])
