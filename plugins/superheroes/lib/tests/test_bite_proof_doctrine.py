@@ -78,7 +78,7 @@ def _census_excluded(rel):
 # workhorse §8 Verify — orchestrator re-reads doctrine when build adds detector (count=1)
 # implementer § The rules — disclosure shapes and doctrine reference in short-return rule (count=1)
 # implementer § Validating — validity rule 6 names expected bite-proof (count=1)
-# test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
+# test-role § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
 # review-discipline § Review bars — Mechanical guards subsection structural-pin doctrine (count=1)
 # review-discipline § Machinery — Prefer shapes that cannot fail subsection bite-proof pointer (count=1)
 # CONVENTIONS §12 — verification contracts pointer to vacuity-trap home (count=2)
@@ -87,7 +87,7 @@ _CONSUMER_ROSTER = [
     ("skills/workhorse/SKILL.md", "## 8. Verify — re-run every receipt yourself", 1),
     ("agents/implementer.md", "## The rules", 1),
     ("agents/implementer.md", "## Validating your work order", 1),
-    ("agents/test-reviewer.md", "## Named test-smell taxonomy", 1),
+    ("agents/test-role.md", "## Named test-smell taxonomy", 1),
     ("rubric/review-discipline.md", "## Machinery, homes, and what a review may ask for", 1),
     ("rubric/review-discipline.md", "## Review bars and recorded residuals", 1),
     (
@@ -154,13 +154,13 @@ _CLAUSE_ROWS = [
     {
         "clause": "through the path the test uses",
         "home_section": "## When the proof cannot be produced",
-        "copy_holder": "agents/test-reviewer.md",
+        "copy_holder": "agents/test-role.md",
         "copy_holder_section": "## What to Flag",
     },
     {
         "clause": "owed disclosure",
         "home_section": "## Who owes what",
-        "copy_holder": "agents/test-reviewer.md",
+        "copy_holder": "agents/test-role.md",
         "copy_holder_section": "## Named test-smell taxonomy",
     },
 ]
