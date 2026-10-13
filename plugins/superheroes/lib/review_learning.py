@@ -86,6 +86,11 @@ def record_adoption_day(cwd, day, root=None):
     if wrote.get("reason") == "item-changed":
         return _result(False, "refused", "adoption-day-already-recorded", wrote.get("observed"),
                        since=wrote.get("observed"))
+    if wrote.get("reason") == project_config.REASON_SET_MISMATCH:  # the write precedes its read-back: the setting may have landed
+        return _result(False, "partial", "calibration-unconfirmed",
+                       "Canon holds %s (commit %s); the calibration write may have landed but its read-back failed, "
+                       "so the setting must be read back before anyone relies on it" % (line, commit),
+                       canonEntry=line, canonCommit=commit, set=wrote)
     if wrote.get("action") not in ("written", "noop"):
         return _result(False, "refused", wrote.get("reason") or wrote.get("action"), wrote)
     return _result(True, "recorded", since=day)
@@ -203,6 +208,11 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
         return _result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only")
     half = proposal["half"]
     wrote = project_config.set_item(cwd, "riskAndTrust", {half: proposal["value"]}, root=root)
+    if wrote.get("reason") == project_config.REASON_SET_MISMATCH:  # the write precedes its read-back: the setting may have landed
+        return _result(False, "partial", "calibration-unconfirmed",
+                       "Canon holds %s (commit %s); the calibration write may have landed but its read-back failed, "
+                       "so the setting must be read back before anyone relies on it" % (line, commit),
+                       canonEntry=line, canonCommit=commit, set=wrote)
     if wrote.get("action") not in ("written", "noop"):
         return _result(False, "partial", "calibration-not-written",
                        "Canon holds %s (commit %s); the calibration write returned %s"
@@ -256,6 +266,19 @@ def _merged_member(f):
     return review_record_session.merged_into(f.get("reason")) is not None
 
 
+def _find(parent, node):
+    while parent.get(node, node) != node:
+        parent[node] = parent.get(parent[node], parent[node])
+        node = parent[node]
+    return node
+
+
+def _union(parent, a, b):
+    ra, rb = _find(parent, a), _find(parent, b)
+    if ra != rb:
+        parent[rb] = ra
+
+
 def tally(records, escapes, since, *, until=None, window_days=None):
     """Count seat reviews and catches. A catch is credited to the seat whose lens the finding names (the
     record's finding `reviewer` is its dimension, not the dispatch that raised it), so `seats[...]["caught"]`
@@ -283,7 +306,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return "beforeWindow" if d < low else "afterWindow" if d > end else None
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
-    seen, unattributed, incomplete = {}, 0, False
+    seen, unattributed, incomplete, parent = {}, 0, False, {}
     present, merged_fixed = collections.defaultdict(set), []  # per PR: finding ids/keys given, and the representatives fixed members name  # incomplete: evidence went missing, so no count is a zero
     given = {v for r in records if isinstance(r, dict) for v in (r.get("url"), r.get("id")) if isinstance(v, (str, int))} \
         if isinstance(records, list) else set()
@@ -333,15 +356,30 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             present[rec.get("pr")].update(v for v in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)) if v is not None)
             if key is not None and _merged_member(f) and day <= end and f.get("outcome") == _FIXED:
                 merged_fixed.append((rec.get("pr"), review_record_session.merged_into(f.get("reason"))))
-            if key is not None and not _merged_member(f):
-                hit = seen.setdefault((rec.get("pr"), key), {"fixed": False, "at": {}})
-                # only an outcome recorded on or before the cutoff establishes a fix; a later record still dates the finding
-                hit["fixed"] = hit["fixed"] or (day <= end and f.get("outcome") == _FIXED)
-                at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))
-                at[1].update(_seats(f.get("reviewer")))
+            if key is None:
+                continue
+            member = _merged_member(f)
+            pr_key = rec.get("pr")
+            for name in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)):
+                if name is not None:
+                    _union(parent, (pr_key, key), (pr_key, name))
+            if member:  # a member and its representative are one catch for the PR, whichever record names the link
+                _union(parent, (pr_key, key), (pr_key, review_record_session.merged_into(f.get("reason"))))
+            hit = seen.setdefault((pr_key, key), {"fixed": False, "at": {}})
+            # only an outcome recorded on or before the cutoff establishes a fix; a later record still dates the finding
+            hit["fixed"] = hit["fixed"] or (not member and day <= end and f.get("outcome") == _FIXED)
+            at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))
+            at[1].update(_seats(f.get("reviewer")))
     if any(rep not in present[pr] for pr, rep in merged_fixed):  # a fixed member whose representative is missing lost its catch
         incomplete = True
-    for hit in seen.values():  # a catch is dated by, and credited to, the earliest record that carries it, once
+    families = {}
+    for node, hit in seen.items():  # merged members and their representatives pool into one family
+        fam = families.setdefault(_find(parent, node), {"fixed": False, "at": {}})
+        fam["fixed"] = fam["fixed"] or hit["fixed"]
+        for stamp, (d, seats) in hit["at"].items():
+            pooled = fam["at"].setdefault(stamp, (d, set()))
+            pooled[1].update(seats)
+    for hit in families.values():  # a catch is dated by, and credited to, the earliest record that carries it, once
         earliest_day, seats = hit["at"][min(hit["at"])]
         if hit["fixed"] and not outside(earliest_day):
             unattributed += not seats

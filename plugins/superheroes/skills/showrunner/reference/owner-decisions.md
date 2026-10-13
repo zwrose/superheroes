@@ -690,7 +690,9 @@ say how it changes and what the advisor says when the owner finds a review slow.
   entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
   which is the next PR it opens. It never goes on the branch of the PR whose sheet carried the proposal.
   A result other than `applied` is reported to the owner as it is, never as done. A `partial` result
-  means the approval is recorded and the setting did not change.
+  means the approval is recorded and the setting is not confirmed written: usually it did not change,
+  but under reason `calibration-unconfirmed` the write may have landed and the setting must be read back
+  before it is reported either way.
 - **From the next review on.** A Risk and trust change takes effect for every review that starts after
   the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
   ruling about leftovers binds where Canon's own reading rules say it does.

@@ -224,8 +224,12 @@ def test_failed_canon_commit_leaves_calibration_alone(proj, canon_root):
 
 
 def test_canon_commit_timeout_reads_canon_not_committed(proj, canon_root, monkeypatch):
+    real = RL._run_git
+
     def hang(cwd, *args):
-        raise subprocess.TimeoutExpired(["git", "-C", cwd, *args], RL.GIT_TIMEOUT_SECONDS)
+        if args[0] == "commit":
+            raise subprocess.TimeoutExpired(["git", "-C", cwd, *args], RL.GIT_TIMEOUT_SECONDS)
+        return real(cwd, *args)
     monkeypatch.setattr(RL, "_run_git", hang)
     core_before = _state(proj, canon_root)[0]
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
@@ -689,3 +693,22 @@ def test_tally_a_fixed_member_whose_representative_is_missing_is_incomplete_evid
     member = dict(_finding("a", "Security"), reason="fixed (merged into B)")
     got = RL.tally([_record(1, "s", D, [_row("security-reviewer")], [member])], [], D, until="2026-10-11")
     assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+
+
+def test_tally_a_member_merged_in_a_later_record_is_one_catch_dated_by_the_earliest():
+    rows = [_row("code-reviewer")]
+    first = dict(_record(1, "s1", "2026-10-10", rows, [_finding("a", "Code")]), id="x")
+    later = dict(_record(1, "s2", "2026-10-11", rows, [dict(_finding("a", "Code"), reason="folded (merged into B)"), _finding("b", "Code")]),
+                 previousRecord={"id": "x"})
+    got = RL.tally([first, later], [], D, until="2026-10-12")
+    assert got["seats"]["code-reviewer"]["caught"] == 1
+    early = dict(first, writtenAt="2026-10-09T10:00:00Z")
+    got = RL.tally([early, later], [], D, until="2026-10-12")
+    assert got["seats"]["code-reviewer"]["caught"] == 0
+
+
+def test_apply_a_failed_read_back_is_partial_and_unconfirmed(proj, canon_root, monkeypatch):
+    monkeypatch.setattr(RL.project_config, "set_item", lambda *a, **k: {"action": "refused", "reason": RL.project_config.REASON_SET_MISMATCH})
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "partial", "calibration-unconfirmed")
+    assert "may have landed" in got["detail"]
