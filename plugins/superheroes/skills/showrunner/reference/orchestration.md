@@ -305,8 +305,28 @@ has the builder's side).
 ## Adoption mechanics
 
 The recovery rules live in `rubric/launch-doctrine.md` § Recovery, and the charter keeps the
-advisor's calls. Two of those calls have mechanics beyond the charter:
+advisor's calls. Three of those calls have mechanics beyond the charter:
 
 - **Pin** each builder's transcript by its issue token instead of re-discovering it newest-first.
 - **Read liveness** from a double-confirmed process check plus pinned-transcript freshness — never
   from a `-p` session's buffered stdout, and never from a global process match.
+- **Recover a cloud lane** in exactly these steps, each naming a verb or record that exists. The
+  verbs are `python3 -B <plugin root>/lib/cloud_recover.py <verb> --repo-root <root> …`.
+  1. Read the session's state in the host's session listing, and the lane's activity age from the
+     wave watch.
+  2. Run `assess`. Its answer is `working`, `unresolved`, `awaiting-handover`, `ask-to-push` or
+     `stopped`. `working`, `unresolved` and `awaiting-handover` never recover. An alive session that
+     never hands over is resolved by the owner archiving it, which then reads `archived`.
+  3. On `ask-to-push`, send `ask`'s text to the lane's session: on the same account with
+     `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
+     Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at
+     all after a definite failure.
+  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, run `successor`, then
+     launch that premise with `launcher.py launch`. The routing step places it: cloud when cloud is
+     ready, the owner's machine otherwise.
+  5. Tell the owner with `message`'s text.
+
+  The state is `cloud-recover.json`, beside the launch ledger. Recovery never leaves two builders on
+  one issue: it recovers only on positive stop evidence or a confirmed handover; `successor` refuses
+  a lane the ledger has not ended or that has no `stopped` assessment; `send-back` never messages a
+  superseded lane; and the successor's intake refuses a branch that moved.
