@@ -432,6 +432,22 @@ def test_works_is_written_at_once_and_the_saved_merge_stays():
     assert result["merge"] == dict(UNLOCKED, pressed="true") and result["save"] == "Saved"
 
 
+# Bites on: walk controls left on when the schema the page loads has no walk-answer rule, so a pick is saved that a reopen cannot restore.
+def test_a_schema_without_the_walk_answer_rule_leaves_the_walk_off_and_writes_nothing():
+    schema = json.loads((Path(pr_sheet.__file__).resolve().parents[1] / "theme" / "sheet.schema.json").read_text(encoding="utf-8"))
+    del schema["$defs"]["walkAnswer"]
+    page = _page(WALK_SHEET, WALK + """
+      const out = { off: walkControls().map((node) => node.disabled), pick: pickOf("p1").disabled };
+      t.click(btn("p1", "Works"));
+      await t.tick();
+      out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
+      return out;
+    """, schema=schema)
+    result = page["result"]
+    assert result["off"] and all(result["off"]) and result["pick"] is True
+    assert result["walkWrites"] == []
+
+
 def _walk_docs(written):
     return [{"id": path.split("/", 1)[1], "data": body} for path, body in written.items() if path.startswith("walk/")]
 

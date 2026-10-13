@@ -1325,6 +1325,7 @@
         },
         // Turns the controls (and a Try again on the save line) on or off.
         setEnabled: function (on) {
+          on = on && spec.live();
           switchedOn = on;
           buttons.forEach(function (button, index) { button.disabled = !on || heldAnswers.has(choices[index].answer); });
           note.disabled = !on;
@@ -2042,7 +2043,7 @@
         extraLabel: prWords.fixQuestion,
         noteId: "walk-note-" + stop.id,
         path: "walk/" + stop.key,
-        live: canEdit,
+        live: function () { return canEdit() && walkRule !== null; },
         // A Problem that sends the PR back waits while a saved Merge may still stand; any other answer, and a follow-up Problem that never blocks Merge, writes freely.
         mayWrite: function (latest) { return !blocking(latest) || cardMayWrite(); },
         // Problem shows pressed whichever fix is chosen, and tapping a chosen fix again leaves the Problem with no fix.
