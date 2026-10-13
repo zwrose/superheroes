@@ -148,7 +148,7 @@ def test_a_defaulted_reviewer_replaced_by_independence_still_needs_a_vendor_clai
 
 def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, **cfg_over):
     """Two findings far apart (two clusters); ``source_for(index)`` names each cluster seat's
-    execution-evidence source. -> final state."""
+    execution-evidence source. -> (final state, ids of cluster 0's findings, ids of cluster 1's)."""
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name, **cfg_over)
     findings = [IT._blocking_finding("unchecked index", 2), dict(IT._blocking_finding("late defect", 2), file=IT.FILES[1])]
     IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
@@ -160,6 +160,9 @@ def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, **cfg_over):
     assert len(slots) == 2, slots
     IT._write_dispatch_manifest(session_dir, pend, slots, lambda seat: "codex")
     by_seat = {seat: source_for(i) for i, (seat, _o) in enumerate(slots)}
+    ids = [[f["id"] for f in IT._cluster_for(pend, seat).get("findings") or []]
+           for seat, _o in slots]
+    assert len(ids[0]) == 1 and len(ids[1]) == 1 and ids[0] != ids[1], ids
     monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda seat: by_seat[seat]))
     for seat, occurrence in slots:
         cluster = IT._cluster_for(pend, seat)
@@ -170,25 +173,27 @@ def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, **cfg_over):
         assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
     out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
     assert out["ok"], out
-    return IT._state(session_dir)
+    return IT._state(session_dir), ids[0], ids[1]
 
 
 def test_a_proven_cluster_folds_while_an_unproven_cluster_is_ignored(tmp_path, monkeypatch):
     # axis: one batch-wide vendor (the joined claim) would void the proven cluster or honor the unproven one
-    state = _drive_two_clusters(tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "runner",
-                                "two-clusters")
+    state, proven_ids, unproven_ids = _drive_two_clusters(
+        tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "runner", "two-clusters")
     rec = state["rounds"]["1"]
-    assert len(rec["verify"]["drops"]) == 1, rec["verify"]
-    assert len(rec["verify"]["unverified"]) == 1
+    # WHICH finding clears matters: a swap of the clusters' vendor entries clears the other one
+    assert {d["id"] for d in rec["verify"]["drops"]} == set(proven_ids), rec["verify"]
+    assert set(rec["verify"]["unverified"]) == set(unproven_ids), rec["verify"]
     outcomes = {(p["ran"], p["outcome"]) for p in rec["verifierProvenance"]}
     assert outcomes == {("codex", "verdicts-folded"), (None, "verdicts-ignored")}
 
 
 def test_a_maker_cluster_does_not_void_a_proven_cluster(tmp_path, monkeypatch):
-    state = _drive_two_clusters(tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "claude",
-                                "two-clusters-maker")
+    state, proven_ids, unproven_ids = _drive_two_clusters(
+        tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "claude", "two-clusters-maker")
     rec = state["rounds"]["1"]
-    assert len(rec["verify"]["drops"]) == 1
+    assert {d["id"] for d in rec["verify"]["drops"]} == set(proven_ids), rec["verify"]
+    assert set(rec["verify"]["unverified"]) == set(unproven_ids), rec["verify"]
     outcomes = {(p["ran"], p["outcome"]) for p in rec["verifierProvenance"]}
     assert outcomes == {("codex", "verdicts-folded"), ("claude", "verdicts-ignored")}
 
@@ -235,3 +240,178 @@ def test_another_vendor_does_not_fold_after_the_preference_changes(tmp_path, mon
     state = _drive_with_preference_change(tmp_path, monkeypatch, "cursor", "pref-other")
     assert _provenance(state) == {"expected": "codex", "ran": "cursor", "outcome": "verdicts-ignored"}
     assert not state["rounds"]["1"]["verify"]["drops"]
+
+
+# --- #1797 native host-seat verifier: the executed vendor is the driver's own manifest entry ------------
+
+import round_records as RR  # noqa: E402
+
+
+def _drive_native_verifiers(tmp_path, name, fixer="codex", vendors=("claude", "codex")):
+    """A host-seat (file-channel) verifier landing as a BARE payload the driver wraps with the stub it
+    emitted — no runner execution evidence. -> (session_dir, state before fold, advance output)."""
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name, fixerVendor=fixer,
+                                                   vendors=list(vendors), seatMap=None)
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_VERIFIERS)
+    state = IT._state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(RD.P_VERIFIERS, state, state.get("config") or {})
+    assert reason is None
+    for seat, occurrence in IT._slots_of(roster):
+        cluster = IT._cluster_for(pend, seat)
+        payload = {"verdicts": [{"id": f["id"], "verdict": "REFUTED", "reason": "intentional",
+                                 "evidence": "read x"} for f in cluster.get("findings") or []]}
+        skey = RR.storage_key(seat, occurrence)
+        RR.atomic_write_json(
+            RR.bare_payload_path(session_dir, pend["round"], pend["phase"], skey, pend["attempt"]),
+            payload)
+        assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
+    out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+    return session_dir, state, out
+
+
+def test_a_native_claude_verdict_folds_with_dispatch_manifest_provenance(tmp_path):
+    # codex made the change; claude is the independent verifier on a host seat (no runner evidence)
+    session_dir, before, out = _drive_native_verifiers(tmp_path, "native-claude")
+    assert RD._nonpanel_selection(before, session_dir)[0] == "claude"
+    assert out["ok"], out
+    state = IT._state(session_dir)
+    assert _provenance(state) == {"expected": "claude", "ran": "claude",
+                                  "outcome": "verdicts-folded", "provenance": "dispatch-manifest"}
+    assert state["rounds"]["1"]["verify"]["drops"], "the native verdict must clear its finding"
+
+
+def test_a_native_seat_whose_manifest_vendor_is_a_maker_family_is_ignored(tmp_path):
+    session_dir, before, _out = _drive_native_verifiers(tmp_path, "native-maker")
+    pend = before["pending"]
+    manifest = RD._anchored_orders_manifest(before, session_dir, pend["round"], pend["phase"],
+                                            pend["attempt"])
+    assert manifest and all(e["channel"] == "file" for e in manifest["seats"].values())
+    roster, _r = round_adapters.roster_for(RD.P_VERIFIERS, before, before["config"])
+    envelopes = [RR.read_json(RR.store_path(session_dir, pend["round"], pend["phase"],
+                                            RR.storage_key(seat, occ), pend["attempt"]))[0]
+                 for seat, occ in IT._slots_of(roster)]
+    assert all(e.get("executionEvidence") is None for e in envelopes)
+
+    def assembled(vendor):
+        edited = {"seats": {k: dict(v, vendor=vendor) for k, v in manifest["seats"].items()}}
+        art, why = round_adapters.assemble(RD.P_VERIFIERS, envelopes, before, before["config"],
+                                           orders_manifest=edited)
+        assert why is None, why
+        return art
+
+    ok = assembled("claude")
+    assert set(ok["verifierSeatVendors"].values()) == {"claude"}
+    assert set(ok["verifierSeatProvenance"].values()) == {"dispatch-manifest"}
+    for maker in ("codex",):   # the fixer's own vendor: never a verifier
+        art = assembled(maker)
+        assert set(art["verifierSeatVendors"].values()) == {""}, art
+        assert "verifierSeatProvenance" not in art
+
+
+def test_a_runner_channel_seat_without_evidence_is_still_ignored(tmp_path):
+    session_dir, before, _out = _drive_native_verifiers(tmp_path, "native-runner")
+    pend = before["pending"]
+    manifest = RD._anchored_orders_manifest(before, session_dir, pend["round"], pend["phase"],
+                                            pend["attempt"])
+    roster, _r = round_adapters.roster_for(RD.P_VERIFIERS, before, before["config"])
+    envelopes = [RR.read_json(RR.store_path(session_dir, pend["round"], pend["phase"],
+                                            RR.storage_key(seat, occ), pend["attempt"]))[0]
+                 for seat, occ in IT._slots_of(roster)]
+    runner = {"seats": {k: dict(v, channel="stdout") for k, v in manifest["seats"].items()}}
+    art, why = round_adapters.assemble(RD.P_VERIFIERS, envelopes, before, before["config"],
+                                       orders_manifest=runner)
+    assert why is None
+    assert set(art["verifierSeatVendors"].values()) == {""}, art
+
+
+# --- #1797 gap-sweep / scoped finder: the executed vendor must be the vendor recorded at emission ------
+
+def _finder_envelope(seat, source=None, wrapped=False, schema_over=None):
+    env = {"schema": RR.SEAT_RESULT_SCHEMA_V2, "seat": seat, "attempt": 0, "vendor": "codex",
+           "model": "m", "payload": {"findings": []}, "provenance": RR.PROVENANCE_DISPATCH_OBSERVED}
+    if source is not None:
+        env["executionEvidence"] = {"source": source}
+    if wrapped:
+        env["payloadHashSource"] = "driver-computed"
+    return env
+
+
+def _finder_state():
+    return RD.new_state({"repoRoot": "/nonexistent-review-project", "vendors": ["claude", "codex"],
+                         "fixerVendor": "claude"})
+
+
+def _finder_manifest(seat, channel="stdout", vendor="codex"):
+    return {"seats": {RR.storage_key(seat, 0): {"vendor": vendor, "channel": channel}}}
+
+
+@pytest.mark.parametrize("phase,seat", [(RD.P_GAPSWEEP, round_adapters.SEAT_GAPSWEEP),
+                                        (RD.P_SCOPED, round_adapters.SEAT_SCOPED)])
+def test_a_finder_executed_by_the_maker_family_does_not_count_as_run(phase, seat):
+    state = _finder_state()
+    art, why = round_adapters.assemble(phase, [_finder_envelope(seat, source="claude")], state,
+                                       state["config"], orders_manifest=_finder_manifest(seat))
+    assert art is None and why.startswith("missing-seat-refuse-fold:%s" % seat), (art, why)
+    assert "executed=claude" in why and "recorded=codex" in why
+
+
+@pytest.mark.parametrize("phase,seat", [(RD.P_GAPSWEEP, round_adapters.SEAT_GAPSWEEP),
+                                        (RD.P_SCOPED, round_adapters.SEAT_SCOPED)])
+def test_a_finder_executed_by_the_recorded_vendor_counts_as_run(phase, seat):
+    state = _finder_state()
+    art, why = round_adapters.assemble(phase, [_finder_envelope(seat, source="codex")], state,
+                                       state["config"], orders_manifest=_finder_manifest(seat))
+    assert why is None and art["findings"] == []
+
+
+@pytest.mark.parametrize("phase,seat", [(RD.P_GAPSWEEP, round_adapters.SEAT_GAPSWEEP),
+                                        (RD.P_SCOPED, round_adapters.SEAT_SCOPED)])
+def test_a_driver_wrapped_host_seat_finder_authenticates_by_its_manifest_vendor(phase, seat):
+    state = _finder_state()
+    env = _finder_envelope(seat, wrapped=True)
+    art, why = round_adapters.assemble(phase, [env], state, state["config"],
+                                       orders_manifest=_finder_manifest(seat, channel="file"))
+    assert why is None and art["provenance"]["provenanceSource"] == {seat: "dispatch-manifest"}
+    # the same landing on a runner-channel seat, or with an evidence-less hand-landed envelope: not run
+    for bad in (_finder_manifest(seat, channel="stdout"),):
+        art, why = round_adapters.assemble(phase, [env], state, state["config"], orders_manifest=bad)
+        assert art is None and why.startswith("missing-seat-refuse-fold"), (art, why)
+    art, why = round_adapters.assemble(phase, [_finder_envelope(seat)], state, state["config"],
+                                       orders_manifest=_finder_manifest(seat, channel="file"))
+    assert art is None and why.startswith("missing-seat-refuse-fold"), (art, why)
+
+
+def test_a_hand_submitted_finder_needs_the_recorded_vendor_claim(tmp_path):
+    state = _state()
+    fault = RD._finder_hand_claim_fault
+    assert fault(state, None, RD.P_GAPSWEEP, {"findings": []}) is not None
+    assert fault(state, None, RD.P_GAPSWEEP, {"findings": [], "reviewerVendor": "claude"}) is not None
+    assert fault(state, None, RD.P_SCOPED, {"findings": [], "reviewerVendor": "codex"}) is None
+
+
+def _drive_scoped_with_source(tmp_path, monkeypatch, source, name):
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_SCOPED)
+    state = IT._state(session_dir)
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
+    pend = state["pending"]
+    monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda _seat: source))
+    IT._land(session_dir, state, pend, round_adapters.SEAT_SCOPED, {"findings": []})
+    assert IT._record(session_dir, round_adapters.SEAT_SCOPED)["ok"]
+    return session_dir, RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+
+
+def test_a_maker_executed_scoped_finder_does_not_converge_the_round_through_advance(tmp_path, monkeypatch):
+    session_dir, out = _drive_scoped_with_source(tmp_path, monkeypatch, "claude", "scoped-maker")
+    assert out["ok"] is False and out["reason"] == "assemble-refused", out
+    assert "unauthenticated-vendor" in out["detail"]
+    state = IT._state(session_dir)
+    assert not state.get("terminal") and state["pending"]["phase"] == RD.P_SCOPED
+
+
+def test_a_recorded_vendor_scoped_finder_folds_through_advance(tmp_path, monkeypatch):
+    _session_dir, out = _drive_scoped_with_source(tmp_path, monkeypatch, "codex", "scoped-codex")
+    assert out["ok"] is True and out["folded"]["phase"] == RD.P_SCOPED, out

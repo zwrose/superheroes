@@ -120,7 +120,7 @@ class FakeAdapters(object):
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
-                 session_dir=None):
+                 session_dir=None, orders_manifest=None):
         self.assembled.append({"phase": phase, "envelopes": envelopes,
                                "dispatch_manifest": dispatch_manifest,
                                "session_dir": session_dir})
@@ -803,7 +803,7 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 session_dir=None):
+                                 session_dir=None, orders_manifest=None):
         seats = {}
         for env in (envelopes or []):
             seat = env.get("seat")
@@ -837,7 +837,7 @@ def test_adapter_provenance_accumulates_per_phase_in_one_round(tmp_path, adapter
     verifier_omitted = [{"seat": "src/f.py:3", "occurrence": 0, "reason": "timeout"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 session_dir=None):
+                                 session_dir=None, orders_manifest=None):
         if phase == RD.P_PANEL:
             seats = {}
             for env in (envelopes or []):
@@ -2445,7 +2445,7 @@ def test_advance_refuses_a_fold_the_submit_chokepoint_rejects(tmp_path, adapters
     _record_all_panel_seats(d)
 
     def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None,
-                     session_dir=None):
+                     session_dir=None, orders_manifest=None):
         return {"seats": {"architecture": {"findings": []}}}, None
 
     adapters.assemble = bad_assemble
@@ -2463,7 +2463,7 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     _record_all_panel_seats(d)
 
     def boom(phase, envelopes, state, config, dispatch_manifest=None,
-             session_dir=None):
+             session_dir=None, orders_manifest=None):
         raise RuntimeError("adapter exploded")
 
     adapters.assemble = boom
