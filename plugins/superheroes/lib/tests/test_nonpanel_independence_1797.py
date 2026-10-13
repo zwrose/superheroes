@@ -60,6 +60,33 @@ def _state(**cfg):
     return {"config": cfg, "rounds": {}, "seatMapReceipts": []}
 
 
+def _seat(vendor, family):
+    return {"vendor": vendor, "family": family, "model": "m", "tier": "reviewer"}
+
+
+def _maker_state(**cfg):
+    # an earlier receipt names openai as a maker; a later one names only anthropic; both nonempty
+    return {"config": cfg, "rounds": {}, "seatMapReceipts": [
+        {"round": "1", "map": {"seats": {"code-reviewer": _seat("codex", "openai")},
+                               "makerFamilies": ["openai"]}},
+        {"round": "2", "map": {"seats": {"code-reviewer": _seat("claude", "anthropic")},
+                               "makerFamilies": ["anthropic"]}},
+    ]}
+
+
+@pytest.mark.parametrize("phase", NONPANEL)
+def test_an_earlier_nonfixer_maker_family_is_barred_from_the_transport_row(monkeypatch, phase):
+    # axis: the driver forwards the accumulated maker families to independent_reviewer — see bite-proof record
+    # wo_b_1797_seat_orders
+    monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("codex", RD.VENDOR_SOURCE_CONFIGURED))
+    cfg = {"vendors": ["claude", "codex", "cursor"], "fixerVendor": "claude"}
+    row = RD._seat_transport_row(_maker_state(**cfg), phase, "seat", 0, cfg, {}, "/repo")
+    assert row["vendor"] == "cursor" and row["vendorSource"] == RD.VENDOR_SOURCE_INDEPENDENT
+    cfg = {"vendors": ["claude", "codex"], "fixerVendor": "claude"}
+    row = RD._seat_transport_row(_maker_state(**cfg), phase, "seat", 0, cfg, {}, "/repo")
+    assert row["vendor"] is None
+
+
 @pytest.mark.parametrize("phase", NONPANEL)
 def test_no_makers_and_no_fixer_keeps_the_reviewer_engine_exactly(monkeypatch, phase):
     monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda root: ("claude", RD.VENDOR_SOURCE_DEFAULTED))

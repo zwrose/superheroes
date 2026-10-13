@@ -1289,7 +1289,8 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
     violations: list[dict] = []
 
     roster = effective_roster(seat_map) or PANEL_ROSTER
-    for seat in ("code-reviewer", "test-role"):
+    # axis: every seat the lane basis calls for must be on the roster; an absent basis calls for the risky one — see bite-proof record wo_a_1797_roster
+    for seat in roster_for(seat_map.get("laneBasis")):
         if seat not in roster:
             violations.append({"seat": seat, "constraint": "roster-missing-required"})
     for seat in roster:

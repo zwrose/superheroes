@@ -4540,7 +4540,7 @@ def test_required_critical_families_scales_with_the_critical_seats_the_roster_se
 def test_a_valid_no_floor_panel_has_no_critical_diversity_degradation_or_violation():
     # axis: a one-critical-seat roster is not held to two families — see bite-proof record wo_a_1797_roster
     for live in (["claude"], ["claude", "codex"], THREE_VENDORS):
-        m = SM.build(NO_FLOOR_ROSTER, live, "xai", "anthropic", 0)
+        m = dict(SM.build(NO_FLOOR_ROSTER, live, "xai", "anthropic", 0), laneBasis={"floor": None})
         assert not any(d["constraint"] == "critical-diversity" for d in m["degradations"]), live
         assert SM.verify(m, "xai") == [], live
         classified = SM.classify_violations(m)
@@ -4574,10 +4574,21 @@ def test_an_architecture_seat_composed_through_an_explicit_roster_cannot_be_pinn
 
 
 def test_verify_a_three_seat_map_has_no_missing_seat():
-    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    m = dict(SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0), laneBasis={"floor": None})
     assert SM.verify(m, "xai") == []
     assert not any(v["constraint"] == "missing-seat" for v in SM.to_receipt(m, "xai")["violations"])
     assert SM.to_receipt(m, "xai")["roster"] == list(NO_FLOOR_ROSTER)
+
+
+@pytest.mark.parametrize("basis", [{"floor": "full"}, None, "unreadable", {}])
+def test_verify_holds_a_reduced_roster_to_its_lane_basis(basis):
+    # axis: the roster must cover roster_for(laneBasis); a full, absent or unreadable basis needs the risky roster — see bite-proof record wo_a_1797_roster
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    got = SM.verify(dict(m, laneBasis=basis), "xai")
+    for gone in ("security-reviewer", "premortem-reviewer"):
+        assert {"constraint": "roster-missing-required", "seat": gone} in got
+    reduced = SM.verify(dict(m, laneBasis={"floor": None}), "xai")
+    assert not any(v["constraint"] == "roster-missing-required" for v in reduced)
 
 
 def test_verify_a_roster_that_omits_the_generalist_or_the_test_seat_is_a_violation():

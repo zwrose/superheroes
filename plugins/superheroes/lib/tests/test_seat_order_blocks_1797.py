@@ -17,6 +17,7 @@ for _p in (_HERE, _LIB):
 import round_adapters as RA  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_orders as RO  # noqa: E402
+import seat_map as SM  # noqa: E402
 import session_contract  # noqa: E402
 import test_round_driver_order_channel as OC  # noqa: E402
 import test_rulings_channel_1445 as RUL  # noqa: E402
@@ -268,7 +269,8 @@ def test_lint_elision_covers_both_quoted_blocks_and_nothing_else():
 def test_panel_dimensions_follow_the_seeded_seat_map_roster_in_dimensions_order():
     # axis: the roster-derived default dimensions (neutralize back to all five) — see bite-proof
     # record wo_b_1797_seat_orders
-    seat_map = {"roster": ["test-role", "grounding-seat", "code-reviewer", "unknown-seat"]}
+    seat_map = {"roster": ["test-role", "grounding-seat", "code-reviewer", "unknown-seat"],
+                "laneBasis": {"floor": None}}
     cfg = RD._default_config({"seatMap": seat_map})
     assert cfg["dimensions"] == ["code-reviewer", "test-role"]
     state = RD.new_state({"seatMap": seat_map})
@@ -287,7 +289,51 @@ def test_unreadable_roster_keeps_the_five_default_dimensions(seat_map):
     assert RD._default_config({"seatMap": seat_map})["dimensions"] == list(RD.DIMENSIONS)
 
 
+@pytest.mark.parametrize("basis", [None, {}, {"floor": "full"}, "unreadable"])
+def test_a_reduced_roster_without_a_no_floor_basis_keeps_the_five_dimensions(basis):
+    # axis: the roster is validated against its lane basis before it reduces the lenses — see bite-proof record wo_a_1797_roster
+    sm = {"roster": ["code-reviewer", "test-role", "grounding-seat"], "laneBasis": basis}
+    assert RD._default_config({"seatMap": sm})["dimensions"] == list(RD.DIMENSIONS)
+
+
 def test_explicit_dimensions_beat_the_roster():
     cfg = RD._default_config({"seatMap": {"roster": ["code-reviewer"]},
                               "dimensions": ["security-reviewer"]})
     assert cfg["dimensions"] == ["security-reviewer"]
+
+
+# --- the lane basis is re-evaluated at each new reviewed head ----------------------------------
+
+_RISKY_DIFF = ("diff --git a/src/payments/charge.py b/src/payments/charge.py\n"
+               "--- a/src/payments/charge.py\n+++ b/src/payments/charge.py\n@@ -1 +1 @@\n-old\n+new\n")
+
+
+def _reduced_state(tmp_path):
+    return RD.new_state({"repoRoot": str(tmp_path),
+                         "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
+
+
+def _unknown_surface_dimensions(state, diff):
+    state["round"] = 2
+    state["_headDiffUnknown"] = True
+    RD._enter_delta_round(state, state["config"], panel_diff_seam=lambda *_: (diff, None),
+                          panel_head="a" * 40)
+    return state["rounds"]["2"]["roundKind"], RD._advance(state, state["config"])["payload"]["dimensions"]
+
+
+@pytest.mark.parametrize("diff", [_RISKY_DIFF, "not a git diff", ""])
+def test_a_head_the_lane_call_cannot_clear_restores_the_risky_lenses(tmp_path, diff):
+    # axis: the lane basis is re-asked at each new reviewed head; unreadable risk expands — see bite-proof record wo_a_1797_roster
+    state = _reduced_state(tmp_path)
+    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
+    kind, dims = _unknown_surface_dimensions(state, diff)
+    assert kind == "full-panel-unknown-surface"
+    assert dims == [d for d in RD.DIMENSIONS if d in SM.PANEL_ROSTER]
+
+
+def test_a_head_the_lane_call_clears_keeps_the_reduced_lenses(tmp_path, monkeypatch):
+    import lane_call
+    monkeypatch.setattr(lane_call, "call", lambda cwd, paths, proposed=None, root=None: {"floor": None})
+    state = _reduced_state(tmp_path)
+    _kind, dims = _unknown_surface_dimensions(state, _RISKY_DIFF)
+    assert dims == ["code-reviewer", "test-role"]

@@ -1126,14 +1126,70 @@ def _cert_shape(state, base):
 # state lifecycle
 # =============================================================================================
 
-def _roster_lens_dimensions(seat_map):
+def _roster_lens_dimensions(seat_map_obj):
     """The lens seats of a seeded seat map's ``roster``, in ``DIMENSIONS`` order; ``[]`` when the
-    map, the roster, or its lens members cannot be read (the caller then keeps all five lenses).
-    A non-string member voids the whole roster; an unknown seat name is ignored."""
-    roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
-    if not isinstance(roster, list) or not roster or not all(isinstance(s, str) for s in roster):
+    map, the roster, or its lens members cannot be read, or when the roster omits a seat its own
+    lane basis requires (the caller then keeps all five lenses). The roster is read through
+    ``seat_map.effective_roster``; an unknown seat name is ignored."""
+    roster = seat_map.effective_roster(seat_map_obj)
+    if roster is None:
+        return []
+    basis = seat_map_obj.get("laneBasis")
+    # axis: a roster short of its lane basis never reduces the lenses — see bite-proof record wo_a_1797_roster
+    if any(n not in roster for n in seat_map.roster_for(basis)):
         return []
     return [d for d in DIMENSIONS if d in roster]
+
+
+_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$")
+
+
+def _diff_changed_paths(diff_text):
+    """The paths a git diff names (both sides of each file header), or None when the diff cannot be
+    read as such (not text, no file header, or a header this reader cannot parse)."""
+    if not isinstance(diff_text, str):
+        return None
+    headers = [ln for ln in diff_text.split("\n") if ln.startswith("diff --git ")]
+    if not headers:
+        return None
+    paths = []
+    for ln in headers:
+        m = _DIFF_GIT_HEADER.match(ln)
+        if not m:
+            return None
+        for p in m.groups():
+            if p not in paths:
+                paths.append(p)
+    return paths
+
+
+def _reevaluate_lane_dimensions(state, config, diff_text):
+    """Re-ask the lane call at a new reviewed head (#1797). A session whose seeded seat map was
+    reduced (``laneBasis.floor`` None) keeps its reduced lenses only while the head still touches no
+    risk area; a head that touches one, or whose risk cannot be read, restores the risky roster's
+    lenses before the next panel. Unreadable evidence always expands. Never raises."""
+    sm = config.get("seatMap")
+    basis = sm.get("laneBasis") if isinstance(sm, dict) else None
+    if not (isinstance(basis, dict) and "floor" in basis and basis["floor"] is None):
+        return
+    new_basis = None
+    try:
+        import lane_call
+        paths = _diff_changed_paths(diff_text)
+        repo_root = config.get("repoRoot")
+        if paths is None or not isinstance(repo_root, str) or not repo_root:
+            new_basis = lane_call.unavailable("lane-basis-unavailable: head diff or repo root unreadable",
+                                              proposed="full")
+        else:
+            new_basis = lane_call.call(repo_root, paths, proposed="full")
+    except Exception:
+        new_basis = {"floor": "full"}
+    if not isinstance(new_basis, dict) or new_basis.get("floor") is None:
+        return
+    risky = seat_map.roster_for(new_basis)
+    config["dimensions"] = [d for d in DIMENSIONS
+                            if d in risky or d in (config.get("dimensions") or [])]
+    config["seatMap"] = dict(sm, laneBasis={"floor": new_basis.get("floor")})
 
 
 def _default_config(overrides=None):
@@ -4152,6 +4208,7 @@ def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_s
         return False
     state["headDiff"] = diff_text
     state["reviewedDiff"] = diff_text
+    _reevaluate_lane_dimensions(state, config, diff_text)
     _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
@@ -4176,6 +4233,8 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
     post_fix = bool(state.pop("_postFixEntry", False))
+    if not state.get("_headDiffUnknown"):
+        _reevaluate_lane_dimensions(state, config, state.get("headDiff"))
     # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
     # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
     # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
