@@ -7,6 +7,7 @@ import pytest
 
 import pr_sheet
 from test_review_template import (
+    _assert_error_shown,
     _picture_card,
     _run_page,
     _sample_files,
@@ -15,9 +16,13 @@ from test_review_template import (
     _sheet_digest,
     _with,
 )
-from test_review_template_pr import PW, WORDS, _accepted_answers, _covers, _entry_lines, _fill, _page
+from test_review_template_pr import PRELUDE, PW, WORDS, _accepted_answers, _covers, _entry_lines, _fill, _files, _page
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
+SCHEMA_FILE = Path(pr_sheet.__file__).resolve().parents[1] / "theme" / "sheet.schema.json"
+SCHEMA = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+# The answers each kind of stop offers, in button order: the schema's own list, the one home of it.
+OFFERED = {kind: found["enum"] for kind, found in SCHEMA["$defs"]["walkAnswersByKind"]["properties"].items()}
 READ_FAILED = "Your saved answers couldn't be loaded."
 NO_STORE = "Answers can't be saved in this view."
 # The ids the fake picture store hands out: the runtime's opaque 32-character id, never the url.
@@ -147,7 +152,7 @@ def _expected_stop(stop, stack):
         parts.append("p.sh-caption:" + PW["tapPicture"])
     labels = PW["walkAnswers"]["labels"]
     parts += [
-        "div.answer-row:" + " ".join(labels[value] for value in PW["walkAnswers"]["try" if is_try else "look"]),
+        "div.answer-row:" + " ".join(labels[value] for value in OFFERED["try" if is_try else "look"]),
         "div#fix-%s.sheet-fix:" % stop_id,
         "label.sh-label:Note",
         "textarea#walk-note-%s.sh-field:" % stop_id,
@@ -168,9 +173,12 @@ def _expected_walk(sheet):
     if "note" in walk:
         expected.append("p:" + walk["note"])
     expected.append("p.sh-caption:" + _fill(PW["advisorWalked"], **{"from": walk["picturesFrom"]}))
-    for group in dict.fromkeys(stop["group"] for stop in walk["stops"]):
-        expected.append("p.sh-label:" + group)
-        expected += [_expected_stop(stop, stack) for stop in walk["stops"] if stop["group"] == group]
+    previous = None
+    for stop in walk["stops"]:
+        if stop["group"] != previous:
+            expected.append("p.sh-label:" + stop["group"])
+            previous = stop["group"]
+        expected.append(_expected_stop(stop, stack))
     return expected
 
 
@@ -1135,3 +1143,212 @@ def test_a_republished_stop_that_changed_starts_unanswered_and_an_unchanged_one_
     assert result["p1"]["pressed"] == ["false"] * 3 and result["p1"]["note"] == "" and result["p1"]["save"] == ""
     assert result["p2"]["pressed"] == ["true", "false", "false"] and result["p2"]["note"] == "kept p2"
     assert result["count"] == _fill(PW["walkCount"], walked=1, total=5)
+
+
+# Axis: the leave-page guard holds while an upload is in flight and lifts when the upload passes its deadline, though it never answers.
+def test_the_leave_page_guard_lifts_at_the_uploads_deadline():
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      const out = { idle: t.unload() };
+      await shoot("p1");
+      out.inFlight = t.unload();
+      await t.advance(9999);
+      out.justBefore = t.unload();
+      await t.advance(1);
+      out.atDeadline = t.unload();
+      return out;
+    """, host={"assets": "hold", "fakeTimers": True})
+    assert page["result"] == {"idle": False, "inFlight": True, "justBefore": True, "atDeadline": False}
+
+
+# Axis: with two uploads, one past its deadline that then settles late while the other is still in flight, the guard stays on until the second ends.
+def test_an_upload_that_settles_late_does_not_release_the_guard_twice():
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      await choose("p2", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      t.click(pickOf("p2"));
+      await t.tick();
+      await shoot("p1");
+      await t.advance(6000);
+      await shoot("p2");
+      await t.advance(5000);
+      const out = { firstPastDeadline: t.unload() };
+      t.uploads[0].resolve({ id: "SHOT_ONE" });
+      await t.tick();
+      out.firstSettledLate = t.unload();
+      t.uploads[1].resolve({ id: "SHOT_TWO" });
+      await t.tick();
+      out.bothEnded = t.unload();
+      out.shots = t.setLog().filter((entry) => entry.body.shots.length > 0).map((entry) => entry.path.slice(0, 7));
+      return out;
+    """.replace("SHOT_ONE", SHOT_1).replace("SHOT_TWO", SHOT_2), host={"assets": "hold", "fakeTimers": True})
+    assert page["result"] == {"firstPastDeadline": True, "firstSettledLate": True, "bothEnded": False, "shots": ["walk/p1", "walk/p2"]}
+
+
+# Axis: a picture store that has not answered when the page's deadline passes is not a refusal: the button stays on, and the next tap asks again and opens the picker once the host has answered.
+def test_a_picture_store_that_answers_after_the_deadline_is_asked_again_on_the_next_tap():
+    page = _page(WALK_SHEET, WALK + """
+      const realUse = window.claude.use;
+      const held = deferred();
+      let asks = 0;
+      window.claude.use = (name) => {
+        if (name !== "assets") return realUse(name);
+        asks += 1;
+        return held.promise;
+      };
+      const view = () => ({ clicks: inputOf("p1").clicks || 0, asks: asks, pick: pickOf("p1").disabled, line: shotLineOf("p1") });
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.advance(10000);
+      const out = { stalled: view() };
+      held.resolve(await realUse("assets"));
+      t.click(pickOf("p1"));
+      await t.tick();
+      out.second = view();
+      t.click(pickOf("p1"));
+      await t.tick();
+      out.third = view();
+      return out;
+    """, host={"assets": "ok", "fakeTimers": True})
+    result = page["result"]
+    assert result["stalled"] == {"clicks": 0, "asks": 1, "pick": False, "line": PW["screenshotUnavailable"]}
+    assert result["second"]["clicks"] == 1 and result["second"]["asks"] == 2 and result["second"]["pick"] is False
+    assert result["third"]["clicks"] == 2 and result["third"]["asks"] == 2
+
+
+# Axis: a walk whose stops repeat an id is refused whole, with the repeat named, and no stop is drawn.
+def test_a_walk_with_a_repeated_stop_id_is_refused_and_draws_no_stop():
+    repeated = _with(WALK_SHEET, lambda clone: clone["prSheet"]["walk"]["stops"][1].update(id="p1"))
+    page = _run_page(_sample_files(repeated), scenario=PRELUDE + """
+      return { walk: part("pr-walk") !== undefined, stops: pageNodes().flatMap((node) => t.all(node)).filter((node) => node.tagName === "article" && node.id.startsWith("stop-")).length };
+    """)
+    _assert_error_shown(page)
+    assert page["errors"] == ['Two walk stops share the id "p1".']
+    assert page["result"] == {"walk": False, "stops": 0}
+
+
+# Axis: the failed-upload line stays through a later note or fix change, and gives way only to the next upload attempt or to a late success of that same upload.
+@pytest.mark.parametrize("then", ["late", "next"])
+def test_the_failed_upload_line_stays_until_the_next_attempt_or_its_late_success(then):
+    page = _page(WALK_SHEET, WALK + """
+      await choose("p1", "Problem");
+      t.click(pickOf("p1"));
+      await t.tick();
+      await shoot("p1");
+      t.uploads[0].resolve({ id: "SHOT_ONE" });
+      await t.tick();
+      const out = { first: shotLineOf("p1") };
+      await shoot("p1");
+      await t.advance(10000);
+      out.failed = shotLineOf("p1");
+      t.type(noteOf("p1"), "still broken", "change");
+      await t.tick();
+      out.afterNote = shotLineOf("p1");
+      await choose("p1", "Fix in a follow-up");
+      out.afterFix = shotLineOf("p1");
+      if (THEN === "late") {
+        t.uploads[1].resolve({ id: "SHOT_TWO" });
+        await t.tick();
+        out.after = shotLineOf("p1");
+      } else {
+        await shoot("p1");
+        out.after = shotLineOf("p1");
+      }
+      return out;
+    """.replace("SHOT_ONE", SHOT_1).replace("SHOT_TWO", SHOT_2).replace("THEN", json.dumps(then)), host={"assets": "hold", "fakeTimers": True})
+    result = page["result"]
+    assert result["first"] == _fill(PW["screenshotsAdded"], count=1)
+    assert result["failed"] == result["afterNote"] == result["afterFix"] == PW["screenshotFailed"]
+    assert result["after"] == (_fill(PW["screenshotsAdded"], count=2) if then == "late" else PW["screenshotUploading"])
+
+
+def _grouped(groups):
+    """The walk sheet with its five stops put in these groups, in the stops' declared order."""
+    def mutate(clone):
+        for stop, group in zip(clone["prSheet"]["walk"]["stops"], groups):
+            stop["group"] = group
+    return _with(WALK_SHEET, mutate)
+
+
+# Axis: stops are drawn in their declared order, and a group's label shows each time a stop's group differs from the previous stop's: a group listed apart is labelled twice in place, a group whose stops sit together once, and one group for every stop once.
+@pytest.mark.parametrize("groups,expected", [
+    (["A", "B", "A", "A", "B"], ["A", "stop-p1", "B", "stop-p2", "A", "stop-p3", "stop-p4", "B", "stop-f1"]),
+    (["A", "A", "B", "B", "C"], ["A", "stop-p1", "stop-p2", "B", "stop-p3", "stop-p4", "C", "stop-f1"]),
+    (["A"] * 5, ["A", "stop-p1", "stop-p2", "stop-p3", "stop-p4", "stop-f1"]),
+    (["A", "B", "A", "B", "A"], ["A", "stop-p1", "B", "stop-p2", "A", "stop-p3", "B", "stop-p4", "A", "stop-f1"]),
+], ids=["apart", "together", "one-group", "three-runs"])
+def test_stops_are_drawn_in_declared_order_with_a_label_wherever_the_group_changes(groups, expected):
+    page = _page(_grouped(groups), WALK + """
+      return part("pr-walk").children.filter((child) => hasClass(child, "sh-label") || child.tagName === "article").map((child) => (child.tagName === "article" ? child.id : text(child)));
+    """)
+    assert page["result"] == expected
+
+
+# Axis: the answers a stop offers, and their order, are the schema's walkAnswersByKind: a reordered try list reorders the try stops' buttons and leaves the look stop's alone.
+def test_a_reordered_walk_answers_list_reorders_the_buttons():
+    schema = json.loads(json.dumps(SCHEMA))
+    schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"] = ["skip", "works", "problem"]
+    page = _page(WALK_SHEET, WALK + """
+      return { p1: answerRow("p1").map((button) => button.textContent), f1: answerRow("f1").map((button) => button.textContent) };
+    """, schema=schema)
+    assert page["result"] == {"p1": ["Skip", "Works", "Problem"], "f1": ["Looks right", "Problem", "Skip"]}
+
+
+# Axis: a schema that does not say which answers a stop offers leaves the walk unanswerable: no answer button, every control off, nothing written.
+def test_a_schema_without_the_walk_answers_by_kind_leaves_the_walk_unanswerable():
+    schema = json.loads(json.dumps(SCHEMA))
+    del schema["$defs"]["walkAnswersByKind"]
+    page = _page(WALK_SHEET, WALK + """
+      const out = { buttons: answerRow("p1").length, off: walkControls().map((node) => node.disabled), gate: { hidden: t.gate().hidden, message: t.gate().message } };
+      t.click(pickOf("p1"));
+      await t.tick();
+      out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
+      return out;
+    """, schema=schema)
+    result = page["result"]
+    assert result["buttons"] == 0 and result["off"] and all(result["off"]) and result["walkWrites"] == []
+    assert result["gate"] == {"hidden": False, "message": PW["walkSchemaMissing"]}
+
+
+# Bites on: the page keeping the walk's answers on offer when the schema lists none for a stop's kind, so the other stops would still draw buttons and the gate line would blame storage.
+# Axis: a stop whose kind has no answer list in walkAnswersByKind turns the whole walk off as a schema with no list does: no stop draws an answer button, every control is off, a tap writes nothing, and the gate line names the schema.
+def test_a_stop_kind_with_no_answer_list_leaves_the_walk_unanswerable():
+    schema = json.loads(json.dumps(SCHEMA))
+    by_kind = schema["$defs"]["walkAnswersByKind"]
+    del by_kind["properties"]["look"]
+    if "required" in by_kind:
+        by_kind["required"] = [kind for kind in by_kind["required"] if kind != "look"]
+    page = _page(WALK_SHEET, WALK + """
+      const out = { p1: answerRow("p1").map((button) => button.textContent), f1: answerRow("f1").map((button) => button.textContent), off: walkControls().map((node) => node.disabled), gate: { hidden: t.gate().hidden, message: t.gate().message } };
+      t.click(pickOf("p1"));
+      await t.tick();
+      out.walkWrites = t.setLog().filter((entry) => entry.path.startsWith("walk/"));
+      return out;
+    """, schema=schema)
+    result = page["result"]
+    assert result["p1"] == [] and result["f1"] == []
+    assert result["off"] and all(result["off"]) and result["walkWrites"] == []
+    assert result["gate"] == {"hidden": False, "message": PW["walkSchemaMissing"]}
+
+
+# Axis: an answer the schema offers that the wording file has no label for refuses the sheet, since the button could not be drawn.
+def test_an_offered_answer_without_a_label_refuses_the_sheet():
+    schema = json.loads(json.dumps(SCHEMA))
+    schema["$defs"]["walkAnswersByKind"]["properties"]["look"]["enum"].append("unlabelled")
+    page = _run_page(_files(WALK_SHEET, schema=schema), scenario="return null;")
+    _assert_error_shown(page)
+    assert page["errors"] == ["The sheet's wording file lacks words this sheet needs."]
+
+
+# Axis: a schema without walkAnswersByKind names that schema defect on the gate line, not a storage failure.
+def test_a_schema_without_the_walk_answers_by_kind_names_the_schema_on_the_gate_line():
+    schema = json.loads(json.dumps(SCHEMA))
+    del schema["$defs"]["walkAnswersByKind"]
+    page = _page(WALK_SHEET, WALK + """
+      return t.gate().message;
+    """, schema=schema)
+    assert page["result"] == PW["walkSchemaMissing"] and "walkAnswersByKind" in page["result"] and page["result"] != NO_STORE

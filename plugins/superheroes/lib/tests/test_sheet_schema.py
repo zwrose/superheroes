@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -909,3 +910,57 @@ def test_every_shipped_sample_passes_the_prose_renderers_check(sample):
     sheet = json.loads((THEME / sample).read_text(encoding="utf-8"))
     assert sheet_prose.check_sheet(sheet) == []
     assert errors_for(sheet) == []
+
+
+def test_walk_answers_by_kind_is_the_one_home_of_the_answers_each_stop_kind_offers():
+    # Axis: the definition exists, lists a try stop's and a look stop's answers in button order, and says it is the one home of them.
+    definition = load_schema()["$defs"]["walkAnswersByKind"]
+    assert set(definition["properties"]) == {"try", "look"} and definition["additionalProperties"] is False
+    for kind, found in definition["properties"].items():
+        assert found["enum"] and len(set(found["enum"])) == len(found["enum"])
+        assert sheet_prose.offered_walk_answers(kind) == found["enum"]
+    assert "one home" in definition["description"] and "button order" in definition["description"]
+    # Every answer a kind offers is one a stored walk answer can hold.
+    stored = load_schema()["$defs"]["walkAnswer"]["properties"]["answer"]["enum"]
+    assert {answer for found in definition["properties"].values() for answer in found["enum"]} <= set(stored)
+
+
+def test_prose_follows_a_reordered_walk_answer_list(tmp_path, monkeypatch):
+    # Axis: the prose renderer reads the walk answers from the schema, so a reordered list changes what it offers.
+    schema = load_schema()
+    schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"].reverse()
+    path = tmp_path / "sheet.schema.json"
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    monkeypatch.setattr(sheet_prose, "SCHEMA", path)
+    assert sheet_prose.offered_walk_answers("try") == schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"]
+
+
+# Bites on: the chat walk listing a stop's answers in a fixed order (or from a list of its own) instead of the schema's walkAnswersByKind order for the stop's kind.
+def test_the_chat_walk_lists_each_stops_answers_in_the_reordered_schema_order(tmp_path, monkeypatch):
+    # Axis: with the try list reversed in the schema, the try stop's Answers line reverses and the look stop's stays as the schema lists it.
+    schema = load_schema()
+    schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"].reverse()
+    path = tmp_path / "schema" / "sheet.schema.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    fixtures = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
+    built = tmp_path / "sheet.json"
+    done = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "pr_sheet.py"), "build", "--record", str(fixtures / "record-big.json"),
+                           "--input", str(fixtures / "input-walk.json"), "--out", str(built)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout
+    sheet = json.loads(built.read_text(encoding="utf-8"))
+    monkeypatch.setattr(sheet_prose, "SCHEMA", path)
+    lines = sheet_prose.render(sheet).splitlines()
+    labels = json.loads((Path(sheet_prose.__file__).resolve().parents[1] / "theme" / "sheet-words.json").read_text(encoding="utf-8"))["pr"]["walkAnswers"]["labels"]
+    by_kind = load_schema()["$defs"]["walkAnswersByKind"]["properties"]
+    stops = {stop["kind"]: stop["id"] for stop in sheet["prSheet"]["walk"]["stops"]}
+
+    def answers_line(stop_id, order):
+        return "   Answers: " + " / ".join("%s %s" % (stop_id, labels[a]) for a in order)
+
+    canonical_try = by_kind["try"]["enum"]
+    reversed_try = schema["$defs"]["walkAnswersByKind"]["properties"]["try"]["enum"]
+    assert reversed_try != canonical_try  # the reorder must change the try stop's line, or this proves nothing
+    assert answers_line(stops["try"], reversed_try) in lines
+    assert answers_line(stops["look"], by_kind["look"]["enum"]) in lines
+    assert answers_line(stops["try"], canonical_try) not in lines

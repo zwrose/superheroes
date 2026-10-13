@@ -1,15 +1,18 @@
 """Census of the answer buttons a PR sheet offers: every one belongs to one of the four answer patterns."""
 import copy
+import json
 import re
 
 import pytest
 
 import pr_sheet
-from test_pr_sheet import BIG, STACK, bundle
-from test_review_template import WORDS, _template_text
+from test_pr_sheet import BIG, STACK, bundle, index_cli, index_world
+from test_review_template import THEME, WORDS, _run_page, _sample_files, _template_text
 from test_review_template_pr import SAMPLES, _fill, _page
 
 PW = WORDS["pr"]
+# The answers each kind of walk stop offers, in button order: the schema's own list.
+OFFERED = {kind: found["enum"] for kind, found in json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))["$defs"]["walkAnswersByKind"]["properties"].items()}
 
 # Every button inside every answer row on the page, with the part that holds the row: a card, the verdict, or a walk stop (which holds two rows).
 COLLECT = r"""
@@ -47,15 +50,12 @@ def test_every_answer_button_is_one_of_the_four_patterns(kind):
     stop_rows = [row for row in page["result"] if row["part"].startswith("stop-")]
     rows = [row for row in page["result"] if not row["part"].startswith("stop-")]
     assert [row["part"] for row in rows] == [card["id"] for card in sheet["cards"]] + ["sheet-verdict"]
-    walk = PW["walkAnswers"]
-    stops = sheet["prSheet"]["walk"]["stops"]
-    groups = list(dict.fromkeys(stop["group"] for stop in stops))
-    ordered = [stop for group in groups for stop in stops if stop["group"] == group]
-    # A stop holds its check row (the kind's own checks) and then its fix row (the words' fixes).
+    labels_of = PW["walkAnswers"]["labels"]
+    # A stop holds its check row (the kind's own checks, from the schema) and then its fix row (the words' fixes); stops come in their declared order.
     assert stop_rows == [
         {"part": "stop-" + stop["id"], "labels": labels}
-        for stop in ordered
-        for labels in ([walk["labels"][value] for value in walk[stop["kind"]]], [fix["label"] for fix in PW["walkFixes"]])
+        for stop in sheet["prSheet"]["walk"]["stops"]
+        for labels in ([labels_of[value] for value in OFFERED[stop["kind"]]], [fix["label"] for fix in PW["walkFixes"]])
     ]
     assert {tuple(row["labels"]) for row in stop_rows} == {("Works", "Problem", "Skip"), ("Looks right", "Problem", "Skip"), ("Fix before merge", "Fix in a follow-up")}
     for row in rows:
@@ -69,6 +69,31 @@ def test_every_answer_button_is_one_of_the_four_patterns(kind):
         labels = WORDS["prAnswers"]["labels"]
         expected = options + [labels["something-else"]] if options else [labels["accept"], labels["discuss"]]
         assert row["labels"] == expected, row["part"]
+
+
+# Every button inside every answer row of an index page, row by row.
+COLLECT_INDEX = r"""
+return t.all(elements["sheet-cards"]).filter((item) => hasClass(item, "answer-row"))
+  .map((row) => row.children.filter((child) => child.tagName === "button").map((button) => button.textContent));
+"""
+
+
+# Bites on: an answer button on the index outside a question's own option labels and Something else, or a question offering Aligned, Discuss or Accept instead of a pick.
+def test_every_answer_button_on_the_index_is_a_pick(tmp_path):
+    source, out = index_world(tmp_path)
+    done = index_cli(source, out / "index.json")
+    assert done.returncode == 0, done.stdout
+    sheet = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    page = _run_page(_sample_files(sheet), scenario=COLLECT_INDEX)
+    assert page["settled"] and page["errorHidden"] is True, page["errors"]
+    questions, rows = sheet["cards"], page["result"]
+    assert questions and len(rows) == len(questions)
+    pick = set(WORDS["answers"]["labels"].values())
+    for card, labels in zip(questions, rows):
+        options = [option["label"] for option in card["options"]]
+        outside = [label for label in labels if label not in set(options) | pick]
+        assert outside == [], "%s offers %s outside the four answer patterns" % (card["id"], outside)
+        assert labels == options + [WORDS["answers"]["labels"]["something-else"]], card["id"]
 
 
 # Bites on: a new answer word added to prAnswers, a second place in the template that creates an answer row, a default leftover option outside the words file's leftoverOptions.

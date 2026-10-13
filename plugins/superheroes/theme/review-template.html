@@ -479,6 +479,18 @@
       rowNumbers.add(row.number);
     });
 
+    const walkStops = (isObject(sheet.prSheet) && isObject(sheet.prSheet.walk) && Array.isArray(sheet.prSheet.walk.stops)) ? sheet.prSheet.walk.stops : [];
+    const stopIds = new Set();
+    const reportedStops = new Set();
+    walkStops.forEach((stop) => {
+      if (!isObject(stop)) return;
+      if (stopIds.has(stop.id) && !reportedStops.has(stop.id)) {
+        reportedStops.add(stop.id);
+        problems.push('Two walk stops share the id "' + stop.id + '".');
+      }
+      stopIds.add(stop.id);
+    });
+
     return problems;
   }
 </script>
@@ -1636,6 +1648,12 @@
     let walkCount = textElement("span", "sh-label", "");
     let walkLines = [];
     let walkRule = null;
+    // The answers each kind of stop offers, in button order, from the schema's walkAnswersByKind (null leaves the walk's answers off).
+    let walkOffered = null;
+
+    function walkOfferedFor(kind) {
+      return walkOffered !== null && Array.isArray(walkOffered[kind]) ? walkOffered[kind] : [];
+    }
 
     // How many items the store has acknowledged as accepted (Accept, or an option that does not send the PR back) and nothing of the item is unsaved.
     function savedAcceptances() {
@@ -1875,7 +1893,7 @@
         const option = held === null ? undefined : items[index].options.find(function (candidate) { return candidate.id === held.optionId; });
         return held !== null && (held.answer === "accept" || (option !== undefined && option.sendsBack === false)) && controllers.get(items[index].id).revision() === null;
       });
-      const resaveText = resave.length === 0 ? "" : fill(canMakeRevision() ? prWords.resaveLegacy : prWords.resaveNoRevision, { numbers: resave.map(function (index) { return index + 1; }).join(", ") });
+      const resaveText = resave.length === 0 ? "" : fill(canMakeRevision() ? prWords.resaveLegacy : prWords.resaveNoRevision, { titles: resave.map(function (index) { return "“" + items[index].question + "”"; }).join(", ") });
       unlockLine.textContent = [incomplete ? fill(prWords.unlocks, { accepted: accepted, total: total }) : "", resaveText].filter(function (part) { return part !== ""; }).join(" ");
       unlockLine.hidden = unlockLine.textContent === "" || sendsBack;
       sendBackLine.hidden = !sendsBack;
@@ -1984,23 +2002,40 @@
       "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
       "problemNote", "addScreenshot", "screenshotsAdded", "screenshotUploading", "screenshotFailed", "screenshotUnavailable", "walkProblemsOne",
-      "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
+      "walkSchemaMissing", "walkProblemsMany", "followUpsOne", "followUpsMany", "notWalkedOne", "notWalkedMany", "zoomOut", "zoomIn", "zoomFit",
     ];
 
-    function hasWalkWords(pr) {
+    // The answers each stop kind offers, in button order, are the schema's own ($defs.walkAnswersByKind): { try: [...], look: [...] }.
+    // Null when the schema gives none in that shape, which leaves the walk's answers off.
+    function readWalkOffered(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const defs = isObject(schema) && isObject(schema.$defs) ? schema.$defs : {};
+      const byKind = isObject(defs.walkAnswersByKind) ? defs.walkAnswersByKind.properties : undefined;
+      if (!isObject(byKind)) return null;
+      const offered = {};
+      const kinds = Object.keys(byKind);
+      for (let index = 0; index < kinds.length; index += 1) {
+        const list = isObject(byKind[kinds[index]]) ? byKind[kinds[index]].enum : undefined;
+        if (!Array.isArray(list) || list.length === 0 || list.some(function (value) { return typeof value !== "string"; })) return null;
+        offered[kinds[index]] = list;
+      }
+      return kinds.length > 0 ? offered : null;
+    }
+
+    // The words must label every answer the schema offers (offered is null when it offers none).
+    function hasWalkWords(pr, offered) {
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
       const answers = pr.walkAnswers;
-      const labelled = function (kind) {
-        return isObject(answers) && isObject(answers.labels) && Array.isArray(answers[kind]) && answers[kind].every(function (value) { return typeof answers.labels[value] === "string"; });
-      };
-      return labelled("try") && labelled("look") && Array.isArray(pr.walkFixes) && pr.walkFixes.every(function (fix) {
+      const labelled = isObject(answers) && isObject(answers.labels)
+        && (offered === null || Object.keys(offered).every(function (kind) { return offered[kind].every(function (value) { return typeof answers.labels[value] === "string"; }); }));
+      return labelled && Array.isArray(pr.walkFixes) && pr.walkFixes.every(function (fix) {
         return isObject(fix) && ["id", "label", "consequence"].every(function (key) { return typeof fix[key] === "string"; }) && typeof fix.sendsBack === "boolean";
       });
     }
 
-    function hasPrWords(words) {
+    function hasPrWords(words, offered) {
       return words !== null && typeof words === "object" && typeof words.roundNoun === "string" && words.pr !== null
-        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr);
+        && typeof words.pr === "object" && PR_WORD_KEYS.every(function (key) { return typeof words.pr[key] === "string"; }) && hasWalkWords(words.pr, offered);
     }
 
     // The words under "index" in sheet-words.json that the index is drawn from, the three zoom words it takes from "pr", and the shapes of groups and ordinals.
@@ -2131,7 +2166,8 @@
       return element;
     }
 
-    // The host's picture store, asked for on the first tap of an Add a screenshot (null when there is none or it cannot upload), and the uploads in flight.
+    // The host's picture store, asked for on the first tap of an Add a screenshot: a promise of the store, or of null when there is none or it cannot upload.
+    // An ask the page's own deadline cut off is not kept, so the next tap asks again. And the uploads that still count for the leave-page guard.
     let assetsAsk = null;
     let uploads = 0;
 
@@ -2158,6 +2194,10 @@
       extra.replaceChildren(textElement("p", "sh-label", prWords.fixQuestion), fixes);
       let controller = null;
       let uploading = false;
+      // The store this stop uploads to, once a tap found one; the number of the latest upload attempt; and the attempt whose failed line is showing (0 when none is).
+      let assets = null;
+      let attempt = 0;
+      let failedAttempt = 0;
       const shotLine = textElement("span", "sh-caption", "");
       const input = document.createElement("input");
       input.setAttribute("type", "file");
@@ -2165,10 +2205,19 @@
       input.hidden = true;
       const pick = actionButton(prWords.addScreenshot, async function () {
         if (!canEdit()) return;
-        assetsAsk = assetsAsk || withDeadline(function () { return window.claude.use("assets"); }).then(function (assets) {
-          return assets && typeof assets.upload === "function" ? assets : null;
-        }, function () { return null; });
-        pick.disabled = (await assetsAsk) === null;
+        // No store, no upload, or an ask the host rejects is a "no" for good. Only the page's own deadline firing first is not: the host's answer is
+        // memoized and may be there by the next tap, so that ask is not kept and the button stays on.
+        const ask = assetsAsk || (assetsAsk = withDeadline(function () { return window.claude.use("assets"); }).then(function (found) {
+          return found && typeof found.upload === "function" ? found : null;
+        }, function (error) { return error === DEADLINE ? DEADLINE : null; }));
+        const found = await ask;
+        if (found === DEADLINE) {
+          if (assetsAsk === ask) assetsAsk = null;
+          shotLine.textContent = prWords.screenshotUnavailable;
+          return;
+        }
+        assets = found;
+        pick.disabled = found === null;
         if (pick.disabled) shotLine.textContent = prWords.screenshotUnavailable;
         else input.click();
       });
@@ -2178,25 +2227,38 @@
         input.value = "";
         if (!file || !canEdit()) return;
         uploading = true;
-        uploads += 1;
+        attempt += 1;
+        const mine = attempt;
+        failedAttempt = 0;
         pick.disabled = true;
         shotLine.textContent = prWords.screenshotUploading;
         let id = null;
-        const real = (async function () { return (await (await assetsAsk).upload(file)).id; })();
-        real.then(function () { uploads -= 1; }, function () { uploads -= 1; });
+        const real = (async function () { return (await assets.upload(file)).id; })();
+        // The upload counts for the leave-page guard until it settles or its deadline passes, whichever comes first, and stops counting once.
+        uploads += 1;
+        let counted = true;
+        const release = function () { if (counted) { counted = false; uploads -= 1; } };
+        real.then(release, release);
         try { id = await withDeadline(function () { return real; }); } catch (error) { id = null; }
+        release();
         uploading = false;
         pick.disabled = false;
         if (typeof id === "string" && id !== "") controller.addShot(id);
         else {
+          // The failed line stays until the next upload attempt, or this upload's late success, replaces it.
+          if (attempt === mine) failedAttempt = mine;
           shotLine.textContent = prWords.screenshotFailed;
           // A stall is not a loss: an upload that lands after the deadline is still saved, once.
-          real.then(function (late) { if (typeof late === "string" && late !== "") controller.addShot(late); }, function () {});
+          real.then(function (late) {
+            if (typeof late !== "string" || late === "") return;
+            if (failedAttempt === mine) failedAttempt = 0;
+            controller.addShot(late);
+          }, function () {});
         }
       });
       addSaver({
-        choices: prWords.walkAnswers[stop.kind].map(function (value) { return { label: prWords.walkAnswers.labels[value], answer: value, optionId: null }; })
-          .concat(prWords.walkFixes.map(function (fix) { return { label: fix.label, answer: "problem", optionId: fix.id, row: 2 }; })),
+        choices: walkOfferedFor(stop.kind).map(function (value) { return { label: prWords.walkAnswers.labels[value], answer: value, optionId: null }; })
+          .concat(walkOffered === null ? [] : prWords.walkFixes.map(function (fix) { return { label: fix.label, answer: "problem", optionId: fix.id, row: 2 }; })),
         rowLabel: "Your answer",
         extra: extra,
         extraLabel: prWords.fixQuestion,
@@ -2213,14 +2275,14 @@
         paint: function (latest, noteLabel) {
           extra.hidden = latest.answer !== "problem";
           noteLabel.textContent = latest.answer === "problem" ? prWords.problemNote : "Note";
-          if (!uploading && latest.shots.length > 0) shotLine.textContent = fill(prWords.screenshotsAdded, { count: latest.shots.length });
+          if (!uploading && failedAttempt === 0 && latest.shots.length > 0) shotLine.textContent = fill(prWords.screenshotsAdded, { count: latest.shots.length });
         },
         enable: function (on) { pick.disabled = !on; },
         document: function (body) { return { answer: body.answer, fix: body.optionId, note: body.note, shots: body.shots }; },
         // A stored document restores its pick only when it fits the walk-answer rule and names an answer and a fix offered; else only its text note.
         state: function (data) {
           const fits = walkRule !== null && fitsRule(walkRule.root, walkRule.rule, data)
-            && (data.answer === null || prWords.walkAnswers[stop.kind].includes(data.answer))
+            && (data.answer === null || walkOfferedFor(stop.kind).includes(data.answer))
             && (data.fix === null || prWords.walkFixes.some(function (fix) { return fix.id === data.fix; }));
           if (fits) return { answer: data.answer, optionId: data.fix, note: data.note, shots: data.shots.slice() };
           // A stored Problem whose fix is not offered, or whose document is malformed, stays a Problem with no fix, so it keeps blocking Merge.
@@ -2232,7 +2294,8 @@
       return article;
     }
 
-    // The walk: the open box, the advisor's lines, then the stops, each group's label once before its first stop.
+    // The walk: the open box, the advisor's lines, then the stops in the order they are declared, a group's label shown
+    // each time a stop's group differs from the previous stop's (a group listed apart is labelled again where it resumes).
     function buildWalk(walk) {
       const section = prSection("section", "pr-walk", "sh-box");
       walkCount = prSection("span", "walk-count", "sh-label");
@@ -2252,9 +2315,11 @@
       if (walk.note !== undefined) section.appendChild(textElement("p", "", walk.note));
       section.appendChild(textElement("p", "sh-caption", fill(prWords.advisorWalked, { from: walk.picturesFrom })));
       walkStops = walk.stops;
-      walk.stops.map(function (stop) { return stop.group; }).filter(function (group, index, all) { return all.indexOf(group) === index; }).forEach(function (group) {
-        section.appendChild(textElement("p", "sh-label", group));
-        walk.stops.filter(function (stop) { return stop.group === group; }).forEach(function (stop) { section.appendChild(buildStop(stop, walk)); });
+      let previousGroup = null;
+      walk.stops.forEach(function (stop) {
+        if (stop.group !== previousGroup) section.appendChild(textElement("p", "sh-label", stop.group));
+        previousGroup = stop.group;
+        section.appendChild(buildStop(stop, walk));
       });
       return section;
     }
@@ -2454,7 +2519,7 @@
       syncControls();
       gate.hidden = true;
       // A walk whose answers the schema cannot hold stays off, and the line says so.
-      if (walkStops.length > 0 && walkRule === null) say(SAY.noStore, false);
+      if (walkStops.length > 0 && walkRule === null) say(walkOffered === null ? prWords.walkSchemaMissing : SAY.noStore, false);
       // The owner lands on the first call still waiting for an answer, or on the first when none is.
       const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
       openIndex = waiting === -1 ? 0 : waiting;
@@ -2577,7 +2642,8 @@
           return;
         }
       }
-      if ((revisedKind(sheet.kind) && !hasPrWords(words)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
+      const offered = readWalkOffered(schema);
+      if ((revisedKind(sheet.kind) && !hasPrWords(words, offered)) || (sheet.kind === "index" && !hasIndexWords(words, readIndexStates(schema)))) {
         showErrors(["The sheet's wording file lacks words this sheet needs."]);
         return;
       }
@@ -2595,9 +2661,14 @@
       sheetDigest = verdictKind(sheet.kind) ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema, sheet.kind);
+      walkOffered = revisedKind(sheet.kind) ? offered : null;
       walkRule = isObject(schema.$defs) && isObject(schema.$defs.walkAnswer) ? { root: schema, rule: schema.$defs.walkAnswer } : null;
-      // The walk stays off unless every answer and fix the words offer fits the walk-answer rule, so a saved pick is one a reopen restores.
-      if (walkRule !== null && prWords !== null && !prWords.walkAnswers.try.concat(prWords.walkAnswers.look).map(function (answer) { return [answer, null]; }).concat(prWords.walkFixes.map(function (fix) { return ["problem", fix.id]; }))
+      // The walk stays off unless the schema says which answers a stop offers and every answer and fix offered fits the walk-answer rule, so a saved pick is one a reopen restores.
+      if (prWords !== null && walkOffered === null) walkRule = null;
+      // A stop whose kind the schema lists no answers for would offer fix buttons without a primary answer, so the walk stays off and draws no buttons, as when the schema has no list at all.
+      if (walkOffered !== null && isObject(sheet.prSheet) && isObject(sheet.prSheet.walk) && Array.isArray(sheet.prSheet.walk.stops)
+        && sheet.prSheet.walk.stops.some(function (stop) { return !isObject(stop) || !Array.isArray(walkOffered[stop.kind]); })) { walkRule = null; walkOffered = null; }
+      if (walkRule !== null && prWords !== null && ![].concat(...Object.values(walkOffered)).map(function (answer) { return [answer, null]; }).concat(prWords.walkFixes.map(function (fix) { return ["problem", fix.id]; }))
         .every(function (pair) { return fitsRule(walkRule.root, walkRule.rule, { answer: pair[0], fix: pair[1], note: "", shots: [] }); })) walkRule = null;
       render(sheet);
       if (wordsProblem !== null) {
