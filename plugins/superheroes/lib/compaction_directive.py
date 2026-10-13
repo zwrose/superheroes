@@ -18,6 +18,7 @@ refusal (argparse usage errors keep argparse's own exit 2).
                                                     [--user-instructions TEXT]
 """
 import argparse
+import contextlib
 import datetime
 import glob
 import json
@@ -33,12 +34,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import charter_detect
 import config_dir
 
+try:
+    import fcntl
+except ImportError:        # no advisory locks (Windows): ``reap`` then deletes nothing
+    fcntl = None
+
 MODES = tuple(charter_detect.CHARTER_NAMES) + ("generic",)
 
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 # The one home of how long a session's notes file is kept before ``reap`` removes it.
 NOTES_MAX_AGE_DAYS = 30
+
+# The one home of the delivery window: how long a delivery marker counts as fresh. ``reap``
+# removes a marker outside it.
+DELIVERY_WINDOW_SECONDS = 120
+
+_LOCK_NAME = ".lock"      # in the checkpoints directory; ``reap``'s filter never matches it
 
 _DROP = """\
 DROP (recoverable from GitHub or the ledger — do not spend summary budget):
@@ -201,6 +213,27 @@ def read_notes(session_id, env=None, max_chars=20000, cwd=None):
         return "", None
 
 
+@contextlib.contextmanager
+def _checkpoint_lock(base):
+    """Hold an exclusive advisory lock on ``<base>/.lock`` for the block; yields True when held.
+    One lock serializes every writer and the reaper over the directory. Where it cannot be taken
+    (no ``fcntl``, no directory, an I/O error) it yields False and never raises."""
+    fd = None
+    if fcntl is not None:
+        try:
+            fd = os.open(os.path.join(base, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+            fd = None
+    try:
+        yield fd is not None
+    finally:
+        if fd is not None:
+            os.close(fd)         # closing releases the lock
+
+
 def _atomic_write(path, text):
     """Write ``text`` to ``path`` through a temp file in the same directory and ``os.replace``:
     the destination is only ever absent/old or complete. Raises on I/O failure (temp removed)."""
@@ -212,7 +245,8 @@ def _atomic_write(path, text):
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        with _checkpoint_lock(directory):
+            os.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -265,7 +299,7 @@ def compose(mode, notes="", notes_path=None, notes_mtime=None, user_instructions
 
 
 # ----------------------------------------------------------------- delivery marker
-def delivered_recently(session_id, env=None, window_seconds=120, now=None, cwd=None):
+def delivered_recently(session_id, env=None, window_seconds=DELIVERY_WINDOW_SECONDS, now=None, cwd=None):
     """True only when THIS session's marker exists and its mtime is within the window."""
     try:
         marker = delivered_marker_path(session_id, env, cwd)
@@ -278,7 +312,7 @@ def delivered_recently(session_id, env=None, window_seconds=120, now=None, cwd=N
         return False
 
 
-def consume_delivered(session_id, env=None, window_seconds=120, now=None, cwd=None):
+def consume_delivered(session_id, env=None, window_seconds=DELIVERY_WINDOW_SECONDS, now=None, cwd=None):
     """One-shot read of this session's delivery marker: True when it was fresh, and the marker
     is deleted so a retry of the same compaction cannot reuse this attempt's evidence."""
     try:
@@ -303,12 +337,13 @@ def unmark_attempt(session_id, since_ms, until_ms, env=None, cwd=None):
         marker = delivered_marker_path(session_id, env, cwd)
         if marker is None:
             return False
-        with open(marker, encoding="utf-8") as fh:
-            stamp = int(fh.read().strip())
-        if not since_ms <= stamp <= until_ms:
-            return False
-        os.remove(marker)
-        return True
+        with _checkpoint_lock(os.path.dirname(marker)):
+            with open(marker, encoding="utf-8") as fh:
+                stamp = int(fh.read().strip())
+            if not since_ms <= stamp <= until_ms:
+                return False
+            os.remove(marker)
+            return True
     except Exception:
         return False
 
@@ -316,46 +351,19 @@ def unmark_attempt(session_id, since_ms, until_ms, env=None, cwd=None):
 # ----------------------------------------------------------------- reaping
 def _stale(mtime, suffix, current):
     """The reap rule on one file's mtime: notes past ``NOTES_MAX_AGE_DAYS``, markers outside the
-    delivery window (``delivered_recently``'s 120 seconds)."""
+    delivery window."""
     if suffix == ".md":
         return current - mtime > NOTES_MAX_AGE_DAYS * 86400
-    return abs(current - mtime) > 120
-
-
-def _remove_if_still_stale(path, suffix, current):
-    """1 when the file at ``path`` was removed. A save can replace ``path`` between the scan's
-    stale check and a remove by name, so the candidate is first renamed to a private name (one
-    ``_atomic_write``'s temp names and ``reap``'s own filter never match) and re-judged there; a
-    file that turned out fresh goes back under its name unless a newer save already holds it.
-    Never raises; no private file is left behind."""
-    private = os.path.join(os.path.dirname(path), ".%s.reap-%d-%s" % (os.path.basename(path), os.getpid(), os.urandom(4).hex()))
-    try:
-        os.rename(path, private)
-    except OSError:
-        return 0
-    try:
-        info = os.lstat(private)
-        if stat.S_ISREG(info.st_mode) and _stale(info.st_mtime, suffix, current):
-            return 1
-        try:
-            os.link(private, path)       # fails when the name was re-created: that save is newer
-        except OSError:
-            pass
-        return 0
-    except OSError:
-        return 0
-    finally:
-        try:
-            os.remove(private)
-        except OSError:
-            pass
+    return abs(current - mtime) > DELIVERY_WINDOW_SECONDS
 
 
 def reap(session_id, env=None, cwd=None, now=None):
     """Remove stale files from the checkpoint directory: ``<id>.md`` notes older than
     ``NOTES_MAX_AGE_DAYS`` (by mtime) and ``<id>.delivered`` markers outside the delivery window.
     Only regular files with a valid session-id name, never a symlink, never a subdirectory's
-    content, never ``session_id``'s own files. Returns the number removed; never raises."""
+    content, never ``session_id``'s own files. The scan and every removal run under the
+    checkpoint lock, which every writer takes to publish, so no save lands in between; where the
+    lock cannot be taken nothing is deleted. Returns the number removed; never raises."""
     removed = 0
     try:
         if not _valid_session_id(session_id):
@@ -364,19 +372,24 @@ def reap(session_id, env=None, cwd=None, now=None):
         if base is None:
             return 0
         current = time.time() if now is None else now
-        with os.scandir(base) as entries:
-            listing = list(entries)
-        for entry in listing:
-            try:
-                stem, suffix = os.path.splitext(entry.name)
-                if suffix not in (".md", ".delivered") or not _valid_session_id(stem) or stem == session_id:
+        with _checkpoint_lock(base) as held:
+            if not held:
+                return 0
+            with os.scandir(base) as entries:
+                listing = list(entries)
+            for entry in listing:
+                try:
+                    stem, suffix = os.path.splitext(entry.name)
+                    if suffix not in (".md", ".delivered") or not _valid_session_id(stem) or stem == session_id:
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    if entry.is_symlink() or not stat.S_ISREG(info.st_mode):
+                        continue
+                    if _stale(info.st_mtime, suffix, current):
+                        os.remove(entry.path)
+                        removed += 1
+                except Exception:
                     continue
-                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
-                    continue
-                if _stale(entry.stat(follow_symlinks=False).st_mtime, suffix, current):
-                    removed += _remove_if_still_stale(entry.path, suffix, current)
-            except Exception:
-                continue
     except Exception:
         pass
     return removed

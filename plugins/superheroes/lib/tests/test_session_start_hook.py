@@ -13,6 +13,13 @@ _HOOK_PATH = os.path.join(_PLUGIN, "hooks", "session_start.py")
 _LIB = os.path.join(_PLUGIN, "lib")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config_dir(tmp_path, monkeypatch):
+    # The hook runs the real reaper: it must never see the owner's config directory.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "isolated-config"))
+    monkeypatch.setenv("HOME", str(tmp_path / "isolated-home"))
+
+
 def _load_hook(module_name="session_start_under_test"):
     spec = importlib.util.spec_from_file_location(module_name, _HOOK_PATH)
     mod = importlib.util.module_from_spec(spec)

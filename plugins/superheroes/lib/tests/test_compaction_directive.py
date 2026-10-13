@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -520,7 +521,7 @@ def test_save_notes_failure_leaves_the_previous_notes_and_no_temp_file(tmp_path,
     with pytest.raises(OSError):
         cd.save_notes(SID, "new notes\n", env)
     directory = os.path.dirname(cd.checkpoint_path(SID, env))
-    assert os.listdir(directory) == [SID + ".md"]
+    assert sorted(os.listdir(directory)) == [".lock", SID + ".md"]
     with open(cd.checkpoint_path(SID, env), encoding="utf-8") as fh:
         assert fh.read() == "old notes\n"
 
@@ -773,45 +774,60 @@ def test_reap_never_raises(tmp_path, monkeypatch):
     assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
 
 
-def _reap_leftovers(tmp_path):
-    return [n for n in os.listdir(os.path.dirname(_ckpt(tmp_path, "x"))) if ".reap-" in n]
+def _ckpt_listing(tmp_path):
+    return sorted(os.listdir(os.path.dirname(_ckpt(tmp_path, "x"))))
 
 
-def test_reap_keeps_a_file_another_session_saved_between_the_scan_and_the_rename(tmp_path, monkeypatch):
-    path = _ckpt(tmp_path, "busy-one.md")
-    _touch(path, mtime=OLD_NOTES, text="old")
-    real_rename = os.rename
-
-    def save_then_rename(src, dst):
-        if src == path:
-            _touch(path, mtime=NOW, text="fresh save")     # the other session's save lands first
-        return real_rename(src, dst)
-
-    monkeypatch.setattr(os, "rename", save_then_rename)
-    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
-    with open(path, encoding="utf-8") as fh:
-        assert fh.read() == "fresh save"
-    assert _reap_leftovers(tmp_path) == []
-
-
-def test_reap_drops_the_renamed_copy_when_a_newer_save_re_created_the_name(tmp_path, monkeypatch):
-    path = _ckpt(tmp_path, "busy-one.md")
-    _touch(path, mtime=OLD_NOTES)
-    real_rename = os.rename
-
-    def refreshed_and_re_saved(src, dst):
-        real_rename(src, dst)
-        os.utime(dst, (NOW, NOW))                           # the renamed file turns out fresh
-        _touch(path, mtime=NOW, text="newest")              # and a newer save holds the name
-
-    monkeypatch.setattr(os, "rename", refreshed_and_re_saved)
-    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
-    with open(path, encoding="utf-8") as fh:
-        assert fh.read() == "newest"
-    assert _reap_leftovers(tmp_path) == []
-
-
-def test_reap_leaves_no_private_file_after_removing_a_stale_one(tmp_path):
+def test_reap_removes_a_stale_file_and_leaves_only_the_lock_file(tmp_path):
     _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
     assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
-    assert os.listdir(os.path.dirname(_ckpt(tmp_path, "x"))) == []
+    assert _ckpt_listing(tmp_path) == [".lock"]
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0      # the lock file is never a candidate
+    assert _ckpt_listing(tmp_path) == [".lock"]
+
+
+def test_reap_waits_for_the_lock_and_keeps_a_file_a_writer_refreshed_under_it(tmp_path):
+    path = _ckpt(tmp_path, "busy-one.md")
+    _touch(path, mtime=OLD_NOTES, text="old")
+    base = os.path.dirname(path)
+    result = []
+    with cd._checkpoint_lock(base) as held:
+        assert held
+        reaper = threading.Thread(target=lambda: result.append(cd.reap(SID, _env(tmp_path), now=NOW)))
+        reaper.start()
+        reaper.join(0.3)
+        assert reaper.is_alive() and os.path.exists(path)   # waiting, nothing removed
+        _touch(path, mtime=NOW, text="fresh save")          # the writer publishes under the lock
+    reaper.join(10)
+    assert result == [0]
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "fresh save"
+
+
+def test_concurrent_reaps_remove_each_stale_file_once_and_never_a_fresh_one(tmp_path):
+    for i in range(20):
+        _touch(_ckpt(tmp_path, "old%d.md" % i), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "new-one.md"), mtime=FRESH_NOTES)
+    counts = []
+    threads = [threading.Thread(target=lambda: counts.append(cd.reap(SID, _env(tmp_path), now=NOW)))
+               for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    assert sorted(counts) == [0, 0, 0, 20]
+    assert _ckpt_listing(tmp_path) == [".lock", "new-one.md"]
+
+
+def test_reap_deletes_nothing_where_fcntl_is_unavailable(tmp_path, monkeypatch):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    monkeypatch.setattr(cd, "fcntl", None)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert _ckpt_listing(tmp_path) == ["old-one.md"]
+
+
+def test_writers_still_save_without_the_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(cd, "fcntl", None)
+    path = cd.save_notes(SID, "notes", _env(tmp_path))
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "notes"
