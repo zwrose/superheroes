@@ -50,10 +50,8 @@ import model_registry  # noqa: E402 — stdlib-only leaf; no cycle with adapters
 import round_phases  # noqa: E402
 import round_records  # noqa: E402
 import seat_map_receipts  # noqa: E402
-import session_contract  # noqa: E402
 import verification  # noqa: E402
 import payload_contracts  # noqa: E402
-import receipt_disclosures  # noqa: E402
 
 # =============================================================================================
 # phases, seat keys, policies
@@ -281,47 +279,8 @@ def _landed(indexed, seat, occurrence):
 # provenance — trusted manifest only, echo disclosed
 # =============================================================================================
 
-PROVENANCE_SOURCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
-
-
-def _maker_barred(state, config):
-    """Predicate: True when a vendor may not review (maker family, the fixer's vendor, or an
-    unresolvable reviewer family) — `receipt_disclosures.reviewer_ineligible`, the same bar
-    `independent_reviewer` applies when the driver selects a non-panel reviewer."""
-    cfg = config if isinstance(config, dict) else {}
-    return receipt_disclosures.reviewer_ineligible(
-        receipt_disclosures.accumulated_maker_families(state), cfg.get("fixerVendor"))
-
-
-def _manifest_vendor_for_wrapped_seat(envelope, seat, occurrence, orders_manifest, is_barred):
-    """The vendor the DRIVER's orders manifest recorded at emission for a host-seat (file-channel)
-    seat whose v2 envelope the driver wrapped itself from a bare payload (so it carries no runner
-    execution evidence); None for any other landing, a runner-channel seat, an unusable entry, or a
-    vendor in a maker family. This is the only place a manifest vendor stands in for evidence."""
-    if not isinstance(orders_manifest, dict) or envelope.get("executionEvidence") is not None:
-        return None
-    if envelope.get("payloadHashSource") != "driver-computed":
-        return None
-    seats = orders_manifest.get("seats")
-    entry = seats.get(round_records.storage_key(seat, occurrence)) if isinstance(seats, dict) else None
-    if not isinstance(entry, dict) or entry.get("channel") != session_contract.CHANNEL_FILE:
-        return None
-    vendor = entry.get("vendor")
-    if not isinstance(vendor, str) or vendor not in model_registry.VENDORS:
-        return None
-    if callable(is_barred) and is_barred(vendor):
-        return None
-    return vendor
-
-
-def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures, orders_manifest=None,
-                     is_barred=None):
-    """{seat: vendor} from the runner record on v2 envelopes; legacy v1 reads dispatch_manifest.
-
-    With ``orders_manifest`` (verifier and finder seats only) a v2 envelope the driver wrapped from
-    its own emitted host-seat stub, carrying no execution evidence, takes the vendor the driver's
-    orders manifest recorded for that seat (provenance ``dispatch-manifest``, distinct from
-    ``runner-record``) unless that vendor is in a maker family."""
+def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
+    """{seat: vendor} from the runner record on v2 envelopes; legacy v1 reads dispatch_manifest."""
     trusted = {}
     unusable = []
     mismatch = []
@@ -346,16 +305,8 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures, orders_man
                     prov_src[seat] = round_records.AUDIT_PROVENANCE_RUNNER_RECORD
                 elif provenance == round_records.PROVENANCE_HAND_LANDED:
                     prov_src[seat] = round_records.AUDIT_PROVENANCE_HAND_LANDED
-            else:
-                wrapped = _manifest_vendor_for_wrapped_seat(
-                    envelope, seat, occurrence, orders_manifest, is_barred)
-                if wrapped is not None:
-                    trusted[seat] = wrapped
-                    source = wrapped
-                    disclosures.setdefault("provenanceSource", {})[seat] = \
-                        PROVENANCE_SOURCE_DISPATCH_MANIFEST
-                elif seat not in underived:
-                    underived.append(seat)
+            elif seat not in underived:
+                underived.append(seat)
             echo = envelope.get("vendor")
             if (isinstance(source, str) and source and isinstance(echo, str) and echo
                     and echo != source):
@@ -399,22 +350,15 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures, orders_man
 # =============================================================================================
 
 def assemble(phase, envelopes, state, config, dispatch_manifest=None,
-             session_dir=None, orders_manifest=None):
-    """(artifact_or_None, reason_or_None). NEVER raises.
-
-    ``orders_manifest`` is the driver's OWN emission-time orders manifest, already verified against
-    the state anchor by the caller (an unverifiable one is passed as ``{}``); ``None`` means the
-    caller supplied none. The verifier and single-seat finder phases read it (see
-    `_trusted_vendors`, `_authenticate_finder`)."""
+             session_dir=None):
+    """(artifact_or_None, reason_or_None). NEVER raises."""
     try:
-        return _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
-                         orders_manifest)
+        return _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir)
     except Exception as exc:  # noqa: BLE001 — the contract is total; a crash must be a reason
         return None, "adapter-internal-error:%s:%s" % (_type_name(exc), exc)
 
 
-def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
-              orders_manifest=None):
+def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir):
     if phase not in ADAPTER_PHASES:
         return None, "unknown-phase:%s" % _label(phase)
     if dispatch_manifest is not None and not isinstance(dispatch_manifest, dict):
@@ -437,17 +381,12 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
     if phase == P_PANEL:
         artifact = _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures)
     elif phase == P_VERIFIERS:
-        artifact = _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures,
-                                       orders_manifest, _maker_barred(state, config))
+        artifact = _assemble_verifiers(roster, indexed, disclosures)
     elif phase == P_AUDITS:
         artifact = _assemble_audits(roster, indexed, dispatch_manifest, disclosures)
     elif phase == P_SYNTHESIS:
         artifact = _assemble_synthesis(roster, indexed, disclosures)
     elif phase in (P_GAPSWEEP, P_SCOPED):
-        fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,
-                                     _maker_barred(state, config), disclosures)
-        if fault is not None:
-            return None, fault
         artifact = _assemble_findings(roster, indexed, disclosures)
     elif phase == P_FIXER:
         artifact = _assemble_fixer(roster, indexed, disclosures, phase, session_dir)
@@ -490,47 +429,19 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures):
     return artifact
 
 
-def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_manifest=None,
-                        is_barred=None):
+def _assemble_verifiers(roster, indexed, disclosures):
     verdicts = []
     omitted = []
-    landed = []
-    seat_of_id = {}
     for seat, occurrence in _roster_slots(roster):
         entry, is_result = _landed(indexed, seat, occurrence)
         if not is_result:
             omitted.append(_missing_detail(seat, occurrence, entry))
             continue
-        landed.append(seat)
         for verdict in entry["payload"]["verdicts"]:
             verdicts.append(dict(verdict))
-            if isinstance(verdict, dict) and isinstance(verdict.get("id"), str):
-                seat_of_id.setdefault(verdict["id"], seat)
     if omitted:
         disclosures["unverifiedClusters"] = omitted
-    artifact = {"verdicts": verdicts}
-    if landed:
-        # The vendor that RAN each verifier is the runner's execution record (the same provenance
-        # `_assemble_audits` derives `collectionManifest` from), never the payload's own claim and
-        # never the driver's selection. Provenance is judged PER SEAT: a seat's executed vendor
-        # authenticates only the verdicts it supplied (`verifierSeatVendors`: verdict id -> that
-        # seat's vendor, "" when the seat has no derivable vendor), so an unproven cluster never
-        # voids a proven one. `verifierVendor` stays the joined summary of the proven seats.
-        trusted = _trusted_vendors(roster, indexed, dispatch_manifest, disclosures,
-                                   orders_manifest, is_barred)
-        ran = {trusted[seat] for seat in landed if seat in trusted}
-        if ran:
-            artifact["verifierVendor"] = "+".join(sorted(ran))
-        artifact["verifierSeatVendors"] = {
-            vid: trusted.get(seat, "") for vid, seat in seat_of_id.items()}
-        # A seat whose vendor is the driver's own manifest entry (a driver-wrapped host-seat landing,
-        # no runner evidence) is marked so the fold records its provenance as `dispatch-manifest`.
-        by_manifest = {
-            vid: PROVENANCE_SOURCE_DISPATCH_MANIFEST for vid, seat in seat_of_id.items()
-            if disclosures.get("provenanceSource", {}).get(seat) == PROVENANCE_SOURCE_DISPATCH_MANIFEST}
-        if by_manifest:
-            artifact["verifierSeatProvenance"] = by_manifest
-    return artifact
+    return {"verdicts": verdicts}
 
 
 def _assemble_audits(roster, indexed, dispatch_manifest, disclosures):
@@ -557,32 +468,6 @@ def _assemble_synthesis(roster, indexed, disclosures):
     if isinstance(grouping, list):
         grouping = [dict(group) for group in grouping]
     return {"grouping": grouping}
-
-
-def _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest, is_barred,
-                         disclosures):
-    """Fault string when the single-seat finder (gap-sweep / scoped) result is not authenticated,
-    else None. The executed vendor (runner `executionEvidence.source`, or the driver's own manifest
-    vendor for a driver-wrapped host-seat landing) must equal the vendor the orders manifest recorded
-    at emission for the seat; anything else is a review that did not run, so the seat folds as
-    missing (the same refuse-fold a never-landed seat gets) rather than as "ran and found nothing".
-    `None` ``orders_manifest`` (no manifest supplied by the caller) leaves the check off."""
-    if orders_manifest is None:
-        return None
-    trusted = _trusted_vendors(roster, indexed, dispatch_manifest, disclosures, orders_manifest,
-                               is_barred)
-    seats = orders_manifest.get("seats") if isinstance(orders_manifest, dict) else None
-    for seat, occurrence in _roster_slots(roster):
-        entry = seats.get(round_records.storage_key(seat, occurrence)) \
-            if isinstance(seats, dict) else None
-        expected = entry.get("vendor") if isinstance(entry, dict) else None
-        executed = trusted.get(seat)
-        if not isinstance(expected, str) or not expected or executed != expected:
-            disclosures["unauthenticatedFinder"] = {"seat": seat, "executed": executed,
-                                                     "recorded": expected}
-            return "missing-seat-refuse-fold:%s:unauthenticated-vendor:executed=%s:recorded=%s" % (
-                seat, executed, expected)
-    return None
 
 
 def _assemble_findings(roster, indexed, disclosures):

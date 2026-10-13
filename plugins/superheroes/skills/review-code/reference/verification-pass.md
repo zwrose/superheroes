@@ -47,8 +47,7 @@ attempt must never be globbed and honored.
    driver selected** — on the auto-fix loop the `vendor` of this seat in the orders manifest
    (`seats.<skey>.vendor`), which replaces the reviewer engine (`$REVIEWER_ENGINE`) whenever that
    engine sits in a maker family; `$REVIEWER_ENGINE` only stands when no manifest vendor is named.
-   Submit that vendor as `verifierVendor` beside `verdicts`: verdicts from any other vendor are
-   ignored by the fold. `$VERIFIER_MODEL` is a Claude tier alias and stands only for a native
+   `$VERIFIER_MODEL` is a Claude tier alias and stands only for a native
    Claude dispatch: when the vendor was switched to `codex` or `cursor` for independence, resolve
    that vendor's own verifier model (and effort) from the registry cell
    `model_registry.matrix_config("verifier", <vendor>)` and dispatch that pair instead — the

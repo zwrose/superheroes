@@ -80,9 +80,7 @@ Each finding below was ruled out of scope by the session's owner or advisor, wit
 Your result must carry a payload matching this shape:
 
 Required keys: verdicts
-Optional keys: verifierVendor
 verdicts type: list-of-objects
-verifierVendor type: string
 verdicts[] required keys: id, verdict, reason
 verdicts[] optional keys: severity, evidence
 verdicts[].evidence type: string

@@ -98,7 +98,7 @@ class FakeAdapters(object):
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
-                 session_dir=None, orders_manifest=None):
+                 session_dir=None):
         if self.assemble_reason:
             return None, self.assemble_reason
         return list(self.assembled), None

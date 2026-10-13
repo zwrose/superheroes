@@ -28,7 +28,6 @@ _SPEC.loader.exec_module(_TDI)
 
 from session_checkout import seed_session_meta  # noqa: E402
 from test_round_driver import (  # noqa: E402
-    _claim_reviewer,
     DIFF, HEAD, HEAD_NEW_SURFACE, _cfg, _drive_cli, _drive_to_phase, _responder,
 )
 
@@ -472,7 +471,7 @@ def test_t6_fix_batch_resets_per_round(tmp_path):
     n = _drive_to_phase(d, cfg, respond, RD.P_AUDITS)
     while n["round"] < 3:
         s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
-                          _claim_reviewer(d, n["phase"], respond(n["phase"], n["payload"], n["round"])))
+                          respond(n["phase"], n["payload"], n["round"]))
         assert s["ok"], s
         n = RD.cmd_next(d)
         if n["action"] == RD.P_TERMINAL:

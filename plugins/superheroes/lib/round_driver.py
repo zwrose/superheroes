@@ -514,11 +514,9 @@ TERMINAL_DISCLOSURE_CHANNELS = ("breakItKept",)
 # unconditionally, not as a disclosure); `lensCoverage` is the panel's per-round coverage anchor
 # owned by the round that ran the panel; `verify` carries finding-shaped verifier evidence (drops,
 # downgrades, unverified, ambiguous) that round-records.json never stores — the receipt gets
-# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`); `verifierProvenance`
-# pairs the selected verifier vendor with the vendor that ran each wave's verdicts — the durable
-# per-seat records and the orders manifest already carry that pairing, so it is not restored.
+# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`).
 UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
-                               "verify", "verifierProvenance")
+                               "verify")
 
 def _round_disclosure_key(value):
     """The rounds-map key for a durable record's round value — one home for producer and restorer.
@@ -2797,73 +2795,6 @@ def synthesis_staged_id_fault(state, artifact):
     return None
 
 
-def _anchored_orders_manifest(state, session_dir, rnd, phase, attempt):
-    """The orders manifest the dispatch of ``(rnd, phase, attempt)`` emitted, only when its canonical
-    hash equals the state-mirrored emission anchor (the file alone is mutable); else None. One home
-    for every reader of the driver's own record of who each seat was dispatched on. Never raises."""
-    try:
-        anchor = _orders_anchor(state, session_dir, rnd, phase, attempt)
-        manifest, err = round_records.read_json(
-            _orders_manifest_path(session_dir, rnd, phase, attempt))
-    except Exception:  # noqa: BLE001 — a missing record falls back to the live selection
-        return None
-    if err is not None or not isinstance(manifest, dict) or not isinstance(anchor, dict):
-        return None
-    if round_records.sha256_text(round_records.canonical(manifest)) != anchor.get("manifestSha256"):
-        return None
-    return manifest
-
-
-def _latest_emission_attempt(state, session_dir, phase):
-    """The latest attempt number of this round's ``phase`` dispatch the state-mirrored emission
-    anchors name, or None when none was emitted. Never raises."""
-    anchors = state.get("_ordersAnchors")
-    if not session_dir or not isinstance(anchors, dict):
-        return None
-    rnd = state.get("round")
-    best = None
-    for key in anchors:
-        parts = key.split(":") if isinstance(key, str) else []
-        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase \
-                and parts[2].isdigit() and (best is None or int(parts[2]) > best):
-            best = int(parts[2])
-    return best
-
-
-def _emission_unverifiable(state, session_dir, phase):
-    """True when this round's ``phase`` dispatch recorded an emission anchor but its orders manifest
-    cannot be read or does not verify against it: the dispatch record is lost, so nothing it
-    ordered can be authenticated (fail closed — never a fallback to the live selection)."""
-    best = _latest_emission_attempt(state, session_dir, phase)
-    return best is not None and _anchored_orders_manifest(
-        state, session_dir, state.get("round"), phase, best) is None
-
-
-def _recorded_phase_vendor(state, session_dir, phase):
-    """The vendor the dispatch of ``phase`` in the current round recorded at emission (its orders
-    manifest's per-seat ``vendor``), or None when nothing was emitted, the manifest does not verify
-    against the state-mirrored anchor, or the seats do not name exactly one vendor. The fold runs
-    after ``pending`` is cleared, so the dispatch is found through the mirrored emission anchors
-    (latest attempt of this round's phase). Never raises."""
-    best = _latest_emission_attempt(state, session_dir, phase)
-    if best is None:
-        return None
-    manifest = _anchored_orders_manifest(state, session_dir, state.get("round"), phase, best)
-    seats = manifest.get("seats") if isinstance(manifest, dict) else None
-    vendors = {entry.get("vendor") for entry in seats.values() if isinstance(entry, dict)} \
-        if isinstance(seats, dict) else set()
-    if len(vendors) == 1:
-        only = next(iter(vendors))
-        if isinstance(only, str) and only:
-            return only
-    return None
-
-
-def _recorded_verifier_vendor(state, session_dir):
-    """`_recorded_phase_vendor` for the verifier dispatch."""
-    return _recorded_phase_vendor(state, session_dir, P_VERIFIERS)
-
-
 def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
@@ -2872,67 +2803,6 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # folds exactly like silence (every staged finding stays unverified), as an unseatable
         # audit target does.
         verdicts = []
-    # axis: the verdicts count only when the vendor that ran them is the driver's selected non-maker
-    # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
-    # unproven family and folds like silence.
-    selected, source = _nonpanel_selection(state, session_dir)
-    if selected is not None and verdicts and _emission_unverifiable(state, session_dir, P_VERIFIERS):
-        # The dispatch anchored an emission but its manifest is unreadable or tampered: the vendor
-        # it ordered is unknown, so the verdicts fold as silence and the loss is disclosed.
-        _record_round_append(state, "verifierProvenance", {
-            "expected": selected, "ran": None, "outcome": "verdicts-ignored",
-            "reason": "emission-manifest-unverifiable"})
-        verdicts = []
-    # The dispatch recorded its vendor at emission; a preference edited while the verifiers ran must
-    # not re-judge them against a selection nobody dispatched.
-    recorded = _recorded_verifier_vendor(state, session_dir)
-    rebound = recorded is not None and recorded != selected
-    if recorded is not None:
-        selected = recorded
-    seat_vendors = artifact.get("verifierSeatVendors")
-    if isinstance(seat_vendors, dict):
-        # Durable path: each seat's executed vendor authenticates only the verdicts that seat
-        # supplied; an unproven seat's verdicts fold as silence while a proven seat's still fold.
-        if selected is not None:
-            outcomes = {}
-            kept = []
-            seat_provenance = artifact.get("verifierSeatProvenance")
-            seat_provenance = seat_provenance if isinstance(seat_provenance, dict) else {}
-            via_manifest = set()
-            for verdict in verdicts:
-                vid = verdict.get("id") if isinstance(verdict, dict) else None
-                ran_vendor = seat_vendors.get(vid) if isinstance(vid, str) else None
-                ran_vendor = ran_vendor.strip() if isinstance(ran_vendor, str) and ran_vendor.strip() \
-                    else None
-                proven = ran_vendor == selected
-                outcomes.setdefault(ran_vendor, proven)
-                if seat_provenance.get(vid) == round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST:
-                    via_manifest.add(ran_vendor)
-                if proven:
-                    kept.append(verdict)
-            for ran_vendor, proven in outcomes.items():
-                row = {"expected": selected, "ran": ran_vendor,
-                       "outcome": "verdicts-folded" if proven else "verdicts-ignored"}
-                if ran_vendor in via_manifest:
-                    row["provenance"] = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
-                _record_round_append(state, "verifierProvenance", row)
-            verdicts = kept
-    else:
-        ran = artifact.get("verifierVendor")
-        claimed = ran.strip() if isinstance(ran, str) and ran.strip() else None
-        # A claim is required when the selection replaced the reviewer engine (whatever the
-        # preference read's provenance) and on the durable path, which always carries the key.
-        claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
-                          or rebound or _nonpanel_replaced(state, selected, session_dir))
-        if verdicts and selected is not None and (
-                (claimed is not None and claimed != selected) or (claim_required and claimed is None)):
-            _record_round_append(state, "verifierProvenance", {
-                "expected": selected, "ran": claimed, "outcome": "verdicts-ignored"})
-            verdicts = []
-        elif verdicts:
-            _record_round_append(state, "verifierProvenance", {
-                "expected": selected, "ran": claimed if claimed is not None else selected,
-                "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
@@ -5825,23 +5695,10 @@ def _run_seam(seams, action, payload, state, config):
                 out["seatMap"] = sm
         return out
     if action == P_VERIFIERS:
-        result = seams["verifier"](payload.get("clusters"), state["round"])
-        # The callback may report the vendor it actually ran on: `{"verdicts": [...], "vendor": v}`.
-        # A bare list reports nothing. Never the driver's selection: that is an assertion of who ran
-        # with no execution record.
-        reported = None
-        if isinstance(result, dict) and "verdicts" in result:
-            vendor = result.get("vendor")
-            reported = vendor.strip() if isinstance(vendor, str) and vendor.strip() else None
-            result = result["verdicts"]
-        artifact = {"verdicts": result}
+        artifact = {"verdicts": seams["verifier"](payload.get("clusters"), state["round"])}
         fault = verifier_results_fault(artifact)
         if fault is not None:
             return {"verdicts": [], "_verifierArtifactFault": fault}
-        # No report leaves the key absent, so `_fold_verifiers` applies its own rule (an unclaimed
-        # verdict is ignored when the selection replaced the reviewer engine).
-        if reported is not None:
-            artifact["verifierVendor"] = reported
         return artifact
     if action == P_SYNTHESIS:
         return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
@@ -6721,18 +6578,6 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resolution = (None, "verified head: %s" % exc)
             else:
                 resolution = None
-            if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):
-                # Durable path: the executed vendor is the runner's execution evidence, carried by the
-                # assembled artifact. Never the driver's selection; absent evidence stays an empty
-                # claim, which `_fold_verifiers` treats as a missing vendor claim.
-                artifact = dict(artifact)
-                artifact.setdefault("verifierSeatVendors", {})
-            elif phase == P_VERIFIERS and isinstance(artifact, dict):
-                # A hand artifact never carries durable execution evidence: its own per-seat
-                # provenance map is a courier claim, so it is dropped and the `verifierVendor`
-                # claim check decides.
-                artifact = {k: v for k, v in artifact.items()
-                            if k not in ("verifierSeatVendors", "verifierSeatProvenance")}
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)
@@ -7114,17 +6959,6 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         return {"ok": False, "reason": "nonpanel-reviewer-unseatable",
                 "detail": "no reviewer outside the makers' families can be seated for %s; no order "
                           "was emitted and a submitted artifact is not a review that ran" % phase}
-    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED) and isinstance(artifact, dict):
-        # A hand artifact for a finder phase is a review by the vendor it claims. When the selection
-        # replaced the reviewer engine, the claim (`reviewerVendor`) is required and must equal the
-        # vendor the dispatch recorded at emission — the verifier hand-submit rule, one helper.
-        claim_fault = _finder_hand_claim_fault(state, session_dir, phase, artifact)
-        if claim_fault is not None:
-            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
-                                          "round": pending.get("round"), "attempt": attempt,
-                                          "outcome": "nonpanel-reviewer-unauthenticated"})
-            return {"ok": False, "reason": "nonpanel-reviewer-unauthenticated",
-                    "detail": claim_fault}
     if phase == P_VERIFIERS:
         fault = verifier_results_fault(artifact)
         if fault:
@@ -8018,36 +7852,6 @@ def _nonpanel_selection(state, session_dir=None):
     meta = _session_meta(session_dir) if session_dir else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     return _nonpanel_reviewer_vendor(state, cfg, repo_root)
-
-
-def _finder_hand_claim_fault(state, session_dir, phase, artifact):
-    """Reason string when a hand-submitted gap-sweep / scoped artifact does not authenticate its
-    reviewer, else None: the vendor claim (`reviewerVendor`) must equal the vendor the dispatch
-    recorded at emission (the live selection when none was recorded), and is required when the
-    selection replaced the reviewer engine."""
-    selected, source = _nonpanel_selection(state, session_dir)
-    expected = _recorded_phase_vendor(state, session_dir, phase) or selected
-    if expected is None:
-        return None
-    raw = artifact.get("reviewerVendor")
-    claimed = raw.strip() if isinstance(raw, str) and raw.strip() else None
-    required = source == VENDOR_SOURCE_INDEPENDENT or _nonpanel_replaced(state, expected, session_dir)
-    if claimed is not None and claimed != expected:
-        return ("%s artifact claims reviewerVendor %r but the dispatch recorded %r; a result from "
-                "another vendor is not the independent review that was ordered"
-                % (phase, claimed, expected))
-    if required and claimed is None:
-        return ("%s artifact carries no `reviewerVendor`; the selection replaced the reviewer "
-                "engine, so the vendor that ran must be claimed (expected %r)" % (phase, expected))
-    return None
-
-
-def _nonpanel_replaced(state, selected, session_dir=None):
-    """True when the non-panel selection is not the reviewer engine itself (independence replaced it)."""
-    cfg = state.get("config") or {}
-    meta = _session_meta(session_dir) if session_dir else {}
-    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    return _reviewer_engine_vendor(repo_root)[0] != selected
 
 
 def effective_seat_map(state):
@@ -10956,12 +10760,9 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     manifest, _merr = _read_dispatch_manifest(manifest_path)
     manifest_disc = _dispatch_manifest_disclosure(manifest_path, _merr)
     _journal_dispatch_manifest_disclosure(session_dir, rnd, phase, attempt, manifest_disc)
-    # The driver's OWN emission record (verified against the state anchor; `{}` when unverifiable):
-    # the verifier and finder seats read it for the vendor each seat was dispatched on.
-    orders_manifest = _anchored_orders_manifest(state, session_dir, rnd, phase, attempt) or {}
     artifact, why = _adapters().assemble(phase, records, state, config,
                                          dispatch_manifest=manifest if _merr is None else None,
-                                         session_dir=session_dir, orders_manifest=orders_manifest)
+                                         session_dir=session_dir)
     if why is not None or not isinstance(artifact, dict):
         return _attach_dispatch_manifest_disclosure(
             session_dir,
