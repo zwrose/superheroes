@@ -277,17 +277,22 @@ def test_verifiers_assembles_verdicts_in_cluster_order(tmp_path):
     def build(n, state):
         clusters = n["payload"]["clusters"]
         assert clusters
+        # The executed vendor rides the artifact as the runner/manifest provenance names it (codex is
+        # the driver's selected non-maker vendor here), never the payload's own claim.
         hand = {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                             for c in clusters for i in c["ids"]]}
+                             for c in clusters for i in c["ids"]],
+                "verifierVendor": "codex"}
         envelopes = [
             _result_env(RA.VERIFIER_SEAT_PREFIX + c["key"],
                         {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
-                                      for i in c["ids"]]})
+                                      for i in c["ids"]]}, vendor="codex")
             for c in clusters]
-        return hand, envelopes, {}
+        manifest = {RA.VERIFIER_SEAT_PREFIX + c["key"]: {"vendor": "codex"} for c in clusters}
+        return hand, envelopes, {"dispatch_manifest": manifest}
 
     artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_VERIFIERS, build)
     assert artifact["verdicts"] == hand["verdicts"]
+    assert artifact["verifierVendor"] == "codex"
 
 
 def test_synthesis_passes_the_grouping_through(tmp_path):

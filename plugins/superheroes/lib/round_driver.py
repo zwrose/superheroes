@@ -2799,16 +2799,19 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # unproven family and folds like silence.
     selected, source = _nonpanel_selection(state, session_dir)
     ran = artifact.get("verifierVendor")
+    claimed = ran.strip() if isinstance(ran, str) and ran.strip() else None
+    # A claim is required when the selection replaced the reviewer engine (whatever the preference
+    # read's provenance) and on the durable path, which always carries the key.
+    claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
+                      or _nonpanel_replaced(state, selected, session_dir))
     if verdicts and selected is not None and (
-            (isinstance(ran, str) and ran.strip() and ran.strip() != selected)
-            or (source == VENDOR_SOURCE_INDEPENDENT and not (isinstance(ran, str) and ran.strip()))):
+            (claimed is not None and claimed != selected) or (claim_required and claimed is None)):
         _record_round_append(state, "verifierProvenance", {
-            "expected": selected, "ran": ran if isinstance(ran, str) else None,
-            "outcome": "verdicts-ignored"})
+            "expected": selected, "ran": claimed, "outcome": "verdicts-ignored"})
         verdicts = []
     elif verdicts:
         _record_round_append(state, "verifierProvenance", {
-            "expected": selected, "ran": ran.strip() if isinstance(ran, str) and ran.strip() else selected,
+            "expected": selected, "ran": claimed if claimed is not None else selected,
             "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
@@ -6588,8 +6591,11 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             else:
                 resolution = None
             if _via_advance and phase == P_VERIFIERS and isinstance(artifact, dict):
-                # Durable path: the seat ran the order the driver emitted for its own selection.
-                artifact = dict(artifact, verifierVendor=_nonpanel_selection(state, session_dir)[0])
+                # Durable path: the executed vendor is the runner's execution evidence, carried by the
+                # assembled artifact. Never the driver's selection; absent evidence stays an empty
+                # claim, which `_fold_verifiers` treats as a missing vendor claim.
+                artifact = dict(artifact)
+                artifact.setdefault("verifierVendor", "")
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)
@@ -7864,6 +7870,14 @@ def _nonpanel_selection(state, session_dir=None):
     meta = _session_meta(session_dir) if session_dir else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     return _nonpanel_reviewer_vendor(state, cfg, repo_root)
+
+
+def _nonpanel_replaced(state, selected, session_dir=None):
+    """True when the non-panel selection is not the reviewer engine itself (independence replaced it)."""
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir) if session_dir else {}
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    return _reviewer_engine_vendor(repo_root)[0] != selected
 
 
 def effective_seat_map(state):

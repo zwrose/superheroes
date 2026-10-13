@@ -200,8 +200,10 @@ def independent_reviewer(config, preferred_vendor, maker_families=frozenset(), f
         fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
         if fixer_fam is not None:
             barred.add(fixer_fam)
-    candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor else [])
-    candidates += [v for v in live_vendors(config) if v not in candidates]
+    live = list(live_vendors(config))
+    candidates = ([preferred_vendor] if isinstance(preferred_vendor, str) and preferred_vendor
+                  and preferred_vendor in live else [])
+    candidates += [v for v in live if v not in candidates]
     for v in candidates:
         if fixer_vendor and v == fixer_vendor:
             continue

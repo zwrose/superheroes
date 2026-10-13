@@ -359,19 +359,6 @@ def test_an_unreadable_head_diff_halts_lane_expanded_recompose(tmp_path):
     _assert_halted_lane_expanded(state)
 
 
-def test_a_delta_round_after_a_risky_head_cannot_reach_converged(tmp_path):
-    # v6: a valid baseline and a parseable delta must not carry a reduced panel to certification
-    state = _reduced_state(tmp_path)
-    state["round"] = 2
-    reviewed = _RISKY_DIFF.replace("+new", "+newer")
-    state["deltaBaseline"] = {"round": 2, "diff": reviewed}
-    state["headDiff"] = _RISKY_DIFF
-    state["fixBatch"] = []
-    RD._enter_delta_round(state, state["config"])
-    _assert_halted_lane_expanded(state)
-    assert state.get("step") != RD.P_AUDITS and state.get("step") != RD.P_SCOPED
-
-
 def test_a_halted_session_dispatches_no_further_phase(tmp_path):
     state = _reduced_state(tmp_path)
     assert not RD._refresh_panel_diff_at_verified_head(
@@ -404,6 +391,38 @@ def _calibrated_reduced_state(tmp_path, monkeypatch):
                         real_call(cwd, paths, proposed=proposed, root=store))
     return RD.new_state({"repoRoot": repo, "diff": _DOCS_DIFF,
                          "seatMap": {"roster": list(SM.BASE_ROSTER), "laneBasis": {"floor": None}}})
+
+
+def _delta_state_after_round_one(tmp_path, monkeypatch, head_diff):
+    """A calibrated reduced session whose round-1 diff is clean (the lane call clears it, so the
+    session proceeds reduced) and is then put at a delta entry whose only unreviewed change is
+    ``head_diff``'s: the baseline never names the risk area, so a halt is the new head's doing."""
+    state = _calibrated_reduced_state(tmp_path, monkeypatch)
+    assert not state.get("terminal")
+    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
+    state["round"] = 2
+    state["deltaBaseline"] = {"round": 2, "diff": _DOCS_DIFF}
+    state["headDiff"] = head_diff
+    state["fixBatch"] = []
+    return state
+
+
+def test_a_delta_round_after_a_risky_head_cannot_reach_converged(tmp_path, monkeypatch):
+    # v6/v4: the halt is attributable to the NEW head — the round-1 baseline is clean
+    state = _delta_state_after_round_one(tmp_path, monkeypatch, _DOCS_DIFF + _RISKY_DIFF)
+    assert state.get("terminal") is None and state["step"] == RD.P_PANEL
+    RD._enter_delta_round(state, state["config"])
+    _assert_halted_lane_expanded(state)
+    assert state.get("step") != RD.P_AUDITS and state.get("step") != RD.P_SCOPED
+
+
+def test_a_delta_round_after_a_docs_only_head_is_not_halted(tmp_path, monkeypatch):
+    head = _DOCS_DIFF + _DOCS_DIFF.replace("readme", "guide")
+    state = _delta_state_after_round_one(tmp_path, monkeypatch, head)
+    RD._enter_delta_round(state, state["config"], panel_diff_seam=lambda *_: (head, None),
+                          panel_head="a" * 40)
+    assert state.get("terminal") is None
+    assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
 
 
 def test_the_head_change_decision_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):

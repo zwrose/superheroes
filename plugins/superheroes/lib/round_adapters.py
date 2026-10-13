@@ -381,7 +381,7 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir):
     if phase == P_PANEL:
         artifact = _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures)
     elif phase == P_VERIFIERS:
-        artifact = _assemble_verifiers(roster, indexed, disclosures)
+        artifact = _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures)
     elif phase == P_AUDITS:
         artifact = _assemble_audits(roster, indexed, dispatch_manifest, disclosures)
     elif phase == P_SYNTHESIS:
@@ -429,19 +429,31 @@ def _assemble_panel(roster, indexed, state, dispatch_manifest, disclosures):
     return artifact
 
 
-def _assemble_verifiers(roster, indexed, disclosures):
+def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures):
     verdicts = []
     omitted = []
+    landed = []
     for seat, occurrence in _roster_slots(roster):
         entry, is_result = _landed(indexed, seat, occurrence)
         if not is_result:
             omitted.append(_missing_detail(seat, occurrence, entry))
             continue
+        landed.append(seat)
         for verdict in entry["payload"]["verdicts"]:
             verdicts.append(dict(verdict))
     if omitted:
         disclosures["unverifiedClusters"] = omitted
-    return {"verdicts": verdicts}
+    artifact = {"verdicts": verdicts}
+    if landed:
+        # The vendor that RAN the verifiers is the runner's execution record (the same provenance
+        # `_assemble_audits` derives `collectionManifest` from), never the payload's own claim and
+        # never the driver's selection. A seat with no derivable vendor leaves the claim absent; seats
+        # that ran on different vendors carry a joined claim no single selection can equal.
+        trusted = _trusted_vendors(roster, indexed, dispatch_manifest, disclosures)
+        ran = {trusted[seat] for seat in landed if seat in trusted}
+        if ran and all(seat in trusted for seat in landed):
+            artifact["verifierVendor"] = "+".join(sorted(ran))
+    return artifact
 
 
 def _assemble_audits(roster, indexed, dispatch_manifest, disclosures):

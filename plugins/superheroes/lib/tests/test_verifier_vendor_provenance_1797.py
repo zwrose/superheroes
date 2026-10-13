@@ -63,3 +63,82 @@ def test_a_refuted_verdict_from_the_selected_vendor_clears_and_records_the_vendo
 
 def test_the_verifier_contract_accepts_the_vendor_field():
     assert RD.verifier_results_fault(_refuted(_state(), verifierVendor="codex")) is None
+
+
+# --- the durable path: the executed vendor is the stored envelope's execution evidence ---------------
+
+import pytest  # noqa: E402
+
+import round_adapters  # noqa: E402
+import test_round_driver_integration as IT  # noqa: E402
+
+
+def _drive_verifiers_with_source(tmp_path, monkeypatch, source, name):
+    """record-result + advance a REFUTED verdict whose stored envelope's execution evidence names
+    ``source`` (fixer claude, so codex is the selected verifier vendor). -> (state, pre_state)."""
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
+    findings = [IT._blocking_finding("unchecked index", 2)]
+    IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
+    state = IT._state(session_dir)
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(RD.P_VERIFIERS, state, state.get("config") or {})
+    assert reason is None and roster, (roster, reason)
+    slots = IT._slots_of(roster)
+    IT._write_dispatch_manifest(session_dir, pend, slots, lambda seat: "codex")
+    monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda _seat: source))
+    for seat, occurrence in slots:
+        cluster = IT._cluster_for(pend, seat)
+        payload = {"verdicts": [{"id": f["id"], "verdict": "REFUTED", "reason": "intentional",
+                                 "evidence": "read %s" % f.get("file")}
+                                for f in cluster.get("findings") or []]}
+        IT._land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+        out = IT._record(session_dir, seat, occurrence=occurrence)
+        assert out["ok"], out
+    out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+    assert out["ok"], out
+    assert out["folded"]["phase"] == RD.P_VERIFIERS, out
+    return IT._state(session_dir)
+
+
+def _provenance(state):
+    return state["rounds"]["1"]["verifierProvenance"][-1]
+
+
+def test_a_verdict_executed_by_the_selected_vendor_applies_through_advance(tmp_path, monkeypatch):
+    # axis: the executed vendor comes from the stored envelope's execution evidence, not the selection
+    state = _drive_verifiers_with_source(tmp_path, monkeypatch, "codex", "exec-selected")
+    assert _provenance(state) == {"expected": "codex", "ran": "codex", "outcome": "verdicts-folded"}
+    assert state["rounds"]["1"]["verify"]["drops"], "the REFUTED verdict from the selected vendor must clear"
+
+
+def test_a_verdict_executed_by_the_maker_vendor_is_ignored_through_advance(tmp_path, monkeypatch):
+    # axis: stamping the selection as the executed vendor would record codex/folded here and fail
+    state = _drive_verifiers_with_source(tmp_path, monkeypatch, "claude", "exec-maker")
+    assert _provenance(state) == {"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}
+    assert not state["rounds"]["1"]["verify"]["drops"]
+    assert state["rounds"]["1"]["verify"]["unverified"]
+
+
+def test_a_verdict_with_no_execution_evidence_is_ignored_through_advance(tmp_path, monkeypatch):
+    state = _drive_verifiers_with_source(tmp_path, monkeypatch, "runner", "exec-none")
+    assert _provenance(state) == {"expected": "codex", "ran": None, "outcome": "verdicts-ignored"}
+    assert not state["rounds"]["1"]["verify"]["drops"]
+    assert state["rounds"]["1"]["verify"]["unverified"]
+
+
+def test_a_defaulted_reviewer_replaced_by_independence_still_needs_a_vendor_claim(tmp_path, monkeypatch):
+    # v2: the preference read failing keeps vendorSource defaulted, but the maker-family engine was
+    # replaced, so a hand-submitted verdict still needs a vendor claim equal to the selection.
+    import engine_pref
+    monkeypatch.setattr(engine_pref, "load_engine_prefs", lambda _root: {"readError": "boom"})
+    state = _state()
+    selected, source = RD._nonpanel_selection(state)
+    assert selected == "codex" and source == RD.VENDOR_SOURCE_DEFAULTED
+    RD._fold_verifiers(state, state["config"], _refuted(state))
+    assert len(state["_verified"]) == 1
+    assert state["rounds"]["1"]["verifierProvenance"][-1]["outcome"] == "verdicts-ignored"
+    state = _state()
+    RD._fold_verifiers(state, state["config"], _refuted(state, verifierVendor="codex"))
+    assert state["_verified"] == []
+    assert state["rounds"]["1"]["verifierProvenance"][-1]["outcome"] == "verdicts-folded"

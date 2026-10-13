@@ -259,3 +259,14 @@ def test_legacy_author_family_stays_a_maker_family():
         {"authorFamily": "openai", "makerFamilies": ["anthropic"]}) == frozenset({"anthropic"})
     state = {"seatMap": {"authorFamily": "openai", "seats": {}}}
     assert "openai" in receipt_disclosures.accumulated_maker_families(state)
+
+
+def test_independent_reviewer_skips_a_preferred_vendor_that_is_not_live():
+    # a configured-but-unavailable preferred reviewer must not win over a live independent one
+    import receipt_disclosures as rd
+    vendor, family = rd.independent_reviewer({"vendors": ["claude", "cursor"]}, "codex",
+                                             {"anthropic"}, "claude")
+    assert vendor == "cursor" and family is not None
+    vendor, _family = rd.independent_reviewer({"vendors": ["claude", "codex"]}, "codex",
+                                              {"anthropic"}, "claude")
+    assert vendor == "codex"

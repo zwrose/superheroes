@@ -155,7 +155,13 @@ class FakeAdapters(object):
                 for verdict in payload.get("verdicts") or []:
                     if isinstance(verdict, dict):
                         verdicts.append(dict(verdict))
-            return {"verdicts": verdicts}, None
+            artifact = {"verdicts": verdicts}
+            # like the real adapter: the executed vendor is the envelope's execution evidence
+            sources = {(env.get("executionEvidence") or {}).get("source") for env in (envelopes or [])
+                       if isinstance(env, dict) and env.get("schema") != RR.SEAT_MISSING_SCHEMA}
+            if len(sources) == 1 and next(iter(sources)) in ("claude", "codex", "cursor"):
+                artifact["verifierVendor"] = next(iter(sources))
+            return artifact, None
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}, None
         if phase == RD.P_VERIFY:
@@ -1496,7 +1502,9 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
     verdict_payload = {"verdicts": [{"id": "v0", "verdict": "CONFIRMED",
                                      "reason": "confirmed by sweep-silence fixture",
                                      "evidence": "reproduced the cited line"}]}
-    _land(d, verifier_seat, payload=verdict_payload)
+    # the seat ran on the driver's selected non-maker vendor (codex; fixer is claude)
+    _land(d, verifier_seat, payload=verdict_payload,
+          executionEvidence=_execution_evidence(source="codex"))
 
     sweep_out = RD.cmd_record_result(d, sweep=True, supersede=True,
                                      expect_sha256=RR.MISSING_CAS_TOKEN)
