@@ -4223,3 +4223,12 @@ def test_backfill_for_a_non_maker_reason_never_returns_a_maker_family(monkeypatc
             and "backfilled to" in d["reason"]
             for d in with_other["degradations"]
         ), seat
+
+
+def test_build_grounding_maker_exclusion_precedes_the_narrative_fallback():
+    # axis: author anthropic, narrative openai, extra maker xai: codex stays outside every maker's family, so grounding is filled by it
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex", "cursor"], "anthropic", "openai", 0,
+                 extra_maker_families=frozenset({"xai"}))
+    seat = m["seats"][SM.GROUNDING_SEAT]
+    assert seat["vendor"] == "codex" and seat["family"] == "openai"
+    assert any(d.get("constraint") == "grounding-independence" for d in m["degradations"])

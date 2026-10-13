@@ -705,7 +705,11 @@ def build(
                     "constraint": "grounding-provenance",
                     "reason": "author or narrative family unknown — grounding independence not guaranteed",
                 })
-            eligible = [cfg for cfg in base if cfg["family"] not in excl]
+            # makers are barred first, so the fallback below relaxes narrative independence over the non-makers
+            pool = [cfg for cfg in base if cfg["family"] not in makers]
+            if base and not pool:
+                maker_emptied_seats.add(seat)
+            eligible = [cfg for cfg in pool if cfg["family"] not in excl]
             if not eligible:
                 degradations.append({
                     "constraint": "grounding-independence",
@@ -715,7 +719,7 @@ def build(
                 # pre-selecting "not the narrative family" — that old ordering picked the AUTHOR's
                 # own family whenever author and narrative were the only live families. Maker
                 # exclusion outranks narrative independence.
-                eligible = list(base)
+                eligible = pool
         else:
             eligible = list(base)
 

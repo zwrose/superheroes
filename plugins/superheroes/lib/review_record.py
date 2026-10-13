@@ -526,7 +526,9 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
             demote("no engine record of the run shows that the reviewer read the change")
         out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
     # axis: a reviewer from a maker's family counts only with the owner's word; independence is computed here, never taken from the account — see bite-proof record wo_a_1796_reading-independence
-    if out["ran"] != "not-run" and maker_families:
+    if out["ran"] != "not-run" and maker_families is None:
+        demote("no maker is named for the step this reviewer reviewed, so independence cannot be shown")
+    elif out["ran"] != "not-run" and maker_families:
         if out["family"] is None:
             demote("the reviewer's model family could not be read, so independence cannot be shown")
         elif out["family"] in maker_families:
@@ -643,7 +645,7 @@ def build_record(account, readers):
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
-                           _makers_for(a["makers"], r.get("step")))
+                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
                  for r in a["reviewers"]]
     notes, missing = [], []
     for v in reviewers:
@@ -1111,6 +1113,8 @@ def _move_up_blocker(seat_map, maker_families):
         return "no maker is named, so independence cannot be shown"
     if any(seats[n]["family"] in maker_families for n in roster):
         return "a roster seat in the seat map is from a maker's family"
+    if not all(isinstance(seats[n].get(k), str) and seats[n][k] for n in roster for k in ("vendor", "model")):
+        return "a roster seat in the seat map names no vendor or model"
     return None
 
 

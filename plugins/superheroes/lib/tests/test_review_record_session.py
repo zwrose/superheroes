@@ -117,7 +117,8 @@ def send(tmp_path, session, fake, **over):
 def fix_session(tmp_path, nonces=True):
     """Specialists on an earlier commit, a fix audit on the final commit, the one finding fixed."""
     s = Session(tmp_path, dispositionLedger=[ledger_row()], config={"maxRounds": 7, "fixerVendor": "claude"},
-                rounds={"1": {"fix": {"fixes": [{"title": "t", "file": "a.py"}]}}})
+                rounds={"1": {"fix": {"fixes": [{"title": "t", "file": "a.py"}]}}},
+                seatMapReceipts=[{"round": "1", "map": {"seats": {}, "makerFamilies": ["xai"]}}])
     s.seat("code-reviewer", nonce="n1" if nonces else None)
     s.seat("security-reviewer", nonce="n2" if nonces else None)
     s.seat(KEY, phase="dispatch-audits", rnd=2, head=HEAD, nonce="n3" if nonces else None)
@@ -310,7 +311,7 @@ def _fixer_then_reviewer_account(tmp_path, review_round, original_makers=None):
 
 
 def test_a_reviewer_before_the_fix_is_judged_against_the_makers_it_faced(tmp_path):
-    account, fake = _fixer_then_reviewer_account(tmp_path, 1)
+    account, fake = _fixer_then_reviewer_account(tmp_path, 1, original_makers=["xai"])
     fixer = next(m for m in account["makers"] if m["source"] == "review loop fixer")
     assert fixer["fromStep"] == 3 and account["reviewers"][0]["step"] == 2
     rec = rr.build_record(account, fake.readers())

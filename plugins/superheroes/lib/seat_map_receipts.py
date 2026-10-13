@@ -240,12 +240,12 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
 def maker_family_union(receipt_list):
     """The one maker-history rule: every family any receipt's `makerFamilies` list named, or None when no
     receipt carried the list. Receipt emission and the decisions that read makers both go through here."""
+    from receipt_disclosures import maker_families  # lazy: receipt_disclosures imports this module
     out, saw = set(), False
     for entry in receipt_list:
-        raw = entry["map"].get("makerFamilies")
-        if isinstance(raw, list):
-            saw = True
-            out.update(fam for fam in raw if isinstance(fam, str) and fam)
+        fams = maker_families(entry["map"])
+        saw = saw or isinstance(entry["map"].get("makerFamilies"), list) or bool(fams)
+        out.update(fams)
     return frozenset(out) if saw else None
 
 

@@ -2212,8 +2212,8 @@ def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
 # --- reading-next ---
 
 PANEL = list(seat_map_module.PANEL_ROSTER)
-SEAT_MAP = {"roster": PANEL, "seats": {n: {"source": "live", "family": "openai" if i % 2 else "google"}
-                                       for i, n in enumerate(PANEL)}}
+SEAT_MAP = seat_map_module.to_receipt(
+    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
 ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
 NO_READING = {"observation": {"read": "unknown"}}
 
@@ -2265,6 +2265,21 @@ def test_reading_next_parks_when_a_roster_seat_is_a_makers_family():
     seats = dict(SEAT_MAP["seats"], **{PANEL[-1]: {"source": "live", "family": "anthropic"}})
     out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
     assert out == {"next": "park", "reason": "a roster seat in the seat map is from a maker's family"}
+
+
+def test_a_reviewer_before_the_only_makers_joined_is_not_reviewed():
+    # axis: a panel reviewer at a step no maker faced counted as independent because a later fixer named a maker
+    fake = Fake(runs={"/run/code-reviewer": (dict(CLAUDE_RUN, viewHeadSha=EARLIER), None)})
+    rev = [maker_family_reviewer(commit=EARLIER, step=2), reviewer("audit", step=3)]
+    rec = build(account(makers=[{"family": "anthropic", "fromStep": 3}], reviewers=rev), fake)
+    assert rec["status"] == "not-reviewed" and rec["reviewers"][0]["ran"] == "not-run"
+
+
+def test_reading_next_parks_when_a_roster_seat_names_no_vendor_or_model():
+    # axis: the dispatchable-seat park; a family-only seat letting the lane move up with no reviewer to dispatch
+    seats = {n: {k: v for k, v in e.items() if k not in ("vendor", "model")} for n, e in SEAT_MAP["seats"].items()}
+    out = rr.reading_next([NO_READING, NO_READING], _seats(seats=seats), ["anthropic"])
+    assert out == {"next": "park", "reason": "a roster seat in the seat map names no vendor or model"}
 
 
 def _without(name):

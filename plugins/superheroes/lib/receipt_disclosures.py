@@ -223,10 +223,7 @@ def accumulated_maker_families(state):
     decisions that read makers do too. Seat identities still come from the latest map alone."""
     if not isinstance(state, dict):
         return frozenset()
-    legacy = frozenset(f for e in seat_map_receipts.receipts(state)
-                       if not isinstance(e["map"].get("makerFamilies"), list)
-                       for f in maker_families(e["map"]))
-    return (maker_families(seat_map_receipts.effective_seat_map(state)) | legacy
+    return (maker_families(seat_map_receipts.effective_seat_map(state))
             | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
 
 

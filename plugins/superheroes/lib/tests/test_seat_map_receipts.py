@@ -373,3 +373,11 @@ def test_emit_receipt_seat_map_without_the_keys_invents_none():
     emitted = SMR.emit_receipt_seat_map({"seatMapReceipts": [{"round": "1", "map": _minimal_map()}]})
     assert "makerFamilies" not in emitted
     assert "roster" not in emitted
+
+
+def test_emit_receipt_seat_map_keeps_a_legacy_author_family_as_a_maker():
+    """axis: a legacy map naming its maker only through authorFamily keeps it in the emitted makerFamilies."""
+    state = {"seatMapReceipts": [{"round": "1", "map": _minimal_map(authorFamily="openai")},
+                                 {"round": "2", "map": _minimal_map(authorFamily="anthropic", makerFamilies=["anthropic"])}],
+             "rounds": {}}
+    assert SMR.emit_receipt_seat_map(state)["makerFamilies"] == ["anthropic", "openai"]
