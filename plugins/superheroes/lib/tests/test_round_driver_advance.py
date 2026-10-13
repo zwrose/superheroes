@@ -144,6 +144,7 @@ class FakeAdapters(object):
             return {"seats": seats}, None
         if phase == RD.P_VERIFIERS:
             verdicts = []
+            seat_vendors = {}
             for env in (envelopes or []):
                 if not isinstance(env, dict):
                     continue
@@ -152,11 +153,15 @@ class FakeAdapters(object):
                 payload = env.get("payload")
                 if not isinstance(payload, dict):
                     continue
+                source = (env.get("executionEvidence") or {}).get("source")
                 for verdict in payload.get("verdicts") or []:
                     if isinstance(verdict, dict):
                         verdicts.append(dict(verdict))
-            artifact = {"verdicts": verdicts}
-            # like the real adapter: the executed vendor is the envelope's execution evidence
+                        if isinstance(verdict.get("id"), str):
+                            seat_vendors[verdict["id"]] = (
+                                source if source in ("claude", "codex", "cursor") else "")
+            artifact = {"verdicts": verdicts, "verifierSeatVendors": seat_vendors}
+            # like the real adapter (per seat): the executed vendor is the envelope's execution evidence
             sources = {(env.get("executionEvidence") or {}).get("source") for env in (envelopes or [])
                        if isinstance(env, dict) and env.get("schema") != RR.SEAT_MISSING_SCHEMA}
             if len(sources) == 1 and next(iter(sources)) in ("claude", "codex", "cursor"):

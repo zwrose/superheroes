@@ -142,3 +142,96 @@ def test_a_defaulted_reviewer_replaced_by_independence_still_needs_a_vendor_clai
     RD._fold_verifiers(state, state["config"], _refuted(state, verifierVendor="codex"))
     assert state["_verified"] == []
     assert state["rounds"]["1"]["verifierProvenance"][-1]["outcome"] == "verdicts-folded"
+
+
+# --- v5: provenance is judged per verifier cluster, not once for the batch ----------------------------
+
+def _drive_two_clusters(tmp_path, monkeypatch, source_for, name, **cfg_over):
+    """Two findings far apart (two clusters); ``source_for(index)`` names each cluster seat's
+    execution-evidence source. -> final state."""
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name, **cfg_over)
+    findings = [IT._blocking_finding("unchecked index", 2), dict(IT._blocking_finding("late defect", 2), file=IT.FILES[1])]
+    IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
+    state = IT._state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(RD.P_VERIFIERS, state, state.get("config") or {})
+    assert reason is None
+    slots = IT._slots_of(roster)
+    assert len(slots) == 2, slots
+    IT._write_dispatch_manifest(session_dir, pend, slots, lambda seat: "codex")
+    by_seat = {seat: source_for(i) for i, (seat, _o) in enumerate(slots)}
+    monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda seat: by_seat[seat]))
+    for seat, occurrence in slots:
+        cluster = IT._cluster_for(pend, seat)
+        payload = {"verdicts": [{"id": f["id"], "verdict": "REFUTED", "reason": "intentional",
+                                 "evidence": "read %s" % f.get("file")}
+                                for f in cluster.get("findings") or []]}
+        IT._land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+        assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
+    out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+    assert out["ok"], out
+    return IT._state(session_dir)
+
+
+def test_a_proven_cluster_folds_while_an_unproven_cluster_is_ignored(tmp_path, monkeypatch):
+    # axis: one batch-wide vendor (the joined claim) would void the proven cluster or honor the unproven one
+    state = _drive_two_clusters(tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "runner",
+                                "two-clusters")
+    rec = state["rounds"]["1"]
+    assert len(rec["verify"]["drops"]) == 1, rec["verify"]
+    assert len(rec["verify"]["unverified"]) == 1
+    outcomes = {(p["ran"], p["outcome"]) for p in rec["verifierProvenance"]}
+    assert outcomes == {("codex", "verdicts-folded"), (None, "verdicts-ignored")}
+
+
+def test_a_maker_cluster_does_not_void_a_proven_cluster(tmp_path, monkeypatch):
+    state = _drive_two_clusters(tmp_path, monkeypatch, lambda i: "codex" if i == 0 else "claude",
+                                "two-clusters-maker")
+    rec = state["rounds"]["1"]
+    assert len(rec["verify"]["drops"]) == 1
+    outcomes = {(p["ran"], p["outcome"]) for p in rec["verifierProvenance"]}
+    assert outcomes == {("codex", "verdicts-folded"), ("claude", "verdicts-ignored")}
+
+
+# --- v1: the fold authenticates against the vendor the dispatch recorded ----------------------------
+
+def _drive_with_preference_change(tmp_path, monkeypatch, source, name):
+    import engine_pref
+    pref = {"engine": "codex"}
+    monkeypatch.setattr(engine_pref, "resolve_engine", lambda _role, _prefs: pref["engine"])
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name,
+                                                   vendors=["claude", "codex", "cursor"])
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_VERIFIERS)
+    state = IT._state(session_dir)
+    assert RD._nonpanel_selection(state, session_dir)[0] == "codex"
+    assert RD._recorded_verifier_vendor(state, session_dir) == "codex"
+    pref["engine"] = "cursor"   # the owner edits the reviewer preference while verifiers run
+    assert RD._nonpanel_selection(state, session_dir)[0] == "cursor"
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(RD.P_VERIFIERS, state, state.get("config") or {})
+    assert reason is None
+    slots = IT._slots_of(roster)
+    IT._write_dispatch_manifest(session_dir, pend, slots, lambda seat: source)
+    monkeypatch.setattr(IT, "_auditor_vendor_for", lambda _state: (lambda seat: source))
+    for seat, occurrence in slots:
+        cluster = IT._cluster_for(pend, seat)
+        payload = {"verdicts": [{"id": f["id"], "verdict": "REFUTED", "reason": "intentional",
+                                 "evidence": "read x"} for f in cluster.get("findings") or []]}
+        IT._land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+        assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
+    out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+    assert out["ok"], out
+    return IT._state(session_dir)
+
+
+def test_the_dispatched_vendor_still_folds_after_the_preference_changes(tmp_path, monkeypatch):
+    state = _drive_with_preference_change(tmp_path, monkeypatch, "codex", "pref-dispatched")
+    assert _provenance(state) == {"expected": "codex", "ran": "codex", "outcome": "verdicts-folded"}
+    assert state["rounds"]["1"]["verify"]["drops"]
+
+
+def test_another_vendor_does_not_fold_after_the_preference_changes(tmp_path, monkeypatch):
+    state = _drive_with_preference_change(tmp_path, monkeypatch, "cursor", "pref-other")
+    assert _provenance(state) == {"expected": "codex", "ran": "cursor", "outcome": "verdicts-ignored"}
+    assert not state["rounds"]["1"]["verify"]["drops"]

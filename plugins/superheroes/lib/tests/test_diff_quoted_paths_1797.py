@@ -60,3 +60,20 @@ def test_a_non_ascii_filename_inside_a_risk_area_halts(tmp_path, monkeypatch):
     diff = _diff('"a/src/payments/\\303\\251.py"', '"b/src/payments/\\303\\251.py"')
     assert RD._reevaluate_lane_dimensions(state, state["config"], diff) is True
     assert state["terminal"] == "halted"
+
+
+def test_a_path_with_a_space_before_b_slash_is_read_whole():
+    # v0: the driver reads headers through sanitized_view's canonical reader; a hand-rolled splitter
+    # read "src/space b/child.py" as two paths and missed a cover such as "src/space b/*".
+    assert RD._diff_changed_paths(_diff("a/src/space b/child.py")) == ["src/space b/child.py"]
+
+
+def test_the_driver_keeps_no_path_decoder_of_its_own():
+    assert not hasattr(RD, "_git_unquote") and not hasattr(RD, "_DIFF_GIT_HEADER")
+
+
+def test_a_quoted_non_ascii_path_and_an_unparseable_header_through_the_shared_reader():
+    assert RD._diff_header_sides('diff --git "a/docs/\\303\\251.md" "b/docs/\\303\\251.md"') == (
+        "docs/é.md", "docs/é.md")
+    assert RD._diff_header_sides('diff --git "a/x\\9.md" "b/x\\9.md"') is None
+    assert RD._diff_changed_paths(_diff('"a/x\\9.md"', '"b/x\\9.md"')) is None

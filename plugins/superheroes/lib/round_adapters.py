@@ -433,6 +433,7 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures):
     verdicts = []
     omitted = []
     landed = []
+    seat_of_id = {}
     for seat, occurrence in _roster_slots(roster):
         entry, is_result = _landed(indexed, seat, occurrence)
         if not is_result:
@@ -441,18 +442,24 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures):
         landed.append(seat)
         for verdict in entry["payload"]["verdicts"]:
             verdicts.append(dict(verdict))
+            if isinstance(verdict, dict) and isinstance(verdict.get("id"), str):
+                seat_of_id.setdefault(verdict["id"], seat)
     if omitted:
         disclosures["unverifiedClusters"] = omitted
     artifact = {"verdicts": verdicts}
     if landed:
-        # The vendor that RAN the verifiers is the runner's execution record (the same provenance
+        # The vendor that RAN each verifier is the runner's execution record (the same provenance
         # `_assemble_audits` derives `collectionManifest` from), never the payload's own claim and
-        # never the driver's selection. A seat with no derivable vendor leaves the claim absent; seats
-        # that ran on different vendors carry a joined claim no single selection can equal.
+        # never the driver's selection. Provenance is judged PER SEAT: a seat's executed vendor
+        # authenticates only the verdicts it supplied (`verifierSeatVendors`: verdict id -> that
+        # seat's vendor, "" when the seat has no derivable vendor), so an unproven cluster never
+        # voids a proven one. `verifierVendor` stays the joined summary of the proven seats.
         trusted = _trusted_vendors(roster, indexed, dispatch_manifest, disclosures)
         ran = {trusted[seat] for seat in landed if seat in trusted}
-        if ran and all(seat in trusted for seat in landed):
+        if ran:
             artifact["verifierVendor"] = "+".join(sorted(ran))
+        artifact["verifierSeatVendors"] = {
+            vid: trusted.get(seat, "") for vid, seat in seat_of_id.items()}
     return artifact
 
 

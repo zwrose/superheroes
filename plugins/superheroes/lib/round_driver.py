@@ -1143,55 +1143,16 @@ def _roster_lens_dimensions(seat_map_obj):
     return [d for d in DIMENSIONS if d in roster]
 
 
-_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$")
-_DIFF_GIT_QUOTED_B = re.compile(r'^diff --git a/(.+?) ("b/.*")$')
-_DIFF_GIT_QUOTED_A = re.compile(r'^diff --git ("(?:[^"\\]|\\.)*") (.+)$')
-_GIT_C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, '"': 34, "\\": 92}
-
-
-def _git_unquote(token):
-    """A git C-quoted path as its canonical text, or None when malformed. Git quotes names holding
-    non-ASCII or control bytes: octal byte escapes plus the C single-letter ones."""
-    if len(token) < 2 or not (token.startswith('"') and token.endswith('"')):
-        return None
-    body, out, i = token[1:-1], bytearray(), 0
-    while i < len(body):
-        ch = body[i]
-        if ch != "\\":
-            out += ch.encode("utf-8", "surrogateescape")
-            i += 1
-        elif body[i + 1:i + 2] in _GIT_C_ESCAPES:
-            out.append(_GIT_C_ESCAPES[body[i + 1]])
-            i += 2
-        elif re.fullmatch(r"[0-7]{3}", body[i + 1:i + 4]):
-            code = int(body[i + 1:i + 4], 8)
-            if code > 255:
-                return None
-            out.append(code)
-            i += 4
-        else:
-            return None
-    return out.decode("utf-8", "surrogateescape")
-
-
 def _diff_header_sides(line):
-    """The (a-side, b-side) canonical paths of one ``diff --git`` header, git-quoted or plain, else None."""
-    rest = line[len("diff --git "):]
-    if rest.startswith('"'):
-        m = _DIFF_GIT_QUOTED_A.match(line)
-        if not m:
-            return None
-        a = _git_unquote(m.group(1))
-        b = _git_unquote(m.group(2)) if m.group(2).startswith('"') else m.group(2)
-        if a is None or b is None or not a.startswith("a/") or not b.startswith("b/"):
-            return None
-        return a[2:], b[2:]
-    m = _DIFF_GIT_QUOTED_B.match(line)
-    if m:
-        b = _git_unquote(m.group(2))
-        return (m.group(1), b[2:]) if b is not None and b.startswith("b/") else None
-    m = _DIFF_GIT_HEADER.match(line)
-    return m.groups() if m else None
+    """The (a-side, b-side) canonical paths of one ``diff --git`` header (git C-quoting undone), or
+    None when it cannot be read unambiguously. Delegates to the canonical reader in
+    ``sanitized_view`` — this module keeps no path decoder of its own; the rename policy (both sides
+    count as changed paths) is this caller's."""
+    import sanitized_view
+    try:
+        return sanitized_view.sides_from_diff_git_line(line.encode("utf-8", "surrogateescape"))
+    except (UnicodeError, ValueError):
+        return None
 
 
 def _diff_changed_paths(diff_text):
@@ -2836,6 +2797,44 @@ def synthesis_staged_id_fault(state, artifact):
     return None
 
 
+def _recorded_verifier_vendor(state, session_dir):
+    """The vendor the verifier dispatch of the current round recorded at emission (its orders
+    manifest's per-seat ``vendor``), or None when nothing was emitted, the manifest does not verify
+    against the state-mirrored anchor, or the seats do not name exactly one vendor. The fold runs
+    after ``pending`` is cleared, so the dispatch is found through the mirrored emission anchors
+    (latest attempt of this round's verifier phase). Never raises."""
+    anchors = state.get("_ordersAnchors")
+    if not session_dir or not isinstance(anchors, dict):
+        return None
+    rnd = state.get("round")
+    best = None
+    for key in anchors:
+        parts = key.split(":") if isinstance(key, str) else []
+        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == P_VERIFIERS \
+                and parts[2].isdigit() and (best is None or int(parts[2]) > best):
+            best = int(parts[2])
+    if best is None:
+        return None
+    try:
+        anchor = anchors[_anchor_key(rnd, P_VERIFIERS, best)]
+        manifest, err = round_records.read_json(
+            _orders_manifest_path(session_dir, rnd, P_VERIFIERS, best))
+        if err is not None or not isinstance(manifest, dict) or not isinstance(anchor, dict):
+            return None
+        if round_records.sha256_text(round_records.canonical(manifest)) != anchor.get("manifestSha256"):
+            return None
+        seats = manifest.get("seats")
+        vendors = {entry.get("vendor") for entry in seats.values() if isinstance(entry, dict)} \
+            if isinstance(seats, dict) else set()
+    except Exception:  # noqa: BLE001 — a missing record falls back to the live selection
+        return None
+    if len(vendors) == 1:
+        only = next(iter(vendors))
+        if isinstance(only, str) and only:
+            return only
+    return None
+
+
 def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
@@ -2848,21 +2847,49 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
     # unproven family and folds like silence.
     selected, source = _nonpanel_selection(state, session_dir)
-    ran = artifact.get("verifierVendor")
-    claimed = ran.strip() if isinstance(ran, str) and ran.strip() else None
-    # A claim is required when the selection replaced the reviewer engine (whatever the preference
-    # read's provenance) and on the durable path, which always carries the key.
-    claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
-                      or _nonpanel_replaced(state, selected, session_dir))
-    if verdicts and selected is not None and (
-            (claimed is not None and claimed != selected) or (claim_required and claimed is None)):
-        _record_round_append(state, "verifierProvenance", {
-            "expected": selected, "ran": claimed, "outcome": "verdicts-ignored"})
-        verdicts = []
-    elif verdicts:
-        _record_round_append(state, "verifierProvenance", {
-            "expected": selected, "ran": claimed if claimed is not None else selected,
-            "outcome": "verdicts-folded"})
+    # The dispatch recorded its vendor at emission; a preference edited while the verifiers ran must
+    # not re-judge them against a selection nobody dispatched.
+    recorded = _recorded_verifier_vendor(state, session_dir)
+    rebound = recorded is not None and recorded != selected
+    if recorded is not None:
+        selected = recorded
+    seat_vendors = artifact.get("verifierSeatVendors")
+    if isinstance(seat_vendors, dict):
+        # Durable path: each seat's executed vendor authenticates only the verdicts that seat
+        # supplied; an unproven seat's verdicts fold as silence while a proven seat's still fold.
+        if selected is not None:
+            outcomes = {}
+            kept = []
+            for verdict in verdicts:
+                vid = verdict.get("id") if isinstance(verdict, dict) else None
+                ran_vendor = seat_vendors.get(vid) if isinstance(vid, str) else None
+                ran_vendor = ran_vendor.strip() if isinstance(ran_vendor, str) and ran_vendor.strip() \
+                    else None
+                proven = ran_vendor == selected
+                outcomes.setdefault(ran_vendor, proven)
+                if proven:
+                    kept.append(verdict)
+            for ran_vendor, proven in outcomes.items():
+                _record_round_append(state, "verifierProvenance", {
+                    "expected": selected, "ran": ran_vendor,
+                    "outcome": "verdicts-folded" if proven else "verdicts-ignored"})
+            verdicts = kept
+    else:
+        ran = artifact.get("verifierVendor")
+        claimed = ran.strip() if isinstance(ran, str) and ran.strip() else None
+        # A claim is required when the selection replaced the reviewer engine (whatever the
+        # preference read's provenance) and on the durable path, which always carries the key.
+        claim_required = (source == VENDOR_SOURCE_INDEPENDENT or "verifierVendor" in artifact
+                          or rebound or _nonpanel_replaced(state, selected, session_dir))
+        if verdicts and selected is not None and (
+                (claimed is not None and claimed != selected) or (claim_required and claimed is None)):
+            _record_round_append(state, "verifierProvenance", {
+                "expected": selected, "ran": claimed, "outcome": "verdicts-ignored"})
+            verdicts = []
+        elif verdicts:
+            _record_round_append(state, "verifierProvenance", {
+                "expected": selected, "ran": claimed if claimed is not None else selected,
+                "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
@@ -6656,7 +6683,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 # assembled artifact. Never the driver's selection; absent evidence stays an empty
                 # claim, which `_fold_verifiers` treats as a missing vendor claim.
                 artifact = dict(artifact)
-                artifact.setdefault("verifierVendor", "")
+                artifact.setdefault("verifierSeatVendors", {})
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution)
