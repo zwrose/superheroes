@@ -628,3 +628,141 @@ def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severit
     assert RD._queue_fix_batch(state, state["config"], []) == "queued"
     assert state["_fixBatch"] == [] and state["_fixQueue"] == []
     assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+
+
+# --- review round 1: a lifted product choice, a lifted non-blocking audit, an emitted-time guidance
+
+def _choice(title, line):
+    finding = _finding(title, line, "Minor", "real")
+    finding["tradeoff"] = True
+    return finding
+
+
+def _judgment_ids(state):
+    return [row["id"] for row in state["pending"]["payload"]["findings"]]
+
+
+def _fold_judgment(tmp_path, session_dir, gitdir, dispositions):
+    path = tmp_path / "judgment.json"
+    path.write_text(json.dumps({"dispositions": dispositions}), encoding="utf-8")
+    return RD.cmd_advance(session_dir, git=_RC._fake_git(gitdir), owner_artifact_path=str(path))
+
+
+def test_a_lifted_product_choice_goes_to_the_owner_not_the_fixer(tmp_path, keep_severity):
+    """axis: an undisposed real-consequence Minor carrying `tradeoff: true` is put to the owner gate
+    beside the round's mechanical blocker — never handed to the fixer without an owner decision."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice")
+    state = _state(session_dir)
+    assert [row["title"] for row in state["_judgmentFindings"]] == ["minor choice"]
+    assert [row["title"] for row in state["_judgmentMechanical"]] == ["blocker B"]
+    assert not state.get("_fixBatch")
+
+
+def test_a_skipped_lifted_choice_stays_out_and_is_not_a_skipped_blocker(tmp_path, keep_severity):
+    """axis: the owner skips the lifted choice — the blocker alone goes to the fixer, and the Minor's
+    skip is recorded without riding the skipped-blocker channel."""
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-skip")
+    [jid] = _judgment_ids(_state(session_dir))
+    out = _fold_judgment(tmp_path, session_dir, gitdir,
+                         [{"id": jid, "disposition": "skip", "reason": "keep the current wording"}])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"]["phase"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B"]
+    assert not after.get("_fixQueue")
+    assert not after.get("_skippedBlockers")
+
+
+def test_a_lifted_choice_the_owner_approves_rides_the_batch(tmp_path, keep_severity):
+    """axis: once the owner chooses to fix the lifted choice it joins the blocker's batch."""
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-fix")
+    [jid] = _judgment_ids(_state(session_dir))
+    out = _fold_judgment(tmp_path, session_dir, gitdir,
+                         [{"id": jid, "disposition": "fix-as-suggested"}])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"]["phase"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B", "minor choice"]
+
+
+def test_lift_awaits_owner_judgment_decision_table():
+    """axis: which lifted rows wait for the owner."""
+    choice = {"tradeoff": True}
+    assert RD._lift_awaits_owner_judgment(choice, None) is True
+    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "out-of-scope"}) is True
+    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "fix"}) is False
+    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "guidance"}) is False
+    assert RD._lift_awaits_owner_judgment({"tradeoff": None}, None) is False
+
+
+def test_a_not_discharged_lifted_minor_never_keeps_the_loop_fixing(tmp_path, keep_severity):
+    """axis: the blocker is discharged and the lifted Minor is not — the Minor is held out of
+    `notDischarged` and out of the stall breaker's audit round, so it neither restarts the fixer nor
+    parks the round."""
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _finding("real minor", 2, "Minor", "real")],
+        to_phase=RD.P_AUDITS, name="c7-audit-minor")
+    state = _state(session_dir)
+    by_title = {t["title"]: t for t in state["_auditTargets"]}
+    tid_b, tid_m = by_title["blocker B"]["id"], by_title["real minor"]["id"]
+    pend = state["pending"]
+    _TRI._write_dispatch_manifest(session_dir, pend, [(tid_b, 0), (tid_m, 0)],
+                                  _TRI._auditor_vendor_for(state))
+    _TRI._land(session_dir, state, pend, tid_b,
+               {"id": tid_b, "ruling": "discharged", "reason": "re-read the hunk; it is gone"})
+    assert _TRI._record(session_dir, tid_b)["ok"] is True
+    _TRI._land(session_dir, state, pend, tid_m,
+               {"id": tid_m, "ruling": "not-discharged", "reason": "the minor is still there"})
+    assert _TRI._record(session_dir, tid_m)["ok"] is True
+    out = RD.cmd_advance(session_dir, git=_RC._fake_git(gitdir))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    outcome = after["_auditOutcome"]
+    assert outcome["notDischarged"] == [], outcome
+    assert outcome["notDischargedNonBlocking"] == [tid_m], outcome
+    assert [o["title"] for o in after["auditRounds"][-1]["outcomes"]] == ["blocker B"]
+    assert any(d["kind"] == "not-discharged-nonblocking" for d in after["decisions"])
+    assert after.get("step") != P_FIXER and after.get("terminal") != "capped-with-open-blocker"
+
+
+def test_guidance_reopening_a_queued_skip_during_an_emitted_attempt_requeues_it(
+        tmp_path, keep_severity):
+    """axis: with F emitted and G queued, an out-of-scope ruling drops G from the queue; replacement
+    guidance on G puts it back in the queue — the emitted batch and pending step are untouched."""
+    session_dir, _g, _h, _key_f, key_g = _two_important(tmp_path, "c7-requeue")
+    before = _state(session_dir)
+    before_file = _fix_batch_file_bytes(session_dir)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
+        {"id": key_g, "ruling": "out-of-scope", "reason": "later", "followUp": _follow_up()}]))["ok"]
+    assert key_g not in _queue_keys(_state(session_dir))
+    out = _rule(session_dir, _guidance_file(tmp_path, "g.json", key_g, "fix G now"))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert _queue_keys(after) == [key_g]
+    assert after["_fixBatch"] == before["_fixBatch"]
+    assert after["pending"] == before["pending"]
+    assert _fix_batch_file_bytes(session_dir) == before_file
+
+
+def test_guidance_on_an_unqueued_minor_during_an_emitted_attempt_joins_the_queue(
+        tmp_path, keep_severity):
+    """axis: guidance naming a code-quality Minor neither slice holds, given while an attempt is
+    emitted, queues it for a later slice of the round."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("bounds F", 1), _finding("quality minor", 3, "Minor", "code-quality")],
+        name="c7-emitted-minor", fixBatchCap=1)
+    state = _state(session_dir)
+    key_m = _finding_key_by_title(state, "quality minor")
+    assert key_m not in _batch_keys(state) + _queue_keys(state)
+    out = _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "TIDY-IT"))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert _queue_keys(after) == [key_m]
+    assert after["_fixQueue"][0]["lifted"] == "guidance"
+    assert after["pending"] == state["pending"]

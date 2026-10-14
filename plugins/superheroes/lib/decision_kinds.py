@@ -27,6 +27,7 @@ DECISION_KINDS = (
     "judgment-skip",
     LANE_EXPANDED_RECOMPOSE,
     "not-discharged",
+    "not-discharged-nonblocking",
     "panel-seat-missing",
     "receipt-missing-seat",
     "ruling-carried",

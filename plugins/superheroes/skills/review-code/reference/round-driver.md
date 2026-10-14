@@ -578,7 +578,8 @@ planned. A ruling given while a fixer attempt has already emitted its orders is 
 batch that attempt was given; the refusal's `detail` names the way out: stop the fixer, restore the
 worktree to the head the attempt started from, run `withdraw`, then `rule` again. A ruling file whose
 every target is outside the emitted batch is recorded at once — it reconciles the later slices of the
-round and binds a later fix batch, and the emitted batch and its file are never reshaped. A file that
+round, a finding its guidance names (or a skip it reopens) that no slice holds joins those later
+slices, and the emitted batch and its file are never reshaped. A file that
 mixes the two is refused whole. A fixer attempt that has already folded keeps its result; the ruling
 binds the next fix. Refusal tokens (each leaves state bytes unchanged):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
@@ -635,6 +636,18 @@ filter and the same `fixBatchCap` slicing as every other row: when the cap is sm
 offered set they wait in `_fixQueue` for a later slice of the same round. The lift never starts a
 fixer leg: a round with no blocking finding converges as before, and its remaining findings are
 settled at the end.
+
+A lifted product choice (`tradeoff: true`) whose effective decision is not the owner's word to fix
+it (a `fix` or `guidance` decision) never rides the fix batch on its own: it goes to
+`present-judgment` beside the round's blockers, as a blocking tradeoff does. A skip there is recorded
+as the finding's out-of-scope disposition but, the finding being no blocker, never joins
+`skippedBlockers`.
+
+A lifted Minor or Nit is audited like any other row of the batch, and its discharge is recorded, but
+it never drives the loop: a not-discharged non-blocking target is held out of the audit outcome's
+`notDischarged` (listed under `notDischargedNonBlocking`, with a `not-discharged-nonblocking`
+decision) and out of the stall breaker's audit round, so it neither starts another fix, nor parks
+the round at the cap, nor withholds certification.
 
 Owner-gate guidance is held to the same measure. A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at submit with `gate-guidance-oversize`, nothing folds, and the owner resubmits shorter guidance; on the library `run_loop` path the fold parks `cannot-certify` with the same token. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a submit whose fix batch would carry more guidance than one order holds refuses with `gate-guidance-aggregate-oversize` (the library fold parks with it), and the render refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
 
