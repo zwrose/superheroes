@@ -229,7 +229,11 @@ across several comments, because the reader parses one comment.
 - The write sandbox has no network. An implementer order inlines or cites only what is in the
   worktree.
 - The commit signer is not reachable from inside the write sandbox, so implementers never commit.
-  The builder commits their work from its own shell.
+  The builder commits their work from its own shell. A test whose fixture makes a git commit fails
+  there for the same reason, so the test pins its own git config (`GIT_CONFIG_GLOBAL` set to
+  `os.devnull`, `GIT_CONFIG_NOSYSTEM` set to `1`, the fixture passing its commit identity inline)
+  and does not depend on the developer's. An order that runs such tests authorizes that pin or
+  leaves the run to the builder's own shell.
 - The sandbox refuses `-X pycache_prefix`. A cloud gate command drops it and keeps `-B`, because the
   flag guards a macOS bytecode cache, not this container.
 - The size count, run as `python3 -B <plugin root>/lib/size_count.py count --base <sha> --worktree`,

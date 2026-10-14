@@ -86,3 +86,15 @@ Axis: the advisor's answering rule no longer says "never on the issue"; the mess
 - Restore: the inverse edit; the old text replaced by the rule, quoted back:
   `Answer by message, or through the relay below. The send is still the gate for `note-answered`; posting the same answer on the issue as the durable record is allowed and recommended.`
 - Green: `1 passed in 0.10s`.
+
+## 6. The container section's test-fixture git pin (WO-E)
+
+Axis: a test whose fixture makes a git commit fails inside the write sandbox (the signer is unreachable), so the container section says to pin the fixture's git config in the test (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`). Guarded by the new needle `GIT_CONFIG_GLOBAL` in the container test.
+
+- Neutralization (`cloud.md`, `## The cloud container`, signer bullet): deleted the added sentences, from ` A test whose fixture makes a git commit fails` through `leaves the run to the builder's own shell.` and the line breaks inside them, keeping the bullet's first two sentences and the closing newline.
+- Node: `T::test_container_section_names_the_sandbox_facts`.
+- Red: `AssertionError: GIT_CONFIG_GLOBAL`, `FAILED plugins/superheroes/lib/tests/test_cloud_builder_doctrine.py::test_container_section_names_the_sandbox_facts` and `1 failed in 9.14s`. The `UV_NATIVE_TLS` deprecation warning is omitted from this record.
+- Restore: the inverse edit; the sentences re-inserted after `The builder commits their work from its own shell.`, quoted back:
+  `A test whose fixture makes a git commit fails` / `there for the same reason, so the test pins its own git config (`GIT_CONFIG_GLOBAL` set to` / `` `os.devnull`, `GIT_CONFIG_NOSYSTEM` set to `1`, the fixture passing its commit identity inline) `` / `and does not depend on the developer's. An order that runs such tests authorizes that pin or` / `leaves the run to the builder's own shell.`
+- Green: `1 passed in 9.07s`.
+- Not proven by a red run: the other seven needles of this test were not re-neutralized in this order (entry 2 covers the setup-text bullet only).

@@ -70,6 +70,7 @@ def test_container_section_names_the_sandbox_facts():
         "uv python install",
         "inlines or cites only what is in the worktree",
         "so implementers never commit",
+        "GIT_CONFIG_GLOBAL",
         "-X pycache_prefix",
         "keeps `-B`",
         "size_count.py count --base",
