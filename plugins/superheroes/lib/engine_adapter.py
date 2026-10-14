@@ -757,18 +757,23 @@ CLOUD_SESSION_NAME_LIMIT = 64
 CLOUD_SESSION_NAME_CHARS = "A-Za-z0-9._-"
 CLOUD_SESSION_NAME_UNSAFE_RE = re.compile("[^%s]" % CLOUD_SESSION_NAME_CHARS)
 _CLOUD_SESSION_NAME_RE = re.compile("[%s]{1,%d}" % (CLOUD_SESSION_NAME_CHARS, CLOUD_SESSION_NAME_LIMIT))
-# A cloud session nobody watches must not stop on a permission prompt (owner, 2026-10-12, #1749);
+# A cloud session nobody watches must not stop on a permission prompt (owner ruling);
 # the user's own `defaultMode` setting does not reach a `--cloud` session, so the argv carries it.
 CLOUD_PERMISSION_MODE = "auto"
+# A cloud session nobody watches has no one to answer a question dialog, so a builder starts without it.
+CLOUD_DISALLOWED_TOOLS = ("AskUserQuestion",)
 
 
 def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_name,
-                              permission_mode=CLOUD_PERMISSION_MODE):
+                              permission_mode=CLOUD_PERMISSION_MODE,
+                              disallowed_tools=CLOUD_DISALLOWED_TOOLS):
     """Build the argv that starts a builder in a cloud session. Never raises.
 
     The command needs a pseudo-terminal and refuses `-p`, so the prompt rides as the argument of
     `--cloud`. The environment is chosen through `--settings`, a builder runs in
-    `CLOUD_PERMISSION_MODE` (`permission_mode=None` passes no mode), and `-n` names the session.
+    `CLOUD_PERMISSION_MODE` (`permission_mode=None` passes no mode), it starts without the tools in
+    `CLOUD_DISALLOWED_TOOLS` (`disallowed_tools=None` or empty passes no flag), and `-n` names the
+    session. The disallowed-tools flag takes a variadic value, so it always sits before `-n`.
     """
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
@@ -797,6 +802,8 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
         argv += ["--effort", effort]
     if permission_mode:
         argv += ["--permission-mode", permission_mode]
+    if disallowed_tools:
+        argv += ["--disallowedTools", *disallowed_tools]
     argv += ["-n", session_name]
     return _ok(argv)
 

@@ -1443,8 +1443,9 @@ def test_start_names_the_environment_in_the_launch(tmp_path):
     cell = model_registry.resolve_dispatch("mechanical", "claude", None)
     assert argv == engine_adapter.claude_cloud_builder_argv(
         cell["dispatch_token"], cell["effort"], _prompt(spawner), ENV_ID,
-        "cloud-check-" + NONCE[:8], permission_mode=None)["argv"]
+        "cloud-check-" + NONCE[:8], permission_mode=None, disallowed_tools=None)["argv"]
     assert "--permission-mode" not in argv
+    assert "--disallowedTools" not in argv
     settings = json.loads(argv[argv.index("--settings") + 1])
     assert settings == {"remote": {"defaultEnvironmentId": ENV_ID}}
     assert result["environment"] == ENV_ID and OTHER_ENV_ID not in " ".join(argv)

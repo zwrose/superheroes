@@ -676,7 +676,8 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
                         detail=cell.get("detail") or cell.get("reason"))
     built = engine_adapter.claude_cloud_builder_argv(
         cell["dispatch_token"], cell["effort"], _check_prompt(nonce, number), environment, name,
-        permission_mode=None)  # the owner's auto-mode ruling covers builders; the check's model may lack it
+        permission_mode=None,  # the owner's auto-mode ruling covers builders; the check's model may lack it
+        disallowed_tools=None)  # the question-dialog ruling covers builders; the check asks nothing
     if built.get("reason") is not None or not built.get("argv"):
         return _refusal("check-launch-refused", "The check session could not be launched.",
                         detail=built.get("reason"))
