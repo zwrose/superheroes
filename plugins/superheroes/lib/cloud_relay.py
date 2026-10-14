@@ -26,6 +26,7 @@ import importlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -37,6 +38,11 @@ _START_TIMEOUT = 120
 _WINDOW = 20
 STATE_NAME = "cloud-relay.json"
 NAME_PREFIX = "superheroes-relay-"
+_NAME_LIMIT = 64  # the longest session name `engine_adapter.claude_relay_argv` accepts
+_NAME_HASH_LENGTH = 8
+_NAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+# The header every forwarded message opens with; `compose` sends it and `_decide` attributes by it.
+FORWARD_HEADER = "Message from the superheroes advisor (id %s):"
 RELAY_PROMPT = """\
 You are the superheroes relay. You forward messages and do nothing else.
 First load your tools: ToolSearch with `select:ListAgents,SendMessage`.
@@ -62,10 +68,17 @@ def _env(env):
 
 
 def relay_name(config_dir):
-    """The relay's session name; it carries the account because names are listed across all."""
+    """The relay's session name; it carries the account because names are listed across all.
+
+    The base is the config dir's name with every character outside `[A-Za-z0-9._-]` made `-`, cut so the
+    whole name is at most 64 characters; the hash of the full path keeps cut names distinct. None when
+    the base is empty."""
     full = os.path.realpath(str(config_dir))
-    base = os.path.basename(full).lstrip(".")
-    return "%s%s-%s" % (NAME_PREFIX, base, hashlib.sha256(full.encode()).hexdigest()[:8]) if base else None
+    base = _NAME_UNSAFE_RE.sub("-", os.path.basename(full).lstrip("."))
+    room = _NAME_LIMIT - len(NAME_PREFIX) - 1 - _NAME_HASH_LENGTH
+    # axis: the name fits the 64-character session-name pattern whatever the config dir is called — see bite-proof record c8a_wo4.md
+    base = base[:room]
+    return "%s%s-%s" % (NAME_PREFIX, base, hashlib.sha256(full.encode()).hexdigest()[:_NAME_HASH_LENGTH]) if base else None
 
 
 def _call(run, argv, env, timeout, cwd=None):
@@ -210,7 +223,7 @@ def compose(repo_root, config_dir, session, text, *, env=None):
     if refusal:
         return refusal
     msg_id = uuid.uuid4().hex[:12]
-    forward = "Message from the superheroes advisor (id %s):\n\n%s" % (msg_id, body)
+    forward = "%s\n\n%s" % (FORWARD_HEADER % msg_id, body)
     state["pending"][msg_id] = {"msgId": msg_id, "session": session, "forward": forward,
                                 "configDir": config_dir, "relay": name, "sentAfter": _now_iso(),
                                 "decision": None}
@@ -222,10 +235,13 @@ def compose(repo_root, config_dir, session, text, *, env=None):
 
 
 def _time(stamp):
+    """The aware datetime of an ISO stamp; None for a value that cannot be parsed or carries no zone."""
     try:
-        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        when = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except (AttributeError, ValueError):
         return None
+    # axis: a stamp without a zone is unreadable here — comparing it with an aware time would raise — see bite-proof record c8a_wo4.md
+    return when if when.tzinfo is not None else None
 
 
 def _records(config_dir, session_id):
@@ -292,22 +308,17 @@ def _first_difference(expected, sent):
     return {"index": i, "expected": expected[i:i + _WINDOW], "sent": sent[i:i + _WINDOW]}
 
 
-def _marker(msg_id):
-    return "(id %s)" % msg_id
-
-
-def _decide(msg, relay_id, final, pending_ids):
+def _decide(msg, relay_id, final):
     """(verdict, detail) from the relay's record now; verdict None means keep waiting.
 
-    A send belongs to this message when its text carries this message's id marker, or carries no
-    id marker of any pending message; a send carrying another pending message's id is that
-    message's send."""
+    A send belongs to this message only when its text, leading whitespace aside, starts with this
+    message's own complete header line. Every other send is ignored, whatever ids it quotes."""
     paths, records = _records(msg["configDir"], relay_id)
     after = _time(msg.get("sentAfter"))
     sends, results = _sends(records, msg["session"], after) if after else ([], {})
-    mine = _marker(msg["msgId"])
-    sends = [(t, i) for t, i in sends
-             if mine in t or not any(_marker(p) in t for p in pending_ids)]
+    header = FORWARD_HEADER % msg["msgId"]
+    # axis: a send is this message's only by its own complete header line at the start — see bite-proof record c8a_wo4.md
+    sends = [(t, i) for t, i in sends if t.lstrip().startswith(header)]
     other = [t for t, _ in sends if t != msg["forward"]]
     if other:
         return "relay-text-mismatch", {"firstDifference": _first_difference(msg["forward"], other[0])}
@@ -385,9 +396,7 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
     clock, sleep = clock or time.monotonic, sleep or time.sleep
     end = clock() + wait_s
     while True:
-        latest = _load(path)  # a message composed meanwhile owns the sends that carry its id
-        pending_ids = list((latest or state)["pending"])
-        verdict, detail = _decide(dict(msg, msgId=msg_id), relay_id, clock() >= end, pending_ids)
+        verdict, detail = _decide(dict(msg, msgId=msg_id), relay_id, clock() >= end)
         if verdict:
             break
         sleep(max(0, min(step, end - clock())))

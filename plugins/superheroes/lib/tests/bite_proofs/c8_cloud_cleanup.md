@@ -86,7 +86,7 @@ Axis: the owner is told the builder was asked only when the request is confirmed
 - Red (unfiltered): `2 failed in 0.52s`; an `uncertain` and a `failed` receipt each carried the owner message.
 
 ```
-E       assert (True and "#412 is merged. I've asked its cloud builder to archive itself. You'll get one prompt for it: tap Allow once." is None)
+E       assert (True and "#412 is merged. I've asked its cloud builder to archive itself. If its session has a tool to archive itself, you'll get one prompt for it: tap Allow once. If it has none, it will say so on its issue, and the session stays listed until you archive it by hand." is None)
 FAILED tests/test_cloud_cleanup.py::test_an_uncertain_request_is_never_resent_on_its_own_and_has_no_owner_message
 FAILED tests/test_cloud_cleanup.py::test_a_failed_request_may_be_overwritten_by_a_delivered_one
 2 failed, 24 deselected in 0.52s

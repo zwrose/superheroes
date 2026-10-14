@@ -41,6 +41,8 @@ _NEGATION_BEFORE = re.compile(r"\b(?:nothing|never|no|not)\s+(?:(?:ever|yet|then
 _REMINDER_VERBS = re.compile(r"\bremind|\bnudge|follow[ -]up|\bchase", re.IGNORECASE)
 _WEAK_WORDS = re.compile(r"\bagain\b|still waiting|unanswered", re.IGNORECASE)
 _ARCHIVE = re.compile(r"archive", re.IGNORECASE)
+_NEGATION_WORD = re.compile(r"\b(?:nothing|never|no|not)\b", re.IGNORECASE)
+_CLAUSE_BREAK = re.compile(r"[,;.:\u2014]")
 
 
 def _read(path):
@@ -69,9 +71,16 @@ def _collapsed(path):
     return " ".join(_read(path).split())
 
 
+def _negated_in_clause(line, start):
+    """True when a negation word stands earlier in the same clause as the match at ``start``: the text since
+    the last comma, semicolon, full stop, colon or em dash before it."""
+    clause = _CLAUSE_BREAK.split(line[:start])[-1]
+    return bool(_NEGATION_WORD.search(clause))
+
+
 def _reminder_hits(lines):
     """Lines naming the archive that carry a reminder verb no negation directly governs; a line with no
-    reminder verb is a hit on a weak word (again, still waiting, unanswered) with no negation ahead of it."""
+    reminder verb is a hit on any weak word (again, still waiting, unanswered) with no negation earlier in its clause."""
     hits = []
     for line in lines:
         if not _ARCHIVE.search(line):
@@ -81,8 +90,8 @@ def _reminder_hits(lines):
             if any(not _NEGATION_BEFORE.search(line[: m.start()]) for m in verbs):
                 hits.append(line.strip())
             continue
-        weak = _WEAK_WORDS.search(line)
-        if weak and not re.search(r"\b(?:nothing|never|no|not)\b", line[: weak.start()], re.IGNORECASE):
+        # axis: every weak word is tested for a negation earlier in its own clause, not just the first — see bite-proof record c8a_wo4.md
+        if any(not _negated_in_clause(line, m.start()) for m in _WEAK_WORDS.finditer(line)):
             hits.append(line.strip())
     return hits
 
@@ -92,6 +101,13 @@ def test_the_reminder_detector_ties_a_negation_to_the_reminder_verb():
     assert _reminder_hits(["If no response arrives, remind the owner about the archive prompt."])
     assert not _reminder_hits(["When the archive prompt goes unanswered, the session stays listed and nothing reminds the owner."])
     assert not _reminder_hits(["If the archive prompt is unanswered, never remind the owner."])
+    # a negation sitting in an earlier clause does not govern a later weak word
+    assert _reminder_hits(["If the owner has not answered the archive prompt, ask again."])
+    # two weak words: only the first is negated, so the second still hits
+    assert _reminder_hits(["There is no archive prompt still waiting, but the other is unanswered."])
+    # a negation in the same clause as the weak word governs it (no reminder verb on these lines)
+    assert not _reminder_hits(["There is no archive prompt still waiting."])
+    assert not _reminder_hits(["Nothing reminds the owner about an unanswered archive prompt."])
 
 
 def test_no_reminder_about_an_unanswered_archive_prompt():

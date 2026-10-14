@@ -167,8 +167,10 @@ def _renew(w, account=ACCOUNT, date=FUTURE):
     assert got["action"] == "written", got
 
 
-def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None, ts=LAUNCHED):
+def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None, ts=LAUNCHED, account_id=None):
     extra = {"ts": ts} if config_dir is None else {"ts": ts, "configDir": config_dir}
+    if account_id is not None:
+        extra["accountId"] = account_id
     rec = _reserved(launch_id, BATCH, [surface], w.repo, issue=issue, place="cloud",
                     cloudEnvironment=ENVIRONMENT, pluginVersion="1.2.3", **extra)
     assert ll.reserve(w.repo, rec, env=w.env)["ok"]
@@ -293,6 +295,30 @@ def test_a_second_park_on_the_same_day_rearms_a_sent_back_pr_but_rereading_one_c
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     entry = _entries(w)[0]
     assert entry["outcome"] is None and entry["parkId"] == 2 and entry["launchId"] == "l-orig"
+
+
+# axis: a newer park re-arms whatever the stored outcome, and a resolved park that is not newer gets no renewal text — see bite-proof record c8a_wo4.md
+@pytest.mark.parametrize("outcome", [None, "sent-back", CP.UNCERTAIN, "owner-let-through", "closed"])
+@pytest.mark.parametrize("newer", [False, True])
+def test_the_notice_by_stored_outcome_and_whether_the_park_is_newer(w, outcome, newer):
+    _park(w, 10)
+    entries = _entries(w)
+    entries[0]["outcome"] = outcome
+    with open(_state_file(w), "w", encoding="utf-8") as fh:
+        json.dump(entries, fh)
+    if newer:
+        w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-11T10:00:00Z", cid=1010))
+    out = _notice(w, 10)
+    saved = _entries(w)[0]
+    if newer:
+        assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10}
+        assert saved["outcome"] is None and saved["parkId"] == 1010 and saved["parkedOn"] == "2026-10-11"
+    elif outcome in ("closed", "owner-let-through"):
+        assert out == {"ok": True, "kind": "park-resolved", "pr": 10, "text": None}
+        assert saved["outcome"] == outcome and saved["parkId"] == 910
+    else:
+        assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10}
+        assert saved["outcome"] == outcome and saved["parkId"] == 910
 
 
 def test_a_go_ahead_recorded_for_an_earlier_head_does_not_let_the_current_head_through(w):
@@ -500,6 +526,68 @@ def test_a_renewal_of_the_lanes_account_alone_is_enough_when_the_advisors_pass_i
     _park(w, 10, issue=101)
     _renew(w, account=SECOND_ACCOUNT)
     assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
+
+
+def test_a_lane_with_its_account_id_is_renewed_when_the_advisor_runs_under_an_explicit_default_config_dir(w):
+    # axis: the lane's recorded account id decides, not a comparison of config paths — see bite-proof record c8a_wo4.md
+    explicit = dict(w.env, CLAUDE_CONFIG_DIR=str(w.home / ".claude"))
+    _lane(w, "l-a", 101, "session-a", "a", account_id=ACCOUNT)
+    _park(w, 10, issue=101)
+    _renew(w)
+    out = CP.send_back(w.repo, TODAY, env=explicit, run=w.gh)
+    assert out["notRenewed"] == [] and [s["pr"] for s in out["sendBack"]] == [10]
+
+
+def test_a_legacy_lane_without_an_account_id_keeps_the_config_path_logic(w):
+    explicit = dict(w.env, CLAUDE_CONFIG_DIR=str(w.home / ".claude"))
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    assert CP.send_back(w.repo, TODAY, env=explicit, run=w.gh)["notRenewed"] == [10]  # the explicit root reads no account
+    assert [s["pr"] for s in _send(w)["sendBack"]] == [10]  # the same lane under the plain env is renewed
+
+
+def test_a_lane_with_an_account_id_is_released_only_by_that_accounts_renewal(w):
+    _setup_record(w.repo, w.store, SECOND_ACCOUNT, PAST)
+    _lane(w, "l-second", 101, "second-session", "a", account_id=SECOND_ACCOUNT)
+    _park(w, 10, issue=101)
+    _renew(w, account=ACCOUNT)  # the advisor's own account is renewed; the lane's is not
+    out = _send(w)
+    assert out["sendBack"] == [] and out["notRenewed"] == [10]
+    _renew(w, account=SECOND_ACCOUNT)
+    assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
+
+
+@pytest.mark.parametrize("lane_config_dir, lane_account", [(None, ACCOUNT), ("default", None)])
+def test_a_default_account_lane_is_decided_by_its_own_record_when_the_advisors_pass_is_stale(
+        w, lane_config_dir, lane_account):
+    second = w.root / "advisor-config"
+    _account_file(second, SECOND_ACCOUNT)
+    _setup_record(w.repo, w.store, SECOND_ACCOUNT, PAST)  # the advisor's override account: stale
+    advisor = dict(w.env, CLAUDE_CONFIG_DIR=str(second))
+    config_dir = str(w.home / ".claude") if lane_config_dir == "default" else None
+    _lane(w, "l-a", 101, "session-a", "a", config_dir=config_dir, account_id=lane_account)
+    _park(w, 10, issue=101)
+    assert CP.send_back(w.repo, TODAY, env=advisor, run=w.gh)["notRenewed"] == [10]
+    _renew(w, account=ACCOUNT)  # the lane's own (default) account is renewed
+    out = CP.send_back(w.repo, TODAY, env=advisor, run=w.gh)
+    assert out["notRenewed"] == [] and [s["pr"] for s in out["sendBack"]] == [10]
+
+
+def test_a_readable_failed_check_marker_keeps_the_pr_unrenewed(w):
+    # axis: a well-formed failed-check marker counts as present, not only a damaged one — see bite-proof record c8a_wo4.md
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)
+    marker = cloud_check.failed_check_path(w.repo, ACCOUNT, w.store)
+    os.makedirs(os.path.dirname(marker), exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as fh:
+        json.dump({"schema": cloud_check.FAILED_CHECK_SCHEMA, "account": ACCOUNT, "environment": ENVIRONMENT,
+                   "failedAt": "2026-10-12T09:00:00Z", "failedParts": ["pass"]}, fh)
+    assert cloud_check.read_failed_check(w.repo, ACCOUNT, w.store).get("damaged") is None
+    assert CP._lapses(w.repo, w.env, None, ENVIRONMENT) is None
+    out = _send(w)
+    assert out["sendBack"] == [] and out["notRenewed"] == [10]
 
 
 def test_a_due_pr_with_no_cloud_lane_is_reported_and_stays_undecided(w):
@@ -830,14 +918,32 @@ def _paused_run(gh):
     return run, inside, release
 
 
-def _in_thread(fn):
+def _in_thread(fn, name=None):
     box = {}
-    thread = threading.Thread(target=lambda: box.setdefault("out", fn()), daemon=True)
+    thread = threading.Thread(target=lambda: box.setdefault("out", fn()), daemon=True, name=name)
     thread.start()
     return thread, box
 
 
-def test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one_pr(w):
+def _watch_lock(monkeypatch, thread_name):
+    """An event set once the thread named `thread_name` calls the state lock's acquire: the proof that a
+    worker which is then seen blocked was blocked on the lock, not still starting up."""
+    fl = CP._sib("file_lock")
+    real_acquire = fl.acquire
+    reached_lock = threading.Event()
+
+    def acquire(*args, **kw):
+        if threading.current_thread().name == thread_name:
+            reached_lock.set()
+        return real_acquire(*args, **kw)
+
+    monkeypatch.setattr(fl, "acquire", acquire)
+    return reached_lock
+
+
+# axis: the overlap tests confirm the second worker reached the lock before asserting it is blocked — see bite-proof record c8a_wo4.md
+def test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one_pr(w, monkeypatch):
+    reached_lock = _watch_lock(monkeypatch, "notice-b")
     for pr in (10, 11):
         w.gh.comments[pr] = [_lapsed_comment(pr)]
         w.gh.pulls[pr] = _pull()
@@ -850,7 +956,9 @@ def test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one
     first, first_box = _in_thread(lambda: CP.notice(w.repo, REPO, 10, TODAY, env=w.env, run=run_a))
     try:
         assert a_inside.wait(10)
-        second, second_box = _in_thread(lambda: CP.notice(w.repo, REPO, 11, TODAY, env=w.env, run=run_b))
+        second, second_box = _in_thread(
+            lambda: CP.notice(w.repo, REPO, 11, TODAY, env=w.env, run=run_b), name="notice-b")
+        assert reached_lock.wait(10), "the second notice never reached the lock while the first held it"
         assert not b_started.wait(0.5), "the second notice read the state while the first held it"
     finally:
         release_a.set()
@@ -860,7 +968,9 @@ def test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one
     assert sorted(e["pr"] for e in _entries(w)) == [10, 11]
 
 
-def test_a_sent_overlapping_a_state_writing_send_back_keeps_the_sent_back_outcome(w):
+# axis: the overlap tests confirm the second worker reached the lock before asserting it is blocked — see bite-proof record c8a_wo4.md
+def test_a_sent_overlapping_a_state_writing_send_back_keeps_the_sent_back_outcome(w, monkeypatch):
+    reached_lock = _watch_lock(monkeypatch, "sent-b")
     _park(w, 10)
     w.gh.comments[12] = [_lapsed_comment(12)]
     w.gh.pulls[12] = _pull()
@@ -870,7 +980,8 @@ def test_a_sent_overlapping_a_state_writing_send_back_keeps_the_sent_back_outcom
     first, first_box = _in_thread(lambda: CP.send_back(w.repo, TODAY, env=w.env, run=run_a))
     try:
         assert a_inside.wait(10)
-        second, second_box = _in_thread(lambda: _sent(w, 10))
+        second, second_box = _in_thread(lambda: _sent(w, 10), name="sent-b")
+        assert reached_lock.wait(10), "sent never reached the lock while send-back held it"
         second.join(0.5)
         assert second.is_alive(), "sent ran while send-back held the state"
     finally:
