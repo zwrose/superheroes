@@ -495,7 +495,7 @@ advisor run together to keep calibration honest.
    date stands in for "the last gardening record"** everywhere this rule is read, so the first pass
    falls on the first walk a week after calibration.
 
-**The eight duties, a closed list.**
+**The seven duties, a closed list.**
 
 1. **Age the P1s.** Each P1 older than two passes is proposed for promotion, demotion, or decline.
 2. **Sweep four things, then draw from the queue.** The four: the declined registry's
@@ -549,25 +549,11 @@ advisor run together to keep calibration honest.
    from run receipts as a reference point the owner reads, never a gate and never a trigger. The duty
    also records **the latest mutation run's survivors and kills per test file the run covered**. **A
    file no run covered reads as unmeasured for mutation, never as no kills**.
-8. **Read the reviewer pass, for a project with a cloud setup.** Run
-   `python3 -B <plugin root>/lib/cloud_setup.py gardening --cwd <root> --next-pass-days 7` (seven, the
-   cadence trigger 1 above states) and say each line it returns
-   as it is, with `Renew now` before a line that carries that mark. The line names the days left and the lapse date and, when the pass would lapse
-   before the next pass is owed, the two hand steps: run the pass command, and paste the new pass into
-   the cloud environment. **After the owner pastes the new pass, finish the renewal.** Have a cloud
-   session run `cloud_pass.py confirm`, then record it on the owner's machine with `cloud_pass.py
-   record-confirmation`, which moves the saved lapse date, then send the parked builds back as
-   `skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back says. If the
-   confirmed lapse date did not move past the old one, the pass command copied the same sign-in again,
-   so tell the owner the separate reviewer sign-in must be signed in again before the pass command.
-   A project with no cloud setup gets no line. **Nothing reads the pass's lapse
-   date between passes.** Once it has lapsed, the launch report and a parked pull request's notice say
-   so; that is not a warning ahead of the lapse.
 
 **Memory gardening at the pass.** The advisor's durable memory is the one instrument in this
 contract that nobody else can read, so it is gardened where everything else is — at the pass, and
 never on its own schedule. Three things, and the duties above are untouched by them; this is a
-standing rule of the pass, not a ninth duty.
+standing rule of the pass, not an eighth duty.
 
 - **Apply the memory-versus-plugin-surface routing test to what memory already holds.** The test
   itself is not restated here — it is the **workhorse** charter's `## Memory` section, and the
@@ -617,7 +603,6 @@ standing rule of the pass, not a ninth duty.
   last doctrine change, and any index lines repaired;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
-- the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
 - the open questions the passes carry until settled;
 - and **the misses-log appends made**.
 

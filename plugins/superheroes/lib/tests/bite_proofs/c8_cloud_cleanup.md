@@ -1,9 +1,9 @@
-# Bite-proof record: cloud_cleanup.py and the gardening pass's reviewer-pass line
+# Bite-proof record: cloud_cleanup.py
 
-Detectors: `plugins/superheroes/lib/tests/test_cloud_cleanup.py` (`T1`) and `plugins/superheroes/lib/tests/test_cloud_setup_gardening.py` (`T2`).
+Detector: `plugins/superheroes/lib/tests/test_cloud_cleanup.py` (`T1`).
 Guarded elements (declared by the order): (1) the open-PR `none` return in `plan`; (2) the `branch-moved` sha check;
-(3) the final sha read right before the DELETE; (4) the `branch-in-use` base check; (5) `record`'s delivered-only `ownerMessage`;
-(6) the `Renew now` threshold. Each was neutralized by a targeted edit in the production file, the detector run alone
+(3) the final sha read right before the DELETE; (4) the `branch-in-use` base check; (5) `record`'s delivered-only `ownerMessage`.
+Each was neutralized by a targeted edit in the production file, the detector run alone
 as one `-k` selection, then restored by the inverse edit. The test files were never edited during the proofs.
 
 Run command, each time, from `plugins/superheroes/lib`: `/root/.local/bin/pytest -p no:cacheprovider <file> -q -k <selection>`.
@@ -15,8 +15,8 @@ Pinned condition: the fixtures set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG
 because this machine's global git config signs every commit through a signer that is not running (the ledger fixture repository still uses git). What that pin makes
 unobservable: a developer's own git configuration (signing, hooks, aliases) acting on the fixture repositories.
 
-Greens: one green run of both files after all six restores (`35 passed`), not six single-node greens; the order's
-14-invocation budget cannot hold six reds, six greens, a first green and the regression run. See the order's budget note in the report.
+Greens: one green run after all five restores, not five single-node greens; the order's
+14-invocation budget cannot hold five reds, five greens, a first green and the regression run. See the order's budget note in the report.
 
 ## 1. The open-PR `none` return
 
@@ -94,30 +94,6 @@ FAILED tests/test_cloud_cleanup.py::test_a_failed_request_may_be_overwritten_by_
 
 - Restore: the inverse edit; `cloud_cleanup.py:262` reads `    owner = texts[got["outcome"]] % number if receipt["outcome"] == "delivered" else None`.
 
-## 6. The `Renew now` threshold
+## Green after all five restores
 
-Axis: a pass lapsing exactly `next_pass_days` away is marked `Renew now` (inclusive bound).
-
-- Neutralization (`cloud_setup.py`, `_lapse_line`): `if days <= next_pass_days:` became `if days < next_pass_days:`.
-- Node: `T2 -k test_the_threshold_is_the_next_pass_days_inclusive`.
-- Red (unfiltered): `1 failed in 0.34s`; at exactly 7 days the mark was `None`.
-
-```
->       assert _lines(w)[0]["mark"] == "Renew now"
-E       AssertionError: assert None == 'Renew now'
-FAILED tests/test_cloud_setup_gardening.py::test_the_threshold_is_the_next_pass_days_inclusive
-1 failed, 8 deselected in 0.34s
-```
-
-- Restore: the inverse edit; `cloud_setup.py:335` reads `    if days <= next_pass_days:`.
-
-## Green after all six restores
-
-`/root/.local/bin/pytest -p no:cacheprovider tests/test_cloud_cleanup.py tests/test_cloud_setup_gardening.py -q`
-
-```
-...................................                                      [100%]
-35 passed in 7.94s
-```
-
-A search of `cloud_cleanup.py` and `cloud_setup.py` for `if False`, `if True` and `days <` found none of the neutralizations present.
+A search of `cloud_cleanup.py` for `if False` and `if True` found none of the neutralizations present.

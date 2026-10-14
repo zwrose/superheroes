@@ -1,14 +1,11 @@
-"""Doctrine-search guards for the cloud-lane cleanup and the gardening pass's duty 8.
+"""Doctrine-search guards for the cloud-lane cleanup.
 
-Bites on: any shipped line that reminds the owner about an unanswered archive prompt; any new
-reader of the reviewer-pass gardening line beyond the one the gardening pass names; the closed
-duties list drifting from eight, or duties 1 to 7 changing; the gardening record losing the
-reviewer-pass line; the cleanup procedure leaving its one home; requirement, Canon, issue or
-session ids in the prose this change added.
+Bites on: any shipped line that reminds the owner about an unanswered archive prompt; the cleanup
+procedure leaving its one home; requirement, Canon, issue or session ids in the prose this change
+added.
 
 **Residual blind spots:** the reminder search is a word match on lines that name the archive, so a
-reminder phrased with none of its words, or split across two lines, passes; the reader search is a
-text search for the two names, so a reader that builds the subcommand name at run time passes.
+reminder phrased with none of its words, or split across two lines, passes.
 """
 import difflib
 import os
@@ -32,18 +29,12 @@ _BASE = "b300a85d64b4f339900509800ee6d9f60485c0f2"
 _REF = "skills/showrunner/reference"
 _MERGE_TRAIN = f"{_REF}/merge-train.md"
 _SKILL = "skills/showrunner/SKILL.md"
-_OWNER_DECISIONS = f"{_REF}/owner-decisions.md"
 _WAVE_WATCH = f"{_REF}/wave-watch.md"
 _TRANSITION = "TRANSITION.md"
 _CLOUD = "skills/workhorse/reference/cloud.md"
-_DOCTRINE = (_MERGE_TRAIN, _SKILL, _OWNER_DECISIONS, _WAVE_WATCH, _TRANSITION, _CLOUD)
+_DOCTRINE = (_MERGE_TRAIN, _SKILL, _WAVE_WATCH, _TRANSITION, _CLOUD)
 
 _HOME_HEADING = "## Cleaning up a finished cloud lane"
-_DUTIES_LABEL = "**The eight duties, a closed list.**"
-_FIRST_DUTY = "1. **Age the P1s.**"
-_MEMORY_PARAGRAPH = "**Memory gardening at the pass.**"
-# The label line of the closed list as the base commit had it, before duty 8 was appended.
-_BASE_DUTIES_LABEL = "**The seven" + " duties, a closed list.**"  # split: see the old-label test
 # A line states the absence of a reminder when a negation comes before its first reminder word.
 _NEGATION = re.compile(r"\b(nothing|never|no|not)\b", re.IGNORECASE)
 _REMINDER_WORDS = re.compile(
@@ -78,30 +69,6 @@ def _collapsed(path):
     return " ".join(_read(path).split())
 
 
-def _duties_block(text, label=_DUTIES_LABEL):
-    """The lines of the closed duties list, from the first duty through the memory paragraph's start."""
-    lines = text.split("\n")
-    labels = [i for i, line in enumerate(lines) if line.strip() == label]
-    assert len(labels) == 1, f"expected exactly one {label!r} line, found {len(labels)}"
-    start = next(
-        (i for i in range(labels[0], len(lines)) if lines[i].startswith(_FIRST_DUTY)), None
-    )
-    assert start is not None, "the first duty's line was not found after the label"
-    end = next(
-        (i for i in range(start, len(lines)) if lines[i].startswith(_MEMORY_PARAGRAPH)), None
-    )
-    assert end is not None, "the memory-gardening paragraph was not found after the duties"
-    block = lines[start:end]
-    while block and not block[-1].strip():
-        block.pop()
-    return block
-
-
-def _numbered_items(block):
-    """(number, first line index) of each top-level numbered item in ``block``."""
-    return [(int(m.group(1)), i) for i, line in enumerate(block) if (m := re.match(r"(\d+)\. ", line))]
-
-
 def _reminder_hits(lines):
     """Lines naming the archive and a reminder word with no negation ahead of the first such word."""
     hits = []
@@ -119,73 +86,6 @@ def test_no_reminder_about_an_unanswered_archive_prompt():
     for rel, path in _shipped((".md", ".py")):
         hits.extend((rel, line) for line in _reminder_hits(_read(path).split("\n")))
     assert hits == [], hits
-
-
-def test_reviewer_pass_gardening_line_has_no_new_reader():
-    py_readers = []
-    for rel, path in _shipped((".py",)):
-        if rel == "lib/cloud_setup.py":
-            continue
-        for line in _read(path).split("\n"):
-            if "gardening_lines" in line or re.search(
-                r"cloud_setup\S*.*\bgardening\b|\bgardening\b.*cloud_setup", line
-            ):
-                py_readers.append((rel, line.strip()))
-    assert py_readers == [], f"shipped callers of the gardening line: {py_readers}"
-
-    md_readers = sorted(
-        rel
-        for rel, path in _shipped((".md",))
-        if re.search(r"cloud_setup\.py gardening", _collapsed(path))
-    )
-    assert md_readers == sorted([_OWNER_DECISIONS, _TRANSITION]), md_readers
-
-
-def test_duty_8_closes_the_list_and_duties_1_to_7_are_unchanged():
-    block = _duties_block(_read(os.path.join(_PLUGIN, _OWNER_DECISIONS)))
-    items = _numbered_items(block)
-    assert [n for n, _ in items] == list(range(1, 9)), f"duties are numbered {[n for n, _ in items]}"
-    item_8 = "\n".join(block[items[7][1]:])
-    assert item_8.startswith("8. **Read the reviewer pass"), item_8[:80]
-    assert "cloud_setup.py gardening" in " ".join(item_8.split())
-
-    first_seven = block[: items[7][1]]
-    while first_seven and not first_seven[-1].strip():
-        first_seven.pop()
-    base = subprocess.run(
-        ["git", "-C", _REPO, "show", f"{_BASE}:plugins/superheroes/{_OWNER_DECISIONS}"],
-        capture_output=True,
-        text=True,
-    )
-    assert base.returncode == 0, f"cannot read {_OWNER_DECISIONS} at {_BASE}: {base.stderr}"
-    base_block = _duties_block(base.stdout, _BASE_DUTIES_LABEL)
-    assert first_seven == base_block, "duties 1 to 7 changed"
-
-
-def test_the_old_label_appears_nowhere_under_plugins():
-    old = "The seven" + " duties"  # split so this file does not name it
-    named = []
-    scanned = 0
-    for root, dirs, files in os.walk(_PLUGINS):
-        dirs[:] = [d for d in dirs if d not in {"__pycache__", ".git", "node_modules"}]
-        for name in files:
-            if name.endswith((".md", ".py")):
-                scanned += 1
-                path = os.path.join(root, name)
-                if old in _read(path):
-                    named.append(os.path.relpath(path, _PLUGINS))
-    assert scanned, "no files scanned; the plugins directory did not resolve"
-    assert named == [], named
-
-
-def test_gardening_record_lists_the_reviewer_pass_line():
-    text = _read(os.path.join(_PLUGIN, _OWNER_DECISIONS))
-    match = re.search(r"^## The gardening record\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
-    assert match, "the gardening record section was not found"
-    bullets = [line for line in match.group(1).split("\n") if line.startswith("- ")]
-    reviewer = [b for b in bullets if "reviewer-pass line" in b]
-    assert len(reviewer) == 1, reviewer
-    assert "duty 8" in reviewer[0] and "Renew now" in reviewer[0]
 
 
 def test_cleanup_procedure_has_one_home_and_the_others_point_to_it():
