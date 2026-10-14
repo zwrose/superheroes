@@ -7497,7 +7497,12 @@ def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
     lines = [line for line in status.splitlines() if line.strip()]
     toplevel = None
     if any(line.startswith("??") for line in lines):
-        toplevel = run_git(root, "rev-parse", "--show-toplevel")
+        try:
+            toplevel = store_core.repo_root(root)
+        except store_core.RepoRootUnavailable as exc:
+            return (WITHDRAW_GIT_UNAVAILABLE,
+                    "the repository root could not be resolved at %r: %s" % (root, exc),
+                    WITHDRAW_RESTORE_NOT_CHECKED)
     dirty = [line for line in lines
              if not line.startswith("??")
              or _untracked_outside_session(session_dir, toplevel, line)]
