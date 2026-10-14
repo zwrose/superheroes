@@ -17,6 +17,7 @@
 - [The revisit-trigger registry](#the-revisit-trigger-registry)
 - [The gardening pass](#the-gardening-pass)
 - [The gardening record](#the-gardening-record)
+- [Calibration changes and time complaints](#calibration-changes-and-time-complaints)
 - [Delivery mechanics](#delivery-mechanics)
 - [Formatting — one block per spine section](#formatting--one-block-per-spine-section)
 - [Where the items come from, and the bound on that sweep](#where-the-items-come-from-and-the-bound-on-that-sweep)
@@ -228,27 +229,48 @@ declined with a trigger by default.
 
 1. **Every grading records its scoring durably on the item**. The record carries the band cited,
    the evidence tier, and the resulting tier. Whoever graded it writes it, normally the advisor.
-2. **The misses log captures three classes**. The classes are declined-then-escaped,
-   launched-then-regretted, and mis-tiered. The advisor appends **at the moment the miss is
-   observed**, whether that is a vet, a field report, or an incident, and reads the log at every
+2. **The misses log captures four classes**. The classes are declined-then-escaped,
+   launched-then-regretted, mis-tiered, and the [review escape](../../../rubric/glossary.md#review-escape).
+   The advisor appends **at the moment the miss is observed**, whether that is a vet, a field report,
+   or an incident, and reads the log at every
    [gardening pass](../../../rubric/glossary.md#gardening-pass).
-3. **Every vet receipt states the misses-log appends it made, or `None`,** following that receipt's
+3. **A review escape is logged by the act that observes it.** Four things settle it.
+   - **What triggers one.** A vet of a fix, a detective diagnosis, a field report, or the owner's own
+     report traces a bug to a PR that had a review.
+   - **Who logs it.** The act that observes it logs it, at that moment. The advisor appends it during
+     that vet, while reading that diagnosis or field report, or when the owner reports it. The act's own
+     durable record states the append, as item 4 requires.
+     An escape is logged once per bug: the act reads the misses log first, and when an earlier act
+     already logged that same bug from that PR, it appends nothing and its record says the escape was
+     already logged. A different bug from the same PR is a separate escape and gets its own entry.
+   - **What the entry says.** The PR, a short description of the bug, a link to that PR's
+     [review record](../../../rubric/glossary.md#review-record) (the record is one hop from the PR), the
+     date of the review that record holds, and one call. The call is **missed** when no finding in the
+     record names the bug. It is **seen and left** when a finding names it and its outcome let it
+     through: shown wrong, a craft call, left for the owner, or a ruling. A finding whose outcome is
+     fixed but whose fix did not hold counts as **missed**, because the review did not stop the bug;
+     the entry then names that finding and says its fix did not hold.
+   - **Counting starts at adoption.** A review escape counts only when the review it traces to is dated
+     on or after the project's [adoption day](#calibration-changes-and-time-complaints), so no reviewer
+     seat is judged on reviews from before the project adopted this way of learning. An escape traced
+     to an earlier review is still logged, marked as before adoption, and never counted.
+4. **Every vet receipt states the misses-log appends it made, or `None`,** following that receipt's
    own filled-or-`None` convention. The same line rides the durable record of any field-report
    processing or incident response — so a quiet log is visibly claimed quiet by each observing act
    rather than silently unappended, and the advisor's sole-appender role is auditable from the
    receipts. The receipt carries it as spine field 10 (`skills/showrunner/reference/vet-receipt.md`).
    **The gardening record**, not the vet receipt, is where the window's appends are
    accounted for.
-4. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
+5. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
    with corrected inputs, alongside any recalibration of the instruments. Recalibrations reach the
    owner as proposals to stamp, never as silent re-scores.
-5. **Rubber-stamping is watched by judgment, never by count.** No tally of accepts and rejects is
+6. **Rubber-stamping is watched by judgment, never by count.** No tally of accepts and rejects is
    kept, because agreement can simply mean the proposals were sound. When either the owner or the
    advisor suspects it, the advisor reads a sample of recent decisions back to the owner at a walk.
-6. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
+7. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
    comment. One surface, one pin, already read at every vet. The **gardening record** lands as a
    durable comment on the collector at each pass.
-7. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
+8. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
    ran in, full, light, or micro,** so the receipt corpus can be read by lane. The receipt carries it
    as spine field 9 (`skills/showrunner/reference/vet-receipt.md`). **The grading record does not carry it**, because no lane
    exists at intake.
@@ -537,8 +559,36 @@ advisor run together to keep calibration honest.
      reclaimed**. When the batch is done and the queue is not empty, the advisor **says how many
      remain and asks whether to draw another batch of about five**. Batches continue on the owner's
      word until the queue is empty or the owner stops.
-3. **Read the [misses log](../../../rubric/glossary.md#misses-log)** and propose any recalibrations for
-   the owner's stamp.
+3. **Read the [misses log](../../../rubric/glossary.md#misses-log), including its review escapes,** and
+   the [keep-or-retire](../../../rubric/glossary.md#keep-or-retire-entry) entries of the **reviewer seats**
+   and of the review record writer. Propose any recalibrations of the grading instruments for the
+   owner's stamp. From the same evidence, propose changes to the
+   [calibration](../../../rubric/glossary.md#calibration).
+   - **A calibration proposal is a batch-2 item**, because it concerns no single PR. It carries the
+     [per-item spine](#the-per-item-spine) and names **the evidence it rests on** (the escapes and seat records, each with its
+     link), **its options**, **what each option costs** (in reviewers, time, or risk left open), and
+     **a recommendation**.
+   - **A proposal to loosen the calibration has exactly the same shape and asks for the same yes as a
+     proposal to tighten it.** A tightening: "make database changes a risk area", resting on two
+     escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
+     window".
+   - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
+     escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
+     record writer's `read --pr <n>` returns it, and each review escape as its review's date
+     (`reviewedAt`) and its call (`missed` or `seen-and-left`). The advisor builds that escape input
+     from the misses log at the pass, one item per review escape in the log, before-adoption ones
+     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
+     dated by that record and counts only when the date is on or after the adoption day and inside
+     the condition window. The record keeps no first date for a finding, so a catch carried from a
+     review before the adoption day into a later re-review counts by the later date; the advisor
+     weighs that before relying on a seat's count. The advisor reads the counts and judges. Missing
+     evidence reads unmeasured, never zero: the helper's tally contract says which records and escapes
+     it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
+     reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
+     is left out unread. A catch is
+     credited to every seat whose lens the finding names (a fixed finding in the security lens
+     counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
+     in that seat's lens.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -617,7 +667,7 @@ standing rule of the pass, not an eighth duty.
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
 - the open questions the passes carry until settled;
-- and **the misses-log appends made**.
+- and **the misses-log appends made**, the review escapes among them, and the calibration proposals the pass brought.
 
 **What the decisions-asked count counts.** The decisions that needed the owner's word in the window:
 P0 rulings, batched P1 words, launch words, retirement rulings, and recalibration stamps. **Nothing
@@ -638,6 +688,56 @@ list is taking too long, **or an issue is filed to automate any part of it**, th
 and coarser components on the keep-or-retire list, never automation**. **There is no timing comparison**.
 The owner's own judgment is the trigger. **The keep-or-retire list is an instrument read by a person
 and never gets a guard.** This section is the one home of that rule.
+
+## Calibration changes and time complaints
+
+The [calibration](../../../rubric/glossary.md#calibration) is what every review runs on. These rules
+say how it changes and what the advisor says when the owner finds a review slow.
+
+- **Only the owner's yes changes the calibration**, whether a proposal tightens or loosens it. While a
+  proposal is unanswered, every review runs on the calibration as it was. Nothing is applied early, in
+  part, or on silence.
+- **Applying an approved change.** The advisor runs `lib/review_learning.py apply` with the proposal and
+  the owner's recorded yes: the answer, the owner's exact words, and where and when they were given. The
+  command records the approval in Canon by Canon's write procedure
+  ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)), then writes the Risk and
+  trust half the proposal changes. A proposal that replaces an earlier Canon ruling names it in an
+  optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
+  about leftovers is the Canon entry alone. The Canon
+  entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
+  which is the next PR it opens. It never goes on the branch of the PR whose sheet carried the proposal.
+  A result other than `applied` is reported to the owner as it is, never as done. A `partial` result
+  means the approval is recorded and the setting is not confirmed written: usually it did not change,
+  but under reason `calibration-unconfirmed` the write may have landed and the setting must be read back
+  before it is reported either way.
+  Every `apply` appends a fresh Canon entry, so after a failed one the advisor reads Canon before
+  anything else. When the result names a `canonEntry`, that entry is already written, so the advisor
+  finishes what remains by hand (committing that entry, or writing and reading back the setting)
+  instead of running `apply` again, which would append a second entry.
+- **From the next review on.** A Risk and trust change takes effect for every review that starts after
+  the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
+  ruling about leftovers binds where Canon's own reading rules say it does.
+- **The adoption day.** The project's adoption day is recorded once, with `lib/review_learning.py adopt`,
+  when the project adopts the plugin release that carries this learning. It lives in the project's
+  configuration (the `projectConfiguration` block, key `reviewLearningSince`) and never moves: a later
+  `adopt` with another date refuses. With no day recorded, every count reads unmeasured. The advisor
+  records the day at the first gardening pass that finds it missing, and says so in that pass's record.
+  Counting starts on that day, so nothing earlier is counted.
+- **When the owner says a review took too long,** the advisor answers with four things:
+  1. whether the calibration is right for that change: the lane, from the PR's
+     [review record](../../../rubric/glossary.md#review-record), and the risk areas the change
+     touches, read with `lib/risk_areas.py touched` over the PR's changed paths;
+  2. whether the review loop followed it: the reviewers that ran, the rounds, and whether the loop
+     stopped at its cap, all from the review record;
+  3. what the review spent its time on: the record's cost (reviewer minutes, summed across the
+     reviewers, not the time the owner waited) and its round count. The record neither times fix
+     rounds nor says which rounds ran a fix, so the answer gives the round count, says that fix work
+     is not recorded, and estimates neither;
+  4. a proposed calibration change, or none, with its reason.
+
+  **The complaint is never treated as an instruction to go faster.** The loop keeps spending the time
+  the calibration calls for until the owner says yes to a change. A proposed change goes through the
+  same yes as any other.
 
 ## Delivery mechanics
 

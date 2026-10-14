@@ -14,6 +14,7 @@ belongs to and lists every change with its replacement.
 - After upgrading, run configure once. `rubric-version` moves from 11 to 13, so each project's review profile reads as behind until configure refreshes it.
 - After upgrading, the owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets.
 - The project keeps working before the sitting. Until then, every change whose risk is unclear goes to the full lane, and every leftover with a real consequence comes to the owner.
+- After upgrading, record the project's adoption day once: `lib/review_learning.py adopt --cwd <project> --date <today, UTC>`. Review escapes and the reviewer seats' records count only from that day.
 - The earlier plugin version is not kept runnable after this release. Downgrading under these changes is not supported.
 
 ### Review record
@@ -96,6 +97,14 @@ These retirements ship in the same release as the review record, and never apart
 - A "Fix in a follow-up" answer is the word to file that follow-up.
 - After the merge, the advisor writes the answers and the verdict back to the PR.
 - Until a project upgrades, its advisor keeps the click list and the chat merge word.
+
+### Review: learning from escapes
+
+- The misses log takes a fourth kind of miss, the review escape: a bug traced to a PR that had a review. The act that finds it logs it, links the PR's review record, and marks it missed or seen and left.
+- Each reviewer seat and the review record writer gets a keep-or-retire entry. A seat is judged on what it caught.
+- The gardening pass brings calibration proposals in batch 2. A loosening is shaped like a tightening. A change is applied only on the owner's yes and is recorded in Canon.
+- Counting starts at the adoption day, so no seat is judged on reviews from before it.
+- A complaint that a review took too long gets an answer about the calibration, never a faster loop.
 
 ## 0.42.0
 
