@@ -394,7 +394,7 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
         today = datetime.date.fromisoformat(today)
     lines = []
     for name in names:
-        account, record = None, None
+        account, record, repair = None, None, None
         try:
             with open(os.path.join(directory, name), encoding="utf-8") as fh:
                 account = json.load(fh)["account"]
@@ -406,22 +406,24 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
                     lines.append({"account": account, "mark": "Renew now", "line":
                                   "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
                                   + _RENEW + " " + _CHECK_AGAIN[0].upper() + _CHECK_AGAIN[1:]})
-                else:
-                    lines.append({"account": account, "mark": None, "line":
-                                  "Cloud reviewer pass: the last cloud check failed on %s, so %s"
-                                  % (", ".join(parts), _CHECK_AGAIN)})
-                continue
+                    continue
+                repair = ("Cloud reviewer pass: the last cloud check failed on %s, so %s"
+                          % (", ".join(parts), _CHECK_AGAIN))
             got = read(cwd, account, root)
             record = got["record"] if got["state"] == "ready" else None
         except Exception:
             record = None
         if record is None:
+            # a non-reviewer check failure with no readable record keeps its repair line alone
             lines.append({"account": account if isinstance(account, str) else None, "mark": None,
-                          "line": "Cloud reviewer pass: the setup record could not be read."})
+                          "line": repair or "Cloud reviewer pass: the setup record could not be read."})
             continue
         lapses = datetime.date.fromisoformat(record["passLapses"])
         mark, line = _lapse_line((lapses - today).days, lapses, next_pass_days,
                                  cloud_check._lapses_ok(record["passLapses"], today))
+        if repair is not None:
+            # a non-reviewer check failure keeps the independent expiry warning beside its repair line
+            mark, line = (None, repair) if mark is None else (mark, repair + " " + line)
         lines.append({"account": account, "mark": mark, "line": line})
     return lines
 

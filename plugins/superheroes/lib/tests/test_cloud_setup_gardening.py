@@ -204,3 +204,14 @@ def test_every_renew_now_line_tells_the_owner_to_sign_the_reviewer_in_again(w):
     assert len(seen) == 4
     for got in seen:
         assert sentence in got["line"], got
+
+
+def test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsing_before_the_next_pass(w):
+    import cloud_check
+    _record(w, ACCOUNT, _lapsing_in(3))
+    with open(cloud_check.failed_check_path(w[0], ACCOUNT, w[1]), "w", encoding="utf-8") as fh:
+        json.dump({"schema": "cloud-check-failed/1", "account": ACCOUNT, "failedParts": ["version"]}, fh)
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now"
+    assert "failed on version" in got["line"] and "run the setup check again" in got["line"].lower()
+    assert "3 days left" in got["line"] and RENEW in got["line"]
