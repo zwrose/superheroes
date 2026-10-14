@@ -1558,6 +1558,11 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
         entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
+    if isinstance(existing, dict) and not _disposition_is_current(existing):
+        # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
+        # never turns a real one into a craft decision.
+        entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
+            [existing, entry])
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
     if key in seen:
         ledger[seen[key]] = entry
