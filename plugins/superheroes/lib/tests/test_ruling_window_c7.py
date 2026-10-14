@@ -697,6 +697,27 @@ def test_a_lifted_choice_the_owner_approves_rides_the_batch(tmp_path, keep_sever
     assert [row["title"] for row in after["_fixBatch"]] == ["blocker B", "minor choice"]
 
 
+def test_guidance_at_the_judgment_gate_survives_skipping_the_last_blocker(tmp_path, keep_severity):
+    """axis: guidance ruled on a code-quality Minor while the owner gate is open still reaches a
+    fixer when the owner then skips the gate's only blocker."""
+    blocker = _finding("tradeoff blocker", 1)
+    blocker["tradeoff"] = True
+    session_dir, gitdir, _h = _session(
+        tmp_path, [blocker, _finding("quality minor", 2, "Minor", "code-quality")],
+        to_phase=RD.P_JUDGMENT, name="c7-judgment-guidance-skip")
+    state = _state(session_dir)
+    key_m = _finding_key_by_title(state, "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "TIDY-THE-MINOR"))["ok"]
+    [jid] = _judgment_ids(_state(session_dir))
+    out = _fold_judgment(tmp_path, session_dir, gitdir,
+                         [{"id": jid, "disposition": "skip", "reason": "keep the current shape"}])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"]["phase"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["quality minor"]
+    assert "TIDY-THE-MINOR" in _order_text(session_dir)
+
+
 def test_lift_awaits_owner_judgment_decision_table():
     """axis: which lifted rows wait for the owner."""
     choice = {"tradeoff": True}

@@ -4303,6 +4303,11 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
                 and _live_out_of_scope_ruling_for_key(state, member) is None):
             fix_batch.append(dict(live))
             queued.add(member)
+    if not fix_batch and not no_lift:
+        # An owner guidance/fix decision recorded at this gate on a lifted row still reaches a fixer.
+        guided = [r for r in _split_lifted_rows(state, judgment)[0]
+                  if not _holds_only_autonomous_lifts(state, [r])]
+        fix_batch = judgment + guided if guided else fix_batch
     if fix_batch:
         _queue_fix_batch(state, config, fix_batch, lift=not no_lift)
         return
