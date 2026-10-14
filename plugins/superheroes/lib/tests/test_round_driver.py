@@ -3125,8 +3125,10 @@ def test_mechanical_compile_nit_cap():
 def test_mechanical_compile_nit_cap_lowercase_equivalent_to_exact_case():
     """Lowercase 'nit' severity variants count toward the Nit cap like exact-case 'Nit'."""
     def _findings(severity):
+        # a stated consequence and the code-quality kind: the finding survives compile and reaches the cap
         return [
-            {"title": "nit%d" % i, "severity": severity, "file": "f.py", "line": i + 1}
+            {"title": "nit%d" % i, "severity": severity, "consequence": _CONSEQUENCE, "file": "f.py",
+             "line": i + 1, "consequenceKind": "code-quality"}
             for i in range(9)
         ]
 
@@ -3143,7 +3145,13 @@ def test_mechanical_compile_nit_cap_lowercase_equivalent_to_exact_case():
 
     compiled_lower, _ = RD.mechanical_compile(_findings("nit"), None)
     compiled_exact, _ = RD.mechanical_compile(_findings("Nit"), None)
+    assert _post_cap_counts(compiled_exact) == (RD._NIT_CAP, 1, RD._NIT_CAP + 1)  # the cap really acted
     assert _post_cap_counts(compiled_lower) == _post_cap_counts(compiled_exact)
+    # compile canonicalizes severity before the cap, so only a direct call puts "nit" in front of the cap itself
+    capped_lower = RD._nit_cap(_findings("nit"))
+    capped_exact = RD._nit_cap(_findings("Nit"))
+    assert _post_cap_counts(capped_exact) == (RD._NIT_CAP, 1, RD._NIT_CAP + 1)
+    assert _post_cap_counts(capped_lower) == _post_cap_counts(capped_exact)
 
 
 def test_mechanical_compile_normalizes_list_dimension():

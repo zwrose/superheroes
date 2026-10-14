@@ -73,7 +73,7 @@ justification); a CONFIRMED finding survives stamped
 Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an
 issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base
 rubric's "Triage rubric"). Set `dimension` to "Code" on every entry. Severity caps
-from the base rubric apply (at most 5 code-quality-only Nits reported per agent; real-consequence Nits are uncapped).
+from the base rubric apply (at most 5 code-quality-only Nits reported per review round across all seats; real-consequence Nits are uncapped).
 Deliver per the base rubric's panel output-format section. Write your payload artifact to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
 
 ## Ratified residuals (owner-ratified, quoted data)

@@ -26,6 +26,7 @@ import definition_doc  # noqa: E402
 import finding_outcomes as FO  # noqa: E402
 import round_orders  # noqa: E402
 import session_contract as SC  # noqa: E402
+import test_risk_areas as TRA  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 import verification  # noqa: E402
 
@@ -93,9 +94,16 @@ def _staged_state(findings, cfg=None):
 
 # --- T1: code quality only is craft, wherever it sits ------------------------------------------
 
-@pytest.mark.parametrize("extra", [{}, {"riskAreas": ["f.py"]}], ids=["no-risk-area", "risk-area-covers-file"])
-def test_t1_code_quality_minor_left_at_convergence_is_craft(extra, sources_calls):
-    result, state = _run_once([_finding("Naming")], TRD._cfg_cert(**extra))
+@pytest.mark.parametrize("risk_area", [False, True], ids=["no-risk-area", "risk-area-covers-file"])
+def test_t1_code_quality_minor_left_at_convergence_is_craft(risk_area, tmp_path, sources_calls):
+    if risk_area:
+        area = dict(TRA.PAYMENTS, name="The reviewed file", covers=["f.py"])
+        repo, store = TRA._repo(tmp_path, [area])
+        read = TRA.R.touched(repo, ["f.py"], root=store)
+        assert read["riskAreas"] == "set"
+        assert [hit["area"]["name"] for hit in read["touched"]] == ["The reviewed file"]
+        assert read["touched"][0]["matched"] == ["f.py"]
+    result, state = _run_once([_finding("Naming")], TRD._cfg_cert())
     assert state["terminal"] == "converged"
     row = _row(state, "Naming")
     assert row["disposition"] == "craft"
@@ -514,14 +522,23 @@ def test_t11_a_terminal_with_pending_new_issues_settles_them_and_records_the_dro
 def test_t12_settling_twice_changes_nothing(tmp_path, sources_calls):
     state = _staged_state([_finding("Real", 1, "Important", "real"),
                            _finding("Tidy", 2, "Minor", "code-quality")])
-    state["_newIssues"] = [{"file": "f.py", "line": 1, "title": "Vague worry", "severity": "Important"},
-                           _finding("Late find", 2, "Minor", "real")]
+    nits = [_finding("Nit %d" % i, 3 + i, "Nit", "code-quality") for i in range(RD._NIT_CAP + 2)]
+    state["reviewedDiff"] = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                             "@@ -1 +1,12 @@\n-old\n" + "+new\n" * 12)  # every pending Nit sits in scope
+    state["_newIssues"] = ([{"file": "f.py", "line": 1, "title": "Vague worry", "severity": "Important"},
+                            _finding("Late find", 2, "Minor", "real")] + nits)
     RD._record_disposition(state, "f.py::real@L1", "out-of-scope", 1, outOfScopeReason="later")
     RD._set_terminal(state, "converged")
+    collapsed = ["f.py::nit %d@L%d" % (i, 3 + i) for i in range(RD._NIT_CAP, RD._NIT_CAP + 2)]
+    collapsed_rows = {k: copy.deepcopy(_ledger(state)[k]) for k in collapsed}
+    assert [r["disposition"] for r in collapsed_rows.values()] == ["craft", "craft"]  # the cap really collapsed two
     first = json.dumps(state, sort_keys=True)
+    first_keys = sorted(_ledger(state))
     RD._settle_open_findings(state)
     RD._settle_open_findings(state, cap=True)
     assert json.dumps(state, sort_keys=True) == first
+    assert sorted(_ledger(state)) == first_keys
+    assert {k: _ledger(state)[k] for k in collapsed} == collapsed_rows
 
 
 def test_stale_fixed_disposition_is_settled_as_open(sources_calls):
