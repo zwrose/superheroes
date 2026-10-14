@@ -106,7 +106,7 @@ def test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands():
         "before starting the next round",
         'a short "no findings" line',
         "refuses the file as too large, post instead a short list",
-        "(severity, title, file:line)",
+        "(severity, title, file:line), rendered through `render_raw` before it is posted",
         "the full text was too large",
         "lives only on the container",
     ):

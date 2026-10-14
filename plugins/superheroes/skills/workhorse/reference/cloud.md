@@ -215,7 +215,8 @@ After each review round, render that round's whole raw findings file through `re
 the build's pull request when one exists, otherwise on the build's issue, naming the round and the
 head it reviewed, before starting the next round. For a round with no findings, post a short "no
 findings" line. If `render_raw` refuses the file as too large, post instead a short list of that
-round's findings (severity, title, file:line) and say the full text was too large. The review
+round's findings (severity, title, file:line), rendered through `render_raw` before it is posted, and
+say the full text was too large. The review
 session's own directory lives only on the container and is lost when the session ends.
 
 When the record writer refuses, follow `skills/review-code/reference/review-record.md` § When it
