@@ -1872,6 +1872,18 @@ def _seed_pending_new_issues(state):
             session_contract.DISPOSITION_LEDGER_OWNER_VALUE)
 
 
+def _newest_content(row, live):
+    """The live copy, unless the ledger row was raised after it (staged, not yet synthesized)."""
+    if not isinstance(live, dict):
+        return row
+    live_seq = live.get(session_contract.RAISED_SEQ_FIELD)
+    row_seq = row.get(session_contract.RAISED_SEQ_FIELD)
+    if (isinstance(live_seq, int) and not isinstance(live_seq, bool)
+            and isinstance(row_seq, int) and not isinstance(row_seq, bool) and row_seq > live_seq):
+        return row
+    return live
+
+
 def _disposition_is_current(row):
     """True when row carries a known disposition newer than the finding's last raise."""
     disp = row.get("disposition")
@@ -1929,7 +1941,7 @@ def _settle_open_findings(state, cap=False):
             continue
         if _disposition_is_current(row):
             continue
-        todo.append((key, row, live_by_key.get(key) or row))
+        todo.append((key, row, _newest_content(row, live_by_key.get(key))))
     if not todo:
         return
     sources = {}

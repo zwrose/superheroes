@@ -554,3 +554,18 @@ def test_a_cap_stop_states_the_round_cap_whatever_the_verdict(sources_calls):
     RD._park_round_ceiling(state, "ceiling")
     assert state["terminal"] == "halted"
     assert _row(state, "Real")["settledReason"] == "still open when the loop reached its round cap"
+
+
+def test_a_staged_newer_report_settles_over_the_older_live_copy():
+    state = RD.new_state({"repoRoot": "/nonexistent-review-project"})
+    f = {"file": "f.py", "line": 1, "title": "Bug", "severity": "Minor",
+         "consequence": "harder to read", "consequenceKind": "code-quality"}
+    RD._stage_findings(state, [f])
+    RD._set_findings(state, state["_toVerify"])
+    state["round"] = 2
+    RD._stage_findings(state, [dict(f, consequence="lost work", consequenceKind="real")])
+    RD._seed_findings_before_record_park(state)
+    RD._park_cannot_certify(state, "record write failed")
+    row = state[SC.DISPOSITION_LEDGER_KEY][0]
+    assert row["disposition"] != "craft"
+    assert row["consequenceKind"] == "real"
