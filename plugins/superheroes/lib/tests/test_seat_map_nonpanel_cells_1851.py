@@ -219,9 +219,13 @@ def test_live_vendors_path_synthesizes_both_cells_per_listed_vendor(capsys):
     for vendor in ("codex", "cursor"):
         for role in ("verifier", "reviewer-deep"):
             assert _real_cell(role, vendor) in receipt["nonPanelLiveCells"]
-        # the registry lists no synthesis cell for this vendor (that row has only `claude`), so the
-        # receipt holds none: it carries exactly the cells the registry lists
-        assert _real_cell("synthesis", vendor) is None
+        # the receipt carries exactly the cells the registry lists: codex's synthesis cell (the same
+        # triple as its verifier cell), and none for cursor, whose synthesis row is empty
+        synthesis = _real_cell("synthesis", vendor)
+        if MR.matrix_config("synthesis", vendor) is None:
+            assert synthesis is None
+        else:
+            assert synthesis in receipt["nonPanelLiveCells"]
 
 
 def test_live_vendors_path_lists_only_the_listed_vendors(capsys):
