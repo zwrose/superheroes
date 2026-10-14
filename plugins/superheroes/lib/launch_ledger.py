@@ -1806,7 +1806,7 @@ def _read_ps_text(pid, flag):
             capture_output=True,
             text=True,
             timeout=_PS_READ_TIMEOUT_SECONDS,
-            env={**os.environ, "LC_ALL": "C"},
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
         )
         if result.returncode != 0:
             return None
@@ -1837,7 +1837,7 @@ def read_birth_identity(pid):
 def _birth_identity_is_foreign(recorded, fresh):
     """True only when every recorded field is in the fresh read and at least one differs.
 
-    Raw strings are compared, never parsed times. Anything uncertain (no recorded
+    Raw strings are compared, never parsed times (``ps`` is read under TZ=UTC so they are caller-stable). Anything uncertain (no recorded
     identity, an unreadable fresh read, or a fresh read missing a recorded field) is False.
     """
     if not isinstance(recorded, dict) or not isinstance(fresh, dict):
@@ -1850,11 +1850,11 @@ def _birth_identity_is_foreign(recorded, fresh):
         return False
     if not all(isinstance(fresh.get(field), str) and fresh[field] for field in held):
         return False
-    # The start time is the immutable birth identifier; a command alone can change under a live
-    # process (exec, title update, `<defunct>`), so it decides only when no start time is held.
-    if "pidLstart" in held:
-        return fresh["pidLstart"] != recorded["pidLstart"]
-    return any(fresh[field] != recorded[field] for field in held)
+    # The start time is the only immutable birth identifier; a command alone can change under a live
+    # process (exec, title update, `<defunct>`), so a command-only record never proves a reused pid.
+    if "pidLstart" not in held:
+        return False
+    return fresh["pidLstart"] != recorded["pidLstart"]
 
 
 def _pid_is_foreign(pid, started_ts, session_id):
@@ -1896,7 +1896,7 @@ def _child_group_is_live(pid, *, started_ts, session_id, birth_identity=None):
 
     A recorded birth identity (``pidLstart``/``pidCommand`` from the ``started`` record)
     is checked first, before any shortcut: a fresh read that lacks no recorded field and
-    has a different start time (or, with no start time held, a different command) is a reused pid, not the lane's child, so it is not live.
+    has a different start time is a reused pid, not the lane's child, so it is not live.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False

@@ -453,6 +453,10 @@ PERMISSION_RULES_FILENAME = calibration_paths.PERMISSION_RULES_FILENAME
 _STORE_TOP_FILES = calibration_paths.STORE_TOP_FILES
 
 
+# The one refusal-reason token every cloud-session calibration-write refusal carries.
+CLOUD_REFUSAL_REASON = "calibration-write-in-cloud-session"
+
+
 class CalibrationWriteRefused(PermissionError):
     """A calibration file write was attempted in a cloud session (CLAUDE_CODE_REMOTE == "true").
 
@@ -474,7 +478,7 @@ def atomic_write(path, text, tmp_prefix=".store-core."):
     In a cloud session (CLAUDE_CODE_REMOTE == "true") a calibration file is never written:
     raises CalibrationWriteRefused before anything touches the disk."""
     if in_cloud_session() and is_calibration_path(path):
-        raise CalibrationWriteRefused("calibration-write-in-cloud-session: %s" % path)
+        raise CalibrationWriteRefused("%s: %s" % (CLOUD_REFUSAL_REASON, path))
     d = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=tmp_prefix, suffix=".tmp")

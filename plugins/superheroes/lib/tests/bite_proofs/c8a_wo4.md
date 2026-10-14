@@ -34,7 +34,7 @@ the orchestrator runs red and green from the manifest `/tmp/claude-0/-home-user-
 **guarded element:** `_birth_identity_is_foreign`, `launch_ledger.py`. **axis:** both fields recorded, the
 fresh `pidLstart` differs, the command is equal: the recorded pid is not the lane's child, so the outcome records.
 
-**neutralization:** `    return any(fresh[field] != recorded[field] for field in held)` became `    return any(False for field in held)`.
+**neutralization:** `    return fresh["pidLstart"] != recorded["pidLstart"]` became `    return False`.
 
 **raw red:**
 ```
@@ -57,7 +57,7 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_record_outcome_
 
 **restore:** the inverse edit.
 
-**restore receipt:** `    return any(fresh[field] != recorded[field] for field in held)`
+**restore receipt:** `    return fresh["pidLstart"] != recorded["pidLstart"]`
 
 **raw green:**
 ```
@@ -65,41 +65,14 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_record_outcome_
 1 passed in 4.06s
 ```
 
-## V464-b — the command differs alone
+## V464-b — a command alone never proves a reused pid
 
-**guarded element:** the `any(...)` in `_birth_identity_is_foreign`. **axis:** one differing recorded field
-is enough; both need not differ.
+**guarded element:** the `"pidLstart" not in held` guard in `_birth_identity_is_foreign`. **axis:** a recorded
+identity holding only `pidCommand` is never foreign, because a live process can change its command (exec, retitle).
 
-**neutralization:** `any(fresh[field] != recorded[field] for field in held)` became `all(...)`.
+**neutralization:** the guard's `        return False` became `        return fresh["pidCommand"] != recorded["pidCommand"]`.
 
-**raw red:**
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_____________ test_record_outcome_records_when_the_command_differs _____________
-    def test_record_outcome_records_when_the_command_differs(tmp_path, monkeypatch):
-        # edge: both recorded, command differs (same start time) -> not live
-        repo = _identity_lane(tmp_path, monkeypatch, "l-command", _BORN)
-        _fake_signal0_alive(monkeypatch)
-        _fresh_identity(monkeypatch, dict(_BORN, pidCommand="vim notes.txt"))
->       assert ll.record_outcome(repo, "l-command", "handback", "done")["ok"] is True
-E       assert False is True
-
-/home/user/c8a-wo4/plugins/superheroes/lib/tests/test_launch_ledger.py:5723: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_record_outcome_records_when_the_command_differs
-1 failed in 2.97s
-```
-
-**restore:** the inverse edit.
-
-**restore receipt:** `    return any(fresh[field] != recorded[field] for field in held)`
-
-**raw green:**
-```
-.                                                                        [100%]
-1 passed in 0.82s
-```
+Re-run pending: the orchestrator re-runs this proof after the fix.
 
 ## V464-c — an unreadable fresh read
 
