@@ -1,6 +1,7 @@
 """Tests for lib/review_learning.py (#1718, review C10): the adoption day, the owner-approved
 calibration change, and the seat tally."""
 import datetime
+import types
 import json
 import os
 import subprocess
@@ -447,8 +448,10 @@ def test_tally_undated_and_malformed_records_contribute_nothing():
 
 
 def test_tally_until_defaults_to_today_utc():
+    before = datetime.datetime.now(datetime.timezone.utc).date()
     got = RL.tally([], [], D)
-    assert got["window"]["until"] == datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    after = datetime.datetime.now(datetime.timezone.utc).date()
+    assert got["window"]["until"] in {before.isoformat(), after.isoformat()}  # a run crossing UTC midnight stays green
     assert got["measured"] is True
 
 
@@ -764,6 +767,13 @@ def _origin_with_newer_canon(tmp_path, canon_root, canon_text="newer canon\n"):
 
 def test_apply_fetches_origin_before_the_canon_lookup(proj, canon_root, tmp_path, monkeypatch):
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    class _PinnedDatetime(datetime.datetime):  # pin the UTC day so a midnight crossing cannot split the minted id's day
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.datetime.strptime(today, "%Y-%m-%d").replace(hour=12, tzinfo=tz)
+
+    monkeypatch.setattr(canon, "datetime", types.SimpleNamespace(datetime=_PinnedDatetime, timezone=datetime.timezone))
     remote_id = today + "-abcd1234-1"  # the id apply would mint first: only the fetched default branch holds it
     remote = canon.build_line(RL._append_args(canon_root, SID[:8], _proposal(ruling="Remote ruling."), APPROVAL), remote_id)
     loc = dict(definition_doc.resolve_canon(canon_root), defaultRef="origin/main")
