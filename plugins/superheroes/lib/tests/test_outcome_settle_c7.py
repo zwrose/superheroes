@@ -567,5 +567,23 @@ def test_a_staged_newer_report_settles_over_the_older_live_copy():
     RD._seed_findings_before_record_park(state)
     RD._park_cannot_certify(state, "record write failed")
     row = state[SC.DISPOSITION_LEDGER_KEY][0]
-    assert row["disposition"] != "craft"
+    assert row["disposition"] == "left-for-owner"
     assert row["consequenceKind"] == "real"
+    import review_record_session as RRS
+    exported = RRS._findings(state)[0]
+    assert exported["consequence"] == "lost work"
+    assert exported["outcome"] == "left-for-owner"
+
+
+def test_a_merged_real_consequence_is_not_settled_as_craft():
+    state = RD.new_state({"repoRoot": "/nonexistent-review-project"})
+    f = {"file": "f.py", "line": 1, "title": "Bug", "severity": "Minor",
+         "consequence": "lost work", "consequenceKind": "real"}
+    RD._stage_findings(state, [f])
+    RD._set_findings(state, state["_toVerify"])
+    older = state["findings"][0]
+    newer = dict(f, consequence="harder to read", consequenceKind="code-quality",
+                 **{SC.RAISED_SEQ_FIELD: (older.get(SC.RAISED_SEQ_FIELD) or 0) + 1})
+    merged = RD._merge_same_finding(older, newer)
+    assert merged["consequenceKind"] == "real"
+    assert merged[SC.RAISED_SEQ_FIELD] == newer[SC.RAISED_SEQ_FIELD]

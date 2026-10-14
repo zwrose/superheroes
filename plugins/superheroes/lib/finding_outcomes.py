@@ -18,7 +18,7 @@ Callers pass text and dicts in. Anything missing or malformed fails closed, towa
 import canon
 import review_findings_schema
 
-_DECISION_KINDS = ("canon", "residual", "sheet-answer")
+DECISION_KINDS = ("canon", "residual", "sheet-answer")
 _SUPERSEDES_PREFIX = "supersedes: "
 
 
@@ -120,6 +120,20 @@ def _sheet_ref_text(ref):
     return str(ref)
 
 
+def decided_by_well_formed(decided_by):
+    """True only for {"kind": <DECISION_KINDS>, "ref": ...} with nothing else: ref is a non-blank
+    string for canon and residual, and {"pr": int, "card": non-blank string} for a sheet answer."""
+    if not isinstance(decided_by, dict) or set(decided_by) != {"kind", "ref"}:
+        return False
+    kind, ref = decided_by["kind"], decided_by["ref"]
+    if kind not in DECISION_KINDS:
+        return False
+    if kind == "sheet-answer":
+        return (isinstance(ref, dict) and set(ref) == {"pr", "card"} and _is_int(ref["pr"])
+                and isinstance(ref["card"], str) and ref["card"].strip() != "")
+    return isinstance(ref, str) and ref.strip() != ""
+
+
 def on_record(decided_by, sources):
     """Decide whether a cited owner decision is on record: (True, what) or (False, why).
 
@@ -132,7 +146,7 @@ def on_record(decided_by, sources):
         sources = {}
     kind = decided_by.get("kind")
     ref = decided_by.get("ref")
-    if kind not in _DECISION_KINDS:
+    if kind not in DECISION_KINDS:
         return False, "the cited decision kind is not recognised"
     if ref is None or (isinstance(ref, str) and ref.strip() == ""):
         return False, "the cited decision names no reference"

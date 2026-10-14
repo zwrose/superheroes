@@ -914,6 +914,10 @@ def _merge_same_finding(existing, incoming):
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
     merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
+    seqs = [f.get(session_contract.RAISED_SEQ_FIELD) for f in (existing, incoming)]
+    seqs = [q for q in seqs if isinstance(q, int) and not isinstance(q, bool)]
+    if seqs:  # the newest raise, so settlement sees the merged live copy as current
+        merged[session_contract.RAISED_SEQ_FIELD] = max(seqs)
     return merged
 
 
@@ -1958,6 +1962,11 @@ def _settle_open_findings(state, cap=False):
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
             content, ruling=rulings.get(key), sources=sources, open_reason=reason)
+        live = live_by_key.get(key)
+        if content is row and live is not None and live is not row:
+            # The newer staged report outranks the live copy: the owner record reads live content first.
+            live.update({k: v for k, v in row.items()
+                         if k not in session_contract.DISPOSITION_FAMILY_FIELDS})
         carried = {}
         if row.get("disposition") == "out-of-scope":
             carried = {name: row[name] for name in ("outOfScopeReason", "followUp") if name in row}
@@ -6799,19 +6808,8 @@ def _load_ruling_file(path):
 
 
 def _decided_by_well_formed(decided_by):
-    """True only for {"kind": canon|residual|sheet-answer, "ref": ...} with nothing else: ref is a
-    non-blank string for canon and residual, and {"pr": int, "card": non-blank string} for a sheet answer."""
-    if not isinstance(decided_by, dict) or set(decided_by) != {"kind", "ref"}:
-        return False
-    kind, ref = decided_by["kind"], decided_by["ref"]
-    if kind in ("canon", "residual"):
-        return isinstance(ref, str) and ref.strip() != ""
-    if kind == "sheet-answer":
-        pr = ref.get("pr") if isinstance(ref, dict) else None
-        card = ref.get("card") if isinstance(ref, dict) else None
-        return (set(ref) == {"pr", "card"} and isinstance(pr, int) and not isinstance(pr, bool)
-                and isinstance(card, str) and card.strip() != "")
-    return False
+    """The shared decidedBy contract (finding_outcomes), the one home rule ingestion and settlement read."""
+    return finding_outcomes.decided_by_well_formed(decided_by)
 
 
 def _validate_ruling_entries(doc):
