@@ -241,8 +241,9 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    --launch-id <the plan's launchId>`.
    GitHub deletes the pull request's branch when the repository deletes merged branches; otherwise
    this step deletes it through GitHub, only while it still points at the pull request's head. It reports `deleted: false` with
-   `already: "absent"` when the branch was already gone. A refusal (`branch-moved`, `branch-in-use`,
-   `default-branch`, `head-repo-foreign`) is reported to the owner, never worked around.
+   `already: "absent"` when the branch was already gone. The step reports what a re-read of the branch shows, never
+   what the delete call returned. A refusal (`branch-moved`, `branch-in-use`, `default-branch`,
+   `head-repo-foreign`, `delete-unconfirmed`, `delete-outcome-unknown`) is reported to the owner, never worked around.
 5. **What is left.** The session, until the owner taps Allow, and the lane's record. The branch is
    gone, and a cloud launch made no checkout or worktree to remove.
 

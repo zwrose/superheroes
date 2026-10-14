@@ -97,3 +97,82 @@ FAILED tests/test_cloud_cleanup.py::test_a_failed_request_may_be_overwritten_by_
 ## Green after all five restores
 
 A search of `cloud_cleanup.py` for `if False` and `if True` found none of the neutralizations present.
+
+## Round 3: the branch step reconciles by observation
+
+Entries 6-12. Detectors: `T1` = `plugins/superheroes/lib/tests/test_cloud_cleanup.py`, `T2` = `plugins/superheroes/lib/tests/test_cloud_cleanup_doctrine.py`.
+Every command was run from the repository root as `scripts/pinned-python -B -m pytest <file> -q -k <test>`. Each red is the
+detector run alone as one `-k` selection, unfiltered; each restore is the inverse edit, quoted back; each green is the same command.
+The `UV_NATIVE_TLS` deprecation warning that heads every run is omitted below.
+
+## 6. The re-read after the DELETE
+
+Axis: the branch step reports what a re-read shows, never what the DELETE returned (a DELETE that times out but removed the branch reads deleted).
+
+- Neutralization (`branch`, `cloud_cleanup.py`): `_, out, err = _gh(run, ["api", "-X", "DELETE", target], env)` became `code, out, err = _gh(...)`, with `if code != 0: return _refusal("delete-unconfirmed", detail=detail)` added after the `detail =` line (trust the exit code).
+- Node: `T1 -k test_a_timed_out_delete_whose_ref_is_gone_reads_deleted`.
+- Red: last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_timed_out_delete_whose_ref_is_gone_reads_deleted` and `1 failed, 58 deselected in 2.20s`; the result was `{'detail': '', 'reason': 'delete-unconfirmed'}` where `ok: True` was expected.
+- Restore: the inverse edit; `cloud_cleanup.py:426` reads `            _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)` and line 427 is the `detail =` line.
+- Green: `1 passed, 58 deselected in 1.50s`.
+
+## 7. The single retry
+
+Axis: a DELETE that left the ref at the PR's head is issued once more, so a lost first DELETE still deletes.
+
+- Neutralization (`branch`): `for _try in (1, 2):` became `for _try in (1,):`.
+- Node: `T1 -k test_a_timed_out_delete_whose_ref_is_still_at_the_head_is_retried_once_and_re_read`.
+- Red: last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_timed_out_delete_whose_ref_is_still_at_the_head_is_retried_once_and_re_read` and `1 failed, 58 deselected in 1.48s`; the result was `{'detail': '', 'reason': 'delete-unconfirmed'}` where `ok: True` was expected.
+- Restore: the inverse edit; `cloud_cleanup.py:425` reads `        for _try in (1, 2):`.
+- Green: `1 passed, 58 deselected in 1.18s`.
+- The upper bound (never a third DELETE) is pinned by `test_two_timed_out_deletes_that_both_leave_the_branch_at_the_head_are_refused_after_exactly_two_deletes`; it was not separately neutralized, so that bound is unproven by a red run.
+
+## 8. The moved check after the delete
+
+Axis: a ref that reads another sha after the DELETE is `branch-moved`, never reported deleted or retried.
+
+- Neutralization (`branch`): `if after != head_sha:` became `if False and after != head_sha:`.
+- Node: `T1 -k test_a_ref_that_reads_another_sha_after_the_delete_is_refused_as_moved`.
+- Red: last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_ref_that_reads_another_sha_after_the_delete_is_refused_as_moved` and `1 failed, 58 deselected in 1.10s`; `{'reason': 'delete-unconfirmed'} != {'reason': 'branch-moved'}`.
+- Restore: the inverse edit; `cloud_cleanup.py:438` reads `            if after != head_sha:`.
+- Green: `1 passed, 58 deselected in 1.00s`.
+
+## 9. The unknown outcome
+
+Axis: a ref that cannot be read after the DELETE is `delete-outcome-unknown`, never a success.
+
+- Neutralization (`branch`): `if absent:` (after the re-read) became `if absent or why:`.
+- Node: `T1 -k test_a_ref_that_cannot_be_read_after_the_delete_is_an_unknown_outcome_never_a_success`.
+- Red: last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_ref_that_cannot_be_read_after_the_delete_is_an_unknown_outcome_never_a_success` and `1 failed, 58 deselected in 1.02s`; `assert (True is False)` (the branch step returned `ok: True`).
+- Restore: the inverse edit; `cloud_cleanup.py:430` reads `            if absent:`.
+- Green: `1 passed, 58 deselected in 1.03s`.
+
+## 10. `record` runs under the module lock
+
+Axis: two overlapping `pending` writes for one PR and session give exactly one reservation; the second caller waits on the lock.
+
+- Neutralization (`cloud_cleanup.py`): the `@_locked` line above `def record(` was removed.
+- Node: `T1 -k test_two_overlapping_pending_writes_for_the_same_pr_and_session_give_one_reservation`.
+- Red: last lines: `AssertionError: the second caller never reached the lock while the first held it`, `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_two_overlapping_pending_writes_for_the_same_pr_and_session_give_one_reservation` and `1 failed, 58 deselected in 11.00s`. The red is the test's own wait for the second caller to reach the lock (with the decorator gone the second caller never calls `acquire`); it is not a double reservation observed in the state file.
+- Restore: the inverse edit; `cloud_cleanup.py:307-308` read `@_locked` then `def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, run=None):`.
+- Green: `1 passed, 58 deselected in 1.03s`.
+
+## 11. The negation is tied to the reminder verb
+
+Axis: a negation suppresses a reminder hit only when it directly governs the verb; one sitting in an earlier condition does not.
+
+- Neutralization (`T2`, `_NEGATION_BEFORE`): the regex became `r"\b(?:nothing|never|no|not)\b"` (any negation ahead of the verb suppresses).
+- Node: `T2 -k test_the_reminder_detector_ties_a_negation_to_the_reminder_verb`.
+- Red: last lines: `AssertionError: assert []` for `_reminder_hits(['If the owner has not answered the archive prompt, remind them again.'])`, `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup_doctrine.py::test_the_reminder_detector_ties_a_negation_to_the_reminder_verb` and `1 failed, 8 deselected in 0.14s`.
+- Restore: the inverse edit; `test_cloud_cleanup_doctrine.py:40` reads `_NEGATION_BEFORE = re.compile(r"\b(?:nothing|never|no|not)\s+(?:(?:ever|yet|then|again|also)\s+)?$|n't\s+$", re.IGNORECASE)`.
+- Green: `1 passed, 8 deselected in 0.13s`.
+
+## 12. One home across documents
+
+Axis: the cleanup heading and its distinctive step (`cloud_cleanup.py plan --repo-root`) appear in no shipped `.md` other than `merge-train.md`.
+
+- `Unreachable through this entry point`: a real red needs a second shipped document to carry the heading or the step, and every other shipped `.md` is outside this order's surface. The neutralization below is a detector-side proxy, not that proof.
+- Proxy neutralization (`T2`, the one-home test): the exclusion `if rel != _MERGE_TRAIN` became `if rel != _SKILL`, so `merge-train.md` itself counts as a second document.
+- Node: `T2 -k test_cleanup_procedure_has_one_home_and_the_others_point_to_it`.
+- Red: last lines: `AssertionError: [('skills/showrunner/reference/merge-train.md', 'heading'), ('skills/showrunner/reference/merge-train.md', 'procedure step')]`, `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup_doctrine.py::test_cleanup_procedure_has_one_home_and_the_others_point_to_it` and `1 failed, 8 deselected in 0.18s`. It shows the scan finds both needles in a document it does not exclude; it does not show that a copy elsewhere would be caught.
+- Restore: the inverse edit; `test_cloud_cleanup_doctrine.py:124` reads `        if rel != _MERGE_TRAIN`.
+- Green: `1 passed, 8 deselected in 0.17s`.

@@ -1,8 +1,8 @@
 """Doctrine-search guards for the cloud-lane cleanup.
 
 Bites on: any shipped line that reminds the owner about an unanswered archive prompt; the cleanup
-procedure leaving its one home; requirement, Canon, issue or session ids in the prose this change
-added.
+procedure, its heading or its distinctive step appearing in a second shipped document; requirement,
+Canon, issue or session ids in the prose this change added.
 
 **Residual blind spots:** the reminder search is a word match on lines that name the archive, so a
 reminder phrased with none of its words, or split across two lines, passes.
@@ -35,11 +35,11 @@ _CLOUD = "skills/workhorse/reference/cloud.md"
 _DOCTRINE = (_MERGE_TRAIN, _SKILL, _WAVE_WATCH, _TRANSITION, _CLOUD)
 
 _HOME_HEADING = "## Cleaning up a finished cloud lane"
-# A line states the absence of a reminder when a negation comes before its first reminder word.
-_NEGATION = re.compile(r"\b(nothing|never|no|not)\b", re.IGNORECASE)
-_REMINDER_WORDS = re.compile(
-    r"\bremind|\bnudge|follow[ -]up|\bchase|\bagain\b|still waiting|unanswered", re.IGNORECASE
-)
+# A reminder verb is suppressed only by a negation that directly governs it ("nothing reminds", "never
+# remind", "no reminder", "not remind"), not by a negation sitting in an earlier condition.
+_NEGATION_BEFORE = re.compile(r"\b(?:nothing|never|no|not)\s+(?:(?:ever|yet|then|again|also)\s+)?$|n't\s+$", re.IGNORECASE)
+_REMINDER_VERBS = re.compile(r"\bremind|\bnudge|follow[ -]up|\bchase", re.IGNORECASE)
+_WEAK_WORDS = re.compile(r"\bagain\b|still waiting|unanswered", re.IGNORECASE)
 _ARCHIVE = re.compile(r"archive", re.IGNORECASE)
 
 
@@ -70,15 +70,35 @@ def _collapsed(path):
 
 
 def _reminder_hits(lines):
-    """Lines naming the archive and a reminder word with no negation ahead of the first such word."""
+    """Lines naming the archive that carry a reminder verb no negation directly governs; a line with no
+    reminder verb is a hit on a weak word (again, still waiting, unanswered) with no negation ahead of it."""
     hits = []
     for line in lines:
         if not _ARCHIVE.search(line):
             continue
-        trigger = _REMINDER_WORDS.search(line)
-        if trigger and not _NEGATION.search(line[: trigger.start()]):
+        verbs = list(_REMINDER_VERBS.finditer(line))
+        if verbs:
+            if any(not _NEGATION_BEFORE.search(line[: m.start()]) for m in verbs):
+                hits.append(line.strip())
+            continue
+        weak = _WEAK_WORDS.search(line)
+        if weak and not re.search(r"\b(?:nothing|never|no|not)\b", line[: weak.start()], re.IGNORECASE):
             hits.append(line.strip())
     return hits
+
+
+_SHIPPED_SENTENCE = (
+    "If the owner never answers the archive prompt, the session stays listed and the advisor carries on; "
+    "nothing reminds the owner."
+)
+
+
+def test_the_reminder_detector_ties_a_negation_to_the_reminder_verb():
+    assert _reminder_hits(["If the owner has not answered the archive prompt, remind them again."])
+    assert _reminder_hits(["If no response arrives, remind the owner about the archive prompt."])
+    assert not _reminder_hits([_SHIPPED_SENTENCE])
+    assert not _reminder_hits(["If the archive prompt is unanswered, never remind the owner."])
+    assert _SHIPPED_SENTENCE in _collapsed(os.path.join(_PLUGIN, _MERGE_TRAIN))
 
 
 def test_no_reminder_about_an_unanswered_archive_prompt():
@@ -88,12 +108,27 @@ def test_no_reminder_about_an_unanswered_archive_prompt():
     assert hits == [], hits
 
 
+_PROCEDURE_STEP = "cloud_cleanup.py plan --repo-root"
+
+
 def test_cleanup_procedure_has_one_home_and_the_others_point_to_it():
     merge_train = _read(os.path.join(_PLUGIN, _MERGE_TRAIN)).split("\n")
     assert merge_train.count(_HOME_HEADING) == 1
+    assert _PROCEDURE_STEP in _collapsed(os.path.join(_PLUGIN, _MERGE_TRAIN))
     pointer = "merge-train.md` § Cleaning up a finished cloud lane"
     for rel in (_SKILL, _WAVE_WATCH):
         assert pointer in _collapsed(os.path.join(_PLUGIN, rel)), rel
+    elsewhere = [
+        (rel, what)
+        for rel, path in _shipped((".md",))
+        if rel != _MERGE_TRAIN
+        for what, found in (
+            ("heading", _HOME_HEADING in _read(path).split("\n")),
+            ("procedure step", _PROCEDURE_STEP in _collapsed(path)),
+        )
+        if found
+    ]
+    assert elsewhere == [], elsewhere
 
 
 def test_builder_side_of_the_archive_request():

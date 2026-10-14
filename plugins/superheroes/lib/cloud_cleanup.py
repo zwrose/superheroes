@@ -25,6 +25,10 @@ checks read, with the credential the reads already proved; no git command runs. 
 again right before the delete and the delete is skipped if it moved. The REST delete has no expected-sha
 condition, so a push that lands between that last read and the delete is not caught; that window is accepted,
 because the pull request is already merged or closed and its builder is finished.
+The delete's own result is never trusted: the branch step reports what a re-read of the branch shows. After
+the delete the branch is read again; absent is deleted, still at the PR's head is deleted once more (one retry,
+never more) and then refused as `delete-unconfirmed`, any other sha is `branch-moved`, and a branch that cannot
+be read is `delete-outcome-unknown`.
 """
 import argparse
 import datetime
@@ -411,23 +415,30 @@ def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
             return _refusal("branch-moved")
         # axis: the delete goes through the gh channel the checks read, so it targets exactly the checked repository
         # The sha was read just above and is compared with the PR's head; the REST delete has no expected-sha
-        # condition, so a push landing between that read and this call is not caught (accepted: the PR is
+        # condition, so a push landing between that read and the delete is not caught (accepted: the PR is
         # already merged or closed and its builder is finished).
-        code, out, err = _gh(run, ["api", "-X", "DELETE",
-                                   "repos/%s/git/refs/heads/%s" % (repo, urllib.parse.quote(name, safe="/"))], env)
-        if code != 0:
-            # a 404 or 422 means the ref may already be gone: only an absent read-back says so
-            refused = _refusal("delete-refused", detail=next((ln for ln in (err or out).splitlines() if ln.strip()), ""))
-            if code is None or not re.search(r"HTTP (404|422)", out + "\n" + err):
-                return refused
-            _, why, absent = _ref_sha(repo, name, env, run)
-            if not absent:
-                return refused
+        # The delete's own result is never trusted: its exit code, output and errors decide nothing. The branch
+        # step reports what a re-read of the branch shows. A ref still at the PR's head is deleted once more
+        # (one retry, never more); any other sha is a moved branch; an unreadable ref is an unknown outcome.
+        target = "repos/%s/git/refs/heads/%s" % (repo, urllib.parse.quote(name, safe="/"))
+        detail = ""
+        for _try in (1, 2):
+            _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)
+            detail = next((ln for ln in (err or out).splitlines() if ln.strip()), "")
+            # axis: only a 404 read-back after the delete is absent; the delete's own result says nothing — see bite-proof record c8_cloud_cleanup
+            after, why, absent = _ref_sha(repo, name, env, run)
+            if absent:
+                deleted, already = True, None
+                break
+            # axis: a branch that is unreadable after the delete is an unknown outcome, never a success — see bite-proof record c8_cloud_cleanup
+            if why:
+                return _refusal("delete-outcome-unknown",
+                                detail="the branch could not be read after the delete, so whether it was deleted is unknown")
+            # axis: a branch that moved during the delete is never reported deleted — see bite-proof record c8_cloud_cleanup
+            if after != head_sha:
+                return _refusal("branch-moved")
         else:
-            _, why, absent = _ref_sha(repo, name, env, run)
-            if not absent:
-                return _refusal("delete-unconfirmed", detail=why or "branch-present")
-            deleted, already = True, None
+            return _refusal("delete-unconfirmed", detail=detail)
     names = _listing(repo, env, run)
     if names is None:
         return _refusal("branches-unreadable")
