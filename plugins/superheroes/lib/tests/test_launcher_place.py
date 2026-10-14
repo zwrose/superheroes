@@ -110,7 +110,7 @@ def machine(monkeypatch):
 def _cloud(monkeypatch, **kwargs):
     """Inject the platform command stand-in; the list of the calls made to it."""
     calls = []
-    monkeypatch.setattr(L, "_default_cloud_spawn", _fake_spawn(calls=calls, **kwargs))
+    monkeypatch.setattr(L, "default_cloud_spawn", _fake_spawn(calls=calls, **kwargs))
     return calls
 
 
@@ -361,7 +361,7 @@ def test_a_base_ref_that_moves_between_the_cloud_attempt_and_the_fallback_builds
         _git(world.repo, "update-ref", "refs/heads/moving", second)
         raise OSError("no platform")
 
-    monkeypatch.setattr(L, "_default_cloud_spawn", spawn_that_moves_the_ref_then_fails)
+    monkeypatch.setattr(L, "default_cloud_spawn", spawn_that_moves_the_ref_then_fails)
     code, result = _launch(world, capsys, 232, baseCommit="moving")
 
     assert code == 0, result

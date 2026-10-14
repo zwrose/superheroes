@@ -82,6 +82,16 @@ _expand_home = config_dir._expand_home
 # exec-time environment, not the live resolution, so a spawn-plumbing check is not a receipt.
 EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
 EFFORT_REFLECTION_ENV = "CLAUDE_EFFORT"
+
+
+def pin_effort(env, effort):
+    """Pin ``effort`` in ``env`` for a child: overwrite the documented input and drop the stale
+    reflection. A None effort is the inherit case and touches neither."""
+    if effort is not None:
+        env[EFFORT_ENV] = effort
+        env.pop(EFFORT_REFLECTION_ENV, None)
+
+
 # Owner ruling 2026-08-25 (in-channel, walk-3 sitting): every use of Opus 5 runs at effort
 # `medium` — "opus 5 works better at medium overall". The launcher pins it at the spawn point
 # so a builder can never run at whatever effort the launching session happened to carry;
@@ -1439,7 +1449,27 @@ def _make_terminate_handler(state):
     return handler
 
 
-def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
+def _drain_pty(master, chunks, budget=0.5):
+    """Append what is still buffered in the pty master to ``chunks``, for at most ``budget`` seconds.
+
+    Stops on no data ready, an empty read, an OSError (EIO once the child has gone, or a closed
+    descriptor) or the budget elapsing. Never raises.
+    """
+    try:
+        deadline = time.monotonic() + budget
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if not ready:
+                break
+            data = os.read(master, 65536)
+            if not data:
+                break
+            chunks.append(data)
+    except Exception:
+        pass
+
+
+def default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
     """Run the cloud launch command once under a pseudo-terminal and return what it printed.
 
     The command refuses to run without a terminal, so its stdin, stdout and stderr are the slave
@@ -1502,6 +1532,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                 deadline = time.monotonic() + timeout
                 while True:
                     if term_state["pending"]:
+                        _drain_pty(master, chunks)
                         raise _LauncherTerminated()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -1522,6 +1553,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
                     wait_until = max(deadline, time.monotonic() + 0.1)
                     while True:
                         if term_state["pending"]:
+                            _drain_pty(master, chunks)
                             raise _LauncherTerminated()
                         remaining = wait_until - time.monotonic()
                         if remaining <= 0:
@@ -1584,7 +1616,7 @@ def _default_cloud_spawn(argv, cwd, log_path, child_env, timeout):
             pass
 
 
-def _strip_terminal_sequences(text):
+def strip_terminal_sequences(text):
     """The text with terminal control sequences and control bytes other than the newline removed."""
     text = _TERMINAL_OSC_RE.sub("", text)
     text = _TERMINAL_CSI_RE.sub("", text)
@@ -1592,7 +1624,7 @@ def _strip_terminal_sequences(text):
     return _TERMINAL_CONTROL_RE.sub("", text)
 
 
-def _read_cloud_receipt(text, session_name):
+def read_cloud_receipt(text, session_name):
     """The `(session_id, session_url)` of a coherent creation receipt in `text`, else None.
 
     Coherent: a `Created cloud session: <name>` line whose name is `session_name`, then a `View:`
@@ -1687,7 +1719,7 @@ def _run_cloud_spawn(
     session may exist, and only its owner's `record-outcome` ends the lane. Never raises for a
     command that ran.
     """
-    spawn = spawn_fn or _default_cloud_spawn
+    spawn = spawn_fn or default_cloud_spawn
     try:
         with open(err_path, "ab"):
             pass
@@ -1708,9 +1740,9 @@ def _run_cloud_spawn(
 
     pid = spawned.get("pid")
     output = spawned.get("output")
-    text = _strip_terminal_sequences(output) if isinstance(output, str) else ""
+    text = strip_terminal_sequences(output) if isinstance(output, str) else ""
     # axis: where the id is read from — only a coherent creation receipt, never a token elsewhere.
-    receipt = _read_cloud_receipt(text, session_name)
+    receipt = read_cloud_receipt(text, session_name)
 
     started = {
         "event": "started",
@@ -1997,9 +2029,7 @@ def _spawn_attempt(
     # nothing while destroying the one honest observable — a child's reflection is evidence of
     # what the CLI resolved only for as long as we do not forge it, and a forged one is exactly
     # the placebo receipt vet 178 caught. A None effort is the inherit case and touches neither.
-    if effort is not None:
-        child_env[EFFORT_ENV] = effort
-        child_env.pop(EFFORT_REFLECTION_ENV, None)
+    pin_effort(child_env, effort)
     try:
         out_fh = open(log_path, "ab")
     except OSError:
@@ -3032,10 +3062,7 @@ def launch_build(
         # The same rule as the local spawn: the variable outranks the `--effort` flag, so a
         # resolved effort overwrites the ambient value and drops the stale reflection; a None
         # effort touches neither.
-        resolved_effort = compose_result["effort"]
-        if resolved_effort is not None:
-            cloud_env[EFFORT_ENV] = resolved_effort
-            cloud_env.pop(EFFORT_REFLECTION_ENV, None)
+        pin_effort(cloud_env, compose_result["effort"])
         success_base = {
             "ok": True,
             "reason": None,
