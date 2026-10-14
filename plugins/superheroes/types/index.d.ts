@@ -2,7 +2,8 @@ declare module 'claude-code' {
   interface PluginState {
     superheroes: {
       transcriptPath: string | null
-      // from session.start: false for `claude -p` and the SDK, where nothing runs automatically
+      // from session.start: false for `claude -p` and the SDK; attendance also counts the desktop
+      // app on the surface roster (`isAttended` in ../hooks/mod/decide), and only an attended session runs anything automatically
       isInteractive: boolean
       // the running turn's id, from turn.start to the main loop's turn.complete (null: idle)
       isTurnActive: string | null

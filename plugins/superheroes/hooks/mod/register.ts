@@ -2,7 +2,8 @@
 // directive plus its checkpoint notes, saves the checkpoint block a reply ends with
 // (layer 1), and runs the automatic checkpoint: at the trigger it runs
 // /superheroes:checkpoint, and once the notes file changed it compacts (layer 2;
-// the decisions are ./decide). Every hook here fails open — on any error the event
+// the decisions are ./decide), only in an attended session: an interactive one, or one
+// with the desktop app on the surface roster. Every hook here fails open — on any error the event
 // goes on unchanged (`next(e)` once), no delivered-marker is written, and the
 // PreCompact command hook steers in its place.
 //
@@ -19,7 +20,7 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv, unmarkArgv } from './argv'
 import type { CliVocabulary } from './argv'
 import { extractCheckpointBlock } from './checkpoint-block'
-import { decide, effectiveTrigger, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
+import { DESKTOP_SURFACE, decide, effectiveTrigger, isAttended, notesChanged, rearmAt, settingsFrom, snooze } from './decide'
 import type { Settings } from './decide'
 
 const MANIFEST = '.claude-plugin/plugin.json'
@@ -44,6 +45,10 @@ const rearmAfterCompact = { plugin: 'superheroes', key: 'rearmAfterCompact' } as
 
 // True while a checkpoint is being started: two measurements must not both start one.
 let isStarting = false
+
+// Counts the session's own compactions that succeeded, bumped by the `session.compact` hook.
+// A plain variable: a rejected state write cannot hide a compaction from it.
+let compactionsDone = 0
 
 const note = ($: EngineInterface, text: string): void => {
   try {
@@ -206,6 +211,20 @@ const rearmTo = (
 ): number | null =>
   tokens < trigger ? null : rearmAt(tokens, breakdown?.isAutoCompactEnabled ? breakdown.autoCompactThreshold : undefined)
 
+// The surfaces the session draws on, read afresh at each decision (a client attaches at any
+// time). Null (fail closed: unattended) when the read fails or answers anything but a list.
+async function readSurfaces($: EngineInterface): Promise<readonly unknown[] | null> {
+  try {
+    const surfaces: unknown = await $.session.surfaces()
+
+    return Array.isArray(surfaces) ? surfaces : null
+  } catch (error) {
+    note($, `surfaces: ${String(error)}`)
+
+    return null
+  }
+}
+
 // Reads the fill, decides, and draws the band from state; starts a checkpoint on `fire`.
 // A failed usage read changes nothing.
 async function evaluate($: EngineInterface, options: unknown): Promise<void> {
@@ -243,7 +262,7 @@ async function evaluate($: EngineInterface, options: unknown): Promise<void> {
     trigger,
     mode: settings.mode,
     isIdle: typeof (await $.state.get(isTurnActive)).value !== 'string',
-    isInteractive: (await $.state.get(isInteractive)).value === true,
+    isAttended: isAttended((await $.state.get(isInteractive)).value === true, await readSurfaces($)),
     isRunning,
     snoozeUntilTokens: typeof snoozed === 'number' ? snoozed : null,
   })
@@ -378,7 +397,21 @@ function compactSoon($: EngineInterface, options: unknown, startedAt: number, is
         throw new Error('a turn is still running')
       }
 
-      const res = await $.session.compact()
+      let res: { skip?: string } | undefined
+
+      if ((await $.state.get(isInteractive)).value === true) {
+        res = await $.session.compact()
+      } else {
+        // a headless (SDK) session rejects `$.session.compact()`: run the /compact command
+        // instead. It resolves without an outcome, but the `session.compact` hook counts a
+        // successful compaction, independent of its checkpoint cleanup (which can fail).
+        const before = compactionsDone
+
+        await $.command.run({ command: 'compact', args: '' })
+        if (compactionsDone === before) {
+          throw new Error('the /compact command did not compact')
+        }
+      }
 
       // a vetoed compaction resolves with a skip: the context did not shrink
       if (typeof res?.skip === 'string') {
@@ -537,6 +570,7 @@ export const register: Register = (on, options) => {
     if ('skip' in result) {
       await unmarkLater($, attempt)
     } else {
+      compactionsDone += 1
       await forgetFill($)
       try {
         await $.state.set(rearmAfterCompact, true)
@@ -560,6 +594,20 @@ export const register: Register = (on, options) => {
     }
 
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // the desktop app joining the roster is the moment an attended session begins: no measure
+  // need follow it
+  on('session.attach', { surface: DESKTOP_SURFACE }, async ($, e, next) => {
+    const result = await next(e)
+
+    try {
+      await evaluate($, options)
+    } catch (error) {
+      note($, `session.attach: ${String(error)}`)
+    }
+
+    return result
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {

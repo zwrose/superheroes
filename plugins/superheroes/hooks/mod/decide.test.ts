@@ -6,6 +6,7 @@ import {
   SNOOZE_STEP_TOKENS,
   decide,
   effectiveTrigger,
+  isAttended,
   notesChanged,
   rearmAt,
   settingsFrom,
@@ -25,13 +26,13 @@ const schemaOf = (): Record<string, any> => ({
 const settingsOf = (schema: unknown, options: unknown): Settings => settingsFrom(options, schema)!
 const TRIGGER = 500000
 
-// Every gate open: at the trigger, auto, idle, interactive, nothing running, no snooze.
+// Every gate open: at the trigger, auto, idle, attended, nothing running, no snooze.
 const open: DecideInput = {
   tokens: TRIGGER,
   trigger: TRIGGER,
   mode: 'auto',
   isIdle: true,
-  isInteractive: true,
+  isAttended: true,
   isRunning: false,
   snoozeUntilTokens: null,
 }
@@ -60,8 +61,26 @@ test('idle gate: a running turn keeps the band and holds the fire', () => {
   expect(run({ isIdle: false })).toEqual({ showBand: true, fire: false, reason: 'busy' })
 })
 
-test('interactive gate: headless draws nothing automatic', () => {
-  expect(run({ isInteractive: false })).toMatchObject({ fire: false, reason: 'headless' })
+test('attended gate: an unattended session draws no band and fires nothing, in every mode', () => {
+  const headless = { showBand: false, fire: false, reason: 'headless' }
+
+  expect(run({ isAttended: false })).toEqual(headless)
+  expect(run({ isAttended: false, mode: 'click-only' })).toEqual(headless)
+  expect(run({ isAttended: false, tokens: TRIGGER - HEADS_UP_TOKENS })).toEqual(headless)
+  expect(run({ isAttended: false, tokens: TRIGGER - 1 })).toEqual(headless)
+})
+
+test('isAttended: interactive, or the desktop app on the roster', () => {
+  expect(isAttended(true, [])).toBe(true)
+  expect(isAttended(true, null)).toBe(true)
+  expect(isAttended(false, ['desktop'])).toBe(true)
+  expect(isAttended(false, ['terminal', 'desktop'])).toBe(true)
+  expect(isAttended(false, [])).toBe(false)
+  expect(isAttended(false, null)).toBe(false)
+  expect(isAttended(false, ['mobile'])).toBe(false)
+  expect(isAttended(false, ['vscode'])).toBe(false)
+  expect(isAttended(false, ['terminal'])).toBe(false)
+  expect(isAttended(false, ['Desktop'])).toBe(false)
 })
 
 test('running gate: a checkpoint in progress hides the band and holds the fire', () => {

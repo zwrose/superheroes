@@ -71,25 +71,37 @@ export const effectiveTrigger = (
   return Math.max(MIN_TRIGGER_TOKENS, Math.min(settings.thresholdTokens, window))
 }
 
+// The surface of the desktop app, whose Code tab hosts the session as an SDK host (so
+// `session.start` reports it not interactive): its presence on the roster is attendance.
+export const DESKTOP_SURFACE = 'desktop'
+
+// bite-proof axis: a non-interactive session counts as attended only with 'desktop' on the roster
+export const isAttended = (isInteractive: boolean, surfaces: readonly unknown[] | null): boolean =>
+  isInteractive === true || (Array.isArray(surfaces) && surfaces.includes(DESKTOP_SURFACE))
+
 export type DecideInput = {
   tokens: number
   trigger: number
   mode: string
   isIdle: boolean
-  isInteractive: boolean
+  isAttended: boolean
   isRunning: boolean
   snoozeUntilTokens: number | null
 }
 
 export type Decision = { showBand: boolean; fire: boolean; reason: string }
 
-// `reason` names the gate that decided: off, running, below-heads-up, click-only,
-// headless, busy, below-trigger, snoozed, or fire.
+// `reason` names the gate that decided: off, headless (no person attached: no band and no
+// run, in every mode), running, below-heads-up, click-only, busy, below-trigger, snoozed,
+// or fire.
 export const decide = (input: DecideInput): Decision => {
-  const { tokens, trigger, mode, isIdle, isInteractive, isRunning, snoozeUntilTokens } = input
+  const { tokens, trigger, mode, isIdle, isRunning, snoozeUntilTokens } = input
 
   if (mode === OFF_MODE) {
     return { showBand: false, fire: false, reason: 'off' }
+  }
+  if (!input.isAttended) {
+    return { showBand: false, fire: false, reason: 'headless' }
   }
   if (isRunning) {
     return { showBand: false, fire: false, reason: 'running' }
@@ -104,9 +116,6 @@ export const decide = (input: DecideInput): Decision => {
     return tokens < (snoozeUntilTokens ?? 0)
       ? { showBand: false, fire: false, reason: 'snoozed' }
       : band(false, 'click-only')
-  }
-  if (!isInteractive) {
-    return band(false, 'headless')
   }
   if (!isIdle) {
     return band(false, 'busy')

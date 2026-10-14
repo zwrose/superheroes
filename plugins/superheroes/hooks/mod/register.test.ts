@@ -110,6 +110,8 @@ type Rig = {
   compactAttempts: number
   // state writes the rig rejected
   denied: number
+  // what `session.surfaces` answers (null: the read fails)
+  surfaces: readonly string[] | null
 }
 
 // Registers the world beneath the mod: the CLI stub on `process.run`, the file
@@ -130,6 +132,8 @@ function rig(
     manifest?: string | null
     compactFailures?: number
     compactSkip?: string
+    // a `/compact` command compacts the session, as the SDK host does (firing `session.compact`)
+    isCompactCommandCompacting?: boolean
     // the clock reading the session.compact handler moves to before it fails or resolves
     compactAt?: number
   } = {},
@@ -154,6 +158,7 @@ function rig(
     isUnreadable: false,
     compactAttempts: 0,
     denied: 0,
+    surfaces: [],
   }
 
   on('session.id', () =>
@@ -247,6 +252,7 @@ function rig(
   // the engine's own band, which the mod's draws in place of only while it has something to say
   on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
   on('session.usage', () => (r.usage === null ? { deny: 'no usage' } : { value: r.usage }))
+  on('session.surfaces', () => (r.surfaces === null ? { deny: 'no roster' } : { value: r.surfaces }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('command.run', async (_$, e) => {
@@ -254,6 +260,11 @@ function rig(
 
     if (options.isCommandBroken) {
       throw new Error('unknown command')
+    }
+    if (options.isCompactCommandCompacting && e.command === 'compact') {
+      await engine?.session.compact({ trigger: 'manual', messages: HISTORY })
+
+      return {}
     }
     // a command whose own turn has not started yet: the test starts it later
     if (options.isCommandSilent) {
@@ -269,6 +280,7 @@ function rig(
     return { text: '' }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.attach', (_$, e) => ({ clientId: e.clientId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('classic.SessionStart', () => ({}))
 
@@ -749,6 +761,148 @@ test('headless (not interactive): nothing runs automatically', async ($, on) => 
 
   await start($, false)
   await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+})
+
+// A non-interactive session (the desktop app's Code tab hosts one) is attended only while
+// the desktop app is on the surface roster, read at each decision.
+const bandWrites = (r: Rig) => r.sets.filter(([key]) => key === 'band')
+
+test('desktop on the roster: a non-interactive session runs the automatic checkpoint', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('desktop on the roster: a non-interactive session draws the band with Now and Snooze', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, NEAR)
+  const ui = await mountBand($, 'desktop')
+
+  expect(await ui.find({ type: 'Text', text: 'Auto-checkpoint soon' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'now' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'snooze' })).toBeDefined()
+})
+
+for (const mode of ['auto', 'click-only'] as const) {
+  test(`an unattended session (empty roster) runs nothing and draws no band in ${mode} mode`, { options: { autoCheckpointMode: mode } }, async ($, on) => {
+    const r = rig(on, () => saveAnswer)
+
+    await start($, false)
+    r.surfaces = []
+    await measure($, r, PAST)
+    await measure($, r, NEAR)
+    await r.clock.settle()
+    const ui = await mountBand($, 'desktop')
+
+    expect(r.commands).toEqual([])
+    expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'now' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'snooze' })).toBeUndefined()
+  })
+}
+
+test('other surfaces on the roster do not attend a non-interactive session', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  for (const surfaces of [['mobile'], ['vscode']]) {
+    r.surfaces = surfaces
+    await measure($, r, PAST)
+    await r.clock.settle()
+  }
+
+  expect(r.commands).toEqual([])
+  expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+})
+
+test('a roster read that fails leaves a non-interactive session unattended, and the session goes on', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = null
+  const res = await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(res).toEqual({ changed: ['context'] })
+  expect(r.commands).toEqual([])
+  expect(bandWrites(r).every(([, value]) => value === false)).toBe(true)
+})
+
+test('the desktop app attaching late starts the checkpoint with no further measure', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([])
+
+  r.surfaces = ['desktop']
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+})
+
+test('the desktop app attaching late carries the checkpoint through the save and the /compact command', async ($, on) => {
+  const r: Rig = rig(
+    on,
+    argv => {
+      if (argv[3] === 'save') {
+        r.notes = 'fresh notes'
+      }
+      if (argv[3] === 'instructions') {
+        return ok({ mode: 'showrunner', notesPath: NOTES, notesFound: true, markerPath: MARKER, instructions: `${DIRECTIVE}\n${r.notes}` })
+      }
+
+      return argv[3] === 'mark' ? ok({}) : saveAnswer
+    },
+    { isCompactCommandCompacting: true },
+  )
+
+  await start($, false)
+  r.surfaces = []
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.surfaces = ['desktop']
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await r.clock.settle()
+
+  expect(r.commands).toEqual([COMMAND])
+
+  await complete($, block('the notes'))
+
+  expect(r.notes).toBe('fresh notes')
+  expect(r.stdins.filter(stdin => stdin !== undefined)).toEqual(['the notes'])
+  expect(r.toasts).toEqual(['Checkpoint notes saved'])
+
+  await r.clock.advance(1000)
+
+  expect(r.commands).toEqual([COMMAND, 'compact'])
+  expect(r.seen).toHaveLength(1)
+  expect(r.toasts).toEqual(['Checkpoint notes saved', SUCCESS])
+})
+
+test('a mobile attach to a non-interactive session runs nothing', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($, false)
+  await measure($, r, PAST)
+  r.surfaces = ['mobile']
+  await $.session.attach({ surface: 'mobile', clientId: 'mobile:default' })
   await r.clock.settle()
 
   expect(r.commands).toEqual([])
@@ -1519,6 +1673,44 @@ test('a compaction that succeeded is never retried for a failed follow-up write'
   // the checkpoint clear threw after the compaction ran: no retry follows it
   expect(r.denied).toBe(1)
   expect(r.compactAttempts).toBe(1)
+})
+
+test('a non-interactive compaction that succeeded is never retried for a failed follow-up write', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { brokenKey: 'checkpoint', isCompactCommandCompacting: true })
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+  await r.clock.advance(60000)
+
+  // the /compact command compacted once; the checkpoint clear threw after it: no second /compact
+  expect(r.denied).toBeGreaterThan(0)
+  expect(r.compactAttempts).toBe(1)
+  expect(r.commands.filter(c => c === 'compact')).toEqual(['compact'])
+  expect(r.toasts.filter(t => t.startsWith(COMPACT_FAILED))).toEqual([])
+})
+
+test('a non-interactive /compact that does not compact is a failure: retried once, then the owner is told', async ($, on) => {
+  const r = rig(on, () => saveAnswer, { isCompactCommandCompacting: true, compactSkip: 'vetoed by a hook' })
+
+  await start($, false)
+  r.surfaces = ['desktop']
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+
+  await r.clock.advance(1000)
+  expect(r.commands.filter(c => c === 'compact')).toEqual(['compact'])
+  expect(r.toasts).toEqual([])
+
+  await r.clock.advance(1000)
+  expect(r.commands.filter(c => c === 'compact')).toEqual(['compact', 'compact'])
+  expect(r.toasts.filter(t => t.startsWith(COMPACT_FAILED))).toHaveLength(1)
+  expect(r.toasts.filter(t => t.startsWith(SUCCESS))).toEqual([])
 })
 
 test('a follow-up turn running when the compaction timer fires costs no attempt; the next tick compacts once', async ($, on) => {

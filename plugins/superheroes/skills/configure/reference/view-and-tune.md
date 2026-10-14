@@ -605,7 +605,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
 ### Auto-checkpoint (the compaction mod)
 
-With the compaction mod, an interactive session checkpoints its notes and compacts itself once the context passes a threshold; a heads-up band above the prompt offers **Now** and **Snooze** shortly before. Three plugin settings:
+With the compaction mod, an interactive session (or a desktop-app Code session) checkpoints its notes and compacts itself once the context passes a threshold; a heads-up band above the prompt offers **Now** and **Snooze** shortly before. Three plugin settings:
 
 - `autoCheckpointTokens` — the context size at which the checkpoint starts.
 - `autoCheckpointAllowance` — how many tokens before the harness's own auto-compaction the checkpoint must land; the checkpoint runs at the lower of the two.
