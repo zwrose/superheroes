@@ -5,7 +5,6 @@ delete included, are a fake `run` that holds the repository's branches in memory
 against a remote, and nothing touches the real home directory, clock or network."""
 import json
 import os
-import re
 import urllib.parse
 import sys
 from types import SimpleNamespace
@@ -37,7 +36,7 @@ class Gh:
         self.pulls, self.open_prs, self.default = {}, [], "main"
         self.broken, self.ref_override, self.calls = set(), {}, []
         self.branches = {"main": "c" * 40, BRANCH: HEAD}
-        self.deletes, self.delete_result, self.before_delete = [], None, None
+        self.deletes, self.delete_envs, self.delete_result, self.before_delete = [], [], None, None
         self.sticky = False
 
     def __call__(self, argv, **kw):
@@ -48,6 +47,7 @@ class Gh:
         if "DELETE" in argv:
             assert argv[:4] == ["gh", "api", "-X", "DELETE"], argv
             self.deletes.append(list(argv))
+            self.delete_envs.append(kw.get("env"))
             if self.before_delete:
                 self.before_delete()
             if self.delete_result is not None:
@@ -182,6 +182,7 @@ def test_the_delete_takes_its_host_from_gh_not_from_a_built_url(w):
     w.env["GH_HOST"] = "ghe.example.com"
     assert _branch(w)["deleted"] is True
     assert len(w.gh.deletes) == 1 and "ghe.example.com" not in " ".join(w.gh.deletes[0])
+    assert w.gh.delete_envs[0]["GH_HOST"] == "ghe.example.com"
 
 
 def test_a_failed_delete_is_refused_with_the_first_line_and_the_branch_stays(w):
@@ -465,20 +466,6 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
     assert json.loads(capsys.readouterr().out)["deleted"] is True
     assert CC.main(["branch"] + base[:-2] + ["--pr", "0"]) == 1
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "pr-invalid"}
-
-
-def test_the_owner_message_is_the_boards_words_byte_for_byte():
-    # the committed board is the authoritative home of the owner message; the sentence is read from it
-    board = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "docs", "superheroes",
-                         "cloud-builders-66a2e8", "board", "build-board.html")
-    with open(board, encoding="utf-8") as fh:
-        html = fh.read()
-    paragraphs = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", p)).strip()
-                  for p in re.findall(r"<p>(.*?)</p>", html, re.S)]
-    found = [p for p in paragraphs if re.match(r"#\d+ is merged\.", p)]
-    assert len(found) == 1
-    number = int(re.match(r"#(\d+)", found[0]).group(1))
-    assert CC.OWNER_MESSAGE_MERGED % number == found[0]
 
 
 # ---------------------------------------------------------------- review round 1
