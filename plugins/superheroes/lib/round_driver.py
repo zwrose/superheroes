@@ -1610,9 +1610,16 @@ class _LineageCarry:
         self.at_location = {}
         raised = {}
         unkeyed = []
+        rows = []
         for finding in compiled:
             if not isinstance(finding, dict):
                 continue
+            rows.append(finding)
+            # A Nit-cap summary row's collapsed members are raised this round too.
+            members = finding.get("members") if finding.get("summaryEntry") else None
+            if isinstance(members, list):
+                rows.extend(m for m in members if isinstance(m, dict))
+        for finding in rows:
             key = _finding_identity_key(finding)
             if key:
                 raised.setdefault(key, finding)

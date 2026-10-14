@@ -494,3 +494,18 @@ def test_a_newer_skip_without_a_follow_up_never_inherits_an_older_one():
     state["round"] = 2
     RD._stage_findings(state, [original])
     assert L2E._ledger_by_key(state)[key_o]["followUp"] == L2E._WELL_FORMED
+
+
+def test_a_collapsed_nit_at_the_location_blocks_the_carry():
+    """axis: a Nit the readout cap collapsed into a summary row is raised this round — it counts at
+    its file and line, so a lone Important rewording there does not inherit the decision."""
+    state = _mem_state()
+    _add_rule(state, _key("old"), "out-of-scope", rnd=1)
+    important = _finding("new")
+    nits = [_finding("nit%d" % i, line=100 + i if i < 5 else LINE, severity="Nit",
+                     consequenceKind=RD.review_findings_schema.CODE_QUALITY) for i in range(6)]
+    compiled, _ = RD.mechanical_compile([important] + nits)
+    assert any(f.get("summaryEntry") for f in compiled)
+    RD._stage_findings(state, compiled)
+    _no_carry(state)
+    assert RD._filter_excluded_discharged_fixes(state, [important]) == ([important], None)
