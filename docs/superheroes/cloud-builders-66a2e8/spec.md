@@ -152,8 +152,8 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
 **FR-28.** When a cloud builder's PR is merged, the advisor shall ask that builder to archive its own session. (source: Canon 2026-10-10-ca3e7e0d-11; board · 6 Cleanup)
   - *Acceptance (Given-When-Then):* Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the platform's one prompt for that session. (source: board · 6 Cleanup)
 
-**FR-29.** When the advisor has asked a cloud builder to archive itself, the advisor shall tell the owner to expect one prompt and to tap Allow once. (source: board · 6 Cleanup)
-  - *Acceptance (rule):* The advisor's message names the merged build and the one tap. (source: board · 6 Cleanup)
+**FR-29.** When the advisor has asked a cloud builder to archive itself, the advisor shall tell the owner to expect one prompt and to tap Allow once if the builder's session has a tool to archive itself, and otherwise that the builder will say so on its issue and the session stays listed until the owner archives it by hand. (source: board · 6 Cleanup; owner's ruling "124 a", 2026-10-14)
+  - *Acceptance (rule):* The advisor's message names the merged build, the one tap when the builder can archive itself, and the hand archive when it cannot. (source: board · 6 Cleanup; owner's ruling "124 a", 2026-10-14)
 
 **FR-30.** When a cloud build's PR is merged, the plugin shall leave nothing behind for that build except its session and its lane record: no branch on the repository, and no checkout or worktree on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-9; board · 6 Cleanup)
   - *Acceptance (rule):* The archive prompt is the only step left to the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
@@ -365,6 +365,12 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   comments on the builder's issue (owner's ruling "33 a" on spike #1769's findings, Canon
   2026-10-11-dcc2b5e5-3). The messaging assumption says so. Sections touched: Assumptions &
   dependencies, Amendments.
+- **2026-10-14 (owner-stamped, substantive):** the owner's archive prompt is conditional: the
+  advisor tells the owner to expect one prompt and tap Allow once only when the builder's session
+  has a tool to archive itself; otherwise the builder says so on its issue and the owner archives
+  the session by hand (owner's ruling "124 a", collector item 124). FR-29's statement and
+  acceptance say so; FR-28 is unchanged. Sections touched: Part D · cleaning up a finished cloud
+  builder (FR-29), Amendments.
 
 ## Coverage
 

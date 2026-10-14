@@ -191,20 +191,39 @@ def test_duty_8_closes_the_list_and_duties_1_to_7_are_unchanged():
     assert first_seven == base_block, "duties 1 to 7 changed"
 
 
+# A bite-proof record quotes what it neutralized, so it may name the retired label.
+_BITE_PROOFS = os.path.join(_TESTS, "bite_proofs")
+_SKIPPED_DIRS = ("__pycache__", ".git", "node_modules")
+
+
+def _scanned_for_the_old_label():
+    """Every .md and .py file under the plugins directory that the old-label scan reads."""
+    paths = []
+    for root, dirs, files in os.walk(_PLUGINS):
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in _SKIPPED_DIRS and os.path.join(root, d) != _BITE_PROOFS
+        ]
+        paths.extend(os.path.join(root, name) for name in files if name.endswith((".md", ".py")))
+    return paths
+
+
 def test_the_old_label_appears_nowhere_under_plugins():
     old = "The seven" + " duties"  # split so this file does not name it
-    named = []
-    scanned = 0
-    for root, dirs, files in os.walk(_PLUGINS):
-        dirs[:] = [d for d in dirs if d not in {"__pycache__", ".git", "node_modules"}]
-        for name in files:
-            if name.endswith((".md", ".py")):
-                scanned += 1
-                path = os.path.join(root, name)
-                if old in _read(path):
-                    named.append(os.path.relpath(path, _PLUGINS))
-    assert scanned, "no files scanned; the plugins directory did not resolve"
+    paths = _scanned_for_the_old_label()
+    named = [os.path.relpath(path, _PLUGINS) for path in paths if old in _read(path)]
+    assert paths, "no files scanned; the plugins directory did not resolve"
     assert named == [], named
+
+
+def test_the_old_label_scan_skips_the_bite_proof_records():
+    # axis: the scan's walk leaves out lib/tests/bite_proofs only, by path — see bite-proof record c8c_wo_c.md
+    assert any(n.endswith(".md") for n in os.listdir(_BITE_PROOFS)), "no records to skip"
+    paths = [os.path.abspath(path) for path in _scanned_for_the_old_label()]
+    under = [p for p in paths if os.path.commonpath([p, _BITE_PROOFS]) == _BITE_PROOFS]
+    assert under == [], under
+    assert os.path.abspath(__file__) in paths, "the scan no longer reads the rest of lib/tests"
 
 
 def test_gardening_record_lists_the_reviewer_pass_line():

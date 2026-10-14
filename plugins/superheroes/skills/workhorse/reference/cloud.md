@@ -236,8 +236,9 @@ refuses.
   `os.devnull`, `GIT_CONFIG_NOSYSTEM` set to `1`, the fixture passing its commit identity inline)
   and does not depend on the developer's. An order that runs such tests authorizes that pin or
   leaves the run to the builder's own shell.
-- The sandbox refuses `-X pycache_prefix`. A cloud gate command drops it and keeps `-B`, because the
-  flag guards a macOS bytecode cache, not this container.
+- A gate command keeps `-B -X pycache_prefix=…`: the write channel's allow rules cover
+  `scripts/pinned-python` with any flags. If a sandbox refuses the flag, drop it and keep `-B`,
+  because the flag guards a macOS bytecode cache, not this container.
 - The size count, run as `python3 -B <plugin root>/lib/size_count.py count --base <sha> --worktree`,
   can fail inside the sandbox on stray dotfiles in the home directory
   (`git-failed: ./.bash_profile`). Run it from the builder's own shell.
