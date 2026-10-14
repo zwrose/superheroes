@@ -362,6 +362,22 @@ def test_a_ruling_citing_a_superseded_entry_goes_to_the_owner():
     assert rec["findings"][0]["outcome"] == "left-for-owner" and len(rec["decisionRechecks"]) == 1
 
 
+def test_a_ruling_citing_an_id_two_different_canon_entries_share_goes_to_the_owner():
+    # axis: the write-time re-check follows canon_decides' distinct-entry count; a ruling kept
+    # when two different complete entries share the id it cites
+    first = canon.entry_line(CANON_ID, "2026-01-02", "standing", "a ruling", 'owner\'s words: "go"', "issue thread")
+    second = canon.entry_line(CANON_ID, "2026-01-02", "standing", "a ruling", 'owner\'s words: "no, stop"', "issue thread")
+    assert first != second
+    sources = {"canonText": canon.HEADER + first + "\n" + second + "\n"}
+    rec = build(account(findings=[ruling("r-1", CANON_ID)]), Fake(sources=sources))
+    f = rec["findings"][0]
+    assert f["outcome"] == "left-for-owner"
+    assert f["reason"] == "the cited decision is not on record (the cited Canon entry is not on record); decided earlier"
+    assert rec["decisionRechecks"] == [{"finding": "r-1", "from": "ruling", "to": "left-for-owner",
+                                        "why": "the cited decision is not on record (the cited Canon entry is not on record)"}]
+    assert rec["leftForOwner"] == ["r-1"]
+
+
 @pytest.mark.parametrize("sources", [{}, {"canonText": 5}], ids=["canon-unreadable", "canon-malformed"])
 def test_edge6_unreadable_canon_leaves_a_cited_ruling_for_the_owner(sources):
     # axis: an unreadable source; a ruling kept because Canon could not be read
