@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -1734,7 +1735,7 @@ def test_a_sigterm_keeps_the_bytes_the_child_wrote_after_the_read_that_saw_the_s
         return data
 
     monkeypatch.setattr(L.os, "read", read_then_signal_then_open_the_gate)
-    script = f"echo head; while [ ! -e {gate} ]; do sleep 0.01; done; echo tail; sleep 30"
+    script = f"echo head; while [ ! -e {shlex.quote(str(gate))} ]; do sleep 0.01; done; echo tail; sleep 30"
     result = L.default_cloud_spawn(
         ["sh", "-c", script], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 20,
     )

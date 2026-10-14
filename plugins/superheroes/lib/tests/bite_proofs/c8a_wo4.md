@@ -12,20 +12,24 @@ the orchestrator runs red and green from the manifest `/tmp/claude-0/-home-user-
 
 | Element | Axis | Detector | Git fixture | Verdict |
 |---|---|---|---|---|
-| V464-a | a differing start time reads as a reused pid | `test_launch_ledger.py::test_record_outcome_records_when_the_start_time_differs` | no | proven |
-| V464-b | a differing command alone reads as a reused pid | `test_launch_ledger.py::test_record_outcome_records_when_the_command_differs` | no | proven |
-| V464-c | an unreadable fresh identity reads as live | `test_launch_ledger.py::test_record_outcome_refuses_when_the_fresh_identity_read_fails_entirely` | no | proven |
-| V464-d | the child's birth identity is recorded at spawn | `test_launcher_birth_identity.py::test_the_started_record_carries_the_childs_birth_identity` | no | proven |
-| V465a-a | a zone-less relay stamp is skipped, not compared | `test_cloud_relay.py::test_a_send_stamped_without_a_zone_neither_raises_nor_counts_as_delivered` | no | proven |
-| V465b-a | a relay name fits the builder's 64-character pattern | `test_cloud_relay.py::test_a_relay_name_fits_the_builders_session_name_pattern` | no | proven |
-| V475-a | a send is a message's only by its own header line | `test_cloud_relay.py::test_a_body_that_quotes_another_messages_id_does_not_fool_that_messages_check` | no | proven |
-| C7pFU2-a | the lane's recorded account id decides | `test_cloud_parked.py::test_a_lane_with_its_account_id_is_renewed_when_the_advisor_runs_under_an_explicit_default_config_dir` | yes | Unrunnable here |
-| C7pFU3-a | a newer park re-arms whatever the stored outcome | `test_cloud_parked.py::test_the_notice_by_stored_outcome_and_whether_the_park_is_newer` | yes | Unrunnable here |
-| C7pFU3-b | a resolved park that is not newer gets no renewal text | `test_cloud_parked.py::test_the_notice_by_stored_outcome_and_whether_the_park_is_newer` | yes | Unrunnable here |
-| C7pFU4-a | the overlap test confirms the second worker reached the lock | `test_cloud_parked.py::test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one_pr` | yes | Unrunnable here |
-| C7pFU4-b | a readable failed-check marker counts as present | `test_cloud_parked.py::test_a_readable_failed_check_marker_keeps_the_pr_unrenewed` | yes | Unrunnable here |
-| C8FU7-a | every weak word is tested for a negation in its own clause | `test_cloud_cleanup_doctrine.py::test_the_reminder_detector_ties_a_negation_to_the_reminder_verb` | no | proven |
-| C8FU9-a | the owner message promises a prompt only when the builder has the tool | `test_cloud_cleanup.py::test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool` | no | proven |
+| V464-a | a differing start time reads as a reused pid | `test_launch_ledger.py::test_record_outcome_records_when_the_start_time_differs` | no | proven; re-neutralized on the final code at `96ca0c34`: `1 failed`, then passed |
+| V464-b1 | a full record whose command differs stays live | `test_launch_ledger.py::test_record_outcome_refuses_when_only_the_command_differs` | no | proven; re-neutralized on the final code at `96ca0c34`: `1 failed`, then passed |
+| V464-b2 | a command-only record stays live | `test_launch_ledger.py::test_a_recorded_identity_with_one_field_compares_that_field_alone` | no | proven; re-neutralized on the final code at `96ca0c34`: `1 failed, 5 passed`, then `6 passed` |
+| V464-c | an unreadable fresh identity reads as live | `test_launch_ledger.py::test_record_outcome_refuses_when_the_fresh_identity_read_fails_entirely` | no | proven; re-run at `96ca0c34`: failed, then passed (counts only) |
+| V464-d | the child's birth identity is recorded at spawn | `test_launcher_birth_identity.py::test_the_started_record_carries_the_childs_birth_identity` | no | proven; re-run at `96ca0c34`: failed, then passed (counts only) |
+| V465a-a | a zone-less relay stamp is skipped, not compared | `test_cloud_relay.py::test_a_send_stamped_without_a_zone_neither_raises_nor_counts_as_delivered` | no | proven; re-run at `96ca0c34`: failed, then passed (counts only) |
+| V465b-a | a relay name fits the builder's 64-character pattern | `test_cloud_relay.py::test_a_relay_name_fits_the_builders_session_name_pattern` | no | proven; re-run at `96ca0c34`: failed, then passed (counts only) |
+| V475-a | a send is a message's only by its own header line | `test_cloud_relay.py::test_a_body_that_quotes_another_messages_id_does_not_fool_that_messages_check` | no | proven; re-run at `96ca0c34`: failed, then passed (counts only) |
+| C7pFU2-a | the lane's recorded account id decides | `test_cloud_parked.py::test_a_lane_with_its_account_id_is_renewed_when_the_advisor_runs_under_an_explicit_default_config_dir` | yes | proven; re-run at `96ca0c34` outside the sandbox: failed, then passed (counts only) |
+| C7pFU3-a | a newer park re-arms whatever the stored outcome | `test_cloud_parked.py::test_the_notice_by_stored_outcome_and_whether_the_park_is_newer` | yes | proven; re-run at `96ca0c34` outside the sandbox: failed, then passed (counts only) |
+| C7pFU3-b | a resolved park that is not newer gets no renewal text | `test_cloud_parked.py::test_the_notice_by_stored_outcome_and_whether_the_park_is_newer` | yes | proven; re-run at `96ca0c34` outside the sandbox: failed, then passed (counts only) |
+| C7pFU4-a | the overlap test confirms the second worker reached the lock | `test_cloud_parked.py::test_two_notices_overlapping_in_time_cannot_both_read_the_state_and_lose_one_pr` | yes | proven; re-run at `96ca0c34` outside the sandbox: failed, then passed (counts only) |
+| C7pFU4-b | a readable failed-check marker counts as present | `test_cloud_parked.py::test_a_readable_failed_check_marker_keeps_the_pr_unrenewed` | yes | proven; re-run at `96ca0c34` outside the sandbox: failed, then passed (counts only) |
+| C8FU7-a | every weak word is tested for a negation in its own clause | `test_cloud_cleanup_doctrine.py::test_the_reminder_detector_ties_a_negation_to_the_reminder_verb` | no | proven; re-run at `96ca0c34`: failed, then passed (counts only) |
+| C8FU9-a | the owner message promises a prompt only when the builder has the tool | `test_cloud_cleanup.py::test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool` | no | proven; re-neutralized on the final code at `96ca0c34`: `2 failed`, then `2 passed` |
+| V464-e | `ps` reads the birth identity under a pinned zone, so the start time is the same for every caller | `test_launch_ledger.py::test_the_birth_identity_is_read_under_a_pinned_time_zone`, `test_launch_ledger.py::test_a_live_childs_identity_is_stable_across_caller_time_zones` | no | proven; re-neutralized on the final code at `96ca0c34`: 2 nodes, `1 failed` each, then passed |
+
+**Refresh from the final head.** The verdict column above is from C8a's builder re-run of every element on its final head `96ca0c34`, as recorded in PR #1873's build record (the WO4 rows of its bite-proof table). That record holds counts, not raw captures, for these re-runs: where this table says `counts only`, the raw capture was not kept. Each neutralization was an exact-string targeted replacement, restored to the original bytes, and `git status --porcelain` was empty after each restore. One red capture (V464-e) prints the process environment, so it is not quoted. The five `Unrunnable here` entries below (C7pFU2-a, C7pFU3-a, C7pFU3-b, C7pFU4-a, C7pFU4-b) keep the text written at the time; this refresh supersedes their verdict. V464-b was one element in the first record; its identity rule was revised, and it is now the two elements V464-b1 and V464-b2.
 
 ---
 
@@ -65,14 +69,56 @@ FAILED plugins/superheroes/lib/tests/test_launch_ledger.py::test_record_outcome_
 1 passed in 4.06s
 ```
 
-## V464-b — a command alone never proves a reused pid
+## V464-b1 — a full record whose command differs stays live
+
+**guarded element:** the final comparison in `_birth_identity_is_foreign`, `launch_ledger.py`. **axis:** a
+record holding both fields, whose fresh read has the same start time but a different command, is not a
+reused pid: a live process can change its command (exec, retitle), so only the start time decides.
+
+**neutralization:** the last line, `    return fresh["pidLstart"] != recorded["pidLstart"]`, became a comparison of
+every held field (the build record states the shape, not the exact replacement text).
+
+**detector:** `test_launch_ledger.py::test_record_outcome_refuses_when_only_the_command_differs`
+(named from the repository at base `32b97bce`, not from the build record).
+
+**raw red:** `1 failed`, on the final head `96ca0c34`; counts only; raw capture not kept. Source: PR #1873's
+build record, the WO4 re-neutralized rows.
+
+**restore:** the inverse edit, an exact-string replacement back to the original bytes; the build record says
+`git status --porcelain` was empty after the restore.
+
+**restore receipt:** the line as it stands in `launch_ledger.py` at base `32b97bce`:
+`    return fresh["pidLstart"] != recorded["pidLstart"]`
+
+**raw green:** passed, on the final head `96ca0c34`; counts only; raw capture not kept. Source: PR #1873's
+build record.
+
+## V464-b2 — a command-only record stays live
 
 **guarded element:** the `"pidLstart" not in held` guard in `_birth_identity_is_foreign`. **axis:** a recorded
-identity holding only `pidCommand` is never foreign, because a live process can change its command (exec, retitle).
+identity holding only `pidCommand` is never foreign, because a live process can change its command (exec,
+retitle) and no start time was recorded to say otherwise.
 
-**neutralization:** the guard's `        return False` became `        return fresh["pidCommand"] != recorded["pidCommand"]`.
+**neutralization:** the guard's `        return False` became a comparison of the held field
+(`fresh["pidCommand"] != recorded["pidCommand"]`, the shape the first record of this entry quoted).
 
-Re-run pending: the orchestrator re-runs this proof after the fix.
+**detector:** `test_launch_ledger.py::test_a_recorded_identity_with_one_field_compares_that_field_alone`, six
+parameters (named from the repository at base `32b97bce`, not from the build record).
+
+**raw red:** `1 failed, 5 passed`, on the final head `96ca0c34`; counts only; raw capture not kept. Source:
+PR #1873's build record.
+
+**restore:** the inverse edit, an exact-string replacement back to the original bytes; the build record says
+`git status --porcelain` was empty after the restore.
+
+**restore receipt:** the lines as they stand in `launch_ledger.py` at base `32b97bce`:
+```
+    if "pidLstart" not in held:
+        return False
+```
+
+**raw green:** `6 passed`, on the final head `96ca0c34`; counts only; raw capture not kept. Source: PR #1873's
+build record.
 
 ## V464-c — an unreadable fresh read
 
@@ -250,6 +296,31 @@ FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_body_that_quote
 1 passed in 0.35s
 ```
 
+## V464-e — the `ps` read is pinned to UTC
+
+**guarded element:** the `"TZ": "UTC"` entry in the environment `read_birth_identity` gives `ps`,
+`launch_ledger.py`. **axis:** `ps` renders the start time in the caller's zone, so the reader pins one zone;
+a child read under two caller zones is the same child, never a reused pid.
+
+**neutralization:** the `"TZ": "UTC"` entry was dropped from the `ps` environment.
+
+**detectors:** two nodes, `test_launch_ledger.py::test_the_birth_identity_is_read_under_a_pinned_time_zone` and
+`test_launch_ledger.py::test_a_live_childs_identity_is_stable_across_caller_time_zones` (named from the
+repository at base `32b97bce`, not from the build record, which says "2 nodes").
+
+**raw red:** `1 failed` for each of the 2 nodes, on the final head `96ca0c34`; counts only; raw capture not
+kept: the red capture prints the process environment, so the build record does not quote it. Source: PR
+#1873's build record.
+
+**restore:** the inverse edit, an exact-string replacement back to the original bytes; the build record says
+`git status --porcelain` was empty after the restore.
+
+**restore receipt:** the line as it stands in `launch_ledger.py` at base `32b97bce`:
+`            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},`
+
+**raw green:** passed, on the final head `96ca0c34`; counts only; raw capture not kept. Source: PR #1873's
+build record.
+
 ## C7pFU2-a — `_lapses` ignores `accountId`
 
 **guarded element:** the `account_id` branch in `cloud_parked._lapses`. **axis:** the lane's recorded account
@@ -351,8 +422,10 @@ builder's session has the archive tool.
 `[closed]` fail on the `_UNCONDITIONAL_PROMPT not in message` assertion and the independent
 `"If its session has a tool"` check.
 
-**raw red:** Re-run pending: the orchestrator re-runs this proof after the fix.
+**raw red:** `2 failed` (the `[merged]` and `[closed]` nodes), re-neutralized on the final code at `96ca0c34`;
+counts only; raw capture not kept. Source: PR #1873's build record.
 
 **restore:** the inverse edit.
 
-**raw green:** Re-run pending: the orchestrator re-runs this proof after the fix.
+**raw green:** `2 passed`, on the final head `96ca0c34`; counts only; raw capture not kept. Source: PR #1873's
+build record.

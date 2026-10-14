@@ -224,7 +224,7 @@ def test_inside_fixture_carries_exactly_the_machine_local_document_policy(tmp_pa
 
 # --- the script runs ------------------------------------------------------------------------
 
-def _stubs(tmp_path, code=0):
+def _stubs(tmp_path, code=0, apt_install_fails_first=False):
     stub = tmp_path / "stubs"
     stub.mkdir()
     log = tmp_path / "stub-calls.log"
@@ -232,12 +232,28 @@ def _stubs(tmp_path, code=0):
         path = stub / name
         path.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit %d\n' % (name, log, code))
         path.chmod(0o755)
+    if apt_install_fails_first:
+        # `apt-get install` fails the first time it is run and succeeds after; every other
+        # `apt-get` verb (`update`) succeeds. A counter file carries the count between runs.
+        counter = tmp_path / "apt-install-count"
+        (stub / "apt-get").write_text(
+            '#!/bin/bash\n'
+            'echo "apt-get $*" >> "%s"\n'
+            'if [ "$1" = install ]; then\n'
+            '  n=$(cat "%s" 2>/dev/null || echo 0)\n'
+            '  n=$((n + 1))\n'
+            '  echo "$n" > "%s"\n'
+            '  [ "$n" -ge 2 ] || exit 1\n'
+            'fi\n'
+            'exit 0\n' % (log, counter, counter)
+        )
     return stub, log
 
 
-def _run_script(w, text, code=0, pinned=False):
-    """Runs the script from a working directory of its own, with every tool stubbed to exit `code`."""
-    stub, log = _stubs(w.tmp, code)
+def _run_script(w, text, code=0, pinned=False, apt_install_fails_first=False):
+    """Runs the script from a working directory of its own, with every tool stubbed to exit `code`
+    (or, with `apt_install_fails_first`, `apt-get install` failing once and then succeeding)."""
+    stub, log = _stubs(w.tmp, code, apt_install_fails_first)
     work = w.tmp / "work"
     work.mkdir()
     if pinned:
@@ -329,6 +345,23 @@ def test_working_sandbox_tools_and_pinned_python_are_logged_ok(tmp_path):
     assert "uv python install" in calls
     assert "apt-get install -y bubblewrap socat" in calls
     assert "apt-get update" not in calls
+
+
+def test_a_sandbox_tools_install_that_fails_once_is_retried_after_apt_update(tmp_path):
+    # axis: the first `apt-get install` failing does not fail the step — `apt-get update` runs
+    # once, the install runs a second time, and the log says ok — see bite-proof record c8c_wo_b.md
+    w = _inside(tmp_path)
+    proc, log = _run_script(w, _compose(w)["text"], pinned=True, apt_install_fails_first=True)
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "sandbox tools ok" in setup_log
+    assert "sandbox tools FAILED" not in setup_log
+    apt_calls = [line for line in log.read_text().splitlines() if line.startswith("apt-get ")]
+    assert apt_calls == [
+        "apt-get install -y bubblewrap socat",
+        "apt-get update",
+        "apt-get install -y bubblewrap socat",
+    ], apt_calls
 
 
 def test_no_python_version_file_is_logged_by_directory_and_uv_is_never_called(tmp_path):
