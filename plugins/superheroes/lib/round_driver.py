@@ -245,7 +245,7 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
 # version; while it is unfinished, `_upgrade_gate` refuses every command on it.
-SESSION_GENERATION = 3
+SESSION_GENERATION = 4
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
@@ -6088,6 +6088,12 @@ def run_loop(seams, config=None):
             action = step["action"]
             if action == P_TERMINAL:
                 break
+            # the finder is authenticated against the selection as it stood when the seam was called:
+            # a preference edit made while the callback runs never re-judges its result.
+            selected, replaced = None, False
+            if action in (P_GAPSWEEP, P_SCOPED):
+                selected, _src = _nonpanel_selection(state)
+                replaced = selected is not None and _nonpanel_replaced(state, selected)
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
             if action == P_VERIFIERS and isinstance(artifact, dict):
@@ -6097,11 +6103,11 @@ def run_loop(seams, config=None):
                                          {"fault": fault, "round": state["round"]})
             if action in (P_GAPSWEEP, P_SCOPED):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
-                if _library_finder_unauthenticated(state, reported):
+                if _library_finder_unauthenticated(state, reported, selected=selected, replaced=replaced):
                     _retain_unauthenticated_finder_findings(state, artifact)
                     _park_cannot_certify(
                         state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
-                            action, _nonpanel_selection(state)[0], reported))
+                            action, selected, reported))
                     return _driver_receipt(state)
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
@@ -8084,15 +8090,21 @@ def _nonpanel_selection(state, session_dir=None):
     return _nonpanel_reviewer_vendor(state, cfg, repo_root)
 
 
-def _library_finder_unauthenticated(state, reported):
+_LIVE_SELECTION = object()
+
+
+def _library_finder_unauthenticated(state, reported, selected=_LIVE_SELECTION, replaced=None):
     """True when a library gap-sweep / scoped result does not count: no selectable reviewer, a
     reported vendor that is not the selection or fails the eligibility bar, or no report when the
-    selection replaced the reviewer engine."""
-    selected, _source = _nonpanel_selection(state)
+    selection replaced the reviewer engine. `run_loop` passes the selection (and whether it replaced
+    the engine) captured before the callback ran; a caller that passes none reads the live one."""
+    if selected is _LIVE_SELECTION:
+        selected, _source = _nonpanel_selection(state)
+        replaced = None
     if selected is None:
         return True
     if reported is None:
-        return _nonpanel_replaced(state, selected)
+        return _nonpanel_replaced(state, selected) if replaced is None else replaced
     return reported != selected or receipt_disclosures.nonpanel_barred(state, state.get("config"))(reported)
 
 

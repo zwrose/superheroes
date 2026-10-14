@@ -801,9 +801,9 @@ apply the wrong disposition. Recorded rows that predate the cited-head derivatio
 were recorded at this version, not refused.
 
 **A session from an earlier plugin version is not continued.** State the driver mints carries
-`sessionGeneration`, set to the integer `2`; the key is written only when state is minted and is
+`sessionGeneration`, set to the integer `4`; the key is written only when state is minted and is
 never added to a loaded state. A saved state is from an earlier version when it is a JSON object
-whose `sessionGeneration` is absent or is anything other than the integer `2`, or whose
+whose `sessionGeneration` is absent or is anything other than the integer `4`, or whose
 `schemaVersion` is an integer the driver still supports (`2`, `3` or `4`) that is older than the
 current state version, `5`. Any other `schemaVersion` (`1`, a later one, a non-integer, `true`, or
 `null`) is not an earlier session: the state loader refuses it as unsupported and no restart marker

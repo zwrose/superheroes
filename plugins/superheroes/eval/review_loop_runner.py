@@ -457,7 +457,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             for i in c.get("ids") or []:
                 out.append({"id": i, "verdict": "CONFIRMED", "reason": "fixture harness",
                             "evidence": "fixture harness"})
-        return out
+        return {"verdicts": out, **finder_vendor}
 
     def auditor(targets, rnd):
         # Default: discharge — #507 scoped certification path. Fixtures that need a
