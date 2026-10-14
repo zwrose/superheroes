@@ -421,3 +421,32 @@ def test_fix_at_the_gate_after_a_skip_reaches_the_fixer(disposition):
     assert state["step"] == RD.P_FIXER
     assert key in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
     assert L2E._ledger_by_key(state)[key].get("disposition") != "out-of-scope"
+
+
+@pytest.mark.parametrize("later", ["original", "second independent issue"])
+def test_a_same_round_carry_is_undone_when_a_later_staging_makes_it_ambiguous(later):
+    """axis: a carry is provisional until the round's last staging — a gap sweep that raises the
+    decided original (or another finding at the place) after the panel's carry undoes it, along
+    with the skip it inherited; a carry from an earlier round stands."""
+    state = _mem_state()
+    key_f = _key("original")
+    _add_gate(state, 1, key_f, "skip", title="original", seq=RD._next_ruling_seq(state))
+    panel = _finding("first independent issue")
+    key_p = RD._finding_identity_key(panel)
+    RD._stage_findings(state, [panel])
+    assert state["findingLineage"] == {key_p: key_f}
+    assert L2E._ledger_by_key(state)[key_p]["disposition"] == "out-of-scope"
+    RD._stage_findings(state, [_finding(later)])
+    assert key_p not in (state.get("findingLineage") or {})
+    assert key_p not in RD._live_out_of_scope_ruling_keys(state)
+    assert L2E._ledger_by_key(state)[key_p].get("disposition") != "out-of-scope"
+    assert RD._filter_excluded_discharged_fixes(state, [panel]) == ([panel], None)
+    assert [d["kind"] for d in state["decisions"]].count("ruling-carry-revoked") == 1
+    # a carry made in an earlier round is not revisited by this round's stagings
+    state = _mem_state()
+    _add_gate(state, 1, key_f, "skip", title="original", seq=RD._next_ruling_seq(state))
+    RD._stage_findings(state, [panel])
+    state["round"] += 1
+    RD._stage_findings(state, [panel])
+    RD._stage_findings(state, [_finding("second independent issue")])
+    assert state["findingLineage"] == {key_p: key_f}

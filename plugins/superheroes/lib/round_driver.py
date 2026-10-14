@@ -1627,6 +1627,8 @@ class _LineageCarry:
             key = _finding_identity_key(entry)
             if key:
                 raised.setdefault(key, entry)
+        self.round_no = round_no
+        self.raised = raised
         self.compiled_keys = set(raised)
         for finding in list(raised.values()) + unkeyed:
             location = self.location_of(finding)
@@ -1668,8 +1670,37 @@ class _LineageCarry:
         if group & self.compiled_keys:
             return
         state.setdefault("findingLineage", {})[key] = root
+        state.setdefault("findingLineageRound", {})[key] = state.get("round")
         _decision(state, "ruling-carried",
                   "%s takes the decision on %s (same file and line, reworded)" % (key, root))
+
+    def revoke_ambiguous(self, state):
+        """Undo a carry an earlier staging of THIS round made, when the round's view now breaks
+        one of its conditions — another finding raised at its file and line, or a member of its
+        group (the decided original included) raised this round. A carry is provisional until the
+        round's last staging; one from an earlier round stands. The inherited out-of-scope
+        disposition goes with the revoked carry, so the finding is judged fresh."""
+        lineage = _lineage_map(state)
+        rounds = state.get("findingLineageRound")
+        if not lineage or not isinstance(rounds, dict):
+            return
+        for key in sorted(lineage):
+            if rounds.get(key) != self.round_no or key not in self.raised:
+                continue
+            root = _lineage_root(lineage, key)
+            group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
+            location = self.location_of(self.raised[key])
+            if (location is not None and self.at_location.get(location) == 1
+                    and not ((group - {key}) & self.compiled_keys)):
+                continue
+            state["findingLineage"].pop(key, None)
+            rounds.pop(key, None)
+            lineage = _lineage_map(state)
+            if _live_out_of_scope_ruling_for_key(state, key) is None:
+                _clear_out_of_scope_disposition(state, key)
+            _decision(state, "ruling-carry-revoked",
+                      "%s no longer takes the decision on %s (a later staging this round raised "
+                      "another finding at that place, or the original)" % (key, root))
 
 
 def _ledger_follow_up(ledger, seen, key):
@@ -1704,6 +1735,7 @@ def _stage_findings(state, compiled):
     seeded = False
     sanitized = []
     carry = _LineageCarry(state, compiled, ledger)
+    carry.revoke_ambiguous(state)
     for finding in compiled:
         if not isinstance(finding, dict):
             sanitized.append(finding)
