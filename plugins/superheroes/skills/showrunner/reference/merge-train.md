@@ -231,8 +231,10 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
    when nothing can have reached the builder. Pass the plan's `launchId` as `--launch-id` to every `record`
    and to `branch`, so each settles the lane that was planned. A plan whose `request` is already `pending` or
-   `uncertain` is a resume after an unconfirmed send: send nothing, record `uncertain` for that
-   request's message id, and go on. A request in either state is never sent a second time.
+   `uncertain` is a resume after an unconfirmed send: send nothing. When that message id came from the relay (another
+   account), first run `cloud_relay.py check --repo-root <root> --msg-id <id>` (as `wave-watch.md` § Answering a
+   builder note describes) and record `delivered` when it reads `delivered: true`, otherwise `uncertain`. A
+   same-account id has no check, so record `uncertain`. Then go on. A request in either state is never sent a second time.
 3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other
    outcome, tell the owner that the archive request to that build's session could not be confirmed
    and that its session stays listed. Ask nothing of the owner: the only step the owner is ever asked

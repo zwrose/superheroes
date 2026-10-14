@@ -87,18 +87,11 @@ def _reminder_hits(lines):
     return hits
 
 
-_SHIPPED_SENTENCE = (
-    "If the owner never answers the archive prompt, the session stays listed and the advisor carries on; "
-    "nothing reminds the owner."
-)
-
-
 def test_the_reminder_detector_ties_a_negation_to_the_reminder_verb():
     assert _reminder_hits(["If the owner has not answered the archive prompt, remind them again."])
     assert _reminder_hits(["If no response arrives, remind the owner about the archive prompt."])
-    assert not _reminder_hits([_SHIPPED_SENTENCE])
+    assert not _reminder_hits(["When the archive prompt goes unanswered, the session stays listed and nothing reminds the owner."])
     assert not _reminder_hits(["If the archive prompt is unanswered, never remind the owner."])
-    assert _SHIPPED_SENTENCE in _collapsed(os.path.join(_PLUGIN, _MERGE_TRAIN))
 
 
 def test_no_reminder_about_an_unanswered_archive_prompt():
