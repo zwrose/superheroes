@@ -3,7 +3,7 @@
 Bites on: the headless-session section losing the question-dialog flag, the builder note as the only way
 to ask, or the push limits; the container section losing a sandbox fact (the two packages, the cache
 flag, the signer, the size-count shape); the cloud-only-failure rule going back to judgment instead of
-the two-part test; the per-round findings comment or the over-the-cap record rule leaving the Review
+the two-part test; the per-round findings comment or the pointer to the record reference's refusal recovery leaving the Review
 section; the advisor's answering rule saying "never on the issue" again, or the builder acting on only
 one copy of the answer.
 
@@ -52,12 +52,14 @@ def test_headless_section_follows_the_applies_section_and_names_the_dialog_flag_
         "disallows the question tool through `--disallowedTools`",
         "builder note",
         "parks with its work pushed",
-        "rubric/launch-doctrine.md",
-        "never a force-push",
-        "never `main`",
+        "cloud-launch block of `rubric/launch-doctrine.md`",
+        "the one home of that permission",
         "push only to the session's own branch",
     ):
         assert needle in body, needle
+    # the permission's terms live only in the doctrine block; the reference restates none of them
+    for restated in ("never a force-push", "never `main`", "layer branch"):
+        assert restated not in body, restated
 
 
 def test_container_section_names_the_sandbox_facts():
@@ -94,35 +96,29 @@ def test_environment_only_failure_needs_both_the_base_run_and_a_named_limitation
 
 
 def test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands():
-    # axis: the round's raw findings are a PR comment before the next round, because the review directory dies with the container
+    # axis: the round's whole raw file is rendered and posted as one comment before the next round, because the review directory dies with the container
     body = _section(_CLOUD, "Review")
     for needle in (
-        "After each review round, post that round's raw findings",
-        'a short "no findings" line',
+        "After each review round, render that round's whole raw findings file through `render_raw`",
+        "the credential check runs on the whole file",
+        "as one comment on the build's pull request when one exists, otherwise on the build's issue",
         "naming the round and the head it reviewed",
-        "on the build's pull request when one exists, otherwise on the build's issue",
         "before starting the next round",
+        'a short "no findings" line',
+        "refuses the file as too large, post instead a short list",
+        "(severity, title, file:line)",
+        "the full text was too large",
         "lives only on the container",
     ):
         assert needle in body, needle
 
 
-def test_a_review_record_over_the_cap_is_shortened_never_split():
-    # axis: a too-large record is not retried or split; the builder parks naming the missing record
+def test_a_refused_review_record_is_recovered_by_the_record_reference_not_restated():
+    # axis: the recovery rules have one home (review-record.md); cloud.md points there and restates none
     body = _section(_CLOUD, "Review")
-    for needle in (
-        "`review-record-too-large`",
-        "Do not retry it",
-        "park, naming the oversized record",
-        "Never split one record across several comments",
-        "the reader parses one comment",
-        "Post them by the same destination rule, split at finding boundaries",
-        "a single finding over the cap is split inside it at line boundaries",
-        "render every slice through `render_raw`",
-        "\"part i of n\"",
-        "only the raw findings are sliced",
-    ):
-        assert needle in " ".join(body.split()), needle
+    assert "follow `skills/review-code/reference/review-record.md` § When it refuses" in body
+    for restated in ("Do not retry it", "part i of n", "split at finding boundaries", "Never split one record"):
+        assert restated not in body, restated
 
 
 def test_the_advisor_may_answer_on_the_issue_and_the_builder_acts_on_either_copy():
