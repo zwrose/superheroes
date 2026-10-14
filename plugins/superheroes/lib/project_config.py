@@ -688,7 +688,6 @@ def set_item(cwd, slug, value, root=None, *, account=None, project_name=None):
                     "message": cloud_setup.switch_message("refused", project_name),
                 }
             try:
-                import cloud_check
                 # axis: a failed-check marker that is present, or damaged, or cannot be read keeps cloud builds from switching on — see bite-proof record wo_d_place_call
                 check_failed = cloud_setup.read_failed_check(cwd, account, root=root) is not None
             except Exception:

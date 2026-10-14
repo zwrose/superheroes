@@ -1601,6 +1601,7 @@ def test_a_sigterm_keeps_the_bytes_the_child_wrote_after_the_read_that_saw_the_s
     # axis: bytes still buffered in the pty master when the signal lands are drained before the
     # raise, not lost — see bite-proof record c8a_wo1.md
     import os as _os
+    import select as _select
     import signal as _signal
 
     gate = tmp_path / "go"
@@ -1615,6 +1616,9 @@ def test_a_sigterm_keeps_the_bytes_the_child_wrote_after_the_read_that_saw_the_s
             # The child writes `tail` only once this file exists, which is after the signal is
             # recorded, so the line can never have been read ahead of the cancellation.
             gate.write_text("go")
+            # Hold the return until `tail` is buffered in the master, so the test never races the
+            # child: the loop then sees the signal with unread bytes waiting, whatever the load.
+            _select.select([fd], [], [], 10)
         return data
 
     monkeypatch.setattr(L.os, "read", read_then_signal_then_open_the_gate)

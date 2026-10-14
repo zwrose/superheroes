@@ -170,7 +170,6 @@ def test_switch_on_refused_without_account(tmp_path):
 
 
 def _refused_for_a_failed_check(repo, store, monkeypatch):
-    monkeypatch.setitem(sys.modules, "cloud_check", CC)
     got = PC.set_item(repo, "cloudBuilds", True, root=store, account=ACCOUNT, project_name="fixture")
     assert got == {
         "action": "refused",
