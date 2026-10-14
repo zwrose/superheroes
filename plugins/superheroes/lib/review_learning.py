@@ -221,7 +221,9 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
 
     Canon's append path cannot carry a store root (`canon._locate` resolves the ambient store), so a
     `root` naming any other store is refused (`store-override-unsupported`) before anything is written,
-    rather than recording the approval in one store and the calibration in another."""
+    rather than recording the approval in one store and the calibration in another.
+
+    Every apply appends a fresh Canon entry; a failed apply (canon-not-committed or partial) is retried by hand after reading Canon."""
     # axis: a calibration change is written only on the owner's exact yes, with their words, place and date — see bite-proof record wo_a_1718_no-owner-yes
     if not _owner_yes(approval):
         return _result(False, "refused", "no-owner-yes", "no approval with answer 'yes', words, where and an ISO date")
@@ -304,12 +306,10 @@ def _carried(f):
 
 
 def tally(records, escapes, since, *, until=None, window_days=None):
-    """Count seat reviews and catches record by record. Each review record counts on its own `writtenAt` day when that
-    day falls inside the counting range (on or after the adoption day and inside the window); a record outside it is
-    left out. A counted record's reviews are its seat rows that ran, and its catches are its own fixed findings that
-    are not merged members and not carried in from an earlier record (that record counted them), one per finding key,
-    credited to the seat the finding's lens names (the finding `reviewer` is its dimension, not the dispatch that
-    raised it)."""
+    """Every review record is one review, dated by its own `writtenAt`: it counts when that day is on or after the adoption
+    day and inside the window, and its reviews are its seat rows that ran. Only findings that review decided are counted: its
+    own fixed findings, one per finding key, credited to the seat the finding's lens names, leaving out merged members and
+    findings carried in from an earlier record."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
