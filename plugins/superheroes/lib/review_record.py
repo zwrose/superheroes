@@ -276,7 +276,8 @@ def _validate(a):
         chk(ne(f.get(session_contract.FINDING_KEY_FIELD)) or (ne(f.get("file")) and ne(f.get("title"))),
             f"findings[{i}] identity (needs findingKey, or file and title)")
         chk(sn(f.get("reason")), f"findings[{i}].reason")
-        chk(f.get("decidedBy") is None or isinstance(f["decidedBy"], dict), f"findings[{i}].decidedBy")
+        decided_by = session_contract.decided_by_of(f)
+        chk(decided_by is None or isinstance(decided_by, dict), f"findings[{i}].decidedBy")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
     for k in ("rawFindingsFiles", "checked"):
         chk(all(ne(x) for x in lst(k)), k)

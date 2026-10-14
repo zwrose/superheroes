@@ -27,6 +27,7 @@
       "tokens": 100,
       "unit": "reviewer-minutes"
     },
+    "decisionRechecks": [],
     "finalCommit": {
       "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "source": "GitHub PR"
@@ -43,6 +44,7 @@
         "reason": "fixed in 1a2b3c4",
         "reviewer": "code-reviewer",
         "severity": "Minor",
+        "sheetPart": "how-the-review-went",
         "title": "A null guard was missing"
       }
     ],
@@ -79,6 +81,7 @@
     "pr": 7,
     "previousRecord": null,
     "rawOutputs": [],
+    "refused": [],
     "reviewers": [
       {
         "commit": null,
@@ -100,6 +103,7 @@
     ],
     "rounds": {
       "cap": 3,
+      "capKind": "rounds",
       "count": 1,
       "source": "reported by the session",
       "stoppedAtCap": false

@@ -27,6 +27,7 @@
       "tokens": 100,
       "unit": "reviewer-minutes"
     },
+    "decisionRechecks": [],
     "finalCommit": {
       "sha": "cccccccccccccccccccccccccccccccccccccccc",
       "source": "GitHub PR"
@@ -43,6 +44,7 @@
         "reason": "style preference",
         "reviewer": "code-reviewer",
         "severity": "Minor",
+        "sheetPart": "decided-as-craft",
         "title": "Retry can charge twice"
       }
     ],
@@ -79,6 +81,7 @@
     "pr": 7,
     "previousRecord": null,
     "rawOutputs": [],
+    "refused": [],
     "reviewers": [
       {
         "commit": null,
@@ -100,6 +103,7 @@
     ],
     "rounds": {
       "cap": 3,
+      "capKind": "rounds",
       "count": 1,
       "source": "reported by the session",
       "stoppedAtCap": false
