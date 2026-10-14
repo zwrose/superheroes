@@ -100,6 +100,7 @@ def test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands():
         "After each review round, post that round's raw findings",
         'a short "no findings" line',
         "naming the round and the head it reviewed",
+        "on the build's pull request when one exists, otherwise on the build's issue",
         "before starting the next round",
         "lives only on the container",
     ):
@@ -115,7 +116,8 @@ def test_a_review_record_over_the_cap_is_shortened_never_split():
         "park, naming the oversized record",
         "Never split one record across several comments",
         "the reader parses one comment",
-        "Split each round's raw findings file at finding boundaries",
+        "Post them by the same destination rule, split at finding boundaries",
+        "a single finding over the cap is split inside it at line boundaries",
         "render every slice through `render_raw`",
         "\"part i of n\"",
         "only the raw findings are sliced",
