@@ -57,8 +57,9 @@ E         Use -v to get more diff
 
 /home/user/wt-l2c/plugins/superheroes/lib/tests/test_fix_scope_c7.py:237: AssertionError
 =========================== short test summary info ============================
-FAILED tests/test_fix_scope_c7.py::test_t1_a_critical_out_of_scope_finding_is_offered_to_a_fixer_once
-1 failed in 1.43s
+FAILED plugins/superheroes/lib/tests/test_fix_scope_c7.py::test_t1_a_critical_out_of_scope_finding_is_offered_to_a_fixer_once
+1 failed in 1.45s
+exit=1
 ```
 
 - **Restore:** inverse edit (`if False:` back to `if earlier:`).
@@ -74,7 +75,8 @@ FAILED tests/test_fix_scope_c7.py::test_t1_a_critical_out_of_scope_finding_is_of
 
 ```
 .                                                                        [100%]
-1 passed in 1.38s
+1 passed in 1.37s
+exit=0
 ```
 
 ## 2. The `unnamedChange` refusal in `apply_audit_results` (`lib/audits.py`, both clearing branches)

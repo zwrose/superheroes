@@ -4243,10 +4243,11 @@ def _drop_spent_out_of_scope_rows(state, rows):
         fields = {name: value for name, value
                   in session_contract.disposition_family_snapshot(held_row).items()
                   if name not in ("disposition", "dispositionRound")}
-        fields["outOfScopeReason"] = (
+        reason = (
             "out of scope; already offered to a fixer in round %s and not offered again while it "
             "stays out of scope" % offered_round)
-        _record_disposition(state, key, "out-of-scope", this_round, **fields)
+        _record_disposition(state, key, "out-of-scope", this_round,
+                            **dict(fields, outOfScopeReason=reason))
         _decision(state, "out-of-scope-fix-spent",
                   "%s is out of scope and was already offered to a fixer in round %s — not offered "
                   "again" % (key, offered_round))
