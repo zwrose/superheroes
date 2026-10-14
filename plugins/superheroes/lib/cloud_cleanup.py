@@ -49,14 +49,14 @@ ARCHIVE_TEXT_MERGED = (
     "Pull request #%d is merged, so this build is finished. Follow the section \"" + ARCHIVE_HEADING
     + "\" in your cloud build reference.")
 ARCHIVE_TEXT_CLOSED = ARCHIVE_TEXT_MERGED.replace("is merged", "is closed without merging")
+OWNER_ARCHIVE_PROMPT_CONDITIONAL = (
+    "If its session has a tool to archive itself, you'll get one prompt for it: tap Allow once. "
+    "If it has none, it will say so on its issue, and the session stays listed "
+    "until you archive it by hand.")
 OWNER_MESSAGE_MERGED = ("#%d is merged. I've asked its cloud builder to archive itself. "
-                        "If its session has a tool to archive itself, you'll get one prompt for it: tap Allow once. "
-                        "If it has none, it will say so on its issue, and the session stays listed "
-                        "until you archive it by hand.")
+                        + OWNER_ARCHIVE_PROMPT_CONDITIONAL)
 OWNER_MESSAGE_CLOSED = ("#%d is closed. I've asked its cloud builder to archive itself. "
-                        "If its session has a tool to archive itself, you'll get one prompt for it: tap Allow once. "
-                        "If it has none, it will say so on its issue, and the session stays listed "
-                        "until you archive it by hand.")
+                        + OWNER_ARCHIVE_PROMPT_CONDITIONAL)
 _RECEIPT_KEYS = ("repo", "pr", "session", "msgId", "outcome", "at", "closedAt", "closure")
 _LOCK_WAIT_SECONDS = 30
 _GH_TIMEOUT = 60

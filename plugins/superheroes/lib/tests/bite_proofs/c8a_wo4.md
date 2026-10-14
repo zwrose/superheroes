@@ -340,39 +340,19 @@ FAILED plugins/superheroes/lib/tests/test_cloud_cleanup_doctrine.py::test_the_re
 
 ## C8FU9-a — the owner message sentence
 
-**guarded element:** the conditional sentence in `cloud_cleanup.OWNER_MESSAGE_MERGED`. **axis:** the
-message promises a prompt only if the builder's session has the archive tool.
+**guarded element:** the conditional sentence `cloud_cleanup.OWNER_ARCHIVE_PROMPT_CONDITIONAL`, shared by
+`OWNER_MESSAGE_MERGED` and `OWNER_MESSAGE_CLOSED`. **axis:** the message promises a prompt only if the
+builder's session has the archive tool.
 
-**neutralization:** the second, third and fourth string pieces of `OWNER_MESSAGE_MERGED` became the old
+**neutralization:** the value of `OWNER_ARCHIVE_PROMPT_CONDITIONAL` became the old
 `"You'll get one prompt for it: tap Allow once."`.
 
-**raw red:**
-```
-F.                                                                       [100%]
-=================================== FAILURES ===================================
-_ test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool[merged] _
-message = "#%d is merged. I've asked its cloud builder to archive itself. You'll get one prompt for it: tap Allow once."
->       assert _CONDITIONAL_PROMPT in message
-E       assert "If its session has a tool to archive itself, you'll get one prompt for it: tap Allow once. If it has none, it will say so on its issue, and the session stays listed until you archive it by hand." in "#%d is merged. I've asked its cloud builder to archive itself. You'll get one prompt for it: tap Allow once."
+**expected red:** `test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool[merged]` and
+`[closed]` fail on the `_UNCONDITIONAL_PROMPT not in message` assertion and the independent
+`"If its session has a tool"` check.
 
-/home/user/c8a-wo4/plugins/superheroes/lib/tests/test_cloud_cleanup.py:995: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_the_owner_message_promises_a_prompt_only_when_the_builder_has_the_tool[merged]
-1 failed, 1 passed in 1.05s
-```
+**raw red:** Re-run pending: the orchestrator re-runs this proof after the fix.
 
 **restore:** the inverse edit.
 
-**restore receipt:**
-```
-OWNER_MESSAGE_MERGED = ("#%d is merged. I've asked its cloud builder to archive itself. "
-                        "If its session has a tool to archive itself, you'll get one prompt for it: tap Allow once. "
-                        "If it has none, it will say so on its issue, and the session stays listed "
-                        "until you archive it by hand.")
-```
-
-**raw green:**
-```
-..                                                                       [100%]
-2 passed in 1.89s
-```
+**raw green:** Re-run pending: the orchestrator re-runs this proof after the fix.
