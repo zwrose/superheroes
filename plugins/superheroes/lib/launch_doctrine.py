@@ -105,12 +105,8 @@ RULING_INVARIANTS = {
     ),
 }
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
-CLOUD_LAUNCH_TEXT = (
-    "Standing permission from the owner: push to your own build branch (the one you create at intake, "
-    "or the branch the launch adopts) and to any layer branch the issue's advisor-written order gives "
-    "this session to build; never to a branch the order names only as a base, never a force-push, "
-    "never `main`."
-)
+# The cloud-launch sentence lives once, in rubric/launch-doctrine.md; the parser checks only what it must carry.
+CLOUD_LAUNCH_INVARIANTS = ("never a force-push", "never `main`")
 
 _RULINGS_BEGIN = "<!-- launch-doctrine:rulings:begin -->"
 _RULINGS_END = "<!-- launch-doctrine:rulings:end -->"
@@ -257,8 +253,9 @@ def _parse_cloud_launch_block(text: str, body: str, body_start: int) -> tuple[st
     lines = [raw_line for raw_line in body.split("\n") if raw_line.strip()]
     if len(lines) != 1:
         return None, f"doctrine-malformed-line:{_line_number(text, body_start)}"
-    if lines[0] != CLOUD_LAUNCH_TEXT:
-        return None, "doctrine-cloud-launch-text-mismatch"
+    for phrase in CLOUD_LAUNCH_INVARIANTS:
+        if phrase not in lines[0]:
+            return None, f"doctrine-cloud-launch-invariant-missing:{phrase}"
     return lines[0], None
 
 

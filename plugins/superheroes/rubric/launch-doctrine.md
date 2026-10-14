@@ -37,8 +37,8 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 <!-- launch-doctrine:preflight:end -->
 
 **Cloud launch permission (documentation only — not parsed).** The block below holds one sentence.
-`lib/launch_doctrine.py` parses it byte-for-byte, and `compose_launch` carries it in every cloud
-launch prompt and in no local one. A cloud session pushes only to its own designated branch unless
+`lib/launch_doctrine.py` parses it as one line that must carry the never-a-force-push and
+never-`main` limits, and `compose_launch` carries it in every cloud launch prompt and in no local one. A cloud session pushes only to its own designated branch unless
 its launch says otherwise, so the sentence is how the owner's standing permission to push reaches
 the builder.
 

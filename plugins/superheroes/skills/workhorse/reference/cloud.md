@@ -213,12 +213,17 @@ an owner-authorized go-ahead covering a missing review, is a written record: han
 `skills/review-code/reference/review-record.md`.
 
 After each review round, post that round's raw findings (or a short "no findings" line) as a PR
-comment naming the round and the head it reviewed, before starting the next round. The review
-session's own directory lives only on the container and is lost when the session ends.
+comment naming the round and the head it reviewed, before starting the next round. Render each raw
+findings file through `render_raw` in `lib/review_record.py` first, so a file holding a
+credential-shaped assignment or a private-key block is withheld and the comment says so; never post
+a findings file's text unrendered. The review session's own directory lives only on the container
+and is lost when the session ends.
 
-When the record writer refuses `review-record-too-large`, shorten the account to the outcome of each
-round, pointing at the per-round findings comments, and write it again. Never split one record
-across several comments, because the reader parses one comment.
+When the record writer refuses `review-record-too-large`, read its detail. If it names the account,
+shorten the account to the outcome of each round, pointing at the per-round findings comments, and
+write it again. If it names a raw output file, split that file into bounded comments, each under
+the comment cap, and write again. Never split one record across several comments, because
+the reader parses one comment.
 
 ## The cloud container
 

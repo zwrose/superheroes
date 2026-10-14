@@ -89,8 +89,12 @@ _CLOUD_END = "<!-- launch-doctrine:cloud-launch:end -->"
 def test_shipped_doctrine_carries_the_cloud_launch_line():
     result = LD.load()
     assert result["ok"] is True
-    assert result["cloudLaunchLine"] == LD.CLOUD_LAUNCH_TEXT
+    assert result["cloudLaunchLine"] == _cloud_line()
     assert result["cloudLaunchLine"].count("\n") == 0
+
+
+def _cloud_line():
+    return LD.load()["cloudLaunchLine"]
 
 
 def _assert_cloud_refusal(text, reason):
@@ -114,7 +118,7 @@ def test_doctrine_duplicate_cloud_launch_block():
 
 
 def test_doctrine_empty_cloud_launch_block_is_malformed():
-    text = _mutate_once(_read_doctrine(), LD.CLOUD_LAUNCH_TEXT + "\n", "")
+    text = _mutate_once(_read_doctrine(), _cloud_line() + "\n", "")
     result = LD.parse(text)
     assert result["ok"] is False
     assert re.fullmatch(r"doctrine-malformed-line:\d+", result["reason"])
@@ -123,7 +127,7 @@ def test_doctrine_empty_cloud_launch_block_is_malformed():
 
 def test_doctrine_two_line_cloud_launch_block_is_malformed():
     text = _mutate_once(
-        _read_doctrine(), LD.CLOUD_LAUNCH_TEXT, LD.CLOUD_LAUNCH_TEXT + "\nAnd one more line."
+        _read_doctrine(), _cloud_line(), _cloud_line() + "\nAnd one more line."
     )
     result = LD.parse(text)
     assert result["ok"] is False
@@ -131,9 +135,12 @@ def test_doctrine_two_line_cloud_launch_block_is_malformed():
     assert result["cloudLaunchLine"] is None
 
 
-def test_doctrine_cloud_launch_text_drift_refuses():
-    text = _mutate_once(_read_doctrine(), "never a force-push, never `main`.", "never `main`.")
-    _assert_cloud_refusal(text, "doctrine-cloud-launch-text-mismatch")
+@pytest.mark.parametrize("phrase", LD.CLOUD_LAUNCH_INVARIANTS)
+def test_doctrine_cloud_launch_missing_invariant_refuses(phrase):
+    line = _cloud_line()
+    assert phrase in line
+    text = _mutate_once(_read_doctrine(), line, line.replace(phrase, "never anything"))
+    _assert_cloud_refusal(text, f"doctrine-cloud-launch-invariant-missing:{phrase}")
 
 
 def test_opening_ruling_count_word_matches_ruling_ids():

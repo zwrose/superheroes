@@ -35,6 +35,11 @@ from test_launcher import (  # noqa: E402
     _write_json,
 )
 
+
+def _cloud_line():
+    return launch_doctrine.load()["cloudLaunchLine"]
+
+
 SESSION_ID = "session_01XkoXctZReLbM87S13947gp"
 SESSION_URL = "https://claude.ai/code/%s" % SESSION_ID
 ENV_ID = "env_01AbCdEf"
@@ -329,7 +334,7 @@ def test_compose_cloud_prompt_differs_from_local_by_the_four_place_lines_and_the
         "Place: cloud session\nAdvisor plugin version: %s\nCloud environment: %s\n"
         "Base commit: %s\n\n" % (version, ENV_ID, _head_sha(repo))
     )
-    permission = launch_doctrine.CLOUD_LAUNCH_TEXT + "\n\n"
+    permission = _cloud_line() + "\n\n"
     assert lines in cloud["prompt"]
     assert permission in cloud["prompt"]
     assert cloud["prompt"].replace(lines, "", 1).replace(permission, "", 1) == local["prompt"]
@@ -345,7 +350,7 @@ def test_compose_cloud_prompt_carries_the_standing_permission_once_between_base_
     repo = _init_repo(tmp_path / "repo")
     cloud = _compose_cloud(repo)
     prompt = cloud["prompt"]
-    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    text = _cloud_line()
     assert prompt.count(text) == 1
     assert text in prompt.split("\n")
     first_ruling = cloud["doctrine"]["rulingsBlock"].split("\n")[0]
@@ -360,14 +365,14 @@ def test_compose_cloud_adopt_prompt_carries_the_standing_permission_after_the_ad
                              session_name="issue-656-preview")
     assert cloud["ok"] is True
     prompt = cloud["prompt"]
-    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    text = _cloud_line()
     assert prompt.count(text) == 1
     assert prompt.index("Base commit: ") < prompt.index("feature/adopted") < prompt.index(text)
 
 
 def test_compose_local_prompts_do_not_carry_the_standing_permission(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    text = _cloud_line()
     adopting = dict(_stamped(repo), adoptsBranch="feature/adopted", adoptsHead=_head_sha(repo))
     for local in (L.compose_launch(repo, 656, _stamped(repo)),
                   L.compose_launch(repo, 656, _stamped(repo), place="local"),
@@ -394,7 +399,7 @@ def test_compose_cloud_refuses_a_doctrine_with_no_cloud_launch_line(tmp_path):
 def test_cloud_intake_reads_the_same_environment_and_base_from_the_composed_prompt(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     prompt = _compose_cloud(repo)["prompt"]
-    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    text = _cloud_line()
     with_line = cloud_builder.parse_launch(prompt)
     without_line = cloud_builder.parse_launch(prompt.replace(text + "\n\n", "", 1))
     assert with_line == without_line
