@@ -137,6 +137,8 @@ synthesis`) over the survivors only. Its job is to group findings that share the
 cause, not keep/drop. It emits a JSON array of `{group_id, member_ids}` echoing the staged
 ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
 
+The synthesis seat sits outside every maker family on a proven synthesis cell; when no vendor qualifies, no synthesis order is emitted and the findings are not grouped (each stays separate, nothing is dropped), which the receipt discloses.
+
 **On the auto-fix loop**, dispatch the driver-emitted order at
 `$SESSION_DIR/round-<N>/orders/dispatch-synthesis/<skey>.a<K>.md` (template body:
 `rubric/orders/dispatch-synthesis.md`). **On the read-only path**, the orchestrator dispatches

@@ -66,9 +66,10 @@ UNFILLED_SOURCE = "unfilled"
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
-# The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, and
-# the gap-sweep / scoped reviewers): compose probes and records these beside the panel's own cells.
-NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep")
+# The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, the
+# gap-sweep / scoped reviewers and the synthesis grouper): compose probes and records these beside
+# the panel's own cells.
+NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep", "synthesis")
 
 
 def roster_for(lane_basis) -> tuple[str, ...]:

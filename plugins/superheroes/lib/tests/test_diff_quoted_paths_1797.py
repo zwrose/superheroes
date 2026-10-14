@@ -77,3 +77,17 @@ def test_a_quoted_non_ascii_path_and_an_unparseable_header_through_the_shared_re
         "docs/é.md", "docs/é.md")
     assert RD._diff_header_sides('diff --git "a/x\\9.md" "b/x\\9.md"') is None
     assert RD._diff_changed_paths(_diff('"a/x\\9.md"', '"b/x\\9.md"')) is None
+
+
+# axis: the driver's header reader is the shared reader — a spy standing in for it is what answers.
+def test_the_header_reader_is_delegated_to_the_shared_reader(monkeypatch):
+    import sanitized_view
+    seen = []
+
+    def spy(raw):
+        seen.append(raw)
+        return ("sentinel-a", "sentinel-b")
+
+    monkeypatch.setattr(sanitized_view, "sides_from_diff_git_line", spy)
+    assert RD._diff_header_sides("diff --git a/x b/y") == ("sentinel-a", "sentinel-b")
+    assert seen == [b"diff --git a/x b/y"]

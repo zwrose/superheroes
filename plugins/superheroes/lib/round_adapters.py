@@ -447,6 +447,10 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
     elif phase == P_AUDITS:
         artifact = _assemble_audits(roster, indexed, dispatch_manifest, disclosures)
     elif phase == P_SYNTHESIS:
+        fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,
+                                     _maker_barred(state, config), disclosures)
+        if fault is not None:
+            return None, fault
         artifact = _assemble_synthesis(roster, indexed, disclosures)
     elif phase in (P_GAPSWEEP, P_SCOPED):
         fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,

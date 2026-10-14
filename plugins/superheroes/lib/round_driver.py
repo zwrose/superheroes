@@ -493,7 +493,7 @@ ORDER_EMISSION_DISCLOSURE_CHANNELS = (
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
-VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance")
+VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance", "synthesisUnseatable")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
@@ -2998,6 +2998,18 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
+    if _nonpanel_unseatable(state, session_dir, P_SYNTHESIS):
+        # No grouping seat outside the makers' families on a proven synthesis cell: no order is
+        # emitted and the round folds exactly as an empty grouping would — every verified finding
+        # stays separate (nothing dropped) and the receipt discloses it.
+        cfg = state.get("config") or {}
+        _record_round(state, "synthesisUnseatable", {
+            "makerFamilies": sorted(receipt_disclosures.accumulated_maker_families(state)),
+            "fixerVendor": cfg.get("fixerVendor")})
+        _decision(state, "synthesis-unseatable",
+                  "no synthesis seat outside the makers' families on a proven cell; findings not grouped")
+        _fold_synthesis(state, config, {"grouping": None})
+        return
     state["step"] = P_SYNTHESIS
 
 
@@ -5880,7 +5892,16 @@ def _run_seam(seams, action, payload, state, config):
             artifact["verifierVendor"] = reported
         return artifact
     if action == P_SYNTHESIS:
-        return {"grouping": seams["synthesis"](payload.get("findings"), state["round"])}
+        result = seams["synthesis"](payload.get("findings"), state["round"])
+        # The callback may report the vendor it ran on: `{"grouping": [...], "vendor": v}`; a bare
+        # grouping reports nothing and is accepted.
+        if isinstance(result, dict) and "grouping" in result:
+            vendor = result.get("vendor")
+            artifact = {"grouping": result["grouping"]}
+            if isinstance(vendor, str) and vendor.strip():
+                artifact["synthesisVendor"] = vendor.strip()
+            return artifact
+        return {"grouping": result}
     if action in (P_GAPSWEEP, P_SCOPED):
         result = seams["reviewer"]("gap-sweep" if action == P_GAPSWEEP else "scoped-finder",
                                    DEEP, state["round"], payload)
@@ -6094,6 +6115,8 @@ def run_loop(seams, config=None):
             # the finder is authenticated against the selection as it stood when the seam was called:
             # a preference edit made while the callback runs never re-judges its result.
             selected, replaced = None, False
+            if action == P_SYNTHESIS:
+                selected, _src = _nonpanel_selection(state, None, action)
             if action in (P_GAPSWEEP, P_SCOPED):
                 selected, _src = _nonpanel_selection(state, None, action)
                 replaced = selected is not None and _nonpanel_replaced(state, selected)
@@ -6104,6 +6127,15 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
+            if action == P_SYNTHESIS and isinstance(artifact, dict):
+                reported = artifact.pop("synthesisVendor", None)
+                if reported is not None and (
+                        reported != selected
+                        or receipt_disclosures.nonpanel_barred(state, state["config"])(reported)):
+                    _park_cannot_certify(
+                        state, "nonpanel-synthesis-unauthenticated:expected=%s:reported=%s" % (
+                            selected, reported))
+                    return _driver_receipt(state)
             if action in (P_GAPSWEEP, P_SCOPED):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
                 if _library_finder_unauthenticated(state, reported, action, selected=selected,
@@ -7171,7 +7203,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "collection-manifest-key"})
             return {"ok": False, "reason": fault}
-    if (not _via_advance and phase in _NONPANEL_REVIEWER_PHASES
+    if (not _via_advance and (phase in _NONPANEL_REVIEWER_PHASES or phase == P_SYNTHESIS)
             and _adapters().missing_policy(phase) == _adapters().MISSING_REFUSE_FOLD
             and _nonpanel_unseatable(state, session_dir, phase)):
         # No reviewer outside the makers' families can be seated: no order was emitted for this
@@ -8056,11 +8088,14 @@ def _reviewer_engine_vendor(repo_root):
 _NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
 
 # The cell role each non-panel phase dispatches on (`model_registry.matrix_config`): the verifier
-# row for verifiers, the reviewer-deep row for gap sweep and scoped.
+# row for verifiers, the reviewer-deep row for gap sweep and scoped, the synthesis row for grouping.
+# Synthesis is not in `_NONPANEL_REVIEWER_PHASES`: it finds and verifies nothing, so the finder and
+# verifier claim rules do not apply to it.
 _NONPANEL_PHASE_ROLE = {
     P_VERIFIERS: receipt_disclosures.NONPANEL_ROLE_VERIFIER,
     P_GAPSWEEP: receipt_disclosures.NONPANEL_ROLE_FINDER,
     P_SCOPED: receipt_disclosures.NONPANEL_ROLE_FINDER,
+    P_SYNTHESIS: receipt_disclosures.NONPANEL_ROLE_SYNTHESIS,
 }
 
 
@@ -8229,10 +8264,7 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
             if isinstance(target, dict) and target.get("id") == seat_key:
                 return {"vendor": target.get("auditorVendor"), "model": None, "engine": None}
         return {"vendor": None, "model": None, "engine": None}
-    if phase == P_SYNTHESIS:
-        # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
-        return {"vendor": "claude", "model": None, "engine": None}
-    if phase in _NONPANEL_REVIEWER_PHASES:
+    if phase in _NONPANEL_REVIEWER_PHASES or phase == P_SYNTHESIS:
         vendor, source = _nonpanel_reviewer_vendor(state, cfg, repo_root, phase)
         return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
     return {"vendor": None, "model": None, "engine": None}

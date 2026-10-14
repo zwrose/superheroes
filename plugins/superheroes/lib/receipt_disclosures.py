@@ -88,6 +88,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "priorCommentsUnavailable": bool_value,
     "verifyPasses": dict_list,
     "verifierProvenance": dict_list,
+    "synthesisUnseatable": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -197,7 +198,8 @@ HOST_FAMILY_REGISTRY = object()
 # The dispatched-cell roles of the non-panel phases (`model_registry.matrix_config` rows).
 NONPANEL_ROLE_VERIFIER = "verifier"
 NONPANEL_ROLE_FINDER = "reviewer-deep"
-NONPANEL_ROLES = (NONPANEL_ROLE_VERIFIER, NONPANEL_ROLE_FINDER)
+NONPANEL_ROLE_SYNTHESIS = "synthesis"
+NONPANEL_ROLES = (NONPANEL_ROLE_VERIFIER, NONPANEL_ROLE_FINDER, NONPANEL_ROLE_SYNTHESIS)
 
 _SEAT_MAP_HOST_KEY = "hostFamily"
 _SEAT_MAP_CELLS_KEY = "nonPanelLiveCells"
@@ -682,6 +684,11 @@ def build_degraded_prose(state, form, journal=None):
                             r.get("expected"), r.get("ran"),
                             " (%s)" % r.get("reason") if r.get("reason") else "")
                         for r in ignored)))
+        syn = declared.get("synthesisUnseatable")
+        if syn:
+            degraded_out.append(
+                "synthesis-unseatable (round %s): no grouping seat outside the makers' families on a "
+                "proven cell — findings were not grouped (nothing dropped)" % rkey)
         bik = declared.get("breakItKept")
         if bik:
             not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required")]

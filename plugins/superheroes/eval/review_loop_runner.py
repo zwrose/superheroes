@@ -328,6 +328,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
 
     seen = []
     usage = {}
+    synthesis_rounds = set()   # rounds whose synthesis callback ran (a round with no seat has no leaf)
     coverage_decision_ids = []
     fix_contexts = []
     fix_results = []
@@ -465,6 +466,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
         }
 
     def synthesis(findings, rnd):
+        synthesis_rounds.add(rnd)
         usage["synthesis:r%d" % rnd] = {"total": 1}
         return None  # empty grouping — round_driver merge_and_rank keeps findings
 
@@ -684,8 +686,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
                 leaf = "%s:r%d" % (name_r, r)
                 if leaf not in expected_leaves:
                     expected_leaves.append(leaf)
-        expected_leaves.append("synthesis:r%d" % r)
-        usage.setdefault("synthesis:r%d" % r, {"total": 1})
+        if r in synthesis_rounds:
+            expected_leaves.append("synthesis:r%d" % r)
+            usage.setdefault("synthesis:r%d" % r, {"total": 1})
         if r in fix_rounds:
             expected_leaves.append("fix:r%d" % r)
 
