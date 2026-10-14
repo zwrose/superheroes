@@ -381,6 +381,10 @@ The plain account of one PR's review, written when the review ends on any lane. 
 
 Any model that built or fixed the product's code under review. A fixer's family joins the makers for every later round. A reviewer that only writes break-it tests for a change is not a maker of it.
 
+### Leftover
+
+A finding with a real consequence that the review left unfixed, and that no on-record decision settles. It comes to the owner under "What you're accepting" on the PR's [sheet](#sheet), whatever its severity. Its outcome in the [review record](#review-record) is `left-for-owner`.
+
 ### Test role
 
 The review panel's test seat. For each changed test it asks whether the test would fail if the code were wrong, and it reports tests that check nothing, pass by chance, or bloat the change. It asks for no coverage outside the project's risk areas and raises no test-style findings. Its method is in [the test role's agent file](../agents/test-role.md).
