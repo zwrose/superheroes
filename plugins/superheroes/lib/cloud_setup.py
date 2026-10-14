@@ -353,6 +353,78 @@ def confirm_pass(cwd, account, lapses, *, environment=None, root=None):
     return _write(cwd, account, root, build)
 
 
+_CHECK_AGAIN = "cloud builds stay off until a check passes. Run the setup check again."
+_RENEW = "Run the pass command and paste the new pass into the environment."
+
+
+def _lapse_line(days, lapses, next_pass_days, live):
+    """(mark, line) for a pass with ``days`` left until it lapses on ``lapses``. ``live`` is the readiness
+    rule's answer (a lapse date equal to today is still live), so gardening and launch readiness agree."""
+    when = "%d %s" % (lapses.day, lapses.strftime("%b"))
+    if not live:
+        return "Renew now", "Cloud reviewer pass: lapsed %s. %s" % (when, _RENEW)
+    # axis: a pass that will not last to the next gardening pass is marked Renew now — see bite-proof record c8_cloud_cleanup
+    if days <= 0:
+        return "Renew now", "Cloud reviewer pass: lapses today, %s. It won't last to the next gardening pass. %s" % (
+            when, _RENEW)
+    if days <= next_pass_days:
+        return "Renew now", "Cloud reviewer pass: %d %s left, lapses %s. It won't last to the next gardening pass. %s" % (
+            days, "day" if days == 1 else "days", when, _RENEW)
+    return None, "Cloud reviewer pass: %d days left, lapses %s. Nothing to do." % (days, when)
+
+
+def gardening_lines(cwd, next_pass_days, today=None, root=None):
+    """The reviewer-pass line for the gardening pass, one per setup record in the project's store, so it
+    is read for whichever Claude account the builders run on. No records, no lines. Each line is
+    ``{"account", "mark", "line"}``; a record that cannot be read gives the unreadable line."""
+    directory = os.path.dirname(record_path(cwd, "x", root))
+    # a failed-check marker sits beside its record and is not a record
+    try:
+        import cloud_check  # lazy: cloud_check imports this module
+        names = sorted(n for n in os.listdir(directory)
+                       if n.endswith(".json") and not n.endswith(cloud_check.FAILED_CHECK_SUFFIX))
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [{"account": None, "mark": None, "line": "Cloud reviewer pass: the setup record could not be read."}]
+    if today is None:
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+    elif isinstance(today, str):
+        today = datetime.date.fromisoformat(today)
+    lines = []
+    for name in names:
+        account, record = None, None
+        try:
+            with open(os.path.join(directory, name), encoding="utf-8") as fh:
+                account = json.load(fh)["account"]
+            # axis: a failed or unreadable check marker makes the saved lapse date stale, as cloud_parked reads it
+            marker = cloud_check.read_failed_check(cwd, account, root)
+            if marker is not None:
+                parts = [p for p in (marker.get("failedParts") or []) if isinstance(p, str)]
+                if marker.get("damaged") or not parts or "reviewer" in parts:
+                    lines.append({"account": account, "mark": "Renew now", "line":
+                                  "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
+                                  + _RENEW + " " + _CHECK_AGAIN[0].upper() + _CHECK_AGAIN[1:]})
+                else:
+                    lines.append({"account": account, "mark": None, "line":
+                                  "Cloud reviewer pass: the last cloud check failed on %s, so %s"
+                                  % (", ".join(parts), _CHECK_AGAIN)})
+                continue
+            got = read(cwd, account, root)
+            record = got["record"] if got["state"] == "ready" else None
+        except Exception:
+            record = None
+        if record is None:
+            lines.append({"account": account if isinstance(account, str) else None, "mark": None,
+                          "line": "Cloud reviewer pass: the setup record could not be read."})
+            continue
+        lapses = datetime.date.fromisoformat(record["passLapses"])
+        mark, line = _lapse_line((lapses - today).days, lapses, next_pass_days,
+                                 cloud_check._lapses_ok(record["passLapses"], today))
+        lines.append({"account": account, "mark": mark, "line": line})
+    return lines
+
+
 def _bool_arg(text):
     if text == "true":
         return True
@@ -385,14 +457,27 @@ def main(argv):
 
     acp = sub.add_parser("account")
 
-    for each in (rp, cp, pp, acp):
+    gp = sub.add_parser("gardening")
+    gp.add_argument("--today", default=None)
+    gp.add_argument("--next-pass-days", type=int, default=None)
+
+    for each in (rp, cp, pp, acp, gp):
         each.add_argument("--cwd", default=".")
         each.add_argument("--root", default=None)
 
     args = ap.parse_args(argv)
     cwd = os.path.abspath(args.cwd)
 
-    if args.cmd == "account":
+    if args.cmd == "gardening":
+        if args.next_pass_days is None or args.next_pass_days <= 0:
+            sys.stdout.write(json.dumps({"reason": "next-pass-days-invalid"}, indent=2) + "\n")
+            return 1
+        if args.today is not None and not _date_ok(args.today):
+            sys.stdout.write(json.dumps({"reason": "today-invalid"}, indent=2) + "\n")
+            return 1
+        out = {"lines": gardening_lines(
+            args.cwd, today=args.today, next_pass_days=args.next_pass_days, root=args.root)}
+    elif args.cmd == "account":
         out = {"account": launching_account(cwd=cwd)}
     else:
         account = args.account
