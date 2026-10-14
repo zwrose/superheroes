@@ -4521,6 +4521,12 @@ def _lifted_judgment_rows(state, rows):
     return _split_lifted_rows(state, rows)[1]
 
 
+def _holds_only_autonomous_lifts(rows):
+    """True when every row is an autonomous lift (``LIFT_REAL_CONSEQUENCE``): with no eligible blocker
+    beside them they never start a fixer leg. A guidance-named row is the owner's word, so it stays."""
+    return bool(rows) and all(row.get("lifted") == LIFT_REAL_CONSEQUENCE for row in rows)
+
+
 def _lift_into_fix_batch(state, rows):
     """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered,
     non-empty offered set: the lift joins a fixer leg that is going out, it never starts one. A lifted
@@ -4558,6 +4564,8 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
+    if batch_index == 0 and _holds_only_autonomous_lifts(filtered):
+        filtered = []
     if offered_nonempty and not filtered:
         rec = state["rounds"].setdefault(str(state["round"]), {})
         prior = rec.get("fixBatchExcludedByDischarge") or 0

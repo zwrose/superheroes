@@ -891,3 +891,21 @@ def test_ruling_the_only_blocker_out_clears_a_lifted_only_judgment_gate(tmp_path
     assert after.get("terminal") == "converged", after.get("step")
     assert not after.get("_judgmentFindings") and not after.get("_judgmentMechanical")
     assert not after.get("pending")
+
+
+def test_ruling_a_withdrawn_batchs_only_blocker_out_drops_its_lifted_minor(tmp_path, keep_severity):
+    """axis: a withdrawn fixer batch holds one Important blocker and a lifted real-consequence Minor;
+    ruling the blocker out of scope leaves no eligible blocker, so the lifted Minor does not go out
+    alone and the loop converges."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-withdrawn-oos")
+    state = _state(session_dir)
+    assert [r["title"] for r in state["_fixBatch"]][0] == "blocker B"
+    out = RD.cmd_withdraw(session_dir, state["pending"]["attempt"], "rule the blocker out")
+    assert out.get("ok") is True, out
+    key = _finding_key_by_title(_state(session_dir), "blocker B")
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
+        {"id": key, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()}]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") == "converged", (after.get("step"), after.get("_fixBatch"))
