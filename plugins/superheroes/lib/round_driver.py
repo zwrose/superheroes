@@ -1000,7 +1000,7 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
     for f in findings:
         if not isinstance(f, dict):
             continue
-        if f.get("file") is None or f.get("line") is None:
+        if not isinstance(f.get("file"), str) or f.get("line") is None:
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
@@ -3625,6 +3625,19 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     state["step"] = P_SYNTHESIS
 
 
+def _sync_merged_consequences(state, kept):
+    """Carry a synthesized representative's merged consequence onto its ledger row, so a later
+    re-seed or restage from the ledger cannot lose a member's real consequence."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    for finding in kept:
+        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        if key in seen:
+            for field in ("consequence", "consequenceKind"):
+                if field in finding:
+                    ledger[seen[key]][field] = finding[field]
+
+
 def _fold_synthesis(state, config, artifact):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
@@ -3677,6 +3690,7 @@ def _fold_synthesis(state, config, artifact):
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
+    _sync_merged_consequences(state, kept)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
     # a delta settle — the delta round has its own scoped scan + audit breaker.)
     plan = delta_surface.shard_plan(state.get("reviewedDiff") or "")
@@ -4207,9 +4221,12 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
         disposition = d.get("disposition")
         reason = d.get("reason")
         if disposition == "skip" and isinstance(reason, str) and reason.strip():
-            skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
-                            "title": f.get("title"), "severity": f.get("severity"),
-                            "reason": reason.strip()})
+            # A lifted Minor/Nit product choice put to the owner is not a blocker: its skip is
+            # recorded (disposition and decision below) but never rides the skipped-blocker channel.
+            if circuit_breaker.is_blocking(f.get("severity")):
+                skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
+                                "title": f.get("title"), "severity": f.get("severity"),
+                                "reason": reason.strip()})
             follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
                           "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
@@ -4311,7 +4328,7 @@ def _after_findings_settled(state, config):
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
     if blocking:
-        if _route_judgment_blockers(state, blocking):
+        if _route_judgment_blockers(state, blocking + _lifted_judgment_rows(state, blocking)):
             return
         _queue_fix_batch(state, config, [dict(f) for f in blocking])
     else:
@@ -4517,11 +4534,48 @@ def _lifted_fix_rows(state, rows):
     return lifted
 
 
-def _lift_into_fix_batch(state, rows):
-    """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered,
-    non-empty offered set: the lift joins a fixer leg that is going out, it never starts one."""
+# The effective decisions that are the owner's word to fix a finding: a fix choice at the owner gate
+# and guidance (from the gate or the `rule` verb).
+_OWNER_FIX_RULINGS = ("fix", "guidance")
+
+
+def _lift_awaits_owner_judgment(row, decision):
+    """True when a lifted row is a product choice (``tradeoff: true``) that no effective owner
+    decision authorizes fixing yet. Such a row never rides an autonomous fix batch: it goes to the
+    owner-judgment gate beside the round's blockers, as a blocking tradeoff does."""
+    ruling = decision.get("ruling") if isinstance(decision, dict) else None
+    return bool(row.get("tradeoff")) and ruling not in _OWNER_FIX_RULINGS
+
+
+def _split_lifted_rows(state, rows):
+    """``(autonomous, awaiting_judgment)``: the lifted rows for the offered ``rows`` after the
+    discharge filter, split by ``_lift_awaits_owner_judgment``. A ledger read fault lifts nothing."""
     lifted, fault = _filter_excluded_discharged_fixes(state, _lifted_fix_rows(state, rows))
     if fault is not None or not lifted:
+        return [], []
+    effective = _live_ruling_by_key(state)
+    autonomous, awaiting = [], []
+    for row in lifted:
+        decision = effective.get(_fix_batch_row_key(row))
+        (awaiting if _lift_awaits_owner_judgment(row, decision) else autonomous).append(row)
+    return autonomous, awaiting
+
+
+def _lifted_judgment_rows(state, rows):
+    """The lifted rows beside the blocking ``rows`` that must go to the owner-judgment gate before
+    any fixer leg is composed (``_route_judgment_blockers``)."""
+    if not rows:
+        return []
+    return _split_lifted_rows(state, rows)[1]
+
+
+def _lift_into_fix_batch(state, rows):
+    """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered,
+    non-empty offered set: the lift joins a fixer leg that is going out, it never starts one. A lifted
+    product choice no owner decision authorizes is held out (``_lift_awaits_owner_judgment``) — the
+    settle paths route it to the owner gate first."""
+    lifted, _awaiting = _split_lifted_rows(state, rows)
+    if not lifted:
         return rows
     keys = [_fix_batch_row_key(row) for row in lifted]
     _record_round(state, "liftedIntoFixBatch", keys)
@@ -4666,14 +4720,31 @@ def _sync_pending_after_ruling_reconcile(state):
     state["pending"] = updated
 
 
-def _reconcile_queue_after_emitted_rulings(state):
-    """Filter the not-yet-emitted slices (``_fixQueue``) through the ruling filter, leaving the
-    emitted slice (``_fixBatch``) and the pending payload exactly as they are."""
+def _reconcile_queue_after_emitted_rulings(state, extra_rows=None):
+    """Filter the not-yet-emitted slices (``_fixQueue``) through the ruling filter, after appending
+    the rows the ruling brought in (``extra_rows`` — guidance-named or reopened findings) that neither
+    the emitted slice nor the queue holds. The emitted slice (``_fixBatch``) and the pending payload
+    stay exactly as they are; the appended rows ride a later slice of the round."""
     queue = state.get("_fixQueue")
-    if not isinstance(queue, list) or not queue:
+    queue = [row for row in queue if isinstance(row, dict)] if isinstance(queue, list) else []
+    held = set()
+    for row in list(state.get("_fixBatch") or []) + queue:
+        if isinstance(row, dict):
+            key = _fix_batch_row_key(row)
+            if key:
+                held.add(key)
+    for row in extra_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in held:
+                continue
+            held.add(key)
+        queue.append(dict(row))
+    if not queue:
         return None
-    filtered, fault = _filter_excluded_discharged_fixes(
-        state, [row for row in queue if isinstance(row, dict)])
+    filtered, fault = _filter_excluded_discharged_fixes(state, queue)
     if fault is None:
         state["_fixQueue"] = filtered
     return "queue-reconciled"
@@ -4684,12 +4755,12 @@ def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session
     """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling.
 
     ``emitted`` is True while the pending fixer attempt has emitted its orders: that slice is never
-    reshaped (no ``extra_rows`` join it, no guidance lift runs), only the later slices of the round
-    are reconciled."""
+    reshaped — the ``extra_rows`` join the later slices of the round (``_fixQueue``), which are
+    reconciled."""
     if state.get("step") != P_FIXER:
         return None
     if emitted:
-        return _reconcile_queue_after_emitted_rulings(state)
+        return _reconcile_queue_after_emitted_rulings(state, extra_rows)
     offered = _offered_fixer_rows(state, extra_rows)
     if not offered:
         return None
@@ -5570,6 +5641,18 @@ def _fold_audits(state, config, artifact, session_dir=None):
                                          collection_manifest=collection_manifest,
                                          carry_fields=(session_contract.FINDING_KEY_FIELD,),
                                          change_allowed_ids=change_allowed_ids)
+    # A lifted Minor/Nit target is audited and its discharge recorded like any other, but it never
+    # drives the loop: a not-discharged non-blocking target is held out of `notDischarged` (which
+    # restarts fixing, parks at the cap and feeds stall recovery) and out of the stall breaker's
+    # audit round — the rubric's rule that a Minor/Nit never changes the verdict.
+    nonblocking_ids = {t.get("id") for t in targets
+                       if isinstance(t, dict) and t.get("id") is not None
+                       and not circuit_breaker.is_blocking(t.get("severity"))}
+    held_open = [aid for aid in outcome.get("notDischarged") or [] if aid in nonblocking_ids]
+    if held_open:
+        outcome["notDischarged"] = [aid for aid in outcome["notDischarged"]
+                                    if aid not in nonblocking_ids]
+        outcome["notDischargedNonBlocking"] = held_open
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -5580,7 +5663,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
         {"identity": a.get("identity"), "ruling": a.get("ruling"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
-        for a in outcome["audits"]]}
+        for a in outcome["audits"] if a.get("id") not in nonblocking_ids]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         audit_reason = None
@@ -5634,6 +5717,9 @@ def _fold_audits(state, config, artifact, session_dir=None):
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
+    for aid in held_open:
+        _decision(state, "not-discharged-nonblocking",
+                  "%s — a lifted non-blocking finding; recorded, never a reason to keep fixing" % aid)
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
         state["step"] = P_VERIFY
         return
@@ -5766,7 +5852,7 @@ def _settle_delta(state, config):
         nd_targets = [dict(t) for t in audit_targets
                       if isinstance(t, dict) and t.get("id") in nd_ids]
         batch = _union_open_blockers(new_blocking, nd_targets)
-        if _route_judgment_blockers(state, batch):
+        if _route_judgment_blockers(state, batch + _lifted_judgment_rows(state, batch)):
             return
         _queue_fix_batch(state, config, batch)
         return
@@ -7707,7 +7793,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
     named_rows = []
-    if state.get("step") == P_FIXER and not emitted:
+    if state.get("step") == P_FIXER:
+        # While an attempt is emitted these rows cannot be in its batch (a ruling on that batch was
+        # refused above): they join the later slices of the round.
         named_rows = _guidance_named_rows(state, guidance_keys) + reopened_rows
     _reconcile_fixer_queue_after_rulings(
         state, cfg, extra_rows=named_rows, session_dir=session_dir, emitted=emitted)
