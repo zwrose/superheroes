@@ -2658,6 +2658,9 @@ def test_log_dir_exists_as_file_refuses_and_terminalizes(tmp_path, monkeypatch):
 
 
 def test_log_dir_parent_readonly_refuses_and_terminalizes(tmp_path, monkeypatch):
+    # The fixture repository must not depend on the developer's git config (signing).
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "readonly-parent" / "logs")
