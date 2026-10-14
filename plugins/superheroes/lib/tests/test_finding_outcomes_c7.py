@@ -367,3 +367,58 @@ def test_session_contract_dispositions_end_with_the_settled_outcomes():
     assert session_contract.DISPOSITIONS[3:] == ("craft", "left-for-owner", "ruling")
     assert session_contract.DISPOSITIONS[3:] == RFS.OUTCOMES[2:]
     assert session_contract.DISPOSITION_FAMILY_FIELDS[-2:] == ("settledReason", "decidedBy")
+
+
+# --- the compile step refuses a finding that states no consequence -----------------------------
+
+NO_CONSEQUENCE = "no stated consequence"
+UNCITED = "uncited — no file:line"
+COMPILE_DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
+
+
+def _raised(**extra):
+    base = {"file": "f.py", "line": 1, "title": "t", "severity": "Important"}
+    base.update(extra)
+    return base
+
+
+# axis: refusal at the compile step (the finding is absent from `compiled`, its drop row is present)
+@pytest.mark.parametrize("extra", [
+    {}, {"consequence": None}, {"consequence": ""}, {"consequence": "  \n\t "},
+    {"consequence": 5}, {"consequence": ["x"]},
+], ids=["missing", "none", "empty", "whitespace", "int", "list"])
+def test_compile_drops_a_finding_that_states_no_consequence(extra):
+    finding = _raised(**extra)
+    compiled, drops = round_driver.mechanical_compile([finding], COMPILE_DIFF)
+    assert compiled == []
+    assert drops == [{"file": "f.py", "line": 1, "title": "t", "reason": NO_CONSEQUENCE}]
+    assert round_driver.COMPILE_DROP_NO_CONSEQUENCE == NO_CONSEQUENCE
+    stated, no_drops = round_driver.mechanical_compile(
+        [_raised(consequence="users lose data")], COMPILE_DIFF)
+    assert no_drops == []
+    assert [f["consequence"] for f in stated] == ["users lose data"]
+
+
+def test_compile_uncited_finding_with_no_consequence_drops_once_as_uncited():
+    for finding in ({"title": "t", "severity": "Important"},
+                    {"file": "f.py", "title": "t", "severity": "Important", "consequence": ""},
+                    {"line": 1, "title": "t", "severity": "Important", "consequence": None}):
+        compiled, drops = round_driver.mechanical_compile([finding], COMPILE_DIFF)
+        assert compiled == []
+        assert [d["reason"] for d in drops] == [UNCITED]
+
+
+def test_compile_break_it_exempt_finding_with_no_consequence_is_dropped():
+    # g.py:9 is outside COMPILE_DIFF, so only the exemption keeps it in scope
+    for extra in ({}, {"consequence": None}, {"consequence": ""}, {"consequence": " \n"}):
+        finding = _raised(file="g.py", line=9, **extra)
+        compiled, drops = round_driver.mechanical_compile(
+            [finding], COMPILE_DIFF, scope_exempt={id(finding)})
+        assert compiled == []
+        assert drops == [{"file": "g.py", "line": 9, "title": "t", "reason": NO_CONSEQUENCE}]
+    stated = _raised(file="g.py", line=9, consequence="users lose data")
+    compiled, drops = round_driver.mechanical_compile(
+        [stated], COMPILE_DIFF, scope_exempt={id(stated)})
+    assert drops == []
+    assert [(f["file"], f["line"]) for f in compiled] == [("g.py", 9)]
