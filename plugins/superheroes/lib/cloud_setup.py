@@ -354,7 +354,8 @@ def confirm_pass(cwd, account, lapses, *, environment=None, root=None):
 
 
 _CHECK_AGAIN = "cloud builds stay off until a check passes. Run the setup check again."
-_RENEW = "Run the pass command and paste the new pass into the environment."
+_RENEW = ("Run the pass command and paste the new pass into the environment. "
+          "Sign the reviewer in again if the date does not move.")
 
 
 def _lapse_line(days, lapses, next_pass_days, live):

@@ -533,10 +533,11 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    python3 -B "$ROOT_DIR/lib/cloud_check.py" judge --environment <id> --nonce <nonce> --account <the account kept from step 6> --line-file <file>
    ```
 
-   Say judge's `message`. A passed check
-   has written the setup record for this account and changed no setting. A failed check, or a result that could not be read, has written nothing; when cloud
-   builds were on, it has switched them off and the message says so. Never write the setup record
-   any other way, and never tell the owner a check passed without a `passed` result.
+   Say judge's `message`. A passed check has written the setup record for this account and changed no
+   setting. A failed check never leaves cloud builds ready to switch on, because its failed-check
+   marker blocks them; when cloud builds were on, it has switched them off and the message says so.
+   Never write the setup record any other way, and never tell the owner a check passed without a
+   `passed` result.
 8. **"Check again"** repeats steps 6 and 7 with a new check session, naming the environment now in use (the id step 3
    returned, the one the latest recovery pick returned, or the one the latest `mismatched` check
    returned, whichever came last).
@@ -545,6 +546,7 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    repair is done, read the pick with both the new baseline and the environment now in use, and use the
    `environment` it returns for steps 5 to 7; it becomes the environment now in use for every later
    retry. A repair that kept the same environment returns that same id.
+   Leave `--before` out when the snapshot value was null.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

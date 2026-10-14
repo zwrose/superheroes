@@ -273,7 +273,7 @@ declined with a trigger by default.
 ## The launch door
 
 1. **Filing waits on the owner's word; launching spends the capacity.** The budget is [N](../../../rubric/glossary.md#n)
-   machinery lanes in flight at once, counted by the advisor at the launch word. A lane is in flight
+   machinery lanes in flight at once, counted by the advisor at the launch go-ahead. A lane is in flight
    until its outcome is recorded, which the launch doctrine already requires. **That is the whole of
    the slot accounting.**
 2. **The dial.** The [dial](../../../rubric/glossary.md#dial) is a ceiling on the machinery share
@@ -292,7 +292,7 @@ declined with a trigger by default.
    own word, against the window so far. **N caps concurrency within a wave, the dial caps the
    window's share, and the tighter one binds.** No finer accounting is done. A P0 override changes
    priority, never the launch budget. A larger budget is a change to the dial.
-5. **A convention at the launch word, never a check.** At wave planning the advisor writes the share
+5. **A convention at the launch go-ahead, never a check.** At wave planning the advisor writes the share
    as **one sentence beside the owner's word**, in whatever thread carries the word. The sentence
    states machinery lanes over total lanes, across every lane launched in the current window so far
    plus the wave being planned. A lane launched outside a planned wave gets the same sentence
@@ -302,7 +302,7 @@ declined with a trigger by default.
    the pass from the launch ledger. **The dial is never a launcher check, a preflight item, or a
    script**, and a filing to make it one is declined at the door. A checked dial is the grid
    instrumenting itself.
-6. **Tiers order entry through the door. Filing waits on the owner's word; the launch word**
+6. **Tiers order entry through the door. Filing waits on the owner's word; the launch go-ahead**
    spends the capacity where it is actually spent.
 7. **No exemption for correctness.** Every epic and milestone is product-forward and is labeled so
    by the owner at ratification. **The advisor never makes that call.** Machinery then arrives only
@@ -622,7 +622,7 @@ standing rule of the pass, not a ninth duty.
 - and **the misses-log appends made**.
 
 **What the decisions-asked count counts.** The decisions that needed the owner's word in the window:
-P0 rulings, batched P1 words, launch words, retirement rulings, and recalibration stamps. **Nothing
+P0 rulings, batched P1 words, launch go-aheads, retirement rulings, and recalibration stamps. **Nothing
 compares it to anything yet.** The window's misses are **not** a second count, because the record's
 misses-log line already lists the entries appended. The escape rate is a different measure recorded
 beside it. **No instrument is built for the count**. It is an advisor's read over board data.
