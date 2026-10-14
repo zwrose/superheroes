@@ -86,6 +86,23 @@ def test_a_record_of_200k_characters_pretty_printed_posts_whole_in_parts(tmp_pat
     assert [f["body"] for f in rec["findings"]] == [f["body"] for f in found]
 
 
+def test_a_record_of_227k_characters_with_98_reviewer_rows_and_79_findings_posts_whole_in_parts(tmp_path):
+    # axis: record fit at the largest real session; a record that size refused, cut, or read back different
+    fake = Fake()
+    rows, found = panel_rows(SEATS, 8, gap=10), many_findings(79, 3000)
+    assert len(rows) == 98 and len(found) == 79
+    size = pretty_size(fake, reviewers=rows, findings=found)
+    assert size >= 227000, size
+    out = send(tmp_path, fake, reviewers=rows, findings=found)
+    assert out["parts"] > 1 and len(parts_of(fake)) == out["parts"]
+    assert all(len(c["body"]) <= rr.MAX_BODY_CHARS for c in fake.comments)
+    assert [c["id"] for c in fake.comments][-1] == fake.marked()[0]["id"]  # the head goes last
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["ok"] and keys(rec) == keys(build(account(reviewers=rows, findings=found), fake))
+    assert len(rec["findings"]) == 79 and len(rec["reviewers"]) == 98
+    assert [f["body"] for f in rec["findings"]] == [f["body"] for f in found]
+
+
 def test_66_rows_in_6_seats_over_11_rounds_fit_one_comment(tmp_path):
     # axis: compaction; per-seat bullets and compact JSON failing to keep a mid-size session in one comment
     fake = Fake()
