@@ -51,6 +51,9 @@ def _isolated(tmp_path, monkeypatch):
     # The launches below keep their base on a local bare remote; the commit is asked of that
     # remote by git rather than of GitHub. The GitHub question has its own tests.
     monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
+    # The fixture repositories must not depend on the developer's git config, such as signing.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 
 def _local_remote_has(repo_root, base, env):
@@ -315,8 +318,8 @@ def _compose_cloud(repo, **kwargs):
     return L.compose_launch(repo, 656, _stamped(repo), **kwargs)
 
 
-def test_compose_cloud_prompt_differs_from_local_by_exactly_the_four_place_lines(tmp_path):
-    # axis: the prompt differs from the local one by exactly those lines
+def test_compose_cloud_prompt_differs_from_local_by_the_four_place_lines_and_the_standing_permission(tmp_path):
+    # axis: the prompt differs from the local one by exactly those lines and the standing permission
     repo = _init_repo(tmp_path / "repo")
     local = L.compose_launch(repo, 656, _stamped(repo))
     cloud = _compose_cloud(repo)
@@ -326,8 +329,10 @@ def test_compose_cloud_prompt_differs_from_local_by_exactly_the_four_place_lines
         "Place: cloud session\nAdvisor plugin version: %s\nCloud environment: %s\n"
         "Base commit: %s\n\n" % (version, ENV_ID, _head_sha(repo))
     )
+    permission = launch_doctrine.CLOUD_LAUNCH_TEXT + "\n\n"
     assert lines in cloud["prompt"]
-    assert cloud["prompt"].replace(lines, "", 1) == local["prompt"]
+    assert permission in cloud["prompt"]
+    assert cloud["prompt"].replace(lines, "", 1).replace(permission, "", 1) == local["prompt"]
     rulings = local["doctrine"]["rulingsBlock"]
     assert rulings
     assert cloud["doctrine"]["rulingsBlock"] == rulings
