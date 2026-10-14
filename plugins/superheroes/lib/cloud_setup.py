@@ -233,13 +233,14 @@ def _load(cwd, account, root):
     return "ready", raw
 
 
-def read(cwd, account, root=None):
+def read(cwd, account, root=None, *, persist_backfill=True):
     """The cloud-builds setting and the setup record's state for ``account``. Never raises."""
     setting = False
     try:
         import project_config
 
-        got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
+        keyword = {} if persist_backfill else {"persist_backfill": False}
+        got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root, **keyword)
         setting = got.get("effective") is True
     except Exception:
         setting = False

@@ -84,9 +84,12 @@ def test_every_check_command_names_the_picked_id():
 def test_the_pick_is_read_before_and_after_and_before_the_check():
     section = _section_six()
     assert section, "section 6 of set-up.md was not found"
+    # axis: the plain after-read line must name cloud_environment.py, not only end like the read — see bite-proof record wo_b_1771_setup_sitting_text.md
     plain_end = 'pick --cwd . --before <the value step 1 kept>'
-    plain_label = 'a plain after-read line ending %r' % plain_end
-    plain = next((i for i, line in enumerate(section) if line.strip().endswith(plain_end)), None)
+    plain_name = 'cloud_environment.py" pick'
+    plain_label = 'a plain after-read line naming %r and ending %r' % (plain_name, plain_end)
+    plain = next((i for i, line in enumerate(section)
+                  if plain_name in line and line.strip().endswith(plain_end)), None)
     found = [('cloud_environment.py" snapshot', _first(section, 'cloud_environment.py" snapshot')),
              ('cloud_check.py" setup-message', _first(section, 'cloud_check.py" setup-message')),
              (plain_label, plain),

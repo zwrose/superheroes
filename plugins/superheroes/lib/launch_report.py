@@ -120,6 +120,16 @@ def _summary(lanes):
         _count(lanes), wasnt, _fix_line(code, first))
 
 
+def yields_report(calls):
+    """True when any of these place calls leaves a launch report: cloud builds were on or used.
+    The one predicate behind a report, so a caller that decides before it renders cannot drift
+    from the renderer. Never raises; a call it cannot read yields no report."""
+    try:
+        return any(c["pointedAtCloud"] or c["place"] == ll.PLACE_CLOUD for c in calls)
+    except Exception:
+        return False
+
+
 def render_report(lanes):
     """The launch report for these lanes, in launch order; None when cloud builds were neither on
     nor used. Never names a reason that is not in the table."""
@@ -127,7 +137,7 @@ def render_report(lanes):
         if not lanes:
             return None
         calls = [lane["placeCall"] for lane in lanes]
-        if not any(c["pointedAtCloud"] or c["place"] == ll.PLACE_CLOUD for c in calls):
+        if not yields_report(calls):
             return None
         summary = _summary(lanes)
         if summary is not None:
@@ -179,12 +189,16 @@ def _setting_read_off(cwd, root):
         import core_md
         import project_config
 
-        if core_md.read(cwd, root) is None:
-            if not core_md.gate_config_profile_is_absent(cwd, root):
+        # the path is resolved once, without writing the mode record; gate_config_profile_is_absent
+        # would resolve it again with the default, which can write that record
+        path = core_md.core_path(cwd, root, persist_backfill=False)
+        if core_md.read(cwd, root, persist_backfill=False) is None:
+            if core_md._classify_core_md_at_path(path).status != core_md.CONFIG_ABSENT:
                 return False
-        elif not _configuration_is_whole(core_md.core_path(cwd, root)):
+        elif not _configuration_is_whole(path):
             return False
-        got = project_config.get_item(cwd, project_config.CLOUD_BUILDS_SLUG, root=root)
+        got = project_config.get_item(
+            cwd, project_config.CLOUD_BUILDS_SLUG, root=root, persist_backfill=False)
         return got.get("effective") is False and got.get("malformed") is not True
     except Exception:
         return False
@@ -271,7 +285,7 @@ def still_check(repo_root, *, root=None, readiness_fn=None):
     ledger and from the cloud's readiness now. Never raises."""
     try:
         try:
-            read = ll.read(repo_root)
+            read = ll.read(repo_root, create=False)
         except Exception:
             # a reader that breaks leaves the ledger's state unknown: refuse, never read it as no reminder
             return {"line": None, "refused": STILL_LEDGER_UNREADABLE}
@@ -286,7 +300,8 @@ def still_check(repo_root, *, root=None, readiness_fn=None):
         if not candidates:
             return {"line": None, "refused": None}
         try:
-            now = (readiness_fn or cloud_ready.readiness)(repo_root, reported=None, root=root)
+            now = (readiness_fn or cloud_ready.readiness)(
+                repo_root, reported=None, root=root, persist_backfill=False)
         except Exception:
             now = None
         # axis: a fixed candidate is skipped, so the next one still standing shows — see bite-proof record wo_a_launch_report

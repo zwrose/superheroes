@@ -377,11 +377,13 @@ def _item_by_slug(slug):
     return _SLUG_INDEX.get(slug)
 
 
-def _guardian_cadence_raw(cwd, root):
+def _guardian_cadence_raw(cwd, root, *, persist_backfill=True):
     import guardian_store
 
     try:
-        layer_p = guardian_store.guardian_layer_path(cwd, root)
+        layer_p = guardian_store.guardian_layer_path(
+            cwd, root, persist_backfill=persist_backfill
+        )
     except Exception:
         return None
     if core_md._layer_is_empty(layer_p):
@@ -532,10 +534,11 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
     }
 
 
-def read(cwd, root=None):
+def read(cwd, root=None, *, persist_backfill=True):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
-    facts = core_md.read(cwd, root)
-    guardian_cfg = guardian_sweep.read_config(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    facts = core_md.read(cwd, root, **keyword)
+    guardian_cfg = guardian_sweep.read_config(cwd, root, **keyword)
     if facts is None:
         absent_items = []
         dial_entry = _resolve_item_entry(_SLUG_INDEX["dial"], None)
@@ -544,7 +547,7 @@ def read(cwd, root=None):
             if item["home"] == HOME_THREAT_MODEL:
                 raw = None
             elif item["home"] == HOME_GUARDIAN_CADENCE:
-                raw = _guardian_cadence_raw(cwd, root)
+                raw = _guardian_cadence_raw(cwd, root, **keyword)
             else:
                 raw = None
             entry = _resolve_item_entry(
@@ -571,7 +574,7 @@ def read(cwd, root=None):
             if isinstance(raw, str) and not raw.strip():
                 raw = None
         elif item["home"] == HOME_GUARDIAN_CADENCE:
-            raw = _guardian_cadence_raw(cwd, root)
+            raw = _guardian_cadence_raw(cwd, root, **keyword)
         else:
             raw = _read_project_config_raw(mapping, slug)
         entry = _resolve_item_entry(
@@ -614,12 +617,13 @@ def view(cwd, root=None):
     }
 
 
-def get_item(cwd, slug, root=None):
+def get_item(cwd, slug, root=None, *, persist_backfill=True):
     """Return one item's read contract, or a refusal when the slug is unknown."""
     item = _item_by_slug(slug)
     if item is None:
         return {"action": "refused", "reason": REASON_UNKNOWN_SLUG}
-    payload = read(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    payload = read(cwd, root, **keyword)
     for entry in payload["items"]:
         if entry["slug"] == slug:
             return {

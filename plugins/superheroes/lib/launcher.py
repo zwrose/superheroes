@@ -3466,7 +3466,7 @@ def _report_title(title_fn, repo_root, issue):
 
 def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
     """The launch report for one batch, built from the ledger's started launches."""
-    read = ll.read(repo_root, env=env)
+    read = ll.read(repo_root, env=env, create=False)
     if read["state"] == "missing":
         return {"ok": True, "report": None, "lanes": 0}
     if read["state"] != "ok":
@@ -3493,14 +3493,17 @@ def launch_report_for_batch(repo_root, batch_id, *, title_fn=None, env=None):
         if isinstance(rec, dict) and rec.get("event") == "reserved"
     }
     lookup = title_fn or _issue_title
-    lanes = []
+    calls = []
     for issue in sorted(last_started, key=lambda i: first_index[i]):
         launch_id, info = last_started[issue]
-        lanes.append({
-            "issue": issue,
-            "title": _report_title(lookup, repo_root, issue),
-            "placeCall": launch_report.report_place_call(reserved.get(launch_id), info["place"]),
-        })
+        calls.append((issue, launch_report.report_place_call(reserved.get(launch_id), info["place"])))
+    # titles are looked up only for a report that will render, by the renderer's own predicate
+    wanted = launch_report.yields_report([call for _issue, call in calls])
+    lanes = [
+        {"issue": issue, "title": _report_title(lookup, repo_root, issue) if wanted else None,
+         "placeCall": call}
+        for issue, call in calls
+    ]
     return {
         "ok": True,
         "report": launch_report.render_report(lanes),

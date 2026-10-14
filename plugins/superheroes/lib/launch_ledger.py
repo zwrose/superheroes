@@ -205,12 +205,14 @@ def _ledger_refusal(reason, root_fd=None, repo_fd=None, ledger_fd=None):
     return {"ok": False, "reason": reason, "fh": None, "path": None}
 
 
-def _open_ledger_dirs(repo_root, env=None):
-    """Open validated root and repo-id directory fds. Never raises."""
+def _open_ledger_dirs(repo_root, env=None, *, create=True):
+    """Open validated root and repo-id directory fds. Never raises. With create=False nothing is
+    made: a root or repo-id directory that is absent gives the reason ledger-missing, and an
+    existing one is checked exactly as before."""
     if env is None:
         env = os.environ
 
-    resolved = resolve_root(repo_root, env=env)
+    resolved = resolve_root(repo_root, env=env, create=create)
     if not resolved["ok"]:
         return {"ok": False, "reason": resolved["reason"], "root_fd": None,
                 "repo_fd": None, "root": None, "repo_id": None}
@@ -225,19 +227,23 @@ def _open_ledger_dirs(repo_root, env=None):
     repo_fd = None
     try:
         root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        return {"ok": False, "reason": "ledger-root-unusable", "root_fd": None,
+    except OSError as exc:
+        reason = "ledger-root-unusable"
+        if not create and isinstance(exc, FileNotFoundError):
+            reason = "ledger-missing"
+        return {"ok": False, "reason": reason, "root_fd": None,
                 "repo_fd": None, "root": root, "repo_id": repo_id}
 
     if _is_fd_group_or_world_accessible(root_fd):
         return _ledger_refusal("ledger-root-insecure", root_fd=root_fd)
 
-    try:
-        os.mkdir(repo_id, mode=0o700, dir_fd=root_fd)
-    except FileExistsError:
-        pass
-    except OSError:
-        return _ledger_refusal("ledger-repo-dir-unusable", root_fd=root_fd)
+    if create:
+        try:
+            os.mkdir(repo_id, mode=0o700, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        except OSError:
+            return _ledger_refusal("ledger-repo-dir-unusable", root_fd=root_fd)
 
     try:
         repo_fd = os.open(
@@ -248,7 +254,7 @@ def _open_ledger_dirs(repo_root, env=None):
     except OSError as exc:
         reason = "ledger-repo-dir-unusable"
         if isinstance(exc, FileNotFoundError):
-            reason = "ledger-repo-dir-missing"
+            reason = "ledger-repo-dir-missing" if create else "ledger-missing"
         elif getattr(exc, "errno", None) in (getattr(os, "ENOTDIR", None),):
             reason = "ledger-repo-dir-not-directory"
         else:
@@ -270,12 +276,13 @@ def _open_ledger_dirs(repo_root, env=None):
     }
 
 
-def open_ledger(repo_root, mode, env=None):
-    """The ONLY way to obtain a ledger file handle. Never raises."""
+def open_ledger(repo_root, mode, env=None, *, create=True):
+    """The ONLY way to obtain a ledger file handle. Never raises. With create=False no directory is
+    made: an absent root or repo-id directory gives the reason ledger-missing."""
     if mode not in ("r", "a"):
         return {"ok": False, "reason": "ledger-mode-invalid", "fh": None, "path": None}
 
-    opened = _open_ledger_dirs(repo_root, env=env)
+    opened = _open_ledger_dirs(repo_root, env=env, create=create)
     if not opened["ok"]:
         return {"ok": False, "reason": opened["reason"], "fh": None, "path": None}
 
@@ -515,8 +522,10 @@ def repo_identity(repo_root):
     return hashlib.sha256(real.encode("utf-8")).hexdigest()
 
 
-def _candidate_root_validation_reason(repo_root, root, env=None):
-    """Return a refusal reason token, or None when root is usable. Never raises."""
+def _candidate_root_validation_reason(repo_root, root, env=None, *, create=True):
+    """Return a refusal reason token, or None when root is usable. Never raises. With create=False
+    an absent root is not made; it is reported usable (there is nothing to check yet), and an
+    existing root gets every check."""
     if env is None:
         env = os.environ
     repo_real = os.path.realpath(repo_root)
@@ -534,10 +543,13 @@ def _candidate_root_validation_reason(repo_root, root, env=None):
     if _path_inside(repo_real, root) or _path_inside(common_real, root):
         return "ledger-root-in-repo"
 
-    try:
-        os.makedirs(root, mode=0o700, exist_ok=True)
-    except OSError:
-        return "ledger-root-unusable"
+    if create:
+        try:
+            os.makedirs(root, mode=0o700, exist_ok=True)
+        except OSError:
+            return "ledger-root-unusable"
+    elif not os.path.lexists(root):
+        return None
 
     if not os.path.isdir(root) or not os.access(root, os.W_OK):
         return "ledger-root-unusable"
@@ -558,8 +570,9 @@ def default_root():
     return os.path.join(tempfile.gettempdir(), LEDGER_DIR_NAME)
 
 
-def resolve_root(repo_root, env=None):
-    """Resolve ledger root outside the repo; refuse in-repo paths."""
+def resolve_root(repo_root, env=None, *, create=True):
+    """Resolve ledger root outside the repo; refuse in-repo paths. With create=False the root is
+    not made when it is absent."""
     if env is None:
         env = os.environ
     if not _has_git_entry(repo_root):
@@ -574,16 +587,16 @@ def resolve_root(repo_root, env=None):
     except OSError:
         return {"ok": False, "root": None, "reason": "ledger-root-unusable"}
 
-    reason = _candidate_root_validation_reason(repo_root, root, env=env)
+    reason = _candidate_root_validation_reason(repo_root, root, env=env, create=create)
     if reason is not None:
         return {"ok": False, "root": None, "reason": reason}
 
     return {"ok": True, "root": root, "reason": None}
 
 
-def ledger_path(repo_root, env=None):
+def ledger_path(repo_root, env=None, *, create=True):
     """Pure query for reporting/refusal reasons; does not open the ledger."""
-    resolved = resolve_root(repo_root, env=env)
+    resolved = resolve_root(repo_root, env=env, create=create)
     if not resolved["ok"]:
         return {"ok": False, "path": None, "reason": resolved["reason"]}
     repo_id = repo_identity(repo_root)
@@ -663,9 +676,11 @@ def append(repo_root, record, env=None):
     return _append_raw(repo_root, record, env=env)
 
 
-def read(repo_root, env=None):
-    """Read ledger; surface torn tails and interior corruption fail-closed."""
-    opened = open_ledger(repo_root, "r", env=env)
+def read(repo_root, env=None, *, create=True):
+    """Read ledger; surface torn tails and interior corruption fail-closed. With create=False an
+    absent root or repo-id directory reads as an existing empty ledger directory does, and
+    nothing is made."""
+    opened = open_ledger(repo_root, "r", env=env, create=create)
     if not opened["ok"]:
         if opened["reason"] == "ledger-missing":
             return {"state": "missing", "records": []}

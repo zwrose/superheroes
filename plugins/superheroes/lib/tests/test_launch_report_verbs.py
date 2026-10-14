@@ -42,7 +42,6 @@ from test_launch_report import (  # noqa: E402
     SETUP_TEXT_FIX,
     STAMP,
     _account_env,
-    _fn,
     _now,
     _put,
     _record,
@@ -68,6 +67,14 @@ def _call(place="local", pointed=True, reason=None, by="setting", need=None, clo
 
 def _titles(repo_root, issue):
     return "Title %s" % issue
+
+
+def _fn(**kw):
+    """An injected readiness reader. It takes the keyword `persist_backfill` (and any other) the real
+    reader takes, and ignores it."""
+    def readiness(cwd, reported=None, root=None, env=None, **kwargs):
+        return _now(**kw)
+    return readiness
 
 
 @pytest.fixture
@@ -394,18 +401,20 @@ def test_B11_the_report_result_has_no_still_key(world):
 
 
 def test_B10_one_store_report_and_still_write_nothing(world):
+    # axis: report and still write nothing under the store, the repository or the ledger root — see bite-proof record c8a_wo3.md
     repo, _store = world
+    ledger_root = os.environ[ll.LEDGER_ROOT_ENV]
     state = os.path.join(mode_registry.project_store_dir(repo, None), "state")
     os.makedirs(state)
     with open(os.path.join(state, "stale-reminder.json"), "wb") as fh:
         fh.write(b"left behind by an older build")
     _launch(repo, "a", 11, "local", _call(reason="no-setup"))
     _launch(repo, "b", 22, "local", _call(reason="unreachable"))
-    before = _snapshot(mode_registry.project_store_dir(repo, None), repo)
+    before = _snapshot(mode_registry.project_store_dir(repo, None), repo, ledger_root)
     assert _report(repo)["report"] is not None
     got = LR.still_check(repo, readiness_fn=_fn(ready=False, reason="no-setup"))
     assert got["line"].startswith("Still on your machine\n") and got["refused"] is None
-    assert _snapshot(mode_registry.project_store_dir(repo, None), repo) == before
+    assert _snapshot(mode_registry.project_store_dir(repo, None), repo, ledger_root) == before
 
 
 # ---------------------------------------------------------------- the line comes from the ledger
@@ -416,14 +425,20 @@ def _line(repo, **kw):
 
 
 def _day_launch(repo, launch_id, issue, day, call):
-    _launch(repo, launch_id, issue, "local", call, ts=_ts(day))
+    """A launch that started on `day` and was reserved the day before, so a day read from the
+    reservation is not the start day."""
+    premise = None if call is None else {"placeCall": call}
+    _reserve(repo, launch_id, issue, "local", premise, ts=_ts(day - datetime.timedelta(days=1)))
+    _start(repo, launch_id, "local", ts=_ts(day))
+    info = ll.fold(ll.read(repo)["records"])["launches"][launch_id]
+    assert LR.launch_day(info) == day
 
 
 def test_B1_no_deciding_launch_means_no_line_and_readiness_is_not_read(world):
     repo, _store = world
     asked = []
 
-    def readiness(cwd, reported=None, root=None, env=None):
+    def readiness(cwd, reported=None, root=None, env=None, **kwargs):
         asked.append(cwd)
         return _now()
 
@@ -443,7 +458,7 @@ def test_B1_readiness_is_read_once_however_many_fallbacks_stand(world):
     repo, _store = world
     asked = []
 
-    def readiness(cwd, reported=None, root=None, env=None):
+    def readiness(cwd, reported=None, root=None, env=None, **kwargs):
         asked.append(cwd)
         return _now(ready=False, reason="no-setup")
 
@@ -900,3 +915,156 @@ def test_B9_cli_still_on_a_ledger_reader_that_raises_refuses_and_exits_one(world
     monkeypatch.setattr(ll, "read", boom)
     assert launcher.main(["still", "--repo-root", repo]) == 1
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "still-ledger-unreadable"}
+
+
+# ---------------------------------------------------------------- a read writes nothing
+
+
+def test_cli_still_with_hero_evidence_and_no_core_md_writes_no_mode_record(
+        tmp_path, monkeypatch, capsys):
+    # axis: the readiness read behind `still` never backfills the storage-mode record — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(control_plane, "store_root", lambda: store)
+    monkeypatch.setenv("HOME", _account_env(tmp_path)["HOME"])
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    # a cloud session never writes calibration, which would hide a write this test looks for
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    assert _declare(repo, BATCH, 4)["ok"]
+    # hero evidence (a review-crew layer in the repository), no core.md, no registry
+    layer = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    os.makedirs(os.path.dirname(layer))
+    with open(layer, "w", encoding="utf-8") as fh:
+        fh.write("a calibrated hero\n")
+    assert not os.path.exists(CM.core_path(repo, None, persist_backfill=False))
+    assert mode_registry.read_registry(repo, store) is None
+    # the world is one that a default read would write a record for
+    assert mode_registry.resolve(repo, store, persist_backfill=False)["source"] == "evidence"
+    assert mode_registry.read_registry(repo, store) is None
+    _day_launch(repo, "a", 11, DAY, _call(reason="no-setup", by="setting"))
+    before = _snapshot(mode_registry.project_store_dir(repo, None), repo, store, ledger_root)
+    assert launcher.main(["still", "--repo-root", repo]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert mode_registry.read_registry(repo, store) is None
+    assert _snapshot(mode_registry.project_store_dir(repo, None), repo, store, ledger_root) == before
+
+
+# ---------------------------------------------------------------- a read makes no ledger directory
+
+
+def _repo_dir(repo, root):
+    return os.path.join(root, ll.repo_identity(repo))
+
+
+def test_still_and_report_do_not_create_a_missing_ledger_root(tmp_path, monkeypatch):
+    # axis: a read of a ledger whose root does not exist reports an empty ledger and makes nothing — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    missing = tmp_path / "no-such-ledger-root"
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(missing))
+    assert LR.still_check(repo, readiness_fn=_fn()) == {"line": None, "refused": None}
+    assert launcher.launch_report_for_batch(repo, BATCH, title_fn=_titles) == {
+        "ok": True, "report": None, "lanes": 0}
+    assert not missing.exists()
+    assert ll.read(repo, create=False) == {"state": "missing", "records": []}
+    assert not missing.exists()
+
+
+def test_still_and_report_do_not_create_a_missing_repo_directory(tmp_path, monkeypatch):
+    # axis: a read with the ledger root present and the repository directory absent makes no directory — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    root = _ledger_env(tmp_path, monkeypatch)
+    assert LR.still_check(repo, readiness_fn=_fn()) == {"line": None, "refused": None}
+    assert launcher.launch_report_for_batch(repo, BATCH, title_fn=_titles) == {
+        "ok": True, "report": None, "lanes": 0}
+    assert os.listdir(root) == []
+
+
+def test_a_read_that_may_create_still_makes_the_directories(tmp_path, monkeypatch):
+    # axis: the default read is unchanged — it makes the root and the repository directory, then reads an empty ledger — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    missing = tmp_path / "ledger-made-by-a-default-read"
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(missing))
+    assert ll.read(repo) == {"state": "missing", "records": []}
+    assert os.path.isdir(_repo_dir(repo, str(missing)))
+    assert ll.read(repo, create=False) == {"state": "missing", "records": []}
+
+
+def test_a_read_that_may_not_create_still_refuses_a_root_with_the_wrong_mode(tmp_path, monkeypatch):
+    # axis: an existing ledger root that others can reach is still refused when the read may not create — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    root = _ledger_env(tmp_path, monkeypatch)
+    os.chmod(root, 0o755)
+    assert ll.read(repo, create=False) == {"state": "unreadable", "records": []}
+    assert LR.still_check(repo, readiness_fn=_fn()) == {
+        "line": None, "refused": LR.STILL_LEDGER_UNREADABLE}
+    assert launcher.launch_report_for_batch(repo, BATCH, title_fn=_titles) == {
+        "ok": False, "reason": "report-ledger-unreadable"}
+    assert os.listdir(root) == []
+
+
+def test_a_read_that_may_not_create_still_refuses_a_repo_directory_that_is_a_symlink(
+        tmp_path, monkeypatch):
+    # axis: an existing repository directory that is a symlink is still refused when the read may not create — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    root = _ledger_env(tmp_path, monkeypatch)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    os.symlink(str(elsewhere), _repo_dir(repo, root))
+    assert ll.read(repo, create=False) == {"state": "unreadable", "records": []}
+    assert LR.still_check(repo, readiness_fn=_fn()) == {
+        "line": None, "refused": LR.STILL_LEDGER_UNREADABLE}
+
+
+def test_a_read_that_may_not_create_still_refuses_a_repo_directory_with_the_wrong_mode(
+        tmp_path, monkeypatch):
+    # axis: an existing repository directory that others can reach is still refused when the read may not create — see bite-proof record c8a_wo3.md
+    repo = _init_repo(tmp_path / "repo")
+    root = _ledger_env(tmp_path, monkeypatch)
+    os.mkdir(_repo_dir(repo, root), 0o755)
+    os.chmod(_repo_dir(repo, root), 0o755)
+    assert ll.read(repo, create=False) == {"state": "unreadable", "records": []}
+    assert LR.still_check(repo, readiness_fn=_fn()) == {
+        "line": None, "refused": LR.STILL_LEDGER_UNREADABLE}
+
+
+# ---------------------------------------------------------------- the report looks up titles only for a report
+
+
+def _counting_titles(asked):
+    def lookup(repo_root, issue):
+        asked.append(issue)
+        return "Title %s" % issue
+    return lookup
+
+
+def test_a_batch_with_no_report_looks_up_no_titles(world):
+    # axis: no title lookup for a batch whose place calls leave no report (cloud builds neither on nor used) — see bite-proof record c8a_wo3.md
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(pointed=False, reason=None))
+    _launch(repo, "b", 22, "local", None)
+    asked = []
+    got = launcher.launch_report_for_batch(repo, BATCH, title_fn=_counting_titles(asked))
+    assert got == {"ok": True, "report": None, "lanes": 2}
+    assert asked == []
+
+
+def test_a_batch_with_a_report_looks_up_a_title_for_each_lane(world):
+    # axis: a batch that does report still gets a title for each lane — see bite-proof record c8a_wo3.md
+    repo, _store = world
+    _launch(repo, "a", 11, "local", _call(pointed=False, reason=None))
+    _launch(repo, "b", 22, "cloud")
+    asked = []
+    got = launcher.launch_report_for_batch(repo, BATCH, title_fn=_counting_titles(asked))
+    assert got["report"] is not None and got["lanes"] == 2
+    assert sorted(asked) == [11, 22]
+    assert "#22 Title 22" in got["report"]
+
+
+def test_the_report_and_the_title_lookup_share_one_predicate():
+    # axis: the title lookup and the renderer decide by the one predicate, so they cannot drift — see bite-proof record c8a_wo3.md
+    calls = [_call(pointed=False, reason=None), _call("cloud", pointed=True)]
+    assert LR.yields_report(calls[:1]) is False
+    assert LR.yields_report(calls) is True
+    assert LR.render_report([{"issue": 1, "title": None, "placeCall": c} for c in calls[:1]]) is None
+    assert LR.render_report([{"issue": 1, "title": None, "placeCall": c} for c in calls]) is not None
