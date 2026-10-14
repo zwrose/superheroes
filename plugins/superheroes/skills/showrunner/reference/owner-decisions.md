@@ -240,6 +240,8 @@ declined with a trigger by default.
    - **Who logs it.** The act that observes it logs it, at that moment. The advisor appends it during
      that vet, while reading that diagnosis or field report, or when the owner reports it. The act's own
      durable record states the append, as item 4 requires.
+     An escape is logged once: the act reads the misses log first, and when an earlier act already
+     logged that PR's escape, it appends nothing and its record says the escape was already logged.
    - **What the entry says.** The PR, a link to that PR's
      [review record](../../../rubric/glossary.md#review-record) (the record is one hop from the PR), the
      date of the review that record holds, and one call. The call is **missed** when no finding in the
@@ -570,20 +572,23 @@ advisor run together to keep calibration honest.
    - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
      escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
      record writer's `read --pr <n>` returns it, and each review escape as its review's date
-     (`reviewedAt`) and its call (`missed` or `seen-and-left`). A PR is dated by that record and counts
-     only when the date is on or after the adoption day and inside the condition window. The record
-     keeps no first date for a finding, so a catch carried from a review before the adoption day into a
-     later re-review counts by the later date; the advisor weighs that before relying on a seat's count.
-     The advisor reads the counts and judges. Missing evidence reads unmeasured, never zero: an undated
-     or unreadable record, an undated escape or one whose call is neither, and a record inside the
-     counting range that is a refusal, has lost its reviewers or findings, lacks its `pr` or
-     `sessionId`, could not read a reviewer's raw output, has a damaged reviewer or finding row, or
-     repeats a PR already supplied each turn the whole tally unmeasured (`incomplete-evidence`) instead
-     of counting as nothing. A record dated outside the range is left out unread. A condition window
-     that opens before the adoption day also reads unmeasured, as `short-of-window`, and that is the
-     reason reported. A catch is credited to every seat whose lens the finding names (a fixed finding
-     in the security lens counts toward the security seat, whichever dispatch raised it), so the count
-     is findings fixed in that seat's lens.
+     (`reviewedAt`) and its call (`missed` or `seen-and-left`). The advisor builds that escape input
+     from the misses log at the pass, one item per review escape in the log, before-adoption ones
+     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
+     dated by that record and counts only when the date is on or after the adoption day and inside
+     the condition window. The record keeps no first date for a finding, so a catch carried from a
+     review before the adoption day into a later re-review counts by the later date; the advisor
+     weighs that before relying on a seat's count. The advisor reads the counts and judges. Missing
+     evidence reads unmeasured, never zero: an undated or unreadable record, an undated escape or
+     one whose call is neither, and a record inside the counting range that is a refusal, has lost
+     its reviewers or findings, lacks its `pr` or `sessionId`, could not read a reviewer's raw
+     output, has a damaged reviewer or finding row, or repeats a PR already supplied each turn the
+     whole tally unmeasured (`incomplete-evidence`) instead of counting as nothing. A record dated
+     outside the range is left out unread. A condition window that opens before the adoption day
+     also reads unmeasured, as `short-of-window`, and that is the reason reported. A catch is
+     credited to every seat whose lens the finding names (a fixed finding in the security lens
+     counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
+     in that seat's lens.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -724,9 +729,10 @@ say how it changes and what the advisor says when the owner finds a review slow.
      touches, read with `lib/risk_areas.py touched` over the PR's changed paths;
   2. whether the review loop followed it: the reviewers that ran, the rounds, and whether the loop
      stopped at its cap, all from the review record;
-  3. what the review spent its time on: the record's cost (reviewer minutes) and its round count. The
-     record neither times fix rounds nor says which rounds ran a fix, so the answer gives the round
-     count, says that fix work is not recorded, and estimates neither;
+  3. what the review spent its time on: the record's cost (reviewer minutes, summed across the
+     reviewers, not the time the owner waited) and its round count. The record neither times fix
+     rounds nor says which rounds ran a fix, so the answer gives the round count, says that fix work
+     is not recorded, and estimates neither;
   4. a proposed calibration change, or none, with its reason.
 
   **The complaint is never treated as an instruction to go faster.** The loop keeps spending the time
