@@ -246,6 +246,14 @@ def ids_in(*texts):
     return {m.group(0)[4:-2] for t in texts for m in map(_ID_RE.match, t.splitlines()) if m}
 
 
+def superseded_ids(*texts):
+    """The entry ids some entry line in the texts names in its `supersedes:` field (the fields between
+    the ruling and the owner's words, as `_entry_shape_ok` reads them)."""
+    mark = "supersedes: "
+    return {v[len(mark):] for t in texts for l in t.splitlines() if _ID_RE.match(l)
+            for v in l.split(SEP)[4:-2] if v.startswith(mark)}
+
+
 def next_seq(id_prefix, *texts):
     """The next n after the highest one `id_prefix` ('<date>-<session>-') used in the texts."""
     used = [int(i.rsplit("-", 1)[1]) for i in ids_in(*texts) if i.startswith(id_prefix)]

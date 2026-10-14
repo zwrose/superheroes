@@ -317,18 +317,20 @@ def _finding(key, reviewer, outcome="fixed", fid=None):
     return f
 
 
-def _record(pr, session, day, rows, findings=()):
-    return {"pr": pr, "sessionId": session, "writtenAt": day + "T10:00:00Z", "reviewers": list(rows),
-            "findings": list(findings), "previousRecord": None}
+def _record(pr, session, day, rows, findings=(), rid=None, prev=None):
+    """A review record; `rid` is its comment id and `prev` the id of the record before it (what the writer links by)."""
+    rec = {"pr": pr, "sessionId": session, "writtenAt": day + "T10:00:00Z", "reviewers": list(rows),
+           "findings": list(findings), "previousRecord": None if prev is None else {"id": prev, "url": "u%s" % prev}}
+    return dict(rec, id=rid) if rid is not None else rec
 
 
 def _truth_table_records():
     return [
-        _record(1, "s1", "2026-10-09", [_row("code-reviewer")], [_finding("k-old", "Code")]),
+        _record(1, "s1", "2026-10-09", [_row("code-reviewer")], [_finding("k-old", "Code")], rid=11),
         _record(2, "s2", D, [_row("code-reviewer"), _row("confirm security", "reported-by-session"), _row("test-role", "not-run")],
-                [_finding("k-new", "Code, Security"), _finding("k-none", ""), _finding("k-open", "Test", "left-for-owner")]),
-        _record(1, "s1b", "2026-10-11", [_row("code-reviewer")], [_finding("k-old", "Code")]),
-        _record(2, "s2b", "2026-10-11", [_row("code-reviewer")], [_finding("k-new", "Code, Security")]),
+                [_finding("k-new", "Code, Security"), _finding("k-none", ""), _finding("k-open", "Test", "left-for-owner")], rid=21),
+        _record(1, "s1b", "2026-10-11", [_row("code-reviewer")], [_finding("k-old", "Code")], rid=12, prev=11),
+        _record(2, "s2b", "2026-10-11", [_row("code-reviewer")], [_finding("k-new", "Code, Security")], rid=22, prev=21),
     ]
 
 
@@ -371,9 +373,10 @@ def test_tally_a_pr_reviewed_after_adoption_counts_its_latest_records_fixed_find
 
 
 def test_tally_finding_without_a_key_falls_back_to_its_id():
-    f = _finding(None, "Code", fid="F-1")
-    got = RL.tally([_record(1, "a", D, [], [f]), _record(1, "b", "2026-10-11", [], [f])], [], D, until="2026-10-11")
-    assert got["seats"]["code-reviewer"]["caught"] == 1
+    one, two = _finding(None, "Code", fid="F-1"), _finding(None, "Code", fid="F-2")
+    first, last = _record(1, "a", D, [], [one], rid=1), _record(1, "b", "2026-10-11", [], [one, two], rid=2, prev=1)
+    got = RL.tally([first, last], [], D, until="2026-10-11")
+    assert got["seats"]["code-reviewer"]["caught"] == 2  # two distinct keyless findings are two catches, not one
 
 
 def test_tally_no_adoption_day_is_unmeasured_with_no_counts():
@@ -470,10 +473,8 @@ def test_tally_damaged_rows_read_incomplete_not_measured_zero():
 
 
 def test_tally_missing_earlier_record_reads_incomplete_and_a_full_chain_counts():
-    first = dict(_record(1, "s1", "2026-10-10", [_row("code-reviewer")], [_finding("k", "Code")]),
-                 url="u1", previousRecord=None)
-    last = dict(_record(1, "s2", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")]),
-                url="u2", previousRecord={"id": 1, "url": "u1"})
+    first = _record(1, "s1", "2026-10-10", [_row("code-reviewer")], [_finding("k", "Code")], rid=1)
+    last = _record(1, "s2", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")], rid=2, prev=1)
     got = RL.tally([last], [], D, until="2026-10-11")
     assert got["measured"] is False and got["reason"] == "incomplete-evidence"
     full = RL.tally([first, last], [], D, until="2026-10-11")
@@ -646,6 +647,66 @@ def test_tally_unhashable_finding_identity_reads_incomplete_evidence(bad):
     assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
 
 
+# --- a PR's record order comes only from the writer's previousRecord links ---
+
+def _linked_pair(first_catch="Code", last_catch="Security", day="2026-10-11"):
+    rows = [_row("code-reviewer")]
+    first = _record(1, "s1", day, rows, [_finding("k1", first_catch)], rid=1)
+    last = _record(1, "s2", day, rows, [_finding("k2", last_catch)], rid=2, prev=1)
+    return first, last
+
+
+def test_tally_reads_the_linked_latest_record_when_both_carry_the_same_written_at():
+    first, last = _linked_pair()
+    for order in ([last, first], [first, last]):  # supplied newest-first and oldest-first: same instant, only the link orders them
+        got = RL.tally(order, [], D, until="2026-10-12")
+        assert got["seats"]["security-reviewer"]["caught"] == 1 and got["seats"]["code-reviewer"]["caught"] == 0, order
+
+
+def test_tally_a_fork_reads_incomplete_evidence():
+    first, last = _linked_pair()
+    rival = _record(1, "s3", "2026-10-11", [_row("code-reviewer")], [_finding("k3", "Code")], rid=3, prev=1)
+    got = RL.tally([first, last, rival], [], D, until="2026-10-12")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+
+
+def test_tally_a_cycle_reads_incomplete_evidence():
+    first, last = _linked_pair()
+    loop = dict(first, previousRecord={"id": 2, "url": "u2"})  # no record names null: the links form a ring
+    got = RL.tally([loop, last], [], D, until="2026-10-12")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+    detached = _record(1, "s3", "2026-10-11", [_row("code-reviewer")], rid=3, prev=4)
+    ring = _record(1, "s4", "2026-10-11", [_row("code-reviewer")], rid=4, prev=3)
+    again = RL.tally([first, detached, ring], [], D, until="2026-10-12")  # a ring beside a real root is unreached, not skipped
+    assert (again["measured"], again["reason"]) == (False, "incomplete-evidence")
+
+
+def test_tally_a_missing_link_reads_incomplete_evidence():
+    first, last = _linked_pair()
+    skipped = dict(last, previousRecord={"id": 99, "url": "u99"})
+    got = RL.tally([first, skipped], [], D, until="2026-10-12")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+    assert RL.tally([first, last], [], D, until="2026-10-12")["measured"] is True
+
+
+def test_tally_two_roots_or_no_root_reads_incomplete_evidence():
+    first, last = _linked_pair()
+    other_root = _record(1, "s3", "2026-10-11", [_row("code-reviewer")], rid=3)
+    assert RL.tally([first, last, other_root], [], D, until="2026-10-12")["reason"] == "incomplete-evidence"
+    assert RL.tally([last], [], D, until="2026-10-12")["reason"] == "incomplete-evidence"
+
+
+def test_tally_a_link_to_a_record_after_until_is_not_missing_and_the_latest_is_the_last_one_up_to_until():
+    rows = [_row("code-reviewer")]
+    one = _record(1, "s1", D, rows, [_finding("k1", "Code")], rid=1)
+    two = _record(1, "s2", "2026-10-11", rows, [_finding("k2", "Security")], rid=2, prev=1)
+    three = _record(1, "s3", "2026-10-20", rows, [_finding("k3", "Code")], rid=3, prev=2)
+    got = RL.tally([three, two, one], [], D, until="2026-10-12")
+    assert got["measured"] is True and got["seats"]["security-reviewer"]["caught"] == 1
+    assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 0} and got["leftOut"]["afterWindow"] == 1
+
+
+
 # --- review C10 round 7 fixes ---
 
 def test_the_persisted_adoption_key_is_the_literal_core_md_spelling(proj):
@@ -672,9 +733,8 @@ def test_canon_commit_that_landed_before_the_timeout_continues(proj, canon_root,
 
 
 def test_tally_an_outcome_recorded_after_until_does_not_make_a_catch():
-    first = _record(1, "s", D, [_row("code-reviewer")], [_finding("k", "Code", "left-for-owner")])
-    later = _record(1, "s2", "2026-10-20", [_row("code-reviewer")], [_finding("k", "Code")])
-    later["previousRecord"] = None
+    first = _record(1, "s", D, [_row("code-reviewer")], [_finding("k", "Code", "left-for-owner")], rid=1)
+    later = _record(1, "s2", "2026-10-20", [_row("code-reviewer")], [_finding("k", "Code")], rid=2, prev=1)
     got = RL.tally([first, later], [], D, until="2026-10-11")
     assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
     assert got["leftOut"]["afterWindow"] == 1
@@ -682,17 +742,17 @@ def test_tally_an_outcome_recorded_after_until_does_not_make_a_catch():
 
 def test_tally_reused_display_ids_across_sessions_never_merge_distinct_keys():
     rows = [_row("code-reviewer")]
-    first = dict(_record(1, "s1", D, rows, [_finding("k1", "Code", fid="code-001")]), id="first")
-    last = dict(_record(1, "s2", "2026-10-11", rows, [_finding("k1", "Code", fid="code-001"), _finding("k2", "Code", fid="code-001")]),
-                previousRecord={"id": "first"})
+    first = _record(1, "s1", D, rows, [_finding("k1", "Code", fid="code-001")], rid="first")
+    last = _record(1, "s2", "2026-10-11", rows, [_finding("k1", "Code", fid="code-001"), _finding("k2", "Code", fid="code-001")],
+                   rid="second", prev="first")
     got = RL.tally([first, last], [], D, until="2026-10-12")
     assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 2}
 
 
 def test_tally_catches_are_read_from_the_latest_record_only():
     rows = [_row("code-reviewer")]
-    first = dict(_record(1, "s1", D, rows, [_finding("k1", "Code")]), id="first")
-    last = dict(_record(1, "s2", "2026-10-11", rows, [_finding("k2", "Security")]), previousRecord={"id": "first"})
+    first = _record(1, "s1", D, rows, [_finding("k1", "Code")], rid="first")
+    last = _record(1, "s2", "2026-10-11", rows, [_finding("k2", "Security")], rid="second", prev="first")
     for order in ([first, last], [last, first]):
         got = RL.tally(order, [], D, until="2026-10-12")
         assert got["seats"]["code-reviewer"]["caught"] == 0 and got["seats"]["security-reviewer"]["caught"] == 1
@@ -819,3 +879,21 @@ def test_a_different_ruling_still_appends_its_own_entry(proj, canon_root):
     other = {"schema": "calibration-proposal/1", "kind": "standing-ruling", "ruling": "Something else entirely."}
     got = _apply(proj, canon_root, other, APPROVAL)
     assert got["ok"] is True and "canonEntryReused" not in got and len(_entries(canon_root)) == 2
+
+
+def test_a_retry_of_a_superseded_approval_is_refused_and_the_newer_calibration_stays(proj, canon_root, monkeypatch):
+    repo, store = proj
+    real = project_config.set_item
+    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: {"action": "refused", "reason": "boom"})
+    a = _apply(proj, canon_root, _proposal(), APPROVAL)  # A: value X, its entry committed but X not applied
+    assert a["reason"] == "calibration-not-written"
+    monkeypatch.setattr(project_config, "set_item", real)
+    newer = _proposal(value=[AUTH], ruling="Only auth is a risk area now.", supersedes=next(iter(canon.ids_in(a["canonEntry"]))))
+    b = _apply(proj, canon_root, newer, dict(APPROVAL, words="Yes, only auth now.", date="2026-10-14"))  # B: value Y, supersedes A
+    assert (b["ok"], b["outcome"]) == (True, "applied")
+    before = _state(proj, canon_root)
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)  # the retry of A's original proposal and approval
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", "approval-superseded")
+    assert _state(proj, canon_root) == before and len(_entries(canon_root)) == 2
+    paths = ["src/auth/login.py", "src/payments/charge.py"]
+    assert [t["area"]["name"] for t in risk_areas.touched(repo, paths, root=store)["touched"]] == ["Auth"]  # still Y, not X

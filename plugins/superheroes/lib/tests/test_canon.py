@@ -36,6 +36,7 @@ def project(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", "-b", "main", work], check=True)
     _git(work, "config", "user.email", "t@t")
     _git(work, "config", "user.name", "t")
+    _git(work, "config", "commit.gpgsign", "false")  # the ambient config signs through a service a test cannot reach
     path = os.path.join(work, "docs", "superheroes", "canon.md")
     os.makedirs(os.path.dirname(path))
     with open(path, "w") as fh:
@@ -381,6 +382,7 @@ def _bare_project(path):
     subprocess.run(["git", "init", "-q", "-b", "main", path], check=True)
     _git(path, "config", "user.email", "t@t")
     _git(path, "config", "user.name", "t")
+    _git(path, "config", "commit.gpgsign", "false")
     canon_path = os.path.join(path, "docs", "superheroes", "canon.md")
     with open(canon_path, "w") as fh:
         fh.write(canon.HEADER + _entry(1) + "\n")
@@ -592,3 +594,21 @@ def test_unterminated_final_entry_refused(project, capsys, tmp_path, flag):
     code, out = _run(capsys, "append", *extra)
     assert code == 1 and out["reason"] == "canon-bad-line"
     assert open(project["path"]).read() == before
+
+
+def _retiring(n, target):
+    """Entry n with a supersedes field naming entry `target`."""
+    return _entry(n).replace(" · owner's words", " · supersedes: %s-abcd1234-%d · owner's words" % (WRITTEN, target))
+
+
+# axis: superseded_ids names exactly the ids an entry line's supersedes field holds, from every text given.
+def test_superseded_ids_reads_the_working_and_default_copies(project):
+    working = canon.HEADER + _entry(1) + "\n" + _retiring(2, 7) + "\n"
+    default = _retiring(3, 1) + "\n"
+    assert canon.superseded_ids(working, default) == {"%s-abcd1234-7" % WRITTEN, "%s-abcd1234-1" % WRITTEN}
+    assert canon.superseded_ids(working) == {"%s-abcd1234-7" % WRITTEN}
+
+
+def test_superseded_ids_is_empty_for_canon_with_no_supersedes_field(project):
+    assert canon.superseded_ids(canon.HEADER + _entry(1) + "\n" + _entry(2) + "\n", "") == set()
+    assert canon.superseded_ids() == set()
