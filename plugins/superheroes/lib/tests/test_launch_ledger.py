@@ -5752,7 +5752,7 @@ def test_record_outcome_refuses_when_the_fresh_identity_lacks_a_recorded_field(t
     ({"pidLstart": "Mon"}, {"pidLstart": "Tue", "pidCommand": "x"}, True),  # the fresh read's extra field is moot
     ({"pidLstart": "Mon"}, {"pidLstart": "Mon", "pidCommand": "x"}, False),  # equal
     ({"pidLstart": "Mon"}, {"pidCommand": "x"}, False),  # the held field is missing from the fresh read
-    ({"pidCommand": "c"}, {"pidCommand": "d"}, True),
+    ({"pidCommand": "c"}, {"pidCommand": "d"}, False),  # a command alone never proves a reused pid (exec / retitle)
     ({"pidCommand": "c"}, {"pidLstart": "Mon"}, False),
 ])
 def test_a_recorded_identity_with_one_field_compares_that_field_alone(tmp_path, monkeypatch, recorded, fresh, records):
@@ -5845,6 +5845,39 @@ def test_read_birth_identity_reads_the_raw_start_string_and_the_first_200_comman
 def test_read_birth_identity_omits_a_field_whose_read_fails(monkeypatch, answers, expected):
     monkeypatch.setattr(ll.subprocess, "run", _PsRun(answers))
     assert ll.read_birth_identity(4242) == expected
+
+
+def test_the_birth_identity_is_read_under_a_pinned_time_zone(monkeypatch):
+    # axis: ps renders lstart in the caller's zone, so the reader pins one zone for every caller
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        return subprocess.CompletedProcess(argv, 0, stdout="x\n", stderr="")
+
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    monkeypatch.setattr(ll.subprocess, "run", run)
+    ll.read_birth_identity(4242)
+    assert seen and all(env["TZ"] == "UTC" and env["LC_ALL"] == "C" for env in seen)
+
+
+def test_a_live_childs_identity_is_stable_across_caller_time_zones(monkeypatch):
+    # edge: the same live pid read under two caller zones is the same child, never a reused pid
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        monkeypatch.setenv("TZ", "UTC")
+        recorded = ll.read_birth_identity(child.pid)
+        assert recorded.get("pidLstart"), "ps is unavailable here"
+        monkeypatch.setenv("TZ", "Etc/GMT-8")
+        fresh = ll.read_birth_identity(child.pid)
+        assert fresh["pidLstart"] == recorded["pidLstart"]
+        assert ll._birth_identity_is_foreign(recorded, fresh) is False
+        monkeypatch.setattr(ll, "read_birth_identity", lambda pid: fresh)
+        assert ll._child_group_is_live(child.pid, started_ts=None, session_id=None,
+                                       birth_identity=recorded) is True
+    finally:
+        child.kill()
+        child.wait()
 
 
 @pytest.mark.parametrize("pid", [0, -3, None, True, "7"])

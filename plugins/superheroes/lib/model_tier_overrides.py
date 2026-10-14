@@ -521,7 +521,7 @@ def main(argv):
         except store_core.CalibrationWriteRefused:
             sys.stdout.write(json.dumps({
                 "ok": False,
-                "reason": "calibration-write-in-cloud-session",
+                "reason": store_core.CLOUD_REFUSAL_REASON,
             }) + "\n")
             return 1
         result["warnings"] = warnings + result["warnings"]

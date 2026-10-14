@@ -32,7 +32,7 @@ import store_core  # noqa: E402
 
 REAL, ORPHAN, UNKNOWN = "real", "orphan", "unknown"
 
-CLOUD_REFUSAL_REASON = "calibration-write-in-cloud-session"
+CLOUD_REFUSAL_REASON = store_core.CLOUD_REFUSAL_REASON
 
 # Files every store mints or accretes regardless of use — never evidence of life.
 # Anything NOT named here counts as real content (fail-closed for future state files).

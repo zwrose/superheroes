@@ -126,7 +126,7 @@ def active_journal(cwd, *, root=None):
     return _read_journal(mode_registry.project_store_dir(cwd, root))
 
 
-CLOUD_REFUSAL_REASON = "calibration-write-in-cloud-session"
+CLOUD_REFUSAL_REASON = store_core.CLOUD_REFUSAL_REASON
 
 
 def _cloud_refusal():
