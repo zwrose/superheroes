@@ -156,6 +156,12 @@ def apply_verdicts(findings, verdicts):
         else:
             kept["verdict"] = "PLAUSIBLE"
         kept["severity"] = _kept_severity(f, v, honored)
+        if circuit_breaker.severity_rank(kept["severity"]) > circuit_breaker.severity_rank(f.get("severity")):
+            kept["severityChange"] = {
+                "from": f.get("severity"),
+                "to": kept["severity"],
+                "reason": reason.strip() if isinstance(reason, str) and reason.strip() else "no reason given",
+            }
         survivors.append(kept)
         from_severity = f.get("severity")
         if circuit_breaker.is_blocking(from_severity) and not circuit_breaker.is_blocking(kept["severity"]):
