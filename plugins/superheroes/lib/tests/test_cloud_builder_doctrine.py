@@ -74,7 +74,8 @@ def test_container_section_names_the_sandbox_facts():
         "so implementers never commit",
         "GIT_CONFIG_GLOBAL",
         "-X pycache_prefix",
-        "keeps `-B`",
+        "keeps `-B -X pycache_prefix=",
+        "drop it and keep `-B`",
         "size_count.py count --base",
     ):
         assert needle in body, needle

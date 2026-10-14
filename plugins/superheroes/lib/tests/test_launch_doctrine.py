@@ -87,10 +87,26 @@ _CLOUD_END = "<!-- launch-doctrine:cloud-launch:end -->"
 
 
 def test_shipped_doctrine_carries_the_cloud_launch_line():
+    # axis: the parser returns the doctrine block's own text, read here by plain string operations
+    # rather than through the parser — see bite-proof record c8c_wo_c.md
+    text = _read_doctrine()
+    assert text.count(_CLOUD_BEGIN) == 1
+    assert text.count(_CLOUD_END) == 1
+    block = text.split(_CLOUD_BEGIN, 1)[1].split(_CLOUD_END, 1)[0].strip()
     result = LD.load()
     assert result["ok"] is True
-    assert result["cloudLaunchLine"] == _cloud_line()
-    assert result["cloudLaunchLine"].count("\n") == 0
+    assert result["cloudLaunchLine"] == block
+    assert block.count("\n") == 0
+    assert "never a force-push" in block
+    assert "never `main`" in block
+
+
+def test_cloud_launch_block_is_introduced_as_parsed():
+    # axis: the label above the parsed block must not call it unparsed — see bite-proof record c8c_wo_c.md
+    before = _read_doctrine().split(_CLOUD_BEGIN, 1)[0]
+    label = before.rstrip("\n").split("\n\n")[-1]
+    assert label.startswith("**Cloud launch permission"), label
+    assert "not parsed" not in label, label
 
 
 def _cloud_line():
