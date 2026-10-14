@@ -1703,12 +1703,27 @@ class _LineageCarry:
                       "another finding at that place, or the original)" % (key, root))
 
 
-def _ledger_follow_up(ledger, seen, key):
-    """The ``followUp`` an out-of-scope ledger entry holds for ``key``, else None."""
+def _ledger_out_of_scope_entry(ledger, seen, key):
     if not isinstance(key, str) or key not in seen:
         return None
     entry = ledger[seen[key]]
     if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+        return None
+    return entry
+
+
+def _ledger_out_of_scope_reason(ledger, seen, key):
+    entry = _ledger_out_of_scope_entry(ledger, seen, key)
+    return entry.get("outOfScopeReason") if entry is not None else None
+
+
+def _ledger_follow_up(ledger, seen, key, *, reason=None):
+    """The ``followUp`` an out-of-scope ledger entry holds for ``key``, else None; with ``reason``,
+    only when that entry was recorded for a decision with that reason."""
+    entry = _ledger_out_of_scope_entry(ledger, seen, key)
+    if entry is None:
+        return None
+    if reason is not None and entry.get("outOfScopeReason") != reason:
         return None
     return _follow_up_of(entry)
 
@@ -1746,17 +1761,23 @@ def _stage_findings(state, compiled):
             continue
         carry.apply(state, finding, key)
         held_follow_up = _ledger_follow_up(ledger, seen, key)
+        held_reason = _ledger_out_of_scope_reason(ledger, seen, key)
         entry = _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
         sanitized.append(entry)
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
         if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
-            # A decision row written before skips carried their follow-up recovers it from the
-            # ledger: this key's own (read before the re-seed stripped it), else the decided key's.
+            # Only a legacy decision row — an unsequenced gate skip, written before skips carried
+            # their follow-up — recovers one from the ledger, and only from an entry recorded for
+            # that same decision (its reason): this key's own (read before the re-seed stripped
+            # it), else the decided key's. A sequenced decision without a follow-up keeps none.
             follow_up = _follow_up_of(live_oos)
-            if follow_up is None:
-                follow_up = held_follow_up
-            if follow_up is None:
-                follow_up = _ledger_follow_up(ledger, seen, live_oos.get("findingKey"))
+            if (follow_up is None and live_oos.get("source") == "gate"
+                    and not _is_plain_int(live_oos.get("seq"))):
+                reason = live_oos.get("reason")
+                follow_up = (held_follow_up if held_reason == reason else None)
+                if follow_up is None:
+                    follow_up = _ledger_follow_up(ledger, seen, live_oos.get("findingKey"),
+                                                  reason=reason)
             _record_disposition(
                 state, key, "out-of-scope", round_no,
                 outOfScopeReason=live_oos.get("reason"),
@@ -1860,8 +1881,8 @@ def _gate_decision_candidates(state):
     """Owner-gate decisions across every round's ``judgmentDispositions``, shaped like ruling rows.
 
     ``skip`` is an ``out-of-scope`` decision (carrying its ``followUp`` when the fold recorded one),
-    ``fix-with-guidance`` (with guidance text) a ``guidance`` decision, and ``fix-as-suggested`` a
-    ``fix`` decision — the owner's choice to fix as suggested, which supersedes an earlier skip or
+    ``fix-with-guidance`` a ``guidance`` decision (a ``fix`` decision when it carries no guidance
+    text), and ``fix-as-suggested`` a ``fix`` decision — the owner's choice to fix as suggested, which supersedes an earlier skip or
     guidance and itself neither excludes nor guides; every other gate disposition is not a
     decision."""
     rounds = state.get("rounds") if isinstance(state, dict) else None
@@ -1899,9 +1920,12 @@ def _gate_decision_candidates(state):
                    "round": rnd_num, "source": "gate"}
             if ruling == "guidance":
                 guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
-                if not isinstance(guidance, str) or not guidance.strip():
-                    continue
-                row["guidance"] = guidance.strip()
+                if isinstance(guidance, str) and guidance.strip():
+                    row["guidance"] = guidance.strip()
+                else:
+                    # fix-with-guidance with no usable text is a fix decision: it still
+                    # supersedes earlier guidance rather than letting that guidance return.
+                    row["ruling"] = "fix"
             if ruling == "out-of-scope" and _follow_up_of(item) is not None:
                 session_contract.copy_follow_up_field(item, row)
             for field in ("file", "line", "title"):

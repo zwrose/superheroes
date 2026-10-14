@@ -450,3 +450,47 @@ def test_a_same_round_carry_is_undone_when_a_later_staging_makes_it_ambiguous(la
     RD._stage_findings(state, [panel])
     RD._stage_findings(state, [_finding("second independent issue")])
     assert state["findingLineage"] == {key_p: key_f}
+
+
+@pytest.mark.parametrize("blank", ["   ", None])
+def test_blank_gate_guidance_is_a_fix_decision_that_supersedes_earlier_guidance(blank):
+    """axis: a later fix-with-guidance with no usable text never lets earlier guidance return."""
+    state = _mem_state(2)
+    key = _key("subject")
+    _add_gate(state, 1, key, "fix-with-guidance", guidance="OLD OWNER INSTRUCTION",
+              seq=RD._next_ruling_seq(state))
+    entry = _add_gate(state, 2, key, "fix-with-guidance", seq=RD._next_ruling_seq(state))
+    if blank is not None:
+        entry[RD.GATE_GUIDANCE_RECORD_KEY] = blank
+    assert RD._live_ruling_by_key(state)[key]["ruling"] == "fix"
+    _batch(state, _finding("subject"))
+    assert "OLD OWNER INSTRUCTION" not in RD._gate_guidance_block(_entries(state))
+
+
+def test_a_newer_skip_without_a_follow_up_never_inherits_an_older_one():
+    """axis: follow-up recovery from the ledger is for legacy (unsequenced) gate skips only, and only
+    from an entry recorded for that same decision."""
+    state = _mem_state(1)
+    original = _finding("original")
+    key_o = RD._finding_identity_key(original)
+    RD._stage_findings(state, [original])
+    RD._record_disposition(state, key_o, "out-of-scope", 1, outOfScopeReason="old skip",
+                           followUp=dict(L2E._WELL_FORMED))
+    _add_gate(state, 1, key_o, "skip", reason="old skip", seq=RD._next_ruling_seq(state))
+    state["round"] = 2
+    _add_gate(state, 2, key_o, "skip", reason="new skip without commitment",
+              seq=RD._next_ruling_seq(state))
+    state["round"] = 3
+    RD._stage_findings(state, [original])
+    restaged = L2E._ledger_by_key(state)[key_o]
+    assert restaged["outOfScopeReason"] == "new skip without commitment"
+    assert restaged.get("followUp") is None
+    # a legacy (unsequenced) skip still recovers the follow-up recorded for that same decision
+    state = _mem_state(1)
+    RD._stage_findings(state, [original])
+    RD._record_disposition(state, key_o, "out-of-scope", 1, outOfScopeReason="old skip",
+                           followUp=dict(L2E._WELL_FORMED))
+    _add_gate(state, 1, key_o, "skip", reason="old skip", seq=None)
+    state["round"] = 2
+    RD._stage_findings(state, [original])
+    assert L2E._ledger_by_key(state)[key_o]["followUp"] == L2E._WELL_FORMED
