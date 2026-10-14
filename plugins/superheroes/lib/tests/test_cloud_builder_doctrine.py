@@ -115,8 +115,12 @@ def test_a_review_record_over_the_cap_is_shortened_never_split():
         "park, naming the oversized record",
         "Never split one record across several comments",
         "the reader parses one comment",
+        "Split each round's raw findings file at finding boundaries",
+        "render every slice through `render_raw`",
+        "\"part i of n\"",
+        "only the raw findings are sliced",
     ):
-        assert needle in body, needle
+        assert needle in " ".join(body.split()), needle
 
 
 def test_the_advisor_may_answer_on_the_issue_and_the_builder_acts_on_either_copy():

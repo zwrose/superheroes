@@ -742,11 +742,16 @@ def claude_builder_argv(token, session_id, prompt):
     return _ok(argv)
 
 
-# The two refusals below are the cloud argv's own. They are deliberately not members of
+# The refusals below are the cloud argv's own. They are deliberately not members of
 # BUILD_ARGV_REFUSAL_TOKENS: that roster is the engine-config surface the dispatch-entry doc
 # renders, and a cloud builder is not dispatched through it.
 REFUSAL_CLOUD_ENVIRONMENT_INVALID = "cloud-environment-invalid"
 REFUSAL_CLOUD_SESSION_NAME_INVALID = "cloud-session-name-invalid"
+REFUSAL_CLOUD_MODEL_NO_AUTO_MODE = "cloud-model-no-auto-mode"
+# Dispatch tokens whose model cannot run auto mode (haiku resolves to Haiku 4.5). An unavailable auto
+# mode falls back to Manual and stops an unwatched builder at a permission prompt, so a builder on one
+# of these is refused before any session starts, never launched without auto mode.
+CLOUD_AUTO_MODE_UNSUPPORTED_TOKENS = frozenset({"haiku"})
 CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
 # Where Claude Code keeps the picked cloud environment in its settings: `remote.defaultEnvironmentId`.
 # The one home for the spelling; the launch argv writes it and the setup reader reads it.
@@ -777,6 +782,13 @@ def claude_cloud_builder_argv(token, effort, prompt, environment_id, session_nam
     """
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
+    if permission_mode == "auto" and token in CLOUD_AUTO_MODE_UNSUPPORTED_TOKENS:
+        return {
+            "argv": [],
+            "reason": REFUSAL_CLOUD_MODEL_NO_AUTO_MODE,
+            "detail": "the %r model cannot run auto mode, and a cloud builder nobody watches would "
+                      "stop at a permission prompt; choose a model that supports auto mode" % token,
+        }
     if not isinstance(prompt, str) or not prompt.strip():
         return _refuse(
             REFUSAL_BUILDER_PROMPT_MISSING,

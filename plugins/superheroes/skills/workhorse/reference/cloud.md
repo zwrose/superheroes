@@ -222,10 +222,15 @@ and is lost when the session ends.
 When the record writer refuses `review-record-too-large`, no record comment was posted and the
 refusal repeats on every retry: the session writer regenerates the account and the raw output files
 from the stored seat payloads each time, so shortening or splitting by hand changes nothing it
-reads. Do not retry it. The review record is missing: post the review receipt on the PR as a
-comment naming the head it reviewed, leave the PR not ready, and park, naming the oversized record
-(the refusal's detail gives the character count, and names the raw output file when one is the cause).
-Never split one record across several comments, because the reader parses one comment.
+reads. Do not retry it. The review record is missing, and the receipt's findings rows omit the
+bodies, evidence and suggestions, so before parking preserve the raw findings that the container
+would lose. Split each round's raw findings file at finding boundaries into slices that each fit under
+the comment cap, render every slice through `render_raw` so the credential check runs on each one, and
+post each slice as its own PR comment naming the round, the head it reviewed and "part i of n". Only
+then post the review receipt on the PR as a comment naming the head it reviewed, leave the PR not
+ready, and park, naming the oversized record (the refusal's detail gives the character count, and
+names the raw output file when one is the cause). Never split one record across several comments,
+because the reader parses one comment; only the raw findings are sliced.
 
 ## The cloud container
 

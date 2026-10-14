@@ -261,6 +261,35 @@ def test_cloud_argv_refuses_unknown_tier():
     assert built["reason"] == "unknown-claude-tier"
 
 
+def test_cloud_argv_refuses_a_model_that_cannot_run_auto_mode_before_any_session_starts():
+    built = EA.claude_cloud_builder_argv("haiku", None, "p", ENV_ID, "n")
+    assert built["argv"] == []
+    assert built["reason"] == "cloud-model-no-auto-mode"
+    assert "haiku" in built["detail"] and "auto mode" in built["detail"]
+
+
+def test_cloud_argv_without_a_permission_mode_does_not_refuse_haiku():
+    # the setup check opts out of the mode on purpose; the guard is about auto mode only
+    built = EA.claude_cloud_builder_argv("haiku", None, "p", ENV_ID, "n", permission_mode=None)
+    assert built["reason"] is None and "--permission-mode" not in built["argv"]
+
+
+def test_cloud_compose_refuses_an_explicit_haiku_builder(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    result = _compose_cloud(repo, model="haiku")
+    assert result["ok"] is False and result["reason"] == "cloud-model-no-auto-mode"
+
+
+def test_cloud_compose_refuses_a_configured_haiku_builder(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        L.engine_pref, "load_builder_dispatch_tier",
+        lambda root: {"tier": "haiku", "source": "configured", "reason": None},
+    )
+    result = _compose_cloud(repo)
+    assert result["ok"] is False and result["reason"] == "cloud-model-no-auto-mode"
+
+
 @pytest.mark.parametrize("prompt", ["", "   ", None, 7])
 def test_cloud_argv_refuses_empty_prompt(prompt):
     built = EA.claude_cloud_builder_argv("opus", None, prompt, ENV_ID, "n")
