@@ -18,7 +18,9 @@ import types
 import pytest
 
 import engine_adapter as EA
+import cloud_builder
 import heartbeat as hb
+import launch_doctrine
 import launch_ledger as ll
 
 from test_launcher import (  # noqa: E402
@@ -49,6 +51,9 @@ def _isolated(tmp_path, monkeypatch):
     # The launches below keep their base on a local bare remote; the commit is asked of that
     # remote by git rather than of GitHub. The GitHub question has its own tests.
     monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
+    # The fixture repositories must not depend on the developer's git config, such as signing.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 
 def _local_remote_has(repo_root, base, env):
@@ -198,7 +203,8 @@ def test_cloud_argv_shape_and_order():
         "argv": [
             "claude", "--cloud", "the prompt",
             "--settings", '{"remote":{"defaultEnvironmentId":"%s"}}' % ENV_ID,
-            "--model", "opus", "--effort", "medium", "--permission-mode", "auto", "-n", "issue-1-ab",
+            "--model", "opus", "--effort", "medium", "--permission-mode", "auto",
+            "--disallowedTools", "AskUserQuestion", "-n", "issue-1-ab",
         ],
         "reason": None,
     }
@@ -210,6 +216,30 @@ def test_cloud_argv_runs_the_session_in_auto_permission_mode(effort):
     argv = EA.claude_cloud_builder_argv("opus", effort, "p", ENV_ID, "n")["argv"]
     assert argv.count("--permission-mode") == 1
     assert argv[argv.index("--permission-mode") + 1] == "auto"
+
+
+def test_cloud_argv_starts_with_the_question_dialog_off_once_and_before_the_name():
+    # The flag takes a variadic value, so the tool is its only value and `-n` follows at once.
+    argv = EA.claude_cloud_builder_argv("opus", "medium", "p", ENV_ID, "n")["argv"]
+    assert argv.count("--disallowedTools") == 1
+    at = argv.index("--disallowedTools")
+    assert argv[at + 1] == "AskUserQuestion"
+    assert argv[at + 2] == "-n"
+    assert argv[-2:] == ["-n", "n"]
+
+
+@pytest.mark.parametrize("disallowed", [None, ()])
+def test_cloud_argv_without_disallowed_tools_has_no_such_flag(disallowed):
+    built = EA.claude_cloud_builder_argv("opus", "medium", "p", ENV_ID, "n", disallowed_tools=disallowed)
+    assert built["reason"] is None
+    assert "--disallowedTools" not in built["argv"]
+    assert built["argv"][-2:] == ["-n", "n"]
+
+
+def test_cloud_argv_without_permission_mode_still_turns_the_dialog_off():
+    argv = EA.claude_cloud_builder_argv("opus", None, "p", ENV_ID, "n", permission_mode=None)["argv"]
+    assert "--permission-mode" not in argv
+    assert argv[-4:] == ["--disallowedTools", "AskUserQuestion", "-n", "n"]
 
 
 @pytest.mark.parametrize("effort", [None, ""])
@@ -288,8 +318,8 @@ def _compose_cloud(repo, **kwargs):
     return L.compose_launch(repo, 656, _stamped(repo), **kwargs)
 
 
-def test_compose_cloud_prompt_differs_from_local_by_exactly_the_four_place_lines(tmp_path):
-    # axis: the prompt differs from the local one by exactly those lines
+def test_compose_cloud_prompt_differs_from_local_by_the_four_place_lines_and_the_standing_permission(tmp_path):
+    # axis: the prompt differs from the local one by exactly those lines and the standing permission
     repo = _init_repo(tmp_path / "repo")
     local = L.compose_launch(repo, 656, _stamped(repo))
     cloud = _compose_cloud(repo)
@@ -299,13 +329,77 @@ def test_compose_cloud_prompt_differs_from_local_by_exactly_the_four_place_lines
         "Place: cloud session\nAdvisor plugin version: %s\nCloud environment: %s\n"
         "Base commit: %s\n\n" % (version, ENV_ID, _head_sha(repo))
     )
+    permission = launch_doctrine.CLOUD_LAUNCH_TEXT + "\n\n"
     assert lines in cloud["prompt"]
-    assert cloud["prompt"].replace(lines, "", 1) == local["prompt"]
+    assert permission in cloud["prompt"]
+    assert cloud["prompt"].replace(lines, "", 1).replace(permission, "", 1) == local["prompt"]
     rulings = local["doctrine"]["rulingsBlock"]
     assert rulings
     assert cloud["doctrine"]["rulingsBlock"] == rulings
     assert local["prompt"].endswith(rulings)
     assert cloud["prompt"].endswith(rulings)
+
+
+def test_compose_cloud_prompt_carries_the_standing_permission_once_between_base_and_rulings(tmp_path):
+    # axis: every cloud prompt carries the doctrine's standing push permission
+    repo = _init_repo(tmp_path / "repo")
+    cloud = _compose_cloud(repo)
+    prompt = cloud["prompt"]
+    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    assert prompt.count(text) == 1
+    assert text in prompt.split("\n")
+    first_ruling = cloud["doctrine"]["rulingsBlock"].split("\n")[0]
+    assert prompt.index("Base commit: ") < prompt.index(text) < prompt.index(first_ruling)
+    assert "\n\n%s\n\n%s" % (text, first_ruling) in prompt
+
+
+def test_compose_cloud_adopt_prompt_carries_the_standing_permission_after_the_adopt_line(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise = dict(_stamped(repo), adoptsBranch="feature/adopted", adoptsHead=_head_sha(repo))
+    cloud = L.compose_launch(repo, 656, premise, place="cloud", cloud_environment=ENV_ID,
+                             session_name="issue-656-preview")
+    assert cloud["ok"] is True
+    prompt = cloud["prompt"]
+    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    assert prompt.count(text) == 1
+    assert prompt.index("Base commit: ") < prompt.index("feature/adopted") < prompt.index(text)
+
+
+def test_compose_local_prompts_do_not_carry_the_standing_permission(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    adopting = dict(_stamped(repo), adoptsBranch="feature/adopted", adoptsHead=_head_sha(repo))
+    for local in (L.compose_launch(repo, 656, _stamped(repo)),
+                  L.compose_launch(repo, 656, _stamped(repo), place="local"),
+                  L.compose_launch(repo, 656, adopting, place="local")):
+        assert local["ok"] is True
+        assert text not in local["prompt"]
+        assert "Standing permission" not in local["prompt"]
+
+
+def test_compose_cloud_refuses_a_doctrine_with_no_cloud_launch_line(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+
+    def loader():
+        return {k: v for k, v in launch_doctrine.load().items() if k != "cloudLaunchLine"}
+
+    refused = _compose_cloud(repo, doctrine_loader=loader)
+    assert refused["ok"] is False
+    assert refused["reason"] == "compose-cloud-launch-line-absent"
+    assert "prompt" not in refused and "argv" not in refused
+    # a local compose never reads the line, so the same loader still composes
+    assert L.compose_launch(repo, 656, _stamped(repo), doctrine_loader=loader)["ok"] is True
+
+
+def test_cloud_intake_reads_the_same_environment_and_base_from_the_composed_prompt(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    prompt = _compose_cloud(repo)["prompt"]
+    text = launch_doctrine.CLOUD_LAUNCH_TEXT
+    with_line = cloud_builder.parse_launch(prompt)
+    without_line = cloud_builder.parse_launch(prompt.replace(text + "\n\n", "", 1))
+    assert with_line == without_line
+    assert with_line["environment"] == ENV_ID
+    assert with_line["baseCommit"] == _head_sha(repo)
 
 
 def test_compose_cloud_prompt_names_the_environment_on_its_own_line(tmp_path):

@@ -1358,9 +1358,13 @@ def compose_launch(
             base_line += "\n" + adopts
         place_line = launch_lines.format_line(launch_lines.PLACE, "cloud session")
         version_line = launch_lines.format_line(launch_lines.VERSION, version)
-        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s" % (
+        # axis: every cloud prompt carries the doctrine's standing push permission, between the base lines and the rulings
+        cloud_launch_line = doctrine.get("cloudLaunchLine")
+        if not isinstance(cloud_launch_line, str) or not cloud_launch_line.strip():
+            return _fail("compose-cloud-launch-line-absent")
+        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (
             _WORKHORSE_CMD, issue, place_line, version_line, environment_line, base_line,
-            rulings_block,
+            cloud_launch_line, rulings_block,
         )
     elif adopts is not None:
         local_base = premise.get("baseCommit")
