@@ -311,8 +311,8 @@ def _merged_member(f):
 def tally(records, escapes, since, *, until=None, window_days=None):
     """The input is one review record per PR, the latest, as the record writer reads it (`review_record.py read --pr <n>`);
     a PR is dated by that record's `writtenAt`, and counts when that day is on or after the adoption day and inside the window.
-    Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, credited to the seat the
-    finding's lens names, leaving out merged members. A PR supplied more than once reads `incomplete-evidence`."""
+    Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, credited to every seat the
+    finding's rows name, leaving out merged members (the representative carries the catch). A PR supplied more than once reads `incomplete-evidence`."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
@@ -377,18 +377,12 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                 for seat in _seats(row.get("name")):
                     reviews[seat].add(str(pr))
         fixed = {}  # the PR's catches, one per findingKey
-        present = {v for f in rec["findings"] for v in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)) if v}  # the mark names a key or an id
-        if any(f.get("outcome") == _FIXED and _merged_member(f)
-               and review_record_session.merged_into(f.get("reason")) not in present for f in rec["findings"]):
-            left["malformed"] += 1  # a merged member whose representative is gone: the catch's evidence is missing, not zero
-            incomplete = True
-            continue
         for f in rec["findings"]:
             if f.get("outcome") == _FIXED and not _merged_member(f):
                 # axis: a finding with no findingKey is keyed by its id, so distinct keyless findings stay distinct — see bite-proof record wo_a_1718_keyless-id
-                fixed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"), f)
-        for f in fixed.values():
-            seats = _seats(f.get("reviewer"))
+                # axis: rows sharing a findingKey are one catch crediting the union of their seats, so row order never changes the tally
+                fixed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"), set()).update(_seats(f.get("reviewer")))
+        for seats in fixed.values():
             unattributed += not seats
             caught.update(seats)
     counts = {"missed": 0, "seenAndLeft": 0}

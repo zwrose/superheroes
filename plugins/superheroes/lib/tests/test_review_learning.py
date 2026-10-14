@@ -693,9 +693,10 @@ def test_tally_an_outcome_recorded_after_until_does_not_make_a_catch():
 
 def test_tally_reused_display_ids_across_sessions_never_merge_distinct_keys():
     rows = [_row("code-reviewer")]
-    rec = _record(1, "s1", D, rows, [_finding("k1", "Code", fid="code-001"), _finding("k2", "Code", fid="code-001")])
-    got = RL.tally([rec], [], D, until="2026-10-12")
-    assert got["seats"]["code-reviewer"] == {"reviews": 1, "caught": 2}
+    one = _record(1, "s1", D, rows, [_finding("k1", "Code", fid="code-001")])
+    two = _record(2, "s2", D, rows, [_finding("k2", "Code", fid="code-001")])
+    got = RL.tally([one, two], [], D, until="2026-10-12")
+    assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 2}
 
 
 def test_tally_each_pr_counts_its_own_catches():
@@ -814,7 +815,10 @@ def test_a_second_apply_appends_its_own_entry(proj, canon_root):
     assert got["ok"] is True and got["canonEntry"] != first["canonEntry"] and len(_entries(canon_root)) == 2
 
 
-def test_tally_a_merged_member_with_a_lost_representative_is_incomplete_evidence():
-    member = dict(_finding("a", "Security"), reason="fixed and audited in round 1 (merged into B)")
-    got = RL.tally([_record(1, "s", D, [_row("security-reviewer")], [member])], [], D, until="2026-10-11")
-    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+def test_tally_two_fixed_rows_sharing_a_key_are_one_catch_crediting_every_seat():
+    rows = [_row("code-reviewer"), _row("security-reviewer")]
+    pair = [_finding("k", "Code"), _finding("k", "Security", fid="K2")]
+    for order in (pair, pair[::-1]):
+        got = RL.tally([_record(1, "s", D, rows, order)], [], D, until="2026-10-11")
+        assert got["measured"] is True and got["unattributedCatches"] == 0
+        assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
