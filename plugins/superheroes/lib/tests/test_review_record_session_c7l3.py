@@ -19,10 +19,10 @@ from session_checkout import seed_session_meta  # noqa: E402
 from test_panel_diff_at_head_1419 import _commit_file, _init_two_commit_repo  # noqa: E402
 from test_round_driver import _cfg, _claim_reviewer, _drive_to_phase, _responder  # noqa: E402
 from test_review_record_session import (  # noqa: E402
-    CODEX, KEY, OOS, UNFILLED_SEAT, Fake, Session, _by_key, extras, ledger_row, put_extras, send,
+    CANON_SOURCES, CODEX, KEY, OOS, STANDING, UNFILLED_SEAT, Fake, Session, _by_key, extras, ledger_row, put_extras, send,
 )
 
-CANON = {"kind": "canon", "ref": "canon-1"}
+CANON = {"kind": "canon", "ref": STANDING}
 MEMBER = "m::t@L1"
 RULED_BY = {"ruledBy": "the owner", "ruledAt": "2030-01-02"}
 
@@ -216,7 +216,7 @@ def test_edge_5_a_ruling_older_than_the_findings_latest_raise_is_not_recovered(t
 
 @pytest.mark.parametrize("log", ["x", [5, None], [{"findingKey": ["x"], "decidedBy": CANON}],
                                  [_ruling(decided_by=None)], [_ruling(round=None)], [_ruling(round=True)],
-                                 [_ruling(decided_by="canon-1")]])
+                                 [_ruling(decided_by=STANDING)]])
 def test_edge_4_a_malformed_rulings_log_recovers_no_decision_and_never_raises(tmp_path, log):
     s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=log)
     assert _found(s.seat("code-reviewer").save())["decidedBy"] is None
@@ -229,7 +229,7 @@ def test_a_fixed_finding_takes_no_decision_from_a_ruling(tmp_path):
 
 def test_the_decision_reaches_the_account_the_writer_reads(tmp_path):
     s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling()]).seat("code-reviewer")
-    fake = Fake()
+    fake = Fake(sources=CANON_SOURCES)
     out = send(tmp_path, s.save(), fake)
     assert out["ok"], out
     (posted,) = _by_key(fake)
