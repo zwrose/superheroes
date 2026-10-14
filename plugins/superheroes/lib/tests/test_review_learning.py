@@ -460,8 +460,8 @@ def test_tally_until_defaults_to_today_utc():
     ("architecture", ["architecture-reviewer"]), ("Security (round 2)", ["security-reviewer"]),
     ("failure-mode", ["premortem-reviewer"]), ("confirm security", ["security-reviewer"]),
     ("Audit Code (round 3)", ["code-reviewer"]), ("Code, Security", ["code-reviewer", "security-reviewer"]),
-    ("Code, code-reviewer", ["code-reviewer"]), ("Fresh Eyes", ["fresh eyes"]), ("custom-seat", ["custom-seat"]),
-    ("", []), (None, []), ("confirm", ["confirm"]),
+    ("Code, code-reviewer", ["code-reviewer"]), ("Fresh Eyes", []), ("custom-seat", []),
+    ("", []), (None, []), ("confirm", []), ("audits code-001 (round 2)", []), ("Audit Code, verifier", ["code-reviewer"]),
 ])
 def test_seat_normalization(name, seats):
     assert RL._seats(name) == seats
@@ -492,6 +492,22 @@ def test_tally_incomplete_evidence_reads_unmeasured_never_zero():
         assert got["measured"] is False and got["reason"] == "incomplete-evidence", (records, escapes)
         assert got["unattributedCatches"] is None and got["escapes"] == {"missed": None, "seenAndLeft": None}
         assert got["seats"] == {}
+
+
+def test_tally_unread_reviewer_output_reads_incomplete_evidence():
+    for unread in (["lost-raw.json"], "lost-raw.json", {"a": 1}):
+        rec = dict(_record(1, "s", D, [_row("code-reviewer")], []), unreadFiles=unread, status="not-reviewed")
+        got = RL.tally([rec], [], D, until="2026-10-11")
+        assert got["measured"] is False and got["reason"] == "incomplete-evidence" and got["seats"] == {}
+    clean = dict(_record(1, "s", D, [_row("code-reviewer")], []), unreadFiles=[])
+    assert RL.tally([clean], [], D, until="2026-10-11")["measured"] is True
+
+
+def test_tally_non_lens_labels_are_not_seats_and_unlabelled_catches_are_unattributed():
+    rec = _record(1, "s", D, [_row("code-reviewer"), _row("audits code-001 (round 2)"), _row("verifier")],
+                  [_finding("k", "audits code-001 (round 2)")])
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}} and got["unattributedCatches"] == 1
 
 
 def test_tally_damaged_rows_read_incomplete_not_measured_zero():

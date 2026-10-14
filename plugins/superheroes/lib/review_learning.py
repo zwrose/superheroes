@@ -42,7 +42,8 @@ _KEYS = {"risk-and-trust": {"schema", "kind", "half", "value", "ruling"},
          "standing-ruling": {"schema", "kind", "ruling"}}
 SUPERSEDES_KEY = "supersedes"  # optional on either kind: the Canon entry id a replacement retires
 DIMENSION_SEAT = review_seats.DIMENSION_SEAT
-_KNOWN = set(DIMENSION_SEAT) | set(DIMENSION_SEAT.values())
+_SEATS = set(DIMENSION_SEAT.values())
+_KNOWN = set(DIMENSION_SEAT) | _SEATS
 
 
 def _canon_id(value):
@@ -302,7 +303,8 @@ def _seats(name):
         if len(tokens) > 1 and tokens[-1] in _KNOWN:
             part = tokens[-1]
         seat = DIMENSION_SEAT.get(part, part)
-        if seat and seat not in out:
+        # only the known lens seats are seats: an audit, verifier, or phase label is not one and is not counted
+        if seat in _SEATS and seat not in out:
             out.append(seat)
     return out
 
@@ -364,8 +366,10 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["undated"] += 1
             incomplete = True
             continue
-        # a record that lost its reviewers or findings (a refusal body, a partial read) is unknown coverage, not an empty review
-        if (rec.get("ok") is False or not isinstance(rec.get("reviewers"), list) or not rec["reviewers"]
+        # a record that lost its reviewers or findings (a refusal body, a partial read) is unknown coverage, not an empty review;
+        # one whose raw reviewer output could not be read (`unreadFiles`) is likewise missing evidence, not a measured zero
+        if (rec.get("ok") is False or rec.get("unreadFiles") not in (None, [])
+                or not isinstance(rec.get("reviewers"), list) or not rec["reviewers"]
                 or not isinstance(rec.get("findings"), list)):
             left["malformed"] += 1
             incomplete = True
