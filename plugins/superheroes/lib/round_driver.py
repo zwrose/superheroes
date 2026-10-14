@@ -358,6 +358,9 @@ normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 live_vendors = receipt_disclosures.live_vendors
 independent_auditor = receipt_disclosures.independent_auditor
 independent_reviewer = receipt_disclosures.independent_reviewer
+nonpanel_reviewer = receipt_disclosures.nonpanel_reviewer
+nonpanel_cell_proven = receipt_disclosures.nonpanel_cell_proven
+nonpanel_candidates = receipt_disclosures.nonpanel_candidates
 host_family = receipt_disclosures.host_family
 independent_auditor_available = receipt_disclosures.independent_auditor_available
 unfilled_seats = receipt_disclosures.unfilled_seats
@@ -2893,7 +2896,7 @@ def _recorded_verifier_vendor(state, session_dir):
 def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
-    if _nonpanel_unseatable(state, session_dir):
+    if _nonpanel_unseatable(state, session_dir, P_VERIFIERS):
         # No verifier could be seated outside the makers: any verdict submitted never ran, so it
         # folds exactly like silence (every staged finding stays unverified), as an unseatable
         # audit target does.
@@ -2901,7 +2904,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     # axis: the verdicts count only when the vendor that ran them is the driver's selected non-maker
     # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
     # unproven family and folds like silence.
-    selected, source = _nonpanel_selection(state, session_dir)
+    selected, source = _nonpanel_selection(state, session_dir, P_VERIFIERS)
     barred = receipt_disclosures.nonpanel_barred(state, config)
     unverifiable = _emission_unverifiable(state, session_dir, P_VERIFIERS)
     if selected is not None and verdicts and unverifiable:
@@ -6092,7 +6095,7 @@ def run_loop(seams, config=None):
             # a preference edit made while the callback runs never re-judges its result.
             selected, replaced = None, False
             if action in (P_GAPSWEEP, P_SCOPED):
-                selected, _src = _nonpanel_selection(state)
+                selected, _src = _nonpanel_selection(state, None, action)
                 replaced = selected is not None and _nonpanel_replaced(state, selected)
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
@@ -6103,7 +6106,8 @@ def run_loop(seams, config=None):
                                          {"fault": fault, "round": state["round"]})
             if action in (P_GAPSWEEP, P_SCOPED):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
-                if _library_finder_unauthenticated(state, reported, selected=selected, replaced=replaced):
+                if _library_finder_unauthenticated(state, reported, action, selected=selected,
+                                                   replaced=replaced):
                     _retain_unauthenticated_finder_findings(state, artifact)
                     _park_cannot_certify(
                         state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
@@ -7169,7 +7173,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
             return {"ok": False, "reason": fault}
     if (not _via_advance and phase in _NONPANEL_REVIEWER_PHASES
             and _adapters().missing_policy(phase) == _adapters().MISSING_REFUSE_FOLD
-            and _nonpanel_unseatable(state, session_dir)):
+            and _nonpanel_unseatable(state, session_dir, phase)):
         # No reviewer outside the makers' families can be seated: no order was emitted for this
         # phase, so a hand artifact for it is not a review that ran. Refuse the fold (the advance
         # path's refuse-fold policy for a single-seat phase) rather than let an empty artifact
@@ -8051,11 +8055,19 @@ def _reviewer_engine_vendor(repo_root):
 
 _NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
 
+# The cell role each non-panel phase dispatches on (`model_registry.matrix_config`): the verifier
+# row for verifiers, the reviewer-deep row for gap sweep and scoped.
+_NONPANEL_PHASE_ROLE = {
+    P_VERIFIERS: receipt_disclosures.NONPANEL_ROLE_VERIFIER,
+    P_GAPSWEEP: receipt_disclosures.NONPANEL_ROLE_FINDER,
+    P_SCOPED: receipt_disclosures.NONPANEL_ROLE_FINDER,
+}
 
-def _nonpanel_reviewer_vendor(state, config, repo_root):
-    """`(vendor, source)` for verifiers / gap-sweep / scoped, outside every maker family (a native
-    host seat takes the seat map's host family); `(None, None)` when no live vendor qualifies (the
-    seat is unseatable).
+
+def _nonpanel_reviewer_vendor(state, config, repo_root, phase):
+    """`(vendor, source)` for verifiers / gap-sweep / scoped, outside every maker family and on a
+    vendor whose dispatched cell for ``phase`` the seat map proves live (a native host seat takes the
+    seat map's host family); `(None, None)` when no candidate qualifies (the seat is unseatable).
 
     The reviewer engine is the preferred candidate, so when it qualifies the result is the engine
     with its own `vendorSource`."""
@@ -8063,9 +8075,8 @@ def _nonpanel_reviewer_vendor(state, config, repo_root):
     cfg = config if isinstance(config, dict) else {}
     makers = receipt_disclosures.accumulated_maker_families(state)
     fixer = cfg.get("fixerVendor")
-    chosen, _family = receipt_disclosures.independent_reviewer(
-        cfg, vendor, makers, fixer,
-        host_family=receipt_disclosures.host_family(effective_seat_map(state)))
+    chosen, _family = receipt_disclosures.nonpanel_reviewer(
+        cfg, effective_seat_map(state), _NONPANEL_PHASE_ROLE[phase], vendor, makers, fixer)
     if chosen is None:
         return None, None
     if chosen == vendor or source == VENDOR_SOURCE_DEFAULTED:
@@ -8075,31 +8086,31 @@ def _nonpanel_reviewer_vendor(state, config, repo_root):
     return chosen, VENDOR_SOURCE_INDEPENDENT
 
 
-def _nonpanel_unseatable(state, session_dir=None):
-    """True when no reviewer outside every maker family can be seated for the verifier / gap-sweep /
-    scoped phases. The same decision `_emit_orders_manifest` records slots missing on, read on the
+def _nonpanel_unseatable(state, session_dir, phase):
+    """True when no reviewer outside every maker family, on a proven-live cell, can be seated for
+    ``phase``. The same decision `_emit_orders_manifest` records slots missing on, read on the
     fold side so a hand-`submit` session cannot fold a result for a slot that never ran."""
-    return _nonpanel_selection(state, session_dir)[0] is None
+    return _nonpanel_selection(state, session_dir, phase)[0] is None
 
 
-def _nonpanel_selection(state, session_dir=None):
-    """`(vendor, source)` the non-panel reviewer selection stands on for this session."""
+def _nonpanel_selection(state, session_dir, phase):
+    """`(vendor, source)` the non-panel reviewer selection stands on for ``phase`` in this session."""
     cfg = state.get("config") or {}
     meta = _session_meta(session_dir) if session_dir else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    return _nonpanel_reviewer_vendor(state, cfg, repo_root)
+    return _nonpanel_reviewer_vendor(state, cfg, repo_root, phase)
 
 
 _LIVE_SELECTION = object()
 
 
-def _library_finder_unauthenticated(state, reported, selected=_LIVE_SELECTION, replaced=None):
+def _library_finder_unauthenticated(state, reported, phase, selected=_LIVE_SELECTION, replaced=None):
     """True when a library gap-sweep / scoped result does not count: no selectable reviewer, a
     reported vendor that is not the selection or fails the eligibility bar, or no report when the
     selection replaced the reviewer engine. `run_loop` passes the selection (and whether it replaced
-    the engine) captured before the callback ran; a caller that passes none reads the live one."""
+    the engine) captured before the callback ran; a caller that passes none reads the live one for ``phase``."""
     if selected is _LIVE_SELECTION:
-        selected, _source = _nonpanel_selection(state)
+        selected, _source = _nonpanel_selection(state, None, phase)
         replaced = None
     if selected is None:
         return True
@@ -8119,7 +8130,7 @@ def _finder_hand_claim_fault(state, session_dir, phase, artifact):
         return "%s dispatch recorded an emission whose orders manifest does not verify (%s); the " \
                "vendor it ordered is unknown, so no submitted artifact can be authenticated" \
                % (phase, unverifiable)
-    selected, source = _nonpanel_selection(state, session_dir)
+    selected, source = _nonpanel_selection(state, session_dir, phase)
     expected = _recorded_phase_vendor(state, session_dir, phase) or selected
     if expected is None:
         return None
@@ -8222,7 +8233,7 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
         # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
         return {"vendor": "claude", "model": None, "engine": None}
     if phase in _NONPANEL_REVIEWER_PHASES:
-        vendor, source = _nonpanel_reviewer_vendor(state, cfg, repo_root)
+        vendor, source = _nonpanel_reviewer_vendor(state, cfg, repo_root, phase)
         return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
     return {"vendor": None, "model": None, "engine": None}
 
@@ -9145,7 +9156,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
                      or os.getcwd())
-        if _nonpanel_unseatable(state, session_dir):
+        if _nonpanel_unseatable(state, session_dir, phase):
             # Every live vendor sits in a maker family: no reviewer can be seated for ANY slot of
             # this phase, on either channel (a hand-submit session has no runner-channel rule to
             # refuse under, but an unseatable slot still gets no order). The driver records each
@@ -9251,7 +9262,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     if certified_head:
         manifest["headSha"] = certified_head
     if phase in _NONPANEL_REVIEWER_PHASES:
-        vendor, source = _nonpanel_selection(state, session_dir)
+        vendor, source = _nonpanel_selection(state, session_dir, phase)
         if vendor is not None and (source == VENDOR_SOURCE_INDEPENDENT
                                    or _nonpanel_replaced(state, vendor, session_dir)):
             manifest["claimRequired"] = True

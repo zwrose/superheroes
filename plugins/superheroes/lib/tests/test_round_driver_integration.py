@@ -82,8 +82,22 @@ REVIEWED_DIFF = "".join(_section(p, "gamma") for p in FILES)
 HEAD_DIFF = ("".join(_section(p, "gamma-fixed" if p == FIXED_FILE else "gamma") for p in FILES)
              + _section(NEW_SURFACE_FILE, "fresh"))
 
+
+def _nonpanel_cell_proof(vendors=("claude", "codex")):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`, `reviewer-deep`)
+    live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
-                      for dim in round_driver.DIMENSIONS}}
+                      for dim in round_driver.DIMENSIONS},
+            **_nonpanel_cell_proof()}
 FINDING_SEAT = "code-reviewer"
 _FAKE_GIT_HEAD = "a" * 40
 _WRITE_META_HEAD = object()
@@ -102,6 +116,9 @@ def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "diff": REVIEWED_DIFF, "fixerVendor": "claude",
             "verifyCommand": "none", "seatMap": SEAT_MAP}
     base.update(over)
+    if "seatMap" not in over and "vendors" in over:
+        # the proof names exactly the session's live vendors: an unlisted vendor stays unseatable
+        base["seatMap"] = dict(SEAT_MAP, **_nonpanel_cell_proof(over["vendors"] or ()))
     return base
 
 
@@ -297,12 +314,16 @@ def _auditor_vendor_for(state):
     by_id = {t.get("id"): t.get("auditorVendor") for t in targets if isinstance(t, dict)}
     # A verifier / gap-sweep / scoped seat runs on the driver's selected non-maker vendor; its result
     # counts only when the runner's execution evidence names that vendor.
-    selected = round_driver._nonpanel_selection(state)[0] or "claude"
+    selected = {phase: round_driver._nonpanel_selection(state, None, phase)[0] or "claude"
+                for phase in round_driver._NONPANEL_REVIEWER_PHASES}
 
     def vendor_for(seat):
-        if (seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX)
-                or seat in (round_adapters.SEAT_GAPSWEEP, round_adapters.SEAT_SCOPED)):
-            return selected
+        if seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX):
+            return selected[round_driver.P_VERIFIERS]
+        if seat == round_adapters.SEAT_GAPSWEEP:
+            return selected[round_driver.P_GAPSWEEP]
+        if seat == round_adapters.SEAT_SCOPED:
+            return selected[round_driver.P_SCOPED]
         return by_id.get(seat, "claude")
     return vendor_for
 
@@ -986,7 +1007,8 @@ def test_real_loop_dispatch_observed_row_cites_the_runner_observed_head(tmp_path
         "seats": {
             dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
-        }
+        },
+        **_nonpanel_cell_proof(["codex"]),
     }
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path,
@@ -1036,7 +1058,8 @@ def test_real_loop_refuses_record_when_no_head_is_resolvable_anywhere(tmp_path):
         "seats": {
             dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
-        }
+        },
+        **_nonpanel_cell_proof(["codex"]),
     }
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path,
@@ -1087,7 +1110,8 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
         "seats": {
             dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
-        }
+        },
+        **_nonpanel_cell_proof(["codex"]),
     }
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path,

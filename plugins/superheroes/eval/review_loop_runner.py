@@ -98,6 +98,8 @@ _TERMINAL_MAP = {
 # choose a vendor whose family is absent from the live pool so barring it yields a mixed panel.
 _EVAL_FIXER_VENDOR = "cursor"
 _EVAL_LIVE_POOL = ["claude", "codex"]
+# The non-panel phase each finder dimension runs as.
+_FINDER_PHASE = {"scoped-finder": RD.P_SCOPED, "gap-sweep": RD.P_GAPSWEEP}
 
 
 def _eval_live_pool_families():
@@ -231,8 +233,21 @@ def _compose_worklist(run_dir, round_no, batch, roster):
         return worklist_path, json.load(fh)
 
 
+def _eval_nonpanel_cells():
+    """The `verifier` and `reviewer-deep` cells of every live-pool vendor, as the seat map's
+    `nonPanelLiveCells` lists them (a vendor with no such registry row has no such cell)."""
+    cells = []
+    for role in SM.NONPANEL_CELL_ROLES:
+        for vendor in _EVAL_LIVE_POOL:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return cells
+
+
 def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
-    """Seat map with no unexcused violations for the run's driver-derived maker family (#1190 INV-14)."""
+    """Seat map with no unexcused violations for the run's driver-derived maker family (#1190 INV-14),
+    proving the live pool's non-panel cells (the harness synthesizes them; nothing is probed)."""
     live = _EVAL_LIVE_POOL
     driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
     for narrative in ("anthropic", "openai"):
@@ -250,6 +265,8 @@ def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
                     "eval harness baseline seat map must seat at least two distinct vendors "
                     "(single-vendor collapse breaks liveness-gate preconditions; INV-15)"
                 )
+            receipt["nonPanelLiveCells"] = _eval_nonpanel_cells()
+            receipt["nonPanelLiveCellsSource"] = "synthesized"
             return receipt
     raise RuntimeError(
         "eval harness seat map must have no unexcused violations for "
@@ -316,8 +333,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     fix_results = []
     # Live coverage decisions accumulated during the run.
     live_coverage = []
-    # The vendor the gap-sweep / scoped-finder callbacks simulate: the non-panel selection for the
-    # run's config, set before `run_loop` (empty when unseatable, so the guard's park stays honest).
+    # The vendor each non-panel callback (verifier, gap sweep, scoped finder) simulates, keyed by
+    # phase: the non-panel selection for that phase under the run's config, set before `run_loop`
+    # (a phase with no entry is unseatable, so the guard's park stays honest).
     finder_vendor = {}
 
     # Track last panel dim→findings for round-record persistence.
@@ -365,7 +383,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
                 usage.setdefault("scoped-finder:r%d" % rnd, {"total": 1})
                 return {"findings": [], "confidence": "high",
                         "verificationReceipt": _receipt(name, rnd, live_coverage),
-                        "usage": {"total": 1}, **finder_vendor}
+                        "usage": {"total": 1}, **finder_vendor.get(_FINDER_PHASE[dim], {})}
             evs = [e for e in events if e.get("round") == target]
             for e in list(evs):
                 events.remove(e)
@@ -391,7 +409,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             last_panel["kind"] = "intermediate"
             return {"findings": merged, "confidence": "high",
                     "verificationReceipt": _receipt(name, rnd, live_coverage),
-                    "usage": {"total": usage_total or 1}, **finder_vendor}
+                    "usage": {"total": usage_total or 1},
+                    **finder_vendor.get(_FINDER_PHASE[dim], {})}
 
         # Named-dimension seat: a round-1 baseline panel, a resumed round, or a re-armed
         # confirmation panel. Match this round's event first (baseline / resume / seeded), else — on
@@ -457,7 +476,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             for i in c.get("ids") or []:
                 out.append({"id": i, "verdict": "CONFIRMED", "reason": "fixture harness",
                             "evidence": "fixture harness"})
-        return {"verdicts": out, **finder_vendor}
+        return {"verdicts": out, **finder_vendor.get(RD.P_VERIFIERS, {})}
 
     def auditor(targets, rnd):
         # Default: discharge — #507 scoped certification path. Fixtures that need a
@@ -601,8 +620,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
         io = {"stall_menu": lambda payload: "hold"}
         fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
         _validate_fixer_vendor_override(fixer_vendor)
+        seat_map_obj = None
         if supply_seat_map:
-            io["seatMap"] = _eval_clean_seat_map(fixer_vendor)
+            seat_map_obj = io["seatMap"] = _eval_clean_seat_map(fixer_vendor)
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,
@@ -625,11 +645,15 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             "baseGuard": RD.BASE_GUARD_CHECKED,
         }
         try:
-            selected = RD._nonpanel_selection(RD.new_state(config))[0]
+            selection_state = RD.new_state(
+                dict(config, seatMap=seat_map_obj) if seat_map_obj is not None else config)
+            selected = {phase: RD._nonpanel_selection(selection_state, None, phase)[0]
+                        for phase in (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)}
         except (RD.RoundCeilingRefusal, RD.FixBatchCapRefusal):
-            selected = None  # run_loop parks the same refusal itself
-        if selected is not None:
-            finder_vendor["vendor"] = selected
+            selected = {}  # run_loop parks the same refusal itself
+        for phase, vendor in selected.items():
+            if vendor is not None:
+                finder_vendor[phase] = {"vendor": vendor}
         receipt = RD.run_loop(seams, config)
     finally:
         RD._fold_panel = _orig_fold_panel

@@ -31,7 +31,7 @@ BAR_HOW = ["maker-family", "fixer-vendor"]
 
 def _state(fixer="claude", host="anthropic", makers=()):
     """A session whose independent selection is `codex` (fixer `claude`, codex outranks cursor)."""
-    seat_map = {"hostFamily": host}
+    seat_map = {"hostFamily": host, **TRD._nonpanel_cell_proof(["claude", "codex", "cursor"])}
     if makers:
         seat_map["makerFamilies"] = list(makers)
     state = RD.new_state({"repoRoot": "/nonexistent-review-project", "vendors": ["claude", "codex", "cursor"],
@@ -135,9 +135,9 @@ def test_t1_hand_finder_claim_other_than_recorded_is_refused(tmp_path, phase, se
 
 def test_t1_library_finder_reporting_another_vendor_is_unauthenticated():
     state = _state()
-    assert RD._nonpanel_selection(state)[0] == "codex"
-    assert RD._library_finder_unauthenticated(state, "cursor") is True
-    assert RD._library_finder_unauthenticated(state, "codex") is False
+    assert RD._nonpanel_selection(state, None, RD.P_GAPSWEEP)[0] == "codex"
+    assert RD._library_finder_unauthenticated(state, "cursor", RD.P_GAPSWEEP) is True
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP) is False
 
 
 # --- T2: the executed vendor equals the order's but sits in a maker family / is the fixer --------------
@@ -200,7 +200,7 @@ def _library_run(reported):
             return reported
         return []
 
-    seams = TRD._seams()
+    seams = TRD._seams(vendors=["claude", "codex"])
     # the callback reports (or not) exactly what the test says
     seams["reviewer"] = reviewer
     _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert(diff=TRD._big_diff(25)))
@@ -245,7 +245,7 @@ def test_t2_library_scoped_finder_that_does_not_authenticate_parks_the_loop(vend
         return {"fixes": [], "headDiff": TRD.HEAD_NEW_SURFACE, "changedSubjects": ["Code"]}
 
     _result, state = TRD._run_loop_capturing_state(
-        TRD._seams(reviewer=reviewer, fix_step=fix_step), TRD._cfg_cert())
+        TRD._seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"]), TRD._cfg_cert())
     assert calls["scoped"] >= 1
     reason = str((state.get("certification") or {}).get("reason"))
     assert (state.get("terminal") == "cannot-certify"
@@ -257,18 +257,18 @@ def test_t2_library_scoped_finder_that_does_not_authenticate_parks_the_loop(vend
 
 def test_t2_library_unseatable_selection_parks():
     state = _state(makers=["openai", "xai"])
-    assert RD._nonpanel_selection(state) == (None, None)
-    assert RD._library_finder_unauthenticated(state, "codex") is True
-    assert RD._library_finder_unauthenticated(state, None) is True
+    assert RD._nonpanel_selection(state, None, RD.P_GAPSWEEP) == (None, None)
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP) is True
+    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP) is True
 
 
 def test_t2_library_selection_that_is_the_engine_folds_without_a_report():
     state = _state(fixer="codex")
-    selected, _source = RD._nonpanel_selection(state)
+    selected, _source = RD._nonpanel_selection(state, None, RD.P_GAPSWEEP)
     assert selected == "claude" and not RD._nonpanel_replaced(state, selected)
-    assert RD._library_finder_unauthenticated(state, None) is False
-    assert RD._library_finder_unauthenticated(state, "claude") is False
-    assert RD._library_finder_unauthenticated(state, "cursor") is True
+    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP) is False
+    assert RD._library_finder_unauthenticated(state, "claude", RD.P_GAPSWEEP) is False
+    assert RD._library_finder_unauthenticated(state, "cursor", RD.P_GAPSWEEP) is True
 
 
 # --- T3: the hand-submit claim rules -------------------------------------------------------------------
@@ -340,7 +340,7 @@ def test_t3_recorded_claim_requirement_survives_a_preference_edit(tmp_path, monk
         "manifestSha256": RR.sha256_text(RR.canonical(manifest))}
     # the preference is edited: codex is now the configured reviewer, so nothing is replaced
     monkeypatch.setattr(RD, "_reviewer_engine_vendor", lambda _root: ("codex", RD.VENDOR_SOURCE_CONFIGURED))
-    assert RD._nonpanel_selection(state, str(tmp_path)) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
+    assert RD._nonpanel_selection(state, str(tmp_path), phase) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
     assert not RD._nonpanel_replaced(state, "codex", str(tmp_path))
     fault = RD._finder_hand_claim_fault(state, str(tmp_path), phase, {"findings": []})
     assert fault is not None and "carries no `reviewerVendor`" in fault, fault

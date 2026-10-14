@@ -17,6 +17,7 @@ import pytest
 
 import audits
 import payload_contracts as PC
+import model_registry
 import round_adapters as RA
 import round_driver as RD
 import round_records as RR
@@ -49,10 +50,30 @@ _TWO_FINDINGS = [{"title": "bug", "severity": "Important", "file": "f.py", "line
                  {"title": "other bug", "severity": "Minor", "file": "f.py", "line": 2}]
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`, `reviewer-deep`)
+    live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = model_registry.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "claude"}
     base.update(over)
     return base
+
+
+def _cfg_proven(**over):
+    """`_cfg` plus a seat map proving the live vendors' non-panel cells: the gap sweep, scoped finder
+    and verifiers are seated on `codex` only when its cell is proven."""
+    cfg = _cfg(**over)
+    cfg.setdefault("seatMap", _nonpanel_cell_proof(cfg["vendors"]))
+    return cfg
 
 
 def _responder(round1_findings=None, head=HEAD, grouping=None, verify="pass"):
@@ -195,11 +216,11 @@ def _assert_fold_equivalent(tmp_path, phase, build, cfg=None, respond_factory=No
     out_hand = RD.cmd_submit(d_hand, n_hand["phase"], n_hand["attempt"],
                              n_hand["expectedStateHash"],
                              dict(hand_artifact, **(
-                                 {"reviewerVendor": RD._nonpanel_selection(state_asm, d_hand)[0]}
+                                 {"reviewerVendor": RD._nonpanel_selection(state_asm, d_hand, phase)[0]}
                                  if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})))
     assert out_hand["ok"] is True, out_hand
     # a hand submit of a single-seat reviewer phase names the vendor it was dispatched on
-    claim = ({"reviewerVendor": RD._nonpanel_selection(state_asm, d_asm)[0]}
+    claim = ({"reviewerVendor": RD._nonpanel_selection(state_asm, d_asm, phase)[0]}
              if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})
     out_asm = RD.cmd_submit(d_asm, n_asm["phase"], n_asm["attempt"],
                             n_asm["expectedStateHash"], dict(artifact, **claim))
@@ -326,7 +347,7 @@ def test_gap_sweep_assembles_its_candidate_findings(tmp_path):
         return hand, [_result_env(RA.SEAT_GAPSWEEP, {"findings": []})], {}
 
     artifact, _hand = _assert_fold_equivalent(
-        tmp_path, RD.P_GAPSWEEP, build, cfg=_cfg(diff=big),
+        tmp_path, RD.P_GAPSWEEP, build, cfg=_cfg_proven(diff=big),
         respond_factory=lambda: _responder(round1_findings=_A_FINDING))
     assert artifact == {"findings": []}
 
@@ -381,7 +402,7 @@ def test_scoped_finder_assembles_its_candidate_findings(tmp_path):
         return hand, [_result_env(RA.SEAT_SCOPED, {"findings": list(candidates)})], {}
 
     artifact, hand = _assert_fold_equivalent(
-        tmp_path, RD.P_SCOPED, build,
+        tmp_path, RD.P_SCOPED, build, cfg=_cfg_proven(),
         respond_factory=lambda: _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     assert artifact == hand
 
@@ -562,16 +583,16 @@ def test_missing_scoped_finder_refuses_where_an_empty_artifact_would_certify(tmp
     refusal is the only thing standing between silence and a certification.
     """
     respond = _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE)
-    d, n, state = _at(tmp_path, RD.P_SCOPED, respond=respond, name="refused")
+    d, n, state = _at(tmp_path, RD.P_SCOPED, cfg=_cfg_proven(), respond=respond, name="refused")
     artifact, reason = RA.assemble(RD.P_SCOPED, [_missing_env(RA.SEAT_SCOPED)], state,
                                    state["config"])
     assert artifact is None, "a missing scoped-finder must never assemble a success artifact"
     assert reason == "missing-seat-refuse-fold:%s" % RA.SEAT_SCOPED
 
-    d2, n2, _state2 = _at(tmp_path, RD.P_SCOPED, respond=_responder(
+    d2, n2, _state2 = _at(tmp_path, RD.P_SCOPED, cfg=_cfg_proven(), respond=_responder(
         round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE), name="counterfactual")
     assert RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"],
-                         {"findings": [], "reviewerVendor": RD._nonpanel_selection(_state2, d2)[0]})["ok"]
+                         {"findings": [], "reviewerVendor": RD._nonpanel_selection(_state2, d2, RD.P_SCOPED)[0]})["ok"]
     payload = _drive_on(d2, _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     assert payload["verdict"] == "converged", payload
     assert payload["certification"]["shape"] is not None, payload

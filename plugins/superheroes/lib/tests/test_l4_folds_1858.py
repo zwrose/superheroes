@@ -82,7 +82,7 @@ def _gap_run(monkeypatch, reported_vendor, edit_to="cursor"):
             return dict(findings=[], vendor=reported_vendor)
         return []
 
-    seams = TRD._seams()
+    seams = TRD._seams(vendors=VENDORS)
     seams["reviewer"] = reviewer
     _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert(diff=TRD._big_diff(25), vendors=VENDORS))
     return state, seen
@@ -106,7 +106,7 @@ def _scoped_run(monkeypatch, reported_vendor, edit_to="cursor"):
         return dict(fixes=[], headDiff=TRD.HEAD_NEW_SURFACE, changedSubjects=["Code"])
 
     _result, state = TRD._run_loop_capturing_state(
-        TRD._seams(reviewer=reviewer, fix_step=fix_step), TRD._cfg_cert(vendors=VENDORS))
+        TRD._seams(reviewer=reviewer, fix_step=fix_step, vendors=VENDORS), TRD._cfg_cert(vendors=VENDORS))
     return state, seen
 
 
@@ -145,7 +145,7 @@ def test_v4_a_vendor_other_than_the_captured_selection_still_parks(monkeypatch, 
 # fail-closed edges of the helper itself, with the selection passed in (a live read would differ)
 
 def _state(makers=()):
-    seat_map = {"hostFamily": "anthropic"}
+    seat_map = {"hostFamily": "anthropic", **TRD._nonpanel_cell_proof(["claude", "codex", "cursor"])}
     if makers:
         seat_map["makerFamilies"] = list(makers)
     return RD.new_state({"repoRoot": "/nonexistent-review-project", "vendors": ["claude", "codex", "cursor"],
@@ -154,21 +154,21 @@ def _state(makers=()):
 
 def test_v4_e4_a_captured_selection_of_none_is_unauthenticated():
     state = _state()
-    assert RD._nonpanel_selection(state)[0] == "codex"  # the live read would authenticate
-    assert RD._library_finder_unauthenticated(state, "codex", selected=None, replaced=False) is True
+    assert RD._nonpanel_selection(state, None, RD.P_GAPSWEEP)[0] == "codex"  # the live read would authenticate
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP, selected=None, replaced=False) is True
 
 
 def test_v4_e5_no_report_with_the_captured_selection_replaced_is_unauthenticated():
     state = _state()
-    assert RD._library_finder_unauthenticated(state, None, selected="claude", replaced=True) is True
+    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP, selected="claude", replaced=True) is True
 
 
 def test_v4_e6_no_report_with_the_captured_selection_being_the_engine_is_authenticated():
     state = _state()
     assert RD._nonpanel_replaced(state, "codex")  # the live read would say replaced
-    assert RD._library_finder_unauthenticated(state, None, selected="codex", replaced=False) is False
+    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP, selected="codex", replaced=False) is False
 
 
 def test_v4_e7_a_reported_vendor_equal_to_the_captured_selection_but_barred_is_unauthenticated():
     state = _state(makers=["openai"])
-    assert RD._library_finder_unauthenticated(state, "codex", selected="codex", replaced=True) is True
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP, selected="codex", replaced=True) is True
