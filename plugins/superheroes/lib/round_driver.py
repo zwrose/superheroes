@@ -1816,12 +1816,11 @@ def _decision_sources(state):
     config = state.get("config") if isinstance(state.get("config"), dict) else {}
     root = config.get("repoRoot")
     try:
-        import definition_doc
-        located = definition_doc.resolve_canon(root=root)
-        path = located.get("path")
-        if located.get("exists") and isinstance(path, str) and path:
-            with open(path, encoding="utf-8") as fh:
-                sources["canonText"] = fh.read()
+        import canon
+        # Both copies, so a supersession on the default branch retires an entry the working copy
+        # still holds; a copy that cannot be read refuses and leaves Canon out.
+        _, working, default_text = canon._locate(root)
+        sources["canonText"] = working + "\n" + default_text
     except Exception:  # noqa: BLE001 — fail closed: no Canon text means no Canon decision
         sources.pop("canonText", None)
     try:
@@ -1861,10 +1860,13 @@ def _seed_pending_new_issues(state):
     for finding in compiled:
         _seed_collapsed_nits(state, ledger, seen, finding, round_no)
         key = _finding_identity_key(finding)
-        if finding.get("summaryEntry") or not key or key in seen:
+        if finding.get("summaryEntry") or not key:
             continue
+        # A pending issue is unprocessed whatever its identity: re-seed it over any entry that
+        # shares the key, which drops that entry's disposition (the re-raise outranks it).
         _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
         seeded = True
+    state.pop("_newIssues", None)  # seeded once: a second settle finds nothing pending
     if seeded:
         state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = (
             session_contract.DISPOSITION_LEDGER_OWNER_VALUE)
@@ -4945,7 +4947,7 @@ def _fold_scoped(state, config, artifact):
     """Fold the scoped new-finding scan over the fix's new surface; its candidates + the audits'
     new-issue candidates route through the same stage/cluster/verify fold."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    new_issues = state.get("_newIssues") or []
+    new_issues = state.pop("_newIssues", None) or []  # consumed: the terminal seeds only what is left
     combined = list(candidates) + [ni for ni in new_issues if isinstance(ni, dict)]
     compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
     _record_compile_drops(state, drops)

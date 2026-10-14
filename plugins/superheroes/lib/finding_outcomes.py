@@ -63,18 +63,19 @@ def _supersedes_target(line):
 
 
 def canon_decides(canon_text, entry_id):
-    """True only when canon_text holds a complete entry with this id that no complete entry supersedes."""
+    """True only when canon_text holds exactly one distinct complete entry with this id and no
+    complete entry supersedes it; two different entries sharing an id resolve for no reader."""
     if not isinstance(canon_text, str) or not isinstance(entry_id, str) or entry_id == "":
         return False
-    present = False
+    held = set()
     for line in canon_text.splitlines():
         if not canon._entry_shape_ok(line):
             continue
         if canon.ids_in(line) == {entry_id}:
-            present = True
+            held.add(line)
         if _supersedes_target(line) == entry_id:
             return False
-    return present
+    return len(held) == 1
 
 
 def _squash(text):
