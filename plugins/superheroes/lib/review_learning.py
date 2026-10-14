@@ -233,6 +233,15 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     if root is not None and os.path.realpath(os.path.expanduser(root)) != control_plane.store_root():
         return _result(False, "refused", "store-override-unsupported",
                        "Canon's append cannot take a store root; --root %s is not the ambient store" % root)
+    # both writes bind to one project: Canon's lookup for canon_root must land where it lands for cwd
+    try:
+        canon_home = os.path.realpath(definition_doc.resolve_canon(root=canon_root)["path"])
+        project_home = os.path.realpath(definition_doc.resolve_canon(root=cwd)["path"])
+    except Exception as exc:  # CanonLookupError, UnknownSchemaVersion: both fail closed, as canon._locate does
+        return _result(False, "refused", "canon-refused", "canon-lookup-failed: %s" % exc)
+    if canon_home != project_home:
+        return _result(False, "refused", "canon-root-mismatch",
+                       "--canon-root resolves Canon to %s but --cwd resolves it to %s; nothing was written" % (canon_home, project_home))
     note = _refresh_default_branch(canon_root)
     try:
         res = _append_canon(canon_root, session_id, proposal, approval)
@@ -299,17 +308,11 @@ def _merged_member(f):
     return review_record_session.merged_into(f.get("reason")) is not None
 
 
-def _carried(f):
-    """True for a finding row the record writer carried in from the earlier review record: that record already counted it."""
-    reason = f.get("reason")
-    return isinstance(reason, str) and review_record_session.CARRIED in reason
-
-
 def tally(records, escapes, since, *, until=None, window_days=None):
-    """Every review record is one review, dated by its own `writtenAt`: it counts when that day is on or after the adoption
-    day and inside the window, and its reviews are its seat rows that ran. Only findings that review decided are counted: its
-    own fixed findings, one per finding key, credited to the seat the finding's lens names, leaving out merged members and
-    findings carried in from an earlier record."""
+    """The input is one review record per PR, the latest, as the record writer reads it (`review_record.py read --pr <n>`);
+    a PR is dated by that record's `writtenAt`, and counts when that day is on or after the adoption day and inside the window.
+    Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, credited to the seat the
+    finding's lens names, leaving out merged members. A PR supplied more than once reads `incomplete-evidence`."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
@@ -320,7 +323,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     start = _day(since)
     bad_window = window_days is not None and not (isinstance(window_days, int) and window_days > 0)
     if start is None or end is None or bad_window or end < start:  # an `until` before the adoption day measures nothing
-        return dict(out, reason="bad-input")
+        return dict(out, ok=False, reason="bad-input")
     first = end - datetime.timedelta(days=window_days - 1) if window_days else start
     low = max(first, start)  # nothing dated before the adoption day ever counts (rule 1, 7)
     out.update(measured=first >= start, reason=None if first >= start else "short-of-window")
@@ -331,6 +334,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return "beforeWindow" if d < low else "afterWindow" if d > end else None
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
+    seen_prs = set()
     unattributed, incomplete = 0, False  # incomplete: evidence went missing, so no count is a zero
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
@@ -343,7 +347,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             incomplete = True
             continue
         # a record that lost its reviewers or findings (a refusal body, a partial read) is unknown coverage, not an empty review
-        if rec.get("ok") is False or not isinstance(rec.get("reviewers"), list) or not isinstance(rec.get("findings"), list):
+        if (rec.get("ok") is False or not isinstance(rec.get("reviewers"), list) or not rec["reviewers"]
+                or not isinstance(rec.get("findings"), list)):
             left["malformed"] += 1
             incomplete = True
             continue
@@ -353,7 +358,13 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["malformed"] += 1
             incomplete = True
             continue
-        if any(not (isinstance(r, dict) and r.get("ran") in review_record.RAN_STATES and isinstance(r.get("name"), str))
+        if str(pr) in seen_prs:  # the caller did not reduce to one record per PR: a retried or duplicated record is never a second catch
+            left["malformed"] += 1
+            incomplete = True
+            continue
+        seen_prs.add(str(pr))
+        if any(not (isinstance(r, dict) and r.get("ran") in review_record.RAN_STATES
+                    and isinstance(r.get("name"), str) and r["name"].strip())
                for r in rec["reviewers"]) or any(not _finding_ok(f) for f in rec["findings"]):
             left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
             incomplete = True
@@ -364,11 +375,10 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         for row in rec["reviewers"]:
             if row["ran"] != review_record.RAN_NOT_RUN:
                 for seat in _seats(row.get("name")):
-                    reviews[seat].add((pr, session))
-        # axis: a finding carried in from an earlier record is not a second catch — see bite-proof record wo_a_1718_carried-excluded
-        fixed = {}  # this record's own catches, one per findingKey
+                    reviews[seat].add(str(pr))
+        fixed = {}  # the PR's catches, one per findingKey
         for f in rec["findings"]:
-            if f.get("outcome") == _FIXED and not _merged_member(f) and not _carried(f):
+            if f.get("outcome") == _FIXED and not _merged_member(f):
                 # axis: a finding with no findingKey is keyed by its id, so distinct keyless findings stay distinct — see bite-proof record wo_a_1718_keyless-id
                 fixed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"), f)
         for f in fixed.values():
