@@ -34,6 +34,13 @@ These retirements ship in the same release as the review record, and never apart
 - A project whose own checks look for the certificate's files or words, namely `certification-receipt.json`, `certification-refusal.json`, a `certified` verdict, or the handback refusal `handback-no-receipt`, now looks for the review record. The review record is a PR comment whose first line is `<!-- superheroes:review-record -->`, read back with `review_record.py read --pr <n>`, with its link in the PR body's build record.
 - A review in flight when a project takes this release either finishes on the old version or restarts once on the new one. The first driver command on such a session answers `session-from-earlier-version` and writes `restarted-on-upgrade.json` once. Run Setup again into a fresh session folder; the old folder, with any old certification files, stays on disk, unread.
 
+### Review: the PR sheet builder
+
+- `pr_sheet.py build` makes a PR sheet's data file from the PR's review record and the advisor's input, `pr-sheet-input/1`, whose shape its module docstring defines. A stack that merges whole gets one sheet from all its records.
+- `theme/sheet.schema.json` gains the `pr` and `stack` sheet kinds, and on those kinds every option carries `sendsBack`. Discovery's remainder, final and plain sheets are unchanged.
+- A PR sheet's walk is answerable: Works (or Looks right on a look-only stop), Problem or Skip. A Problem asks whether to fix before merge or in a follow-up, and keeps the merge locked until it is answered. Its pictures are copied into the sheet's own published files, never linked by URL. The advisor's input `walk` is now an object (its shape is in `lib/pr_sheet.py`), and a PR sheet is published with the `assets` capability as well.
+- `pr_sheet.py index` builds the index from the advisor's `index-input/1` and each PR's sheet and store dump; a PR sheet's answer saves carry `revision` and a Merge verdict carries `covers`.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
@@ -78,6 +85,17 @@ These retirements ship in the same release as the review record, and never apart
 - A new reader, `lib/risk_areas.py touched --cwd . --path <path>`, says which risk areas a change touches. Its `riskAreas` is `set` (with `touched`) or `not-set` (with a `reason`: `missing`, `empty` or `unreadable`).
 - An existing project's threat model carries over unchanged as the first half, and its risk areas start empty.
 - The setup sitting lives in configure: set-up § 3.5, or view-and-tune's "Set up Risk and trust" for a project that is already configured.
+
+### The owner's decisions: batches, sheets and the merge word
+
+- Decisions come in three batches. Batch 1 holds what blocks work, in the chat and at the top of the index. Batch 2 holds decisions not tied to one PR, in the chat. Batch 3 is one sheet per PR, built after the first two are carried out.
+- The click list is gone.
+- The owner's word to merge is a saved "Merge" verdict on the PR's current sheet plus "done" in the chat. A chat message naming PRs is not the word.
+  - A head that moves after its sheet was published is judged by the material-consequence line, and doubt counts as material. A move with no material consequence (a base update with no conflict, a mechanical bring-current, a craft fix) keeps the word: the sheet is republished carrying the verdict forward, with a dated note saying what moved and why it is not material.
+  - A move that is material starts the verdict over: the sheet shows "This PR changed" and is unsigned. A PR opened after the word, or a layer linked onto a stack, is outside the word.
+- A "Fix in a follow-up" answer is the word to file that follow-up.
+- After the merge, the advisor writes the answers and the verdict back to the PR.
+- Until a project upgrades, its advisor keeps the click list and the chat merge word.
 
 ## 0.42.0
 
