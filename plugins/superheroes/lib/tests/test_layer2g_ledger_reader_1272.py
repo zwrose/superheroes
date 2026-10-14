@@ -19,6 +19,7 @@ _ALLOWED_WRITER_FUNCTIONS = frozenset({
     "_record_disposition",
     "_record_merged_into",
     "_archive_departures",
+    "_seed_pending_new_issues",  # writes only at a terminal, inside the terminal's own commit
 })
 _ALLOWED_LEDGER_KEY_FUNCTIONS = frozenset({_WRITER_NAME})
 _SESSION_CONTRACT_BASENAME = "session_contract.py"

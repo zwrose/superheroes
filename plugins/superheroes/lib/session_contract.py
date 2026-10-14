@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Session-contract path and phase constants — leaf module with no round_* imports."""
+import copy
 import hashlib
 import json
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ __all__ = (
     "FOLLOW_UP_FIELDS",
     "follow_up_shape_fault",
     "copy_follow_up_field",
+    "copy_decided_by_field",
+    "decided_by_of",
+    "has_decided_by",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
     "DispositionLedgerReadFault",
@@ -220,6 +224,24 @@ def copy_follow_up_field(source, target):
     """Copy followUp from source onto target when the key is present (defensive copy)."""
     if "followUp" in source:
         target["followUp"] = dict(source["followUp"])
+
+
+def copy_decided_by_field(source, target):
+    """Copy decidedBy from source onto target when the key is present (deep copy)."""
+    if "decidedBy" in source:
+        target["decidedBy"] = copy.deepcopy(source["decidedBy"])
+
+
+def decided_by_of(row):
+    """The row's decidedBy when the row is a dict holding it, else None."""
+    if isinstance(row, dict):
+        return row.get("decidedBy")
+    return None
+
+
+def has_decided_by(row):
+    """True when the row is a dict with the decidedBy key present, whatever its value."""
+    return isinstance(row, dict) and "decidedBy" in row
 
 
 DISPOSITION_LEDGER_KEY = "dispositionLedger"

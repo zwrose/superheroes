@@ -1931,7 +1931,7 @@ def _settle_open_findings(state, cap=False):
     if not todo:
         return
     sources = {}
-    if any(isinstance(rulings.get(key), dict) and rulings[key].get("decidedBy") for key, _, _ in todo):
+    if any(session_contract.decided_by_of(rulings.get(key)) for key, _, _ in todo):
         try:
             sources = _decision_sources(state)
         except Exception:  # noqa: BLE001 — fail closed: no sources, nothing on record
@@ -6821,10 +6821,10 @@ def _validate_ruling_entries(doc):
         if not isinstance(reason, str) or not reason.strip():
             return None, None, RULING_REASON_MISSING
         entry = {"id": rid.strip(), "ruling": kind, "reason": reason.strip()}
-        if "decidedBy" in spec:
-            if not _decided_by_well_formed(spec["decidedBy"]):
+        if session_contract.has_decided_by(spec):
+            if not _decided_by_well_formed(session_contract.decided_by_of(spec)):
                 return None, None, RULING_DECIDED_BY_MALFORMED
-            entry["decidedBy"] = copy.deepcopy(spec["decidedBy"])
+            session_contract.copy_decided_by_field(spec, entry)
         if kind == "out-of-scope":
             follow_up = spec.get("followUp")
             fault = session_contract.follow_up_shape_fault(follow_up)
@@ -6947,8 +6947,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             "by": by,
         }
         session_contract.copy_follow_up_field(entry, log_row)
-        if entry.get("decidedBy") is not None:
-            log_row["decidedBy"] = entry["decidedBy"]
+        session_contract.copy_decided_by_field(entry, log_row)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
         _writable_rulings_log(state).append(log_row)
