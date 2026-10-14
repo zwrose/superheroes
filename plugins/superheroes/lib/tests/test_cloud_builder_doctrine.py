@@ -49,7 +49,7 @@ def test_headless_section_follows_the_applies_section_and_names_the_dialog_flag_
     assert headings.index("## A headless session") == headings.index("## When this file applies") + 1
     body = _section(_CLOUD, "A headless session")
     for needle in (
-        "--disallowedTools AskUserQuestion",
+        "disallows the question tool through `--disallowedTools`",
         "builder note",
         "parks with its work pushed",
         "rubric/launch-doctrine.md",

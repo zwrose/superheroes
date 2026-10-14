@@ -3,8 +3,8 @@
 Detectors: `plugins/superheroes/lib/tests/test_launcher_cloud.py` (`T1`), `plugins/superheroes/lib/tests/test_launch_doctrine.py` (`T2`),
 `plugins/superheroes/lib/tests/test_cloud_check.py` (`T3`).
 Guarded elements (declared by the order): (G1) the `--disallowedTools` addition in `engine_adapter.claude_cloud_builder_argv`;
-(G2) the cloud-only insertion of the standing-permission paragraph in `launcher.compose_launch`; (G3) the text-mismatch refusal in
-`launch_doctrine.parse`; (G4) `cloud_check.start`'s opt-out of the disallowed-tools flag.
+(G2) the cloud-only insertion of the standing-permission paragraph in `launcher.compose_launch`; (G3) the invariant refusal in
+`launch_doctrine._parse_cloud_launch_block`; (G4) `cloud_check.start`'s opt-out of the disallowed-tools flag.
 Each was neutralized by a targeted edit in the production file, the detector run alone as one test node, then restored by the
 inverse edit. No test file was edited during the proofs. After all four restores, `git diff f11061ff` over `engine_adapter.py`,
 `launcher.py`, `launch_doctrine.py` and `cloud_check.py` is empty.
@@ -65,42 +65,73 @@ FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_compose_cloud_
 - Restore: the inverse edit; `launcher.py:1365-1368` read `        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (`, `            _WORKHORSE_CMD, issue, place_line, version_line, environment_line, base_line,`, `            cloud_launch_line, rulings_block,`, `        )`.
 - Green: `1 passed in 0.32s`.
 
-## 3. G3: the text-mismatch refusal
+## 3. G3: the invariant refusal
 
-Axis: a cloud-launch block whose one line is not `CLOUD_LAUNCH_TEXT` is refused as `doctrine-cloud-launch-text-mismatch`.
+The earlier text-equality check (`CLOUD_LAUNCH_TEXT`, refused as `doctrine-cloud-launch-text-mismatch`) was replaced in the review's round 1 fix.
 
-- Neutralization (`launch_doctrine.py:260`, `_parse_cloud_launch_block`): `if lines[0] != CLOUD_LAUNCH_TEXT:` became `if False and lines[0] != CLOUD_LAUNCH_TEXT:`.
-- Node: `T2::test_doctrine_cloud_launch_text_drift_refuses`.
-- Red: the parse accepted the drifted text, so the refusal never appeared.
+Axis: a cloud-launch block whose one line lacks either `never a force-push` or `never `main`` is refused as `doctrine-cloud-launch-invariant-missing:<phrase>`.
+
+- Neutralization (`launch_doctrine.py:257`, `_parse_cloud_launch_block`, inside the `for phrase in CLOUD_LAUNCH_INVARIANTS:` loop): `if phrase not in lines[0]:` became `if False and phrase not in lines[0]:`.
+- Node: `T2::test_doctrine_cloud_launch_missing_invariant_refuses`, both parametrized cases (`never a force-push` and `never `main``), run with `-k test_doctrine_cloud_launch_missing_invariant_refuses`.
+- Red: the parse accepted the line with the phrase removed, so the refusal never appeared. Both cases failed on `assert result["ok"] is False`.
 
 ```
-F                                                                        [100%]
+FF                                                                       [100%]
 =================================== FAILURES ===================================
-________________ test_doctrine_cloud_launch_text_drift_refuses _________________
+___ test_doctrine_cloud_launch_missing_invariant_refuses[never a force-push] ___
 
-    def test_doctrine_cloud_launch_text_drift_refuses():
-        text = _mutate_once(_read_doctrine(), "never a force-push, never `main`.", "never `main`.")
->       _assert_cloud_refusal(text, "doctrine-cloud-launch-text-mismatch")
+phrase = 'never a force-push'
 
-/home/user/wo-b/plugins/superheroes/lib/tests/test_launch_doctrine.py:136: 
+    @pytest.mark.parametrize("phrase", LD.CLOUD_LAUNCH_INVARIANTS)
+    def test_doctrine_cloud_launch_missing_invariant_refuses(phrase):
+        line = _cloud_line()
+        assert phrase in line
+        text = _mutate_once(_read_doctrine(), line, line.replace(phrase, "never anything"))
+>       _assert_cloud_refusal(text, f"doctrine-cloud-launch-invariant-missing:{phrase}")
+
+/home/user/wo-f/plugins/superheroes/lib/tests/test_launch_doctrine.py:143: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 text = "# Launch doctrine\n\nThis document is the standing doctrine for headless builder launches and recovery: the eight rul...unner's\n[wave-watch reference](../skills/showrunner/reference/wave-watch.md#before-treating-lane-stale-as-a-wedge).\n"
-reason = 'doctrine-cloud-launch-text-mismatch'
+reason = 'doctrine-cloud-launch-invariant-missing:never a force-push'
 
     def _assert_cloud_refusal(text, reason):
         result = LD.parse(text)
 >       assert result["ok"] is False
 E       assert True is False
 
-/home/user/wo-b/plugins/superheroes/lib/tests/test_launch_doctrine.py:98: AssertionError
+/home/user/wo-f/plugins/superheroes/lib/tests/test_launch_doctrine.py:102: AssertionError
+______ test_doctrine_cloud_launch_missing_invariant_refuses[never `main`] ______
+
+phrase = 'never `main`'
+
+    @pytest.mark.parametrize("phrase", LD.CLOUD_LAUNCH_INVARIANTS)
+    def test_doctrine_cloud_launch_missing_invariant_refuses(phrase):
+        line = _cloud_line()
+        assert phrase in line
+        text = _mutate_once(_read_doctrine(), line, line.replace(phrase, "never anything"))
+>       _assert_cloud_refusal(text, f"doctrine-cloud-launch-invariant-missing:{phrase}")
+
+/home/user/wo-f/plugins/superheroes/lib/tests/test_launch_doctrine.py:143: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+text = "# Launch doctrine\n\nThis document is the standing doctrine for headless builder launches and recovery: the eight rul...unner's\n[wave-watch reference](../skills/showrunner/reference/wave-watch.md#before-treating-lane-stale-as-a-wedge).\n"
+reason = 'doctrine-cloud-launch-invariant-missing:never `main`'
+
+    def _assert_cloud_refusal(text, reason):
+        result = LD.parse(text)
+>       assert result["ok"] is False
+E       assert True is False
+
+/home/user/wo-f/plugins/superheroes/lib/tests/test_launch_doctrine.py:102: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_launch_doctrine.py::test_doctrine_cloud_launch_text_drift_refuses
-1 failed in 0.12s
+FAILED plugins/superheroes/lib/tests/test_launch_doctrine.py::test_doctrine_cloud_launch_missing_invariant_refuses[never a force-push]
+FAILED plugins/superheroes/lib/tests/test_launch_doctrine.py::test_doctrine_cloud_launch_missing_invariant_refuses[never `main`]
+2 failed, 44 deselected in 0.27s
 ```
 
-- Restore: the inverse edit; `launch_doctrine.py:260-261` read `    if lines[0] != CLOUD_LAUNCH_TEXT:` then `        return None, "doctrine-cloud-launch-text-mismatch"`.
-- Green: `1 passed in 0.10s`.
+- Restore: the inverse edit; `launch_doctrine.py:257-258` read `        if phrase not in lines[0]:` then `            return None, f"doctrine-cloud-launch-invariant-missing:{phrase}"`.
+- Green: `2 passed, 44 deselected in 0.24s`.
 
 ## 4. G4: the check session's opt-out of the disallowed-tools flag
 
