@@ -1305,6 +1305,7 @@ def compose_launch(
     place=None, cloud_environment=None, session_name=None,
 ):
     """Compose prompt and argv. Never raises."""
+    import launch_lines  # the one home of the launch line labels (cloud_builder parses them back)
     if place not in (None, PLACE_LOCAL, PLACE_CLOUD):
         return _fail("launch-place-invalid")
     cloud = place == PLACE_CLOUD
@@ -1332,22 +1333,32 @@ def compose_launch(
         base = premise.get("baseCommit") if isinstance(premise, dict) else None
         if not isinstance(base, str) or not base.strip():
             return _fail("premise-missing-field:baseCommit")
+        # Cloud intake reads the base back as a full lowercase 40-hex sha; a value it would refuse
+        # is refused here, as given (never stripped or case-folded).
+        # axis: the cloud prompt carries only a full lowercase 40-hex base commit — see bite-proof record c8a_wo2.md
+        if not valid_adopts_head(base):
+            return _fail("premise-base-commit-invalid")
         # axis: the cloud prompt names the cloud environment on its own line — see bite-proof record wo_c_place_call
-        environment_line = "Cloud environment: %s" % cloud_environment
+        environment_line = launch_lines.format_line(launch_lines.ENVIRONMENT, cloud_environment)
         # axis: the cloud prompt names the base commit on its own line — see bite-proof record wo_c_place_call
-        base_line = "Base commit: %s" % base
+        base_line = launch_lines.format_line(launch_lines.BASE, base)
         if adopts is not None:
             # axis: the cloud prompt names the adopted branch on its own line right after the base commit — see bite-proof record adopt_branch
             base_line += "\n" + adopts
-        prompt = "%s\n\nIssue: #%s\n\nPlace: cloud session\nAdvisor plugin version: %s\n%s\n%s\n\n%s" % (
-            _WORKHORSE_CMD, issue, version, environment_line, base_line, rulings_block,
+        place_line = launch_lines.format_line(launch_lines.PLACE, "cloud session")
+        version_line = launch_lines.format_line(launch_lines.VERSION, version)
+        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s" % (
+            _WORKHORSE_CMD, issue, place_line, version_line, environment_line, base_line,
+            rulings_block,
         )
     elif adopts is not None:
         local_base = premise.get("baseCommit")
         if not isinstance(local_base, str) or not local_base.strip():
             return _fail("premise-missing-field:baseCommit")
-        prompt = "%s\n\nIssue: #%s\n\n%s\nBase commit: %s\n\n%s" % (
-            _WORKHORSE_CMD, issue, adopts, local_base, rulings_block,
+        # A local adopt launch never reaches cloud intake, so its base keeps the non-empty check.
+        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n\n%s" % (
+            _WORKHORSE_CMD, issue, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
+            rulings_block,
         )
     else:
         prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)

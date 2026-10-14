@@ -241,3 +241,9 @@ def test_guard_layout_names_are_the_writers_names():
     assert mr.META_FILENAME == sc.META_FILENAME
     assert mr.CONFIG_DIRNAME == sc.CONFIG_DIRNAME
     assert os.path.basename(ac.policy_path("/x", "/r")) == sc.POLICY_FILENAME
+    # FU3: the classification's one home is calibration_paths; the in-repo directory is read from it
+    import calibration_paths as cp
+    assert sc.is_calibration_path is cp.is_calibration_path
+    assert os.path.dirname(cm.in_repo_core_rel_path()) == cp.IN_REPO_DIR
+    assert sc.POLICY_FILENAME == cp.POLICY_FILENAME
+    assert sc.PERMISSION_RULES_FILENAME == cp.PERMISSION_RULES_FILENAME

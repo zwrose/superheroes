@@ -25,6 +25,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import model_registry  # noqa: E402
+import store_core  # noqa: E402
 
 # The OWNER-CONFIGURABLE model-tier role set — re-derived from the registry minus
 # `orchestrator`. `orchestrator` is deliberately excluded: it has no config key (the
@@ -111,17 +112,6 @@ def _read_text(path):
             return fh.read()
     except OSError:
         return ""
-
-
-def _write_text(path, text):
-    d = os.path.dirname(os.path.abspath(path)) or "."
-    os.makedirs(d, exist_ok=True)
-    tmp = os.path.join(d, f".{os.path.basename(path)}.tmp.{os.getpid()}")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 def effective_tiers(profile_path):
@@ -264,7 +254,7 @@ def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     warnings.extend(update_warnings)
     current.update(normalized)
     text = _read_text(profile_path)
-    _write_text(profile_path, replace_model_tiers_block(text, current))
+    store_core.atomic_write(profile_path, replace_model_tiers_block(text, current))
     return {
         "ok": True,
         "path": profile_path,
@@ -526,7 +516,14 @@ def main(argv):
                 "violations": violations,
             }) + "\n")
             return 1
-        result = update_overrides(profile, updates, clear_roles)
+        try:
+            result = update_overrides(profile, updates, clear_roles)
+        except store_core.CalibrationWriteRefused:
+            sys.stdout.write(json.dumps({
+                "ok": False,
+                "reason": "calibration-write-in-cloud-session",
+            }) + "\n")
+            return 1
         result["warnings"] = warnings + result["warnings"]
         sys.stdout.write(json.dumps(result) + "\n")
         return 0

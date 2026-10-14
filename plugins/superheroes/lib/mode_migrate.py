@@ -126,6 +126,19 @@ def active_journal(cwd, *, root=None):
     return _read_journal(mode_registry.project_store_dir(cwd, root))
 
 
+CLOUD_REFUSAL_REASON = "calibration-write-in-cloud-session"
+
+
+def _cloud_refusal():
+    """The refusal result in a cloud session (CLAUDE_CODE_REMOTE == "true"), else None. `rebind`
+    and `recover` move and remove calibration files (the registry, the config tree, the in-repo
+    layers) with `shutil.move` and `os.remove`, which the guarded `atomic_write` never sees; they
+    return this before touching anything."""
+    if store_core.in_cloud_session():
+        return {"status": "blocked", "reason": CLOUD_REFUSAL_REASON}
+    return None
+
+
 def _commit_registry(cwd, target, remote_key, root=None):
     """Write registry.json RAW under a lock the CALLER already holds — never via the
     self-locking mode_registry.write_registry (nested config_lock → None). Preserves an
@@ -302,7 +315,13 @@ def recover(cwd, *, root=None):
     (#121 Part B) — auto-migrating ~/.claude/workhorse → ~/.claude/superheroes before any store
     path is computed. Gated on `root is None` so the test suite (which always passes an explicit
     tmp root) never moves the real store; best-effort so it never blocks recovery. A FAILED rename
-    is surfaced to stderr rather than silently swallowed (/code-review #7)."""
+    is surfaced to stderr rather than silently swallowed (/code-review #7).
+
+    In a cloud session it refuses first, before the store-root rename and before any journal is
+    read: finishing or backing out a flip removes calibration files."""
+    refused = _cloud_refusal()
+    if refused is not None:
+        return refused
     if root is None:
         try:
             res = control_plane.migrate_store_root()
@@ -379,7 +398,13 @@ def rebind(cwd, *, root=None):
     recoverable regardless of the now-changed active config_key (UFR-10). Takes no `owner_authorized`
     flag (unlike the destructive flip's plan/execute, which refuse unattended): a rebind is a
     mechanical re-key that runs even headless, and its one owner-decision part — a value conflict
-    — is surfaced (applied=False) regardless of mode, satisfying FR-9 + FR-17 in both."""
+    — is surfaced (applied=False) regardless of mode, satisfying FR-9 + FR-17 in both.
+
+    In a cloud session it refuses first, before any lock, journal or move: the move relocates the
+    registry and the config tree."""
+    refused = _cloud_refusal()
+    if refused is not None:
+        return refused
     ident = store_core.derive_identifiers(cwd)
     rk, gh = ident["remote_hash"], ident["gitdir_hash"]
     if rk is None or rk == gh:

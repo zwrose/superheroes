@@ -46,9 +46,6 @@ _GH_TIMEOUT = 120
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPO_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}\Z)[A-Za-z0-9_.-]+\Z")
-_VERSION_LINE = re.compile(r"^Advisor plugin version: (.+)$")
-_ENVIRONMENT_LINE = re.compile(r"^Cloud environment: (.+)$")
-_BASE_LINE = re.compile(r"^Base commit: (.+)$")
 
 INTAKE_TEXT = (
     "Builder intake (cloud build). Plugin {v}. Commits from this build carry the cloud's own "
@@ -86,6 +83,12 @@ def _sibling(name):
     if _LIB_DIR not in sys.path:
         sys.path.insert(0, _LIB_DIR)
     return importlib.import_module(name)
+
+
+_launch_lines = _sibling("launch_lines")  # the one home of the launch line labels
+_VERSION_LINE = _launch_lines.line_regex(_launch_lines.VERSION, ".+")
+_ENVIRONMENT_LINE = _launch_lines.line_regex(_launch_lines.ENVIRONMENT, ".+")
+_BASE_LINE = _launch_lines.line_regex(_launch_lines.BASE, ".+")
 
 
 def _env(env):
