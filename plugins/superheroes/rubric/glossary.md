@@ -197,7 +197,7 @@ declined-then-escaped, launched-then-regretted, mis-tiered, and [review escapes]
 
 ### Review escape
 
-A bug traced after merge to a PR that had a review. It is logged in the [misses log](#misses-log) with a link to that PR's [review record](#review-record) and one call, missed or seen and left. It counts only from the project's adoption day.
+A bug traced after merge to a PR that had a review. The act that traces it logs it in the [misses log](#misses-log): a vet of a fix, a detective diagnosis, a field report, or the owner's own report. The entry links that PR's [review record](#review-record) and makes one call, missed or seen and left. It counts only from the project's adoption day. The rule for logging it is in [the owner-decisions reference](../skills/showrunner/reference/owner-decisions.md#every-grading-keeps-its-scoring-and-the-misses-log).
 
 ### Collector
 

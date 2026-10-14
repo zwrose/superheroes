@@ -560,17 +560,30 @@ advisor run together to keep calibration honest.
    owner's stamp. From the same evidence, propose changes to the
    [calibration](../../../rubric/glossary.md#calibration).
    - **A calibration proposal is a batch-2 item**, because it concerns no single PR. It carries the
-     per-item spine and names **the evidence it rests on** (the escapes and seat records, each with its
+     [per-item spine](#the-per-item-spine) and names **the evidence it rests on** (the escapes and seat records, each with its
      link), **its options**, **what each option costs** (in reviewers, time, or risk left open), and
      **a recommendation**.
    - **A proposal to loosen the calibration has exactly the same shape and asks for the same yes as a
      proposal to tighten it.** A tightening: "make database changes a risk area", resting on two
      escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
      window".
-   - **The counts come from `lib/review_learning.py tally`.** It reads review records (every record of each PR it covers, earliest included) and logged
-     escapes only, and decides nothing. A review is dated by the PR's first review record and counts only when that date is on or after the adoption day and inside the condition window; catches are read from the PR's latest record. The advisor reads the counts and judges. Missing evidence reads
-     unmeasured, never zero: a record or escape that is undated or has lost its reviewers or findings
-     turns the whole tally unmeasured (`incomplete-evidence`), as does a record whose earlier record is not supplied, lacks its `pr` or `sessionId`, or has a reviewer or finding row that is damaged, instead of counting as nothing. A catch is credited to the seat whose lens the finding names (a fixed finding in the security lens counts toward the security seat, whichever dispatch raised it), so the count is findings fixed in that seat's lens.
+   - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
+     escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
+     record writer's `read --pr <n>` returns it, and each review escape as its review's date
+     (`reviewedAt`) and its call (`missed` or `seen-and-left`). A PR is dated by that record and counts
+     only when the date is on or after the adoption day and inside the condition window. The record
+     keeps no first date for a finding, so a catch carried from a review before the adoption day into a
+     later re-review counts by the later date; the advisor weighs that before relying on a seat's count.
+     The advisor reads the counts and judges. Missing evidence reads unmeasured, never zero: an undated
+     or unreadable record, an undated escape or one whose call is neither, and a record inside the
+     counting range that is a refusal, has lost its reviewers or findings, lacks its `pr` or
+     `sessionId`, could not read a reviewer's raw output, has a damaged reviewer or finding row, or
+     repeats a PR already supplied each turn the whole tally unmeasured (`incomplete-evidence`) instead
+     of counting as nothing. A record dated outside the range is left out unread. A condition window
+     that opens before the adoption day also reads unmeasured, as `short-of-window`, and that is the
+     reason reported. A catch is credited to every seat whose lens the finding names (a fixed finding
+     in the security lens counts toward the security seat, whichever dispatch raised it), so the count
+     is findings fixed in that seat's lens.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -692,6 +705,10 @@ say how it changes and what the advisor says when the owner finds a review slow.
   means the approval is recorded and the setting is not confirmed written: usually it did not change,
   but under reason `calibration-unconfirmed` the write may have landed and the setting must be read back
   before it is reported either way.
+  Every `apply` appends a fresh Canon entry, so after a failed one the advisor reads Canon before
+  anything else. When the result names a `canonEntry`, that entry is already written, so the advisor
+  finishes what remains by hand (committing that entry, or writing and reading back the setting)
+  instead of running `apply` again, which would append a second entry.
 - **From the next review on.** A Risk and trust change takes effect for every review that starts after
   the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
   ruling about leftovers binds where Canon's own reading rules say it does.
@@ -707,9 +724,9 @@ say how it changes and what the advisor says when the owner finds a review slow.
      touches, read with `lib/risk_areas.py touched` over the PR's changed paths;
   2. whether the review loop followed it: the reviewers that ran, the rounds, and whether the loop
      stopped at its cap, all from the review record;
-  3. what the review spent its time on: the record's cost (reviewer minutes) and its rounds. The
-     record does not time fix rounds, so the answer says how many fix rounds ran and that their time
-     is not recorded, and does not estimate it;
+  3. what the review spent its time on: the record's cost (reviewer minutes) and its round count. The
+     record neither times fix rounds nor says which rounds ran a fix, so the answer gives the round
+     count, says that fix work is not recorded, and estimates neither;
   4. a proposed calibration change, or none, with its reason.
 
   **The complaint is never treated as an instruction to go faster.** The loop keeps spending the time
