@@ -219,10 +219,9 @@ def test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsin
 
 # ---- the gardening line reads only what it validates, and reports the real setting ---------------
 
-STILL_ON = ("Cloud builds are still on: I could not switch them off. "
-            "Switch them off in configure, then run the setup check again.")
-STAY_OFF = "cloud builds stay off until a check passes. Run the setup check again."
-SETTING_UNREAD = "I could not read whether cloud builds are on. Run the setup check again."
+STILL_ON = CS.STILL_ON_REPAIR + ", then run the setup check again."
+STAY_OFF = CS._CHECK_AGAIN
+SETTING_UNREAD = CS._SETTING_UNREAD
 
 
 def _marker(w, failed_parts, account=ACCOUNT):
