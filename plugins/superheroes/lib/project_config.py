@@ -377,11 +377,13 @@ def _item_by_slug(slug):
     return _SLUG_INDEX.get(slug)
 
 
-def _guardian_cadence_raw(cwd, root):
+def _guardian_cadence_raw(cwd, root, *, persist_backfill=True):
     import guardian_store
 
     try:
-        layer_p = guardian_store.guardian_layer_path(cwd, root)
+        layer_p = guardian_store.guardian_layer_path(
+            cwd, root, persist_backfill=persist_backfill
+        )
     except Exception:
         return None
     if core_md._layer_is_empty(layer_p):
@@ -545,7 +547,7 @@ def read(cwd, root=None, *, persist_backfill=True):
             if item["home"] == HOME_THREAT_MODEL:
                 raw = None
             elif item["home"] == HOME_GUARDIAN_CADENCE:
-                raw = _guardian_cadence_raw(cwd, root)
+                raw = _guardian_cadence_raw(cwd, root, **keyword)
             else:
                 raw = None
             entry = _resolve_item_entry(
@@ -572,7 +574,7 @@ def read(cwd, root=None, *, persist_backfill=True):
             if isinstance(raw, str) and not raw.strip():
                 raw = None
         elif item["home"] == HOME_GUARDIAN_CADENCE:
-            raw = _guardian_cadence_raw(cwd, root)
+            raw = _guardian_cadence_raw(cwd, root, **keyword)
         else:
             raw = _read_project_config_raw(mapping, slug)
         entry = _resolve_item_entry(
