@@ -38,8 +38,8 @@ notice, a review receipt.
 ## A headless session
 
 The cloud builder runs headless. It starts in auto permission mode with the question dialog off
-(`--disallowedTools AskUserQuestion`), so it never asks a question in a dialog. Every question is a
-builder note on the issue (§ Asking the advisor). With no answer in the reply window it parks with
+(its launch argv disallows the question tool through `--disallowedTools`), so it never asks a
+question in a dialog. Every question is a builder note on the issue (§ Asking the advisor). With no answer in the reply window it parks with
 its work pushed.
 
 Its launch prompt carries the owner's standing permission sentence from the cloud-launch block of
