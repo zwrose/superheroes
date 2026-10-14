@@ -1602,8 +1602,9 @@ class _LineageCarry:
     count of those findings per (file, line), and the decided keys with the location their decision
     row records. ``apply`` carries only when ALL hold: the finding has no decision and no lineage
     entry of its own; exactly one lineage root holds a decision recorded at the finding's file and
-    integer line; that root's group has no member raised this round; and the finding is the only
-    finding raised this round at that file and line."""
+    integer line, and that root's effective decision is guidance (a skip never carries); that root's
+    group has no member raised this round; and the finding is the only finding raised this round at
+    that file and line."""
 
     def __init__(self, state, compiled, ledger=None):
         self.compiled_keys = set()
@@ -1643,6 +1644,7 @@ class _LineageCarry:
                 self.at_location[location] = self.at_location.get(location, 0) + 1
         rows, readable = _decision_candidates(state)
         self.readable = readable
+        self.effective = _effective_decisions(state) if readable else {}
         self.decided = {}
         for index, row in enumerate(rows):
             key = row.get("findingKey")
@@ -1673,6 +1675,12 @@ class _LineageCarry:
         if len(roots) != 1:
             return
         root = next(iter(roots))
+        # Only a guidance decision carries. A skip (a ``rule`` out-of-scope ruling or an owner-gate
+        # skip) never does: a location match does not prove the new finding is the one the owner
+        # waived, so it is judged fresh — fixed, or left for the owner.
+        effective = self.effective.get(root)
+        if not isinstance(effective, dict) or effective.get("ruling") != "guidance":
+            return
         group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
         if group & self.compiled_keys:
             return
@@ -1867,6 +1875,13 @@ def _lineage_map(state):
         return {}
     return {k: v for k, v in raw.items()
             if isinstance(k, str) and k and isinstance(v, str) and v}
+
+
+def _lineage_group(state, key):
+    """Every key sharing ``key``'s lineage root (``key`` and the root included), sorted."""
+    lineage = _lineage_map(state)
+    root = _lineage_root(lineage, key)
+    return sorted({key, root} | {k for k in lineage if _lineage_root(lineage, k) == root})
 
 
 def _lineage_root(lineage, key):
@@ -4089,6 +4104,15 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     (every judgment finding skipped and no mechanical blocker) the loop settles into a converged
     terminal with the skips disclosed."""
     raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    seq_fault = _ruling_seq_counter_fault(state)
+    if seq_fault is not None:
+        # Every gate decision is sequenced on the counter the ``rule`` verb uses; recorded without a
+        # sequence it would rank below an older sequenced decision (a fix choice losing to an
+        # earlier skip), so the fold parks instead of recording it.
+        _park_cannot_certify(state, "%s: %s" % seq_fault)
+        state.pop("_judgmentFindings", None)
+        state.pop("_judgmentMechanical", None)
+        return
     oversize = judgment_guidance_oversize_fault(artifact)
     if oversize:
         _park_cannot_certify(state, oversize)
@@ -4209,7 +4233,8 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
         # A fix choice is the finding's latest decision: it supersedes an earlier skip (its
         # out-of-scope disposition is cleared here, as a later ``rule`` guidance clears one) and
         # earlier guidance (the effective-decision reader ranks this sequenced entry last).
-        _clear_out_of_scope_disposition(state, fid)
+        for member in _lineage_group(state, fid):
+            _clear_out_of_scope_disposition(state, member)
         fix_batch.append(g)
     if skipped:
         state["_skippedBlockers"] = (state.get("_skippedBlockers") or []) + skipped
