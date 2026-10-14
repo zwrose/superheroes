@@ -855,3 +855,20 @@ def test_stall_recovery_batch_takes_no_lifted_rows_and_merged_members_never_lift
     assert RD._lift_marker_for(merged, {}, {"ruling": "guidance"}) is None
     assert RD._lift_marker_for(real, {session_contract.MERGED_INTO_FIELD: "rep"},
                                {"ruling": "guidance"}) is None
+
+
+def test_stall_recovery_batch_keeps_no_lift_through_the_owner_judgment_gate(monkeypatch):
+    """axis: a stall batch routed through owner judgment folds into a fix batch without lifting."""
+    tradeoff = {"title": "widen the API", "severity": "Important", "file": "j.py", "line": 3,
+                "tradeoff": True}
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "claude"})
+    seen = []
+    monkeypatch.setattr(RD, "_queue_fix_batch",
+                        lambda st, cfg, rows, **kw: seen.append(kw.get("lift", True)))
+    RD._route_stall_self_recovery(state, state["config"], [dict(tradeoff)], None, {})
+    assert seen == []
+    fid = RD._judgment_row_ids(state["_judgmentFindings"])[0]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": fid, "disposition": "fix"}]})
+    assert seen and set(seen) == {False}

@@ -4096,6 +4096,7 @@ def _route_judgment_blockers(state, blocking):
     mechanical (the caller composes the fix batch as before)."""
     # A tradeoff whose effective decision is already a (non-Critical) skip — the owner's own, or one
     # carried to a rewording — is not put to the owner again: the fix-batch exclusion honors it.
+    state.pop("_judgmentNoLift", None)
     decided_out = _live_out_of_scope_ruling_keys(state)
     judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")
                 and not (_finding_key_of(f) in decided_out
@@ -4291,6 +4292,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     _record_round(state, "judgmentDispositions", disposition_log)
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
+    no_lift = bool(state.pop("_judgmentNoLift", None))
     # A lineage member whose own skip the fix choice superseded is reopened: when it is a blocking
     # finding this round it joins the fix batch rather than being left unfixed.
     queued = {_fix_batch_row_key(r) for r in fix_batch}
@@ -4302,7 +4304,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             fix_batch.append(dict(live))
             queued.add(member)
     if fix_batch:
-        _queue_fix_batch(state, config, fix_batch)
+        _queue_fix_batch(state, config, fix_batch, lift=not no_lift)
         return
     # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
     # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
@@ -6039,6 +6041,8 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
     if batch:
         if _route_judgment_blockers(state, batch):
+            # The owner's fix choice continues this same stall batch: carry the no-lift policy.
+            state["_judgmentNoLift"] = True
             return
         _queue_fix_batch(state, config, batch, lift=False)
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
