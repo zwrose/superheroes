@@ -207,7 +207,21 @@ RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
 RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
 RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
 RULINGS_LOG_MALFORMED = "rulings-log-malformed"
-RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
+WITHDRAW_CMD = "withdraw"
+WITHDRAW_SESSION_TERMINAL = "withdraw-session-terminal"
+WITHDRAW_NOT_FIXER = "withdraw-not-fixer"
+WITHDRAW_ATTEMPT_MISMATCH = "withdraw-attempt-mismatch"
+WITHDRAW_NOT_EMITTED = "withdraw-not-emitted"
+WITHDRAW_REASON_MISSING = "withdraw-reason-missing"
+WITHDRAW_WORKTREE_DIRTY = "withdraw-worktree-dirty"
+WITHDRAW_HEAD_MOVED = "withdraw-head-moved"
+WITHDRAW_HEAD_UNANCHORED = "withdraw-head-unanchored"
+WITHDRAW_GIT_UNAVAILABLE = "withdraw-git-unavailable"
+FIXER_ATTEMPT_WITHDRAWN = "fixer-attempt-withdrawn"
+WITHDRAW_RESTORE_CHECKED = "checked"
+WITHDRAW_RESTORE_NOT_CHECKED = "not-checked"
+LIFT_REAL_CONSEQUENCE = "real-consequence"
+LIFT_GUIDANCE = "guidance"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
@@ -4188,8 +4202,94 @@ def _resolve_empty_fix_batch_convergence(state, config):
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
+def _fix_row_roots(state, rows):
+    """The lineage roots of the finding keys the ``rows`` hold — a reworded finding and the one it
+    rewords are one finding."""
+    lineage = _lineage_map(state)
+    roots = set()
+    for row in rows or []:
+        key = _fix_batch_row_key(row)
+        if key:
+            roots.add(_lineage_root(lineage, key))
+    return roots
+
+
+def _lift_marker_for(finding, disposition_row, decision):
+    """``LIFT_REAL_CONSEQUENCE`` / ``LIFT_GUIDANCE`` when this live finding must ride the fix batch
+    though no blocking row names it, else None.
+
+    Real consequence: the finding states a real consequence and holds no disposition at all (a
+    fixed, refuted, merged or collapsed finding, and an out-of-scope one, never ride). Guidance: the
+    finding's one effective decision is ``guidance`` and it is not fixed or refuted; a stale
+    out-of-scope disposition under a later guidance decision does not block it."""
+    ruling = decision.get("ruling") if isinstance(decision, dict) else None
+    disposition = disposition_row.get("disposition")
+    if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL
+            and ruling != "out-of-scope" and disposition != "out-of-scope"
+            and not _disposition_is_current(disposition_row)):
+        return LIFT_REAL_CONSEQUENCE
+    if (ruling == "guidance"
+            and not (disposition in ("fixed", "refuted") and _disposition_is_current(disposition_row))):
+        return LIFT_GUIDANCE
+    return None
+
+
+def _lifted_fix_rows(state, rows):
+    """Live findings that join a round's fix batch beside the blocking ``rows``: every undisposed
+    finding with a real consequence, and every finding an effective ``guidance`` decision names, each
+    a copy carrying its ``lifted`` marker, in severity order. A finding already in ``rows`` (under
+    any wording of its lineage) is never added twice."""
+    findings = state.get("findings")
+    if not isinstance(findings, list):
+        return []
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return []
+    lineage = _lineage_map(state)
+    held = _fix_row_roots(state, rows)
+    effective = _live_ruling_by_key(state)
+    lifted = []
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("summaryEntry"):
+            continue
+        key = _fix_batch_row_key(finding)
+        if not key:
+            continue
+        root = _lineage_root(lineage, key)
+        if root in held:
+            continue
+        stored = ledger_by_key.get(key)
+        marker = _lift_marker_for(finding, stored if isinstance(stored, dict) else finding,
+                                  effective.get(key))
+        if marker is None:
+            continue
+        held.add(root)
+        row = dict(finding)
+        row["lifted"] = marker
+        lifted.append(row)
+    lifted.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
+    return lifted
+
+
+def _lift_into_fix_batch(state, rows):
+    """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered,
+    non-empty offered set: the lift joins a fixer leg that is going out, it never starts one."""
+    lifted, fault = _filter_excluded_discharged_fixes(state, _lifted_fix_rows(state, rows))
+    if fault is not None or not lifted:
+        return rows
+    keys = [_fix_batch_row_key(row) for row in lifted]
+    _record_round(state, "liftedIntoFixBatch", keys)
+    _decision(state, "fix-batch-lifted",
+              "%d finding(s) with a real consequence or a guidance decision join this round's "
+              "fix batch: %s" % (len(keys), ", ".join(keys)))
+    return list(rows) + lifted
+
+
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    The round's first batch (``reset_accumulator`` with ``batch_index`` 0) also takes the lifted
+    findings (``_lift_into_fix_batch``) after the blocking rows, under the same cap and slicing.
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
     setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
@@ -4219,6 +4319,8 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "fix batch emptied by discharged-finding exclusion — "
                       "remaining queue exhausted, the round proceeds to post-fix")
         return "excluded"
+    if reset_accumulator and batch_index == 0 and filtered:
+        filtered = _lift_into_fix_batch(state, filtered)
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
@@ -4251,6 +4353,46 @@ def _offered_fixer_rows(state, extra_rows=None):
     return offered
 
 
+def _guidance_named_rows(state, named):
+    """Lifted copies of the findings a just-recorded ``guidance`` ruling names that the fixer step's
+    batch and queue do not hold yet — the same ``lifted`` marker the round's first batch uses. A fixed
+    or refuted finding, and a finding the batch already holds (under any wording), is not named
+    again. ``named`` is ``[(findingKey, resolved row)]``."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        ledger_by_key = {}
+    lineage = _lineage_map(state)
+    held = _fix_row_roots(state, _offered_fixer_rows(state))
+    effective = _live_ruling_by_key(state)
+    rows = []
+    for key, candidate in named:
+        root = _lineage_root(lineage, key)
+        if root in held:
+            continue
+        source = _live_finding_by_key(state, key)
+        if not isinstance(source, dict):
+            source = candidate
+        if not isinstance(source, dict):
+            continue
+        stored = ledger_by_key.get(key)
+        if _lift_marker_for(source, stored if isinstance(stored, dict) else source,
+                            effective.get(key)) is None:
+            continue
+        held.add(root)
+        row = dict(source)
+        row["lifted"] = LIFT_GUIDANCE
+        rows.append(row)
+    if rows:
+        keys = [_fix_batch_row_key(row) for row in rows]
+        _record_round(state, "liftedIntoFixBatch",
+                      list(state["rounds"].get(str(state["round"]), {}).get(
+                          "liftedIntoFixBatch") or []) + keys)
+        _decision(state, "fix-batch-lifted",
+                  "guidance names %d finding(s) the fix batch did not hold: %s"
+                  % (len(keys), ", ".join(keys)))
+    return rows
+
+
 def _sync_pending_after_ruling_reconcile(state):
     """Drop or refresh a stored fixer pending whose payload no longer matches the reconciled slice."""
     pending = state.get("pending")
@@ -4268,10 +4410,30 @@ def _sync_pending_after_ruling_reconcile(state):
     state["pending"] = updated
 
 
-def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
-    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
+def _reconcile_queue_after_emitted_rulings(state):
+    """Filter the not-yet-emitted slices (``_fixQueue``) through the ruling filter, leaving the
+    emitted slice (``_fixBatch``) and the pending payload exactly as they are."""
+    queue = state.get("_fixQueue")
+    if not isinstance(queue, list) or not queue:
+        return None
+    filtered, fault = _filter_excluded_discharged_fixes(
+        state, [row for row in queue if isinstance(row, dict)])
+    if fault is None:
+        state["_fixQueue"] = filtered
+    return "queue-reconciled"
+
+
+def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None,
+                                         emitted=False):
+    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling.
+
+    ``emitted`` is True while the pending fixer attempt has emitted its orders: that slice is never
+    reshaped (no ``extra_rows`` join it, no guidance lift runs), only the later slices of the round
+    are reconciled."""
     if state.get("step") != P_FIXER:
         return None
+    if emitted:
+        return _reconcile_queue_after_emitted_rulings(state)
     offered = _offered_fixer_rows(state, extra_rows)
     if not offered:
         return None
@@ -7148,21 +7310,26 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             if circuit_breaker.is_critical(sev):
                 return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
                                    id=entry["id"])
-    if (isinstance(pending, dict) and pending.get("phase") == P_FIXER
-            and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
-                                            pending.get("attempt"))):
-        return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
-                           phase=pending.get("phase"), rnd=pending.get("round"),
-                           attempt=pending.get("attempt"))
-    if state.get("step") != P_FIXER:
+    emitted = (isinstance(pending, dict) and pending.get("phase") == P_FIXER
+               and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                               pending.get("attempt")))
+    if emitted:
+        batch_roots = _fix_row_roots(state, state.get("_fixBatch"))
+        lineage = _lineage_map(state)
         for entry in parsed:
-            if entry["ruling"] == "guidance":
+            key, _candidate, _fault = _resolve_ruling_target(state, entry["id"])
+            if _lineage_root(lineage, key) in batch_roots:
                 return _refuse_cmd(
-                    session_dir, RULE_CMD, RULING_GUIDANCE_NOT_FIXER,
-                    phase=phase, rnd=rnd, attempt=attempt)
+                    session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
+                    phase=pending.get("phase"), rnd=pending.get("round"),
+                    attempt=pending.get("attempt"), id=entry["id"],
+                    detail=("a fixer attempt is running on a batch this ruling would change: "
+                            "stop the fixer, restore the worktree to the head the attempt "
+                            "started from, run `withdraw` for attempt %s, then `rule` again"
+                            % pending.get("attempt")))
     cfg = state.get("config") or {}
     round_rulings = []
-    restored_rows = []
+    guidance_keys = []
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
@@ -7202,6 +7369,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
                 rulingSeq=seq)
         elif entry["ruling"] == "guidance":
+            guidance_keys.append((key, candidate))
             live_row = _live_finding_by_key(state, key)
             ledger_oos = isinstance(live_row, dict) and live_row.get("disposition") == "out-of-scope"
             if not ledger_oos:
@@ -7212,14 +7380,14 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             prior_oos = isinstance(prior_live, dict) and prior_live.get("ruling") == "out-of-scope"
             if prior_oos or ledger_oos:
                 _clear_out_of_scope_disposition(state, key)
-                restore = _live_finding_by_key(state, key) or candidate
-                if isinstance(restore, dict):
-                    restored_rows.append(dict(restore))
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
+    named_rows = []
+    if state.get("step") == P_FIXER and not emitted:
+        named_rows = _guidance_named_rows(state, guidance_keys)
     _reconcile_fixer_queue_after_rulings(
-        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+        state, cfg, extra_rows=named_rows, session_dir=session_dir, emitted=emitted)
     if state.get("step") == P_FIXER:
         pending_render_check = state.get("pending")
         rnd_render = None
@@ -7257,6 +7425,168 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             and not state.get("terminal")):
         response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
     return response
+
+
+def _withdrawn_fixer_attempts(state, rnd):
+    """The fixer attempts of round ``rnd`` the orchestrator withdrew, as a set of ints."""
+    rows = state.get("withdrawnFixerAttempts") if isinstance(state, dict) else None
+    out = set()
+    if isinstance(rows, list):
+        for row in rows:
+            if (isinstance(row, dict) and row.get("round") == rnd
+                    and _is_plain_int(row.get("attempt"))):
+                out.add(row["attempt"])
+    return out
+
+
+def _fixer_attempt_withdrawn_refusal(session_dir, cmd, state, attempt, expect_round=None,
+                                     expect_phase=None, phase=P_FIXER):
+    """The ``fixer-attempt-withdrawn`` refusal when a fold-path call addresses a withdrawn fixer
+    attempt of the current round, else None. It runs before the checks that would read the missing
+    pending step, so the refusal names the real cause. A call aimed at a pending step of another
+    phase (or round) is never read as addressing the fixer attempt."""
+    if phase != P_FIXER or not _is_plain_int(attempt):
+        return None
+    rnd = state.get("round")
+    if expect_round is not None and expect_round != rnd:
+        return None
+    if expect_phase is not None and expect_phase != P_FIXER:
+        return None
+    pending = state.get("pending")
+    if isinstance(pending, dict) and pending.get("phase") != P_FIXER:
+        return None
+    if attempt not in _withdrawn_fixer_attempts(state, rnd):
+        return None
+    return _refuse_cmd(session_dir, cmd, FIXER_ATTEMPT_WITHDRAWN, phase=P_FIXER, rnd=rnd,
+                       attempt=attempt,
+                       detail=("fixer attempt %s was withdrawn; its result can never fold. Run "
+                               "`next` to emit a fresh attempt" % attempt))
+
+
+def _untracked_outside_session(session_dir, toplevel, line):
+    """True when a ``git status --porcelain`` untracked line names a path outside ``session_dir``
+    (a path that cannot be read, or a toplevel that cannot be resolved, counts as outside)."""
+    path = line[3:].strip()
+    if not path or path.startswith('"') or not toplevel:
+        return True
+    resolved = os.path.realpath(os.path.join(toplevel, path))
+    root = os.path.realpath(session_dir)
+    return not (resolved == root or resolved.startswith(root + os.sep))
+
+
+def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
+    """``(refusal token or None, detail, restoreCheck)`` — has the worktree been put back to the head
+    the fixer attempt started from? With no repo root and no git seam (library path) nothing is
+    checked and the record says so."""
+    if repo_root is None and git is None:
+        return None, None, WITHDRAW_RESTORE_NOT_CHECKED
+    root = repo_root or os.getcwd()
+    run_git = git or store_core.run_git
+    anchor = _orders_anchor(state, session_dir, rnd, P_FIXER, attempt) or {}
+    bound = anchor.get("headSha")
+    if not isinstance(bound, str) or not bound:
+        return (WITHDRAW_HEAD_UNANCHORED,
+                "the orders of fixer attempt %s carry no head the worktree can be compared "
+                "with" % attempt, WITHDRAW_RESTORE_NOT_CHECKED)
+    head = run_git(root, "rev-parse", "HEAD")
+    status = run_git(root, "status", "--porcelain", "--untracked-files=all")
+    if not head or status is None:
+        return (WITHDRAW_GIT_UNAVAILABLE,
+                "git could not report the worktree state at %r" % root,
+                WITHDRAW_RESTORE_NOT_CHECKED)
+    lines = [line for line in status.splitlines() if line.strip()]
+    toplevel = None
+    if any(line.startswith("??") for line in lines):
+        toplevel = run_git(root, "rev-parse", "--show-toplevel")
+    dirty = [line for line in lines
+             if not line.startswith("??")
+             or _untracked_outside_session(session_dir, toplevel, line)]
+    if dirty:
+        return (WITHDRAW_WORKTREE_DIRTY,
+                "the worktree still holds the stopped fixer's changes (%s); restore it before "
+                "withdrawing" % "; ".join(line.strip() for line in dirty[:5]),
+                WITHDRAW_RESTORE_NOT_CHECKED)
+    if head != bound:
+        return (WITHDRAW_HEAD_MOVED,
+                "the worktree is at %s but fixer attempt %s started from %s; restore it before "
+                "withdrawing" % (head, attempt, bound), WITHDRAW_RESTORE_NOT_CHECKED)
+    return None, None, WITHDRAW_RESTORE_CHECKED
+
+
+def cmd_withdraw(session_dir, attempt, reason, repo_root=None, git=None):
+    """Close a pending fixer attempt the orchestrator has stopped, so a ruling can reach the fix.
+
+    The attempt must be the pending ``dispatch-fixer`` attempt with its orders emitted. The worktree
+    must be back at the head the attempt started from with no changes left by the stopped fixer
+    (``restoreCheck: "checked"``); a library call with neither ``repo_root`` nor ``git`` skips that
+    check and records ``"not-checked"``. The commit clears the pending step and leaves the fix batch
+    where it was, so a following ``rule`` reconciles it and a following ``next`` emits a fresh
+    attempt; the withdrawn attempt can never fold."""
+    try:
+        with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, WITHDRAW_CMD)
+            if upgrade is not None:
+                return upgrade
+            refusal = _commit_recover_or_refuse(session_dir, WITHDRAW_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_withdraw_locked(session_dir, attempt, reason, repo_root, git)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, WITHDRAW_CMD, held)
+
+
+def _cmd_withdraw_locked(session_dir, attempt, reason, repo_root, git):
+    state, refusal = _load_driver_state(session_dir, WITHDRAW_CMD)
+    if refusal is not None:
+        return refusal
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_SESSION_TERMINAL)
+    pending = state.get("pending")
+    if not isinstance(pending, dict) or pending.get("phase") != P_FIXER:
+        return _refuse_cmd(
+            session_dir, WITHDRAW_CMD, WITHDRAW_NOT_FIXER,
+            phase=pending.get("phase") if isinstance(pending, dict) else None,
+            detail="only a pending fixer attempt can be withdrawn")
+    rnd = pending.get("round")
+    if not _is_plain_int(attempt) or attempt != pending.get("attempt"):
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_ATTEMPT_MISMATCH, phase=P_FIXER,
+                           rnd=rnd, attempt=attempt, pendingAttempt=pending.get("attempt"))
+    if not _journal_has_orders_emitted(session_dir, rnd, P_FIXER, attempt):
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_NOT_EMITTED, phase=P_FIXER,
+                           rnd=rnd, attempt=attempt,
+                           detail="the fixer attempt has emitted no orders; a ruling can be "
+                                  "recorded without withdrawing it")
+    if not isinstance(reason, str) or not reason.strip():
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_REASON_MISSING, phase=P_FIXER,
+                           rnd=rnd, attempt=attempt)
+    reason = reason.strip()
+    token, detail, restore_check = _withdraw_restore_check(
+        session_dir, state, rnd, attempt, repo_root, git)
+    if token is not None:
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, token, phase=P_FIXER, rnd=rnd,
+                           attempt=attempt, detail=detail)
+    withdrawn = state.get("withdrawnFixerAttempts")
+    withdrawn = list(withdrawn) if isinstance(withdrawn, list) else []
+    withdrawn.append({"round": rnd, "attempt": attempt, "reason": reason,
+                      "restoreCheck": restore_check})
+    state["withdrawnFixerAttempts"] = withdrawn
+    _decision(state, FIXER_ATTEMPT_WITHDRAWN,
+              "fixer attempt %s of round %s withdrawn: %s" % (attempt, rnd, reason))
+    state["pending"] = None
+    journal_entry = _journal_entry_for_commit(
+        session_dir, WITHDRAW_CMD, FIXER_ATTEMPT_WITHDRAWN, phase=P_FIXER, round=rnd,
+        attempt=attempt, reason=reason, restoreCheck=restore_check)
+    try:
+        c = round_commit.begin(session_dir, "withdraw")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, WITHDRAW_CMD, exc, phase=P_FIXER,
+                                        rnd=rnd, attempt=attempt)
+    return {"ok": True, "withdrawn": {"round": rnd, "attempt": attempt},
+            "restoreCheck": restore_check}
 
 
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
@@ -7575,6 +7905,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         if fault:
             return _receipt_fault_response(fault)
         return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
+    withdrawn_refusal = _fixer_attempt_withdrawn_refusal(
+        session_dir, "submit", state, attempt, phase=phase)
+    if withdrawn_refusal is not None:
+        return withdrawn_refusal
     if not _via_advance and state.get("_advanceUsed"):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": (state.get("pending") or {}).get("round"),
@@ -8345,6 +8679,10 @@ def _next_dispatch_attempt(session_dir, rnd, phase, state):
     candidates = [
         _max_used_attempt(session_dir, rnd, phase),
     ]
+    if phase == P_FIXER:
+        # A withdrawn attempt's order files stay on disk and it can never fold: no later attempt
+        # of the round takes its number.
+        candidates.extend(_withdrawn_fixer_attempts(state, rnd))
     prior = state.get("lastAccepted")
     if prior and prior.get("phase") == phase and prior.get("round") == rnd:
         att = prior.get("attempt", 0)
@@ -10347,6 +10685,11 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
+    withdrawn_refusal = _fixer_attempt_withdrawn_refusal(
+        session_dir, "record-result", state, attempt, expect_round=expect_round,
+        expect_phase=expect_phase)
+    if withdrawn_refusal is not None:
+        return withdrawn_refusal
     if state.get("_submitUsed"):
         return _refuse_cmd(
             session_dir, "record-result", "record-submit-interleaved",
@@ -10740,6 +11083,11 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     state, refusal = _load_driver_state(session_dir, "record-missing")
     if refusal is not None:
         return refusal
+    withdrawn_refusal = _fixer_attempt_withdrawn_refusal(
+        session_dir, "record-missing", state, attempt, expect_round=expect_round,
+        expect_phase=expect_phase)
+    if withdrawn_refusal is not None:
+        return withdrawn_refusal
     if state.get("_submitUsed"):
         return _refuse_cmd(
             session_dir, "record-missing", "record-submit-interleaved",
@@ -12266,6 +12614,14 @@ def build_parser():
                               dest="ruling_file")
     cli_contract.add_argument(pru, "--by", contract="free-text", required=True)
 
+    pwd = sub.add_parser("withdraw")
+    cli_contract.add_argument(pwd, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pwd, "--attempt", contract="integer", required=True, type=int)
+    cli_contract.add_argument(pwd, "--reason", contract="free-text", required=True)
+    cli_contract.add_argument(pwd, "--repo-root", contract="repo-root", default=None,
+                              help="worktree the stopped fixer worked in, checked before the "
+                                   "withdrawal (default: cwd)")
+
     return parser
 
 
@@ -12459,6 +12815,11 @@ def _dispatch(args):
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "rule":
         out = cmd_rule(args.session_dir, args.ruling_file, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "withdraw":
+        out = cmd_withdraw(args.session_dir, args.attempt, args.reason,
+                           repo_root=args.repo_root or os.getcwd())
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:

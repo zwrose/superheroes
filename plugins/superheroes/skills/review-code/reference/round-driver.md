@@ -568,14 +568,73 @@ A guidance ruling that supersedes a live out-of-scope ruling clears that disposi
 the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
 fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
-A ruling while a pending fixer attempt already has emitted orders is refused — a ruling waits until
-that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes unchanged):
+A guidance ruling at that point also brings in a finding the batch does not hold yet (marked
+`lifted: "guidance"`, below).
+
+A `guidance` ruling is accepted at every step that is not terminal. At a step that is not the fixer
+step it only records; the fix batch that holds the finding renders it when that batch is next
+planned. A ruling given while a fixer attempt has already emitted its orders is refused with
+`ruling-attempt-pending` only when one of its targets (or a finding reworded from one) is in the
+batch that attempt was given; the refusal's `detail` names the way out: stop the fixer, restore the
+worktree to the head the attempt started from, run `withdraw`, then `rule` again. A ruling file whose
+every target is outside the emitted batch is recorded at once — it reconciles the later slices of the
+round and binds a later fix batch, and the emitted batch and its file are never reshaped. A file that
+mixes the two is refused whole. A fixer attempt that has already folded keeps its result; the ruling
+binds the next fix. Refusal tokens (each leaves state bytes unchanged):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
 `ruling-critical-out-of-scope`, `ruling-decided-by-malformed`,
 `ruling-session-terminal`, `ruling-attempt-pending`,
 `disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
+
+### Withdrawing a stopped fixer attempt (`withdraw`)
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" withdraw --session-dir "$SESSION_DIR" \
+  --attempt <K> --reason "<why>" [--repo-root "$REPO_ROOT"]
+```
+
+`withdraw` closes the pending `dispatch-fixer` attempt the orchestrator has stopped, so a ruling can
+reach the fix. Stop the fixer first and put the worktree back to the head the attempt started from
+(discard its uncommitted changes, and reset any commit it made); then run `withdraw`, `rule`, and
+`next`. The driver checks, in this order, and refuses with a journaled token that leaves
+`loop-state.json` untouched: `withdraw-session-terminal` (the session is over), `withdraw-not-fixer`
+(no pending step, or it is not the fixer), `withdraw-attempt-mismatch` (`--attempt` is not the
+pending attempt), `withdraw-not-emitted` (the attempt emitted no orders, so a ruling can simply be
+recorded), `withdraw-reason-missing` (blank `--reason`).
+
+Then the restore check reads the worktree at `--repo-root` (default: the current directory):
+`withdraw-head-unanchored` when the attempt's orders carry no head to compare with,
+`withdraw-git-unavailable` when git cannot report, `withdraw-worktree-dirty` when a tracked file is
+changed or an untracked file sits outside the session directory, and `withdraw-head-moved` when
+`HEAD` is not the head the driver bound into the attempt's orders. A passing check is recorded as
+`"restoreCheck": "checked"`; a library call with no repo root and no git seam skips it and records
+`"not-checked"`.
+
+On success one commit records the attempt under `state.withdrawnFixerAttempts`
+(`round`, `attempt`, `reason`, `restoreCheck`), adds a `fixer-attempt-withdrawn` decision and journal
+row, and clears the pending step. The step stays at the fixer step with the fix batch and queue where
+they were, so the `rule` that follows reconciles the batch exactly as it does before any emission, and
+`next` emits a fresh attempt. That attempt number is always higher than any withdrawn attempt of the
+round; the withdrawn attempt's order files stay on disk. A withdrawn attempt can never fold:
+`submit`, `record-result` and `record-missing` addressed to it refuse `fixer-attempt-withdrawn`
+(journaled, state unchanged, checked before any other pending-step check), and `advance` folds only
+the current pending attempt, so a result left at a withdrawn attempt's path is not folded.
+
+### Findings that join a round's fix batch (the lift)
+
+When a round sends a fixer out, its first fix batch holds the blocking findings and then, after them
+in severity order, every other live finding that either states a real consequence (`consequenceKind:
+"real"`) and has no disposition, or is named by its effective `guidance` decision and is not fixed or
+refuted. Each such row carries `"lifted": "real-consequence"` or `"lifted": "guidance"`; the round
+records `liftedIntoFixBatch` (their keys) and a `fix-batch-lifted` decision. A finding that is fixed,
+refuted, merged, collapsed, or out of scope under its effective decision is never lifted, and a
+code-quality finding with no guidance decision is not. Lifted rows go through the same discharge
+filter and the same `fixBatchCap` slicing as every other row: when the cap is smaller than the
+offered set they wait in `_fixQueue` for a later slice of the same round. The lift never starts a
+fixer leg: a round with no blocking finding converges as before, and its remaining findings are
+settled at the end.
 
 Owner-gate guidance is held to the same measure. A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at submit with `gate-guidance-oversize`, nothing folds, and the owner resubmits shorter guidance; on the library `run_loop` path the fold parks `cannot-certify` with the same token. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a submit whose fix batch would carry more guidance than one order holds refuses with `gate-guidance-aggregate-oversize` (the library fold parks with it), and the render refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
 

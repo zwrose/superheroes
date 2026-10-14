@@ -1,0 +1,630 @@
+"""A ruling reaches the next fix: the `withdraw` verb, `guidance` at every non-terminal step, and the
+lift of undisposed real-consequence and guidance-named findings into a round's fix batch.
+
+Drives the CLI-level functions over the real adapters the way `test_rulings_channel_1445.py` does,
+reusing its helpers (and, through it, the shared integration harness)."""
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.dirname(_HERE)
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import round_adapters  # noqa: E402
+import round_driver as RD  # noqa: E402
+import round_records as RR  # noqa: E402
+import session_contract  # noqa: E402
+
+_SPEC = importlib.util.spec_from_file_location(
+    "test_rulings_channel_1445", os.path.join(_HERE, "test_rulings_channel_1445.py"))
+_RC = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_RC)
+_TRI = _RC._TRI
+
+P_FIXER = RD.P_FIXER
+_state = _RC._state
+_state_bytes = _RC._state_bytes
+_bootstrap = _RC._bootstrap
+_drive_to_phase = _RC._drive_to_phase
+_drive_one_phase = _RC._drive_one_phase
+_write_ruling_file = _RC._write_ruling_file
+_follow_up = _RC._follow_up
+_rule = _RC._rule
+_strip_fixer_orders_emitted = _RC._strip_fixer_orders_emitted
+
+
+# --- fixtures and helpers ------------------------------------------------------------------------
+
+@pytest.fixture
+def keep_severity(monkeypatch):
+    """The shared harness's verifier verdicts all say `Important`; wrap them (in this file only) so a
+    verified finding keeps the severity the panel gave it."""
+    original = _TRI._payload_for
+
+    def wrapped(session_dir, state, pend, seat, panel_findings, head_diff_path):
+        payload = original(session_dir, state, pend, seat, panel_findings, head_diff_path)
+        if pend["phase"] == RD.P_VERIFIERS:
+            cluster = _TRI._cluster_for(pend, seat)
+            severity_of = {f.get("id"): f.get("severity") for f in cluster.get("findings") or []}
+            for verdict in payload["verdicts"]:
+                if severity_of.get(verdict["id"]):
+                    verdict["severity"] = severity_of[verdict["id"]]
+        return payload
+
+    monkeypatch.setattr(_TRI, "_payload_for", wrapped)
+
+
+def _finding(title, line, severity="Important", kind="real"):
+    finding = _RC._blocking_finding(title, line)
+    finding["severity"] = severity
+    finding["consequenceKind"] = kind
+    return finding
+
+
+def _session(tmp_path, findings, to_phase=P_FIXER, name="c7", **cfg):
+    """A session driven to `to_phase` pending: (session_dir, gitdir, head_diff_path)."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name=name, **cfg)
+    _drive_to_phase(session_dir, gitdir, findings, head_path, to_phase)
+    return session_dir, gitdir, head_path
+
+
+def _key(row):
+    return RD._fix_batch_row_key(row)
+
+
+def _batch_keys(state):
+    return [_key(row) for row in state.get("_fixBatch") or []]
+
+
+def _queue_keys(state):
+    return [_key(row) for row in state.get("_fixQueue") or []]
+
+
+def _rows_by_title(state):
+    rows = list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+    return {row.get("title"): row for row in rows}
+
+
+def _finding_key_by_title(state, title):
+    for finding in state.get("findings") or []:
+        if finding.get("title") == title:
+            return _key(finding)
+    for entry in state.get(session_contract.DISPOSITION_LEDGER_KEY) or []:
+        if entry.get("title") == title:
+            return RD._finding_identity_key(entry)
+    raise AssertionError("no finding titled %r" % title)
+
+
+def _guidance_file(tmp_path, name, key, text):
+    return _write_ruling_file(tmp_path / name, [
+        {"id": key, "ruling": "guidance", "reason": "owner call", "guidance": text}])
+
+
+def _order_path(session_dir, state):
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    assert reason is None, reason
+    seat, occurrence = RR.roster_slots(roster)[0]
+    return RR.order_prompt_path(session_dir, pend["round"], pend["phase"],
+                                RR.storage_key(seat, occurrence), pend["attempt"])
+
+
+def _order_text(session_dir):
+    with open(_order_path(session_dir, _state(session_dir)), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _fix_batch_file_bytes(session_dir, rnd=1):
+    with open(os.path.join(RR.round_dir(session_dir, rnd), "fix-batch.json"), "rb") as fh:
+        return fh.read()
+
+
+def _git(cwd, *args):
+    done = subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t",
+         "-c", "commit.gpgsign=false", *args],
+        capture_output=True, text=True)
+    assert done.returncode == 0, (args, done.stdout, done.stderr)
+    return done.stdout.strip()
+
+
+def _throwaway_repo(tmp_path, name="wt"):
+    repo = tmp_path / name
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.txt").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "first")
+    return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def _bind_anchor_head(session_dir, head):
+    """Bind the pending fixer attempt's orders anchor to `head` (None drops the head)."""
+    state = _state(session_dir)
+    pend = state["pending"]
+    key = RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])
+    anchor = dict(state["_ordersAnchors"][key])
+    if head is None:
+        anchor.pop("headSha", None)
+    else:
+        anchor["headSha"] = head
+    state["_ordersAnchors"][key] = anchor
+    RD.save_state(session_dir, state)
+
+
+def _two_important(tmp_path, name="c7-two"):
+    """Fixer attempt emitted over a batch holding F only; G waits in the queue (cap 1)."""
+    session_dir, gitdir, head_path = _session(
+        tmp_path, [_finding("bounds F", 1), _finding("bounds G", 2)], name=name, fixBatchCap=1)
+    state = _state(session_dir)
+    assert len(state["_fixBatch"]) == 1 and len(state["_fixQueue"]) == 1, state
+    return (session_dir, gitdir, head_path,
+            _key(state["_fixBatch"][0]), _key(state["_fixQueue"][0]))
+
+
+def _journal_refusals(session_dir, reason):
+    return [row for row in RD.read_journal(session_dir)
+            if row.get("outcome") == "refused" and row.get("reason") == reason]
+
+
+# --- R1: the withdraw verb -----------------------------------------------------------------------
+
+def test_t1_ruling_while_pending_reaches_the_fix(tmp_path, keep_severity):
+    """axis: a ruling given while a fixer attempt is pending is refused with the recovery, and after
+    `withdraw` it reaches the fix that follows; the withdrawn attempt can never fold.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (elements 3, 5)
+    """
+    session_dir, _gitdir, _head, key_f, _key_g = _two_important(tmp_path)
+    k = _state(session_dir)["pending"]["attempt"]
+    ruling = _guidance_file(tmp_path, "r.json", key_f, "wrap it in the retry guard")
+    before = _state_bytes(session_dir)
+    out = _rule(session_dir, ruling)
+    assert out.get("ok") is False and out.get("reason") == "ruling-attempt-pending", out
+    assert "withdraw" in out.get("detail", ""), out
+    assert _state_bytes(session_dir) == before
+    assert _journal_refusals(session_dir, "ruling-attempt-pending")
+
+    repo, head = _throwaway_repo(tmp_path)
+    _bind_anchor_head(session_dir, head)
+    withdrawn = RD.cmd_withdraw(session_dir, k, "owner ruled on F", repo_root=str(repo))
+    assert withdrawn.get("ok") is True and withdrawn.get("restoreCheck") == "checked", withdrawn
+    state = _state(session_dir)
+    assert state["pending"] is None and state["step"] == P_FIXER
+    assert state["withdrawnFixerAttempts"] == [
+        {"round": 1, "attempt": k, "reason": "owner ruled on F", "restoreCheck": "checked"}]
+    assert any(d["kind"] == "fixer-attempt-withdrawn" for d in state["decisions"])
+    assert any(row.get("outcome") == "fixer-attempt-withdrawn" and row.get("attempt") == k
+               for row in RD.read_journal(session_dir))
+
+    assert _rule(session_dir, ruling).get("ok") is True
+    nxt = RD.cmd_next(session_dir)
+    assert nxt.get("ok") and nxt["phase"] == P_FIXER and nxt["attempt"] > k, nxt
+    assert key_f in [_key(row) for row in nxt["payload"]["batch"]]
+    assert "wrap it in the retry guard" in _order_text(session_dir)
+
+    folded = RD.cmd_submit(session_dir, P_FIXER, k, "any-hash", {})
+    assert folded.get("ok") is False and folded.get("reason") == "fixer-attempt-withdrawn", folded
+
+
+def test_t2_replaced_guidance_never_renders_beside_the_new(tmp_path, keep_severity):
+    """axis: guidance ruled before emission renders in attempt K; a later ruling replaces it, and after
+    withdraw and re-emission only the new guidance renders and K can never fold."""
+    session_dir, gitdir, head_path = _session(
+        tmp_path, [_finding("bounds F", 1)], to_phase=RD.P_GAPSWEEP, name="c7-replace")
+    key_f = _finding_key_by_title(_state(session_dir), "bounds F")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g1.json", key_f, "FIRST-GUIDANCE"))["ok"]
+    _drive_to_phase(session_dir, gitdir, [], head_path, P_FIXER)
+    k = _state(session_dir)["pending"]["attempt"]
+    assert "FIRST-GUIDANCE" in _order_text(session_dir)
+
+    g2 = _guidance_file(tmp_path, "g2.json", key_f, "SECOND-GUIDANCE")
+    assert _rule(session_dir, g2).get("reason") == "ruling-attempt-pending"
+    assert RD.cmd_withdraw(session_dir, k, "owner replaced the guidance")["ok"]
+    assert _rule(session_dir, g2)["ok"]
+    assert RD.cmd_next(session_dir)["ok"]
+    text = _order_text(session_dir)
+    assert "SECOND-GUIDANCE" in text and "FIRST-GUIDANCE" not in text
+    assert RD.cmd_submit(session_dir, P_FIXER, k, "h", {}).get("reason") == "fixer-attempt-withdrawn"
+
+
+def test_t3_ruling_outside_the_emitted_batch_is_recorded_at_once(tmp_path, keep_severity):
+    """axis: a ruling whose target is in a later slice (not the emitted batch) is recorded with no
+    refusal; the pending attempt, the emitted `_fixBatch` and the emitted `fix-batch.json` bytes stay
+    exactly as they were."""
+    session_dir, _g, _h, _key_f, key_g = _two_important(tmp_path, "c7-outside")
+    before_state = _state(session_dir)
+    before_file = _fix_batch_file_bytes(session_dir)
+    log_before = len(before_state.get("rulingsLog") or [])
+    out = _rule(session_dir, _guidance_file(tmp_path, "r.json", key_g, "for the next slice"))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert len(after["rulingsLog"]) == log_before + 1
+    assert after["pending"] == before_state["pending"]
+    assert after["_fixBatch"] == before_state["_fixBatch"]
+    assert _fix_batch_file_bytes(session_dir) == before_file
+
+
+def test_ruling_on_a_queued_row_reconciles_the_queue_not_the_emitted_batch(tmp_path, keep_severity):
+    """axis: with `fixBatchCap` 1 an out-of-scope ruling on a row in `_fixQueue` is accepted while the
+    fixer is pending and drops the row from the queue; the emitted batch, the pending payload and the
+    emitted batch file are untouched."""
+    session_dir, _g, _h, _key_f, key_g = _two_important(tmp_path, "c7-queued")
+    before = _state(session_dir)
+    before_file = _fix_batch_file_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": key_g, "ruling": "out-of-scope", "reason": "later", "followUp": _follow_up()}]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["_fixBatch"] == before["_fixBatch"]
+    assert after["pending"] == before["pending"]
+    assert key_g not in _queue_keys(after) and not after.get("_fixQueue")
+    assert _fix_batch_file_bytes(session_dir) == before_file
+
+
+def test_t4_guidance_at_a_non_fixer_step_binds_the_next_batch(tmp_path, keep_severity):
+    """axis: `guidance` is accepted at a step that is not the fixer step and the fix batch that holds
+    its finding renders it."""
+    for phase in (RD.P_VERIFIERS, RD.P_GAPSWEEP):
+        sub = tmp_path / phase
+        sub.mkdir()
+        session_dir, gitdir, head_path = _session(
+            sub, [_finding("bounds F", 1)], to_phase=phase, name="c7-nonfixer")
+        key_f = _finding_key_by_title(_state(session_dir), "bounds F")
+        out = _rule(session_dir, _guidance_file(sub, "g.json", key_f, "GUIDED-%s" % phase))
+        assert out.get("ok") is True, (phase, out)
+        assert _state(session_dir)["rulingsLog"][-1]["ruling"] == "guidance"
+        _drive_to_phase(session_dir, gitdir, [], head_path, P_FIXER)
+        state = _state(session_dir)
+        assert key_f in _batch_keys(state), phase
+        assert "GUIDED-%s" % phase in _order_text(session_dir)
+
+
+def test_t4_guidance_at_an_audit_step_is_accepted(tmp_path, keep_severity):
+    """axis: a pending step that is neither the fixer nor a finding step (the audits) takes guidance."""
+    session_dir, _g, _h, key_f, _key_g = _two_important(tmp_path, "c7-audits")
+    state = _state(session_dir)
+    pend = {"action": RD.P_AUDITS, "round": state["round"], "phase": RD.P_AUDITS, "attempt": 0,
+            "payload": {"targets": state.get("_auditTargets") or []}}
+    state["pending"] = pend
+    state["step"] = RD.P_AUDITS
+    RD.save_state(session_dir, state)
+    out = _rule(session_dir, _guidance_file(tmp_path, "g.json", key_f, "g at the audits"))
+    assert out.get("ok") is True, out
+    assert _state(session_dir)["rulingsLog"][-1]["findingKey"] == key_f
+
+
+# --- R4: the lift --------------------------------------------------------------------------------
+
+def _minors_session(tmp_path, name, **cfg):
+    findings = [_finding("blocker B", 1),
+                _finding("real minor one", 2, "Minor", "real"),
+                _finding("real minor two", 3, "Minor", "real"),
+                _finding("quality minor", 4, "Minor", "code-quality")]
+    return _session(tmp_path, findings, name=name, **cfg)
+
+
+def test_t5_undisposed_real_minors_ride_the_first_fixer_order(tmp_path, keep_severity):
+    """axis: a round that sends a fixer out offers its undisposed real-consequence Minors in that same
+    batch, after the blocker, each marked; a code-quality Minor is not lifted.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 6)
+    """
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-lift")
+    state = _state(session_dir)
+    assert state["pending"]["phase"] == P_FIXER
+    by_title = _rows_by_title(state)
+    assert [row["title"] for row in state["_fixBatch"]] == [
+        "blocker B", "real minor one", "real minor two"]
+    assert "quality minor" not in by_title
+    assert "lifted" not in by_title["blocker B"]
+    assert by_title["real minor one"]["lifted"] == "real-consequence"
+    assert by_title["real minor two"]["lifted"] == "real-consequence"
+    with open(os.path.join(RR.round_dir(session_dir, 1), "fix-batch.json"), encoding="utf-8") as fh:
+        emitted = json.load(fh)
+    assert [row["title"] for row in emitted] == ["blocker B", "real minor one", "real minor two"]
+    assert [row.get("lifted") for row in emitted] == [None, "real-consequence", "real-consequence"]
+    rec = state["rounds"]["1"]
+    assert rec["liftedIntoFixBatch"] == [_key(by_title["real minor one"]),
+                                         _key(by_title["real minor two"])]
+    assert any(d["kind"] == "fix-batch-lifted" for d in state["decisions"])
+
+
+def test_t5b_lifted_row_waits_for_a_later_slice_of_the_same_round(tmp_path, keep_severity):
+    """axis: with `fixBatchCap` 1 the blocker goes first and the lifted Minor waits in `_fixQueue` for
+    the next slice of the same round."""
+    session_dir, gitdir, head_path = _session(
+        tmp_path, [_finding("blocker B", 1), _finding("real minor", 2, "Minor", "real")],
+        name="c7-cap", fixBatchCap=1)
+    state = _state(session_dir)
+    assert [row["title"] for row in state["_fixBatch"]] == ["blocker B"]
+    assert [row["title"] for row in state["_fixQueue"]] == ["real minor"]
+    assert state["_fixQueue"][0]["lifted"] == "real-consequence"
+    rnd = state["round"]
+    phase, out = _drive_one_phase(session_dir, gitdir, [], head_path)
+    assert phase == P_FIXER and out.get("ok"), out
+    after = _state(session_dir)
+    assert after["round"] == rnd and after["pending"]["phase"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["real minor"]
+    assert after["_fixBatchIndex"] == 1 and not after.get("_fixQueue")
+
+
+def test_t6_guidance_lifts_a_code_quality_minor(tmp_path, keep_severity):
+    """axis: a code-quality Minor an effective guidance decision names rides the next batch marked
+    `guidance`, and its guidance renders."""
+    session_dir, gitdir, head_path = _session(
+        tmp_path, [_finding("blocker B", 1), _finding("quality minor", 2, "Minor", "code-quality")],
+        to_phase=RD.P_VERIFIERS, name="c7-guided-minor")
+    key_m = _finding_key_by_title(_state(session_dir), "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "TIDY-THE-MINOR"))["ok"]
+    _drive_to_phase(session_dir, gitdir, [], head_path, P_FIXER)
+    state = _state(session_dir)
+    by_title = _rows_by_title(state)
+    assert by_title["quality minor"]["lifted"] == "guidance"
+    assert "lifted" not in by_title["blocker B"]
+    assert "TIDY-THE-MINOR" in _order_text(session_dir)
+
+
+def test_guidance_ruled_at_the_fixer_step_lifts_a_finding_the_batch_lacks(tmp_path, keep_severity):
+    """axis: before the fixer order is emitted, a guidance ruling on a finding the batch does not hold
+    brings it in through the same marker."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-reconcile")
+    state = _state(session_dir)
+    key_q = _finding_key_by_title(state, "quality minor")
+    assert key_q not in _batch_keys(state)
+    _strip_fixer_orders_emitted(session_dir)
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_q, "pull it in"))["ok"]
+    after = _state(session_dir)
+    assert _rows_by_title(after)["quality minor"]["lifted"] == "guidance"
+
+
+def test_lift_marker_decision_table():
+    """axis: which findings the lift selects."""
+    real = {"consequenceKind": "real"}
+    quality = {"consequenceKind": "code-quality"}
+    live = lambda ruling: {"ruling": ruling}  # noqa: E731
+    fixed = {"disposition": "fixed", "dispositionSeq": 5, "raisedSeq": 1}
+    assert RD._lift_marker_for(real, {}, None) == "real-consequence"
+    assert RD._lift_marker_for(quality, {}, None) is None
+    assert RD._lift_marker_for(real, {}, live("out-of-scope")) is None
+    assert RD._lift_marker_for(real, {"disposition": "out-of-scope"}, None) is None
+    assert RD._lift_marker_for(real, fixed, None) is None
+    assert RD._lift_marker_for(quality, {}, live("guidance")) == "guidance"
+    assert RD._lift_marker_for(quality, {"disposition": "out-of-scope"}, live("guidance")) == "guidance"
+    assert RD._lift_marker_for(quality, fixed, live("guidance")) is None
+
+
+# --- fail-closed edges ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("case,token", [
+    ("terminal", "withdraw-session-terminal"),
+    ("not-fixer", "withdraw-not-fixer"),
+    ("wrong-attempt", "withdraw-attempt-mismatch"),
+    ("not-emitted", "withdraw-not-emitted"),
+    ("blank-reason", "withdraw-reason-missing"),
+])
+def test_edge1_withdraw_refusals_leave_state_bytes_alone(tmp_path, keep_severity, case, token):
+    if case == "not-fixer":
+        session_dir, _g, _h = _bootstrap(tmp_path, name="c7-e1")
+        attempt = _state(session_dir)["pending"]["attempt"]
+        assert _state(session_dir)["pending"]["phase"] != P_FIXER
+    else:
+        session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e1")
+        attempt = _state(session_dir)["pending"]["attempt"]
+    reason = "a reason"
+    if case == "terminal":
+        state = _state(session_dir)
+        state["terminal"] = "converged"
+        RD.save_state(session_dir, state)
+    elif case == "wrong-attempt":
+        attempt += 1
+    elif case == "not-emitted":
+        _strip_fixer_orders_emitted(session_dir)
+    elif case == "blank-reason":
+        reason = "   "
+    before = _state_bytes(session_dir)
+    out = RD.cmd_withdraw(session_dir, attempt, reason)
+    assert out.get("ok") is False and out.get("reason") == token, out
+    assert _state_bytes(session_dir) == before
+    assert _journal_refusals(session_dir, token)
+
+
+@pytest.mark.parametrize("case,token", [
+    ("tracked-change", "withdraw-worktree-dirty"),
+    ("untracked-file", "withdraw-worktree-dirty"),
+    ("head-moved", "withdraw-head-moved"),
+    ("no-anchor-head", "withdraw-head-unanchored"),
+    ("git-unavailable", "withdraw-git-unavailable"),
+])
+def test_edge2_restore_check_refusals(tmp_path, keep_severity, case, token):
+    """axis: the worktree must be back at the attempt's starting head with nothing left over.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (elements 1, 2)
+    """
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e2")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head)
+    kwargs = {"repo_root": str(repo)}
+    if case == "tracked-change":
+        (repo / "a.txt").write_text("changed by the stopped fixer\n", encoding="utf-8")
+    elif case == "untracked-file":
+        (repo / "stray.txt").write_text("left behind\n", encoding="utf-8")
+    elif case == "head-moved":
+        (repo / "a.txt").write_text("two\n", encoding="utf-8")
+        _git(repo, "commit", "-q", "-a", "-m", "second")
+    elif case == "git-unavailable":
+        kwargs = {"repo_root": str(repo), "git": lambda cwd, *args: None}
+    before = _state_bytes(session_dir)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", **kwargs)
+    assert out.get("ok") is False and out.get("reason") == token, out
+    assert _state_bytes(session_dir) == before
+    assert _journal_refusals(session_dir, token)
+
+
+def test_untracked_files_inside_the_session_directory_are_not_a_dirty_worktree(tmp_path):
+    inside = tmp_path / "session"
+    assert RD._untracked_outside_session(str(inside), str(tmp_path), "?? session/round-1/x") is False
+    assert RD._untracked_outside_session(str(inside), str(tmp_path), "?? other/x") is True
+    assert RD._untracked_outside_session(str(inside), None, "?? session/x") is True
+
+
+def test_library_withdraw_without_a_repo_records_not_checked(tmp_path, keep_severity):
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-nc")
+    k = _state(session_dir)["pending"]["attempt"]
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled")
+    assert out.get("ok") is True and out["restoreCheck"] == "not-checked", out
+    assert _state(session_dir)["withdrawnFixerAttempts"][0]["restoreCheck"] == "not-checked"
+
+
+def test_withdraw_verb_runs_through_the_command_line(tmp_path, keep_severity, capsys):
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-cli")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    _bind_anchor_head(session_dir, head)
+    capsys.readouterr()
+    code = RD.main(["withdraw", "--session-dir", session_dir, "--attempt", str(k),
+                    "--reason", "owner ruled", "--repo-root", str(repo)])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 0 and out["ok"] is True and out["restoreCheck"] == "checked", out
+    (repo / "a.txt").write_text("dirty\n", encoding="utf-8")
+    code = RD.main(["withdraw", "--session-dir", session_dir, "--attempt", str(k + 1),
+                    "--reason", "again", "--repo-root", str(repo)])
+    assert code == 1
+
+
+def test_edge3_fold_paths_refuse_a_withdrawn_attempt(tmp_path, keep_severity):
+    """axis: submit, record-result and record-missing addressed to a withdrawn fixer attempt name the
+    withdrawal, and leave the state alone."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e3")
+    state = _state(session_dir)
+    k = state["pending"]["attempt"]
+    roster, _ = round_adapters.roster_for(P_FIXER, state, state.get("config") or {})
+    seat = RR.roster_slots(roster)[0][0]
+    assert RD.cmd_withdraw(session_dir, k, "owner ruled")["ok"]
+    before = _state_bytes(session_dir)
+    for out in (RD.cmd_submit(session_dir, P_FIXER, k, "h", {"fixes": []}),
+                RD.cmd_record_result(session_dir, seat, attempt=k),
+                RD.cmd_record_missing(session_dir, seat, k, "no-output")):
+        assert out.get("ok") is False and out.get("reason") == "fixer-attempt-withdrawn", out
+    assert _state_bytes(session_dir) == before
+    assert len(_journal_refusals(session_dir, "fixer-attempt-withdrawn")) == 3
+
+
+def test_edge4_fresh_attempt_is_above_the_withdrawn_one(tmp_path, keep_severity):
+    """axis: the attempt allocated after a withdrawal is strictly greater, its orders are emitted at
+    that attempt, and the withdrawn attempt's order files stay on disk untouched.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 4)
+    """
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e4")
+    state = _state(session_dir)
+    k = state["pending"]["attempt"]
+    old_order = _order_path(session_dir, state)
+    manifest = RD._orders_manifest_path(session_dir, state["round"], P_FIXER, k)
+    with open(old_order, "rb") as fh:
+        old_order_bytes = fh.read()
+    with open(manifest, "rb") as fh:
+        old_manifest_bytes = fh.read()
+    assert RD.cmd_withdraw(session_dir, k, "owner ruled")["ok"]
+    assert RD._next_dispatch_attempt(session_dir, state["round"], P_FIXER, _state(session_dir)) > k
+    nxt = RD.cmd_next(session_dir)
+    assert nxt.get("ok") and nxt["attempt"] > k, nxt
+    assert RD._journal_has_orders_emitted(session_dir, state["round"], P_FIXER, nxt["attempt"])
+    with open(old_order, "rb") as fh:
+        assert fh.read() == old_order_bytes
+    with open(manifest, "rb") as fh:
+        assert fh.read() == old_manifest_bytes
+    assert _order_path(session_dir, _state(session_dir)) != old_order
+
+
+def test_a_landing_left_at_the_withdrawn_attempt_is_not_folded(tmp_path, keep_severity):
+    """axis: `advance` folds only the fresh attempt; a seat result landed at the withdrawn attempt's
+    path is never stored or folded."""
+    session_dir, gitdir, head_path, _f, _g = _two_important(tmp_path, "c7-stale")
+    state = _state(session_dir)
+    k = state["pending"]["attempt"]
+    pend_k = state["pending"]
+    roster, _ = round_adapters.roster_for(P_FIXER, state, state.get("config") or {})
+    seat, occurrence = RR.roster_slots(roster)[0]
+    _TRI._write_dispatch_manifest(session_dir, pend_k, _TRI._slots_of(roster),
+                                  _TRI._auditor_vendor_for(state))
+    payload = _TRI._payload_for(session_dir, state, pend_k, seat, [], head_path)
+    _TRI._land(session_dir, state, pend_k, seat, payload, occurrence=occurrence)
+    assert RD.cmd_withdraw(session_dir, k, "owner ruled")["ok"]
+    assert RD.cmd_next(session_dir)["ok"]
+    fresh = _state(session_dir)["pending"]["attempt"]
+    assert fresh > k
+    phase, out = _drive_one_phase(session_dir, gitdir, [], head_path)
+    assert phase == P_FIXER and out.get("ok"), out
+    stale_store = RR.store_path(session_dir, 1, P_FIXER, RR.storage_key(seat, occurrence), k)
+    assert not os.path.exists(stale_store)
+    assert _state(session_dir)["lastAccepted"]["attempt"] == fresh
+
+
+def test_edge5_mixed_ruling_file_refuses_whole(tmp_path, keep_severity):
+    """axis: a ruling file naming one finding in the emitted batch and one outside it is refused
+    whole; nothing is recorded."""
+    session_dir, _g, _h, key_f, key_g = _two_important(tmp_path, "c7-e5")
+    before = _state_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", [
+        {"id": key_g, "ruling": "guidance", "reason": "outside", "guidance": "for G"},
+        {"id": key_f, "ruling": "guidance", "reason": "inside", "guidance": "for F"}]))
+    assert out.get("ok") is False and out.get("reason") == "ruling-attempt-pending", out
+    assert _state_bytes(session_dir) == before
+
+
+def test_edge6_out_of_scope_and_fixed_findings_are_never_lifted(tmp_path, keep_severity):
+    """axis: a real-consequence finding that is effectively out of scope, or already fixed, is not
+    lifted; an undisposed one beside them still is."""
+    session_dir, _g, _h = _session(
+        tmp_path,
+        [_finding("blocker B", 1), _finding("minor ruled out", 2, "Minor", "real"),
+         _finding("minor fixed", 3, "Minor", "real"), _finding("minor open", 4, "Minor", "real")],
+        name="c7-e6")
+    state = _state(session_dir)
+    keys = {title: _finding_key_by_title(state, title)
+            for title in ("blocker B", "minor ruled out", "minor fixed", "minor open")}
+    assert set(_batch_keys(state)) == set(keys.values())
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
+        {"id": keys["minor ruled out"], "ruling": "out-of-scope", "reason": "later",
+         "followUp": _follow_up()}]))["ok"]
+    state = _state(session_dir)
+    RD._record_disposition(state, keys["minor fixed"], "fixed", state["round"])
+    blocker = next(row for row in state["findings"] if _key(row) == keys["blocker B"])
+    status = RD._queue_fix_batch(state, state["config"], [dict(blocker)])
+    assert status == "queued"
+    queued = _batch_keys(state) + _queue_keys(state)
+    assert queued == [keys["blocker B"], keys["minor open"]]
+    assert state["rounds"]["1"]["liftedIntoFixBatch"] == [keys["minor open"]]
+
+
+def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severity):
+    """axis: the lift never starts a fixer leg. A Minor-only round converges with no fixer leg, and an
+    empty offered set lifts nothing even though real-consequence findings are live."""
+    minor_only = tmp_path / "minor-only"
+    minor_only.mkdir()
+    session_dir, gitdir, head_path = _bootstrap(minor_only, name="c7-e7")
+    folded = _TRI._drive_to_terminal(
+        session_dir, gitdir, [_finding("only minor", 1, "Minor", "real")], head_path)
+    assert P_FIXER not in folded, folded
+    final = _state(session_dir)
+    assert final.get("terminal") == "converged"
+    assert "liftedIntoFixBatch" not in final["rounds"]["1"]
+
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-e7-direct")
+    state = _state(session_dir)
+    assert any(f.get("consequenceKind") == "real" for f in state["findings"])
+    state["pending"] = None
+    state["rounds"]["1"].pop("liftedIntoFixBatch", None)
+    assert RD._queue_fix_batch(state, state["config"], []) == "queued"
+    assert state["_fixBatch"] == [] and state["_fixQueue"] == []
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
