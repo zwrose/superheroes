@@ -847,13 +847,41 @@ def test_apply_canon_lookups_ignore_an_inherited_git_dir(proj, monkeypatch, tmp_
     mode_registry.write_registry(str(other), mode_registry.IN_REPO, "rk2", root=_store)
     core_md.write(str(other), {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
                               "patterns": "- x: a.ts:1"}, "confirmed", root=_store, now="2026-06-26")
-    other_before = _bytes(core_md.core_path(str(other), _store))
-    mine_before = _bytes(core_md.core_path(repo, _store))
+    # both paths are resolved before the routing variables are set, so the assertions read each project's own file
+    other_path = core_md.core_path(str(other), _store)
+    mine_path = core_md.core_path(repo, _store)
+    assert other_path != mine_path
+    other_before = _bytes(other_path)
+    mine_before = _bytes(mine_path)
     assert other_before is not None and other_before != mine_before
     monkeypatch.setenv("GIT_DIR", str(other / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(other))
     got = _apply(proj, repo, _proposal(), APPROVAL)
     assert (got["ok"], got["outcome"]) == (True, "applied"), got
     assert os.environ["GIT_DIR"] == str(other / ".git") and os.environ["GIT_WORK_TREE"] == str(other)
-    assert _bytes(core_md.core_path(repo, _store)) != mine_before  # the calibration landed in the requested project
-    assert _bytes(core_md.core_path(str(other), _store)) == other_before  # and the other checkout's core.md is untouched
+    assert _bytes(mine_path) != mine_before  # the calibration landed in the requested project
+    assert _bytes(other_path) == other_before  # and the other checkout's core.md is untouched
+
+
+def test_adoption_day_reads_and_writes_the_requested_project_under_an_inherited_git_dir(proj, monkeypatch, tmp_path):
+    repo, store = proj
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(str(other), "init", "-q")
+    _identity(str(other))
+    mode_registry.write_registry(str(other), mode_registry.IN_REPO, "rk3", root=store)
+    core_md.write(str(other), {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+                              "patterns": "- x: a.ts:1"}, "confirmed", root=store, now="2026-06-26")
+    other_path = core_md.core_path(str(other), store)  # resolved before the routing variables are set
+    other_before = _bytes(other_path)
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    got = RL.record_adoption_day(repo, "2026-10-13", store)
+    assert (got["ok"], got["outcome"]) == (True, "recorded"), got
+    assert os.environ["GIT_DIR"] == str(other / ".git") and os.environ["GIT_WORK_TREE"] == str(other)
+    assert _bytes(other_path) == other_before  # the other checkout's core.md is untouched
+    assert RL.adoption_day(repo, store) == {"since": "2026-10-13", "reason": None}
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert RL.adoption_day(repo, store) == {"since": "2026-10-13", "reason": None}
+    assert RL.adoption_day(str(other), store) == {"since": None, "reason": "not-recorded"}

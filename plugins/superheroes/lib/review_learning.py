@@ -68,6 +68,12 @@ def _day(value, whole=True):
 # --- the adoption day (I3) ---
 
 def adoption_day(cwd, root=None):
+    # scrubbed: core_md resolves the project through git, which must act on `cwd`, not an inherited GIT_DIR / GIT_WORK_TREE
+    with _scrubbed_environ():
+        return _adoption_day(cwd, root)
+
+
+def _adoption_day(cwd, root):
     facts = core_md.read(cwd, root)
     mapping = facts.get("projectConfiguration") if facts else None
     if not isinstance(mapping, dict) or SINCE_KEY not in mapping:
@@ -77,6 +83,12 @@ def adoption_day(cwd, root=None):
 
 
 def record_adoption_day(cwd, day, root=None):
+    # one scrubbed span over the read and the compare-and-set write, so both act on the requested project
+    with _scrubbed_environ():
+        return _record_adoption_day(cwd, day, root)
+
+
+def _record_adoption_day(cwd, day, root):
     if _day(day) is None:
         return _result(False, "refused", "bad-date", "%r is not an ISO date (YYYY-MM-DD)" % (day,))
     cur = adoption_day(cwd, root)
@@ -285,7 +297,7 @@ def _seats(name):
     out = []
     # a merged finding label joins its dimensions with " + " (panel_tally._merge_dims, verification._union_dimensions)
     for part in re.split(r"[,+]", name) if isinstance(name, str) else []:
-        part = re.sub(r"\s*\(round \d+\)$", "", part.strip()).strip().lower()
+        part = review_record_session.REVIEWER_ROUND_SUFFIX.sub("", part.strip()).strip().lower()
         tokens = part.split()
         if len(tokens) > 1 and tokens[-1] in _KNOWN:
             part = tokens[-1]

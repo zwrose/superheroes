@@ -161,11 +161,17 @@ def _bind(ran, run_dirs, engine_run):
     return {k: v[0] for k, v in hits.items() if len(v) == 1}
 
 
+# The `(round N)` suffix a persisted reviewer name carries: the one home of the format. `_reviewer` writes it
+# through REVIEWER_ROUND_FORMAT; REVIEWER_ROUND_SUFFIX is the pattern that strips it (review_learning's tally).
+REVIEWER_ROUND_FORMAT = " (round {rnd})"
+REVIEWER_ROUND_SUFFIX = re.compile(r"\s*\(round \d+\)$")
+
+
 def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None, run_dir=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
     entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
-    out = {"name": f"{stem}{seat} (round {rnd})", "planned": True, "ran": ran,
+    out = {"name": f"{stem}{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": ran,
            "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
            "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
            "commit": commit, "runDir": run_dir}
