@@ -71,12 +71,14 @@ def relay_name(config_dir):
     """The relay's session name; it carries the account because names are listed across all.
 
     The base is the config dir's name with every character outside `[A-Za-z0-9._-]` made `-`, cut so the
-    whole name is at most 64 characters; the hash of the full path keeps cut names distinct."""
+    whole name is at most 64 characters; the hash of the full path keeps cut names distinct. None when
+    the base is empty."""
     full = os.path.realpath(str(config_dir))
     base = _NAME_UNSAFE_RE.sub("-", os.path.basename(full).lstrip("."))
     room = _NAME_LIMIT - len(NAME_PREFIX) - 1 - _NAME_HASH_LENGTH
-    base = base[:room] or "x"
-    return "%s%s-%s" % (NAME_PREFIX, base, hashlib.sha256(full.encode()).hexdigest()[:_NAME_HASH_LENGTH])
+    # axis: the name fits the 64-character session-name pattern whatever the config dir is called — see bite-proof record c8a_wo4.md
+    base = base[:room]
+    return "%s%s-%s" % (NAME_PREFIX, base, hashlib.sha256(full.encode()).hexdigest()[:_NAME_HASH_LENGTH]) if base else None
 
 
 def _call(run, argv, env, timeout, cwd=None):

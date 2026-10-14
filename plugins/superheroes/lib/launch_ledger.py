@@ -1783,8 +1783,6 @@ def _read_process_facts(pid):
         return None
 
 
-
-
 def _read_ps_text(pid, flag):
     """One ``ps`` column for ``pid``, stripped; None on any failure or an empty read."""
     try:
