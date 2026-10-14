@@ -14062,7 +14062,7 @@ def test_stage_attempt_prompt_refusal_arms(tmp_path, schema_arm):
     assert ended["refusal"] == "native-schema-unreadable"
 
 
-def test_stage_attempt_prompt_refusal_readonly_run_dir(tmp_path):
+def test_stage_attempt_prompt_refusal_readonly_run_dir(tmp_path, monkeypatch):
     run_dir = str(tmp_path / "readonly-run")
     repo_root = _repo(tmp_path)
     os.makedirs(run_dir, exist_ok=True)
@@ -14084,11 +14084,16 @@ def test_stage_attempt_prompt_refusal_readonly_run_dir(tmp_path):
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     fake = FakeRunner([])
-    try:
-        os.chmod(run_dir, 0o500)
-        ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
-    finally:
-        os.chmod(run_dir, 0o755)
+    # Injected, not chmod: root ignores mode bits. Only the O_CREAT open of prompt-attempt-1.md fails.
+    real_os_open = os.open
+
+    def deny_attempt_prompt_open(path, flags, *args, **kwargs):
+        if os.path.basename(os.fspath(path)) == "prompt-attempt-1.md":
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real_os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(ED.os, "open", deny_attempt_prompt_open)
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
     assert ok is True
     assert detail == ""
     ended = next(
@@ -14967,20 +14972,28 @@ def test_claude_review_last_result_event_materialized(tmp_path, monkeypatch):
         assert fh.read() == expected
 
 
-def test_claude_native_channel_suffix_unreadable_schema_refuses_coherence(tmp_path):
+def test_claude_native_channel_suffix_unreadable_schema_refuses_coherence(tmp_path, monkeypatch):
     # edge 13
     run_dir = str(tmp_path / "unreadable-schema")
     os.makedirs(run_dir, exist_ok=True)
     schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
     with open(schema_path, "w", encoding="utf-8") as fh:
         fh.write('{"type":"object"}\n')
-    os.chmod(schema_path, 0)
     opened = {
         "engine": "claude", "channel": ERC.CHANNEL_NATIVE,
         "nativeSchemaPath": schema_path,
         "argv": ["claude"], "cwd": run_dir,
         "resolvedInputs": _spawn_gate_resolved_inputs(_reviewer_claude_seat()),
     }
+    # Injected, not chmod: root ignores mode bits. Only the read of the schema file fails.
+    real_open = open
+
+    def deny_schema_read(file, *args, **kwargs):
+        if os.fspath(file) == schema_path:
+            raise PermissionError(13, "Permission denied", schema_path)
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(ED, "open", deny_schema_read, raising=False)
     assert ED._native_channel_suffix(opened) == ()
     _, err = ED._spawn_argv_coherence(opened, opened["argv"])
     assert err is not None
