@@ -276,7 +276,13 @@ def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
     if proposal["kind"] == "standing-ruling":
         return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only"), note)
     half = proposal["half"]
-    wrote = project_config.set_item(cwd, "riskAndTrust", {half: proposal["value"]}, root=root)
+    try:
+        wrote = project_config.set_item(cwd, "riskAndTrust", {half: proposal["value"]}, root=root)
+    except Exception as exc:  # e.g. core_md.VerifyCommandMalformed: Canon is already committed, so name it rather than trace
+        return _noted(_result(False, "partial", "calibration-not-written",
+                              "Canon holds %s (commit %s); the calibration write raised %s: %s"
+                              % (line, commit, type(exc).__name__, exc),
+                              canonEntry=line, canonCommit=commit), note)
     # axis: a failed calibration read-back reads partial and unconfirmed, never applied — see bite-proof record wo_a_1718_failed-read-back
     if wrote.get("reason") == project_config.REASON_SET_MISMATCH:  # the write precedes its read-back: the setting may have landed
         return _noted(_result(False, "partial", "calibration-unconfirmed",
@@ -366,6 +372,9 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["undated"] += 1
             incomplete = True
             continue
+        if outside(day):  # a record outside the counting range is left out before its evidence is checked, so it never turns the tally incomplete
+            left[outside(day)] += 1
+            continue
         # a record that lost its reviewers or findings (a refusal body, a partial read) is unknown coverage, not an empty review;
         # one whose raw reviewer output could not be read (`unreadFiles`) is likewise missing evidence, not a measured zero
         if (rec.get("ok") is False or rec.get("unreadFiles") not in (None, [])
@@ -390,9 +399,6 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                for r in rec["reviewers"]) or any(not _finding_ok(f) for f in rec["findings"]):
             left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
             incomplete = True
-            continue
-        if outside(day):
-            left[outside(day)] += 1
             continue
         for row in rec["reviewers"]:
             if row["ran"] != review_record.RAN_NOT_RUN:

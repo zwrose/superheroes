@@ -239,6 +239,17 @@ def test_partial_when_the_calibration_write_refuses(proj, canon_root, monkeypatc
     assert _touched(proj) == []
 
 
+def test_partial_when_the_calibration_write_raises_after_the_canon_commit(proj, canon_root, monkeypatch):
+    def boom(*a, **k):
+        raise ValueError("verify-command-malformed: core.md verifyCommand must be a non-empty string")
+    monkeypatch.setattr(project_config, "set_item", boom)
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "partial", "calibration-not-written")
+    assert got["canonEntry"] in _git(canon_root, "show", "HEAD:" + CANON_REL).splitlines()
+    assert got["canonCommit"] and got["canonEntry"] in got["detail"]
+    assert "ValueError" in got["detail"] and "verify-command-malformed" in got["detail"]
+
+
 def test_failed_canon_commit_leaves_calibration_alone(proj, canon_root):
     hooks = os.path.join(canon_root, ".git", "hooks")
     _git(canon_root, "config", "core.hooksPath", hooks)  # the fixture's own hooks dir, whatever the ambient config says
@@ -492,6 +503,16 @@ def test_tally_incomplete_evidence_reads_unmeasured_never_zero():
         assert got["measured"] is False and got["reason"] == "incomplete-evidence", (records, escapes)
         assert got["unattributedCatches"] is None and got["escapes"] == {"missed": None, "seenAndLeft": None}
         assert got["seats"] == {}
+
+
+def test_tally_an_unread_record_outside_the_range_is_left_out_not_incomplete():
+    old = dict(_record(1, "s1", "2026-10-09", [_row("code-reviewer")], []), unreadFiles=["lost-old-output.json"])
+    cur = _record(2, "s2", D, [_row("code-reviewer")], [_finding("k", "Code")])
+    got = RL.tally([old, cur], [], D, until="2026-10-11")
+    assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["leftOut"]["beforeWindow"] == 1 and got["leftOut"]["malformed"] == 0
+    inside = dict(old, writtenAt=D + "T10:00:00Z")  # the same damage inside the range still reads incomplete
+    assert RL.tally([inside, cur], [], D, until="2026-10-11")["reason"] == "incomplete-evidence"
 
 
 def test_tally_unread_reviewer_output_reads_incomplete_evidence():
