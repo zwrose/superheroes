@@ -47,8 +47,11 @@ REPORT_SCHEMA = "cloud-check-report/1"
 REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp", "stampFile",
                  "repoStamp", "confirmation")
 DIGEST_FIELD = "digest"
-FAILED_CHECK_SCHEMA = "cloud-check-failed/1"
-FAILED_CHECK_SUFFIX = ".failed-check.json"
+# The failed-check marker's reader lives in cloud_setup; these names stay importable from here.
+FAILED_CHECK_SCHEMA = cloud_setup.FAILED_CHECK_SCHEMA
+FAILED_CHECK_SUFFIX = cloud_setup.FAILED_CHECK_SUFFIX
+failed_check_path = cloud_setup.failed_check_path
+read_failed_check = cloud_setup.read_failed_check
 
 _NONCE_RE = re.compile(r"[A-Za-z0-9]{8,64}")
 
@@ -457,30 +460,6 @@ def _parse_stamp(stamp):
     return datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
 
 
-def failed_check_path(cwd, account, root=None):
-    """Where the failed-check marker for ``account`` lives: the setup record's path, beside it."""
-    return cloud_setup.record_path(cwd, account, root)[:-len(".json")] + FAILED_CHECK_SUFFIX
-
-
-def read_failed_check(cwd, account, root=None):
-    """The failed-check marker for ``account``: None when there is none, the marker when it reads,
-    else the damaged shape. Never raises."""
-    damaged = {"schema": FAILED_CHECK_SCHEMA, "failedAt": None, "failedParts": [],
-               "environment": None, "damaged": True}
-    try:
-        path = failed_check_path(cwd, account, root)
-        if not os.path.lexists(path):
-            return None
-        with open(path, encoding="utf-8") as fh:
-            got = json.load(fh)
-        # axis: a marker that exists but cannot be read is present and damaged, never absent
-        if isinstance(got, dict) and got.get("schema") == FAILED_CHECK_SCHEMA:
-            return got
-    except Exception:
-        pass
-    return damaged
-
-
 def _write_failed_check(cwd, account, root, environment, failed_parts, now):
     """True only when the marker was written. A lock not acquired or an OSError is False."""
     try:
@@ -702,7 +681,8 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
                         detail=built.get("reason"))
     import launcher
     child_env = launcher.ll.scrub_env(env)
-    spawn = spawn_fn or launcher._default_cloud_spawn
+    launcher.pin_effort(child_env, cell["effort"])
+    spawn = spawn_fn or launcher.default_cloud_spawn
     try:
         log_path = os.path.join(tempfile.mkdtemp(prefix="cloud-check-"), "launch.log")
         spawned = spawn(built["argv"], _repo_root(cwd, child_env), log_path, child_env, timeout)
@@ -710,8 +690,8 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
         return _refusal("check-session-not-started", _NOT_STARTED)
     output = spawned.get("output") if isinstance(spawned, dict) else None
     # axis: a session is reported started only on a receipt for this launch's own session name
-    got = launcher._read_cloud_receipt(
-        launcher._strip_terminal_sequences(output if isinstance(output, str) else ""), name)
+    got = launcher.read_cloud_receipt(
+        launcher.strip_terminal_sequences(output if isinstance(output, str) else ""), name)
     if got is None:
         return _refusal("check-session-unconfirmed", _UNCONFIRMED.format(name=name),
                         sessionName=name)

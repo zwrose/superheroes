@@ -308,6 +308,7 @@ def test_sign_in_refuses_the_main_sign_in_as_the_separate_one(tmp_path):
 
 
 def test_sign_in_command_quotes_the_home_literally(tmp_path):
+    # axis: the printed sign-in command carries the home literally (run.stdout) and creates it (is_dir) — see bite-proof record c8a_wo1.md
     import shlex
     import subprocess
     tricky = tmp_path / "rev$UNSET_X home"
@@ -323,6 +324,7 @@ def test_sign_in_command_quotes_the_home_literally(tmp_path):
 
 
 def test_setup_message_names_the_sign_ins_real_expiry_when_readable(tmp_path, composing):
+    # axis: the setup message names the expiry read from the sign-in's own token, never a guessed one — see bite-proof record c8a_wo1.md
     import base64
     w = _build(tmp_path)
     exp = int(datetime(2026, 10, 12, tzinfo=timezone.utc).timestamp())
@@ -588,6 +590,19 @@ def test_judge_edge7_an_unreadable_account_fails_on_record(tmp_path):
     assert calls == [] and _record_state(local) == "none"
 
 
+def test_judge_resolves_the_launching_account_itself_when_none_is_given(tmp_path):
+    # axis: a judgment given no account reads the launching account itself and records against it — see bite-proof record c8a_wo1.md
+    local, cloud = _pair(tmp_path)
+    config = local.env["CLAUDE_CONFIG_DIR"]
+    os.makedirs(config, exist_ok=True)
+    with open(os.path.join(config, ".claude.json"), "w", encoding="utf-8") as fh:
+        json.dump({"oauthAccount": {"accountUuid": ACCOUNT}}, fh)
+    result = CC.judge(local.cwd, CC.report_line(_ok_report(cloud)), environment=ENV_ID,
+                      nonce=NONCE, root=local.root, env=local.env, now=NOW, project_name="demo")
+    assert result["action"] == "passed"
+    assert _record_state(local) == "ready"
+
+
 def test_judge_edge8_a_refused_or_raising_record_write_fails_on_record(tmp_path):
     local, cloud = _pair(tmp_path)
 
@@ -676,6 +691,7 @@ def test_judge_edge9_a_refused_or_raising_switch_off_adds_the_setting_part(tmp_p
 
 
 def test_judge_edge9_an_unread_report_with_a_refused_or_raising_switch_off_says_so(tmp_path):
+    # axis: an unread report whose switch-off did not happen says the builds are still on — see bite-proof record c8a_wo1.md
     local, cloud = _pair(tmp_path)
     _turn_on(local)
 
@@ -1110,21 +1126,41 @@ def test_a_marker_that_cannot_be_removed_fails_the_check_after_the_record_write(
     assert os.path.exists(_marker_path(local))
 
 
-def test_a_record_write_that_fails_leaves_an_existing_marker_in_place(tmp_path):
+def _record_write_that_raises(*a, **k):
+    raise OSError("disk")
+
+
+@pytest.mark.parametrize("record_fn", [
+    _record_write_that_raises,
+    lambda *a, **k: {"action": "refused"},
+    lambda *a, **k: None,
+], ids=["raises", "refused", "none"])
+def test_a_record_write_that_fails_leaves_an_existing_marker_in_place(
+        tmp_path, monkeypatch, record_fn):
+    # axis: the marker is cleared only after a record write that reported written — see bite-proof record c8a_wo1.md
     local, cloud = _pair(tmp_path)
     assert _judge(local, _cloud_report(cloud, pluginVersion="0.0.1"))["action"] == "failed"
     before = open(_marker_path(local)).read()
     seen = []
+    removals = []
+    real_remove = CC._remove_failed_check
 
-    def raising(*a, **k):
+    def spying_remove(*a, **k):
+        removals.append(a)
+        return real_remove(*a, **k)
+
+    monkeypatch.setattr(CC, "_remove_failed_check", spying_remove)
+
+    def recording(*a, **k):
         # detector: a marker cleared before the record writer is called goes red here
         seen.append(os.path.exists(_marker_path(local)) and open(_marker_path(local)).read() == before)
-        raise OSError("disk")
+        return record_fn(*a, **k)
 
-    result = _judge(local, _ok_report(cloud), now=LATER, record_fn=raising)
+    result = _judge(local, _ok_report(cloud), now=LATER, record_fn=recording)
     # detector: a failed record write that clears the failure marker goes red here
     assert seen == [True]
     assert result["action"] == "failed" and "record" in result["failedParts"]
+    assert removals == []
     assert os.path.exists(_marker_path(local)) and before
 
 
@@ -1370,6 +1406,32 @@ def test_start_scrubs_inherited_git_variables_from_the_child_and_the_root(tmp_pa
     # detector: a start that hands inherited GIT_* variables to the child or the root lookup goes red
     assert "GIT_WORK_TREE" not in call["env"] and "GIT_DIR" not in call["env"]
     assert os.path.realpath(call["cwd"]) == os.path.realpath(local.cwd)
+
+
+def test_start_pins_the_cells_effort_over_an_inherited_effort_variable(tmp_path):
+    # axis: the check session's environment carries the cell's effort, since an inherited variable outranks the flag — see bite-proof record c8a_wo1.md
+    local, _ = _pair(tmp_path)
+    spawner = Spawner()
+    env = dict(local.env, CLAUDE_CODE_EFFORT_LEVEL="low", CLAUDE_EFFORT="low")
+    assert _start(local, spawner, env=env)["action"] == "started"
+    cell = model_registry.resolve_dispatch("mechanical", "claude", None)
+    child_env = spawner.calls[0]["env"]
+    assert child_env["CLAUDE_CODE_EFFORT_LEVEL"] == cell["effort"] != "low"
+    assert "CLAUDE_EFFORT" not in child_env
+
+
+def test_start_with_no_resolved_effort_leaves_the_environment_untouched(tmp_path, monkeypatch):
+    # The registry's mechanical claude cell carries an effort today, so the cell is stubbed here.
+    local, _ = _pair(tmp_path)
+    real = model_registry.resolve_dispatch
+    monkeypatch.setattr(model_registry, "resolve_dispatch",
+                        lambda *a, **k: dict(real(*a, **k), effort=None))
+    spawner = Spawner()
+    env = dict(local.env, CLAUDE_CODE_EFFORT_LEVEL="low", CLAUDE_EFFORT="low")
+    assert _start(local, spawner, env=env)["action"] == "started"
+    child_env = spawner.calls[0]["env"]
+    assert child_env["CLAUDE_CODE_EFFORT_LEVEL"] == "low" and child_env["CLAUDE_EFFORT"] == "low"
+    assert "--effort" not in spawner.calls[0]["argv"]
 
 
 def test_start_names_the_environment_in_the_launch(tmp_path):

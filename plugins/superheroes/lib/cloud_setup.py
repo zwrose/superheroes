@@ -42,6 +42,9 @@ REASON_WRITE_FAILED = "write-failed"
 REASON_ENVIRONMENT_MISMATCH = "environment-mismatch"
 REASON_CHECK_FAILED = "cloud-check-failed"
 
+FAILED_CHECK_SCHEMA = "cloud-check-failed/1"
+FAILED_CHECK_SUFFIX = ".failed-check.json"
+
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:-]*$")
 _VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 _STAMP_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -250,6 +253,30 @@ def read(cwd, account, root=None):
         "ready": state == "ready",
         "record": record,
     }
+
+
+def failed_check_path(cwd, account, root=None):
+    """Where the failed-check marker for ``account`` lives: the setup record's path, beside it."""
+    return record_path(cwd, account, root)[:-len(".json")] + FAILED_CHECK_SUFFIX
+
+
+def read_failed_check(cwd, account, root=None):
+    """The failed-check marker for ``account``: None when there is none, the marker when it reads,
+    else the damaged shape. Never raises."""
+    damaged = {"schema": FAILED_CHECK_SCHEMA, "failedAt": None, "failedParts": [],
+               "environment": None, "damaged": True}
+    try:
+        path = failed_check_path(cwd, account, root)
+        if not os.path.lexists(path):
+            return None
+        with open(path, encoding="utf-8") as fh:
+            got = json.load(fh)
+        # axis: a marker that exists but cannot be read is present and damaged, never absent
+        if isinstance(got, dict) and got.get("schema") == FAILED_CHECK_SCHEMA:
+            return got
+    except Exception:
+        pass
+    return damaged
 
 
 def _write(cwd, account, root, build):

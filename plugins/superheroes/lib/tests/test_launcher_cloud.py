@@ -966,7 +966,7 @@ def test_default_spawn_captures_the_measured_output_and_the_child_is_gone(
     ))
     log_path = str(tmp_path / "out.log")
     descriptors = _open_descriptors()
-    result = L._default_cloud_spawn(
+    result = L.default_cloud_spawn(
         [sys.executable, script], str(tmp_path), log_path, dict(os.environ), 30,
     )
     assert result["rc"] == 0
@@ -1027,7 +1027,7 @@ def test_default_spawn_kills_its_own_child_on_timeout(tmp_path, terminal):
     descriptors = _open_descriptors()
     result = None
     try:
-        result = L._default_cloud_spawn(
+        result = L.default_cloud_spawn(
             [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
             dict(os.environ), 1,
         )
@@ -1051,7 +1051,7 @@ def test_default_spawn_ends_a_child_left_behind_by_an_exited_command(tmp_path, t
     child_pid = None
     try:
         started = time.monotonic()
-        result = L._default_cloud_spawn(
+        result = L.default_cloud_spawn(
             [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
             dict(os.environ), 30,
         )
@@ -1072,7 +1072,7 @@ def test_default_spawn_ends_the_whole_group_on_timeout(tmp_path, terminal):
     result = None
     child_pid = None
     try:
-        result = L._default_cloud_spawn(
+        result = L.default_cloud_spawn(
             [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
             dict(os.environ), 2,
         )
@@ -1105,7 +1105,7 @@ def test_default_spawn_ends_the_group_when_the_read_raises(tmp_path, terminal, m
     monkeypatch.setattr(L, "select", types.SimpleNamespace(select=read_fails))
     pids = []
     try:
-        result = L._default_cloud_spawn(
+        result = L.default_cloud_spawn(
             [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"),
             dict(os.environ), 30,
         )
@@ -1128,7 +1128,7 @@ def test_default_spawn_reports_a_failed_group_signal_instead_of_raising(
         raise OSError(5, "the group signal failed")
 
     monkeypatch.setattr(os, "killpg", signal_fails)
-    result = L._default_cloud_spawn(
+    result = L.default_cloud_spawn(
         [sys.executable, script], str(tmp_path), str(tmp_path / "out.log"), dict(os.environ), 30,
     )
     assert result["readError"] == "OSError"
@@ -1170,7 +1170,7 @@ def test_default_spawn_raises_oserror_for_a_missing_command_and_closes_descripto
 ):
     descriptors = _open_descriptors()
     with pytest.raises(OSError):
-        L._default_cloud_spawn(
+        L.default_cloud_spawn(
             [str(tmp_path / "no-such-command")], str(tmp_path), str(tmp_path / "out.log"),
             dict(os.environ), 5,
         )
@@ -1339,7 +1339,7 @@ def test_a_real_captured_receipt_is_read(tmp_path):
 
 def test_the_stripper_removes_every_sequence_in_the_real_capture():
     # axis: no escape byte survives stripping
-    stripped = L._strip_terminal_sequences(
+    stripped = L.strip_terminal_sequences(
         REAL_CAPTURE % {"name": "issue-656-abc", "id": SESSION_ID}
     )
     assert "\x1b" not in stripped
@@ -1567,7 +1567,7 @@ def _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, signum):
     log = tmp_path / "signalled.stdout"
     before = _signal.getsignal(signum)
     sent = _signal_after_hello_is_read(monkeypatch, signum)
-    result = L._default_cloud_spawn(
+    result = L.default_cloud_spawn(
         ["sh", "-c", "echo hello; sleep 30"], str(tmp_path), str(log), dict(_os.environ), 20,
     )
     assert sent
@@ -1595,6 +1595,41 @@ def test_a_sigint_to_the_launcher_ends_the_command_group_and_keeps_the_output(
     _assert_a_launcher_signal_ends_the_group(tmp_path, monkeypatch, _signal.SIGINT)
 
 
+def test_a_sigterm_keeps_the_bytes_the_child_wrote_after_the_read_that_saw_the_signal(
+    tmp_path, monkeypatch, terminal,
+):
+    # axis: bytes still buffered in the pty master when the signal lands are drained before the
+    # raise, not lost — see bite-proof record c8a_wo1.md
+    import os as _os
+    import signal as _signal
+
+    gate = tmp_path / "go"
+    real_read = _os.read
+    sent = []
+
+    def read_then_signal_then_open_the_gate(fd, length):
+        data = real_read(fd, length)
+        if not sent and b"head" in data:
+            sent.append(fd)
+            _os.kill(_os.getpid(), _signal.SIGTERM)
+            # The child writes `tail` only once this file exists, which is after the signal is
+            # recorded, so the line can never have been read ahead of the cancellation.
+            gate.write_text("go")
+        return data
+
+    monkeypatch.setattr(L.os, "read", read_then_signal_then_open_the_gate)
+    script = f"echo head; while [ ! -e {gate} ]; do sleep 0.01; done; echo tail; sleep 30"
+    result = L.default_cloud_spawn(
+        ["sh", "-c", script], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 20,
+    )
+    assert sent
+    assert result["readError"] == "_LauncherTerminated"
+    assert "head" in result["output"]
+    assert "tail" in result["output"]
+    assert "tail" in (tmp_path / "t.stdout").read_text()
+    assert result["rc"] is not None
+
+
 def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(
     tmp_path, monkeypatch, terminal,
 ):
@@ -1613,7 +1648,7 @@ def test_a_sigterm_landing_as_the_child_starts_still_ends_its_group(
 
     monkeypatch.setattr(L.subprocess, "Popen", popen_then_sigterm)
     before = _signal.getsignal(_signal.SIGTERM)
-    result = L._default_cloud_spawn(
+    result = L.default_cloud_spawn(
         ["sh", "-c", "sleep 30"], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 20,
     )
     assert result["readError"] == "_LauncherTerminated"
@@ -1641,7 +1676,7 @@ def test_a_sigterm_landing_during_the_cleanup_does_not_cut_the_group_kill_short(
 
     monkeypatch.setattr(L.os, "killpg", sigterm_then_killpg)
     before = _signal.getsignal(_signal.SIGTERM)
-    result = L._default_cloud_spawn(
+    result = L.default_cloud_spawn(
         ["sh", "-c", "sleep 30"], str(tmp_path), str(tmp_path / "t.stdout"), dict(_os.environ), 1,
     )
     monkeypatch.undo()
