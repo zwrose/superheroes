@@ -2240,6 +2240,7 @@ def _record_panel_with_verifier_cluster(session_dir, file="f.py", line=1):
         "severity": "Important",
         "title": "issue",
         "dimension": "Code",
+        "consequence": "a reviewer-found defect stays in the change",
     }
     for seat in RD.DIMENSIONS:
         payload = {"findings": [finding] if seat == "code-reviewer" else []}

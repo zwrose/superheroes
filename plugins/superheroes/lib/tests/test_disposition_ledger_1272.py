@@ -39,7 +39,8 @@ def _ledger_by_key(state):
 
 def test_L1_stage_findings_seeds_ledger_and_owner_marker():
     state = RD.new_state(_cfg())
-    finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     RD._stage_findings(state, compiled)
     assert state["dispositionLedgerOwner"] == "ledger"
@@ -54,7 +55,8 @@ def test_L1_stage_findings_seeds_ledger_and_owner_marker():
 # --- L2 ------------------------------------------------------------------------------
 
 def test_L2_verifier_refuted_never_live_ledger_refuted():
-    finding = {"file": "r.py", "line": 3, "title": "leak", "severity": "Important"}
+    finding = {"file": "r.py", "line": 3, "title": "leak", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._stage_findings(state, compiled)
@@ -71,7 +73,7 @@ def test_L2_verifier_refuted_never_live_ledger_refuted():
 
 def test_L2_author_justified_plausible_drop_refuted():
     finding = {"file": "aj.py", "line": 2, "title": "style", "severity": "Important",
-               "verdict": "PLAUSIBLE"}
+               "verdict": "PLAUSIBLE", "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._stage_findings(state, compiled)
@@ -88,7 +90,8 @@ def test_L2_author_justified_plausible_drop_refuted():
 
 
 def test_L2_restaged_finding_strips_prior_round_disposition():
-    finding = {"file": "r.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "r.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     key = SC.finding_identity_key(compiled[0])
@@ -105,7 +108,8 @@ def test_L2_restaged_finding_strips_prior_round_disposition():
 
 
 def test_L2_same_round_restage_keeps_disposition():
-    finding = {"file": "s.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "s.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -121,7 +125,8 @@ def test_L2_same_round_restage_keeps_disposition():
 
 def test_L2_stage_findings_strips_seat_supplied_disposition_family():
     finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important",
-               "disposition": "fixed", "dispositionReceipt": {"headSha": "z" * 40}}
+               "disposition": "fixed", "dispositionReceipt": {"headSha": "z" * 40},
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._stage_findings(state, compiled)
@@ -137,7 +142,8 @@ def test_L2_stage_findings_strips_seat_supplied_disposition_family():
 
 def test_L2_append_review_record_then_stage_strips_seat_supplied_disposition():
     finding = {"file": "x", "line": 1, "title": "t", "severity": "Minor",
-               "disposition": "refuted", "dispositionRound": 1, "refutedReason": "seat"}
+               "disposition": "refuted", "dispositionRound": 1, "refutedReason": "seat",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._append_review_record(state, 1, "baseline", {}, compiled)
@@ -159,7 +165,8 @@ def test_L2_backfill_last_record_wins_over_earlier_disposition(tmp_path):
            "dispositionRound": 1, "refutedReason": "stale"}
     later = {"file": "o", "line": 1, "title": "old", "severity": "Important",
              SC.FINDING_KEY_FIELD: key}
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -171,9 +178,9 @@ def test_L2_backfill_last_record_wins_over_earlier_disposition(tmp_path):
 
 def test_L2_synthesis_merge_records_member_into_representative(tmp_path):
     f1 = {"file": "m.py", "line": 1, "title": "root a", "severity": "Important",
-          "verdict": "CONFIRMED"}
+          "verdict": "CONFIRMED", "consequence": "a reviewer-found defect stays in the change"}
     f2 = {"file": "m.py", "line": 2, "title": "root b", "severity": "Minor",
-          "verdict": "CONFIRMED"}
+          "verdict": "CONFIRMED", "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([f1, f2], None)
     state = RD.new_state(_cfg())
     RD._stage_findings(state, compiled)
@@ -308,7 +315,8 @@ def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
 def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
     old = {"file": "o", "line": 1, "title": "old", "severity": "Important",
            SC.FINDING_KEY_FIELD: "o::old@L1"}
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -346,7 +354,8 @@ def test_C13_backfill_preserves_preexisting_ledger_disposition():
         SC.FINDING_KEY_FIELD: key, "disposition": "fixed",
         "dispositionRound": 1, "dispositionReceipt": {"headSha": "z" * 40},
     }
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -377,7 +386,8 @@ def test_C13_backfill_merges_record_severity_preserves_disposition_family(tmp_pa
         "file": "o", "line": 1, "title": "old", "severity": "Critical",
         SC.FINDING_KEY_FIELD: key,
     }
-    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -397,7 +407,8 @@ def test_C13_backfill_merges_record_severity_preserves_disposition_family(tmp_pa
 # --- L7 bite-proof: departure chokepoint ---------------------------------------------
 
 def test_L7_archive_departure_without_prior_staging():
-    finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}
+    finding = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     key = SC.finding_identity_key(compiled[0])
@@ -408,7 +419,8 @@ def test_L7_archive_departure_without_prior_staging():
 
 
 def test_L7_departure_outside_chokepoint_still_on_ledger(tmp_path):
-    finding = {"file": "d.py", "line": 1, "title": "live", "severity": "Important"}
+    finding = {"file": "d.py", "line": 1, "title": "live", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._stage_findings(state, compiled)
@@ -421,7 +433,8 @@ def test_L7_departure_outside_chokepoint_still_on_ledger(tmp_path):
 
 
 def test_L7_departure_preserves_raised_round_through_archive_and_record(tmp_path):
-    finding = {"file": "d.py", "line": 1, "title": "live", "severity": "Important"}
+    finding = {"file": "d.py", "line": 1, "title": "live", "severity": "Important",
+               "consequence": "a reviewer-found defect stays in the change"}
     compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
     RD._stage_findings(state, compiled)

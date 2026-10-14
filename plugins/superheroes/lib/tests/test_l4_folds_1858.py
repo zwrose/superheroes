@@ -99,7 +99,8 @@ def _scoped_run(monkeypatch, reported_vendor, edit_to="cursor"):
                 _flip_engine(monkeypatch, edit_to)
             return dict(findings=[], vendor=reported_vendor)
         if rnd == 1 and dim == "code-reviewer":
-            return dict(findings=[dict(title="bug", severity="Important", file="f.py", line=1)])
+            return dict(findings=[dict(title="bug", severity="Important", file="f.py", line=1,
+                                       consequence="a reviewer-found defect stays in the change")])
         return []
 
     def fix_step(batch, rnd, payload):

@@ -630,7 +630,8 @@ def test_raw_output_is_the_seats_payload_and_is_posted_not_withheld(tmp_path):
     put_envelope(session, "code-reviewer", {
         "vendor": "codex", "model": CODEX, "runnerNonce": "nonce-a",
         "executionEvidence": {"runnerNonce": "nonce-a", "observation": {"tokens": None, "wallSeconds": 1.0}},
-        "payload": {"findings": [{"title": "Unchecked index in parse", "severity": "Important"}]}})
+        "payload": {"findings": [{"title": "Unchecked index in parse", "severity": "Important",
+                                  "consequence": "a reviewer-found defect stays in the change"}]}})
     fake = Fake()
     out = send(tmp_path, session, fake)
     posted = raw_comments(fake)
