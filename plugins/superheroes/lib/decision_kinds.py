@@ -10,6 +10,7 @@ LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
 DECISION_KINDS = (
     "audit-echo-mismatch",
     "audit-provenance-fail",
+    "audit-unnamed-change",
     "author-justified-drop",
     "break-it-kept",
     "break-it-run",
@@ -27,6 +28,7 @@ DECISION_KINDS = (
     "judgment-skip",
     LANE_EXPANDED_RECOMPOSE,
     "not-discharged",
+    "out-of-scope-fix-spent",
     "panel-seat-missing",
     "receipt-missing-seat",
     "ruling-carried",
