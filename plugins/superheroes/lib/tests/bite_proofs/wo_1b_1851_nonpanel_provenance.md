@@ -849,3 +849,392 @@ FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_f1_n
 ```
 
 ---
+
+# WO-F3b (#1851, review C5 L4) — bite-proof for the per-seat verdict binding (B1-B6)
+
+**Provenance:** claude / sonnet-5.5 (implementer), `plugins/superheroes/lib/round_adapters.py` (`_assemble_verifiers`) and `plugins/superheroes/lib/round_driver.py` (`_emit_orders_manifest`); detector file `plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py`. Added after P1-P10 and F1.
+
+Declared guarded-element set (from the order): B1-B6. Each was neutralized by one targeted edit in production code, its proving node run alone and red, the neutralization undone by the inverse edit, and the same node run green. The captures are the raw terminal output, read through `| tail -N` with N larger than every run's line count, so nothing was cut. Each capture is under the 32 KiB ceiling, so nothing overflowed to disk. Restore receipts are the restored lines quoted back from the file, plus sha256 of both production files before the first neutralization and after the last restore.
+
+Baseline and final sha256 (identical):
+```
+214c8d4efd4cbf5af91cf36e209bc867eb37e0d2b664b8bc3222f3c020c3553b  plugins/superheroes/lib/round_adapters.py
+ba3f59e32492095a61a5b6d4640e252ffcd57f3bb617d8282b1e358808c6bb1f  plugins/superheroes/lib/round_driver.py
+```
+
+## Disclosures
+
+- **Superseded entries: none.** The existing entries in this file (P2-P10, F1) guard the vendor-equality and eligibility axes; none of them guarded the deleted duplicate-id arbitration, and no other file under `bite_proofs/` mentions `_assemble_verifiers` or the arbitration tests (searched for `_assemble_verifiers`, `authenticated_seats_repeating`, `ambiguity rule`). Nothing is removed or marked superseded for that reason. The tests that did assert the arbitration were rewritten to the binding (see the build return), not deleted.
+- **B1 and B2 share one neutralization class** (keep every supplied verdict regardless of `ids`), applied once per entry so each has its own red and green. B1's element is the misrouted *other-vendor* seat (cursor, order named codex); B2's is the *same-vendor* unordered repeat. B1's fixture puts the ordered seat first, so B1 is deliberately green under B4's first-supplied neutralization and B4 is the node that goes red there.
+- **B5** is four parametrized cases (seat entries without `ids`, `ids` not a list, no manifest, empty manifest) under one neutralization; all four went red.
+- **B6** reads the emitted, anchor-verified verifier manifest through the advance path (`IT._drive_to_phase` to the verifier phase) and checks each seat's `ids` against its cluster's findings.
+- Not proven, listed as unguarded: the ordered seat's result missing or unauthenticated (the id then counts as not verified). It is held by `unverifiedClusters` and the unchanged per-seat vendor equality (P7, P3), not by a node added here. The gap sweep and scoped finder return findings, not verdict ids, so the binding has no code path there to prove.
+
+## B1 — `round_adapters._assemble_verifiers`: a misrouted eligible seat does not win an id ordered to another seat
+
+- **axis:** the verdict's seat must be the seat whose order assigned the id; an eligible vendor (cursor) that was not the ordered one (the order named codex) wins nothing it was not assigned, and the ordered codex seat's verdict for that id counts
+
+**neutralization** (`plugins/superheroes/lib/round_adapters.py`, keep every supplied verdict regardless of `ids`):
+```diff
+--- before (restored text)
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
++++ neutralized
+    kept = [(seat, verdict) for seat, skey, verdict in supplied]
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest "plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b1_a_misrouted_eligible_seat_does_not_win_an_id_ordered_to_another_seat" -q -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b1_a_misrouted_eligible_seat_does_not_win_an_id_ordered_to_another_seat _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-94/test_b1_a_misrouted_eligible_s0')
+
+    def test_b1_a_misrouted_eligible_seat_does_not_win_an_id_ordered_to_another_seat(tmp_path):
+        # axis (B1): the verdict's seat must be the seat whose order assigned the id — an eligible vendor
+        # (cursor) that was not the ordered one (the order named codex) wins nothing it was not assigned
+        state, seats, ids = _binding_fixture()
+        _emit(state, tmp_path, RD.P_VERIFIERS, "codex")
+        envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]),
+                _seat_env(seats[1], "cursor", [(ids[0], "CONFIRMED"), (ids[1], "CONFIRMED")])]
+        art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[1]]]))
+>       assert _kept(art) == [(ids[0], "REFUTED"), (ids[1], "CONFIRMED")]
+E       AssertionError: assert [('v0', 'REFU... 'CONFIRMED')] == [('v0', 'REFU... 'CONFIRMED')]
+E         
+E         At index 1 diff: ('v0', 'CONFIRMED') != ('v1', 'CONFIRMED')
+E         Left contains one more item: ('v1', 'CONFIRMED')
+E         Use -v to get more diff
+
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:588: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b1_a_misrouted_eligible_seat_does_not_win_an_id_ordered_to_another_seat
+1 failed in 1.24s
+```
+
+**restore:** inverse edit. Restored lines quoted back from the file (`round_adapters.py:528-529`):
+```
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
+```
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 1.55s
+```
+
+---
+
+## B2 — `round_adapters._assemble_verifiers`: a same-vendor repeat from an unordered seat is dropped and disclosed
+
+- **axis:** the repeat is judged by the seat that supplied it, not by its vendor; a second codex seat repeating an id it was not assigned is dropped and named in `unorderedVerdicts` (same neutralization class as B1)
+
+**neutralization** (`plugins/superheroes/lib/round_adapters.py`, as B1):
+```diff
+--- before (restored text)
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
++++ neutralized
+    kept = [(seat, verdict) for seat, skey, verdict in supplied]
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest "plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b2_a_same_vendor_repeat_from_an_unordered_seat_is_dropped_and_disclosed" -q -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b2_a_same_vendor_repeat_from_an_unordered_seat_is_dropped_and_disclosed _
+
+    def test_b2_a_same_vendor_repeat_from_an_unordered_seat_is_dropped_and_disclosed():
+        # axis (B2): the repeat is judged by the seat that supplied it, not by its vendor — a second
+        # codex seat (same vendor as the ordered one) repeating an id it was not assigned is dropped
+        state, seats, ids = _binding_fixture()
+        envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]),
+                _seat_env(seats[1], "codex", [(ids[0], "CONFIRMED"), (ids[1], "REFUTED")])]
+        art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[1]]]))
+>       assert _kept(art) == [(ids[0], "REFUTED"), (ids[1], "REFUTED")]
+E       AssertionError: assert [('v0', 'REFU...', 'REFUTED')] == [('v0', 'REFU...', 'REFUTED')]
+E         
+E         At index 1 diff: ('v0', 'CONFIRMED') != ('v1', 'REFUTED')
+E         Left contains one more item: ('v1', 'REFUTED')
+E         Use -v to get more diff
+
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:606: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b2_a_same_vendor_repeat_from_an_unordered_seat_is_dropped_and_disclosed
+1 failed in 1.24s
+```
+
+**restore:** inverse edit. Restored lines quoted back from the file (`round_adapters.py:528-529`):
+```
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
+```
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 1.18s
+```
+
+---
+
+## B3 — `round_adapters._assemble_verifiers`: a manifest that assigns an id to two seats keeps no verdict for it (E1)
+
+- **axis:** an id assigned to two seats is refused (not counted), never arbitrated; neither the first seat nor either copy wins, and the id stays unverified
+
+**neutralization** (`plugins/superheroes/lib/round_adapters.py`, skip the double-assignment check):
+```diff
+--- before (restored text)
+            if _owner(verdict) == skey and verdict["id"] not in double]
++++ neutralized
+            if _owner(verdict) == skey]
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest "plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b3_a_manifest_that_assigns_an_id_to_two_seats_keeps_no_verdict_for_it" -q -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_b3_a_manifest_that_assigns_an_id_to_two_seats_keeps_no_verdict_for_it __
+
+    def test_b3_a_manifest_that_assigns_an_id_to_two_seats_keeps_no_verdict_for_it():
+        # axis (B3, fail-closed edge E1): an id assigned to two seats is refused (not counted), never
+        # arbitrated — neither the first seat nor either copy wins; the id stays unverified
+        state, seats, ids = _binding_fixture()
+        envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]),
+                _seat_env(seats[1], "codex", [(ids[0], "CONFIRMED")])]
+        art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[0]]]))
+>       assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+E       AssertionError: assert ([{'id': 'v0',...e': 'read x'}] == []
+E         
+E         Left contains one more item: {'id': 'v0', 'verdict': 'REFUTED', 'reason': 'r', 'evidence': 'read x'}
+E         Use -v to get more diff)
+
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:620: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b3_a_manifest_that_assigns_an_id_to_two_seats_keeps_no_verdict_for_it
+1 failed in 1.17s
+```
+
+**restore:** inverse edit. Restored lines quoted back from the file (`round_adapters.py:528-529`):
+```
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
+```
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 1.11s
+```
+
+---
+
+## B4 — `round_adapters._assemble_verifiers`: copies of an id are credited only to its ordered seat, not the first supplier
+
+- **axis:** the round-1 case (a historical name; this is a `_assemble_verifiers` verdict-id case, not a gap-sweep code path): two seats return the same id and the first-supplying seat is not the ordered one; the id is credited only to the seat its order assigned
+
+**neutralization** (`plugins/superheroes/lib/round_adapters.py`, `owner_of_id` rebuilt from first-supplied instead of from `ids`; the lines were inserted between the `ids` loop and `def _owner`):
+```diff
+--- before (restored text)
+                double.add(vid)
+
+    def _owner(verdict):
++++ neutralized
+                double.add(vid)
+    owner_of_id = {}
+    for _seat, _skey, _verdict in supplied:
+        owner_of_id.setdefault(_verdict["id"], _skey)
+
+    def _owner(verdict):
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest "plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b4_copies_of_an_id_are_credited_only_to_its_ordered_seat_not_the_first_supplier" -q -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b4_copies_of_an_id_are_credited_only_to_its_ordered_seat_not_the_first_supplier _
+
+    def test_b4_copies_of_an_id_are_credited_only_to_its_ordered_seat_not_the_first_supplier():
+        # axis (B4): the round-1 case (a seat copying another seat's id into its own output, supplied
+        # first) — the id is credited by the seat the order assigned, never by who supplied it first
+        state, seats, ids = _binding_fixture()
+        envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED"), (ids[1], "CONFIRMED")]),
+                _seat_env(seats[1], "codex", [(ids[1], "REFUTED")])]
+        art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[1]]]))
+>       assert _kept(art) == [(ids[0], "REFUTED"), (ids[1], "REFUTED")]
+E       AssertionError: assert [('v0', 'REFU... 'CONFIRMED')] == [('v0', 'REFU...', 'REFUTED')]
+E         
+E         At index 1 diff: ('v1', 'CONFIRMED') != ('v1', 'REFUTED')
+E         Use -v to get more diff
+
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:633: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b4_copies_of_an_id_are_credited_only_to_its_ordered_seat_not_the_first_supplier
+1 failed in 1.22s
+```
+
+**restore:** inverse edit (the three inserted lines removed). Restored lines quoted back from the file (`round_adapters.py:523-527`):
+```
+            if isinstance(vid, str) and owner_of_id.setdefault(vid, skey) != skey:
+                double.add(vid)
+
+    def _owner(verdict):
+        return owner_of_id.get(verdict["id"]) if isinstance(verdict.get("id"), str) else None
+```
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 1.00s
+```
+
+---
+
+## B5 — `round_adapters._assemble_verifiers`: a manifest that assigns no `ids` keeps no verdict (E2)
+
+- **axis:** no `ids` (absent key, a non-list, no manifest, an empty manifest) assigns nothing, so nothing is kept; never "whoever supplied it"
+
+**neutralization** (`plugins/superheroes/lib/round_adapters.py`, fall back to keeping every verdict when no ids were assigned; two lines added after the `kept = ...` statement):
+```diff
+--- before (restored text)
+            if _owner(verdict) == skey and verdict["id"] not in double]
+    unordered = [dict(seat=seat, id=verdict.get("id"), orderedTo=_owner(verdict))
++++ neutralized
+            if _owner(verdict) == skey and verdict["id"] not in double]
+    if not owner_of_id:
+        kept = [(seat, verdict) for seat, skey, verdict in supplied]
+    unordered = [dict(seat=seat, id=verdict.get("id"), orderedTo=_owner(verdict))
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest "plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict" -q --tb=short -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[seat-entries-without-ids] _
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:653: in test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict
+    assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+E   AssertionError: assert ([{'id': 'v0',...e': 'read x'}] == []
+E     
+E     Left contains 2 more items, first extra item: {'id': 'v0', 'verdict': 'REFUTED', 'reason': 'r', 'evidence': 'read x'}
+E     Use -v to get more diff)
+___ test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[ids-not-a-list] ____
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:653: in test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict
+    assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+E   AssertionError: assert ([{'id': 'v0',...e': 'read x'}] == []
+E     
+E     Left contains 2 more items, first extra item: {'id': 'v0', 'verdict': 'REFUTED', 'reason': 'r', 'evidence': 'read x'}
+E     Use -v to get more diff)
+_____ test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[no-manifest] _____
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:653: in test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict
+    assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+E   AssertionError: assert ([{'id': 'v0',...e': 'read x'}] == []
+E     
+E     Left contains 2 more items, first extra item: {'id': 'v0', 'verdict': 'REFUTED', 'reason': 'r', 'evidence': 'read x'}
+E     Use -v to get more diff)
+___ test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[empty-manifest] ____
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:653: in test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict
+    assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+E   AssertionError: assert ([{'id': 'v0',...e': 'read x'}] == []
+E     
+E     Left contains 2 more items, first extra item: {'id': 'v0', 'verdict': 'REFUTED', 'reason': 'r', 'evidence': 'read x'}
+E     Use -v to get more diff)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[seat-entries-without-ids]
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[ids-not-a-list]
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[no-manifest]
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict[empty-manifest]
+4 failed in 1.28s
+```
+
+**restore:** inverse edit (the two added lines removed). Restored lines quoted back from the file (`round_adapters.py:528-532`):
+```
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
+    unordered = [dict(seat=seat, id=verdict.get("id"), orderedTo=_owner(verdict))
+                 for seat, skey, verdict in supplied if _owner(verdict) != skey]
+    if unordered:
+```
+
+**raw green** (exit 0):
+```
+....                                                                     [100%]
+4 passed in 1.21s
+```
+
+---
+
+## B6 — `round_driver._emit_orders_manifest`: the emission records each verifier seat's assigned `ids`
+
+- **axis:** the anchored verifier orders manifest carries `ids` per seat, equal to the finding ids of the cluster that seat was ordered; without it the binding has nothing to bind to
+
+**neutralization** (`plugins/superheroes/lib/round_driver.py`, drop the `ids` key):
+```diff
+--- before (restored text)
+            seats[skey]["ids"] = _cluster_finding_ids(pending, seat_key)
++++ neutralized
+            pass
+```
+
+**command:**
+```
+python3 -B -X pycache_prefix=/tmp/l4-pyc -m pytest "plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b6_the_emitted_verifier_manifest_records_each_seats_assigned_ids" -q --tb=short -p no:cacheprovider
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_b6_the_emitted_verifier_manifest_records_each_seats_assigned_ids _____
+/home/user/l4/plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py:674: in test_b6_the_emitted_verifier_manifest_records_each_seats_assigned_ids
+    assert assigned and manifest["seats"][RR.storage_key(seat, occurrence)].get("ids") == assigned
+E   AssertionError: assert (['v0'] and None == ['v0'])
+E    +  where None = <built-in method get of dict object at 0x7f908b30f5c0>('ids')
+E    +    where <built-in method get of dict object at 0x7f908b30f5c0> = {'channel': 'stdout', 'engine': None, 'envelopeStubPath': '/tmp/claude-0/pytest-of-root/pytest-104/test_b6_the_emitted...rds-ids/round-1/orders/dispatch-verifiers/verifier-src-f00-py-0-cc6e975994215308.a0.envelope.json', 'model': None, ...}.get
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_nonpanel_provenance_1851.py::test_b6_the_emitted_verifier_manifest_records_each_seats_assigned_ids
+1 failed in 1.90s
+```
+
+(pytest itself abbreviated the `where` line at `...`; that is its output, not a truncation here.)
+
+**restore:** inverse edit. Restored lines quoted back from the file (`round_driver.py:9225-9228`):
+```
+        if phase == P_VERIFIERS:
+            # The verdict ids this seat's order assigned: `_assemble_verifiers` counts a verdict only from
+            # the seat that was ordered it (the manifest is hashed into the emission anchor).
+            seats[skey]["ids"] = _cluster_finding_ids(pending, seat_key)
+```
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 1.92s
+```
+
+---

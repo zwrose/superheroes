@@ -453,10 +453,15 @@ def test_verdicts_are_ignored_when_the_anchored_manifest_is_tampered(tmp_path, m
     # tampered manifest (anchor intact) must not release that fallback
     state = _drive_with_preference_change(tmp_path, monkeypatch, "cursor", "pref-tampered",
                                           tamper="cursor")
-    row = _provenance(state)
-    assert row["outcome"] == "verdicts-ignored" and row["reason"] == "emission-manifest-unverifiable"
+    # Per-seat binding: the unverifiable manifest reaches the adapter as `{}`, which assigns no seat any
+    # id, so every verdict is dropped as unordered BEFORE the fold sees it (the fold's own
+    # `emission-manifest-unverifiable` row is therefore no longer reachable on this path; it stays
+    # asserted directly by `test_nonpanel_provenance_1851::test_mixed_manifest_verifier_verdicts_fold_as_silence`).
+    assert not state["rounds"]["1"].get("verifierProvenance")
     assert not state["rounds"]["1"]["verify"]["drops"]
     assert state["rounds"]["1"]["verify"]["unverified"]
+    unordered = state["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_VERIFIERS]["unorderedVerdicts"]
+    assert unordered and all(entry["orderedTo"] is None for entry in unordered), unordered
 
 
 def test_a_hand_artifact_cannot_supply_its_own_per_seat_provenance(tmp_path):

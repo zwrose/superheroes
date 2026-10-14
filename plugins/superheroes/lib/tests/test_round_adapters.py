@@ -294,7 +294,11 @@ def test_verifiers_assembles_verdicts_in_cluster_order(tmp_path):
                                       for i in c["ids"]]}, vendor="codex")
             for c in clusters]
         manifest = {RA.VERIFIER_SEAT_PREFIX + c["key"]: {"vendor": "codex"} for c in clusters}
-        return hand, envelopes, {"dispatch_manifest": manifest}
+        # A verdict counts only from the seat its order assigned: the driver's orders manifest
+        # carries each seat's `ids` (what `_emit_orders_manifest` records), so give it the same.
+        orders = {"seats": {RR.storage_key(RA.VERIFIER_SEAT_PREFIX + c["key"], 0): {"ids": list(c["ids"])}
+                            for c in clusters}}
+        return hand, envelopes, {"dispatch_manifest": manifest, "orders_manifest": orders}
 
     artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_VERIFIERS, build)
     assert artifact["verdicts"] == hand["verdicts"]

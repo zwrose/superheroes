@@ -375,7 +375,9 @@ def _wrapped_verifier_artifact(state, manifest_vendor="claude"):
     env = {"schema": RR.SEAT_RESULT_SCHEMA_V2, "seat": seat, "attempt": 0, "vendor": "claude", "model": "m",
            "payload": {"verdicts": [dict(v, evidence="read x") for v in _verdicts(state)]},
            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED, "payloadHashSource": "driver-computed"}
-    manifest = {"seats": {RR.storage_key(seat, 0): {"vendor": manifest_vendor, "channel": "file"}}}
+    # the seat's `ids` are what its emitted order assigned it: a verdict counts only from the ordered seat
+    manifest = {"seats": {RR.storage_key(seat, 0): {"vendor": manifest_vendor, "channel": "file",
+                                                    "ids": [v["id"] for v in _verdicts(state)]}}}
     art, why = RA.assemble(RD.P_VERIFIERS, [env], state, state["config"], orders_manifest=manifest)
     assert why is None, why
     return art
@@ -510,26 +512,163 @@ def test_mixed_manifest_hand_finder_claim_is_refused(tmp_path, phase, seat):
         assert fault is not None and "emission-manifest-mixed-vendors" in fault, fault
 
 
-def test_authenticated_seats_repeating_an_id_keep_both_verdicts_for_the_ambiguity_rule():
-    # axis: the adapter drops only unproven repeats; two codex seats that disagree stay ambiguous
+# --- per-seat verdict binding (WO-F3b): a verdict counts only from the seat its order assigned -----------
+# `_emit_orders_manifest` records each verifier seat's assigned finding ids as `ids` (hashed into the
+# emission anchor); `_assemble_verifiers` keeps a verdict only from the seat whose `ids` hold it.
+
+def _binding_fixture():
+    """A two-finding state, its two verifier seats and the two staged verdict ids (same order)."""
     state = _state()
     state["_toVerify"] = [{"file": "a.py", "line": 1, "title": "defect", "severity": "Important"},
                           {"file": "z.py", "line": 1, "title": "other", "severity": "Important"}]
     seats = RA.roster_for(RD.P_VERIFIERS, state, state["config"])[0]
-    assert len(seats) == 2
-    vid = V.stage_ids(state["_toVerify"])[0]["id"]
-    envs = []
-    for seat, verdict in zip(seats, ("REFUTED", "CONFIRMED")):
-        env = P17._finder_envelope(seat, source="codex")
-        env["payload"] = {"verdicts": [{"id": vid, "verdict": verdict, "reason": "r", "evidence": "read x"}]}
-        envs.append(env)
-    manifest = {"seats": {RR.storage_key(seat, 0): {"vendor": "codex", "channel": "stdout"} for seat in seats}}
+    ids = [s["id"] for s in V.stage_ids(state["_toVerify"])]
+    assert len(seats) == 2 and len(ids) == 2 and ids[0] != ids[1]
+    return state, seats, ids
+
+
+def _ids_manifest(seats, assigned, vendor="codex"):
+    """An anchored-style orders manifest: seat i was ordered the ids in `assigned[i]` (None: no `ids` key)."""
+    entries = {}
+    for seat, ids in zip(seats, assigned):
+        entries[RR.storage_key(seat, 0)] = {"vendor": vendor, "channel": "stdout"}
+        if ids is not None:
+            entries[RR.storage_key(seat, 0)]["ids"] = ids
+    return {"seats": entries}
+
+
+def _seat_env(seat, source, verdicts):
+    env = P17._finder_envelope(seat, source=source)
+    env["payload"] = {"verdicts": [{"id": vid, "verdict": verdict, "reason": "r", "evidence": "read x"}
+                                   for vid, verdict in verdicts]}
+    return env
+
+
+def _assemble_seats(state, envs, manifest):
     art, why = RA.assemble(RD.P_VERIFIERS, envs, state, state["config"], orders_manifest=manifest)
     assert why is None, why
-    assert [v["verdict"] for v in art["verdicts"]] == ["REFUTED", "CONFIRMED"]
+    return art
+
+
+def _kept(art):
+    return [(v["id"], v["verdict"]) for v in art["verdicts"]]
+
+
+def test_authenticated_seats_repeating_an_id_are_bound_to_the_ordered_seat():
+    # Rewritten from `test_authenticated_seats_repeating_an_id_keep_both_verdicts_for_the_ambiguity_rule`,
+    # which asserted the deleted duplicate arbitration (both authenticated copies kept, the fold left to
+    # call it ambiguous). Same input (two codex seats returning one id, disagreeing), now judged by the
+    # binding: the seat the order assigned the id wins it, the other copy is dropped and disclosed, and
+    # there is nothing left for the fold to call ambiguous; an id assigned to both is refused, not arbitrated.
+    # axis: a repeated id is resolved by the ordered seat, never by "both authenticated, so both kept"
+    state, seats, ids = _binding_fixture()
+    vid = ids[0]
+    envs = [_seat_env(seats[0], "codex", [(vid, "REFUTED")]), _seat_env(seats[1], "codex", [(vid, "CONFIRMED")])]
+    art = _assemble_seats(state, envs, _ids_manifest(seats, [[vid], [ids[1]]]))
+    assert _kept(art) == [(vid, "REFUTED")]
+    assert art["provenance"]["unorderedVerdicts"] == [
+        {"seat": seats[1], "id": vid, "orderedTo": RR.storage_key(seats[0], 0)}]
     applied = V.apply_verdicts(V.stage_ids(state["_toVerify"]), art["verdicts"])
-    assert applied["ambiguous"] == [vid] and not applied["drops"]
-    # control: an unproven (cursor) seat repeating the id is still dropped
-    envs[1]["executionEvidence"] = {"source": "cursor"}
-    art, _why = RA.assemble(RD.P_VERIFIERS, envs, state, state["config"], orders_manifest=manifest)
-    assert [v["verdict"] for v in art["verdicts"]] == ["REFUTED"]
+    assert [d["id"] for d in applied["drops"]] == [vid] and applied["ambiguous"] == []
+    # the same input against a manifest that assigned the id to both seats: refused, never arbitrated
+    art = _assemble_seats(state, envs, _ids_manifest(seats, [[vid], [vid]]))
+    assert art["verdicts"] == [] and art["provenance"]["doubleAssigned"] == [vid]
+    applied = V.apply_verdicts(V.stage_ids(state["_toVerify"]), art["verdicts"])
+    assert applied["ambiguous"] == [] and not applied["drops"] and len(applied["unverified"]) == 2
+
+
+def test_b1_a_misrouted_eligible_seat_does_not_win_an_id_ordered_to_another_seat(tmp_path):
+    # axis (B1): the verdict's seat must be the seat whose order assigned the id — an eligible vendor
+    # (cursor) that was not the ordered one (the order named codex) wins nothing it was not assigned
+    state, seats, ids = _binding_fixture()
+    _emit(state, tmp_path, RD.P_VERIFIERS, "codex")
+    envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]),
+            _seat_env(seats[1], "cursor", [(ids[0], "CONFIRMED"), (ids[1], "CONFIRMED")])]
+    art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[1]]]))
+    assert _kept(art) == [(ids[0], "REFUTED"), (ids[1], "CONFIRMED")]
+    assert art["verifierSeatVendors"] == {ids[0]: "codex", ids[1]: "cursor"}
+    assert art["provenance"]["unorderedVerdicts"] == [
+        {"seat": seats[1], "id": ids[0], "orderedTo": RR.storage_key(seats[0], 0)}]
+    # through the fold: the ordered codex seat's verdict clears its finding; the cursor seat's own id is
+    # ignored (cursor is not the vendor its order named)
+    RD._fold_verifiers(state, state["config"], art, session_dir=str(tmp_path))
+    verify = state["rounds"]["1"]["verify"]
+    assert [d["id"] for d in verify["drops"]] == [ids[0]] and len(verify["unverified"]) == 1
+
+
+def test_b2_a_same_vendor_repeat_from_an_unordered_seat_is_dropped_and_disclosed():
+    # axis (B2): the repeat is judged by the seat that supplied it, not by its vendor — a second
+    # codex seat (same vendor as the ordered one) repeating an id it was not assigned is dropped
+    state, seats, ids = _binding_fixture()
+    envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]),
+            _seat_env(seats[1], "codex", [(ids[0], "CONFIRMED"), (ids[1], "REFUTED")])]
+    art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[1]]]))
+    assert _kept(art) == [(ids[0], "REFUTED"), (ids[1], "REFUTED")]
+    assert art["provenance"]["unorderedVerdicts"] == [
+        {"seat": seats[1], "id": ids[0], "orderedTo": RR.storage_key(seats[0], 0)}]
+    applied = V.apply_verdicts(V.stage_ids(state["_toVerify"]), art["verdicts"])
+    assert sorted(d["id"] for d in applied["drops"]) == sorted(ids) and applied["ambiguous"] == []
+
+
+def test_b3_a_manifest_that_assigns_an_id_to_two_seats_keeps_no_verdict_for_it():
+    # axis (B3, fail-closed edge E1): an id assigned to two seats is refused (not counted), never
+    # arbitrated — neither the first seat nor either copy wins; the id stays unverified
+    state, seats, ids = _binding_fixture()
+    envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]),
+            _seat_env(seats[1], "codex", [(ids[0], "CONFIRMED")])]
+    art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[0]]]))
+    assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+    assert art["provenance"]["doubleAssigned"] == [ids[0]]
+    applied = V.apply_verdicts(V.stage_ids(state["_toVerify"]), art["verdicts"])
+    assert not applied["drops"] and applied["ambiguous"] == [] and len(applied["unverified"]) == 2
+
+
+def test_b4_copies_of_an_id_are_credited_only_to_its_ordered_seat_not_the_first_supplier():
+    # axis (B4): the round-1 case (a seat copying another seat's id into its own output, supplied
+    # first) — the id is credited by the seat the order assigned, never by who supplied it first
+    state, seats, ids = _binding_fixture()
+    envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED"), (ids[1], "CONFIRMED")]),
+            _seat_env(seats[1], "codex", [(ids[1], "REFUTED")])]
+    art = _assemble_seats(state, envs, _ids_manifest(seats, [[ids[0]], [ids[1]]]))
+    assert _kept(art) == [(ids[0], "REFUTED"), (ids[1], "REFUTED")]
+    assert art["provenance"]["unorderedVerdicts"] == [
+        {"seat": seats[0], "id": ids[1], "orderedTo": RR.storage_key(seats[1], 0)}]
+
+
+@pytest.mark.parametrize("manifest", [
+    pytest.param("no-ids-key", id="seat-entries-without-ids"),
+    pytest.param("ids-not-a-list", id="ids-not-a-list"),
+    pytest.param(None, id="no-manifest"),
+    pytest.param({}, id="empty-manifest"),
+])
+def test_b5_a_manifest_that_assigns_no_ids_keeps_no_verdict(manifest):
+    # axis (B5, fail-closed edge E2): no `ids` assigns nothing, so nothing is kept — never "whoever supplied it"
+    state, seats, ids = _binding_fixture()
+    if manifest == "no-ids-key":
+        manifest = _ids_manifest(seats, [None, None])
+    elif manifest == "ids-not-a-list":
+        manifest = _ids_manifest(seats, [ids[0], ids[1]])
+    envs = [_seat_env(seats[0], "codex", [(ids[0], "REFUTED")]), _seat_env(seats[1], "codex", [(ids[1], "REFUTED")])]
+    art = _assemble_seats(state, envs, manifest)
+    assert art["verdicts"] == [] and art["verifierSeatVendors"] == {}
+    assert [(u["id"], u["orderedTo"]) for u in art["provenance"]["unorderedVerdicts"]] == [
+        (ids[0], None), (ids[1], None)]
+    assert "doubleAssigned" not in art["provenance"]
+    applied = V.apply_verdicts(V.stage_ids(state["_toVerify"]), art["verdicts"])
+    assert not applied["drops"] and len(applied["unverified"]) == 2
+
+
+def test_b6_the_emitted_verifier_manifest_records_each_seats_assigned_ids(tmp_path):
+    # axis (B6): the emission records `ids` per verifier seat — the binding reads them from the anchored manifest
+    session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name="emit-records-ids")
+    IT._drive_to_phase(session_dir, gitdir, [IT._blocking_finding("unchecked index", 2)], head_path,
+                       RD.P_VERIFIERS)
+    state = IT._state(session_dir)
+    pend = state["pending"]
+    manifest = RD._anchored_orders_manifest(state, session_dir, pend["round"], pend["phase"], pend["attempt"])
+    assert manifest, "the verifier emission must verify against its anchor"
+    slots = IT._slots_of(RA.roster_for(RD.P_VERIFIERS, state, state["config"])[0])
+    assert slots
+    for seat, occurrence in slots:
+        assigned = [f["id"] for f in IT._cluster_for(pend, seat).get("findings") or []]
+        assert assigned and manifest["seats"][RR.storage_key(seat, occurrence)].get("ids") == assigned
