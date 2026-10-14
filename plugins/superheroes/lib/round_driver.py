@@ -1877,6 +1877,18 @@ def _lineage_map(state):
             if isinstance(k, str) and k and isinstance(v, str) and v}
 
 
+def _holds_out_of_scope_disposition(state, key):
+    """True when the live finding or the ledger entry for ``key`` holds an out-of-scope disposition."""
+    live = _live_finding_by_key(state, key)
+    if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
+        return True
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return False
+    stored = ledger_by_key.get(key)
+    return isinstance(stored, dict) and stored.get("disposition") == "out-of-scope"
+
+
 def _lineage_group(state, key):
     """Every key sharing ``key``'s lineage root (``key`` and the root included), sorted."""
     lineage = _lineage_map(state)
@@ -4174,6 +4186,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     fix_batch = [dict(f) for f in (state.get("_judgmentMechanical") or []) if isinstance(f, dict)]
     skipped = []
     disposition_log = []
+    reopened = []
     for i, f in enumerate(judgment):
         fid = row_ids[i]
         d = by_id.get(fid) if isinstance(by_id.get(fid), dict) else {}
@@ -4236,6 +4249,8 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
         # out-of-scope disposition is cleared here, as a later ``rule`` guidance clears one) and
         # earlier guidance (the effective-decision reader ranks this sequenced entry last).
         for member in _lineage_group(state, fid):
+            if member != fid and _holds_out_of_scope_disposition(state, member):
+                reopened.append(member)
             _clear_out_of_scope_disposition(state, member)
         fix_batch.append(g)
     if skipped:
@@ -4244,6 +4259,16 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     _record_round(state, "judgmentDispositions", disposition_log)
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
+    # A lineage member whose own skip the fix choice superseded is reopened: when it is a blocking
+    # finding this round it joins the fix batch rather than being left unfixed.
+    queued = {_fix_batch_row_key(r) for r in fix_batch}
+    for member in reopened:
+        live = _live_finding_by_key(state, member)
+        if (member not in queued and isinstance(live, dict)
+                and circuit_breaker.is_blocking(live.get("severity"))
+                and _live_out_of_scope_ruling_for_key(state, member) is None):
+            fix_batch.append(dict(live))
+            queued.add(member)
     if fix_batch:
         _queue_fix_batch(state, config, fix_batch)
         return
@@ -7375,6 +7400,15 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 restore = _live_finding_by_key(state, key) or candidate
                 if isinstance(restore, dict):
                     restored_rows.append(dict(restore))
+            # A lineage member whose own skip this guidance now supersedes reopens with it.
+            for member in _lineage_group(state, key):
+                if member == key or _live_out_of_scope_ruling_for_key(state, member) is not None:
+                    continue
+                if _holds_out_of_scope_disposition(state, member):
+                    _clear_out_of_scope_disposition(state, member)
+                    restore = _live_finding_by_key(state, member)
+                    if isinstance(restore, dict):
+                        restored_rows.append(dict(restore))
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)

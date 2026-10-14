@@ -591,3 +591,55 @@ def test_a_skip_never_reaches_another_finding_through_a_guidance_lineage(skipped
     RD._stage_findings(state, [other])
     assert L2E._ledger_by_key(state)[other_key].get("disposition") != "out-of-scope"
     assert RD._filter_excluded_discharged_fixes(state, [other]) == ([other], None)
+
+
+def test_a_fix_choice_reopens_a_skipped_lineage_member_into_the_fix_batch():
+    """axis: when a fix choice on one lineage member supersedes another member's own skip, that
+    member — blocking this round — joins the fix batch instead of being left unfixed."""
+    state = _mem_state(1)
+    key_a = _key("original")
+    _add_rule(state, key_a, "guidance", guidance="G1", rnd=1)
+    state["round"] = 2
+    reworded = _finding("reworded", tradeoff=True)
+    key_b = RD._finding_identity_key(reworded)
+    RD._stage_findings(state, [reworded])
+    assert state["findingLineage"] == {key_b: key_a}
+    _add_gate(state, 2, key_a, "skip", title="original", seq=RD._next_ruling_seq(state))
+    state["round"] = 3
+    original = _finding("original", tradeoff=True)
+    RD._stage_findings(state, [original, _finding("reworded", line=LINE)])
+    state["findings"] = [dict(original, disposition="out-of-scope"), dict(reworded)]
+    state["_judgmentFindings"] = [dict(reworded)]
+    state["_judgmentMechanical"] = []
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": key_b, "disposition": "fix-as-suggested"}]})
+    assert state["step"] == RD.P_FIXER
+    queued = {RD._fix_batch_row_key(r) for r in state["_fixBatch"] + state["_fixQueue"]}
+    assert queued == {key_a, key_b}
+    assert L2E._ledger_by_key(state)[key_a].get("disposition") != "out-of-scope"
+
+
+def test_a_rule_guidance_reopens_a_skipped_lineage_member(tmp_path):
+    """axis: a rule guidance on one lineage member that supersedes another member's own skip clears
+    that member's skip and restores it to the fixer queue."""
+    session_dir, _, _, row_a, row_b = RC._pending_fixer_two_findings(tmp_path)
+    key_a = RD._fix_batch_row_key(row_a)
+    key_b = RD._fix_batch_row_key(row_b)
+    state = RC._state(session_dir)
+    state["findingLineage"] = {key_b: key_a}
+    _add_gate(state, state["round"], key_b, "skip", title=row_b["title"], file=row_b["file"],
+              line=row_b["line"], seq=RD._next_ruling_seq(state))
+    RD._record_disposition(state, key_b, "out-of-scope", state["round"], outOfScopeReason="why")
+    state["_fixQueue"] = [r for r in state.get("_fixQueue") or []
+                          if RD._fix_batch_row_key(r) != key_b]
+    state["_fixBatch"] = [r for r in state.get("_fixBatch") or []
+                          if RD._fix_batch_row_key(r) != key_b]
+    RD.save_state(session_dir, state)
+    path = RC._write_ruling_file(tmp_path / "r.json", [
+        {"id": key_a, "ruling": "guidance", "reason": "keep it small", "guidance": "G2"}])
+    assert RC._rule(session_dir, path)["ok"]
+    state = RC._state(session_dir)
+    assert L2E._ledger_by_key(state)[key_b].get("disposition") != "out-of-scope"
+    queued = {RD._fix_batch_row_key(r) for r in (state.get("_fixBatch") or [])
+              + (state.get("_fixQueue") or [])}
+    assert key_b in queued
