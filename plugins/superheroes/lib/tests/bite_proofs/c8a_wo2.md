@@ -14,6 +14,7 @@
 | FU4-a | no launch label literal in `launcher.py` / `cloud_builder.py` | an `ast` scan of string constants outside docstrings finds none of the four label strings | `test_launch_lines.py::test_no_launch_label_literal_remains_in_the_two_modules[launcher.py]` | proven |
 | FU5-a | the lowercase 40-hex check on the cloud launch's base commit in `compose_launch` | any base that is not a full lowercase 40-hex sha is refused with `premise-base-commit-invalid` (missing or blank stays `premise-missing-field:baseCommit`) | `test_launch_lines.py::test_cloud_compose_refuses_a_base_commit_cloud_intake_would_refuse` | proven |
 | FU7-a | the `slice_wait = MAX_SYNC_WAIT` reset in `engine_dispatch.dispatch_review`'s slice loop | history time is charged to the first wait slice only; slices 1 and 2 get the full `MAX_SYNC_WAIT` | `test_dispatch_review_cloud_history.py::test_history_time_is_charged_to_the_first_wait_slice_only` | proven |
+| C6-f | the cloud refusal at the top of `store_sweep.sweep` | in a cloud session an orphan store directory survives a sweep byte-for-byte and the result names the refusal | `test_calibration_paths.py::test_sweep_removes_nothing_in_a_cloud_session` | proven |
 
 Neutralizations were applied and restored with a one-shot script doing an exact, unique-match string
 replace (and its inverse) over the manifest's `old`/`new` text, never `git checkout`/`restore`/`stash`.
@@ -884,8 +885,99 @@ EXIT=0
 
 ---
 
+## C6-f
+
+**guarded element:** the cloud refusal at the top of `store_sweep.sweep` (round 2). **axis:** in a cloud session an orphan store directory (`meta.json`, `registry.json`, `doc-policy.json`) survives `sweep` byte-for-byte, and the result carries `refused: "calibration-write-in-cloud-session"` with `deleted` empty.
+
+**file:** `plugins/superheroes/lib/store_sweep.py`. **node:** `plugins/superheroes/lib/tests/test_calibration_paths.py::test_sweep_removes_nothing_in_a_cloud_session`
+
+**neutralization:** the exact text (applied by an Edit, restored by the inverse Edit)
+```
+    if store_core.in_cloud_session():
+        return {"projectsRoot": base, "deleted": [], "kept": {REAL: 0, ORPHAN: 0, UNKNOWN: 0},
+                "includeUnknown": include_unknown, "errors": [], "refused": CLOUD_REFUSAL_REASON}
+    doomed = {ORPHAN} | ({UNKNOWN} if include_unknown else set())
+```
+became
+```
+    doomed = {ORPHAN} | ({UNKNOWN} if include_unknown else set())
+```
+
+**raw red** (the node alone, through the wrapper `scripts/pinned-python -B <scratchpad>/nosign_pytest.py <node> -q -p no:cacheprovider`; the pytest output is cut by pytest itself where it says "29 lines hidden" / "Full output truncated", not by me):
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_sweep_removes_nothing_in_a_cloud_session _________________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-61/test_sweep_removes_nothing_in_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f0ab82a7dd0>
+
+    def test_sweep_removes_nothing_in_a_cloud_session(tmp_path, monkeypatch):
+        # axis: store_sweep.sweep refuses to remove an orphan store (calibration files) in a cloud
+        # session — see bite-proof record c8a_wo2.md
+        import store_sweep as ss
+        root, key = _orphan_store(tmp_path)
+        before = _snapshot(tmp_path)
+        _cloud(monkeypatch)
+        out = ss.sweep(root=str(root), include_unknown=True)
+>       assert _snapshot(tmp_path) == before
+E       assert {'/tmp/claude...ojects': None} == {'/tmp/claude...y': None, ...}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Right contains 4 more items:
+E         {'/tmp/claude-0/pytest-of-root/pytest-61/test_sweep_removes_nothing_in_0/store/projects/orphan-key': None,
+E          '/tmp/claude-0/pytest-of-root/pytest-61/test_sweep_removes_nothing_in_0/store/projects/orphan-key/doc-policy.json': b'{}',
+E          '/tmp/claude-0/pytest-of-root/pytest-61/test_sweep_removes_nothing_in_0/store/projects/orphan-key/meta.json': b'{"sc'
+E                                                                                                                        b'hema'...
+E         
+E         ...Full output truncated (29 lines hidden), use '-vv' to show
+
+/home/user/c8a-wo2/plugins/superheroes/lib/tests/test_calibration_paths.py:416: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_paths.py::test_sweep_removes_nothing_in_a_cloud_session
+1 failed in 0.41s
+```
+
+**restore:** the inverse Edit (the 3-line block put back above `doomed = ...`).
+
+**restore receipt:** after the restore `plugins/superheroes/lib/store_sweep.py` reads again (L148-153, from `grep -n -B2 -A4 in_cloud_session`)
+```
+148-    base = os.path.realpath(projects_root(root))
+149:    if store_core.in_cloud_session():
+150-        return {"projectsRoot": base, "deleted": [], "kept": {REAL: 0, ORPHAN: 0, UNKNOWN: 0},
+151-                "includeUnknown": include_unknown, "errors": [], "refused": CLOUD_REFUSAL_REASON}
+152-    doomed = {ORPHAN} | ({UNKNOWN} if include_unknown else set())
+153-    deleted, kept, errors = [], {REAL: 0, ORPHAN: 0, UNKNOWN: 0}, []
+```
+
+**raw green:**
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 0.26s
+```
+
+---
+
+## Census (round 2): writers and movers that could target a calibration path
+
+Command: `grep -nE "os\.replace|os\.rename|shutil\.(move|copy|copy2|copyfile|copytree|rmtree)|os\.remove|os\.unlink" plugins/superheroes/lib/*.py`, run once in round 2 (after state). The before state is derived from `git diff HEAD~1 HEAD`, not a second grep: the only census-visible changes are the removal of `model_tier_overrides._write_text`'s `os.replace` (the bypass) and the new docstring mention at `mode_migrate.py:135`. Other hits are unchanged between before and after.
+
+Hits that can target a classified path, and how each is closed:
+- `store_core.py:486` (`atomic_write`'s `os.replace`): the guarded chokepoint itself.
+- `model_tier_overrides.py` (before: `_write_text`'s own `os.replace`): the bypass, now routed through `atomic_write` (C6-a).
+- `mode_migrate.py:299, 386` (`os.remove`, `shutil.move`) and `mode_migrate.py:118` (`_remove`): `rebind` and `recover` refuse first in a cloud session (C6-d); `execute` copies through `atomic_write` before any `_remove` of a source, so the first calibration copy raises before any removal. `execute` can leave its own journal (not a calibration file).
+- `core_md.py:463` (`relocate_file`'s `os.remove(src)`): its only caller is `mode_migrate._finish_flip`, reached through `recover` (refused).
+- `control_plane.py:77` (`migrate_store_root`'s `os.rename` of the whole legacy store root): its only non-test caller is `mode_migrate.recover`, which now refuses before the call (test `test_recover_with_no_journal_refuses_in_a_cloud_session_and_skips_the_store_root_rename`).
+- `store_sweep.py:161` (`shutil.rmtree` of an orphan `projects/<k>`): closed this round (C6-f).
+- Residual, not changed by order: `definition_doc.py:548` and `project_config.py`'s Canon creation write into the owner-chosen documents location; they match only if the owner sets that location to exactly `.claude/superheroes`.
+
+Hits that cannot target a classified path (their own state, lock, temp, session, cache or scratch paths; no calibration file name or layout in the file): `build_lane`, `cache_markers`, `cloud_builder.py:456` (`_write_json_atomic`, builder state), `cloud_check`, `cloud_setup`, `conformance_probe`, `control_plane.py:164` (`atomic_write`: its one caller is `ensure_store`, which writes `<root>/checkouts/<key>/meta.json`, a `checkouts` directory, not `projects`, so unclassified), `coverage_decisions`, `decisions`, `engine_authz`, `engine_dispatch`, `file_lock`, `grounding_stage`, `guardian_ledger`, `guardian_lens_duplication`, `guardian_store`, `heartbeat`, `liveness_cache`, `loop_plan_common`, `panel_tally`, `pilot_*`, `pr_comment`, `preflight_probe`, `review_loop_plan`, `review_memory`, `review_record`, `review_record_session`, `review_result`, `round_commit`, `round_driver`, `round_records` (session `meta.json` in a session directory), `sanitized_view`, `verify_gate`, `vet_slot`. Checked by a Grep for the calibration file names and the in-repo directory over those files: the only hits are the session-directory `meta.json` reads/writes and `control_plane.ensure_store` above.
+
 ## Notes
 
+- Round 2: the wrapper `scripts/pinned-python -B <scratchpad>/nosign_pytest.py` did not turn commit signing off inside this sandbox: seven tests that run `git commit` still fail with exit 128 and `connection refused` from the signer (see the return report).
 - FU7-a touched `engine_dispatch.py` for the neutralize-and-restore only; `git diff --stat` on it is empty after the restore.
 - C6-d's first red run (before the test asserted the trees first) failed on the returned status (`deferred` instead of the blocked refusal); the test was then reordered to assert the unchanged trees before the status, and the red above is from that final test.
 - C6-a's first red run was a `tail`-filtered capture; the red above is its unfiltered re-run.

@@ -28,8 +28,11 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import control_plane  # noqa: E402
+import store_core  # noqa: E402
 
 REAL, ORPHAN, UNKNOWN = "real", "orphan", "unknown"
+
+CLOUD_REFUSAL_REASON = "calibration-write-in-cloud-session"
 
 # Files every store mints or accretes regardless of use — never evidence of life.
 # Anything NOT named here counts as real content (fail-closed for future state files).
@@ -137,8 +140,15 @@ def report(root=None):
 def sweep(root=None, include_unknown=False):
     """Delete orphan-class stores (plus unknown-class only on the explicit opt-in).
     Each dir is re-classified immediately before deletion and must still be a direct
-    child of the projects root — real stores are never deleted, under any flag."""
+    child of the projects root — real stores are never deleted, under any flag.
+
+    In a cloud session (CLAUDE_CODE_REMOTE == "true") it removes nothing: a store directory holds
+    calibration files (meta.json, registry.json, doc-policy.json), so it returns the usual result
+    with `deleted` empty and a `refused` field naming the reason, before any listing or removal."""
     base = os.path.realpath(projects_root(root))
+    if store_core.in_cloud_session():
+        return {"projectsRoot": base, "deleted": [], "kept": {REAL: 0, ORPHAN: 0, UNKNOWN: 0},
+                "includeUnknown": include_unknown, "errors": [], "refused": CLOUD_REFUSAL_REASON}
     doomed = {ORPHAN} | ({UNKNOWN} if include_unknown else set())
     deleted, kept, errors = [], {REAL: 0, ORPHAN: 0, UNKNOWN: 0}, []
     for entry in report(root)["stores"]:

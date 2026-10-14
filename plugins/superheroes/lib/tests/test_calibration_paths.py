@@ -391,3 +391,39 @@ def test_mode_migrate_only_refuses_on_the_exact_string_true(tmp_path, monkeypatc
     _cloud(monkeypatch, value)
     assert mm.recover(str(tmp_path), root=str(tmp_path / "store")) == {"status": "noop"}
     assert mm.rebind(str(tmp_path), root=str(tmp_path / "store")) == {"status": "noop"}
+
+
+# ------------------------------------------------------------------ store_sweep (orphan removal)
+
+def _orphan_store(tmp_path):
+    root = tmp_path / "store"
+    key = root / "projects" / "orphan-key"
+    key.mkdir(parents=True)
+    (key / "meta.json").write_text(json.dumps({"schemaVersion": 1, "sourcePath": str(tmp_path / "gone")}))
+    (key / "registry.json").write_text("{}")
+    (key / "doc-policy.json").write_text("{}")
+    return root, key
+
+
+def test_sweep_removes_nothing_in_a_cloud_session(tmp_path, monkeypatch):
+    # axis: store_sweep.sweep refuses to remove an orphan store (calibration files) in a cloud
+    # session — see bite-proof record c8a_wo2.md
+    import store_sweep as ss
+    root, key = _orphan_store(tmp_path)
+    before = _snapshot(tmp_path)
+    _cloud(monkeypatch)
+    out = ss.sweep(root=str(root), include_unknown=True)
+    assert _snapshot(tmp_path) == before
+    assert out["deleted"] == [] and out["errors"] == []
+    assert out["refused"] == "calibration-write-in-cloud-session"
+    assert set(out) >= {"projectsRoot", "deleted", "kept", "includeUnknown", "errors"}
+
+
+def test_sweep_still_removes_an_orphan_store_outside_a_cloud_session(tmp_path, monkeypatch):
+    import store_sweep as ss
+    root, key = _orphan_store(tmp_path)
+    _cloud(monkeypatch, None)
+    out = ss.sweep(root=str(root))
+    assert out["deleted"] == [str(key)]
+    assert "refused" not in out
+    assert not key.exists()
