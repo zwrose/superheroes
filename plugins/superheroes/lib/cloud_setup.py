@@ -172,6 +172,16 @@ def _date_ok(value):
     return True
 
 
+def _lapses_ok(lapses, today):
+    # axis: the date's format is the record owner's rule, not a second copy
+    if not _date_ok(lapses):
+        return False
+    try:
+        return datetime.date.fromisoformat(lapses) >= today
+    except ValueError:
+        return False
+
+
 def _field_ok(field, value):
     if field == "schema":
         return value == SCHEMA
@@ -354,6 +364,11 @@ def confirm_pass(cwd, account, lapses, *, environment=None, root=None):
 
 
 _CHECK_AGAIN = "cloud builds stay off until a check passes. Run the setup check again."
+# The wording for a switch-off that failed, read by the check's own messages too (cloud_check).
+SWITCH_OFF_FIX = "switch them off in configure"
+STILL_ON_REPAIR = ("Cloud builds are still on: I could not switch them off. "
+                   + SWITCH_OFF_FIX[0].upper() + SWITCH_OFF_FIX[1:])
+_SETTING_UNREAD = "I could not read whether cloud builds are on. Run the setup check again."
 _RENEW = ("Run the pass command and paste the new pass into the environment. "
           "Sign the reviewer in again if the date does not move.")
 
@@ -374,6 +389,29 @@ def _lapse_line(days, lapses, next_pass_days, live):
     return None, "Cloud reviewer pass: %d days left, lapses %s. Nothing to do." % (days, when)
 
 
+def _cloud_builds_setting(cwd, root):
+    """The project's cloud-builds setting as it stands: True, False, or None when it cannot be read.
+    `read` collapses an unreadable setting to off, so the gardening line asks directly. Never raises."""
+    try:
+        import project_config
+
+        effective = project_config.get_item(
+            cwd, project_config.CLOUD_BUILDS_SLUG, root=root, persist_backfill=False)["effective"]
+    except Exception:
+        return None
+    return effective if isinstance(effective, bool) else None
+
+
+def _check_again(setting):
+    """(sentence, joins with "so") saying what the owner does next, true to the current setting."""
+    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed
+    if setting is False:
+        return _CHECK_AGAIN, True
+    if setting is True:
+        return STILL_ON_REPAIR + ", then run the setup check again.", False
+    return _SETTING_UNREAD, False
+
+
 def gardening_lines(cwd, next_pass_days, today=None, root=None):
     """The reviewer-pass line for the gardening pass, one per setup record in the project's store, so it
     is read for whichever Claude account the builders run on. No records, no lines. Each line is
@@ -381,9 +419,8 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
     directory = os.path.dirname(record_path(cwd, "x", root))
     # a failed-check marker sits beside its record and is not a record
     try:
-        import cloud_check  # lazy: cloud_check imports this module
         names = sorted(n for n in os.listdir(directory)
-                       if n.endswith(".json") and not n.endswith(cloud_check.FAILED_CHECK_SUFFIX))
+                       if n.endswith(".json") and not n.endswith(FAILED_CHECK_SUFFIX))
     except FileNotFoundError:
         return []
     except OSError:
@@ -397,30 +434,38 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
         account, record, repair = None, None, None
         try:
             with open(os.path.join(directory, name), encoding="utf-8") as fh:
-                account = json.load(fh)["account"]
+                found = json.load(fh)["account"]
+            # axis: an account read from a record file is validated before it builds a marker path
+            if not _id_ok(found):
+                raise ValueError("account")
+            account = found
             # axis: a failed or unreadable check marker makes the saved lapse date stale, as cloud_parked reads it
-            marker = cloud_check.read_failed_check(cwd, account, root)
+            marker = read_failed_check(cwd, account, root)
             if marker is not None:
-                parts = [p for p in (marker.get("failedParts") or []) if isinstance(p, str)]
-                if marker.get("damaged") or not parts or "reviewer" in parts:
+                again, joins_with_so = _check_again(_cloud_builds_setting(cwd, root))
+                failed_parts = marker.get("failedParts")
+                # axis: a marker whose failedParts is not a list of strings is damaged, never iterated as valid
+                well_formed = (isinstance(failed_parts, list)
+                               and all(isinstance(p, str) for p in failed_parts))
+                if marker.get("damaged") or not well_formed or not failed_parts or "reviewer" in failed_parts:
                     lines.append({"account": account, "mark": "Renew now", "line":
                                   "Cloud reviewer pass: the last reviewer check failed, so the pass must be renewed. "
-                                  + _RENEW + " " + _CHECK_AGAIN[0].upper() + _CHECK_AGAIN[1:]})
+                                  + _RENEW + " " + again[0].upper() + again[1:]})
                     continue
-                repair = ("Cloud reviewer pass: the last cloud check failed on %s, so %s"
-                          % (", ".join(parts), _CHECK_AGAIN))
+                repair = ("Cloud reviewer pass: the last cloud check failed on %s%s%s"
+                          % (", ".join(failed_parts), ", so " if joins_with_so else ". ", again))
             got = read(cwd, account, root)
             record = got["record"] if got["state"] == "ready" else None
         except Exception:
             record = None
         if record is None:
             # a non-reviewer check failure with no readable record keeps its repair line alone
-            lines.append({"account": account if isinstance(account, str) else None, "mark": None,
+            lines.append({"account": account, "mark": None,
                           "line": repair or "Cloud reviewer pass: the setup record could not be read."})
             continue
         lapses = datetime.date.fromisoformat(record["passLapses"])
         mark, line = _lapse_line((lapses - today).days, lapses, next_pass_days,
-                                 cloud_check._lapses_ok(record["passLapses"], today))
+                                 _lapses_ok(record["passLapses"], today))
         if repair is not None:
             # a non-reviewer check failure keeps the independent expiry warning beside its repair line
             mark, line = (None, repair) if mark is None else (mark, repair + " " + line)

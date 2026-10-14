@@ -477,7 +477,7 @@ def test_refusal_internal_error_on_read_exception(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
 
-    def raiser(repo_root, env=None):
+    def raiser(repo_root, env=None, create=True):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(ww.ll, "read", raiser)
@@ -761,7 +761,7 @@ def test_ledger_unreadable_refuses_at_timer_when_still_unreadable(tmp_path, monk
     calls = [0]
     clock = [0.0]
 
-    def flaky_read(repo_root, env=None):
+    def flaky_read(repo_root, env=None, create=True):
         calls[0] += 1
         if calls[0] >= 3:
             return {"state": "unreadable", "records": []}
@@ -804,7 +804,7 @@ def test_ledger_transient_unreadable_then_readable_emits_timer_degraded(
     real_read = ll.read
     calls = [0]
 
-    def flaky_read(repo_root, env=None):
+    def flaky_read(repo_root, env=None, create=True):
         calls[0] += 1
         if calls[0] == 2:
             return {"state": "unreadable", "records": []}
@@ -840,7 +840,7 @@ def test_first_interval_unreadable_refuses_immediately(tmp_path, monkeypatch):
     def fake_sleep(duration):
         clock[0] += duration
 
-    def unreadable_read(repo_root, env=None):
+    def unreadable_read(repo_root, env=None, create=True):
         return {"state": "unreadable", "records": []}
 
     monkeypatch.setattr(ww.ll, "read", unreadable_read)
@@ -880,7 +880,7 @@ def test_unrecognized_ledger_state_refuses_on_first_interval(tmp_path, monkeypat
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
 
-    def bogus_read(repo_root, env=None):
+    def bogus_read(repo_root, env=None, create=True):
         return {"state": "future-state", "records": []}
 
     monkeypatch.setattr(ww.ll, "read", bogus_read)
@@ -933,6 +933,41 @@ def test_loop_missing_ledger_at_arm_refuses_with_arms_and_ledger_path(
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
     assert result["arms"] == 1
     assert result["ledgerPath"] == expected_path
+
+
+def _absent_ledger_root(tmp_path, monkeypatch):
+    """A ledger root override naming a path that does not exist, and the repo."""
+    repo = _init_repo(tmp_path / "repo")
+    absent = tmp_path / "absent-ledger-root"
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(absent))
+    assert not absent.exists()
+    return repo, absent
+
+
+def test_watch_arm_on_an_absent_ledger_root_refuses_and_creates_no_directory(
+    tmp_path, monkeypatch,
+):
+    # axis: a read-only arm makes no ledger root or repo-id directory — see bite-proof record c8c_wo_a.md
+    repo, absent = _absent_ledger_root(tmp_path, monkeypatch)
+    expected_path = ll.ledger_path(repo, create=False)["path"]
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == expected_path
+    assert not absent.exists()
+
+
+def test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory(tmp_path, monkeypatch):
+    # axis: a read-only run makes no ledger root or repo-id directory — see bite-proof record c8c_wo_a.md
+    repo, absent = _absent_ledger_root(tmp_path, monkeypatch)
+    expected_path = ll.ledger_path(repo, create=False)["path"]
+    result = ww.run(repo, "batch-982", gh_run=_noop_gh_run)
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == expected_path
+    assert not absent.exists()
 
 
 def test_missing_ledger_mid_arm_degrades_next_firing(tmp_path, monkeypatch):
@@ -1034,7 +1069,7 @@ def test_observed_then_missing_refuses_at_deadline(tmp_path, monkeypatch):
     calls = [0]
     clock = [0.0]
 
-    def flaky_read(repo_root, env=None):
+    def flaky_read(repo_root, env=None, create=True):
         calls[0] += 1
         if calls[0] >= 2:
             return {"state": "missing", "records": []}
@@ -1067,7 +1102,7 @@ def test_deadline_blind_on_final_read_refuses_not_timer(tmp_path, monkeypatch):
     read_calls = [0]
     clock = [0.0]
 
-    def flaky_read(repo_root, env=None):
+    def flaky_read(repo_root, env=None, create=True):
         read_calls[0] += 1
         if read_calls[0] >= 2:
             return {"state": "unreadable", "records": []}
@@ -3328,7 +3363,7 @@ def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
     ledger_reads = [0]
     real_read = ww.ll.read
 
-    def counting_read(repo_root, env=None):
+    def counting_read(repo_root, env=None, create=True):
         ledger_reads[0] += 1
         return real_read(repo_root, env=env)
 
