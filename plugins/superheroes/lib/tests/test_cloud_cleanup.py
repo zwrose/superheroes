@@ -136,6 +136,12 @@ def _record(w, msg_id, outcome):
     return CC.record(w.repo, REPO, PR, msg_id, outcome, env=w.env, run=w.gh)
 
 
+def _sent(w, msg_id, outcome, launch_id=None):
+    """Reserve `msg_id` (a pending write), then settle it: a final outcome settles only a reserved message."""
+    assert CC.record(w.repo, REPO, PR, msg_id, "pending", launch_id=launch_id, env=w.env, run=w.gh)["ok"]
+    return CC.record(w.repo, REPO, PR, msg_id, outcome, launch_id=launch_id, env=w.env, run=w.gh)
+
+
 def _state_file(w):
     return os.path.join(os.path.dirname(ll.ledger_path(w.repo, w.env)["path"]), CC.STATE_NAME)
 
@@ -428,7 +434,7 @@ def test_an_older_pr_is_not_bound_to_a_lane_reserved_after_it_was_opened(w):
     got = _plan(w)
     assert got["ok"] and got["session"] == "session-one" and got["launchId"] == "l-1"
     assert got.get("session") != "session-two"
-    recorded = _record(w, "m-1", "delivered")
+    recorded = _sent(w, "m-1", "delivered")
     assert recorded["ok"] and recorded["request"]["session"] == "session-one"
 
 
@@ -464,12 +470,13 @@ def test_an_argument_that_is_not_a_repository_or_a_pull_request_is_refused(w):
 
 def test_a_delivered_request_gives_the_owner_the_boards_words_and_is_never_overwritten(w):
     _lane(w, "l-1", 101)
-    first = _record(w, "m-1", "delivered")
+    first = _sent(w, "m-1", "delivered")
     assert first["ok"] and first["ownerMessage"] == CC.OWNER_MESSAGE_MERGED % PR
     assert set(first["request"]) == set(CC._RECEIPT_KEYS)
     assert (first["request"]["session"], first["request"]["msgId"], first["request"]["outcome"]) == ("session-a", "m-1", "delivered")
-    second = _record(w, "m-2", "delivered")
+    second = _record(w, "m-1", "delivered")
     assert second["ok"] and second["already"] is True and second["request"]["msgId"] == "m-1"
+    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-unknown"}
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [r["msgId"] for r in json.load(fh)] == ["m-1"]
     assert _plan(w)["request"] == first["request"]
@@ -477,18 +484,18 @@ def test_a_delivered_request_gives_the_owner_the_boards_words_and_is_never_overw
 
 def test_an_uncertain_request_is_never_resent_on_its_own_and_has_no_owner_message(w):
     _lane(w, "l-1", 101)
-    got = _record(w, "m-1", "uncertain")
+    got = _sent(w, "m-1", "uncertain")
     assert got["ok"] and got["ownerMessage"] is None and got["request"]["outcome"] == "uncertain"
-    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-uncertain"}
+    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-unknown"}
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "uncertain")]
 
 
 def test_a_failed_request_may_be_overwritten_by_a_delivered_one(w):
     _lane(w, "l-1", 101)
-    got = _record(w, "m-1", "failed")
+    got = _sent(w, "m-1", "failed")
     assert got["ok"] and got["ownerMessage"] is None
-    done = _record(w, "m-2", "delivered")
+    done = _sent(w, "m-2", "delivered")
     assert done["ok"] and "already" not in done and done["request"]["msgId"] == "m-2" and done["ownerMessage"]
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-2", "delivered")]
@@ -497,7 +504,7 @@ def test_a_failed_request_may_be_overwritten_by_a_delivered_one(w):
 def test_a_closed_pr_gets_the_closed_owner_message(w):
     _lane(w, "l-1", 101)
     w.gh.pulls[PR] = _pull(merged=False, head_sha=w.head)
-    got = _record(w, "m-1", "delivered")
+    got = _sent(w, "m-1", "delivered")
     assert got["ownerMessage"] == CC.OWNER_MESSAGE_CLOSED % PR
 
 
@@ -523,6 +530,8 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
     base = ["--repo-root", w.repo, "--repo", REPO, "--pr", str(PR)]
     assert CC.main(["plan"] + base) == 0
     assert json.loads(capsys.readouterr().out)["archiveText"] == CC.ARCHIVE_TEXT_MERGED % PR
+    assert CC.main(["record"] + base + ["--msg-id", "m-1", "--outcome", "pending"]) == 0
+    capsys.readouterr()
     assert CC.main(["record"] + base + ["--msg-id", "m-1", "--outcome", "delivered"]) == 0
     assert json.loads(capsys.readouterr().out)["ownerMessage"]
     assert CC.main(["branch"] + base) == 0
@@ -536,7 +545,7 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
 
 def test_a_delivered_request_is_not_asked_for_again(w):
     _lane(w, "l-1", 101)
-    assert _record(w, "m-1", "delivered")["ok"]
+    assert _sent(w, "m-1", "delivered")["ok"]
     got = _plan(w)
     assert got["action"] == "cleanup" and got["archiveText"] is None and got["alreadyDelivered"] is True
 
@@ -546,7 +555,7 @@ def test_record_and_branch_keep_the_explicit_launch_selection(w):
     _lane(w, "l-1", 101, session="session-a")
     _lane(w, "l-2", 202, session="session-b")
     assert _record(w, "m-1", "delivered") == {"ok": False, "reason": "lane-ambiguous"}
-    got = CC.record(w.repo, REPO, PR, "m-1", "delivered", launch_id="l-2", env=w.env, run=w.gh)
+    got = _sent(w, "m-1", "delivered", launch_id="l-2")
     assert got["ok"] and got["request"]["session"] == "session-b"
     out = CC.branch(w.repo, REPO, PR, launch_id="l-2", env=w.env, run=w.gh)
     assert out.get("deleted") is True, out
@@ -563,7 +572,8 @@ def test_receipts_for_two_different_pull_requests_both_survive_in_the_state_file
     other = PR + 1
     w.gh.pulls[other] = _pull(head_sha=w.head)
     _lane(w, "l-1", 101)
-    assert CC.record(w.repo, REPO, PR, "m-1", "delivered", env=w.env, run=w.gh)["ok"]
+    assert _sent(w, "m-1", "delivered")["ok"]
+    assert CC.record(w.repo, REPO, other, "m-2", "pending", env=w.env, run=w.gh)["ok"]
     assert CC.record(w.repo, REPO, other, "m-2", "delivered", env=w.env, run=w.gh)["ok"]
     with open(_state_file(w), encoding="utf-8") as fh:
         saved = json.load(fh)
@@ -572,7 +582,7 @@ def test_receipts_for_two_different_pull_requests_both_survive_in_the_state_file
 
 def test_a_receipt_saved_under_a_differently_cased_repository_is_found_by_plan_and_record(w):
     _lane(w, "l-1", 101)
-    assert _record(w, "m-1", "delivered")["ok"]
+    assert _sent(w, "m-1", "delivered")["ok"]
     with open(_state_file(w), encoding="utf-8") as fh:
         saved = json.load(fh)
     saved[0]["repo"] = "Owner/Name"
@@ -580,12 +590,12 @@ def test_a_receipt_saved_under_a_differently_cased_repository_is_found_by_plan_a
         json.dump(saved, fh)
     got = _plan(w)
     assert got["archiveText"] is None and got["alreadyDelivered"] is True and got["request"]["repo"] == "Owner/Name"
-    again = _record(w, "m-2", "delivered")
+    again = _record(w, "m-1", "delivered")
     assert again["ok"] and again["already"] is True and again["request"]["msgId"] == "m-1"
     saved[0]["outcome"] = "uncertain"
     with open(_state_file(w), "w", encoding="utf-8") as fh:
         json.dump(saved, fh)
-    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-uncertain"}
+    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-unknown"}
 
 
 def test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up(w):
@@ -600,7 +610,7 @@ def test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up(w):
     assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
     got = _plan(w)
     assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
-    assert _record(w, "m-1", "delivered")["request"]["session"] == "session-two"
+    assert _sent(w, "m-1", "delivered")["request"]["session"] == "session-two"
 
 
 def test_a_successor_whose_premise_carries_only_the_adopted_branch_and_head_is_the_one_cleaned_up(w):
@@ -679,7 +689,7 @@ def test_a_pending_request_found_on_resume_is_never_replaced_by_another_message(
     _lane(w, "l-1", 101)
     assert _record(w, "m-1", "pending")["ok"]
     assert _record(w, "m-2", "pending") == {"ok": False, "reason": "request-in-progress"}
-    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-uncertain"}
+    assert _record(w, "m-2", "delivered") == {"ok": False, "reason": "request-unknown"}
     settled = _record(w, "m-1", "uncertain")
     assert settled["ok"] and settled["request"]["outcome"] == "uncertain"
     with open(_state_file(w), encoding="utf-8") as fh:
@@ -823,14 +833,14 @@ def test_a_pr_without_a_readable_close_time_is_unreadable(w):
 def test_a_delivered_receipt_for_an_earlier_closure_does_not_suppress_a_request_after_a_reopen(w):
     _lane(w, "l-1", 101, ts=_T1)
     w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at="2026-10-12T10:00:00Z")
-    first = _record(w, "m-1", "delivered")
+    first = _sent(w, "m-1", "delivered")
     assert first["ok"] and first["request"]["closedAt"] == "2026-10-12T10:00:00Z"
     assert _plan(w)["alreadyDelivered"] is True  # the current closure is still covered
     w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at="2026-10-13T10:00:00Z")
     again = _plan(w)
     assert again["ok"] and again["request"] == {"state": "none"} and again["archiveText"] is not None
     assert "alreadyDelivered" not in again
-    second = _record(w, "m-2", "delivered")
+    second = _sent(w, "m-2", "delivered")
     assert second["ok"] and "already" not in second and second["request"]["msgId"] == "m-2"
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["closedAt"]) for r in json.load(fh)] == [("m-2", "2026-10-13T10:00:00Z")]
@@ -838,10 +848,36 @@ def test_a_delivered_receipt_for_an_earlier_closure_does_not_suppress_a_request_
 
 def test_a_state_file_with_a_receipt_lacking_closed_at_is_unreadable(w):
     _lane(w, "l-1", 101, ts=_T1)
-    assert _record(w, "m-1", "delivered")["ok"]
+    assert _sent(w, "m-1", "delivered")["ok"]
     with open(_state_file(w), encoding="utf-8") as fh:
         saved = json.load(fh)
     del saved[0]["closedAt"]
     with open(_state_file(w), "w", encoding="utf-8") as fh:
         json.dump(saved, fh)
     assert _plan(w) == {"ok": False, "reason": "cleanup-state-unreadable"}
+
+
+def test_a_final_outcome_settles_the_receipt_that_reserved_its_message_under_the_original_closure(w):
+    _lane(w, "l-1", 101, ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at="2026-10-12T10:00:00Z")
+    assert _record(w, "m-old", "pending")["ok"]
+    w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at="2026-10-13T10:00:00Z")
+    settled = _record(w, "m-old", "delivered")
+    assert settled["ok"] and settled["request"]["closedAt"] == "2026-10-12T10:00:00Z"
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"], r["closedAt"]) for r in json.load(fh)] == [
+            ("m-old", "delivered", "2026-10-12T10:00:00Z")]
+    again = _plan(w)
+    assert again["ok"] and again["request"] == {"state": "none"} and again["archiveText"] is not None
+    assert "alreadyDelivered" not in again
+
+
+def test_a_final_outcome_for_an_unknown_message_is_refused_and_writes_nothing(w):
+    _lane(w, "l-1", 101)
+    for outcome in ("delivered", "uncertain", "failed"):
+        assert _record(w, "m-never", outcome) == {"ok": False, "reason": "request-unknown"}
+    assert not os.path.exists(_state_file(w))
+    assert _record(w, "m-1", "pending")["ok"]
+    assert _record(w, "m-other", "delivered") == {"ok": False, "reason": "request-unknown"}
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "pending")]

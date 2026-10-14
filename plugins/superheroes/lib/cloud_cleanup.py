@@ -335,7 +335,14 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     if receipts is None:
         return path
     texts = {"merged": OWNER_MESSAGE_MERGED, "closed": OWNER_MESSAGE_CLOSED}
-    old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"], got["closedAt"])), None)
+    # axis: a final outcome settles the receipt that reserved its msg id, whatever the PR's closure is now — a
+    # reopen and a second close must not carry an earlier closure's outcome onto the new one
+    if outcome == "pending":
+        old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"], got["closedAt"])), None)
+    else:
+        old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"]) and r["msgId"] == msg_id), None)
+        if old is None:
+            return _refusal("request-unknown")
     # axis: a pending write over a delivered receipt grants no reservation, so a caller holding a stale plan sends nothing
     if old is not None and old["outcome"] == "delivered" and outcome == "pending":
         return _refusal("request-delivered")
@@ -348,9 +355,12 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
         return _refusal("request-uncertain")
     receipt = {"repo": repo, "pr": number, "session": got["session"], "msgId": msg_id, "outcome": outcome,
                "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-               "closedAt": got["closedAt"]}
-    # a receipt of an earlier closure of this PR is superseded by the one for this closure
-    receipts[:] = [r for r in receipts if not _same_receipt(r, repo, number, got["session"])] + [receipt]
+               "closedAt": got["closedAt"] if old is None else old["closedAt"]}
+    if old is None:
+        # a receipt of an earlier closure of this PR is superseded by the one for this closure
+        receipts[:] = [r for r in receipts if not _same_receipt(r, repo, number, got["session"])] + [receipt]
+    else:
+        receipts[:] = [receipt if r is old else r for r in receipts]
     if not _save(path, receipts):
         return _refusal("cleanup-state-unwritable")
     # axis: the owner is told the builder was asked only once the request is confirmed delivered — see bite-proof record c8_cloud_cleanup
