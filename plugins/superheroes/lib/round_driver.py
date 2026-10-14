@@ -1890,9 +1890,9 @@ def _newest_content(row, live):
     if (isinstance(live_seq, int) and not isinstance(live_seq, bool)
             and isinstance(row_seq, int) and not isinstance(row_seq, bool) and row_seq > live_seq):
         kind_key = review_findings_schema.CONSEQUENCE_KIND_KEY
-        if (live.get(kind_key) == review_findings_schema.REAL
-                and row.get(kind_key) != review_findings_schema.REAL):
-            return live  # a newer code-quality report never replaces a real consequence
+        cq = review_findings_schema.CODE_QUALITY
+        if live.get(kind_key) != cq and row.get(kind_key) == cq:
+            return live  # a newer code-quality report never replaces a consequence the owner decides
         return row
     return live
 
