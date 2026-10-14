@@ -146,6 +146,31 @@ def test_e4_canon_does_not_decide(build):
     assert FO.canon_decides(build(), CANON_ID) is False
 
 
+def _conflicting_canon():
+    first = _entry(CANON_ID)
+    second = _entry(CANON_ID, words='owner\'s words: "no, stop"')
+    assert first != second and canon._entry_shape_ok(first) and canon._entry_shape_ok(second)
+    return canon.HEADER + first + "\n" + second + "\n"
+
+
+def test_e4_two_different_entries_sharing_an_id_decide_nothing():
+    # axis: the distinct-entry count in canon_decides; an id held by two different complete entries
+    # resolving as on record, when it must resolve for no reader
+    text = _conflicting_canon()
+    assert FO.canon_decides(text, CANON_ID) is False
+    assert FO.on_record({"kind": "canon", "ref": CANON_ID}, {"canonText": text}) == (
+        False, "the cited Canon entry is not on record")
+
+
+def test_e4_the_same_entry_twice_is_one_distinct_entry_and_still_decides():
+    # axis: the distinct-entry count in canon_decides; a byte-for-byte duplicate refused as a conflict
+    line = _entry(CANON_ID)
+    text = canon.HEADER + line + "\n" + line + "\n"
+    assert FO.canon_decides(text, CANON_ID) is True
+    assert FO.on_record({"kind": "canon", "ref": CANON_ID}, {"canonText": text}) == (
+        True, "canon %s" % CANON_ID)
+
+
 def test_e4_canon_incomplete_superseding_line_does_not_supersede():
     broken = _entry(OTHER_ID, supersedes=CANON_ID).rsplit(canon.SEP, 1)[0]
     assert FO.canon_decides(_entry(CANON_ID) + "\n" + broken, CANON_ID) is True
