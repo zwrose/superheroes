@@ -44,10 +44,10 @@ import urllib.parse
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_NAME = "cloud-cleanup.json"
 OUTCOMES = ("pending", "delivered", "uncertain", "failed")
+ARCHIVE_HEADING = "When the advisor asks you to archive your session"
 ARCHIVE_TEXT_MERGED = (
-    "Pull request #%d is merged, so this build is finished. Archive your own session now with your "
-    "session tool. If you have no tool that archives a session, post one line on your issue naming "
-    "the session tools you do have.")
+    "Pull request #%d is merged, so this build is finished. Follow the section \"" + ARCHIVE_HEADING
+    + "\" in your cloud build reference.")
 ARCHIVE_TEXT_CLOSED = ARCHIVE_TEXT_MERGED.replace("is merged", "is closed without merging")
 OWNER_MESSAGE_MERGED = ("#%d is merged. I've asked its cloud builder to archive itself. "
                         "You'll get one prompt for it: tap Allow once.")
@@ -176,13 +176,26 @@ def _object(run, path, env):
 
 
 def _pages(run, path, env):
-    """Every item of a paginated REST list, or None when any page failed or was not a list of objects."""
+    """Every item of a paginated REST list, or None when any page failed or was not a JSON list of objects
+    (a page that is a bare object, such as `{}`, is unreadable)."""
     code, out, _ = _gh(run, ["api", "--paginate", path], env)
+    if code != 0:
+        return None
+    decoder, at, found = json.JSONDecoder(), 0, []
     try:
-        found = _sib("pr_comment")._parse_paginated_arrays(out) if code == 0 else None
+        while True:
+            while at < len(out) and out[at] in " \r\n\t":
+                at += 1
+            if at >= len(out):
+                break
+            # axis: a successful page that is not a JSON list is unreadable, so a bare object never reads as one open PR
+            page, at = decoder.raw_decode(out, at)
+            if not isinstance(page, list):
+                return None
+            found.extend(page)
     except ValueError:
         return None
-    return found if found is not None and all(isinstance(i, dict) for i in found) else None
+    return found if all(isinstance(i, dict) for i in found) else None
 
 
 def _name(node, *keys):

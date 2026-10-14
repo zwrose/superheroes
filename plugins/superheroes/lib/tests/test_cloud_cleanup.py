@@ -40,6 +40,7 @@ class Gh:
         self.branches = {"main": "c" * 40, BRANCH: HEAD}
         self.deletes, self.delete_envs, self.delete_result, self.before_delete = [], [], None, None
         self.sticky = False
+        self.open_raw = None  # when set, the open-PR listing's raw stdout
         self.delete_script = []  # per DELETE, in order: (removes the branch, then times out)
 
     def __call__(self, argv, **kw):
@@ -69,6 +70,8 @@ class Gh:
             return SimpleNamespace(returncode=0, stdout=json.dumps({"default_branch": self.default}), stderr="")
         if path == base + "/pulls?state=open&per_page=100":
             assert "--paginate" in argv
+            if self.open_raw is not None:
+                return SimpleNamespace(returncode=0, stdout=self.open_raw, stderr="")
             return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps([p]) for p in self.open_prs) or "[]", stderr="")
         if path == base + "/branches?per_page=100":
             assert "--paginate" in argv
@@ -329,6 +332,21 @@ def test_a_branch_an_open_pr_uses_as_its_base_is_kept(w):
     w.gh.open_prs = [_open_pr(head_ref="upper", base_ref=BRANCH)]
     assert _branch(w) == {"ok": False, "reason": "branch-in-use"}
     assert BRANCH in _remote_branches(w)
+
+
+def test_a_branch_is_kept_when_a_later_open_pr_uses_it_as_base_after_an_unrelated_first(w):
+    _lane(w, "l-1", 101)
+    w.gh.open_prs = [_open_pr(head_ref="unrelated", base_ref="main"), _open_pr(head_ref="upper", base_ref=BRANCH)]
+    assert _branch(w) == {"ok": False, "reason": "branch-in-use"}
+    assert BRANCH in _remote_branches(w) and w.gh.deletes == []
+
+
+def test_an_open_pr_listing_that_is_not_a_json_list_is_unreadable_and_nothing_is_deleted(w):
+    _lane(w, "l-1", 101)
+    for raw in ("{}", '[]\n{"head": {}}'):
+        w.gh.open_raw = raw
+        assert _branch(w) == {"ok": False, "reason": "open-prs-unreadable"}
+        assert BRANCH in _remote_branches(w) and w.gh.deletes == []
 
 
 def test_a_branch_another_open_pr_in_this_repository_uses_as_its_head_is_kept_but_a_forks_is_not_a_use(w):

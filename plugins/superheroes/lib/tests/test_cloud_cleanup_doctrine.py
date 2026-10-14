@@ -126,7 +126,11 @@ def test_cleanup_procedure_has_one_home_and_the_others_point_to_it():
 
 def test_builder_side_of_the_archive_request():
     text = _read(os.path.join(_PLUGIN, _CLOUD))
-    heading = "When the advisor asks you to archive your session"
+    heading = cloud_cleanup.ARCHIVE_HEADING
+    for archive_text in (cloud_cleanup.ARCHIVE_TEXT_MERGED, cloud_cleanup.ARCHIVE_TEXT_CLOSED):
+        # the request names the builder's section and restates none of its procedure
+        assert f'Follow the section "{heading}" in your cloud build reference.' in archive_text
+        assert "session tool" not in archive_text
     assert text.split("\n").count(f"## {heading}") == 1
     assert f"- [{heading}](#when-the-advisor-asks-you-to-archive-your-session)" in text.split("# Building")[0]
 
