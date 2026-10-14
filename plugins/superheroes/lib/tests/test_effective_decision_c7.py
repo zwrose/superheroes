@@ -568,3 +568,26 @@ def test_a_malformed_ruling_sequence_counter_parks_the_judgment_fold():
     assert state["terminal"] == "cannot-certify"
     assert "rulings-log-malformed" in state["certification"]["reason"]
     assert "judgmentDispositions" not in state["rounds"].get("2", {})
+
+
+@pytest.mark.parametrize("skipped", ["reworded", "original"])
+def test_a_skip_never_reaches_another_finding_through_a_guidance_lineage(skipped):
+    """axis: guidance carries across a lineage, but a later skip on one member binds that member only
+    — the other member, raised again, reaches the fix batch and is not put to the owner as skipped."""
+    state = _mem_state(1)
+    key_a = _key("original")
+    _add_rule(state, key_a, "guidance", guidance="G1", rnd=1)
+    state["round"] = 2
+    reworded = _finding("reworded")
+    key_b = RD._finding_identity_key(reworded)
+    RD._stage_findings(state, [reworded])
+    assert state["findingLineage"] == {key_b: key_a}
+    skip_key, other_key = (key_b, key_a) if skipped == "reworded" else (key_a, key_b)
+    _add_gate(state, 2, skip_key, "skip", seq=RD._next_ruling_seq(state))
+    assert RD._live_ruling_by_key(state)[skip_key]["ruling"] == "out-of-scope"
+    assert RD._live_ruling_by_key(state)[other_key]["ruling"] == "guidance"
+    state["round"] = 3
+    other = _finding("original" if other_key == key_a else "reworded")
+    RD._stage_findings(state, [other])
+    assert L2E._ledger_by_key(state)[other_key].get("disposition") != "out-of-scope"
+    assert RD._filter_excluded_discharged_fixes(state, [other]) == ([other], None)

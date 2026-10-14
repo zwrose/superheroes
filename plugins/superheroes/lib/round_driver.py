@@ -1992,31 +1992,33 @@ def _effective_decisions(state, *, with_rules=True):
     latest one by a single sequence (``rulingSeq`` from ``_next_ruling_seq``, shared by the ``rule``
     verb and the owner-judgment gate fold; a gate entry with no sequence is older than every
     sequenced decision, and among those the later round wins) — read through this one reader.
-    That decision binds the finding under any wording a later round gives it at the same location
-    (``state["findingLineage"]``, written by ``_stage_findings``): every key of a lineage group maps
-    to the group's one decision, and the fixer order renders only that decision."""
+    A guidance or fix decision binds the finding under any wording a later round gives it at the
+    same location (``state["findingLineage"]``, written by ``_stage_findings``): it is the decision of
+    every key of the lineage group. An out-of-scope decision (a skip) binds only the key it was given
+    on — through a lineage it never reaches another member, which reads the latest decision that does
+    reach it. The fixer order renders only the effective decision."""
     rows, readable = _decision_candidates(state, with_rules=with_rules)
     if not readable:
         return {}
     lineage = _lineage_map(state)
-    best = {}
+    groups = {}
     for indexed in enumerate(rows):
         key = indexed[1].get("findingKey")
         if not isinstance(key, str) or not key:
             continue
-        root = _lineage_root(lineage, key)
-        held = best.get(root)
-        if held is None or _decision_order(indexed) > _decision_order(held):
-            best[root] = indexed
+        groups.setdefault(_lineage_root(lineage, key), []).append(indexed)
     by_key = {}
-    for indexed in enumerate(rows):
-        key = indexed[1].get("findingKey")
-        if isinstance(key, str) and key:
-            by_key[key] = best[_lineage_root(lineage, key)][1]
-    for key in list(lineage) + list(best):
-        root = _lineage_root(lineage, key)
-        if root in best:
-            by_key[key] = best[root][1]
+    for key in set(lineage) | {indexed[1]["findingKey"] for group in groups.values()
+                               for indexed in group}:
+        best = None
+        for indexed in groups.get(_lineage_root(lineage, key), []):
+            row = indexed[1]
+            if row.get("ruling") == "out-of-scope" and row.get("findingKey") != key:
+                continue  # a skip stays on the finding it was given on
+            if best is None or _decision_order(indexed) > _decision_order(best):
+                best = indexed
+        if best is not None:
+            by_key[key] = best[1]
     return by_key
 
 
