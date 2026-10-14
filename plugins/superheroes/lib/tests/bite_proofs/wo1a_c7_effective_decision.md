@@ -1,88 +1,300 @@
 # Bite-proof record — one effective decision per finding (test_effective_decision_c7.py)
 
-Status of every entry below: **Unrunnable here.** No neutralization was applied and no red or green
-run was made in this dispatch. Nothing in this record is a receipt of a run.
+Four entries, one per declared guarded element. Each ran with the detector unedited, against HEAD
+`5eb23f5b`, as a targeted edit to `plugins/superheroes/lib/round_driver.py` restored by the exact
+inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Every run used:
 
-## What blocked the run
+`python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 0 -k <test name>`
 
-Every `pytest` invocation the order names was refused by the shell permission layer before it
-started. Quoted, in the order they were attempted:
+Nothing in the captures is redacted (no secrets, tokens, private URLs or PII appear). Every capture is
+well under the 32 KiB per-element ceiling. Each green run follows the restore; the closing run of the
+whole file and the post-restore `git diff` are at the end.
 
-- `cd /home/user/wt-1868 && /usr/bin/python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 4`
-  -> `This Bash command contains multiple operations. The following part requires approval: /usr/bin/python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 4`
-- the same command, alone, from `/home/user/wt-1868` -> `This command requires approval`
+## BP-1 — the lineage write in `_stage_findings` (the `_LineageCarry` carry)
 
-The only interpreter calls that ran were inline file-edit scripts (they wrote `decision_kinds.py` and
-`round_driver.py`); no test of any kind ran. A scratch exploration script was also refused. The
-order mandates this interpreter and these flags, so no other invocation form was substituted.
+- guarded element: `_LineageCarry.apply`, `round_driver.py:1631-1650`, reached from `_stage_findings`
+  at `round_driver.py:1677`.
+- axis: a reworded finding at the decided file and line takes the decision (the lineage is written).
+- detector: `test_t1_reword_carries_guidance_to_next_fix`
+- neutralization (line 1633): the carry condition is never false, so `apply` always returns before the
+  write.
+  - before: `        if not self.readable or key in self.decided or key in lineage:`
+  - after:  `        if True or not self.readable or key in self.decided or key in lineage:`
+  - This differs from the earlier plan (a `return` before the write). The edit instead makes the guard
+    unconditionally take the early return, so the carry condition is never true. Both reach the write.
 
-## Command that can run it, and who owes the receipts
+Raw red:
 
-Environment: the worktree `/home/user/wt-1868` with a shell that permits the order's pytest form.
-Each proof names one exact node id (never `-k`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_t1_reword_carries_guidance_to_next_fix __________________
 
-`/usr/bin/python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py::<node> -q -n 0`
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-0/test_t1_reword_carries_guidanc0')
 
-The orchestrator owns the outstanding receipts (the order says it re-runs and verifies itself).
-Substitute evidence produced: none. No A/B against the base revision was run either.
+    def test_t1_reword_carries_guidance_to_next_fix(tmp_path):
+        """axis: a ruling recorded with its location binds a reworded finding at the next fixer order.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-1)
+        """
+        session_dir, _, _, row_a, _row_b = RC._pending_fixer_two_findings(tmp_path)
+        key_a = RD._fix_batch_row_key(row_a)
+        path = RC._write_ruling_file(tmp_path / "r.json", [
+            {"id": key_a, "ruling": "guidance", "reason": "keep it small", "guidance": "G1"}])
+        assert RC._rule(session_dir, path)["ok"]
+        state = RC._state(session_dir)
+        logged = state["rulingsLog"][-1]
+        assert (logged["file"], logged["line"]) == (row_a["file"], row_a["line"])
+        state["round"] += 1
+        reworded = _finding("bounds A, said differently", line=row_a["line"], file=row_a["file"])
+        key_new = RD._finding_identity_key(reworded)
+        assert key_new != key_a
+        RD._stage_findings(state, [reworded])
+>       assert state["findingLineage"] == {key_new: key_a}
+               ^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'findingLineage'
 
-## Declared guarded elements, with the neutralization to apply for each
+/home/user/wt-1868/plugins/superheroes/lib/tests/test_effective_decision_c7.py:115: KeyError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t1_reword_carries_guidance_to_next_fix
+1 failed, 20 deselected in 2.35s
+```
 
-Each is a targeted edit in `plugins/superheroes/lib/round_driver.py`, restored by the inverse edit
-(never `git checkout`/`restore`/`stash`). The detector stays unedited.
+The red is on the claimed axis: the first assertion after `_stage_findings` finds no `findingLineage`
+at all, so the carry did not write.
 
-### BP-1 — the lineage write in `_stage_findings` (`_LineageCarry.apply`)
+- restore: the exact inverse edit, `if True or not self.readable ...` back to
+  `if not self.readable or key in self.decided or key in lineage:`.
+- restore receipt: `round_driver.py:1633` reads
+  `        if not self.readable or key in self.decided or key in lineage:`. The final
+  `git diff -- plugins/superheroes/lib/round_driver.py` is empty (below).
 
-- axis: a reworded finding at the decided file and line takes the decision (lineage is written)
-- detector: `test_effective_decision_c7.py::test_t1_reword_carries_guidance_to_next_fix`
-- neutralization: in `_LineageCarry.apply`, replace
-  `        state.setdefault("findingLineage", {})[key] = root`
-  with
-  `        return  # neutralized: carry never happens` placed before that line (the two lines after
-  it, the lineage write and the `ruling-carried` decision, become unreachable).
-- expected red: `assert state["findingLineage"] == {key_new: key_a}` fails (KeyError on
-  `findingLineage`).
-- restore: delete the inserted `return` line.
+Raw green:
 
-### BP-2 — lineage resolution in the reader (latest across the group)
+```
+.                                                                        [100%]
+1 passed, 20 deselected in 2.67s
+```
 
-- axis: the original wording reads the newest decision given on any member of its group
-- detector: `test_effective_decision_c7.py::test_t2_replaced_guidance_never_returns`
-- neutralization: in `_effective_decisions`, replace
-  `        root = _lineage_root(lineage, key)\n        held = best.get(root)` (first loop) and
-  `by_key[key] = best[_lineage_root(lineage, key)][1]` (second loop) so the root is the key itself:
-  add `lineage = {}` directly after `lineage = _lineage_map(state)`.
-- expected red: `RD._live_ruling_by_key(state)[key_f]["guidance"] == "G2"` fails (it reads "G1").
-- restore: delete the inserted `lineage = {}` line.
+## BP-2 — lineage resolution in the reader (latest across the group)
 
-### BP-3 — the single-entry rendering in `_gate_guidance_entries`
+- guarded element: `_effective_decisions`, `round_driver.py:1857-1889` (the `_lineage_root` resolution
+  in both loops and the group fan-out).
+- axis: the original wording reads the newest decision given on any member of its group.
+- detector: `test_t2_replaced_guidance_never_returns`
+- neutralization: resolve per exact key only, by emptying the lineage the reader consults. One line
+  inserted directly after `    lineage = _lineage_map(state)` at line 1870 of `_effective_decisions`
+  (the 4-space-indented occurrence, not the one in `_LineageCarry.apply`):
+  `    lineage = {}`
+  Every `_lineage_root(lineage, key)` in the reader then returns `key` itself.
 
-- axis: only the effective decision renders; a replaced one never does
-- detector: `test_effective_decision_c7.py::test_t3_precedence_latest_decision_renders_alone`
-- neutralization: make `guided(key)` ignore which decision is effective and the current-round
-  gate loop render without the effectiveness test: replace
-  `                if (live is None or live.get("source") != "gate" or live.get("findingKey") != key`
-  `                        or str(live.get("round")) != str(rnd)`
-  `                        or live.get("guidance") != guidance.strip()):`
-  `                    continue`
-  with `                if False:` + `                    continue`, and add a second rendering of
-  the rule row for the key by changing `guided` to read the latest `rulingsLog` row directly. (The
-  first half alone — gate "A" then rule "B" — already renders both once the gate loop stops
-  testing effectiveness.)
-- expected red: the `[(key, "B", True)]` equality in the gate-then-rule half fails (two entries).
-- restore: the inverse edit of each replacement.
+Raw red:
 
-### BP-4 — the gate-skip candidate in the reader
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________ test_t2_replaced_guidance_never_returns ____________________
 
-- axis: an owner-gate `skip` is a decision and keeps binding the finding after a reword
-- detector: `test_effective_decision_c7.py::test_t4_gate_skip_binds_a_reword`
-- neutralization: in `_gate_decision_candidates`, replace
-  `            if disposition == "skip":\n                ruling = "out-of-scope"`
-  with
-  `            if disposition == "skip":\n                continue`
-- expected red: `state["findingLineage"] == {key_new: L2E._TRADEOFF_ID}` fails (no decision to
-  carry, so no lineage entry).
-- restore: change `continue` back to `ruling = "out-of-scope"`.
+    def test_t2_replaced_guidance_never_returns():
+        """axis: a ruling given on the reworded key is the group's decision; the original wording reads it.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-2)
+        """
+        state = _mem_state(2)
+        key_f = _key("original wording")
+        _add_rule(state, key_f, "guidance", guidance="G1", rnd=1)
+        reworded = _finding("reworded wording")
+        key_k = RD._finding_identity_key(reworded)
+        RD._stage_findings(state, [reworded])
+        assert state["findingLineage"] == {key_k: key_f}
+        _add_rule(state, key_k, "guidance", guidance="G2")
+        state["round"] = 3
+        original = _finding("original wording")
+        RD._stage_findings(state, [original])
+        assert state["findingLineage"] == {key_k: key_f}
+>       assert RD._live_ruling_by_key(state)[key_f]["guidance"] == "G2"
+E       AssertionError: assert 'G1' == 'G2'
+E         
+E         - G2
+E         + G1
+
+/home/user/wt-1868/plugins/superheroes/lib/tests/test_effective_decision_c7.py:147: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t2_replaced_guidance_never_returns
+1 failed, 20 deselected in 1.45s
+```
+
+The red is on the claimed axis, and only past the lineage-write assertions (lines 141 and 146 passed,
+so the lineage is still written): the original wording reads the replaced guidance `G1` instead of
+the group's latest `G2`.
+
+- restore: delete the inserted `    lineage = {}` line.
+- restore receipt: `round_driver.py:1870-1871` reads `    lineage = _lineage_map(state)` followed by
+  `    best = {}`. The final `git diff` is empty (below).
+
+Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 20 deselected in 1.38s
+```
+
+## BP-3 — the single-entry rendering in `_gate_guidance_entries`
+
+- guarded element: `_gate_guidance_entries`, `round_driver.py:3747-3835`: the effectiveness test on the
+  current-round gate loop and the `covered_keys` skip on the rule-channel loop together make one
+  effective decision render one entry.
+- axis: only the effective decision renders; a replaced one never does.
+- detector: `test_t3_precedence_latest_decision_renders_alone`
+- neutralization: two edits that together let both sources render. Edits 1 and 2 are one
+  neutralization.
+  1. The gate-loop effectiveness test (`round_driver.py:3800-3803`) replaced by a never-true test.
+     - before:
+       ```
+                       if (live is None or live.get("source") != "gate" or live.get("findingKey") != key
+                               or str(live.get("round")) != str(rnd)
+                               or live.get("guidance") != guidance.strip()):
+                           continue
+       ```
+     - after:
+       ```
+                       if False:
+                           continue
+       ```
+  2. The rule-channel dedupe (`round_driver.py:3810-3811`).
+     - before: `        if key in covered_keys:` / `            continue`
+     - after:  `        if False:` / `            continue`
+  - Edit 1 alone would still show a single entry (the gate one). Edit 2 is what lets the rule row render
+    as well, so both sources render.
+
+Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_t3_precedence_latest_decision_renders_alone _______________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-4/test_t3_precedence_latest_deci0')
+
+    def test_t3_precedence_latest_decision_renders_alone(tmp_path):
+        """axis: gate guidance and rule guidance on one key render one text — the later by one sequence.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-3)
+        """
+        # gate guidance "A", then a rule guidance "B" -> only "B"
+        session_dir = L2E._parked_judgment_session(tmp_path, name="gate-then-rule")
+        out = L2E._pending_submit(session_dir, {"dispositions": [
+            {"id": L2E._TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "A"}]})
+        assert out["ok"] is True, out
+        state = L2E._load_state(session_dir)
+        key = L2E._TRADEOFF_ID
+        gate_rows = state["rounds"][str(state["round"])]["judgmentDispositions"]
+        assert gate_rows[0]["rulingSeq"] == state["rulingSeqCounter"]
+        assert key in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
+        _add_rule(state, key, "guidance", guidance="B", file="f.py", line=1)
+        entries = _entries(state)
+>       assert [(e["id"], e["guidance"], bool(e.get("rulingChannel"))) for e in entries] == [
+            (key, "B", True)]
+E       AssertionError: assert [('f.py::wide...', 'B', True)] == [('f.py::wide...', 'B', True)]
+E         
+E         At index 0 diff: ('f.py::widen the api@L1', 'A', False) != ('f.py::widen the api@L1', 'B', True)
+E         Left contains one more item: ('f.py::widen the api@L1', 'B', True)
+E         Use -v to get more diff
+
+/home/user/wt-1868/plugins/superheroes/lib/tests/test_effective_decision_c7.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t3_precedence_latest_decision_renders_alone
+1 failed, 20 deselected in 1.45s
+```
+
+The red is on the claimed axis: the replaced gate guidance `A` renders first and the effective rule
+guidance `B` renders after it ("Left contains one more item"), so two entries come out where one is
+required.
+
+- restore: the exact inverse of both edits (edit 1's `if False:` / `continue` back to the four-line
+  effectiveness test; edit 2's `if False:` back to `if key in covered_keys:`).
+- restore receipt: `round_driver.py:3800-3803` and `3810-3811` read as in the "before" blocks above.
+  The final `git diff` is empty (below).
+
+Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 20 deselected in 1.38s
+```
+
+## BP-4 — the gate-skip candidate in the reader
+
+- guarded element: `_gate_decision_candidates`, `round_driver.py:1805-1806` (the `skip` arm).
+- axis: an owner-gate `skip` is a decision and keeps binding the finding after a reword.
+- detector: `test_t4_gate_skip_binds_a_reword`
+- neutralization: drop gate `skip` candidates.
+  - before: `            if disposition == "skip":` / `                ruling = "out-of-scope"`
+  - after:  `            if disposition == "skip":` / `                continue`
+
+Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________________ test_t4_gate_skip_binds_a_reword _______________________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-6/test_t4_gate_skip_binds_a_rewo0')
+
+    def test_t4_gate_skip_binds_a_reword(tmp_path):
+        """axis: an owner-gate skip is a decision — it keeps binding the finding after a reword.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-4)
+        """
+        session_dir = L2E._parked_judgment_session(tmp_path)
+        out = L2E._pending_submit(session_dir, {"dispositions": [
+            {"id": L2E._TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
+             "followUp": dict(L2E._WELL_FORMED)}]})
+        assert out["ok"] is True, out
+        state = L2E._load_state(session_dir)
+        skip_row = state["rounds"][str(state["round"])]["judgmentDispositions"][0]
+        assert (skip_row["file"], skip_row["line"]) == ("f.py", 1)
+        assert skip_row["rulingSeq"] == state["rulingSeqCounter"]
+        state["round"] += 1
+        reworded = _finding("widen the public API", line=1, file="f.py")
+        key_new = RD._finding_identity_key(reworded)
+        RD._stage_findings(state, [reworded])
+>       assert state["findingLineage"] == {key_new: L2E._TRADEOFF_ID}
+               ^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'findingLineage'
+
+/home/user/wt-1868/plugins/superheroes/lib/tests/test_effective_decision_c7.py:211: KeyError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t4_gate_skip_binds_a_reword
+1 failed, 20 deselected in 1.57s
+```
+
+The red is on the claimed axis: the gate-fold assertions before it (the skip row's location and
+`rulingSeq`) passed, so the skip was recorded; with the candidate dropped the reader has no decision
+to carry, and no lineage is written for the reword.
+
+- restore: `continue` changed back to `ruling = "out-of-scope"`.
+- restore receipt: `round_driver.py:1805-1806` reads
+  `            if disposition == "skip":` / `                ruling = "out-of-scope"`. The final
+  `git diff` is empty (below).
+
+Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 20 deselected in 1.46s
+```
+
+## Closing evidence (after the last restore)
+
+Whole-file run, `python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 0`:
+
+```
+.....................                                                    [100%]
+21 passed in 2.83s
+```
+
+`git diff -- plugins/superheroes/lib/round_driver.py` printed nothing (exit 0, empty output).
 
 ## What is NOT proven by this record
 
