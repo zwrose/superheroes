@@ -617,6 +617,20 @@ def test_a_successor_whose_premise_carries_only_the_adopted_branch_and_head_is_t
     assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
 
 
+def test_a_successor_adopting_a_different_pr_is_not_chosen_on_a_matching_adopted_branch(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    reserved = _reserved("l-2", BATCH, ["l-2"], w.repo, issue=101, place="cloud", cloudEnvironment="env-fixture-one",
+                         pluginVersion="1.2.3", ts=_T2)
+    reserved["premise"] = dict(reserved.get("premise") or {}, adopts=PR + 1, adoptsBranch=BRANCH, adoptsHead=w.head)
+    assert ll.reserve(w.repo, reserved, env=w.env)["ok"]
+    started = _started("l-2")
+    started.update(cloudSessionName="session-two", cloudSessionId="session_01AbCdEf123")
+    assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1" and got["session"] == "session-one"
+
+
 def _adopter(w, launch_id, issue, session, ts):
     reserved = _reserved(launch_id, BATCH, [launch_id], w.repo, issue=issue, place="cloud",
                          cloudEnvironment="env-fixture-one", pluginVersion="1.2.3", ts=ts)

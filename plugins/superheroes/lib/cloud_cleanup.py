@@ -214,9 +214,11 @@ def _adopting_successor(repo_root, lid, lane, issues, pr, branch, env):
     premises = {r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"}
 
     def adopts(premise):
-        return isinstance(premise, dict) and (
-            (premise.get("adopts") == pr and not isinstance(premise.get("adopts"), bool))
-            or (bool(branch) and premise.get("adoptsBranch") == branch))
+        if not isinstance(premise, dict):
+            return False
+        if "adopts" in premise:
+            return premise["adopts"] == pr and not isinstance(premise["adopts"], bool)
+        return bool(branch) and premise.get("adoptsBranch") == branch
 
     later = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
              if i["place"] == ll.PLACE_CLOUD and i["issue"] in issues
