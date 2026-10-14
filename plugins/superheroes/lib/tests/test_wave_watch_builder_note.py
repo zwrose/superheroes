@@ -577,6 +577,55 @@ def test_a_slug_that_could_not_be_resolved_is_not_tried_again_within_the_tick(re
     assert len(_repo_views(gh)) == 1
 
 
+def test_the_slug_lookup_skipped_for_a_spent_budget_is_resolved_by_a_later_reader(repo):
+    # axis: a budget-skipped slug lookup leaves the tick's cell unresolved, so a later reader with budget resolves — see bite-proof record c8c_wo_a.md
+    gh = _NoteGh()
+    cell = [ww._SLUG_UNRESOLVED]
+    skipped = ww._slug_for_read(repo, 10.0, lambda: 10.0, gh, {}, None, cell)
+    assert skipped is None
+    assert cell[0] is ww._SLUG_UNRESOLVED
+    assert gh.calls == []
+    later = ww._slug_for_read(repo, 100.0, lambda: 10.0, gh, {}, None, cell)
+    assert later == _SLUG
+    assert cell[0] == _SLUG
+    assert len(_repo_views(gh)) == 1
+
+
+def test_a_slug_lookup_that_failed_is_cached_and_a_later_reader_makes_no_second_call(repo):
+    # axis: a real lookup failure is cached for the tick, so no later reader retries it — see bite-proof record c8c_wo_a.md
+    gh = _NoteGh()
+    failing_calls = []
+
+    def failing_gh(argv, **kwargs):
+        failing_calls.append(list(argv))
+        return _raw(argv, "", 1)
+
+    cell = [ww._SLUG_UNRESOLVED]
+    assert ww._slug_for_read(repo, 100.0, lambda: 10.0, failing_gh, {}, None, cell) is None
+    assert cell[0] is None
+    assert len(failing_calls) == 1
+    assert ww._slug_for_read(repo, 100.0, lambda: 10.0, gh, {}, None, cell) is None
+    assert gh.calls == []
+    assert len(failing_calls) == 1
+
+
+def test_the_note_read_on_an_absent_ledger_root_creates_no_directory(repo, tmp_path, monkeypatch):
+    # axis: the builder-note read's answered-notes lookup makes no ledger directory — see bite-proof record c8c_wo_a.md
+    absent = tmp_path / "absent-ledger-root"
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(absent))
+    gh = _NoteGh([_comment(7, 5)])
+    lanes = {"cloud-x": {
+        "place": ll.PLACE_CLOUD, "started": True, "issue": 5, "startedTs": time.time() - 3600,
+    }}
+    degraded = set()
+    notes = ww._evaluate_builder_notes(
+        repo, lanes, deadline=100.0, env=None, gh_run=gh, monotonic=lambda: 0.0,
+        degraded=degraded, note_state=[None], known_slug=_SLUG,
+    )
+    assert [note["commentId"] for note in notes] == [7]
+    assert not absent.exists()
+
+
 def _primed(repo):
     """The note state a first empty read leaves: the URL for this lane's `since`, the ETag, no comments."""
     state = [None]

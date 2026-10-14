@@ -478,7 +478,7 @@ def _build_also_observed(
 def _derive_batch_lanes(
     repo_root, batch_id, env, degraded, ignore_launch_ids,
 ):
-    read_result = ll.read(repo_root, env=env)
+    read_result = ll.read(repo_root, env=env, create=False)
     state = read_result["state"]
     if state in ("ok", "tornTail"):
         if state == "tornTail":
@@ -863,15 +863,18 @@ _SLUG_UNRESOLVED = object()
 def _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell):
     """The slug a granted reader uses: the one the tick already knows, else what the tick's cell
     holds, else one resolution that fills the cell. A resolution that failed (None) is cached for
-    the tick too, and is not tried again within it. Never raises."""
+    the tick too, and is not tried again within it; a lookup skipped for a spent budget is not a
+    failure, so it leaves the cell unresolved for a later reader with budget. Never raises."""
     if known_slug is not None:
         return known_slug
     if slug_cell is not None and slug_cell[0] is not _SLUG_UNRESOLVED:
         return slug_cell[0]
-    slug, _refusal_result = _resolve_repo_slug(
+    slug, refusal_result = _resolve_repo_slug(
         repo_root, deadline, monotonic, gh_run, env, granted=True,
     )
-    if slug_cell is not None:
+    # bite-axis: SKIPPED LOOKUP — (None, None) is a budget skip, not a result: only a slug or a
+    # real refusal fills the cell.
+    if slug_cell is not None and (slug is not None or refusal_result is not None):
         slug_cell[0] = slug
     return slug
 
@@ -1208,8 +1211,10 @@ def _evaluate_cloud_activity(
     return stale
 
 
-def _answered_notes_path(repo_root, env):
-    resolved = ll.ledger_path(repo_root, env=env)
+def _answered_notes_path(repo_root, env, *, create):
+    """The answered-notes file's path. `create` is required: the note read passes False, so no
+    ledger directory is made by a read; `note_answered` passes True, since it writes the file."""
+    resolved = ll.ledger_path(repo_root, env=env, create=create)
     if not resolved["ok"]:
         return None
     return os.path.join(
@@ -1406,8 +1411,8 @@ def _evaluate_builder_notes(
     if not state:
         # Disclose the incomplete read, but still evaluate whatever was observed.
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-    path = _answered_notes_path(repo_root, env)
-    answered = _load_answered_notes(path)[0] if path is not None else set()
+    path = _answered_notes_path(repo_root, env, create=False)
+    answered =_load_answered_notes(path)[0] if path is not None else set()
     notes = [_builder_note(comment, watched, answered) for comment in comments]
     return sorted(
         (note for note in notes if note is not None),
@@ -1435,7 +1440,7 @@ def note_answered(repo_root, comment_id, *, env=None):
             return {"ok": False, "reason": REFUSAL_COMMENT_ID_INVALID}
         if not _valid_repo_root(repo_root):
             return {"ok": False, "reason": REFUSAL_REPO_ROOT_INVALID}
-        path = _answered_notes_path(repo_root, env)
+        path = _answered_notes_path(repo_root, env, create=True)
         if path is None:
             return {"ok": False, "reason": REFUSAL_STORE_UNRESOLVABLE}
         answered, readable = _load_answered_notes(path)
@@ -2444,7 +2449,7 @@ def watch_arm(
         if not _valid_repo_root(repo_root):
             return _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id)
 
-        ledger_path_result = ll.ledger_path(repo_root, env=env)
+        ledger_path_result = ll.ledger_path(repo_root, env=env, create=False)
         if not ledger_path_result["ok"]:
             return _refusal(REFUSAL_STORE_UNRESOLVABLE, batch_id)
         resolved_ledger_path = ledger_path_result["path"]
@@ -2550,7 +2555,7 @@ def run(
         if not _valid_repo_root(repo_root):
             return _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id)
 
-        ledger_path_result = ll.ledger_path(repo_root, env=env)
+        ledger_path_result = ll.ledger_path(repo_root, env=env, create=False)
         if not ledger_path_result["ok"]:
             return _refusal(REFUSAL_STORE_UNRESOLVABLE, batch_id)
         resolved_ledger_path = ledger_path_result["path"]

@@ -197,3 +197,39 @@ Axis: when the state write fails for real, `record(..., "pending")` returns `cle
 - Red: last lines: `tests/test_cloud_cleanup.py:978: AssertionError` (the `cleanup-state-unwritable` assertion), `FAILED tests/test_cloud_cleanup.py::test_a_pending_write_whose_state_write_fails_grants_no_reservation` and `1 failed, 76 deselected in 0.63s`.
 - Restore: the inverse edit; `cloud_cleanup.py:124-126` read `    except Exception:`, `        return False`, `    return True`. `git diff plugins/superheroes/lib/cloud_cleanup.py` is empty.
 - Green: `1 passed, 76 deselected in 0.54s`.
+
+## Entries added in C8c WO-A (item A7): the three lane-binding axes in `_plan`
+
+The three `# axis:` comments in `_plan` ("a lane reserved after the PR was opened ...", "a cloud builder that adopted a PR built elsewhere ...", "a later lane that adopted this PR ...") named this record, which had no entry for them; no other record under `bite_proofs/` holds them either (a search of the directory for `reserved_by` and `adopting_successor` found none, and `c8a_wo2.md` is the calibration-guard record). The entries below were run in this dispatch by a targeted edit to `cloud_cleanup.py`, the detector run alone as one node, then the inverse edit; `git status --porcelain plugins/superheroes/lib/cloud_cleanup.py` lists no change afterwards beyond the comment repoint.
+
+Command, each time, from the worktree root: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest '<file>::<test>' -q -p no:cacheprovider --tb=short`.
+
+## 15. A lane reserved after the PR was opened is not its lane
+
+Axis: a PR resolves to the newest lane reserved at or before the PR's open time, so a lane reserved afterwards (a later builder on the same issue) is not bound to it.
+
+- Test: `test_an_older_pr_is_not_bound_to_a_lane_reserved_after_it_was_opened` (`test_cloud_cleanup.py`).
+- Neutralization (`_plan`, `cloud_cleanup.py:284`): `cp._lane(repo_root, [issue], env, reserved_by=opened)` became `cp._lane(repo_root, [issue], env)`.
+- Red: `test_cloud_cleanup.py:453: in test_an_older_pr_is_not_bound_to_a_lane_reserved_after_it_was_opened`, `assert got["ok"] and got["session"] == "session-one" and got["launchId"] == "l-1"`, `AssertionError: assert (True and 'session-two' == 'session-one'`, `1 failed in 2.84s`.
+- Restore: the inverse edit; `cloud_cleanup.py:284` reads `        found = [cp._lane(repo_root, [issue], env, reserved_by=opened) for issue in issues]`.
+- Green: `2 passed in 5.06s` (this node and entry 16's, in one invocation, both restored).
+
+## 16. Adopters are searched before refusing a PR no older lane built
+
+Axis: when the PR resolves to no single lane, the adopting cloud builder is searched for before the plan refuses, so a PR built locally and adopted by a cloud builder is cleaned up.
+
+- Test: `test_a_cloud_builder_that_adopted_a_locally_built_pr_is_cleaned_up_with_no_older_cloud_lane`.
+- Neutralization (`_plan`, `cloud_cleanup.py:289`): `if len(lanes) != 1 and not launch_id:` became `if False and len(lanes) != 1 and not launch_id:`.
+- Red: `test_cloud_cleanup.py:678: in test_a_cloud_builder_that_adopted_a_locally_built_pr_is_cleaned_up_with_no_older_cloud_lane`, `assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"`, `assert (False)`, `1 failed in 1.55s`.
+- Restore: the inverse edit; `cloud_cleanup.py:289` reads `    if len(lanes) != 1 and not launch_id:`.
+- Green: the `2 passed in 5.06s` of entry 15.
+
+## 17. A later lane that adopted the PR is the one cleaned up
+
+Axis: when one older lane resolves, a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows the adopter, not the older lane.
+
+- Test: `test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up`.
+- Neutralization (`_plan`, `cloud_cleanup.py:300`): `if not launch_id:` (after `lid, lane = lanes[0]`) became `if False and not launch_id:`.
+- Red: `test_cloud_cleanup.py:630: in test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up`, `assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"`, `AssertionError: assert (True and 'l-1' == 'l-2'`, `1 failed in 2.51s`.
+- Restore: the inverse edit; `cloud_cleanup.py:299-300` read `    lid, lane = lanes[0]` and `    if not launch_id:`.
+- Green: `1 passed in 3.41s`.

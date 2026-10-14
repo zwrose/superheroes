@@ -215,3 +215,178 @@ def test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsin
     assert got["mark"] == "Renew now"
     assert "failed on version" in got["line"] and "run the setup check again" in got["line"].lower()
     assert "3 days left" in got["line"] and RENEW in got["line"]
+
+
+# ---- the gardening line reads only what it validates, and reports the real setting ---------------
+
+STILL_ON = ("Cloud builds are still on: I could not switch them off. "
+            "Switch them off in configure, then run the setup check again.")
+STAY_OFF = "cloud builds stay off until a check passes. Run the setup check again."
+SETTING_UNREAD = "I could not read whether cloud builds are on. Run the setup check again."
+
+
+def _marker(w, failed_parts, account=ACCOUNT):
+    body = {"schema": CS.FAILED_CHECK_SCHEMA, "account": account, "failedParts": failed_parts}
+    with open(CS.failed_check_path(w[0], account, w[1]), "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+
+
+def _setting_on(w):
+    import core_md
+    import project_config
+    facts = {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+             "patterns": "- x: a.ts:1"}
+    core_md.write(w[0], facts, "confirmed", root=w[1], now="2026-10-01")
+    got = core_md.write_project_config_item(w[0], project_config.CLOUD_BUILDS_SLUG, True, root=w[1])
+    assert got == {"action": "written"}, got
+
+
+def _setting_reads(monkeypatch, got):
+    import project_config
+
+    def get_item(*args, **kwargs):
+        if isinstance(got, BaseException):
+            raise got
+        return got
+
+    monkeypatch.setattr(project_config, "get_item", get_item)
+
+
+def test_cloud_setup_does_not_import_the_check_orchestrator():
+    # axis: the gardening line imports no cloud_check, lazily or otherwise — see bite-proof record c8c_wo_a.md
+    import ast
+    with open(CS.__file__, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+            imported += [alias.name for alias in node.names]
+    assert "cloud_check" not in imported, imported
+
+
+def test_cloud_check_keeps_the_lapse_rule_as_cloud_setups():
+    import cloud_check
+    assert cloud_check._lapses_ok is CS._lapses_ok
+    assert CS._lapses_ok(_lapsing_in(0), TODAY) is True
+    assert CS._lapses_ok(_lapsing_in(-1), TODAY) is False
+    assert CS._lapses_ok("2026-13-01", TODAY) is False
+
+
+@pytest.mark.parametrize("bad", ["", 5, None, ["a"], "has space", "-leading", "x" * 129])
+def test_a_record_file_with_an_invalid_account_is_unreadable_and_reads_no_marker(w, monkeypatch, bad):
+    # axis: an account read from a record file is validated before it builds a marker path — see bite-proof record c8c_wo_a.md
+    _record(w, ACCOUNT, _lapsing_in(30))
+    os.remove(CS.record_path(w[0], ACCOUNT, w[1]))
+    directory = os.path.dirname(CS.record_path(w[0], ACCOUNT, w[1]))
+    with open(os.path.join(directory, "odd.json"), "w", encoding="utf-8") as fh:
+        json.dump({"account": bad}, fh)
+    reads = []
+    monkeypatch.setattr(CS, "read_failed_check", lambda *args, **kwargs: reads.append(args))
+    assert _lines(w) == [{"account": None, "mark": None, "line": UNREADABLE}]
+    assert reads == []
+
+
+def test_a_record_file_with_no_account_key_is_unreadable(w):
+    _record(w, ACCOUNT, _lapsing_in(30))
+    os.remove(CS.record_path(w[0], ACCOUNT, w[1]))
+    directory = os.path.dirname(CS.record_path(w[0], ACCOUNT, w[1]))
+    with open(os.path.join(directory, "keyless.json"), "w", encoding="utf-8") as fh:
+        json.dump({"schema": CS.SCHEMA}, fh)
+    assert _lines(w) == [{"account": None, "mark": None, "line": UNREADABLE}]
+
+
+def test_a_damaged_marker_is_the_renew_line_with_the_stay_off_sentence_while_the_setting_is_off(w):
+    _record(w, ACCOUNT, "2026-10-25")
+    with open(CS.failed_check_path(w[0], ACCOUNT, w[1]), "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now" and got["account"] == ACCOUNT
+    assert "last reviewer check failed" in got["line"]
+    assert got["line"].endswith("Cloud builds stay off until a check passes. Run the setup check again.")
+
+
+@pytest.mark.parametrize("parts", ["version", {"reviewer": True}, 5, ["version", 3], [3], None])
+def test_a_marker_whose_failed_parts_is_not_a_list_of_strings_is_damaged(w, parts):
+    # axis: a marker whose failedParts is not a list of strings is damaged, never iterated as valid — see bite-proof record c8c_wo_a.md
+    _record(w, ACCOUNT, "2026-10-25")
+    _marker(w, parts)
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now" and got["account"] == ACCOUNT
+    assert got["line"].startswith("Cloud reviewer pass: the last reviewer check failed")
+    assert got["line"].endswith("Cloud builds stay off until a check passes. Run the setup check again.")
+
+
+def test_a_list_of_strings_without_reviewer_is_a_repair_line_and_with_reviewer_is_the_renew_line(w):
+    _record(w, ACCOUNT, "2026-10-25")
+    _marker(w, ["version", "calibration"])
+    [got] = _lines(w)
+    assert got["mark"] is None
+    assert got["line"] == ("Cloud reviewer pass: the last cloud check failed on version, calibration, "
+                           "so " + STAY_OFF)
+    _marker(w, ["version", "reviewer"])
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now" and "last reviewer check failed" in got["line"]
+
+
+def test_with_the_setting_on_a_repair_line_says_cloud_builds_are_still_on(w):
+    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed — see bite-proof record c8c_wo_a.md
+    _record(w, ACCOUNT, "2026-10-25")
+    _setting_on(w)
+    _marker(w, ["version"])
+    [got] = _lines(w)
+    assert got["mark"] is None
+    assert got["line"] == "Cloud reviewer pass: the last cloud check failed on version. " + STILL_ON
+    assert "stay off" not in got["line"]
+
+
+def test_with_the_setting_on_a_renew_line_says_cloud_builds_are_still_on(w):
+    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed — see bite-proof record c8c_wo_a.md
+    _record(w, ACCOUNT, "2026-10-25")
+    _setting_on(w)
+    _marker(w, ["reviewer"])
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now"
+    assert got["line"].endswith(RENEW + " " + STILL_ON)
+    assert "stay off" not in got["line"]
+
+
+def test_a_setting_still_on_beside_a_marker_that_lost_its_setting_part_is_not_called_off(w):
+    # the shape a refused switch-off plus a failed marker rewrite leaves: setting on, marker `["version"]` only
+    # axis: the line says cloud builds stay off only while the setting is off, never when the switch-off failed — see bite-proof record c8c_wo_a.md
+    _record(w, ACCOUNT, _lapsing_in(3))
+    _setting_on(w)
+    _marker(w, ["version"])
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now"
+    assert "failed on version" in got["line"] and STILL_ON in got["line"]
+    assert "stay off" not in got["line"] and "3 days left" in got["line"]
+
+
+@pytest.mark.parametrize("answer", [
+    RuntimeError("config store gone"),
+    {"action": "refused", "reason": "unknown-slug"},
+    {"effective": "yes"},
+    {"effective": None},
+    ["not", "a", "mapping"],
+])
+def test_an_unreadable_setting_is_claimed_neither_on_nor_off(w, monkeypatch, answer):
+    # axis: an unreadable setting is not read as off — see bite-proof record c8c_wo_a.md
+    _record(w, ACCOUNT, "2026-10-25")
+    _marker(w, ["version"])
+    _setting_reads(monkeypatch, answer)
+    [got] = _lines(w)
+    assert got["line"] == ("Cloud reviewer pass: the last cloud check failed on version. "
+                           + SETTING_UNREAD)
+    assert "stay off" not in got["line"] and "still on" not in got["line"]
+    _marker(w, ["reviewer"])
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now" and got["line"].endswith(RENEW + " " + SETTING_UNREAD)
+
+
+def test_cloud_checks_still_on_wording_is_read_from_cloud_setup():
+    import cloud_check
+    assert CS.STILL_ON_REPAIR in cloud_check._UNREAD_STILL_ON
+    assert CS.SWITCH_OFF_FIX in [fix for _n, _s, fix in cloud_check._PARTS]

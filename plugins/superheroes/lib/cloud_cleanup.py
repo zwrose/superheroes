@@ -280,14 +280,14 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         if found[0][2] is None and found[0][1] and found[0][1].get("issue") not in issues:
             return _refusal("lane-mismatch"), None
     else:
-        # axis: a lane reserved after the PR was opened cannot have built it, so the newest lane at or before the open — see bite-proof record c8_cloud_cleanup
+        # axis: a lane reserved after the PR was opened cannot have built it, so the newest lane at or before the open — see bite-proof record c8_cloud_cleanup, entry 15
         found = [cp._lane(repo_root, [issue], env, reserved_by=opened) for issue in issues]
     for _, _, reason in found:
         if reason:
             return _refusal(reason), None
     lanes = [(lid, lane) for lid, lane, _ in found if lane]
     if len(lanes) != 1 and not launch_id:
-        # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup
+        # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup, entry 16
         lid, lane, reason = _adopting_successor(repo_root, None, {}, issues, pr, _name(pull.get("head"), "ref"), closed, env)
         if reason:
             return _refusal(reason), None
@@ -298,7 +298,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         return _refusal("lane-ambiguous"), None
     lid, lane = lanes[0]
     if not launch_id:
-        # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup
+        # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup, entry 17
         lid, lane, reason = _adopting_successor(repo_root, lid, lane, issues, pr, _name(pull.get("head"), "ref"), closed, env)
         if reason:
             return _refusal(reason), None
