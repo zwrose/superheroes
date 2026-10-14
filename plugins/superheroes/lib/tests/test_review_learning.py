@@ -777,16 +777,20 @@ def test_apply_fetches_origin_before_the_canon_lookup(proj, canon_root, tmp_path
     remote_id = today + "-abcd1234-1"  # the id apply would mint first: only the fetched default branch holds it
     remote = canon.build_line(RL._append_args(canon_root, SID[:8], _proposal(ruling="Remote ruling."), APPROVAL), remote_id)
     loc = dict(definition_doc.resolve_canon(canon_root), defaultRef="origin/main")
-    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
     _, newest = _origin_with_newer_canon(tmp_path, canon_root, remote + "\n")
     stale = _git(canon_root, "rev-parse", "origin/main").strip()
     assert stale != newest
-    seen = []
+    seen = []  # the tracking sha at every resolver call, whichever resolver makes it
+
+    def observe(root):
+        seen.append(_git(canon_root, "rev-parse", "origin/main").strip())
+
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: (observe(root), dict(loc))[1])
     real = canon._locate
-    monkeypatch.setattr(canon, "_locate", lambda root: (seen.append(_git(canon_root, "rev-parse", "origin/main").strip()), real(root))[1])
+    monkeypatch.setattr(canon, "_locate", lambda root: (observe(root), real(root))[1])
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
     assert got["ok"] is True and got["detail"] is None
-    assert seen and set(seen) == {newest}  # the lookup saw the refreshed ref
+    assert len(seen) >= 3 and set(seen) == {newest}  # every lookup, the binding check's first, saw the refreshed ref
     assert remote_id not in canon.ids_in(got["canonEntry"]) and canon.ids_in(got["canonEntry"]) == {today + "-abcd1234-2"}  # and read its Canon
 
 
@@ -808,3 +812,9 @@ def test_a_second_apply_appends_its_own_entry(proj, canon_root):
     first = _apply(proj, canon_root, _proposal(), APPROVAL)
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
     assert got["ok"] is True and got["canonEntry"] != first["canonEntry"] and len(_entries(canon_root)) == 2
+
+
+def test_tally_a_merged_member_with_a_lost_representative_is_incomplete_evidence():
+    member = dict(_finding("a", "Security"), reason="fixed and audited in round 1 (merged into B)")
+    got = RL.tally([_record(1, "s", D, [_row("security-reviewer")], [member])], [], D, until="2026-10-11")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})

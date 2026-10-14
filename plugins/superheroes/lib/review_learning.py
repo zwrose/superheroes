@@ -233,6 +233,7 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     if root is not None and os.path.realpath(os.path.expanduser(root)) != control_plane.store_root():
         return _result(False, "refused", "store-override-unsupported",
                        "Canon's append cannot take a store root; --root %s is not the ambient store" % root)
+    note = _refresh_default_branch(canon_root)  # Canon's write procedure step 1: fetch before every Canon lookup, the binding check included
     # both writes bind to one project: Canon's lookup for canon_root must land where it lands for cwd
     try:
         canon_home = os.path.realpath(definition_doc.resolve_canon(root=canon_root)["path"])
@@ -242,7 +243,6 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     if canon_home != project_home:
         return _result(False, "refused", "canon-root-mismatch",
                        "--canon-root resolves Canon to %s but --cwd resolves it to %s; nothing was written" % (canon_home, project_home))
-    note = _refresh_default_branch(canon_root)
     try:
         res = _append_canon(canon_root, session_id, proposal, approval)
         line = res["appended"][0]
@@ -377,6 +377,12 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                 for seat in _seats(row.get("name")):
                     reviews[seat].add(str(pr))
         fixed = {}  # the PR's catches, one per findingKey
+        present = {v for f in rec["findings"] for v in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)) if v}  # the mark names a key or an id
+        if any(f.get("outcome") == _FIXED and _merged_member(f)
+               and review_record_session.merged_into(f.get("reason")) not in present for f in rec["findings"]):
+            left["malformed"] += 1  # a merged member whose representative is gone: the catch's evidence is missing, not zero
+            incomplete = True
+            continue
         for f in rec["findings"]:
             if f.get("outcome") == _FIXED and not _merged_member(f):
                 # axis: a finding with no findingKey is keyed by its id, so distinct keyless findings stay distinct — see bite-proof record wo_a_1718_keyless-id
