@@ -30,13 +30,14 @@ def main():
         return 0
 
     session_id = payload.get("session_id")
-    if compaction_directive.consume_delivered(session_id):
+    cwd = payload.get("cwd")
+    if compaction_directive.consume_delivered(session_id, cwd=cwd):
         return 0
 
     mode = compaction_directive.detect_mode(payload.get("transcript_path"))
-    notes, mtime = compaction_directive.read_notes(session_id)
+    notes, mtime = compaction_directive.read_notes(session_id, cwd=cwd)
     text = compaction_directive.compose(
-        mode, notes, compaction_directive.checkpoint_path(session_id), mtime)
+        mode, notes, compaction_directive.checkpoint_path(session_id, cwd=cwd), mtime)
     sys.stdout.write(text.rstrip("\n") + "\n")
     return 0
 

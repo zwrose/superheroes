@@ -120,10 +120,13 @@ def _valid_session_id(session_id):
     return isinstance(session_id, str) and _SESSION_ID_RE.fullmatch(session_id) is not None
 
 
-def checkpoint_dir(env=None):
-    """``<config dir>/superheroes/checkpoints``, or None when the config dir is unresolvable."""
+def checkpoint_dir(env=None, cwd=None):
+    """``<config dir>/superheroes/checkpoints``, or None when the config dir is unresolvable.
+
+    A relative ``CLAUDE_CONFIG_DIR`` resolves against ``cwd`` (the session's working directory);
+    with no absolute ``cwd`` it is unresolvable, so the result is None."""
     try:
-        root = config_dir.resolve(env=env)
+        root = config_dir.resolve(env=env, cwd=cwd)
         if not root:
             return None
         return os.path.join(root, "superheroes", "checkpoints")
@@ -131,11 +134,11 @@ def checkpoint_dir(env=None):
         return None
 
 
-def _session_file(session_id, suffix, env):
+def _session_file(session_id, suffix, env, cwd=None):
     try:
         if not _valid_session_id(session_id):
             return None
-        base = checkpoint_dir(env)
+        base = checkpoint_dir(env, cwd)
         if base is None:
             return None
         return os.path.join(base, session_id + suffix)
@@ -143,24 +146,24 @@ def _session_file(session_id, suffix, env):
         return None
 
 
-def checkpoint_path(session_id, env=None):
+def checkpoint_path(session_id, env=None, cwd=None):
     """This session's checkpoint notes file, or None (invalid session id / no config dir)."""
-    return _session_file(session_id, ".md", env)
+    return _session_file(session_id, ".md", env, cwd)
 
 
-def delivered_marker_path(session_id, env=None):
+def delivered_marker_path(session_id, env=None, cwd=None):
     """The marker the mod touches once it has delivered the directive, or None."""
-    return _session_file(session_id, ".delivered", env)
+    return _session_file(session_id, ".delivered", env, cwd)
 
 
-def find_transcript(session_id, env=None):
+def find_transcript(session_id, env=None, cwd=None):
     """The first existing ``<config dir>/projects/*/<session_id>.jsonl``, or None.
 
     Used only when no transcript path was supplied."""
     try:
         if not _valid_session_id(session_id):
             return None
-        root = config_dir.resolve(env=env)
+        root = config_dir.resolve(env=env, cwd=cwd)
         if not root:
             return None
         pattern = os.path.join(glob.escape(root), "projects", "*", session_id + ".jsonl")
@@ -173,10 +176,10 @@ def find_transcript(session_id, env=None):
 
 
 # ----------------------------------------------------------------- notes
-def read_notes(session_id, env=None, max_chars=20000):
+def read_notes(session_id, env=None, max_chars=20000, cwd=None):
     """``(text, mtime)`` of this session's checkpoint notes, or ``("", None)``."""
     try:
-        path = checkpoint_path(session_id, env)
+        path = checkpoint_path(session_id, env, cwd)
         if path is None:
             return "", None
         mtime = os.stat(path).st_mtime
@@ -213,22 +216,22 @@ def _atomic_write(path, text):
         raise
 
 
-def save_notes(session_id, text, env=None):
+def save_notes(session_id, text, env=None, cwd=None):
     """Atomically replace this session's checkpoint notes with ``text``; the notes path, or
     ``None`` when there is no path. The destination is only replaced once the whole text is
     on disk, so a failed save leaves the last good notes intact. Raises on I/O failure."""
-    path = checkpoint_path(session_id, env)
+    path = checkpoint_path(session_id, env, cwd)
     if path is None:
         return None
     _atomic_write(path, text)
     return path
 
 
-def mark_delivered(session_id, env=None, now=None):
+def mark_delivered(session_id, env=None, now=None, cwd=None):
     """Atomically publish this session's delivery marker (a complete timestamp or no marker at
     all, so a failed write cannot leave an empty or partial marker for the PreCompact fallback to
     consume); the marker path, or ``None`` when there is no path. Raises on I/O failure."""
-    path = delivered_marker_path(session_id, env)
+    path = delivered_marker_path(session_id, env, cwd)
     if path is None:
         return None
     _atomic_write(path, str(int((time.time() if now is None else now) * 1000)))
@@ -257,10 +260,10 @@ def compose(mode, notes="", notes_path=None, notes_mtime=None, user_instructions
 
 
 # ----------------------------------------------------------------- delivery marker
-def delivered_recently(session_id, env=None, window_seconds=120, now=None):
+def delivered_recently(session_id, env=None, window_seconds=120, now=None, cwd=None):
     """True only when THIS session's marker exists and its mtime is within the window."""
     try:
-        marker = delivered_marker_path(session_id, env)
+        marker = delivered_marker_path(session_id, env, cwd)
         if marker is None:
             return False
         mtime = os.stat(marker).st_mtime
@@ -270,13 +273,13 @@ def delivered_recently(session_id, env=None, window_seconds=120, now=None):
         return False
 
 
-def consume_delivered(session_id, env=None, window_seconds=120, now=None):
+def consume_delivered(session_id, env=None, window_seconds=120, now=None, cwd=None):
     """One-shot read of this session's delivery marker: True when it was fresh, and the marker
     is deleted so a retry of the same compaction cannot reuse this attempt's evidence."""
     try:
-        if not delivered_recently(session_id, env, window_seconds, now):
+        if not delivered_recently(session_id, env, window_seconds, now, cwd):
             return False
-        marker = delivered_marker_path(session_id, env)
+        marker = delivered_marker_path(session_id, env, cwd)
         try:
             os.remove(marker)
         except FileNotFoundError:
@@ -339,8 +342,9 @@ def _build_parser():
 def _verb_path(args):
     if not _valid_session_id(args.session_id):
         return _refuse("session-id-invalid")
-    path = checkpoint_path(args.session_id)
-    marker = delivered_marker_path(args.session_id)
+    cwd = os.getcwd()
+    path = checkpoint_path(args.session_id, cwd=cwd)
+    marker = delivered_marker_path(args.session_id, cwd=cwd)
     if path is None or marker is None:
         return _refuse("config-dir-unresolved")
     return _emit({"ok": True, "path": path, "markerPath": marker})
@@ -352,7 +356,7 @@ def _verb_save(args):
     text = sys.stdin.read()
     if not text.strip():
         return _refuse("empty-notes")
-    path = save_notes(args.session_id, text)
+    path = save_notes(args.session_id, text, cwd=os.getcwd())
     if path is None:
         return _refuse("config-dir-unresolved")
     return _emit({"ok": True, "path": path})
@@ -361,7 +365,7 @@ def _verb_save(args):
 def _verb_mark(args):
     if not _valid_session_id(args.session_id):
         return _refuse("session-id-invalid")
-    path = mark_delivered(args.session_id)
+    path = mark_delivered(args.session_id, cwd=os.getcwd())
     if path is None:
         return _refuse("config-dir-unresolved")
     return _emit({"ok": True, "path": path})
@@ -374,13 +378,14 @@ def _verb_mode(args):
 def _verb_instructions(args):
     if not _valid_session_id(args.session_id):
         return _refuse("session-id-invalid")
-    path = checkpoint_path(args.session_id)
-    marker = delivered_marker_path(args.session_id)
+    cwd = os.getcwd()
+    path = checkpoint_path(args.session_id, cwd=cwd)
+    marker = delivered_marker_path(args.session_id, cwd=cwd)
     if path is None or marker is None:
         return _refuse("config-dir-unresolved")
-    transcript = args.transcript or find_transcript(args.session_id)
+    transcript = args.transcript or find_transcript(args.session_id, cwd=cwd)
     mode = detect_mode(transcript) if transcript else "generic"
-    notes, mtime = read_notes(args.session_id)
+    notes, mtime = read_notes(args.session_id, cwd=cwd)
     text = compose(mode, notes, path, mtime, args.user_instructions)
     return _emit({"ok": True, "mode": mode, "instructions": text, "notesPath": path,
                   "notesFound": bool(notes), "markerPath": marker})

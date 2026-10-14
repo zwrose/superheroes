@@ -13,6 +13,7 @@ export type CliVerb<Role extends string> = {
 export type CliVocabulary = {
   readonly instructions: CliVerb<'sessionId' | 'transcriptPath' | 'userInstructions'>
   readonly mark: CliVerb<'sessionId'>
+  readonly path: CliVerb<'sessionId'>
   readonly save: CliVerb<'sessionId'>
 }
 
@@ -56,6 +57,7 @@ export const parseVocabulary = (text: string): CliVocabulary => {
   return {
     instructions: pick(verbs, 'instructions', ['sessionId', 'transcriptPath', 'userInstructions']),
     mark: pick(verbs, 'mark', ['sessionId']),
+    path: pick(verbs, 'path', ['sessionId']),
     save: pick(verbs, 'save', ['sessionId']),
   }
 }
@@ -94,6 +96,16 @@ export const markArgv = (
 ): string[] => [
   ...base(pluginRoot, vocabulary.mark.verb),
   vocabulary.mark.flags.sessionId,
+  sessionId,
+]
+
+export const pathArgv = (
+  vocabulary: CliVocabulary,
+  pluginRoot: string,
+  sessionId: string,
+): string[] => [
+  ...base(pluginRoot, vocabulary.path.verb),
+  vocabulary.path.flags.sessionId,
   sessionId,
 ]
 

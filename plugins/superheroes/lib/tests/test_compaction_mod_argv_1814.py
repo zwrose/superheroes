@@ -39,13 +39,14 @@ def _mod_argvs(tmp_path, transcript):
     (out / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     (out / "run.mjs").write_text(
         "import { readFileSync } from 'node:fs'\n"
-        "import { instructionsArgv, markArgv, parseVocabulary, saveArgv } from './argv.js'\n"
+        "import { instructionsArgv, markArgv, parseVocabulary, pathArgv, saveArgv } from './argv.js'\n"
         "const [root, sid, transcript, owner, vocabularyFile] = process.argv.slice(2)\n"
         "const cli = parseVocabulary(readFileSync(vocabularyFile, 'utf8'))\n"
         "console.log(JSON.stringify({\n"
         "  instructions: instructionsArgv(cli, root, sid, transcript, owner),\n"
         "  mark: markArgv(cli, root, sid),\n"
         "  save: saveArgv(cli, root, sid),\n"
+        "  path: pathArgv(cli, root, sid),\n"
         "}))\n", encoding="utf-8")
     r = subprocess.run([node, str(out / "run.mjs"), _PLUGIN_ROOT, SID, str(transcript), OWNER, _VOCABULARY],
                        capture_output=True, text=True, timeout=60)
@@ -75,6 +76,10 @@ def test_mod_argv_runs_through_the_real_cli_into_the_summarizer_text_and_the_mar
 
     code, saved, err = _exec(argvs["save"], env, cwd, stdin=NOTES)
     assert code == 0 and saved["ok"] is True, err
+
+    code, located, err = _exec(argvs["path"], env, cwd)
+    assert code == 0 and located["ok"] is True, err
+    assert located["path"] == saved["path"], err  # the path verb answers where `save` just wrote
 
     code, out, err = _exec(argvs["instructions"], env, cwd)
     assert code == 0 and out["ok"] is True, err
