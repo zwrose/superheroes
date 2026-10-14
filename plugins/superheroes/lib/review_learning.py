@@ -178,48 +178,6 @@ def _noted(out, note):
     return out
 
 
-def _decoded(line):
-    """What an entry line says, read through canon's decoder (`entry_fields`) plus the date, the fields
-    before the owner's words (the supersedes field) and the owner's words by canon's positions; None if too short."""
-    f, got = line.split(canon.SEP), canon.entry_fields(line)
-    return (f[1], got["scope"], got["ruling"], tuple(f[4:-2]), f[-2], got["where"]) if got and len(f) >= 6 else None
-
-
-def _existing_entry(canon_root, proposal, approval):
-    """The Canon working-copy entry whose decoded fields equal the ones this approval would write (an
-    earlier apply's entry, left by a retry), or None. Returns (line, res, retired): `res` names Canon's paths and
-    `retired` is whether Canon reads a newer entry superseding it."""
-    args = _append_args(canon_root, "00000000", proposal, approval)
-    loc, working, default_text = canon._locate(args.root)
-    want = _decoded(canon.build_line(args, "0000-00-00-00000000-1"))
-    for held in working.splitlines():
-        if canon._ID_RE.match(held) and _decoded(held) == want:
-            paths = [loc["path"]]
-            attrs = os.path.join(os.path.dirname(loc["path"]), ".gitattributes")
-            if loc["home"] == "repo" and os.path.isfile(attrs):
-                paths.append(attrs)
-            retired = bool(canon.ids_in(held) & canon.superseded_ids(working, default_text))
-            return held, {"path": loc["path"], "gitRoot": loc["gitRoot"], "commitPaths": paths}, retired
-    return None, None, False
-
-
-def _reuse_entry(line, res):
-    """Settle an entry an earlier apply appended: report it when HEAD holds it, else commit it.
-    Returns (commit, failure)."""
-    git_root = res["gitRoot"]
-    rel = os.path.relpath(res["path"], git_root).replace(os.sep, "/")
-    try:
-        shown = _run_git(git_root, "show", "HEAD:" + rel)
-        if shown.returncode == 0 and line in shown.stdout.splitlines():
-            head = _run_git(git_root, "rev-parse", "HEAD")
-            return head.stdout.strip(), None
-    except subprocess.TimeoutExpired:
-        return None, "git show timed out after %ss" % GIT_TIMEOUT_SECONDS
-    except OSError as exc:
-        return None, "git could not be run (%s: %s)" % (type(exc).__name__, exc)
-    return _commit_canon(res, line)
-
-
 def _commit_canon(res, line):
     """Canon's write procedure steps 7-8: commit only Canon's paths, then see the line in HEAD."""
     git_root = res["gitRoot"]
@@ -263,8 +221,7 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
 
     Canon's append path cannot carry a store root (`canon._locate` resolves the ambient store), so a
     `root` naming any other store is refused (`store-override-unsupported`) before anything is written,
-    rather than recording the approval in one store and the calibration in another. A retry reuses the entry an
-    earlier apply appended only while Canon reads nothing superseding it; otherwise it refuses `approval-superseded`."""
+    rather than recording the approval in one store and the calibration in another."""
     # axis: a calibration change is written only on the owner's exact yes, with their words, place and date — see bite-proof record wo_a_1718_no-owner-yes
     if not _owner_yes(approval):
         return _result(False, "refused", "no-owner-yes", "no approval with answer 'yes', words, where and an ISO date")
@@ -276,27 +233,18 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
                        "Canon's append cannot take a store root; --root %s is not the ambient store" % root)
     note = _refresh_default_branch(canon_root)
     try:
-        line, res, retired = _existing_entry(canon_root, proposal, approval)  # a retry reuses the entry, never mints another
-        reused = line is not None
-        # axis: a retry never reuses an entry a newer Canon entry supersedes — see bite-proof record wo_a_1718_superseded-reuse
-        if retired:
-            return _noted(_result(False, "refused", "approval-superseded",
-                                  "Canon entry %s is superseded by a newer entry; the calibration it records is not applied"
-                                  % canon.ids_in(line).pop()), note)
-        if not reused:
-            res = _append_canon(canon_root, session_id, proposal, approval)
-            line = res["appended"][0]
+        res = _append_canon(canon_root, session_id, proposal, approval)
+        line = res["appended"][0]
     except canon.Refusal as exc:
         reason = "proposal-invalid" if exc.payload["reason"] == "canon-stays-out" else "canon-refused"
         return _noted(_result(False, "refused", reason, "%s: %s" % (exc.payload["reason"], exc.payload["detail"])), note)
     except OSError as exc:
         return _noted(_result(False, "canon-not-committed", "canon-write-failed", "%s: %s" % (type(exc).__name__, exc)), note)
-    commit, failure = _reuse_entry(line, res) if reused else _commit_canon(res, line)
+    commit, failure = _commit_canon(res, line)
     if failure:
         return _noted(_result(False, "canon-not-committed", "canon-commit-failed", failure, canonEntry=line), note)
-    extra = {"canonEntryReused": True} if reused else {}
     if proposal["kind"] == "standing-ruling":
-        return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only", **extra), note)
+        return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only"), note)
     half = proposal["half"]
     wrote = project_config.set_item(cwd, "riskAndTrust", {half: proposal["value"]}, root=root)
     # axis: a failed calibration read-back reads partial and unconfirmed, never applied — see bite-proof record wo_a_1718_failed-read-back
@@ -304,13 +252,13 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
         return _noted(_result(False, "partial", "calibration-unconfirmed",
                               "Canon holds %s (commit %s); the calibration write may have landed but its read-back failed, "
                               "so the setting must be read back before anyone relies on it" % (line, commit),
-                              canonEntry=line, canonCommit=commit, set=wrote, **extra), note)
+                              canonEntry=line, canonCommit=commit, set=wrote), note)
     if wrote.get("action") not in ("written", "noop"):
         return _noted(_result(False, "partial", "calibration-not-written",
                               "Canon holds %s (commit %s); the calibration write returned %s"
                               % (line, commit, wrote.get("reason") or wrote.get("action")),
-                              canonEntry=line, canonCommit=commit, set=wrote, **extra), note)
-    return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="risk-and-trust", set=wrote, **extra), note)
+                              canonEntry=line, canonCommit=commit, set=wrote), note)
+    return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="risk-and-trust", set=wrote), note)
 
 
 # --- the tally (I4) ---
@@ -349,37 +297,19 @@ def _merged_member(f):
     return review_record_session.merged_into(f.get("reason")) is not None
 
 
-def _link_id(value):
-    """A record identity the writer links by: the comment id it stores (a string or an int)."""
-    return isinstance(value, (str, int)) and not isinstance(value, bool)
-
-
-def _chain(items):
-    """One PR's (day, record) pairs in `previousRecord` order, root first, or None unless they form exactly one line:
-    one root (null `previousRecord`), each record named by at most one successor, and every supplied record reached."""
-    ids = [r["id"] for _, r in items if r.get("id") is not None]
-    roots = [it for it in items if it[1]["previousRecord"] is None]
-    after = collections.defaultdict(list)
-    for it in items:
-        if it[1]["previousRecord"] is not None:
-            after[it[1]["previousRecord"]["id"]].append(it)
-    if len(roots) != 1 or len(set(ids)) != len(ids):
-        return None
-    chain = roots
-    while len(after.get(chain[-1][1].get("id"), ())) == 1:
-        chain.append(after[chain[-1][1]["id"]][0])
-    # axis: a fork, a cycle or a link to a record not supplied reads incomplete, never a guessed order — see bite-proof record wo_a_1718_chain-incomplete
-    return chain if len(chain) == len(items) else None
+def _carried(f):
+    """True for a finding row the record writer carried in from the earlier review record: that record already counted it."""
+    reason = f.get("reason")
+    return isinstance(reason, str) and review_record_session.CARRIED in reason
 
 
 def tally(records, escapes, since, *, until=None, window_days=None):
-    """Count seat reviews and catches per PR. A PR's records are put in order only by walking their `previousRecord`
-    links from the one root (a fork, a cycle, a missing link, or no single root reads `incomplete-evidence`, nothing
-    guessed); the PR is dated by its root's `writtenAt` and counts only when that date falls inside the counting range.
-    A counted PR's reviews are its records up to `until` with a seat row that ran, and its catches are read from the last
-    of them in chain order alone: each distinct fixed finding that is not a merged member, credited to the seat its
-    lens names (the finding `reviewer` is its dimension, not the dispatch that raised it). `records` is every review
-    record of each PR it covers, earliest included."""
+    """Count seat reviews and catches record by record. Each review record counts on its own `writtenAt` day when that
+    day falls inside the counting range (on or after the adoption day and inside the window); a record outside it is
+    left out. A counted record's reviews are its seat rows that ran, and its catches are its own fixed findings that
+    are not merged members and not carried in from an earlier record (that record counted them), one per finding key,
+    credited to the seat the finding's lens names (the finding `reviewer` is its dimension, not the dispatch that
+    raised it)."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
@@ -402,7 +332,6 @@ def tally(records, escapes, since, *, until=None, window_days=None):
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
     unattributed, incomplete = 0, False  # incomplete: evidence went missing, so no count is a zero
-    by_pr = {}
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
         if not isinstance(rec, dict):
@@ -418,15 +347,6 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["malformed"] += 1
             incomplete = True
             continue
-        if "previousRecord" not in rec:  # the writer always emits it: absence is unknown ancestry, not a first record
-            left["malformed"] += 1
-            incomplete = True
-            continue
-        prev = rec["previousRecord"]  # {"id", "url"} of the record before it (what the writer links by), or null for the first
-        if not (prev is None or (isinstance(prev, dict) and _link_id(prev.get("id")))) or not (rec.get("id") is None or _link_id(rec["id"])):
-            left["malformed"] += 1
-            incomplete = True
-            continue
         pr, session = rec.get("pr"), rec.get("sessionId")  # the review's identity: without both, reviews and catches collapse together
         if not (isinstance(pr, (str, int)) and not isinstance(pr, bool) and pr != ""
                 and isinstance(session, str) and session.strip()):
@@ -438,30 +358,17 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
             incomplete = True
             continue
-        by_pr.setdefault(pr, []).append((day, rec))
-    for items in by_pr.values():
-        # axis: a PR's record order comes only from its previousRecord links, never a timestamp or the input order — see bite-proof record wo_a_1718_chain-order
-        chain = _chain(items)  # walked over every supplied record, whatever its date, so a later record never makes a link read missing
-        if chain is None:
-            left["malformed"] += len(items)
-            incomplete = True
+        if outside(day):
+            left[outside(day)] += 1
             continue
-        kept = [(d, r) for d, r in chain if d <= end] if chain[0][0] <= end else []
-        left["afterWindow"] += len(chain) - len(kept)
-        if not kept:
-            continue
-        if chain[0][0] < low:  # a PR first reviewed before the adoption day is left out whole
-            left["beforeWindow"] += len(kept)
-            continue
-        for _, rec in kept:
-            for row in rec["reviewers"]:
-                if row["ran"] != review_record.RAN_NOT_RUN:
-                    for seat in _seats(row.get("name")):
-                        reviews[seat].add((rec["pr"], rec["sessionId"]))
-        # axis: a PR's catches are read from its latest record alone — see bite-proof record wo_a_1718_latest-record
-        fixed = {}  # the latest record's catches, one per findingKey
-        for f in kept[-1][1]["findings"]:
-            if f.get("outcome") == _FIXED and not _merged_member(f):
+        for row in rec["reviewers"]:
+            if row["ran"] != review_record.RAN_NOT_RUN:
+                for seat in _seats(row.get("name")):
+                    reviews[seat].add((pr, session))
+        # axis: a finding carried in from an earlier record is not a second catch — see bite-proof record wo_a_1718_carried-excluded
+        fixed = {}  # this record's own catches, one per findingKey
+        for f in rec["findings"]:
+            if f.get("outcome") == _FIXED and not _merged_member(f) and not _carried(f):
                 # axis: a finding with no findingKey is keyed by its id, so distinct keyless findings stay distinct — see bite-proof record wo_a_1718_keyless-id
                 fixed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"), f)
         for f in fixed.values():

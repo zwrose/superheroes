@@ -18,6 +18,7 @@ import definition_doc  # noqa: E402
 import mode_registry  # noqa: E402
 import project_config  # noqa: E402
 import review_learning as RL  # noqa: E402
+import review_record_session  # noqa: E402
 import review_round_policy  # noqa: E402
 import review_seats  # noqa: E402
 import risk_areas  # noqa: E402
@@ -32,6 +33,7 @@ APPROVAL = {"answer": "yes", "words": "Yes, add auth as a risk area.",
             "where": "session abcd1234, 14:05 UTC", "date": "2026-10-13"}
 SID = "abcd1234-ffff"
 CANON_REL = "docs/superheroes/canon.md"
+CARRIED = review_record_session.CARRIED
 
 
 def _proposal(**over):
@@ -145,6 +147,8 @@ def test_valid_yes_records_canon_commits_and_applies(proj, canon_root):
     assert touched == {CANON_REL, "docs/superheroes/.gitattributes"}
     assert _git(canon_root, "rev-parse", "HEAD").strip() == got["canonCommit"] != before[2].strip()
     assert _touched(proj) == ["Auth"]
+    repo, store = proj
+    assert project_config.get_item(repo, "riskAndTrust", root=store)["raw"]["riskAreas"] == [PAYMENTS, AUTH]
 
 
 def test_supersedes_is_validated_and_carried_into_canon(proj, canon_root):
@@ -317,20 +321,22 @@ def _finding(key, reviewer, outcome="fixed", fid=None):
     return f
 
 
-def _record(pr, session, day, rows, findings=(), rid=None, prev=None):
-    """A review record; `rid` is its comment id and `prev` the id of the record before it (what the writer links by)."""
-    rec = {"pr": pr, "sessionId": session, "writtenAt": day + "T10:00:00Z", "reviewers": list(rows),
-           "findings": list(findings), "previousRecord": None if prev is None else {"id": prev, "url": "u%s" % prev}}
-    return dict(rec, id=rid) if rid is not None else rec
+def _record(pr, session, day, rows, findings=()):
+    return {"pr": pr, "sessionId": session, "writtenAt": day + "T10:00:00Z", "reviewers": list(rows), "findings": list(findings)}
+
+
+def _carried(finding):
+    """The finding as the record writer carries it into a later review record."""
+    return dict(finding, reason="fixed" + CARRIED)
 
 
 def _truth_table_records():
     return [
-        _record(1, "s1", "2026-10-09", [_row("code-reviewer")], [_finding("k-old", "Code")], rid=11),
+        _record(1, "s1", "2026-10-09", [_row("code-reviewer")], [_finding("k-old", "Code")]),
         _record(2, "s2", D, [_row("code-reviewer"), _row("confirm security", "reported-by-session"), _row("test-role", "not-run")],
-                [_finding("k-new", "Code, Security"), _finding("k-none", ""), _finding("k-open", "Test", "left-for-owner")], rid=21),
-        _record(1, "s1b", "2026-10-11", [_row("code-reviewer")], [_finding("k-old", "Code")], rid=12, prev=11),
-        _record(2, "s2b", "2026-10-11", [_row("code-reviewer")], [_finding("k-new", "Code, Security")], rid=22, prev=21),
+                [_finding("k-new", "Code, Security"), _finding("k-open", "Test", "left-for-owner")]),
+        _record(1, "s1b", "2026-10-11", [_row("code-reviewer")], [_carried(_finding("k-old", "Code"))]),
+        _record(2, "s2b", "2026-10-11", [_row("code-reviewer")], [_carried(_finding("k-new", "Code, Security")), _finding("k-late", "Security")]),
     ]
 
 
@@ -344,11 +350,11 @@ def test_tally_truth_table():
     got = RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11")
     assert (got["measured"], got["reason"], got["since"]) == (True, None, D)
     assert got["window"] == {"from": D, "until": "2026-10-11"}
-    # PR 1 was first reviewed before adoption and is out whole; PR 2's two reviews count and its latest record's catch counts once
-    assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
+    # each record counts on its own day: the record before adoption is out, the others count, and a carried finding is not a second catch
+    assert got["seats"] == {"code-reviewer": {"reviews": 3, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 2}}
     assert got["unattributedCatches"] == 0
     assert got["escapes"] == {"missed": 1, "seenAndLeft": 1}
-    assert got["leftOut"] == {"beforeWindow": 3, "afterWindow": 0, "undated": 0, "malformed": 0}  # PR 1's two records and the escape dated before adoption
+    assert got["leftOut"] == {"beforeWindow": 2, "afterWindow": 0, "undated": 0, "malformed": 0}  # PR 1's early record and the escape dated before adoption
 
 
 # axis: the guarding test for the before-adoption exclusion — an event dated before the adoption day never counts
@@ -361,20 +367,25 @@ def test_tally_nothing_before_the_adoption_day_counts():
     assert got["leftOut"]["beforeWindow"] == 2
 
 
-def test_tally_a_pr_first_reviewed_before_adoption_is_excluded_entirely():
+def test_tally_a_pr_reviewed_before_adoption_counts_only_its_later_records():
     got = RL.tally(_truth_table_records()[::2], [], D, until="2026-10-11")
-    assert got["seats"] == {} and got["unattributedCatches"] == 0
-    assert got["leftOut"]["beforeWindow"] == 2
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}  # the carried finding was counted by the record that raised it
+    assert got["unattributedCatches"] == 0 and got["leftOut"]["beforeWindow"] == 1
 
 
-def test_tally_a_pr_reviewed_after_adoption_counts_its_latest_records_fixed_findings_once():
-    got = RL.tally(_truth_table_records()[1::2], [], D, until="2026-10-11")
-    assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 1} and got["seats"]["security-reviewer"]["caught"] == 1
+# axis: the guarding test for the carried-finding exclusion — a finding carried into a later record is not a second catch
+def test_tally_a_carried_finding_is_not_a_second_catch():
+    rows = [_row("code-reviewer")]
+    first = _record(1, "s1", D, rows, [_finding("k", "Code")])
+    later = _record(1, "s2", "2026-10-11", rows, [_carried(_finding("k", "Code"))])
+    got = RL.tally([first, later], [], D, until="2026-10-11")
+    assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 1}
+    assert RL.tally([first, dict(later, findings=[_finding("k", "Code")])], [], D, until="2026-10-11")["seats"]["code-reviewer"]["caught"] == 2
 
 
 def test_tally_finding_without_a_key_falls_back_to_its_id():
     one, two = _finding(None, "Code", fid="F-1"), _finding(None, "Code", fid="F-2")
-    first, last = _record(1, "a", D, [], [one], rid=1), _record(1, "b", "2026-10-11", [], [one, two], rid=2, prev=1)
+    first, last = _record(1, "a", D, [], [one]), _record(1, "b", "2026-10-11", [], [_carried(one), two])
     got = RL.tally([first, last], [], D, until="2026-10-11")
     assert got["seats"]["code-reviewer"]["caught"] == 2  # two distinct keyless findings are two catches, not one
 
@@ -391,15 +402,16 @@ def test_tally_window_reaching_before_adoption_is_short_of_window_and_still_coun
     got = RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11", window_days=5)
     assert (got["measured"], got["reason"]) == (False, "short-of-window")
     assert got["window"] == {"from": "2026-10-07", "until": "2026-10-11"}
-    assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 1}
-    assert got["leftOut"]["beforeWindow"] == 3
+    assert got["seats"]["code-reviewer"] == {"reviews": 3, "caught": 1}
+    assert got["leftOut"]["beforeWindow"] == 2
 
 
 def test_tally_window_inside_the_adoption_period_is_measured_and_excludes_earlier_days():
     got = RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11", window_days=1)
     assert (got["measured"], got["window"]["from"]) == (True, "2026-10-11")
-    assert got["seats"] == {} and got["unattributedCatches"] == 0  # both PRs were first reviewed before the window
-    assert got["leftOut"]["beforeWindow"] == 7  # the four records of both PRs, and the three escapes dated D-1 and D
+    assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 0}, "security-reviewer": {"reviews": 0, "caught": 1}}
+    assert got["unattributedCatches"] == 0
+    assert got["leftOut"]["beforeWindow"] == 5  # the two records before the window, and the three escapes dated D-1 and D
 
 
 def test_tally_records_after_until_are_ignored_and_counted():
@@ -472,15 +484,6 @@ def test_tally_damaged_rows_read_incomplete_not_measured_zero():
     assert ok["measured"] is True and ok["unattributedCatches"] == 1
 
 
-def test_tally_missing_earlier_record_reads_incomplete_and_a_full_chain_counts():
-    first = _record(1, "s1", "2026-10-10", [_row("code-reviewer")], [_finding("k", "Code")], rid=1)
-    last = _record(1, "s2", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")], rid=2, prev=1)
-    got = RL.tally([last], [], D, until="2026-10-11")
-    assert got["measured"] is False and got["reason"] == "incomplete-evidence"
-    full = RL.tally([first, last], [], D, until="2026-10-11")
-    assert full["measured"] is True and full["seats"]["code-reviewer"] == {"reviews": 2, "caught": 1}
-
-
 def test_tally_merged_plus_label_credits_every_reviewer():
     import panel_tally
     label = panel_tally._merge_dims({"dimension": "Code"}, {"dimension": "Security"})
@@ -488,15 +491,6 @@ def test_tally_merged_plus_label_credits_every_reviewer():
     rec = _record(1, "s", D, [_row("code-reviewer"), _row("security-reviewer")], [_finding("k", label)])
     got = RL.tally([rec], [], D, until="2026-10-11")
     assert got["seats"]["code-reviewer"]["caught"] == 1 and got["seats"]["security-reviewer"]["caught"] == 1
-
-
-def test_tally_record_missing_previous_record_key_is_incomplete_evidence():
-    rec = _record(1, "s", "2026-10-11", [_row("code-reviewer")], [_finding("k", "Code")])
-    del rec["previousRecord"]
-    got = RL.tally([rec], [], D, until="2026-10-11")
-    assert got["measured"] is False and got["reason"] == "incomplete-evidence" and got["seats"] == {}
-    rec["previousRecord"] = None
-    assert RL.tally([rec], [], D, until="2026-10-11")["measured"] is True
 
 
 def test_supersedes_id_grammar_is_canons():
@@ -550,7 +544,7 @@ def test_cli_tally(proj, tmp_path, capsys):
     repo, store = proj
     recs, escs = _json_file(tmp_path, "r.json", _truth_table_records()), _json_file(tmp_path, "e.json", _escapes())
     code, out = _cli(capsys, "tally", "--records", recs, "--escapes", escs, "--since", D, "--until", "2026-10-11")
-    assert code == 0 and out["measured"] is True and out["seats"]["code-reviewer"]["reviews"] == 2
+    assert code == 0 and out["measured"] is True and out["seats"]["code-reviewer"]["reviews"] == 3
     code, out = _cli(capsys, "tally", "--records", recs, "--escapes", escs, "--cwd", repo, "--root", store, "--until", "2026-10-11")
     assert (code, out["measured"], out["reason"]) == (0, False, "no-adoption-day")
     RL.record_adoption_day(repo, D, store)
@@ -593,13 +587,6 @@ def test_tally_record_missing_review_identity_is_incomplete_evidence(drop):
         assert RL.tally([bare], [], D, until="2026-10-11")["reason"] == "incomplete-evidence"
 
 
-def test_tally_unhashable_record_identity_reads_unmeasured_not_a_crash():
-    first = dict(_record(1, "s", "2026-10-10", [_row("code-reviewer")]), id=["x"], url={"u": 1})
-    last = dict(_record(1, "t", "2026-10-11", [_row("code-reviewer")]), previousRecord={"id": ["x"]})
-    got = RL.tally([first, last], [], D, until="2026-10-11")
-    assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
-
-
 def test_tally_until_before_adoption_day_is_bad_input():
     got = RL.tally([], [], "2026-10-10", until="2026-10-09")
     assert (got["measured"], got["reason"], got["seats"]) == (False, "bad-input", {})
@@ -634,8 +621,6 @@ def test_merged_member_carried_into_a_later_review_still_names_its_representativ
     assert rs.merged_into(carried_member["reason"]) == "kb"
     first = _record(1, "s1", D, [_row("code-reviewer")], [member, rep])
     later = _record(1, "s2", "2026-10-11", [_row("code-reviewer")], carried)
-    later["previousRecord"] = {"id": first.get("id", "first")}
-    first["id"] = "first"
     got = RL.tally([first, later], [], D, until="2026-10-11")
     assert got["measured"] is True and got["seats"]["code-reviewer"]["caught"] == 1
 
@@ -645,66 +630,6 @@ def test_tally_unhashable_finding_identity_reads_incomplete_evidence(bad):
     row = dict(_finding("k", "Code"), **bad)
     got = RL.tally([_record(1, "s", D, [_row("code-reviewer")], [row])], [], D, until="2026-10-11")
     assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
-
-
-# --- a PR's record order comes only from the writer's previousRecord links ---
-
-def _linked_pair(first_catch="Code", last_catch="Security", day="2026-10-11"):
-    rows = [_row("code-reviewer")]
-    first = _record(1, "s1", day, rows, [_finding("k1", first_catch)], rid=1)
-    last = _record(1, "s2", day, rows, [_finding("k2", last_catch)], rid=2, prev=1)
-    return first, last
-
-
-def test_tally_reads_the_linked_latest_record_when_both_carry_the_same_written_at():
-    first, last = _linked_pair()
-    for order in ([last, first], [first, last]):  # supplied newest-first and oldest-first: same instant, only the link orders them
-        got = RL.tally(order, [], D, until="2026-10-12")
-        assert got["seats"]["security-reviewer"]["caught"] == 1 and got["seats"]["code-reviewer"]["caught"] == 0, order
-
-
-def test_tally_a_fork_reads_incomplete_evidence():
-    first, last = _linked_pair()
-    rival = _record(1, "s3", "2026-10-11", [_row("code-reviewer")], [_finding("k3", "Code")], rid=3, prev=1)
-    got = RL.tally([first, last, rival], [], D, until="2026-10-12")
-    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
-
-
-def test_tally_a_cycle_reads_incomplete_evidence():
-    first, last = _linked_pair()
-    loop = dict(first, previousRecord={"id": 2, "url": "u2"})  # no record names null: the links form a ring
-    got = RL.tally([loop, last], [], D, until="2026-10-12")
-    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
-    detached = _record(1, "s3", "2026-10-11", [_row("code-reviewer")], rid=3, prev=4)
-    ring = _record(1, "s4", "2026-10-11", [_row("code-reviewer")], rid=4, prev=3)
-    again = RL.tally([first, detached, ring], [], D, until="2026-10-12")  # a ring beside a real root is unreached, not skipped
-    assert (again["measured"], again["reason"]) == (False, "incomplete-evidence")
-
-
-def test_tally_a_missing_link_reads_incomplete_evidence():
-    first, last = _linked_pair()
-    skipped = dict(last, previousRecord={"id": 99, "url": "u99"})
-    got = RL.tally([first, skipped], [], D, until="2026-10-12")
-    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
-    assert RL.tally([first, last], [], D, until="2026-10-12")["measured"] is True
-
-
-def test_tally_two_roots_or_no_root_reads_incomplete_evidence():
-    first, last = _linked_pair()
-    other_root = _record(1, "s3", "2026-10-11", [_row("code-reviewer")], rid=3)
-    assert RL.tally([first, last, other_root], [], D, until="2026-10-12")["reason"] == "incomplete-evidence"
-    assert RL.tally([last], [], D, until="2026-10-12")["reason"] == "incomplete-evidence"
-
-
-def test_tally_a_link_to_a_record_after_until_is_not_missing_and_the_latest_is_the_last_one_up_to_until():
-    rows = [_row("code-reviewer")]
-    one = _record(1, "s1", D, rows, [_finding("k1", "Code")], rid=1)
-    two = _record(1, "s2", "2026-10-11", rows, [_finding("k2", "Security")], rid=2, prev=1)
-    three = _record(1, "s3", "2026-10-20", rows, [_finding("k3", "Code")], rid=3, prev=2)
-    got = RL.tally([three, two, one], [], D, until="2026-10-12")
-    assert got["measured"] is True and got["seats"]["security-reviewer"]["caught"] == 1
-    assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 0} and got["leftOut"]["afterWindow"] == 1
-
 
 
 # --- review C10 round 7 fixes ---
@@ -733,8 +658,8 @@ def test_canon_commit_that_landed_before_the_timeout_continues(proj, canon_root,
 
 
 def test_tally_an_outcome_recorded_after_until_does_not_make_a_catch():
-    first = _record(1, "s", D, [_row("code-reviewer")], [_finding("k", "Code", "left-for-owner")], rid=1)
-    later = _record(1, "s2", "2026-10-20", [_row("code-reviewer")], [_finding("k", "Code")], rid=2, prev=1)
+    first = _record(1, "s", D, [_row("code-reviewer")], [_finding("k", "Code", "left-for-owner")])
+    later = _record(1, "s2", "2026-10-20", [_row("code-reviewer")], [_finding("k", "Code")])
     got = RL.tally([first, later], [], D, until="2026-10-11")
     assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
     assert got["leftOut"]["afterWindow"] == 1
@@ -742,20 +667,19 @@ def test_tally_an_outcome_recorded_after_until_does_not_make_a_catch():
 
 def test_tally_reused_display_ids_across_sessions_never_merge_distinct_keys():
     rows = [_row("code-reviewer")]
-    first = _record(1, "s1", D, rows, [_finding("k1", "Code", fid="code-001")], rid="first")
-    last = _record(1, "s2", "2026-10-11", rows, [_finding("k1", "Code", fid="code-001"), _finding("k2", "Code", fid="code-001")],
-                   rid="second", prev="first")
+    first = _record(1, "s1", D, rows, [_finding("k1", "Code", fid="code-001")])
+    last = _record(1, "s2", "2026-10-11", rows, [_carried(_finding("k1", "Code", fid="code-001")), _finding("k2", "Code", fid="code-001")])
     got = RL.tally([first, last], [], D, until="2026-10-12")
     assert got["seats"]["code-reviewer"] == {"reviews": 2, "caught": 2}
 
 
-def test_tally_catches_are_read_from_the_latest_record_only():
+def test_tally_each_record_counts_its_own_catches():
     rows = [_row("code-reviewer")]
-    first = _record(1, "s1", D, rows, [_finding("k1", "Code")], rid="first")
-    last = _record(1, "s2", "2026-10-11", rows, [_finding("k2", "Security")], rid="second", prev="first")
+    first = _record(1, "s1", D, rows, [_finding("k1", "Code")])
+    last = _record(1, "s2", "2026-10-11", rows, [_finding("k2", "Security")])
     for order in ([first, last], [last, first]):
         got = RL.tally(order, [], D, until="2026-10-12")
-        assert got["seats"]["code-reviewer"]["caught"] == 0 and got["seats"]["security-reviewer"]["caught"] == 1
+        assert got["seats"]["code-reviewer"]["caught"] == 1 and got["seats"]["security-reviewer"]["caught"] == 1
 
 
 def test_canon_commit_recovery_ignores_an_inherited_git_dir(proj, canon_root, monkeypatch, tmp_path):
@@ -798,7 +722,7 @@ def test_run_git_passes_the_timeout_to_subprocess(monkeypatch):
 
 # --- Canon's write procedure step 1: refresh the default branch first ---
 
-def _origin_with_newer_canon(tmp_path, canon_root):
+def _origin_with_newer_canon(tmp_path, canon_root, canon_text="newer canon\n"):
     """A bare origin whose default branch holds a commit the canon_root clone has not fetched."""
     bare = str(tmp_path / "origin.git")
     _git(tmp_path, "init", "-q", "--bare", "-b", "main", bare)
@@ -809,7 +733,7 @@ def _origin_with_newer_canon(tmp_path, canon_root):
     _identity(other)
     os.makedirs(os.path.join(other, "docs", "superheroes"))
     with open(os.path.join(other, CANON_REL), "w") as fh:
-        fh.write("newer canon\n")
+        fh.write(canon_text)
     _git(other, "add", "-A")
     _git(other, "commit", "-qm", "canon on the default branch")
     _git(other, "push", "-q", "origin", "main")
@@ -817,7 +741,12 @@ def _origin_with_newer_canon(tmp_path, canon_root):
 
 
 def test_apply_fetches_origin_before_the_canon_lookup(proj, canon_root, tmp_path, monkeypatch):
-    _, newest = _origin_with_newer_canon(tmp_path, canon_root)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    remote_id = today + "-abcd1234-1"  # the id apply would mint first: only the fetched default branch holds it
+    remote = canon.build_line(RL._append_args(canon_root, SID[:8], _proposal(ruling="Remote ruling."), APPROVAL), remote_id)
+    loc = dict(definition_doc.resolve_canon(canon_root), defaultRef="origin/main")
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
+    _, newest = _origin_with_newer_canon(tmp_path, canon_root, remote + "\n")
     stale = _git(canon_root, "rev-parse", "origin/main").strip()
     assert stale != newest
     seen = []
@@ -826,6 +755,7 @@ def test_apply_fetches_origin_before_the_canon_lookup(proj, canon_root, tmp_path
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
     assert got["ok"] is True and got["detail"] is None
     assert seen and set(seen) == {newest}  # the lookup saw the refreshed ref
+    assert remote_id not in canon.ids_in(got["canonEntry"]) and canon.ids_in(got["canonEntry"]) == {today + "-abcd1234-2"}  # and read its Canon
 
 
 def test_apply_says_so_when_the_fetch_fails_and_continues(proj, canon_root, tmp_path):
@@ -835,65 +765,14 @@ def test_apply_says_so_when_the_fetch_fails_and_continues(proj, canon_root, tmp_
     assert "not refreshed" in got["detail"] and "fetch origin" in got["detail"]
 
 
-# --- a retry reuses the Canon entry the failed apply appended ---
+# --- a second apply appends its own entry ---
 
 def _entries(canon_root):
     with open(os.path.join(canon_root, CANON_REL), encoding="utf-8") as fh:
         return [l for l in fh.read().splitlines() if l.startswith("- **")]
 
 
-def test_retry_after_canon_not_committed_leaves_exactly_one_entry(proj, canon_root):
-    hooks = os.path.join(canon_root, ".git", "hooks")
-    _git(canon_root, "config", "core.hooksPath", hooks)
-    hook = os.path.join(hooks, "pre-commit")
-    with open(hook, "w") as fh:
-        fh.write("#!/bin/sh\nexit 1\n")
-    os.chmod(hook, 0o755)
+def test_a_second_apply_appends_its_own_entry(proj, canon_root):
     first = _apply(proj, canon_root, _proposal(), APPROVAL)
-    assert first["outcome"] == "canon-not-committed" and len(_entries(canon_root)) == 1
-    os.remove(hook)
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
-    assert (got["ok"], got["outcome"], got["canonEntry"]) == (True, "applied", first["canonEntry"])
-    assert got["canonEntryReused"] is True
-    assert _entries(canon_root) == [first["canonEntry"]]
-    assert _git(canon_root, "show", "HEAD:" + CANON_REL).count("- **") == 1
-    assert _touched(proj) == ["Auth"]
-
-
-def test_retry_after_calibration_not_written_appends_nothing_and_applies(proj, canon_root, monkeypatch):
-    real = project_config.set_item
-    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: {"action": "refused", "reason": "boom"})
-    first = _apply(proj, canon_root, _proposal(), APPROVAL)
-    assert first["reason"] == "calibration-not-written"
-    head = _git(canon_root, "rev-parse", "HEAD")
-    monkeypatch.setattr(project_config, "set_item", real)
-    got = _apply(proj, canon_root, _proposal(), APPROVAL)
-    assert (got["ok"], got["outcome"], got["canonEntry"]) == (True, "applied", first["canonEntry"])
-    assert _entries(canon_root) == [first["canonEntry"]]
-    assert _git(canon_root, "rev-parse", "HEAD") == head  # already recorded: no new commit
-    assert _touched(proj) == ["Auth"]
-
-
-def test_a_different_ruling_still_appends_its_own_entry(proj, canon_root):
-    _apply(proj, canon_root, _proposal(), APPROVAL)
-    other = {"schema": "calibration-proposal/1", "kind": "standing-ruling", "ruling": "Something else entirely."}
-    got = _apply(proj, canon_root, other, APPROVAL)
-    assert got["ok"] is True and "canonEntryReused" not in got and len(_entries(canon_root)) == 2
-
-
-def test_a_retry_of_a_superseded_approval_is_refused_and_the_newer_calibration_stays(proj, canon_root, monkeypatch):
-    repo, store = proj
-    real = project_config.set_item
-    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: {"action": "refused", "reason": "boom"})
-    a = _apply(proj, canon_root, _proposal(), APPROVAL)  # A: value X, its entry committed but X not applied
-    assert a["reason"] == "calibration-not-written"
-    monkeypatch.setattr(project_config, "set_item", real)
-    newer = _proposal(value=[AUTH], ruling="Only auth is a risk area now.", supersedes=next(iter(canon.ids_in(a["canonEntry"]))))
-    b = _apply(proj, canon_root, newer, dict(APPROVAL, words="Yes, only auth now.", date="2026-10-14"))  # B: value Y, supersedes A
-    assert (b["ok"], b["outcome"]) == (True, "applied")
-    before = _state(proj, canon_root)
-    got = _apply(proj, canon_root, _proposal(), APPROVAL)  # the retry of A's original proposal and approval
-    assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", "approval-superseded")
-    assert _state(proj, canon_root) == before and len(_entries(canon_root)) == 2
-    paths = ["src/auth/login.py", "src/payments/charge.py"]
-    assert [t["area"]["name"] for t in risk_areas.touched(repo, paths, root=store)["touched"]] == ["Auth"]  # still Y, not X
+    assert got["ok"] is True and got["canonEntry"] != first["canonEntry"] and len(_entries(canon_root)) == 2
