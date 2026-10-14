@@ -603,16 +603,13 @@ def _union_needed(*needed_sets):
     return out
 
 
-def _fill_extra_report(extra_report, liveness, extra, probe_refused=False):
+def _fill_extra_report(extra_report, liveness, extra):
     """Read the extra (non-panel) needed set through liveness_cache.live_from — the one liveness
-    reader — keeping only its live cells. A refused probe or a liveness read error is `unprobed`
-    with no cells; the extra set's dead-cell notes are never surfaced."""
+    reader — keeping only its live cells. A liveness read error is `unprobed` with no cells; the
+    extra set's dead-cell notes are never surfaced."""
     if extra_report is None:
         return
     unprobed = {"liveCells": [], "source": liveness_cache.LIVE_CELLS_SOURCE_UNPROBED}
-    if probe_refused:
-        extra_report.update(unprobed)
-        return
     _live, cells, read_notes = liveness_cache.live_from(liveness, extra)
     if any(n.get("constraint") == liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT for n in read_notes):
         extra_report.update(unprobed)
@@ -686,7 +683,9 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
-    _fill_extra_report(extra_report, liveness, extra, probe_refused=codex_floor_refusal is not None)
+    # A Codex floor refusal already marks every Codex cell dead in `liveness`; the other vendors'
+    # successfully probed cells stay live evidence, so the refusal is not threaded in here.
+    _fill_extra_report(extra_report, liveness, extra)
     return (
         live,
         live_cells,

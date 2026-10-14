@@ -237,13 +237,16 @@ def test_live_vendors_path_lists_only_the_listed_vendors(capsys):
 # --- edge 6: refusal / probe error -> unprobed ----------------------------------------------
 
 
-def test_codex_floor_refusal_records_the_nonpanel_cells_unprobed(probe_env, capsys):
+def test_codex_floor_refusal_keeps_the_other_vendors_probed_cells(probe_env, capsys):
+    # axis: a codex refusal kills only codex's cells; cursor's successfully probed cells stay live
     probe_env.floor = {"tool": "codex cli floor", "ok": False, "exit": 0, "detail": "codex-cli-too-old: test"}
     receipt = _compose(capsys)
 
-    assert receipt["nonPanelLiveCellsSource"] == "unprobed"
-    assert receipt["nonPanelLiveCells"] == []
+    assert receipt["nonPanelLiveCellsSource"] == "probed"
+    assert not [c for c in receipt["nonPanelLiveCells"] if c[0] == "codex"]
     assert "codex" not in receipt["liveVendors"]
+    assert CURSOR_VERIFIER_TRIPLE in receipt["nonPanelLiveCells"]
+    assert _real_cell("reviewer-deep", "cursor") in receipt["nonPanelLiveCells"]
 
 
 def test_liveness_read_error_on_the_nonpanel_set_is_unprobed(monkeypatch):

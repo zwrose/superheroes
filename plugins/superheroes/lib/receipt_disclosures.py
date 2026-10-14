@@ -196,10 +196,10 @@ def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=
 HOST_FAMILY_REGISTRY = object()
 
 # The dispatched-cell roles of the non-panel phases (`model_registry.matrix_config` rows).
-NONPANEL_ROLE_VERIFIER = "verifier"
-NONPANEL_ROLE_FINDER = "reviewer-deep"
-NONPANEL_ROLE_SYNTHESIS = "synthesis"
-NONPANEL_ROLES = (NONPANEL_ROLE_VERIFIER, NONPANEL_ROLE_FINDER, NONPANEL_ROLE_SYNTHESIS)
+# One home: `seat_map.NONPANEL_CELL_ROLES` (verifier, finder, synthesis, in that order) — composition
+# probes those cells and selection consumes them; this unpacking fails loudly if the arity drifts.
+NONPANEL_ROLES = seat_map.NONPANEL_CELL_ROLES
+NONPANEL_ROLE_VERIFIER, NONPANEL_ROLE_FINDER, NONPANEL_ROLE_SYNTHESIS = NONPANEL_ROLES
 
 _SEAT_MAP_HOST_KEY = "hostFamily"
 _SEAT_MAP_CELLS_KEY = "nonPanelLiveCells"

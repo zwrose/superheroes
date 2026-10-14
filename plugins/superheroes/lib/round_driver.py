@@ -6088,6 +6088,19 @@ def _retain_unauthenticated_finder_findings(state, artifact):
     _set_findings(state, rows)
 
 
+def _retain_verified_findings_unmerged(state):
+    """Carry the verified survivors staged for synthesis onto the receipt-visible findings before an
+    unauthenticated-synthesis park, WITHOUT applying the unauthenticated grouping: the confirmed
+    blockers stay visible while certification is withheld. Outstanding carried findings are kept."""
+    verified = state.get("_verified")
+    if not isinstance(verified, list) or not verified:
+        return
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    rows.extend(dict(f) if isinstance(f, dict) else f for f in verified)
+    _set_findings(state, rows)
+
+
 def _driver_receipt(state):
     """The terminal receipt of a run_loop state — the driver's own, built from the state alone."""
     return build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED)
@@ -6132,6 +6145,7 @@ def run_loop(seams, config=None):
                 if reported is not None and (
                         reported != selected
                         or receipt_disclosures.nonpanel_barred(state, state["config"])(reported)):
+                    _retain_verified_findings_unmerged(state)
                     _park_cannot_certify(
                         state, "nonpanel-synthesis-unauthenticated:expected=%s:reported=%s" % (
                             selected, reported))
