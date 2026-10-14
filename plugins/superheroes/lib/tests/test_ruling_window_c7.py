@@ -909,3 +909,29 @@ def test_ruling_a_withdrawn_batchs_only_blocker_out_drops_its_lifted_minor(tmp_p
     assert out.get("ok") is True, out
     after = _state(session_dir)
     assert after.get("terminal") == "converged", (after.get("step"), after.get("_fixBatch"))
+
+
+def _lifted_minor_state(decision_rows=None, gate=None):
+    state = RD.new_state()
+    state["rulingsLog"] = decision_rows or []
+    if gate:
+        state["rounds"] = {"1": {"judgmentDispositions": gate}}
+    return state, dict(findingKey="m", severity="Minor", lifted="real-consequence")
+
+
+def test_a_lifted_minor_with_guidance_stays_when_it_is_the_only_row():
+    state, row = _lifted_minor_state([dict(findingKey="m", ruling="guidance", guidance="fix it", seq=1)])
+    assert RD._queue_fix_batch(state, state["config"], [row]) == "queued"
+    assert state.get("terminal") != "converged"
+
+
+def test_a_lifted_minor_the_owner_approved_to_fix_stays_when_it_is_the_only_row():
+    state, row = _lifted_minor_state(gate=[dict(findingKey="m", disposition="fix-as-suggested", rulingSeq=1)])
+    assert RD._queue_fix_batch(state, state["config"], [row]) == "queued"
+    assert state.get("terminal") != "converged"
+
+
+def test_an_autonomous_lifted_minor_alone_still_converges():
+    state, row = _lifted_minor_state()
+    assert RD._queue_fix_batch(state, state["config"], [row]) == "excluded"
+    assert state.get("terminal") == "converged"

@@ -4521,10 +4521,15 @@ def _lifted_judgment_rows(state, rows):
     return _split_lifted_rows(state, rows)[1]
 
 
-def _holds_only_autonomous_lifts(rows):
-    """True when every row is an autonomous lift (``LIFT_REAL_CONSEQUENCE``): with no eligible blocker
-    beside them they never start a fixer leg. A guidance-named row is the owner's word, so it stays."""
-    return bool(rows) and all(row.get("lifted") == LIFT_REAL_CONSEQUENCE for row in rows)
+def _holds_only_autonomous_lifts(state, rows):
+    """True when every row is an autonomous lift (``LIFT_REAL_CONSEQUENCE``) no owner decision asks
+    to fix: with no eligible blocker beside them they never start a fixer leg. A row whose effective
+    decision is ``guidance`` or ``fix`` is the owner's word, so it stays."""
+    effective = _live_ruling_by_key(state)
+    return bool(rows) and all(
+        row.get("lifted") == LIFT_REAL_CONSEQUENCE
+        and (effective.get(_fix_batch_row_key(row)) or {}).get("ruling") not in ("guidance", "fix")
+        for row in rows)
 
 
 def _lift_into_fix_batch(state, rows):
@@ -4564,7 +4569,7 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
-    if batch_index == 0 and _holds_only_autonomous_lifts(filtered):
+    if batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):
         filtered = []
     if offered_nonempty and not filtered:
         rec = state["rounds"].setdefault(str(state["round"]), {})
