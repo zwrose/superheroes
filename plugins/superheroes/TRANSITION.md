@@ -63,6 +63,16 @@ These retirements ship in the same release as the review record, and never apart
 - A full-lane builder opens its PR as a draft before the review, and marks it ready at handback.
 - The seat-map receipt gains `makerFamilies` and `roster`, `seat_map.py compose` gains `--maker-family`, and `review_record.py` gains `reading-next`.
 
+### Review: damaged sessions, long records and the loop's tooling
+
+- A damaged review session repairs itself from its mirror and continues.
+- A long review record posts as several comments and reads back whole.
+- A session submitted by hand gets a review record too.
+- A fix that a later full panel did not raise again reads as fixed.
+- The review record re-checks the decisions it cites when it is written, and names the sheet part of each finding.
+- A run directory reused with a different prompt now refuses `run-dir-prompt-mismatch` instead of replaying the earlier result.
+- A Claude-built PR's grouping pass can sit on codex when the seat map proves that cell live.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
