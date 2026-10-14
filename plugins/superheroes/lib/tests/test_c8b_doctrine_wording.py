@@ -59,6 +59,11 @@ def test_the_picker_row_compares_before_make_start_and_judge():
     assert "before" in row
     for verb in ("`make`", "`start`", "`judge`"):
         assert verb in row, verb
+    # axis: the compare comes before each command, and the commands run make, start, judge in that
+    # order; the row's earlier "before and after the pick" would satisfy a bare index of "before",
+    # so the pin is on each "before `verb`" phrase — see bite-proof record c8c_wo_b.md
+    places = [row.index("before " + verb) for verb in ("`make`", "`start`", "`judge`")]
+    assert places == sorted(places), places
 
 
 def test_owner_decisions_never_calls_the_go_ahead_a_launch_word():
@@ -73,6 +78,17 @@ def test_the_parked_build_row_names_the_three_runs_and_the_duplicate_window():
     assert "watch cycle" not in row
     assert "sent back twice" not in row
     assert "gardening" in row
+    # axis: the three send-back runs come in the order a parked build meets them (after the renewed
+    # pass is confirmed, after a passed check, at each gardening pass) and the one-duplicate window
+    # is named after them — see bite-proof record c8c_wo_b.md
+    order = [
+        "after a confirmation of a renewed pass",
+        "after a passed check",
+        "at each gardening pass",
+        "one duplicate message",
+    ]
+    places = [row.index(phrase) for phrase in order]
+    assert places == sorted(places), places
 
 
 def test_the_setup_sitting_note_names_the_compare_command():
