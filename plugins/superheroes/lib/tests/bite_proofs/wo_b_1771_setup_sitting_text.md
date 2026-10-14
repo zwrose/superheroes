@@ -320,3 +320,56 @@ FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_
 1. The plain after-read is missing (renamed, deleted, or given `--confirmed`): the plain index is `None`, and the "has no line containing" assertion fails. D3b and D3c are the proofs of this edge.
 2. The plain after-read comes after the pass command: the pairwise order assertion fails (`plain < make`). Reasoned from the code, not run.
 3. The confirm-by-name line comes before the plain after-read: `plain < confirm` fails. Reasoned from the code, not run.
+
+## C8a WO3 (C4b FU2): the plain after-read must name `cloud_environment.py`
+
+The plain after-read match in `T::test_the_pick_is_read_before_and_after_and_before_the_check` now requires the line to contain `cloud_environment.py" pick` as well as end with `pick --cwd . --before <the value step 1 kept>`. Before, it matched on the line ending alone, so a plain after-read that ran another script passed. This is an authorized test strengthening. Same method and run command as above; the pytest captures omit the one `uv` deprecation warning line printed before pytest starts.
+
+**Declared guarded element:** C4bFU2-a.
+
+### C4bFU2-a: the plain after-read names `cloud_environment.py`. Axis: command content (the script the line runs)
+
+- **Neutralization applied.** Whole of `set-up.md:443`, through its line end (a prefix of it also starts line 453): `   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept>` had `cloud_environment.py` changed to `cloud_setup.py`.
+- **Node.** `T::test_the_pick_is_read_before_and_after_and_before_the_check`
+- **Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_the_pick_is_read_before_and_after_and_before_the_check __________
+
+    def test_the_pick_is_read_before_and_after_and_before_the_check():
+        section = _section_six()
+        assert section, "section 6 of set-up.md was not found"
+        # axis: the plain after-read line must name cloud_environment.py, not only end like the read — see bite-proof record wo_b_1771_setup_sitting_text.md
+        plain_end = 'pick --cwd . --before <the value step 1 kept>'
+        plain_name = 'cloud_environment.py" pick'
+        plain_label = 'a plain after-read line naming %r and ending %r' % (plain_name, plain_end)
+        plain = next((i for i, line in enumerate(section)
+                      if plain_name in line and line.strip().endswith(plain_end)), None)
+        found = [('cloud_environment.py" snapshot', _first(section, 'cloud_environment.py" snapshot')),
+                 ('cloud_check.py" setup-message', _first(section, 'cloud_check.py" setup-message')),
+                 (plain_label, plain),
+                 ('cloud_pass.py" make', _first(section, 'cloud_pass.py" make')),
+                 ('cloud_check.py" start', _first(section, 'cloud_check.py" start'))]
+        for needle, index in found:
+>           assert index is not None, "section 6 has no line containing %r" % needle
+E           AssertionError: section 6 has no line containing 'a plain after-read line naming \'cloud_environment.py" pick\' and ending \'pick --cwd . --before <the value step 1 kept>\''
+E           assert None is not None
+
+/home/user/c8a-wo3/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:99: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
+1 failed in 0.16s
+EXIT=1
+```
+
+- **Restore.** The inverse Edit, `cloud_setup.py` back to `cloud_environment.py` on the same line.
+- **Restore receipt.** `sed -n 443p set-up.md` printed `   python3 -B "$ROOT_DIR/lib/cloud_environment.py" pick --cwd . --before <the value step 1 kept>`.
+- **Green.**
+
+```
+.                                                                        [100%]
+1 passed in 0.12s
+EXIT=0
+```
