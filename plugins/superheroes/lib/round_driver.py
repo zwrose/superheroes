@@ -9068,6 +9068,13 @@ def _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt, sea
         envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
 
 
+def _cluster_finding_ids(pending, seat_key):
+    """The staged finding ids of the cluster a verifier seat (`verifier:<cluster key>`) was ordered."""
+    key = seat_key[len("verifier:"):]
+    return [f["id"] for c in pending.get("clusters") or [] if isinstance(c, dict) and c.get("key") == key
+            for f in c.get("findings") or [] if isinstance(f, dict) and isinstance(f.get("id"), str)]
+
+
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
                           pending_payload=None, seat_map=None, extra_journal_entries=()):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
@@ -9215,6 +9222,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "orderPath": paths["order_path"],
             "envelopeStubPath": paths["envelope_stub_path"],
         }
+        if phase == P_VERIFIERS:
+            # The verdict ids this seat's order assigned: `_assemble_verifiers` counts a verdict only from
+            # the seat that was ordered it (the manifest is hashed into the emission anchor).
+            seats[skey]["ids"] = _cluster_finding_ids(pending, seat_key)
         rendered.append((paths["order_path"], order_text.encode("utf-8"),
                          paths["envelope_stub_path"], order_sha, row, occurrence, seat_key))
 

@@ -506,12 +506,34 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
             omitted.append(_missing_detail(seat, occurrence, entry))
             continue
         landed.append(seat)
+        skey = round_records.storage_key(seat, occurrence)
         for verdict in entry["payload"]["verdicts"]:
-            supplied.append((seat, dict(verdict)))
+            supplied.append((seat, skey, dict(verdict)))
     if omitted:
         disclosures["unverifiedClusters"] = omitted
-    verdicts = [verdict for _seat, verdict in supplied]
-    seat_of_id = {}
+    # A verdict counts only from the seat its order assigned (`ids`, recorded at emission and hashed
+    # into the emission anchor). No manifest, or a seat entry with no `ids` list, assigns nothing, so
+    # nothing is kept (never "whoever supplied it"); an id assigned to two seats is kept for neither.
+    owner_of_id = {}
+    double = set()
+    manifest_seats = orders_manifest.get("seats") if isinstance(orders_manifest, dict) else None
+    for skey, entry in (manifest_seats.items() if isinstance(manifest_seats, dict) else ()):
+        ids = entry.get("ids") if isinstance(entry, dict) else None
+        for vid in (ids if isinstance(ids, list) else ()):
+            if isinstance(vid, str) and owner_of_id.setdefault(vid, skey) != skey:
+                double.add(vid)
+
+    def _owner(verdict):
+        return owner_of_id.get(verdict["id"]) if isinstance(verdict.get("id"), str) else None
+    kept = [(seat, verdict) for seat, skey, verdict in supplied
+            if _owner(verdict) == skey and verdict["id"] not in double]
+    unordered = [dict(seat=seat, id=verdict.get("id"), orderedTo=_owner(verdict))
+                 for seat, skey, verdict in supplied if _owner(verdict) != skey]
+    if unordered:
+        disclosures["unorderedVerdicts"] = unordered
+    if double:
+        disclosures["doubleAssigned"] = sorted(double)
+    verdicts = [verdict for _seat, verdict in kept]
     artifact = {"verdicts": verdicts}
     if landed:
         # The vendor that RAN each verifier is the runner's execution record (the same provenance
@@ -525,27 +547,11 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
         ran = {trusted[seat] for seat in landed if seat in trusted}
         if ran:
             artifact["verifierVendor"] = "+".join(sorted(ran))
-        # A verdict id supplied by several seats is vouched by the first proven seat (else the first):
-        # a barred or unproven seat repeating a proven seat's id never voids it.
-        def _proven(seat):
-            vendor = trusted.get(seat)
-            return bool(vendor) and not (is_barred and is_barred(vendor))
-        for seat, verdict in supplied:
-            vid = verdict.get("id")
-            if isinstance(vid, str) and (vid not in seat_of_id or (
-                    not _proven(seat_of_id[vid]) and _proven(seat))):
-                seat_of_id[vid] = seat
-        # Proven seats of one vendor repeating an id all stay, so the fold's ambiguity rule sees them.
-        verdicts[:] = [v for seat, v in supplied if not isinstance(v.get("id"), str)
-                       or seat_of_id[v["id"]] == seat or (
-                           _proven(seat) and _proven(seat_of_id[v["id"]])
-                           and trusted[seat] == trusted[seat_of_id[v["id"]]])]
-        artifact["verifierSeatVendors"] = {
-            vid: trusted.get(seat, "") for vid, seat in seat_of_id.items()}
+        artifact["verifierSeatVendors"] = {v["id"]: trusted.get(seat, "") for seat, v in kept}
         # A seat whose vendor is the driver's own manifest entry (a driver-wrapped host-seat landing,
         # no runner evidence) is marked so the fold records its provenance as `dispatch-manifest`.
         by_manifest = {
-            vid: PROVENANCE_SOURCE_DISPATCH_MANIFEST for vid, seat in seat_of_id.items()
+            v["id"]: PROVENANCE_SOURCE_DISPATCH_MANIFEST for seat, v in kept
             if disclosures.get("provenanceSource", {}).get(seat) == PROVENANCE_SOURCE_DISPATCH_MANIFEST}
         if by_manifest:
             artifact["verifierSeatProvenance"] = by_manifest
