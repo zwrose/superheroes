@@ -10,6 +10,7 @@ import copy
 import json
 import os
 import re
+import subprocess
 import sys
 
 import pytest
@@ -21,6 +22,9 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import canon  # noqa: E402
+import definition_doc  # noqa: E402
+import finding_outcomes as FO  # noqa: E402
+import round_orders  # noqa: E402
 import session_contract as SC  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 import verification  # noqa: E402
@@ -632,3 +636,46 @@ def test_a_later_code_quality_reraise_keeps_the_held_real_consequence():
     assert "lost work" in row["consequence"]
     import review_record_session as RRS
     assert RRS._findings(state)[0]["outcome"] == "left-for-owner"
+
+
+# --- the driver reads its decision sources from the one home the record writer uses -------------
+
+def _canon_project(tmp_path, monkeypatch):
+    """A throwaway git repo holding a Canon file; the Canon lookup and the residual read are pinned to
+    it, so a read that names no repository root would find them anyway (the ambient project's)."""
+    root = str(tmp_path / "project")
+    subprocess.run(["git", "init", "-q", "-b", "main", root], check=True)
+    path = os.path.join(root, "docs", "superheroes", "canon.md")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(canon.HEADER + CANON_TEXT + "\n")
+    loc = {"path": path, "home": "repo", "gitRoot": root, "exists": True, "defaultRef": None}
+    monkeypatch.setattr(definition_doc, "resolve_canon", lambda root: dict(loc))
+    seen = []
+
+    def residuals(repo_root, base_ref):
+        seen.append((repo_root, base_ref))
+        return RESIDUAL_TEXT, "Residuals below are read from the review base commit (base-pinned).", None
+
+    monkeypatch.setattr(round_orders, "resolve_order_residuals", residuals)
+    return root, seen
+
+
+def test_the_drivers_decision_sources_are_the_record_writers(tmp_path, monkeypatch):
+    # axis: the driver's sources are `finding_outcomes.decision_sources` for the session's repo root and base
+    root, seen = _canon_project(tmp_path, monkeypatch)
+    state = RD.new_state(TRD._cfg(repoRoot=root, baseRef="base-oid"))
+    sources = RD._decision_sources(state)
+    assert sources == FO.decision_sources(root, "base-oid")
+    assert CANON_ID in sources["canonText"]
+    assert (sources["residualText"], sources["residualSource"]) == (RESIDUAL_TEXT, "base")
+    assert seen == [(root, "base-oid"), (root, "base-oid")]
+
+
+def test_a_session_with_no_repo_root_has_no_decision_sources(tmp_path, monkeypatch):
+    # axis: no repository named reads nothing, so a cited decision is not on record (never the ambient project's)
+    _canon_project(tmp_path, monkeypatch)
+    state = RD.new_state(TRD._cfg())
+    assert "repoRoot" not in state["config"]
+    assert RD._decision_sources(state) == {}
+    assert RD._decision_sources({"config": {"repoRoot": "  ", "baseRef": "base-oid"}}) == {}
