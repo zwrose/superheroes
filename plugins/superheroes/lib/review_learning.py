@@ -127,13 +127,17 @@ def _proposal_problem(p):
     return None
 
 
-def _append_canon(canon_root, session_id, proposal, approval):
+def _append_args(canon_root, session_id, proposal, approval):
     argv = ["append", "--root=" + canon_root, "--session-id=" + str(session_id), "--ground=owner-call",
             "--scope=standing", "--ruling=" + proposal["ruling"], "--owners-words=" + approval["words"],
             "--where=" + approval["where"], "--date=" + approval["date"]]
     if proposal.get(SUPERSEDES_KEY):
         argv.append("--supersedes=" + proposal[SUPERSEDES_KEY])
-    return canon.cmd_append(canon._parser().parse_args(argv))
+    return canon._parser().parse_args(argv)
+
+
+def _append_canon(canon_root, session_id, proposal, approval):
+    return canon.cmd_append(_append_args(canon_root, session_id, proposal, approval))
 
 
 def _run_git(cwd, *args):
@@ -154,6 +158,62 @@ def _scrubbed_environ():
         yield
     finally:
         os.environ.update(gone)
+
+
+def _refresh_default_branch(canon_root):
+    """Canon's write procedure step 1: when an origin remote exists, `git fetch origin` before the lookup,
+    so a stale origin/HEAD does not hide a Canon the default branch already has. Returns a note saying the
+    refresh could not run or failed, or None when it ran or there is no origin to refresh from."""
+    try:
+        if _run_git(canon_root, "remote", "get-url", "origin").returncode != 0:
+            return None  # no origin remote: nothing to refresh
+        got = _run_git(canon_root, "fetch", "origin")
+    except subprocess.TimeoutExpired:
+        return "the default branch was not refreshed: git fetch origin timed out after %ss" % GIT_TIMEOUT_SECONDS
+    except OSError as exc:
+        return "the default branch was not refreshed: git could not be run (%s: %s)" % (type(exc).__name__, exc)
+    if got.returncode != 0:
+        return "the default branch was not refreshed: git fetch origin failed: %s" % (got.stderr or got.stdout).strip()
+    return None
+
+
+def _noted(out, note):
+    if note:
+        out["detail"] = "%s; %s" % (out["detail"], note) if out.get("detail") else note
+    return out
+
+
+def _existing_entry(canon_root, proposal, approval):
+    """The Canon working-copy line whose fields after the id equal the ones this approval would write (an
+    earlier apply's entry, left by a retry), or None. Returns (line, res) where `res` names Canon's paths."""
+    args = _append_args(canon_root, "00000000", proposal, approval)
+    loc, working, _ = canon._locate(args.root)
+    want = canon._ID_RE.sub("", canon.build_line(args, "0000-00-00-00000000-1"), count=1)
+    for held in working.splitlines():
+        if canon._ID_RE.match(held) and canon._ID_RE.sub("", held, count=1) == want:
+            paths = [loc["path"]]
+            attrs = os.path.join(os.path.dirname(loc["path"]), ".gitattributes")
+            if loc["home"] == "repo" and os.path.isfile(attrs):
+                paths.append(attrs)
+            return held, {"path": loc["path"], "gitRoot": loc["gitRoot"], "commitPaths": paths}
+    return None, None
+
+
+def _reuse_entry(line, res):
+    """Settle an entry an earlier apply appended: report it when HEAD holds it, else commit it.
+    Returns (commit, failure)."""
+    git_root = res["gitRoot"]
+    rel = os.path.relpath(res["path"], git_root).replace(os.sep, "/")
+    try:
+        shown = _run_git(git_root, "show", "HEAD:" + rel)
+        if shown.returncode == 0 and line in shown.stdout.splitlines():
+            head = _run_git(git_root, "rev-parse", "HEAD")
+            return head.stdout.strip(), None
+    except subprocess.TimeoutExpired:
+        return None, "git show timed out after %ss" % GIT_TIMEOUT_SECONDS
+    except OSError as exc:
+        return None, "git could not be run (%s: %s)" % (type(exc).__name__, exc)
+    return _commit_canon(res, line)
 
 
 def _commit_canon(res, line):
@@ -209,32 +269,38 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     if root is not None and os.path.realpath(os.path.expanduser(root)) != control_plane.store_root():
         return _result(False, "refused", "store-override-unsupported",
                        "Canon's append cannot take a store root; --root %s is not the ambient store" % root)
+    note = _refresh_default_branch(canon_root)
     try:
-        res = _append_canon(canon_root, session_id, proposal, approval)
+        line, res = _existing_entry(canon_root, proposal, approval)  # a retry reuses the entry, never mints another
+        reused = line is not None
+        if not reused:
+            res = _append_canon(canon_root, session_id, proposal, approval)
+            line = res["appended"][0]
     except canon.Refusal as exc:
         reason = "proposal-invalid" if exc.payload["reason"] == "canon-stays-out" else "canon-refused"
-        return _result(False, "refused", reason, "%s: %s" % (exc.payload["reason"], exc.payload["detail"]))
+        return _noted(_result(False, "refused", reason, "%s: %s" % (exc.payload["reason"], exc.payload["detail"])), note)
     except OSError as exc:
-        return _result(False, "canon-not-committed", "canon-write-failed", "%s: %s" % (type(exc).__name__, exc))
-    line = res["appended"][0]
-    commit, failure = _commit_canon(res, line)
+        return _noted(_result(False, "canon-not-committed", "canon-write-failed", "%s: %s" % (type(exc).__name__, exc)), note)
+    commit, failure = _reuse_entry(line, res) if reused else _commit_canon(res, line)
     if failure:
-        return _result(False, "canon-not-committed", "canon-commit-failed", failure, canonEntry=line)
+        return _noted(_result(False, "canon-not-committed", "canon-commit-failed", failure, canonEntry=line), note)
+    extra = {"canonEntryReused": True} if reused else {}
     if proposal["kind"] == "standing-ruling":
-        return _result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only")
+        return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only", **extra), note)
     half = proposal["half"]
     wrote = project_config.set_item(cwd, "riskAndTrust", {half: proposal["value"]}, root=root)
+    # axis: a failed calibration read-back reads partial and unconfirmed, never applied — see bite-proof record wo_a_1718_failed-read-back
     if wrote.get("reason") == project_config.REASON_SET_MISMATCH:  # the write precedes its read-back: the setting may have landed
-        return _result(False, "partial", "calibration-unconfirmed",
-                       "Canon holds %s (commit %s); the calibration write may have landed but its read-back failed, "
-                       "so the setting must be read back before anyone relies on it" % (line, commit),
-                       canonEntry=line, canonCommit=commit, set=wrote)
+        return _noted(_result(False, "partial", "calibration-unconfirmed",
+                              "Canon holds %s (commit %s); the calibration write may have landed but its read-back failed, "
+                              "so the setting must be read back before anyone relies on it" % (line, commit),
+                              canonEntry=line, canonCommit=commit, set=wrote, **extra), note)
     if wrote.get("action") not in ("written", "noop"):
-        return _result(False, "partial", "calibration-not-written",
-                       "Canon holds %s (commit %s); the calibration write returned %s"
-                       % (line, commit, wrote.get("reason") or wrote.get("action")),
-                       canonEntry=line, canonCommit=commit, set=wrote)
-    return _result(True, "applied", canonEntry=line, canonCommit=commit, calibration="risk-and-trust", set=wrote)
+        return _noted(_result(False, "partial", "calibration-not-written",
+                              "Canon holds %s (commit %s); the calibration write returned %s"
+                              % (line, commit, wrote.get("reason") or wrote.get("action")),
+                              canonEntry=line, canonCommit=commit, set=wrote, **extra), note)
+    return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="risk-and-trust", set=wrote, **extra), note)
 
 
 # --- the tally (I4) ---
@@ -366,6 +432,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                 if row["ran"] != review_record.RAN_NOT_RUN:
                     for seat in _seats(row.get("name")):
                         reviews[seat].add((rec["pr"], rec["sessionId"]))
+        # axis: a PR's catches are read from its latest record alone — see bite-proof record wo_a_1718_latest-record
         fixed = {}  # the latest record's catches, one per findingKey
         for f in recs[-1][3]["findings"]:
             if f.get("outcome") == _FIXED and not _merged_member(f):

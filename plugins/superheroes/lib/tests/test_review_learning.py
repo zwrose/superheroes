@@ -721,3 +721,101 @@ def test_apply_a_failed_read_back_is_partial_and_unconfirmed(proj, canon_root, m
     got = _apply(proj, canon_root, _proposal(), APPROVAL)
     assert (got["ok"], got["outcome"], got["reason"]) == (False, "partial", "calibration-unconfirmed")
     assert "may have landed" in got["detail"]
+
+
+# --- the real git runner is bounded ---
+
+def test_run_git_passes_the_timeout_to_subprocess(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(RL.subprocess, "run", fake_run)
+    RL._run_git("/nowhere", "commit", "-m", "x")
+    assert seen.get("timeout") == RL.GIT_TIMEOUT_SECONDS and RL.GIT_TIMEOUT_SECONDS > 0
+
+
+# --- Canon's write procedure step 1: refresh the default branch first ---
+
+def _origin_with_newer_canon(tmp_path, canon_root):
+    """A bare origin whose default branch holds a commit the canon_root clone has not fetched."""
+    bare = str(tmp_path / "origin.git")
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", bare)
+    _git(canon_root, "remote", "add", "origin", bare)
+    _git(canon_root, "push", "-q", "origin", "main")
+    other = str(tmp_path / "other")
+    _git(tmp_path, "clone", "-q", bare, other)
+    _identity(other)
+    os.makedirs(os.path.join(other, "docs", "superheroes"))
+    with open(os.path.join(other, CANON_REL), "w") as fh:
+        fh.write("newer canon\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-qm", "canon on the default branch")
+    _git(other, "push", "-q", "origin", "main")
+    return bare, _git(other, "rev-parse", "HEAD").strip()
+
+
+def test_apply_fetches_origin_before_the_canon_lookup(proj, canon_root, tmp_path, monkeypatch):
+    _, newest = _origin_with_newer_canon(tmp_path, canon_root)
+    stale = _git(canon_root, "rev-parse", "origin/main").strip()
+    assert stale != newest
+    seen = []
+    real = canon._locate
+    monkeypatch.setattr(canon, "_locate", lambda root: (seen.append(_git(canon_root, "rev-parse", "origin/main").strip()), real(root))[1])
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert got["ok"] is True and got["detail"] is None
+    assert seen and set(seen) == {newest}  # the lookup saw the refreshed ref
+
+
+def test_apply_says_so_when_the_fetch_fails_and_continues(proj, canon_root, tmp_path):
+    _git(canon_root, "remote", "add", "origin", str(tmp_path / "gone.git"))
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"]) == (True, "applied")
+    assert "not refreshed" in got["detail"] and "fetch origin" in got["detail"]
+
+
+# --- a retry reuses the Canon entry the failed apply appended ---
+
+def _entries(canon_root):
+    with open(os.path.join(canon_root, CANON_REL), encoding="utf-8") as fh:
+        return [l for l in fh.read().splitlines() if l.startswith("- **")]
+
+
+def test_retry_after_canon_not_committed_leaves_exactly_one_entry(proj, canon_root):
+    hooks = os.path.join(canon_root, ".git", "hooks")
+    _git(canon_root, "config", "core.hooksPath", hooks)
+    hook = os.path.join(hooks, "pre-commit")
+    with open(hook, "w") as fh:
+        fh.write("#!/bin/sh\nexit 1\n")
+    os.chmod(hook, 0o755)
+    first = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert first["outcome"] == "canon-not-committed" and len(_entries(canon_root)) == 1
+    os.remove(hook)
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"], got["canonEntry"]) == (True, "applied", first["canonEntry"])
+    assert got["canonEntryReused"] is True
+    assert _entries(canon_root) == [first["canonEntry"]]
+    assert _git(canon_root, "show", "HEAD:" + CANON_REL).count("- **") == 1
+    assert _touched(proj) == ["Auth"]
+
+
+def test_retry_after_calibration_not_written_appends_nothing_and_applies(proj, canon_root, monkeypatch):
+    real = project_config.set_item
+    monkeypatch.setattr(project_config, "set_item", lambda *a, **k: {"action": "refused", "reason": "boom"})
+    first = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert first["reason"] == "calibration-not-written"
+    head = _git(canon_root, "rev-parse", "HEAD")
+    monkeypatch.setattr(project_config, "set_item", real)
+    got = _apply(proj, canon_root, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"], got["canonEntry"]) == (True, "applied", first["canonEntry"])
+    assert _entries(canon_root) == [first["canonEntry"]]
+    assert _git(canon_root, "rev-parse", "HEAD") == head  # already recorded: no new commit
+    assert _touched(proj) == ["Auth"]
+
+
+def test_a_different_ruling_still_appends_its_own_entry(proj, canon_root):
+    _apply(proj, canon_root, _proposal(), APPROVAL)
+    other = {"schema": "calibration-proposal/1", "kind": "standing-ruling", "ruling": "Something else entirely."}
+    got = _apply(proj, canon_root, other, APPROVAL)
+    assert got["ok"] is True and "canonEntryReused" not in got and len(_entries(canon_root)) == 2
