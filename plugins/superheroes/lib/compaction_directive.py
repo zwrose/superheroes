@@ -12,16 +12,19 @@ refusal (argparse usage errors keep argparse's own exit 2).
 
     python3 -B compaction_directive.py path --session-id ID
     python3 -B compaction_directive.py save --session-id ID        (notes text on stdin)
+    python3 -B compaction_directive.py unmark --session-id ID --since MS --until MS
     python3 -B compaction_directive.py mode --transcript P
     python3 -B compaction_directive.py instructions --session-id ID [--transcript P]
                                                     [--user-instructions TEXT]
 """
 import argparse
+import contextlib
 import datetime
 import glob
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -31,9 +34,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import charter_detect
 import config_dir
 
+try:
+    import fcntl
+except ImportError:        # no advisory locks (Windows): ``reap`` then deletes nothing
+    fcntl = None
+
 MODES = tuple(charter_detect.CHARTER_NAMES) + ("generic",)
 
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+# The one home of how long a session's notes file is kept before ``reap`` removes it.
+NOTES_MAX_AGE_DAYS = 30
+
+# The one home of the delivery window: how long a delivery marker counts as fresh. ``reap``
+# removes a marker outside it.
+DELIVERY_WINDOW_SECONDS = 120
+
+_LOCK_NAME = ".lock"      # in the checkpoints directory; ``reap``'s filter never matches it
 
 _DROP = """\
 DROP (recoverable from GitHub or the ledger — do not spend summary budget):
@@ -196,6 +213,27 @@ def read_notes(session_id, env=None, max_chars=20000, cwd=None):
         return "", None
 
 
+@contextlib.contextmanager
+def _checkpoint_lock(base):
+    """Hold an exclusive advisory lock on ``<base>/.lock`` for the block; yields True when held.
+    One lock serializes every writer and the reaper over the directory. Where it cannot be taken
+    (no ``fcntl``, no directory, an I/O error) it yields False and never raises."""
+    fd = None
+    if fcntl is not None:
+        try:
+            fd = os.open(os.path.join(base, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+            fd = None
+    try:
+        yield fd is not None
+    finally:
+        if fd is not None:
+            os.close(fd)         # closing releases the lock
+
+
 def _atomic_write(path, text):
     """Write ``text`` to ``path`` through a temp file in the same directory and ``os.replace``:
     the destination is only ever absent/old or complete. Raises on I/O failure (temp removed)."""
@@ -207,7 +245,8 @@ def _atomic_write(path, text):
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        with _checkpoint_lock(directory):
+            os.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -260,7 +299,7 @@ def compose(mode, notes="", notes_path=None, notes_mtime=None, user_instructions
 
 
 # ----------------------------------------------------------------- delivery marker
-def delivered_recently(session_id, env=None, window_seconds=120, now=None, cwd=None):
+def delivered_recently(session_id, env=None, window_seconds=DELIVERY_WINDOW_SECONDS, now=None, cwd=None):
     """True only when THIS session's marker exists and its mtime is within the window."""
     try:
         marker = delivered_marker_path(session_id, env, cwd)
@@ -273,7 +312,7 @@ def delivered_recently(session_id, env=None, window_seconds=120, now=None, cwd=N
         return False
 
 
-def consume_delivered(session_id, env=None, window_seconds=120, now=None, cwd=None):
+def consume_delivered(session_id, env=None, window_seconds=DELIVERY_WINDOW_SECONDS, now=None, cwd=None):
     """One-shot read of this session's delivery marker: True when it was fresh, and the marker
     is deleted so a retry of the same compaction cannot reuse this attempt's evidence."""
     try:
@@ -287,6 +326,73 @@ def consume_delivered(session_id, env=None, window_seconds=120, now=None, cwd=No
         return True
     except Exception:
         return False
+
+
+def unmark_attempt(session_id, since_ms, until_ms, env=None, cwd=None):
+    """Remove this session's delivery marker when the millisecond stamp inside it (written by
+    ``mark_delivered``) lies within ``[since_ms, until_ms]``: the marker of a compaction attempt
+    that did not complete. True when removed; a missing marker, unreadable content or an
+    out-of-window stamp leaves it alone. Never raises."""
+    try:
+        marker = delivered_marker_path(session_id, env, cwd)
+        if marker is None:
+            return False
+        with _checkpoint_lock(os.path.dirname(marker)):
+            with open(marker, encoding="utf-8") as fh:
+                stamp = int(fh.read().strip())
+            if not since_ms <= stamp <= until_ms:
+                return False
+            os.remove(marker)
+            return True
+    except Exception:
+        return False
+
+
+# ----------------------------------------------------------------- reaping
+def _stale(mtime, suffix, current):
+    """The reap rule on one file's mtime: notes past ``NOTES_MAX_AGE_DAYS``, markers outside the
+    delivery window."""
+    if suffix == ".md":
+        return current - mtime > NOTES_MAX_AGE_DAYS * 86400
+    return abs(current - mtime) > DELIVERY_WINDOW_SECONDS
+
+
+def reap(session_id, env=None, cwd=None, now=None):
+    """Remove stale files from the checkpoint directory: ``<id>.md`` notes older than
+    ``NOTES_MAX_AGE_DAYS`` (by mtime) and ``<id>.delivered`` markers outside the delivery window.
+    Only regular files with a valid session-id name, never a symlink, never a subdirectory's
+    content, never ``session_id``'s own files. The scan and every removal run under the
+    checkpoint lock, which every writer takes to publish, so no save lands in between; where the
+    lock cannot be taken nothing is deleted. Returns the number removed; never raises."""
+    removed = 0
+    try:
+        if not _valid_session_id(session_id):
+            return 0
+        base = checkpoint_dir(env, cwd)
+        if base is None:
+            return 0
+        current = time.time() if now is None else now
+        with _checkpoint_lock(base) as held:
+            if not held:
+                return 0
+            with os.scandir(base) as entries:
+                listing = list(entries)
+            for entry in listing:
+                try:
+                    stem, suffix = os.path.splitext(entry.name)
+                    if suffix not in (".md", ".delivered") or not _valid_session_id(stem) or stem == session_id:
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    if entry.is_symlink() or not stat.S_ISREG(info.st_mode):
+                        continue
+                    if _stale(info.st_mtime, suffix, current):
+                        os.remove(entry.path)
+                        removed += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return removed
 
 
 # ----------------------------------------------------------------- CLI
@@ -322,6 +428,7 @@ _REQUIRED_ROLES = {
     "path": ("sessionId",),
     "save": ("sessionId",),
     "mark": ("sessionId",),
+    "unmark": ("sessionId", "since", "until"),
     "mode": ("transcriptPath",),
     "instructions": ("sessionId",),
 }
@@ -371,6 +478,19 @@ def _verb_mark(args):
     return _emit({"ok": True, "path": path})
 
 
+def _verb_unmark(args):
+    if not _valid_session_id(args.session_id):
+        return _refuse("session-id-invalid")
+    try:
+        since, until = int(args.since), int(args.until)
+    except ValueError:
+        return _refuse("window-invalid")
+    cwd = os.getcwd()
+    if delivered_marker_path(args.session_id, cwd=cwd) is None:
+        return _refuse("config-dir-unresolved")
+    return _emit({"ok": True, "removed": unmark_attempt(args.session_id, since, until, cwd=cwd)})
+
+
 def _verb_mode(args):
     return _emit({"ok": True, "mode": detect_mode(args.transcript)})
 
@@ -395,7 +515,8 @@ def main(argv=None):
     argv = _glue_user_instructions(list(sys.argv[1:] if argv is None else argv))
     args = _build_parser().parse_args(argv)     # argparse usage errors exit 2 by design
     try:
-        verb = {"path": _verb_path, "save": _verb_save, "mark": _verb_mark, "mode": _verb_mode, "instructions": _verb_instructions}
+        verb = {"path": _verb_path, "save": _verb_save, "mark": _verb_mark, "unmark": _verb_unmark,
+                "mode": _verb_mode, "instructions": _verb_instructions}
         return verb[args.verb](args)
     except Exception:
         return _refuse("internal-error")

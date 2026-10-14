@@ -44,14 +44,16 @@ const USER_CONFIG = {
   autoCheckpointMode: { default: 'auto', options: ['auto', 'click-only', 'off'] },
 }
 
-// What the stubbed lib/compaction_cli.json reads as. The mod takes its vocabulary from that
-// file; the real file's agreement with the real CLI is lib/tests/test_compaction_mod_argv_1814.py.
+// What the stubbed lib/compaction_cli.json reads as: a test-local vocabulary whose flag spellings are
+// deliberately NOT the real ones, so these tests prove the argv is built from whatever the file holds.
+// The real spellings are proven against the real CLI by lib/tests/test_compaction_mod_argv_1814.py.
 const VOCABULARY = JSON.stringify({
   verbs: {
-    path: { sessionId: '--session-id' },
-    instructions: { sessionId: '--session-id', transcriptPath: '--transcript', userInstructions: '--user-instructions' },
-    mark: { sessionId: '--session-id' },
-    save: { sessionId: '--session-id' },
+    path: { sessionId: '--t-session' },
+    instructions: { sessionId: '--t-session', transcriptPath: '--t-transcript', userInstructions: '--t-instructions' },
+    mark: { sessionId: '--t-session' },
+    unmark: { sessionId: '--t-session', since: '--t-since', until: '--t-until' },
+    save: { sessionId: '--t-session' },
   },
 })
 
@@ -83,6 +85,10 @@ const usageAt = (tokens: number): SessionUsage => ({
 
 type Rig = {
   argv: string[][]
+  // the clock's reading when each `argv` entry ran
+  argvAt: number[]
+  // what `$.session.id()` answers: a test changes it between events, as `/clear` does
+  sessionId: string
   stdins: (string | undefined)[]
   writes: { path: string; text: string }[]
   reads: string[]
@@ -114,6 +120,7 @@ function rig(
   cli: (argv: readonly string[]) => CliAnswer,
   options: {
     isIdBroken?: boolean
+    sessionId?: string
     isEnvBroken?: boolean
     isStateBroken?: boolean
     brokenKey?: string
@@ -123,10 +130,14 @@ function rig(
     manifest?: string | null
     compactFailures?: number
     compactSkip?: string
+    // the clock reading the session.compact handler moves to before it fails or resolves
+    compactAt?: number
   } = {},
 ): Rig {
   const r: Rig = {
     argv: [],
+    argvAt: [],
+    sessionId: options.sessionId ?? SESSION,
     stdins: [],
     writes: [],
     reads: [],
@@ -146,10 +157,11 @@ function rig(
   }
 
   on('session.id', () =>
-    options.isIdBroken ? { deny: 'no session id' } : { value: SESSION },
+    options.isIdBroken ? { deny: 'no session id' } : { value: r.sessionId },
   )
   on('process.run', async (_$, e) => {
     r.argv.push([...e.argv])
+    r.argvAt.push(r.clock.now())
     r.order.push(`cli:${e.argv[3]}`)
     r.stdins.push(e.init?.stdin)
     const out = await cli(e.argv)
@@ -219,7 +231,10 @@ function rig(
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
-  on('session.compact', (_$, e) => {
+  on('session.compact', async (_$, e) => {
+    if (options.compactAt !== undefined) {
+      await r.clock.set(options.compactAt)
+    }
     r.seen.push(e)
     r.order.push('compact')
     r.compactAttempts += 1
@@ -298,22 +313,22 @@ for (const trigger of ['manual', 'auto'] as const) {
     expect(nth(r.argv, 0)[1]).toBe('-B')
     expect(nth(r.argv, 0)[2]?.endsWith('/lib/compaction_directive.py')).toBe(true)
     expect(nth(r.argv, 0)[3]).toBe('instructions')
-    expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
-    expect(nth(r.argv, 0)).not.toContain('--user-instructions')
+    expect(flag(nth(r.argv, 0), '--t-session')).toBe(SESSION)
+    expect(nth(r.argv, 0)).not.toContain('--t-instructions')
     // the CLI publishes the marker atomically; the mod writes no file itself
     expect(nth(r.argv, 1)[3]).toBe('mark')
-    expect(flag(nth(r.argv, 1), '--session-id')).toBe(SESSION)
+    expect(flag(nth(r.argv, 1), '--t-session')).toBe(SESSION)
     expect(r.writes).toHaveLength(0)
     expect(r.order).toEqual(['cli:instructions', 'cli:mark', 'compact'])
   })
 }
 
-test("session.compact: the owner's /compact text is forwarded as --user-instructions", async ($, on) => {
+test("session.compact: the owner's /compact text is forwarded as --t-instructions", async ($, on) => {
   const r = rig(on, () => steer)
 
   await compact($, { instructions: 'keep the PR number' })
 
-  expect(flag(nth(r.argv, 0), '--user-instructions')).toBe('keep the PR number')
+  expect(flag(nth(r.argv, 0), '--t-instructions')).toBe('keep the PR number')
   expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
 })
 
@@ -322,7 +337,7 @@ test('session.compact: blank owner text is not forwarded', async ($, on) => {
 
   await compact($, { instructions: '  \n ' })
 
-  expect(nth(r.argv, 0)).not.toContain('--user-instructions')
+  expect(nth(r.argv, 0)).not.toContain('--t-instructions')
 })
 
 test('session.compact: the transcript the session started with is forwarded', async ($, on) => {
@@ -331,16 +346,16 @@ test('session.compact: the transcript the session started with is forwarded', as
   await $.classic.SessionStart({ source: 'startup', transcript_path: '/t/s.jsonl' })
   await compact($)
 
-  expect(flag(nth(r.argv, 0), '--transcript')).toBe('/t/s.jsonl')
+  expect(flag(nth(r.argv, 0), '--t-transcript')).toBe('/t/s.jsonl')
 })
 
-test('session.compact: no --transcript while the transcript is unknown', async ($, on) => {
+test('session.compact: no --t-transcript while the transcript is unknown', async ($, on) => {
   const r = rig(on, () => steer)
 
   await $.classic.SessionStart({ source: 'startup', transcript_path: '' })
   await compact($)
 
-  expect(nth(r.argv, 0)).not.toContain('--transcript')
+  expect(nth(r.argv, 0)).not.toContain('--t-transcript')
   expect(nth(r.seen, 0).instructions).toBe(DIRECTIVE)
 })
 
@@ -384,7 +399,7 @@ const failures: [string, Cli, Options][] = [
   ['the session id throws', steer, { isIdBroken: true }],
   ['the vocabulary file cannot be read', steer, { vocabulary: null }],
   ['the vocabulary file is not JSON', steer, { vocabulary: '{ not json' }],
-  ['the vocabulary file lacks a verb', steer, { vocabulary: JSON.stringify({ verbs: { mark: { sessionId: '--session-id' } } }) }],
+  ['the vocabulary file lacks a verb', steer, { vocabulary: JSON.stringify({ verbs: { mark: { sessionId: '--t-session' } } }) }],
 ]
 
 for (const [name, cli, options] of failures) {
@@ -427,6 +442,93 @@ test('session.compact fails open with no owner text: instructions stay absent', 
   expect(r.writes).toHaveLength(0)
 })
 
+const unmarks = (r: Rig) => r.argv.filter(argv => argv[3] === 'unmark')
+
+test('session.compact: next throws (Esc) — the error propagates and one unmark is scheduled for the attempt', async ($, on) => {
+  const r = rig(on, () => steer, { compactFailures: Infinity, compactAt: 1500 })
+
+  await r.clock.set(1000)
+  await expect(compact($)).rejects.toThrow()
+  expect(unmarks(r)).toHaveLength(0)
+
+  await r.clock.advance(1)
+
+  expect(unmarks(r)).toHaveLength(1)
+
+  const markAt = nth(r.argvAt, r.argv.findIndex(argv => argv[3] === 'mark'))
+  const unmark = nth(unmarks(r), 0)
+
+  expect(flag(unmark, '--t-session')).toBe(SESSION)
+  expect(Number(flag(unmark, '--t-since'))).toBeLessThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-until'))).toBeGreaterThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-since'))).toBe(1000)
+  expect(Number(flag(unmark, '--t-until'))).toBe(1500)
+})
+
+test('session.compact: next resolves a skip — one unmark is scheduled for the attempt', async ($, on) => {
+  const r = rig(on, () => steer, { compactSkip: 'vetoed by a hook', compactAt: 1500 })
+
+  await r.clock.set(1000)
+  const res = await compact($)
+
+  expect(res).toEqual({ skip: 'vetoed by a hook' })
+  expect(unmarks(r)).toHaveLength(0)
+
+  await r.clock.advance(1)
+
+  expect(unmarks(r)).toHaveLength(1)
+
+  const markAt = nth(r.argvAt, r.argv.findIndex(argv => argv[3] === 'mark'))
+  const unmark = nth(unmarks(r), 0)
+
+  expect(Number(flag(unmark, '--t-since'))).toBeLessThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-until'))).toBeGreaterThanOrEqual(markAt)
+  expect(Number(flag(unmark, '--t-since'))).toBe(1000)
+  expect(Number(flag(unmark, '--t-until'))).toBe(1500)
+})
+
+test('session.compact: a compaction that completes schedules no unmark', async ($, on) => {
+  const r = rig(on, () => steer)
+
+  await compact($)
+  await r.clock.advance(60000)
+
+  expect(unmarks(r)).toHaveLength(0)
+})
+
+test("session.compact: a subagent's compaction schedules no unmark", async ($, on) => {
+  const r = rig(on, () => steer, { compactSkip: 'vetoed by a hook' })
+
+  await compact($, { agentId: 'agent-7' })
+  await r.clock.advance(1)
+
+  expect(unmarks(r)).toHaveLength(0)
+})
+
+test('session.compact: a mark answered non-zero and then a throw still schedules the unmark', async ($, on) => {
+  const r = rig(
+    on,
+    argv => (argv[3] === 'mark' ? { exitCode: 1, stdout: '{"ok": false, "reason": "x"}' } : steer),
+    { compactFailures: Infinity },
+  )
+
+  await expect(compact($)).rejects.toThrow()
+  await r.clock.advance(1)
+
+  expect(r.argv.filter(argv => argv[3] === 'mark')).toHaveLength(1)
+  expect(unmarks(r)).toHaveLength(1)
+})
+
+test('session.compact: an unmark the CLI refuses changes nothing for the owner', async ($, on) => {
+  const r = rig(on, argv => (argv[3] === 'unmark' ? { exitCode: 1, stdout: '' } : steer), { compactSkip: 'vetoed' })
+
+  expect(await compact($)).toEqual({ skip: 'vetoed' })
+  await r.clock.advance(1)
+
+  expect(unmarks(r)).toHaveLength(1)
+  expect(r.toasts).toEqual([])
+})
+
 test('session.start sets the mod-presence variable to this session id for Bash children', async ($, on) => {
   const r = rig(on, () => steer)
 
@@ -443,6 +545,37 @@ test('session.start still completes when the env write throws', async ($, on) =>
   const res = await $.session.start({ cwd: '/w', surface: null, isInteractive: false })
 
   expect(res).toEqual({ cwd: '/w' })
+})
+
+test('/clear fires no session.start: classic.SessionStart with source clear names the new session', async ($, on) => {
+  const r = rig(on, () => steer)
+
+  await $.session.start({ cwd: '/w', surface: null, isInteractive: false })
+  r.sessionId = 'sess-2'
+  await $.classic.SessionStart({ source: 'clear', transcript_path: '' })
+
+  expect(r.envs).toEqual([
+    ['SUPERHEROES_COMPACT_MOD', 'sess-1'],
+    ['SUPERHEROES_COMPACT_MOD', 'sess-2'],
+  ])
+})
+
+test('classic.SessionStart with any other source leaves the presence variable alone', async ($, on) => {
+  const r = rig(on, () => steer)
+
+  for (const source of ['startup', 'resume', 'compact'] as const) {
+    await $.classic.SessionStart({ source, transcript_path: '' })
+  }
+
+  expect(r.envs).toEqual([])
+})
+
+test('classic.SessionStart with source clear still completes when the env write throws', async ($, on) => {
+  rig(on, () => steer, { isEnvBroken: true })
+
+  const res = await $.classic.SessionStart({ source: 'clear', transcript_path: '' })
+
+  expect(res).toEqual({})
 })
 
 test('classic.SessionStart stores the transcript path under the plugin state', async ($, on) => {
@@ -481,7 +614,7 @@ test('turn.complete hands the checkpoint block to the CLI save verb on stdin, th
   expect(res).toEqual({ text: answer })
   expect(r.argv).toHaveLength(1)
   expect(nth(r.argv, 0)[3]).toBe('save')
-  expect(flag(nth(r.argv, 0), '--session-id')).toBe(SESSION)
+  expect(flag(nth(r.argv, 0), '--t-session')).toBe(SESSION)
   expect(r.stdins).toEqual(['## Notes\n- one\n- two'])
   // the CLI owns the (atomic) file write; the mod writes nothing itself
   expect(r.writes).toHaveLength(0)
@@ -713,6 +846,28 @@ test('a measurement after the turn, before the compaction runs, starts no second
   expect(r.commands).toEqual([COMMAND, COMMAND])
 })
 
+test('measurements at the same high fill while the scheduled compaction waits start no second command', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await complete($, 'Done.')
+
+  // the compaction timer has not run yet
+  expect(r.seen).toHaveLength(0)
+  await measure($, r, PAST)
+  await measure($, r, PAST + 1000)
+
+  expect(r.commands).toEqual([COMMAND])
+
+  await r.clock.advance(1000)
+
+  expect(r.commands).toEqual([COMMAND])
+  expect(r.seen).toHaveLength(1)
+})
+
 test('a failed save never compacts, even when the notes file changed', async ($, on) => {
   const r = rig(on, argv => (argv[3] === 'save' ? { exitCode: 1, stdout: 'no' } : saveAnswer))
 
@@ -894,6 +1049,21 @@ test('a checkpoint whose turn never completed stops blocking after a while', asy
   await r.clock.settle()
 
   expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('a finishing turn ignores an expired checkpoint record: nothing compacts, nothing is told', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+
+  await start($)
+  await measure($, r, PAST)
+  await r.clock.settle()
+  r.notes = 'fresh notes'
+  await r.clock.advance(31 * 60 * 1000)
+  await complete($, 'Done.')
+  await r.clock.advance(5000)
+
+  expect(r.seen).toHaveLength(0)
+  expect(r.toasts).toEqual([])
 })
 
 test('the checkpoint command fails to run: the checkpoint is cleared and the owner is told', async ($, on) => {
@@ -1242,6 +1412,31 @@ test('after a successful compaction the context must grow before an automatic ru
   await measure($, r, FILL + SNOOZE_STEP_TOKENS)
   await r.clock.settle()
   expect(r.commands).toEqual([COMMAND, COMMAND])
+})
+
+test('the post-compaction re-arm boundary: one token below it runs nothing, at it the checkpoint runs', async ($, on) => {
+  const r = rig(on, () => saveAnswer)
+  const usage = (tokens: number) => {
+    const u = usageAt(tokens)
+
+    return { ...u, context: { ...u.context, breakdown: { ...u.context.breakdown!, autoCompactThreshold: THRESHOLD } } }
+  }
+  const at = async (tokens: number) => {
+    r.usage = usage(tokens)
+    await $.session.measure({ context: { tokens, window: 200000 }, rateLimits: [], changed: ['context'] })
+    await r.clock.settle()
+  }
+
+  await start($)
+  await compact($)
+  // the first measurement after the compaction is above the trigger (117000): it re-arms halfway to the
+  // harness's own compaction, 150000 + (167000 - 150000) / 2 = 158500
+  await at(150000)
+  expect(r.commands).toEqual([])
+  await at(158499)
+  expect(r.commands).toEqual([])
+  await at(158500)
+  expect(r.commands).toEqual([COMMAND])
 })
 
 test('after a compaction that leaves 80000 with the harness compacting at 167000, an automatic run happens before it', async ($, on) => {

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -520,7 +521,7 @@ def test_save_notes_failure_leaves_the_previous_notes_and_no_temp_file(tmp_path,
     with pytest.raises(OSError):
         cd.save_notes(SID, "new notes\n", env)
     directory = os.path.dirname(cd.checkpoint_path(SID, env))
-    assert os.listdir(directory) == [SID + ".md"]
+    assert sorted(os.listdir(directory)) == [".lock", SID + ".md"]
     with open(cd.checkpoint_path(SID, env), encoding="utf-8") as fh:
         assert fh.read() == "old notes\n"
 
@@ -590,3 +591,284 @@ def test_cli_absolute_override_unaffected_by_process_cwd(tmp_path):
     code, out, _ = _run_in(session, {"HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
                            "path", "--session-id", SID)
     assert code == 0 and out["path"] == os.path.join(base, SID + ".md")
+
+
+# ---------------------------------------------------------------- unmark_attempt
+def _stamped(tmp_path, now_seconds, sid=SID):
+    env = _env(tmp_path)
+    path = cd.mark_delivered(sid, env, now=now_seconds)
+    return env, path
+
+
+def test_unmark_in_window_removes_the_marker_including_both_ends(tmp_path):
+    env, path = _stamped(tmp_path, 1000)
+    assert cd.unmark_attempt(SID, 999000, 1001000, env) is True
+    assert not os.path.exists(path)
+    for since, until in ((1000000, 1000000), (1000000, 2000000), (0, 1000000)):
+        cd.mark_delivered(SID, env, now=1000)
+        assert cd.unmark_attempt(SID, since, until, env) is True
+        assert not os.path.exists(path)
+
+
+@pytest.mark.parametrize("since,until", [(1000001, 2000000), (0, 999999), (2000000, 3000000)])
+def test_unmark_out_of_window_keeps_the_marker(tmp_path, since, until):
+    env, path = _stamped(tmp_path, 1000)
+    assert cd.unmark_attempt(SID, since, until, env) is False
+    assert os.path.exists(path)
+
+
+def test_unmark_missing_marker_is_false(tmp_path):
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, _env(tmp_path)) is False
+
+
+@pytest.mark.parametrize("content", ["", "not a number", "12.5", "\x00\x01"])
+def test_unmark_garbage_content_keeps_the_marker(tmp_path, content):
+    env = _env(tmp_path)
+    path = cd.delivered_marker_path(SID, env)
+    _touch(path, text=content)
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, env) is False
+    assert os.path.exists(path)
+
+
+def test_unmark_leaves_another_sessions_marker(tmp_path):
+    env, other = _stamped(tmp_path, 1000, sid="other-session")
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, env) is False
+    assert os.path.exists(other)
+
+
+@pytest.mark.parametrize("bad", ["../x", "", None])
+def test_unmark_invalid_session_id_is_false(tmp_path, bad):
+    assert cd.unmark_attempt(bad, 0, 10 ** 15, _env(tmp_path)) is False
+
+
+def test_unmark_unresolved_config_dir_is_false(tmp_path):
+    assert cd.unmark_attempt(SID, 0, 10 ** 15, {"CLAUDE_CONFIG_DIR": "rel", "HOME": str(tmp_path)}) is False
+
+
+def test_cli_unmark_verb_removes_in_window_and_answers_ok_otherwise(tmp_path):
+    env = _env(tmp_path)
+    path = cd.mark_delivered(SID, env, now=1000)
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "0", "--until", "999999")
+    assert (code, out) == (0, {"ok": True, "removed": False})
+    assert os.path.exists(path)
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "999999", "--until", "1000001")
+    assert (code, out) == (0, {"ok": True, "removed": True})
+    assert not os.path.exists(path)
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "0", "--until", "1000001")
+    assert (code, out) == (0, {"ok": True, "removed": False})
+
+
+def test_cli_unmark_refusals(tmp_path):
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", "../x", "--since", "0", "--until", "1")
+    assert (code, out) == (1, {"ok": False, "reason": "session-id-invalid"})
+    code, out, _ = _run(tmp_path, "unmark", "--session-id", SID, "--since", "soon", "--until", "1")
+    assert (code, out) == (1, {"ok": False, "reason": "window-invalid"})
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": "relative/home"}
+    r = subprocess.run([sys.executable, "-B", _SCRIPT, "unmark", "--session-id", SID, "--since", "0",
+                        "--until", "1"], env=env, capture_output=True, text=True, timeout=20, cwd=str(tmp_path))
+    assert r.returncode == 1
+    assert json.loads(r.stdout) == {"ok": False, "reason": "config-dir-unresolved"}
+
+
+# ---------------------------------------------------------------- reap
+NOW = 2000000000
+DAY = 86400
+OLD_NOTES = NOW - cd.NOTES_MAX_AGE_DAYS * DAY - 1
+FRESH_NOTES = NOW - cd.NOTES_MAX_AGE_DAYS * DAY + 1
+
+
+def _ckpt(tmp_path, name):
+    return os.path.join(cd.checkpoint_dir(_env(tmp_path)), name)
+
+
+def test_reap_removes_old_notes_and_keeps_newer_ones(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "new-one.md"), mtime=FRESH_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert not os.path.exists(_ckpt(tmp_path, "old-one.md"))
+    assert os.path.exists(_ckpt(tmp_path, "new-one.md"))
+
+
+def test_reap_removes_markers_past_the_delivery_window_and_keeps_newer_ones(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.delivered"), mtime=NOW - cd.DELIVERY_WINDOW_SECONDS - 1)
+    _touch(_ckpt(tmp_path, "new-one.delivered"), mtime=NOW - cd.DELIVERY_WINDOW_SECONDS + 1)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert not os.path.exists(_ckpt(tmp_path, "old-one.delivered"))
+    assert os.path.exists(_ckpt(tmp_path, "new-one.delivered"))
+
+
+def test_reap_never_touches_the_current_session(tmp_path):
+    _touch(_ckpt(tmp_path, SID + ".md"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, SID + ".delivered"), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert os.path.exists(_ckpt(tmp_path, SID + ".md"))
+    assert os.path.exists(_ckpt(tmp_path, SID + ".delivered"))
+
+
+def test_reap_ignores_names_that_are_not_a_session_id_with_a_known_suffix(tmp_path):
+    names = ["has space.md", ".md", "a.b.md", "a" * 129 + ".md", "x.txt", "x.md.bak", ".checkpoint.abc.tmp",
+             "x.delivered.old"]
+    for name in names:
+        _touch(_ckpt(tmp_path, name), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert all(os.path.exists(_ckpt(tmp_path, name)) for name in names)
+
+
+def test_reap_never_follows_or_removes_a_symlink(tmp_path):
+    target = tmp_path / "elsewhere" / "target.md"
+    _touch(str(target), mtime=OLD_NOTES)
+    os.makedirs(os.path.dirname(_ckpt(tmp_path, "x")), exist_ok=True)
+    os.symlink(str(target), _ckpt(tmp_path, "linked.md"))
+    os.symlink(str(tmp_path / "missing"), _ckpt(tmp_path, "dangling.delivered"))
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert os.path.islink(_ckpt(tmp_path, "linked.md"))
+    assert os.path.islink(_ckpt(tmp_path, "dangling.delivered"))
+    assert target.exists()
+
+
+def test_reap_does_not_recurse_or_remove_directories(tmp_path):
+    _touch(_ckpt(tmp_path, os.path.join("nested", "inner.md")), mtime=OLD_NOTES)
+    os.makedirs(_ckpt(tmp_path, "dir.md"))
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert os.path.exists(_ckpt(tmp_path, os.path.join("nested", "inner.md")))
+    assert os.path.isdir(_ckpt(tmp_path, "dir.md"))
+
+
+def test_reap_counts_every_file_it_removes(tmp_path):
+    for sid in ("a1", "b2", "c3"):
+        _touch(_ckpt(tmp_path, sid + ".md"), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "d4.delivered"), mtime=NOW - 500)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 4
+
+
+def test_reap_defaults_to_the_wall_clock(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=time.time() - (cd.NOTES_MAX_AGE_DAYS + 1) * DAY)
+    _touch(_ckpt(tmp_path, "new-one.md"))
+    assert cd.reap(SID, _env(tmp_path)) == 1
+
+
+def test_reap_is_a_no_op_without_a_resolvable_dir_directory_or_session_id(tmp_path):
+    assert cd.reap(SID, {"CLAUDE_CONFIG_DIR": "rel", "HOME": str(tmp_path)}, now=NOW) == 0
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0     # no checkpoint directory yet
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    for bad in ("../x", "", None):
+        assert cd.reap(bad, _env(tmp_path), now=NOW) == 0
+    assert os.path.exists(_ckpt(tmp_path, "old-one.md"))
+
+
+def test_reap_resolves_a_relative_config_dir_against_cwd(tmp_path):
+    env = {"CLAUDE_CONFIG_DIR": "relcfg", "HOME": str(tmp_path)}
+    old = tmp_path / "relcfg" / "superheroes" / "checkpoints" / "old-one.md"
+    _touch(str(old), mtime=OLD_NOTES)
+    assert cd.reap(SID, env, cwd=str(tmp_path), now=NOW) == 1
+    assert not old.exists()
+
+
+def test_reap_never_raises(tmp_path, monkeypatch):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+
+    def boom(*_a, **_k):
+        raise OSError("scandir failed")
+
+    monkeypatch.setattr(os, "scandir", boom)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+
+
+def _ckpt_listing(tmp_path):
+    return sorted(os.listdir(os.path.dirname(_ckpt(tmp_path, "x"))))
+
+
+def test_reap_removes_a_stale_file_and_leaves_only_the_lock_file(tmp_path):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 1
+    assert _ckpt_listing(tmp_path) == [".lock"]
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0      # the lock file is never a candidate
+    assert _ckpt_listing(tmp_path) == [".lock"]
+
+
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_a_production_save_waits_for_a_held_lock_before_publishing(tmp_path):
+    path = _ckpt(tmp_path, "busy-one.md")
+    _touch(path, mtime=OLD_NOTES, text="old")
+    saved = []
+    with cd._checkpoint_lock(os.path.dirname(path)) as held:    # a reaper mid-sweep
+        assert held
+        writer = threading.Thread(target=lambda: saved.append(cd.save_notes("busy-one", "fresh save", _env(tmp_path))))
+        writer.start()
+        writer.join(0.3)
+        assert writer.is_alive() and _read(path) == "old"        # the real writer is held at publication
+    writer.join(10)
+    assert saved == [path] and _read(path) == "fresh save"
+
+
+def test_a_production_marker_write_waits_for_a_held_lock_before_publishing(tmp_path):
+    marker = cd.delivered_marker_path("busy-one", _env(tmp_path))
+    _touch(marker, text="old")
+    with cd._checkpoint_lock(os.path.dirname(marker)) as held:
+        assert held
+        writer = threading.Thread(target=lambda: cd.mark_delivered("busy-one", _env(tmp_path), now=5))
+        writer.start()
+        writer.join(0.3)
+        assert writer.is_alive() and _read(marker) == "old"
+    writer.join(10)
+    assert _read(marker) == "5000"
+
+
+def test_a_reap_holding_the_lock_removes_the_stale_file_before_the_save_lands(tmp_path, monkeypatch):
+    path = _ckpt(tmp_path, "busy-one.md")
+    _touch(path, mtime=OLD_NOTES, text="old")
+    in_sweep, release = threading.Event(), threading.Event()
+    real_scandir = os.scandir
+
+    def paused_scandir(target):
+        in_sweep.set()                  # the reaper holds the lock and the stale file still exists
+        assert release.wait(10)
+        return real_scandir(target)
+
+    monkeypatch.setattr(os, "scandir", paused_scandir)
+    result, saved = [], []
+    reaper = threading.Thread(target=lambda: result.append(cd.reap(SID, _env(tmp_path), now=NOW)))
+    reaper.start()
+    assert in_sweep.wait(10)
+    writer = threading.Thread(target=lambda: saved.append(cd.save_notes("busy-one", "fresh save", _env(tmp_path))))
+    writer.start()
+    writer.join(0.3)
+    assert writer.is_alive() and _read(path) == "old"          # the save cannot land mid-sweep
+    release.set()
+    reaper.join(10)
+    writer.join(10)
+    assert result == [1] and saved == [path]
+    assert _read(path) == "fresh save"                         # swept first, then the fresh save published
+
+
+def test_concurrent_reaps_remove_each_stale_file_once_and_never_a_fresh_one(tmp_path):
+    for i in range(20):
+        _touch(_ckpt(tmp_path, "old%d.md" % i), mtime=OLD_NOTES)
+    _touch(_ckpt(tmp_path, "new-one.md"), mtime=FRESH_NOTES)
+    counts = []
+    threads = [threading.Thread(target=lambda: counts.append(cd.reap(SID, _env(tmp_path), now=NOW)))
+               for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    assert sorted(counts) == [0, 0, 0, 20]
+    assert _ckpt_listing(tmp_path) == [".lock", "new-one.md"]
+
+
+def test_reap_deletes_nothing_where_fcntl_is_unavailable(tmp_path, monkeypatch):
+    _touch(_ckpt(tmp_path, "old-one.md"), mtime=OLD_NOTES)
+    monkeypatch.setattr(cd, "fcntl", None)
+    assert cd.reap(SID, _env(tmp_path), now=NOW) == 0
+    assert _ckpt_listing(tmp_path) == ["old-one.md"]
+
+
+def test_writers_still_save_without_the_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(cd, "fcntl", None)
+    path = cd.save_notes(SID, "notes", _env(tmp_path))
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "notes"

@@ -189,6 +189,29 @@ def test_fresh_marker_for_same_session_is_silent(monkeypatch, capsys, tmp_path):
     assert _plain_stdout(capsys) == _expected("workhorse")
 
 
+def test_marker_of_an_attempt_that_did_not_complete_is_removed_and_the_fallback_steers(monkeypatch, capsys, tmp_path):
+    mod = _load_hook("cc_marker_unmarked")
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    since = int(time.time() * 1000)
+    compaction_directive.mark_delivered("sess-test")
+    until = int(time.time() * 1000)
+    assert compaction_directive.unmark_attempt("sess-test", since, until) is True
+    _stdin(monkeypatch, _precompact_payload(str(path)))
+    assert mod.main() == 0
+    assert _plain_stdout(capsys) == _expected("workhorse")
+
+
+def test_marker_of_a_completed_attempt_without_an_unmark_keeps_the_fallback_silent(monkeypatch, capsys, tmp_path):
+    mod = _load_hook("cc_marker_marked")
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    compaction_directive.mark_delivered("sess-test")
+    _stdin(monkeypatch, _precompact_payload(str(path)))
+    assert mod.main() == 0
+    assert _stdout_lines(capsys) == []
+
+
 def test_marker_for_a_different_session_still_prints(monkeypatch, capsys, tmp_path):
     mod = _load_hook("cc_marker_other")
     path = tmp_path / "transcript.jsonl"

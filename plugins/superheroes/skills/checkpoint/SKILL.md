@@ -24,6 +24,8 @@ lose) and it prints the **ready-to-paste `/compact` line**.
   does **not** need to re-invoke `/superheroes:showrunner`, `/superheroes:workhorse`, or
   `/superheroes:detective` by hand.
 
+Notes files older than `NOTES_MAX_AGE_DAYS` (in `lib/compaction_directive.py`) and stale delivery markers are removed at session start; a resumed session older than that gets its notes rewritten by its next checkpoint.
+
 ## Invocation
 
 | Form | Behavior |
@@ -158,9 +160,12 @@ printenv <MOD_VAR>
 - **Prints this session's id** (the one in the step 2 notes file name): the mod saves the block to the notes
   file when the reply ends. Do **not** write the file yourself.
 - **Anything else** (nothing, or a different id inherited from another session): no mod in this
-  session. Write the **same block body** (without the
-  fences) to the notes file from step 2 with the host's file-write action, creating its
-  directory if needed (skip this when step 2 found no notes path).
+  session. Save the **same block body** (without the fences) through the lib's
+  `save` verb, which takes the checkpoint directory's lock: the same invocation shape as
+  step 2's `path` command, with `<VERB>` the `save` entry of `lib/compaction_cli.json` (read in
+  step 1), `<FLAG>` that entry's `sessionId` value, and the block body on stdin (skip this when
+  step 2 found no notes path). Never write the notes file with a raw file write. If the lib
+  refuses or cannot run, say so in one line; the save failed, so the notes are not persisted.
 
 An example of the block, shown inside a longer fence so it stays inert here:
 
