@@ -174,7 +174,7 @@ def test_mechanical_compile_stamps_before_dedupe_merge():
     finally:
         RD._compile_by_anchor = real_compile_by_anchor
 
-    assert drops == []
+    assert [d["reason"] for d in drops] == ["merged with a finding at the same place and title"]
     assert len(compiled) == 1
     assert all(f.get("severity") in CB.SEVERITY_TIERS for f in pre_dedupe)
     assert compiled[0]["taxonomy"] == "winner-important"
@@ -182,7 +182,8 @@ def test_mechanical_compile_stamps_before_dedupe_merge():
 
 def test_mechanical_compile_nit_cap_overflow_stays_nit():
     findings = [{"title": "nit%d" % i, "severity": "nit", "file": "f.py", "line": i + 1,
-                 "consequence": "a reviewer-found defect stays in the change"}
+                 "consequence": "a reviewer-found defect stays in the change",
+                 "consequenceKind": "code-quality"}
                 for i in range(9)]
     compiled, _ = RD.mechanical_compile(findings, None)
     summary = [f for f in compiled if f.get("summaryEntry")]

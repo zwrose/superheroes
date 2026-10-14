@@ -1802,9 +1802,6 @@ def _record_merged_into(state, key, into_key):
 
 # ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
 
-SETTLE_SKIPPED = "settle-skipped"
-
-
 def _set_terminal(state, verdict, *, cap=False):
     """The one writer of the loop's terminal verdict: set it, then give every finding the review
     took in an outcome (`_settle_open_findings`). `cap` marks a stop at a round cap."""
@@ -1887,11 +1884,8 @@ def _disposition_is_current(row):
 def _skip_settle(state, fault):
     token = getattr(fault, "token", None) or "ledger-fault"
     detail = getattr(fault, "detail", None) or str(fault)
-    # Not `_decision`: the kind is a record of a skipped step, not a verdict cause.
-    state.setdefault("decisions", []).append({
-        "round": state.get("round"), "kind": SETTLE_SKIPPED,
-        "detail": "no finding was settled: the disposition ledger is unreadable (%s: %s)"
-                  % (token, detail)})
+    # A state field, not a decision: the last decision is the terminal's cause and must stay put.
+    state["settleSkipped"] = {"token": token, "detail": detail}
 
 
 def _settle_open_findings(state, cap=False):
@@ -1950,8 +1944,11 @@ def _settle_open_findings(state, cap=False):
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
             content, ruling=rulings.get(key), sources=sources, open_reason=reason)
+        carried = {}
+        if row.get("disposition") == "out-of-scope":
+            carried = {name: row[name] for name in ("outOfScopeReason", "followUp") if name in row}
         _record_disposition(state, key, result["outcome"], state["round"],
-                            settledReason=result["reason"], decidedBy=result["decidedBy"])
+                            settledReason=result["reason"], decidedBy=result["decidedBy"], **carried)
 
 
 def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):

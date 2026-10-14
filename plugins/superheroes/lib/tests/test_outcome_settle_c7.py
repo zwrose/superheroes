@@ -537,14 +537,16 @@ def test_fixed_refuted_and_merged_findings_keep_what_they_have(sources_calls):
 def test_an_unreadable_ledger_settles_nothing_and_records_why(monkeypatch):
     state = _staged_state([_finding("Real", 1, "Important", "real")])
     ledger_before = copy.deepcopy(state[SC.DISPOSITION_LEDGER_KEY])
+    decisions_before = copy.deepcopy(state.get("decisions"))
     fault = SC.DispositionLedgerReadFault(token="disposition-ledger-malformed",
                                           detail="dispositionLedger must be a list")
     monkeypatch.setattr(RD, "_disposition_ledger_by_key", lambda s: ({}, fault))
     RD._set_terminal(state, "halted")  # never crashes the terminal
     assert state["terminal"] == "halted"
     assert state[SC.DISPOSITION_LEDGER_KEY] == ledger_before
-    skipped = [d for d in state["decisions"] if d["kind"] == "settle-skipped"]
-    assert len(skipped) == 1 and "disposition-ledger-malformed" in skipped[0]["detail"]
+    assert state["settleSkipped"]["token"] == "disposition-ledger-malformed"
+    assert "dispositionLedger must be a list" in state["settleSkipped"]["detail"]
+    assert state["decisions"] == decisions_before  # a skipped settle is not a decision
 
 
 def test_a_cap_stop_states_the_round_cap_whatever_the_verdict(sources_calls):

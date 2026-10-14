@@ -252,7 +252,7 @@ def test_L4_judgment_skip_records_out_of_scope_with_follow_up():
         {"id": fid, "disposition": "skip", "reason": "product choice",
          "followUp": follow_up}]})
     entry = _ledger_by_key(state)[fid]
-    assert entry["disposition"] == "out-of-scope"
+    assert entry["disposition"] == "left-for-owner"
     assert entry["followUp"] == follow_up
 
 
@@ -265,7 +265,7 @@ def test_L4_judgment_skip_without_follow_up_records_no_follow_up(tmp_path):
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": fid, "disposition": "skip", "reason": "product choice"}]})
     entry = _ledger_by_key(state)[fid]
-    assert entry["disposition"] == "out-of-scope"
+    assert entry["disposition"] == "left-for-owner"
     assert "followUp" not in entry
 
 
@@ -276,7 +276,7 @@ def test_L5_stall_accept_risk_records_out_of_scope_on_targets():
     key = RD._finding_key_of(tgt)
     RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
     entry = _ledger_by_key(state)[key]
-    assert entry["disposition"] == "out-of-scope"
+    assert entry["disposition"] == "left-for-owner"
     assert entry["outOfScopeReason"] == "owner accepted the disclosed risk (stall gate)"
 
 
@@ -290,7 +290,7 @@ def test_L5_stall_accept_risk_carries_follow_up():
         "followUp": follow_up,
     })
     entry = _ledger_by_key(state)[key]
-    assert entry["disposition"] == "out-of-scope"
+    assert entry["disposition"] == "left-for-owner"
     assert entry["followUp"] == follow_up
 
 

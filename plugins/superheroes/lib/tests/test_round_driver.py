@@ -2117,9 +2117,9 @@ def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_pat
     ledger = _ledger_by_key(state)
     confirmed_key = RD._finding_key_of(targets[0])
     plausible_key = RD._finding_key_of(targets[1])
-    assert ledger[confirmed_key]["disposition"] == "out-of-scope"
+    assert ledger[confirmed_key]["disposition"] == "left-for-owner"
     assert ledger[confirmed_key]["followUp"] == follow_up
-    assert ledger[plausible_key].get("disposition") is None
+    assert ledger[plausible_key].get("disposition") == "left-for-owner"
 
 
 def test_accept_risk_never_dispositions_critical_targets(tmp_path):
@@ -2138,8 +2138,8 @@ def test_accept_risk_never_dispositions_critical_targets(tmp_path):
     ledger = _ledger_by_key(state)
     critical_key = RD._finding_key_of(targets[0])
     important_key = RD._finding_key_of(targets[1])
-    assert ledger[critical_key].get("disposition") is None
-    assert ledger[important_key]["disposition"] == "out-of-scope"
+    assert ledger[critical_key].get("disposition") == "left-for-owner"
+    assert ledger[important_key]["disposition"] == "left-for-owner"
     assert state["terminal"] == "cannot-certify"
     assert state["certification"]["shape"] is None
 
@@ -2178,8 +2178,8 @@ def test_accepted_risk_with_an_ineligible_critical_sibling_parks(tmp_path):
         assert state["step"] == RD.P_TERMINAL
         assert crit["title"] in state["certification"]["reason"]
         ledger = _ledger_by_key(state)
-        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "out-of-scope"
-        assert ledger[RD._finding_key_of(targets[1])].get("disposition") is None
+        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "left-for-owner"
+        assert ledger[RD._finding_key_of(targets[1])].get("disposition") == "left-for-owner"
 
 
 # =============================================================================
@@ -3109,7 +3109,8 @@ def test_mechanical_compile_keeps_distinct_lines_same_title():
 
 
 def test_mechanical_compile_nit_cap():
-    findings = [{"title": "nit%d" % i, "severity": "Nit", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
+    findings = [{"title": "nit%d" % i, "severity": "Nit", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
+                 "consequenceKind": "code-quality"}
                 for i in range(9)]
     compiled, _ = RD.mechanical_compile(findings, None)
     nits = [f for f in compiled if f.get("severity") == "Nit"]
