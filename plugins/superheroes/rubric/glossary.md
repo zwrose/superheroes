@@ -192,12 +192,8 @@ item at the front door.
 
 ### Misses log
 
-The section of the pinned registry comment where the advisor records four kinds of miss:
-declined-then-escaped, launched-then-regretted, mis-tiered, and [review escapes](#review-escape).
-
-### Review escape
-
-A bug traced after merge to a PR that had a review. It is logged in the [misses log](#misses-log) with a link to that PR's [review record](#review-record) and one call, missed or seen and left. It counts only from the project's adoption day.
+The section of the pinned registry comment where the advisor records three kinds of miss:
+declined-then-escaped, launched-then-regretted, and mis-tiered.
 
 ### Collector
 
@@ -281,10 +277,6 @@ A named part of the project where a mistake costs money, customer data, safety, 
 that cannot be undone. It names the parts it covers, why it is risky, and how hard a mistake there is
 to undo. A folder it names covers every file beneath that folder. A change that touches one is matched
 from the area itself, without model judgment.
-
-### Calibration
-
-The settings a review runs on: the project's [Risk and trust](#risk-and-trust) item and its [standing rulings](#standing-ruling) about leftovers. It changes only on the owner's yes, whether the change tightens or loosens it.
 
 ### Ground-truth sources
 
