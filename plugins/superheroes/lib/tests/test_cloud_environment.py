@@ -42,6 +42,7 @@ def _with_value(value):
 
 
 def test_settings_path_has_one_home_and_the_external_spelling_is_pinned():
+    # axis: the one pinned spelling of Claude Code's settings section and key, and the argv built from it — see bite-proof record c8a_wo3.md
     # The one literal pin of Claude Code's own spelling; everything else reads the adapter's home.
     assert (engine_adapter.CLOUD_SETTINGS_SECTION, engine_adapter.CLOUD_SETTINGS_ENVIRONMENT_KEY) == (
         "remote", "defaultEnvironmentId")
@@ -51,6 +52,7 @@ def test_settings_path_has_one_home_and_the_external_spelling_is_pinned():
 
 
 def test_first_pick_unchanged_asks_to_confirm_by_name(tmp_path):
+    # axis: refusal — an unchanged first pick asks to confirm by name (section R6) — see bite-proof record wo_a_1771_environment_reader.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.pick(before=ENV_ID, env=env)
@@ -61,6 +63,7 @@ def test_first_pick_unchanged_asks_to_confirm_by_name(tmp_path):
 
 
 def test_first_pick_confirmed_by_name_returns_the_id(tmp_path):
+    # axis: retry-keeps-or-asks — an unchanged value equal to the confirmed id is kept — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
@@ -70,6 +73,7 @@ def test_first_pick_confirmed_by_name_returns_the_id(tmp_path):
 
 
 def test_pick_unchanged_setting_asks_again_with_no_id(tmp_path):
+    # axis: refusal — an unchanged value is no pick and gives no id (section R1) — see bite-proof record wo_a_1771_environment_reader.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.pick(before=ENV_ID, env=env)
@@ -95,6 +99,7 @@ _MISSING = [
 @pytest.mark.parametrize("before", [None, ENV_ID])
 @pytest.mark.parametrize("content", _MISSING)
 def test_pick_missing_setting_asks_again_with_no_id(tmp_path, content, before):
+    # axis: refusal and grammar — a missing or malformed value is no pick and gives no id (sections R2, R3) — see bite-proof record wo_a_1771_environment_reader.md
     env = _env(tmp_path)
     if content is not None:
         _write(env, content)
@@ -107,6 +112,7 @@ def test_pick_missing_setting_asks_again_with_no_id(tmp_path, content, before):
 
 @pytest.mark.parametrize("before", [ENV_ID, None])
 def test_pick_changed_setting_returns_the_new_id(tmp_path, before):
+    # axis: the picked id — a changed, well-formed value is returned as the new id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(OTHER_ENV_ID))
     result = CE.pick(before=before, env=env)
@@ -115,6 +121,7 @@ def test_pick_changed_setting_returns_the_new_id(tmp_path, before):
 
 
 def test_snapshot_reads_the_current_value_and_none_when_never_picked(tmp_path):
+    # axis: snapshot-reads — the current well-formed value, or none-set when never picked — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     assert CE.snapshot(env=env) == {"action": "read", "reason": "none-set", "environment": None}
     _write(env, {"remote": {}})
@@ -145,6 +152,7 @@ def _make_directory(env):
 @pytest.mark.parametrize("make", [_make_invalid_json, _make_list, _make_bad_utf8, _make_directory],
                          ids=["invalid-json", "top-level-list", "invalid-utf8", "directory"])
 def test_unreadable_settings_never_give_an_id(tmp_path, make):
+    # axis: never-raises/unreadable — a file that cannot be understood never gives an id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     make(env)
     snap = CE.snapshot(env=env)
@@ -157,6 +165,7 @@ def test_unreadable_settings_never_give_an_id(tmp_path, make):
 
 
 def test_unresolvable_config_dir_is_unreadable_not_a_raise():
+    # axis: never-raises/unreadable — an unresolvable config directory is unreadable, not a raise — see bite-proof record c8a_wo3.md
     env = {"CLAUDE_CONFIG_DIR": "relative/dir"}
     assert CE.settings_path(env=env) is None
     assert CE.snapshot(env=env)["reason"] == "settings-unreadable"
@@ -166,6 +175,7 @@ def test_unresolvable_config_dir_is_unreadable_not_a_raise():
 
 
 def test_unexpected_exception_is_reported_as_unreadable(tmp_path, monkeypatch):
+    # axis: never-raises/unreadable — an unexpected exception in the read is reported as unreadable — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
 
     def boom(*args, **kwargs):
@@ -181,6 +191,7 @@ def test_unexpected_exception_is_reported_as_unreadable(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("before", ["abc", "", "env_", 123])
 def test_pick_refuses_a_malformed_before(tmp_path, before):
+    # axis: refuses-malformed — a before value that is not an environment id is refused — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(OTHER_ENV_ID))
     result = CE.pick(before=before, env=env)
@@ -190,12 +201,14 @@ def test_pick_refuses_a_malformed_before(tmp_path, before):
 
 
 def test_pick_refuses_a_malformed_before_before_reading_the_file(tmp_path):
+    # axis: refuses-malformed — a malformed before is refused before the settings file is read — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _make_directory(env)
     assert CE.pick(before="abc", env=env)["reason"] == "before-invalid"
 
 
 def test_reader_follows_the_account_config_dir(tmp_path):
+    # axis: snapshot-reads — the read follows the account's config directory — see bite-proof record c8a_wo3.md
     one = _env(tmp_path, "one")
     two = _env(tmp_path, "two")
     _write(one, _with_value(ENV_ID))
@@ -212,6 +225,7 @@ def test_reader_follows_the_account_config_dir(tmp_path):
 
 
 def test_no_message_asks_to_type_or_paste_an_id():
+    # axis: message wording — no reader message asks the owner to type, paste or copy an id — see bite-proof record c8a_wo3.md
     messages = [value for name, value in vars(CE).items()
                 if name.startswith("_") and name.isupper() and isinstance(value, str)]
     assert len(messages) == 9
@@ -225,6 +239,7 @@ def _run(capsys, argv):
 
 
 def test_cli_exit_codes(tmp_path, monkeypatch, capsys):
+    # axis: CLI exit-code mapping for snapshot and pick — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
     monkeypatch.setenv("HOME", env["HOME"])
@@ -241,6 +256,7 @@ def test_cli_exit_codes(tmp_path, monkeypatch, capsys):
 
 
 def test_retry_with_the_same_environment_keeps_the_confirmed_id(tmp_path):
+    # axis: retry-keeps-or-asks — the same environment on a retry keeps the confirmed id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
@@ -249,6 +265,7 @@ def test_retry_with_the_same_environment_keeps_the_confirmed_id(tmp_path):
 
 
 def test_retry_with_a_different_environment_returns_the_new_id(tmp_path):
+    # axis: retry-keeps-or-asks — a different environment on a retry returns the new id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(OTHER_ENV_ID))
     result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
@@ -257,6 +274,7 @@ def test_retry_with_a_different_environment_returns_the_new_id(tmp_path):
 
 
 def test_retry_unchanged_value_that_is_not_the_confirmed_id_asks_again(tmp_path):
+    # axis: retry-keeps-or-asks — an unchanged value that is not the confirmed id asks again — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(OTHER_ENV_ID))
     result = CE.pick(before=OTHER_ENV_ID, confirmed=ENV_ID, env=env)
@@ -268,6 +286,7 @@ def test_retry_unchanged_value_that_is_not_the_confirmed_id_asks_again(tmp_path)
 
 @pytest.mark.parametrize("content", _MISSING)
 def test_retry_with_a_missing_value_asks_again(tmp_path, content):
+    # axis: retry-keeps-or-asks — a missing value on a retry asks again — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     if content is not None:
         _write(env, content)
@@ -277,6 +296,7 @@ def test_retry_with_a_missing_value_asks_again(tmp_path, content):
 
 
 def test_retry_with_an_unreadable_file_asks_again(tmp_path):
+    # axis: retry-keeps-or-asks — an unreadable file on a retry asks again, with no id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _make_invalid_json(env)
     result = CE.pick(before=ENV_ID, confirmed=ENV_ID, env=env)
@@ -286,6 +306,7 @@ def test_retry_with_an_unreadable_file_asks_again(tmp_path):
 
 @pytest.mark.parametrize("confirmed", ["abc", "", "env_", 123])
 def test_pick_refuses_a_malformed_confirmed(tmp_path, confirmed):
+    # axis: refuses-malformed — a confirmed value that is not an environment id is refused — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.pick(before=ENV_ID, confirmed=confirmed, env=env)
@@ -294,6 +315,7 @@ def test_pick_refuses_a_malformed_confirmed(tmp_path, confirmed):
 
 
 def test_cli_confirmed_retry(tmp_path, monkeypatch, capsys):
+    # axis: retry-keeps-or-asks — the command line passes --confirmed through and keeps the id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
     monkeypatch.setenv("HOME", env["HOME"])
@@ -305,6 +327,7 @@ def test_cli_confirmed_retry(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_relative_config_dir_with_relative_cwd_reads(tmp_path, monkeypatch, capsys):
+    # axis: snapshot-reads — a relative config directory with a relative cwd is read — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     monkeypatch.chdir(tmp_path)
@@ -315,6 +338,7 @@ def test_cli_relative_config_dir_with_relative_cwd_reads(tmp_path, monkeypatch, 
 
 
 def test_compare_matched_when_the_id_is_the_picked_environment(tmp_path):
+    # axis: compare-verdict — the id about to be used is the picked one: matched — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.compare(ENV_ID, env=env, cwd=str(tmp_path))
@@ -322,6 +346,7 @@ def test_compare_matched_when_the_id_is_the_picked_environment(tmp_path):
 
 
 def test_compare_mismatched_returns_the_current_picked_environment(tmp_path):
+    # axis: compare-verdict — a different picked environment: mismatched, with the picked id — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(OTHER_ENV_ID))
     result = CE.compare(ENV_ID, env=env, cwd=str(tmp_path))
@@ -333,6 +358,7 @@ def test_compare_mismatched_returns_the_current_picked_environment(tmp_path):
 
 @pytest.mark.parametrize("content", [None, "not json", {}, _with_value("bad id")])
 def test_compare_unchecked_without_a_valid_current_pick(tmp_path, content):
+    # axis: compare-verdict — no readable, valid current pick: unchecked — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     if content is not None:
         _write(env, content)
@@ -343,6 +369,7 @@ def test_compare_unchecked_without_a_valid_current_pick(tmp_path, content):
 
 @pytest.mark.parametrize("environment", [None, "", "bad id", 5])
 def test_compare_unchecked_for_a_malformed_environment(tmp_path, environment):
+    # axis: compare-verdict — a malformed id to compare: unchecked — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     _write(env, _with_value(ENV_ID))
     result = CE.compare(environment, env=env, cwd=str(tmp_path))
@@ -350,6 +377,7 @@ def test_compare_unchecked_for_a_malformed_environment(tmp_path, environment):
 
 
 def test_compare_never_raises(tmp_path, monkeypatch):
+    # axis: never-raises/unreadable — compare reports unchecked when the read raises — see bite-proof record c8a_wo3.md
     def boom(*a, **k):
         raise RuntimeError("boom")
     monkeypatch.setattr(CE, "_read", boom)
@@ -358,6 +386,7 @@ def test_compare_never_raises(tmp_path, monkeypatch):
 
 
 def test_compare_cli_exit_codes(tmp_path, monkeypatch, capsys):
+    # axis: compare-verdict — matched exits 0, mismatched and unchecked exit 1 — see bite-proof record c8a_wo3.md
     env = _env(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
     monkeypatch.setenv("HOME", env["HOME"])

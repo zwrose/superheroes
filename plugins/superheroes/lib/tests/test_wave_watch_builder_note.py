@@ -539,3 +539,85 @@ def test_note_answered_cli_exits_1_on_a_refusal(repo, capsys):
     code = ww.main(["wave_watch.py", "note-answered", "--repo-root", repo, "--comment-id", "-4"])
     assert code == 1
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": ww.REFUSAL_COMMENT_ID_INVALID}
+
+
+# --- the slug is resolved once per tick; the cached validator on a paged and a changed read ---
+
+
+def _repo_views(gh):
+    return [argv for argv in gh.calls if argv[:3] == ["gh", "repo", "view"]]
+
+
+def test_the_repository_slug_is_resolved_once_per_tick(repo):
+    # axis: one `gh repo view` per tick, however many readers need the slug — see bite-proof record c8a_wo3.md
+    _cloud_lane(repo, "cloud-a", 101)
+    gh = _NoteGh([_comment(7, 101)])
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert len(gh.note_calls()) == 1
+    assert len(_repo_views(gh)) == 1
+
+
+def test_a_slug_that_could_not_be_resolved_is_not_tried_again_within_the_tick(repo):
+    # axis: a failed slug resolution is cached for the tick, so no reader retries it — see bite-proof record c8a_wo3.md
+    _cloud_lane(repo, "cloud-a", 101)
+
+    class _NoSlugGh(_NoteGh):
+        def __call__(self, argv, **kwargs):
+            if argv[:3] == ["gh", "repo", "view"]:
+                self.calls.append(list(argv))
+                return _raw(argv, "", 1)
+            return super().__call__(argv, **kwargs)
+
+    gh = _NoSlugGh([_comment(7, 101)])
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert result["event"] == ww.EVENT_TIMER
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
+    assert gh.note_calls() == []
+    assert len(_repo_views(gh)) == 1
+
+
+def _primed(repo):
+    """The note state a first empty read leaves: the URL for this lane's `since`, the ETag, no comments."""
+    state = [None]
+    ww.watch_arm(repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=_NoteGh(), note_state=state)
+    stored_url = state[0][0]
+    state[0] = (stored_url, _ETAG, [])
+    return state
+
+
+def test_a_primed_validator_rides_page_one_only_and_a_multi_page_read_clears_it(repo):
+    # axis: the cached validator goes on page one only, and a multi-page read stores none — see bite-proof record c8a_wo3.md
+    _cloud_lane(repo, "cloud-a", 101, start_age=1000)
+    state = _primed(repo)
+    gh = _NoteGh(script=[
+        lambda argv: _ok(argv, [_comment(1, 101, "chatter")], link=True),
+        lambda argv: _ok(argv, [_comment(2, 101, "more chatter")], link=True),
+        lambda argv: _ok(argv, [_comment(3, 101)]),
+    ])
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh, note_state=state,
+    )
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    pages = gh.note_calls()
+    assert [argv[-1].rpartition("&page=")[2] for argv in pages[1:]] == ["2", "3"]
+    assert pages[0][pages[0].index("-H") + 1] == "If-None-Match: %s" % _ETAG
+    assert all("-H" not in argv for argv in pages[1:])
+    assert state[0][1] is None
+    assert [comment["id"] for comment in state[0][2]] == [1, 2, 3]
+
+
+def test_a_note_arriving_after_an_empty_cached_read_is_surfaced(repo):
+    # axis: a 200 after an empty cached read returns the response's comments, not the cached list — see bite-proof record c8a_wo3.md
+    _cloud_lane(repo, "cloud-a", 101, start_age=1000)
+    state = _primed(repo)
+    new_etag = 'W/"1bbbbbbb"'
+    gh = _NoteGh(script=[lambda argv: _ok(argv, [_comment(7, 101)], etag=new_etag)])
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh, note_state=state,
+    )
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [request] = gh.note_calls()
+    assert request[request.index("-H") + 1] == "If-None-Match: %s" % _ETAG
+    assert state[0][1] == new_etag

@@ -109,11 +109,13 @@ def _failed_check(cwd, account, root):
         return []
 
 
-def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen):
+def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen,
+               *, persist_backfill=True):
     if account is None:
         account = cloud_setup.launching_account(env, cwd)
     advisor = _advisor_version(advisor_version)
-    got = cloud_setup.read(cwd, account, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    got = cloud_setup.read(cwd, account, root, **keyword)
     setting = got.get("setting") is True
     seen["setting"] = setting
     seen["account"] = account if isinstance(account, str) else None
@@ -168,7 +170,7 @@ def _readiness(cwd, account, advisor_version, reported, today, root, env, stamp_
 
 
 def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=None,
-              root=None, env=None, stamp_fn=None):
+              root=None, env=None, stamp_fn=None, persist_backfill=True):
     """Whether the cloud can take a build now, with every condition and the facts behind them.
     Never raises; any unexpected failure reads as not ready.
 
@@ -181,6 +183,7 @@ def readiness(cwd, *, account=None, advisor_version=None, reported=None, today=N
     seen = {"setting": False, "account": None}
     try:
         return _readiness(
-            cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen)
+            cwd, account, advisor_version, reported, today, root, env, stamp_fn, seen,
+            persist_backfill=persist_backfill)
     except Exception:
         return _result(_all_false(), setting=seen["setting"], account=seen["account"])

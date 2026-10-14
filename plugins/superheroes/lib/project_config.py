@@ -532,9 +532,10 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
     }
 
 
-def read(cwd, root=None):
+def read(cwd, root=None, *, persist_backfill=True):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
-    facts = core_md.read(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    facts = core_md.read(cwd, root, **keyword)
     guardian_cfg = guardian_sweep.read_config(cwd, root)
     if facts is None:
         absent_items = []
@@ -614,12 +615,13 @@ def view(cwd, root=None):
     }
 
 
-def get_item(cwd, slug, root=None):
+def get_item(cwd, slug, root=None, *, persist_backfill=True):
     """Return one item's read contract, or a refusal when the slug is unknown."""
     item = _item_by_slug(slug)
     if item is None:
         return {"action": "refused", "reason": REASON_UNKNOWN_SLUG}
-    payload = read(cwd, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    payload = read(cwd, root, **keyword)
     for entry in payload["items"]:
         if entry["slug"] == slug:
             return {

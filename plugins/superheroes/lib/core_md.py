@@ -474,12 +474,13 @@ def _core_candidates(cwd, root=None):
     return in_repo, global_path
 
 
-def core_path(cwd, root=None):
+def core_path(cwd, root=None, *, persist_backfill=True):
     """Mode-aware path to core.md (FR-1): in-repo .claude/superheroes/core.md, else the
     project store's config/core.md. An EXISTING file resolves to where it physically lives;
     a new one resolves by the recorded mode (mode_registry.resolve_artifact)."""
     in_repo, global_path = _core_candidates(cwd, root)
-    return mode_registry.resolve_artifact(cwd, in_repo, global_path, root)
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    return mode_registry.resolve_artifact(cwd, in_repo, global_path, root, **keyword)
 
 
 def _classify_core_md_at_path(path):
@@ -652,7 +653,7 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     return ReviewGatePolicyGate(CONFIG_OK, dict(overlay), None)
 
 
-def read(cwd, root=None):
+def read(cwd, root=None, *, persist_backfill=True):
     """Pure read of core.md → the fact dict + `behind`, or None (absent/corrupt — UFR-1).
     Older schemaVersion is upgraded IN MEMORY only (no write-back; at v1 there are no
     migration steps, so the record is stamped current) — UFR-2. A NEWER schemaVersion
@@ -660,7 +661,8 @@ def read(cwd, root=None):
     already guarantees schemaVersion is a real int (else corrupt → None), so any integer
     < SCHEMA_VERSION here is unambiguously an older schema, never a corrupt one."""
     try:
-        with open(core_path(cwd, root), encoding="utf-8") as fh:
+        keyword = {} if persist_backfill else {"persist_backfill": False}
+        with open(core_path(cwd, root, **keyword), encoding="utf-8") as fh:
             text = fh.read()
     except RepoRootUnavailable:
         # UFR-1: read() still returns None for absent/corrupt — but repo-root-unknown is NOT
