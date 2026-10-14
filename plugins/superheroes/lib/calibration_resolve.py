@@ -14,6 +14,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import calibration_paths  # noqa: E402
 import core_md          # noqa: E402
 import mode_registry    # noqa: E402
 import review_store     # noqa: E402
@@ -100,7 +101,7 @@ def _legacy_global_profile_path(cwd, legacy_root=None):
         return os.path.join(g["dir"], review_store.FILENAMES["profile"])
     ident = store_core.derive_identifiers(cwd)
     return os.path.join(
-        legacy_root, "entries", ident["gitdir_hash"], review_store.FILENAMES["profile"])
+        legacy_root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, ident["gitdir_hash"], review_store.FILENAMES["profile"])
 
 
 def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):

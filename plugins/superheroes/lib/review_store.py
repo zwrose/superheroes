@@ -19,6 +19,7 @@ import json
 import os
 import sys
 
+import calibration_paths
 from store_core import (
     normalize_remote,
     short_hash,
@@ -33,7 +34,7 @@ from store_core import (
     repo_root,
 )
 
-FILENAMES = {"profile": "review-profile.md", "decisions": "review-decisions.json"}
+FILENAMES = {"profile": calibration_paths.LEGACY_STORE_PROFILE_FILENAME, "decisions": "review-decisions.json"}
 UNIFIED_LAYER = "review-crew.md"
 UNIFIED_DIR = os.path.join(".claude", "superheroes")
 
@@ -119,7 +120,7 @@ def create(cwd, kind, location, legacy_root=None, registry_root=None):
 
     ident = derive_identifiers(cwd)
     entry_id = ident["gitdir_hash"]
-    entry_dir = os.path.join(legacy_root, "entries", entry_id)
+    entry_dir = os.path.join(legacy_root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
     os.makedirs(entry_dir, exist_ok=True)
     if not os.path.exists(os.path.join(entry_dir, "keys.json")):
         write_keys_json(entry_dir, ident)

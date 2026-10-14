@@ -5714,13 +5714,14 @@ def test_record_outcome_records_when_the_start_time_differs(tmp_path, monkeypatc
     assert ll.record_outcome(repo, "l-lstart", "handback", "done")["ok"] is True
 
 
-# axis: a changed command alone is enough to read the pid as reused — see bite-proof record c8a_wo4.md
-def test_record_outcome_records_when_the_command_differs(tmp_path, monkeypatch):
-    # edge: both recorded, command differs (same start time) -> not live
+# axis: a changed command alone never reads the pid as reused while the start time matches — see bite-proof record c8a_wo4.md
+def test_record_outcome_refuses_when_only_the_command_differs(tmp_path, monkeypatch):
+    # edge: both recorded, command differs (same start time) -> a live exec/retitle, so live
     repo = _identity_lane(tmp_path, monkeypatch, "l-command", _BORN)
     _fake_signal0_alive(monkeypatch)
     _fresh_identity(monkeypatch, dict(_BORN, pidCommand="vim notes.txt"))
-    assert ll.record_outcome(repo, "l-command", "handback", "done")["ok"] is True
+    result = ll.record_outcome(repo, "l-command", "handback", "done")
+    assert result["ok"] is False and result["reason"] == "terminal-child-live:999999"
 
 
 # axis: an unreadable fresh identity reads as live, never as foreign — see bite-proof record c8a_wo4.md
@@ -5777,7 +5778,7 @@ def test_a_differing_identity_beats_the_zombie_shortcut(tmp_path, monkeypatch):
 def test_a_differing_identity_beats_the_callers_own_process_group_shortcut(monkeypatch):
     # edge: the pid is the caller's own process group, with a recorded identity that differs
     own = os.getpid()
-    _fresh_identity(monkeypatch, dict(_BORN, pidCommand="vim notes.txt"))
+    _fresh_identity(monkeypatch, dict(_BORN, pidLstart="Tue Oct 13 10:00:00 2026"))
     assert ll._child_group_is_live(own, started_ts=None, session_id=None, birth_identity=_BORN) is False
     _fresh_identity(monkeypatch, _BORN)
     assert ll._child_group_is_live(own, started_ts=None, session_id=None, birth_identity=_BORN) is True

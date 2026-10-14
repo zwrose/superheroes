@@ -1850,6 +1850,10 @@ def _birth_identity_is_foreign(recorded, fresh):
         return False
     if not all(isinstance(fresh.get(field), str) and fresh[field] for field in held):
         return False
+    # The start time is the immutable birth identifier; a command alone can change under a live
+    # process (exec, title update, `<defunct>`), so it decides only when no start time is held.
+    if "pidLstart" in held:
+        return fresh["pidLstart"] != recorded["pidLstart"]
     return any(fresh[field] != recorded[field] for field in held)
 
 
@@ -1892,7 +1896,7 @@ def _child_group_is_live(pid, *, started_ts, session_id, birth_identity=None):
 
     A recorded birth identity (``pidLstart``/``pidCommand`` from the ``started`` record)
     is checked first, before any shortcut: a fresh read that lacks no recorded field and
-    differs in one is a reused pid, not the lane's child, so it is not live.
+    has a different start time (or, with no start time held, a different command) is a reused pid, not the lane's child, so it is not live.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False

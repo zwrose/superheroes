@@ -11,6 +11,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
+import calibration_paths
 import control_plane
 import store_core
 
@@ -139,7 +140,7 @@ def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=
 
 # Legacy single-file profile locations — used for detection (core_md._legacy_candidates, legacy-profile-unsupported refusal; hero_evidence mode-detection probe).
 _HERO_LEGACY_INREPO = {
-    "review-crew": os.path.join(".claude", "review-profile.md"),
+    "review-crew": calibration_paths.LEGACY_INREPO_REVIEW_PROFILE,
     "test-pilot": os.path.join(".claude", "test-pilot", "profile.md"),
 }
 # Unified layer paths — evidence / mode-detection probes (#81 / #123).

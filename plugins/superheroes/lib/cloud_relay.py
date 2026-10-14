@@ -38,9 +38,7 @@ _START_TIMEOUT = 120
 _WINDOW = 20
 STATE_NAME = "cloud-relay.json"
 NAME_PREFIX = "superheroes-relay-"
-_NAME_LIMIT = 64  # the longest session name `engine_adapter.claude_relay_argv` accepts
 _NAME_HASH_LENGTH = 8
-_NAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 # The header every forwarded message opens with; `compose` sends it and `_decide` attributes by it.
 FORWARD_HEADER = "Message from the superheroes advisor (id %s):"
 RELAY_PROMPT = """\
@@ -74,8 +72,9 @@ def relay_name(config_dir):
     whole name is at most 64 characters; the hash of the full path keeps cut names distinct. None when
     the base is empty."""
     full = os.path.realpath(str(config_dir))
-    base = _NAME_UNSAFE_RE.sub("-", os.path.basename(full).lstrip("."))
-    room = _NAME_LIMIT - len(NAME_PREFIX) - 1 - _NAME_HASH_LENGTH
+    adapter = _sibling("engine_adapter")
+    base = adapter.CLOUD_SESSION_NAME_UNSAFE_RE.sub("-", os.path.basename(full).lstrip("."))
+    room = adapter.CLOUD_SESSION_NAME_LIMIT - len(NAME_PREFIX) - 1 - _NAME_HASH_LENGTH
     # axis: the name fits the 64-character session-name pattern whatever the config dir is called — see bite-proof record c8a_wo4.md
     base = base[:room]
     return "%s%s-%s" % (NAME_PREFIX, base, hashlib.sha256(full.encode()).hexdigest()[:_NAME_HASH_LENGTH]) if base else None

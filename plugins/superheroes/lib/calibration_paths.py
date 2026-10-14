@@ -11,8 +11,8 @@ A calibration file is one the cloud-session guard refuses to write, move or remo
   * the review-crew profile's two legacy locations: `<repo>/.claude/review-profile.md` and
     `<review store root>/entries/<hash>/review-profile.md`.
 
-The legacy names are respelled here because the modules that own them (`mode_registry`,
-`calibration_resolve`) sit above this leaf; `test_calibration_paths.py` pins them equal.
+The legacy names live here, once; the modules above this leaf (`mode_registry`, `review_store`,
+`calibration_resolve`) import them, so the guard and the resolver share one definition.
 """
 import os
 import pathlib

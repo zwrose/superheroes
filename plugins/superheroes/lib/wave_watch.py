@@ -2217,7 +2217,8 @@ def _evaluate_tick(
             repo_slug, _slug_refusal = _resolve_repo_slug(
                 repo_root, deadline, monotonic, gh_run, env,
             )
-            slug_cell[0] = repo_slug
+            if repo_slug is not None or _slug_refusal is not None:
+                slug_cell[0] = repo_slug  # a skipped lookup (None, None) stays unresolved for the first granted reader
             if repo_slug is None:
                 degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
         else:
