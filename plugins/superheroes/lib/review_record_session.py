@@ -24,6 +24,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import receipt_disclosures  # noqa: E402
@@ -43,6 +44,7 @@ UNSUPPORTED = "review-session-unsupported"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
+HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw outputs were not stored"
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
@@ -96,6 +98,10 @@ def _check_extras(x):
             raise Refusal(BAD_EXTRAS, k)
     if not all(isinstance(d, str) and d for d in x.get("runDirs", [])):
         raise Refusal(BAD_EXTRAS, "runDirs")
+    if x.get("sheetAnswers") is not None and not isinstance(x["sheetAnswers"], dict):
+        raise Refusal(BAD_EXTRAS, "sheetAnswers")
+    if x.get("baseRef") is not None and not (isinstance(x["baseRef"], str) and x["baseRef"]):
+        raise Refusal(BAD_EXTRAS, "baseRef")
 
 
 def _historical_orders_superseded(row):
@@ -188,6 +194,40 @@ def _unfilled_reviewer(rnd, seat):
             "model": UNFILLED, "commit": None, "runDir": None}
 
 
+def _panel_rounds_with_status(state):
+    """{round: seatStatus} for each round that recorded a seat status, in round order."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    return {int(n): rec["seatStatus"] for n, rec in sorted(rounds.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else -1)
+            if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("seatStatus"), dict)}
+
+
+def _status_reviewers(state):
+    """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
+    status says which seats ran, and the reviewers' raw outputs were not stored."""
+    status = _panel_rounds_with_status(state)
+    # axis: a hand-submit session with no seat status in any round holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
+    if not any(status.values()):
+        raise Refusal(UNSUPPORTED, "the session recorded no seat result or seat status")
+    out, ran_in = [], {}
+    for rnd, seats in status.items():
+        for seat, value in seats.items():
+            if value == "run":
+                ran_in.setdefault(seat, []).append(rnd)
+    for rnd, seats in status.items():
+        unfilled = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) \
+            & set(round_phases.DIMENSIONS)
+        for seat in sorted(seats):
+            if seat in unfilled:
+                continue  # listed below as an unfilled seat
+            ran = seats[seat] == "run"  # any other value is never credited as run
+            if not ran and any(r > rnd for r in ran_in.get(seat, ())):
+                continue  # a later round ran this seat: the earlier miss is recovered
+            out.append(_reviewer(state, rnd, seat, "", ran, phase=sc.PANEL_PHASE))
+        out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
+                if not any(r > rnd for r in ran_in.get(seat, ()))]
+    return out
+
+
 def _slot_ran(state, key, row, env):
     """Whether the slot's reviewer ran: ingestion alone does not say so, the stored result and the round's seat status do."""
     phase, rnd, seat, _ = key
@@ -238,6 +278,40 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     return out, raw
 
 
+def _group(rep, by_key):
+    """The representative and every ledger row merged into it."""
+    return [r for r in by_key.values() if r is rep or sc.resolve_merged_into_entry(r, by_key) is rep]
+
+
+def _latest_ruling(rep, by_key, rulings):
+    """The newest ruling logged against the representative or against any finding merged into it, else {}."""
+    # axis: a ruling logged against a finding merged into the representative settles the representative too — see bite-proof record c7l3_wo2_session_writer
+    keys = [sc.finding_identity_key(r) for r in _group(rep, by_key)] + [rep.get("id")]
+    found = [rulings[k] for k in keys if isinstance(k, str) and isinstance(rulings.get(k), dict)]
+    return max(found, key=lambda r: r["seq"] if _int(r.get("seq")) else -1) if found else {}
+
+
+def _decided_by(rep, outcome, by_key, rulings):
+    """The cited decision an outcome rests on: the ledger row's own, else the newest ruling's when that
+    ruling postdates the finding's latest raise. The writer re-checks it; this only carries it."""
+    if outcome is None:
+        return None
+    held = sc.decided_by_of(rep)
+    if isinstance(held, dict):
+        return held
+    if outcome not in (_LEFT_FOR_OWNER, _RULING):
+        return None
+    ruling = _latest_ruling(rep, by_key, rulings)
+    decided = ruling.get("decidedBy")
+    raised = [r.get(sc.RAISED_ROUND_FIELD) for r in _group(rep, by_key)]
+    # the rulings log and the ledger keep separate counters, so recency is read from the rounds
+    # axis: a ruling older than the finding's latest raise decides nothing about it — see bite-proof record c7l3_wo2_session_writer
+    if isinstance(decided, dict) and _int(ruling.get("round")) and all(_int(r) for r in raised) \
+            and ruling["round"] >= max(raised):
+        return decided
+    return None
+
+
 def _decide(own, by_key, rulings):
     """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding."""
     rep = sc.resolve_merged_into_entry(own, by_key)
@@ -247,6 +321,9 @@ def _decide(own, by_key, rulings):
     if disp not in sc.DISPOSITIONS or not (_int(seq) and _int(raised) and seq > raised):  # a stale disposition decides nothing
         return None, STILL_OPEN, rep
     if disp == "fixed":
+        receipt = rep.get("dispositionReceipt")
+        if isinstance(receipt, dict) and receipt.get("kind") == "full-panel-not-reraised":
+            return _FIXED, f"fixed; the full panel in round {receipt.get('panelRound')} did not raise it again", rep
         return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))
@@ -254,7 +331,7 @@ def _decide(own, by_key, rulings):
     if disp in (_CRAFT, _LEFT_FOR_OWNER, _RULING):  # the end-of-loop settle names its outcome and reason
         return disp, _text(rep.get("settledReason")), rep
     why = _text(rep.get("outOfScopeReason"))
-    ruling = rulings.get(sc.finding_identity_key(rep)) or rulings.get(rep.get("id")) or {}
+    ruling = _latest_ruling(rep, by_key, rulings)
     prov = ruling.get("provenance") if ruling.get("ruling") == "out-of-scope" else None
     by, at = (_text(prov.get("ruledBy")), _text(prov.get("ruledAt"))) if isinstance(prov, dict) else (None, None)
     if by and at:  # only an attributed ruling settles an out-of-scope finding
@@ -278,7 +355,7 @@ def _findings(state):
     by_key = {sc.finding_identity_key(r): r for r in ledger}
     content = dict(by_key, **{sc.finding_identity_key(f): f for f in live})
     log = state.get("rulingsLog") if isinstance(state.get("rulingsLog"), list) else []
-    rulings = {r.get("findingKey"): r for r in log if isinstance(r, dict)}  # the latest ruling per key stands
+    rulings = {r["findingKey"]: r for r in log if isinstance(r, dict) and isinstance(r.get("findingKey"), str)}  # the latest ruling per key stands
     for p in state.get("_policyApplied") if isinstance(state.get("_policyApplied"), list) else []:
         act = p.get("action") if isinstance(p, dict) and p.get("source") == _OWNER_SUPPLIED \
             and p.get("phase") == round_phases.P_JUDGMENT else None  # the owner-supplied source string; the driver is not importable here
@@ -296,6 +373,7 @@ def _findings(state):
             reason += f" (merged into {_id(rep, sc.finding_identity_key(rep))})"
         dim = row.get("dimension")
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
+                    "decidedBy": _decided_by(rep, outcome, by_key, rulings) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail"))})
@@ -308,6 +386,28 @@ def _original_maker_families(state, fix_round):
     early = [e for e in seat_map_receipts.receipts(state)
              if not str(e.get("round")).isdigit() or int(str(e["round"])) <= fix_round]
     return receipt_disclosures.accumulated_maker_families({**state, "seatMapReceipts": early, "seatMap": None})
+
+
+def _ceiling(cfg):
+    """The round ceiling the driver applied: the configured one when it is a number, else the one it resolves
+    from the configuration; None when no usable ceiling resolves."""
+    named = cfg.get("maxRoundsAbsolute")
+    if _int(named):
+        return named
+    found, refusal = circuit_breaker.resolve_round_ceiling(cfg.get("maxRounds"), named)
+    return found if refusal is None and _int(found) else None
+
+
+def _refused(rounds):
+    """The findings a reviewer raised that the round's compile dropped, in round order."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        drops = rounds[n].get("compileDrops") if isinstance(rounds[n], dict) else None
+        for d in drops if isinstance(drops, list) else []:
+            if isinstance(d, dict) and _text(d.get("title")) and _text(d.get("reason")):
+                out.append({"file": d.get("file"), "line": d.get("line"), "title": d["title"],
+                            "reason": d["reason"], "round": int(n)})
+    return out
 
 
 def account_from_session(session_dir, extras, readers=None, raw_dir=None):
@@ -325,14 +425,17 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     rows = _journal(session_dir)
     if state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS:
         raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not a certified verdict")
-    if not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows):
-        raise Refusal(UNSUPPORTED, "the session recorded no seat result")
+    by_hand = not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows)
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings = _findings(state)
-    reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
-                                review_record._readers(readers)["engine_run"], raw_dir)
+    if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
+        reviewers, raw = _status_reviewers(state), []
+    else:
+        reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
+                                    review_record._readers(readers)["engine_run"], raw_dir)
+    checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
@@ -352,14 +455,16 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     last = decisions[-1] if decisions else {}
     cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
     capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
+    ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
-            "rounds": {"count": len(rounds), "cap": cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
-                       "stoppedAtCap": capped},
+            "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
+                       "capKind": "ceiling" if ceiling else "rounds", "stoppedAtCap": capped},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
-            "goAheads": extras.get("goAheads", []), "checked": extras.get("checked", [])}
+            "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef"),
+            "goAheads": extras.get("goAheads", []), "checked": checked}
 
 
 def _carried(account, extras, repo_root, readers):

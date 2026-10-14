@@ -463,8 +463,8 @@ def test_e3_an_unfinished_state_without_the_key_is_refused(tmp_path, capsys):
 
 # E4 — axis: only the driver's current integer generation is current; any other value, including
 # the ones that compare equal to a number, is refused.
-@pytest.mark.parametrize("generation", [1, 2, "3", None, True, 5, 3.0],
-                         ids=["one", "two", "string-three", "null", "true", "five", "float-three"])
+@pytest.mark.parametrize("generation", [1, 2, "3", None, True, 5, float(RD.SESSION_GENERATION)],
+                         ids=["one", "two", "string-three", "null", "true", "five", "float-current"])
 def test_e4_a_generation_that_is_not_the_current_integer_is_refused(generation, tmp_path, capsys):
     session_dir = _light_folder(tmp_path, generation=generation)
     rc, out = _main(capsys, ["next", "--session-dir", session_dir])
@@ -523,8 +523,8 @@ def test_e4b_an_unfinished_earlier_schema_version_is_refused(name, version, tmp_
 # session: no marker is written, and `next` gives the refusal `load_state` gives for it.
 @pytest.mark.parametrize(
     "version", [1, FUTURE_VERSION, None, str(RD.STATE_SCHEMA_VERSION),
-                float(RD.STATE_SCHEMA_VERSION), True],
-    ids=["one", "future", "null", "string-current", "float-current", "true"])
+                float(RD.STATE_SCHEMA_VERSION), float(EARLIER_VERSIONS[0]), True],
+    ids=["one", "future", "null", "string-current", "float-current", "float-earlier", "true"])
 def test_e4b_an_unsupported_schema_version_gets_the_loader_refusal_and_no_marker(version, tmp_path):
     session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
     state = _read_state_file(session_dir)

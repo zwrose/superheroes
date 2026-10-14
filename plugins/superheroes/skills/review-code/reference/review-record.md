@@ -78,34 +78,36 @@ Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest re
 python3 -B "$ROOT_DIR/lib/review_record_session.py" write --session-dir "$SESSION_DIR" --extras <extras.json> --repo-root <repo root>
 ```
 
-In PR mode, run it on every terminal verdict of a driven session: one that recorded at least one seat result and ended on a certified verdict. Any other session is refused `review-session-unsupported`. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds. Push any fixes before writing the record, because the record is judged against the PR's final commit.
+In PR mode, run it on every terminal verdict of a session driven by the loop's seat commands or by hand `submit`: one that ended on a certified verdict and recorded at least one seat result or one round's seat status. Any other session is refused `review-session-unsupported`. It prints one JSON object (exit 0 ok, 1 refusal), reads the finished session directory, builds the account itself, and hands it to the writer; nothing else posts. Do not retype what the session already holds. Push any fixes before writing the record, because the record is judged against the PR's final commit.
 
-The extras file holds only what the driver never does: `{"schema": "review-session-extras/1", "pr": <int>, "repo": <"owner/name" or null>, "laneReason": <string or null>, "ci": <string or null>, "runDirs": [<run directory>, ...], "goAheads": [...], "makers": [{family, source}, ...], "checked": [<string>, ...]}`. Only `schema` and `pr` are required. `goAheads`, `makers` and `checked` pass to the account unchanged. A go-ahead's `reviewer` is the reviewer row's name exactly as the adapter builds it: `<seat> (round <n>)` for a panel seat, `<phase without the dispatch- prefix> <seat> (round <n>)` for any other review phase, for example `security-reviewer (round 1)`.
+The extras file holds only what the driver never does: `{"schema": "review-session-extras/1", "pr": <int>, "repo": <"owner/name" or null>, "laneReason": <string or null>, "ci": <string or null>, "runDirs": [<run directory>, ...], "goAheads": [...], "makers": [{family, source}, ...], "checked": [<string>, ...], "sheetAnswers": <object or null>, "baseRef": <non-empty string or null>}`. Only `schema` and `pr` are required. `goAheads`, `makers`, `checked`, `sheetAnswers` (the PR sheet store's `answers` object) and `baseRef` (the commit or ref the residuals are read at) pass to the account unchanged; a `sheetAnswers` that is not an object or a `baseRef` that is not a non-empty string is refused `review-session-extras-invalid`. A go-ahead's `reviewer` is the reviewer row's name exactly as the adapter builds it: `<seat> (round <n>)` for a panel seat, `<phase without the dispatch- prefix> <seat> (round <n>)` for any other review phase, for example `security-reviewer (round 1)`.
 
 What comes from the session:
 
-- `rounds`: the count of rounds, the configured cap, and whether the loop stopped at it.
-- `reviewers`: one row per recorded review seat, with the commit that seat cited as the one it covered. A superseded attempt is left out and the highest attempt of a slot counts. A seat recorded missing is a reviewer that did not run, unless a later round ran the same seat. A seat the seat map marks same-family carries `notIndependent`.
+- `rounds`: the count of rounds, the cap, and whether the loop stopped at it. The cap is the configured round cap; when the loop stopped at the round ceiling instead, the cap named is that ceiling and `capKind` reads `ceiling`.
+- `reviewers`: one row per recorded review seat, with the commit that seat cited as the one it covered. A superseded attempt is left out and the highest attempt of a slot counts. A seat recorded missing is a reviewer that did not run, unless a later round ran the same seat. A seat the seat map marks same-family carries `notIndependent`. A session driven by hand `submit` journals no seat, so its reviewers are read from each panel round's seat status: a seat that ran is a reviewer that ran, a seat marked missing is one that did not (unless a later round ran it), and each reads "reported by the session" with no run directory. Its reviewers' raw outputs were not stored, so the account carries no raw findings files and its `checked` list says so.
 - `runDir`: a directory in `runDirs` is bound to the one seat whose recorded runner nonce equals the nonce in that directory's engine record. A directory that matches no seat or several, or cannot be read, is not used. A seat with no run directory reads "reported by the session".
 - `makers`: the extras' makers, plus the fixer's family (source `review loop fixer`) when a round ran a fixer.
 - `finalCommit`: the fix-fold head when the session holds one, else the session's head.
 - `findings` and outcomes, from the disposition ledger and the live findings; `rawFindingsFiles`, each panel, gap-sweep and scoped-finder seat's findings payload, posted without the runner's telemetry.
+- `refused`: every finding a reviewer raised that the loop did not take in (the round's compile drops), each with its round, in round order.
+- `decidedBy`: on each finding, the decision its outcome rests on. It is the settled disposition's own, else the newest ruling logged against the finding (or against one merged into it) when that ruling came after the finding's latest raise, else `null`. The writer re-checks it against what is on record; the adapter only carries it.
 - A later session's account relists the latest earlier record's findings that this session did not raise, each with the outcome and reason it had.
 
 Outcomes:
 
-- A fixed finding becomes `fixed`, with the round it was audited in.
+- A fixed finding becomes `fixed`, with the round it was audited in; a fix a later full panel did not raise again reads `fixed; the full panel in round <n> did not raise it again`.
 - A finding refuted by verification becomes `shown-wrong`, with the refuted reason; a refutation whose reason starts `author-justified` becomes `left-for-owner`.
 - When the loop ends, every finding it took in that is not fixed or shown wrong is settled by its consequence ([how the loop settles what is left](round-driver.md#how-the-loop-settles-what-is-left) says how). The adapter reads a settled disposition `craft`, `left-for-owner` or `ruling` as the outcome of the same name, with the recorded `settledReason` as its reason.
 - An out-of-scope finding is settled like any other open one: it becomes `ruling` only when a decision on record settles it, and otherwise `left-for-owner`, a leftover.
-- A finding merged into another takes the representative's outcome, and its reason names the representative.
+- A finding merged into another takes the representative's outcome, and its reason names the representative. A ruling logged against any finding merged into the representative counts as a ruling on it; the newest one stands.
 - A finding with no disposition newer than the finding, or whose merge cannot be followed, stays undecided (`null`, "still open when the review loop ended"), so the record reads not reviewed.
 
 Refusals, before anything is posted:
 
 - `review-session-unreadable`: a session file the account needs is missing or malformed; the detail names it (the loop state, the journal or its fault file, `meta.json`'s `sessionId`, the disposition ledger). Restore the session directory and write again; never edit the files by hand.
 - `review-session-not-terminal`: the loop has not ended. Finish the loop, then write.
-- `review-session-unsupported`: the session recorded no seat result (a hand-driven session), or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account".
+- `review-session-unsupported`: the session recorded no seat result and no round's seat status, or ended on a terminal that is not a certified verdict (the attested manual terminal, or an unknown one). Write the account by hand per "Write the account".
 - `review-session-extras-invalid`: the extras file is missing, unparseable or malformed; the detail names the key. Fix it and write again.
 
 ## When it refuses

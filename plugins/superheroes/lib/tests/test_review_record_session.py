@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+import circuit_breaker
 import decision_kinds
 import handback_gate as hg
 import model_registry
@@ -576,19 +577,22 @@ def test_refusals(tmp_path, make, reason):
     assert fake.writes == [] and fake.comments == []
 
 
-@pytest.mark.parametrize("terminal,decision,max_rounds,cap,stopped", [
-    ("capped-with-open-blocker", None, 3, 3, True), ("capped-with-open-critical", None, None, None, True),
-    ("halted", "round-ceiling", 3, 3, True), ("halted", "something-else", 3, 3, False),
-    ("converged", None, True, None, False)])
+@pytest.mark.parametrize("terminal,decision,max_rounds,cap,kind,stopped", [
+    ("capped-with-open-blocker", None, 3, 3, "rounds", True),
+    ("capped-with-open-critical", None, None, None, "rounds", True),
+    # a round-ceiling stop names the ceiling the driver applied (the default one here), not the configured cap
+    ("halted", "round-ceiling", 3, circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE, "ceiling", True),
+    ("halted", "something-else", 3, 3, "rounds", False),
+    ("converged", None, True, None, "rounds", False)])
 def test_rounds_report_the_count_the_cap_and_whether_the_cap_stopped_it(tmp_path, terminal, decision, max_rounds, cap,
-                                                                      stopped):
+                                                                      kind, stopped):
     s = Session(tmp_path, terminal=terminal, rounds={"1": {}, "2": {}},
                 decisions=[{"kind": decision, "round": 2}] if decision else [])
     s.state["config"] = {"maxRounds": max_rounds}
     s.seat("code-reviewer")
     # bites on: the round count, a non-integer cap, or a stop at the cap read from the wrong terminal
     rounds = rs.account_from_session(s.save(), extras())["rounds"]
-    assert rounds == {"count": 2, "cap": cap, "stoppedAtCap": stopped}
+    assert rounds == {"count": 2, "cap": cap, "capKind": kind, "stoppedAtCap": stopped}
 
 
 def test_write_from_session_never_raises_and_removes_its_temp_file(tmp_path, monkeypatch):
@@ -774,16 +778,44 @@ def test_a_finding_the_later_session_raises_again_appears_once_with_its_outcome(
     assert only["outcome"] == "left-for-owner" and "carried" not in (only["reason"] or "")
 
 
+def _reviewed_second_session(tmp_path):
+    """A later session that on its own reads reviewed: a maker, a reviewer run on the final commit, green CI."""
+    root = tmp_path / "later"
+    root.mkdir()
+    s = Session(root, seatMapReceipts=[{"round": "1", "map": {"seats": {}, "makerFamilies": ["xai"]}}])
+    s.seat("code-reviewer", head=HEAD, nonce="n1")
+    runs = {"/run/n1": (dict(GOOD_RUN, runnerNonce="n1", viewHeadSha=HEAD), None)}
+    return s.save(), runs, {"ci": "green", "runDirs": ["/run/n1"]}
+
+
 def test_a_carried_finding_with_no_outcome_stays_undecided_and_the_record_reads_not_reviewed(tmp_path):
-    fake = Fake()
+    session, runs, body = _reviewed_second_session(tmp_path)
+    control = Fake(runs=runs)
+    control_out = send(tmp_path, session, control, **body)
+    # bites on: the later session not reading reviewed on its own, so the carried finding proves nothing
+    assert control_out["ok"] and control_out["status"] == "reviewed", control_out
+    fake = Fake(runs=runs)
     s = Session(tmp_path, findings=[{"findingKey": KEY, "id": "f-1", "title": "t", "severity": "Important",
                                      "file": "a.py", "line": 3, "detail": "d", "dimension": "code-reviewer"}])
     assert send(tmp_path, s.seat("code-reviewer").save(), fake)["ok"]
-    out = send(tmp_path, _second_session(tmp_path), fake)
+    out = send(tmp_path, session, fake, **body)
     assert out["ok"], out
     (carried,) = _by_key(fake)
     assert carried["outcome"] is None
-    assert out["status"] != "reviewed"
+    # the only thing left against the record is the carried finding that has no outcome
+    assert out["status"] == "not-reviewed"
+    assert any("has no outcome" in line for line in out["whatIsMissing"]), out["whatIsMissing"]
+    assert not any("covers the final commit" in line for line in out["whatIsMissing"])
+
+
+def test_a_finding_consequence_reaches_the_posted_record(tmp_path):
+    said = "a reviewer-found defect stays in the change"
+    s = Session(tmp_path, dispositionLedger=[ledger_row(consequence=said)]).seat("code-reviewer")
+    fake = Fake()
+    assert send(tmp_path, s.save(), fake)["ok"]
+    # bites on: the consequence a finding carries being dropped between the session and the posted record
+    (posted,) = _by_key(fake)
+    assert posted["consequence"] == said
 
 
 def test_no_earlier_record_means_nothing_is_carried(tmp_path):
