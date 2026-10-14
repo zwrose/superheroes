@@ -271,3 +271,31 @@ FAILED plugins/superheroes/lib/tests/test_cloud_setup_gardening.py::test_the_thr
 .                                                                        [100%]
 1 passed, 15 deselected in 0.77s
 ```
+
+## 9. A non-reviewer check failure keeps the expiry warning (added by the pre-handback review's fix rounds)
+
+Axis: when the failed-check marker names only parts other than the reviewer, `gardening_lines` still evaluates the pass's lapse: a pass lapsing before the next gardening pass is marked `Renew now` and its line carries the repair sentence and the expiry warning together. (Entries 1 to 8 above are unchanged; this entry was added at the final head and is not in the header's element list.)
+
+- Neutralization (`cloud_setup.py`, `gardening_lines`, the `if repair is not None:` branch): `mark, line = (None, repair) if mark is None else (mark, repair + " " + line)` became `mark, line = None, repair` (the non-reviewer marker skips the lapse again, as before the change).
+- Node: `test_cloud_setup_gardening.py::test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsing_before_the_next_pass`.
+- Red (run with `--tb=short`; the `UV_NATIVE_TLS` deprecation warning is omitted):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsing_before_the_next_pass _
+/home/user/wo-g/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:215: in test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsing_before_the_next_pass
+    assert got["mark"] == "Renew now"
+E   AssertionError: assert None == 'Renew now'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_setup_gardening.py::test_a_non_reviewer_check_failure_keeps_the_expiry_warning_for_a_pass_lapsing_before_the_next_pass
+1 failed, 16 deselected in 0.45s
+```
+
+- Restore: the inverse edit. `cloud_setup.py:424-426` reads `        if repair is not None:` / `            # a non-reviewer check failure keeps the independent expiry warning beside its repair line` / `            mark, line = (None, repair) if mark is None else (mark, repair + " " + line)`
+- Green:
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 0.58s
+```

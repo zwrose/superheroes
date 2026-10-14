@@ -3,8 +3,8 @@
 Detector: `plugins/superheroes/lib/tests/test_cloud_builder_doctrine.py` (`T`), six tests, one per item D1.1 to D1.6.
 Guarded elements (declared by the order): D1.1 headless section, D1.2 container section, D1.3 environment-only test,
 D1.4 per-round findings comment, D1.5 over-the-cap record rule, D1.6 answers on the issue.
-D1.4 and D1.5 are grouped: the two sentences stand in adjacent paragraphs, and one neutralization (both paragraphs deleted) and one
-red/green command (two nodes) cover both; each node went red on its own needles, listed below. Representative of the class: D1.4.
+D1.4 and D1.5 are no longer grouped: the pre-handback review's fix rounds replaced the over-the-cap paragraph with a pointer to the record reference, and
+D1.5 is guarded by its own node now (entry 4 proves each with its own neutralization and red).
 
 Each element was neutralized by a targeted edit in the shipped file (the cut text is quoted), the detector run alone,
 then restored by the inverse edit (the cut text re-inserted at the same offset; the script asserted the restored file equals the
@@ -16,7 +16,7 @@ Disclosures:
 
 - The `UV_NATIVE_TLS` deprecation warning that heads every run is omitted (it was removed with `grep -v` from the captures).
 - The red captures below show the assertion and the summary lines; the long `assert ... in "<collapsed text>"` lines were
-  display-cut at 400 characters (D1.4/D1.5) or 600 characters (D1.6) by `cut -c`. The cut lines are the `E   assert ...` echoes of the
+  display-cut at 600 characters (D1.6) by `cut -c`, and at 300 characters for entry 4's first red (D1.4, re-run at the final head). The cut lines are the `E   assert ...` echoes of the
   collapsed file text, not the verdict lines.
 - D1.2: the test carries seven needles (one per bullet fact). Only the setup-text bullet was neutralized; the needles for the sandbox-network,
   signer, `pycache_prefix` and `size_count.py count --base` bullets are not individually proven by a red run.
@@ -29,14 +29,15 @@ Disclosures:
 
 Axis: the headless section names the question-dialog flag (a builder never asks in a dialog).
 
-- Neutralization (`cloud.md`, `## A headless session`): deleted the sentence
-  `It starts in auto permission mode with the question dialog off\n(`--disallowedTools AskUserQuestion`), so it never asks a question in a dialog. `
-  (143 bytes, trailing space included).
+Note: the earlier text of this entry was changed by the pre-handback review's fix rounds (the sentence was reworded twice and the needle changed); re-proven at the final head.
+
+- Neutralization (`cloud.md`, `## A headless session`): deleted the parenthetical `\n(its launch argv disallows the question tool through `--disallowedTools`)`
+  (the line break before it included), leaving `It starts in auto permission mode with the question dialog off, so it never asks a` / `question in a dialog.`.
 - Node: `T::test_headless_section_follows_the_applies_section_and_names_the_dialog_flag_and_push_limits`.
-- Red: `AssertionError: --disallowedTools AskUserQuestion`, `FAILED plugins/superheroes/lib/tests/test_cloud_builder_doctrine.py::test_headless_section_follows_the_applies_section_and_names_the_dialog_flag_and_push_limits` and `1 failed in 7.50s`.
-- Restore: the inverse edit; the sentence re-inserted, quoted back:
-  `It starts in auto permission mode with the question dialog off` / `(`--disallowedTools AskUserQuestion`), so it never asks a question in a dialog. `.
-- Green: `1 passed in 0.16s`.
+- Red: `AssertionError: disallows the question tool through `--disallowedTools``, `FAILED plugins/superheroes/lib/tests/test_cloud_builder_doctrine.py::test_headless_section_follows_the_applies_section_and_names_the_dialog_flag_and_push_limits` and `1 failed, 5 deselected in 0.15s`.
+- Restore: the inverse edit; the parenthetical re-inserted, quoted back (`cloud.md:40-41`):
+  `The cloud builder runs headless. It starts in auto permission mode with the question dialog off` / `(its launch argv disallows the question tool through `--disallowedTools`), so it never asks a`.
+- Green: `1 passed, 5 deselected in 0.09s`.
 
 ## 2. D1.2 the container section
 
@@ -61,18 +62,32 @@ Axis: a base-red failure that is not shown to be a named container limitation is
   `Anything else that is red on the base too is an unresolved base failure. Report it as that, never` / `as environment-only.`
 - Green: `1 passed in 0.11s`.
 
-## 4. D1.4 and D1.5 (grouped; representative D1.4)
+## 4. D1.4 and D1.5 (two elements, two nodes, one neutralization and one red each)
 
-Axis (D1.4): each round's raw findings are posted on the PR before the next round. Axis (D1.5): a record over the cap is shortened and written again as one comment.
+Note: the earlier text of this entry was changed by the pre-handback review's fix rounds. The paragraphs it quoted were deleted and replaced, and its D1.5 test was replaced by a pointer test. Both halves are re-proven at the final head, each against its own paragraph.
 
-- Neutralization (`cloud.md`, `## Review`): deleted both paragraphs, from `After each review round, post` through `the reader parses one comment.` and its newline (538 bytes).
-- Nodes (one command, two nodes): `T::test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands` and `T::test_a_review_record_over_the_cap_is_shortened_never_split`.
-- Red: `AssertionError: After each review round, post that round's raw findings` (D1.4), `AssertionError: `review-record-too-large`` (D1.5),
-  `FAILED ...::test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands`, `FAILED ...::test_a_review_record_over_the_cap_is_shortened_never_split` and `2 failed in 0.10s`.
-- Restore: the inverse edit; both paragraphs re-inserted, quoted back:
-  `After each review round, post that round's raw findings (or a short "no findings" line) as a PR` / `comment naming the round and the head it reviewed, before starting the next round. The review` / `session's own directory lives only on the container and is lost when the session ends.` / blank / `When the record writer refuses `review-record-too-large`, shorten the account to the outcome of each` / `round, pointing at the per-round findings comments, and write it again. Never split one record` / `across several comments, because the reader parses one comment.`
-- Green: `2 passed in 0.11s`.
-- Not separately proven: that D1.5's test stays red when only D1.4's paragraph is cut, and the reverse (the needles are disjoint, but no single-paragraph neutralization was run; the order's 18-command budget could not hold a sixth red/green pair).
+### 4a. D1.4 the per-round post paragraph
+
+Axis: each round's whole raw findings file is rendered through `render_raw` and posted as one comment before the next round.
+
+- Neutralization (`cloud.md`, `## Review`): deleted the paragraph from `After each review round, render that round's whole raw findings file through `render_raw` in` through `session's own directory lives only on the container and is lost when the session ends.` and its blank line. The pointer paragraph after it was left as shipped.
+- Node: `T::test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands`.
+- Red: `AssertionError: After each review round, render that round's whole raw findings file through `render_raw``, `FAILED plugins/superheroes/lib/tests/test_cloud_builder_doctrine.py::test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands` and `1 failed, 5 deselected in 0.12s`.
+- Restore: the inverse edit; the paragraph re-inserted after the `handback follows` / `skills/review-code/reference/review-record.md`.` lines, quoted back (`cloud.md:213-220`):
+  `After each review round, render that round's whole raw findings file through `render_raw` in` / `` `lib/review_record.py` (the credential check runs on the whole file) and post it as one comment on `` / `the build's pull request when one exists, otherwise on the build's issue, naming the round and the` / `head it reviewed, before starting the next round. For a round with no findings, post a short "no` / `findings" line. If `render_raw` refuses the file as too large, post instead a short list of that` / `round's findings (severity, title, file:line), rendered through `render_raw` before it is posted, and` / `say the full text was too large. The review` / `session's own directory lives only on the container and is lost when the session ends.`
+- Green: `1 passed, 5 deselected in 0.10s`.
+
+### 4b. D1.5 the review-record pointer
+
+Axis: the recovery rules for a refused record have one home (`review-record.md` § When it refuses); `cloud.md` points there and restates none of them.
+
+- Neutralization (`cloud.md`, `## Review`): deleted the paragraph `When the record writer refuses, follow `skills/review-code/reference/review-record.md` § When it` / `refuses.` and its blank line. The per-round post paragraph was left as shipped.
+- Node: `T::test_a_refused_review_record_is_recovered_by_the_record_reference_not_restated`.
+- Red: `assert 'follow `skills/review-code/reference/review-record.md` § When it refuses' in "Every independent review seat runs through the reviewer pass. ...`, `FAILED plugins/superheroes/lib/tests/test_cloud_builder_doctrine.py::test_a_refused_review_record_is_recovered_by_the_record_reference_not_restated` and `1 failed, 5 deselected in 0.12s`.
+- Restore: the inverse edit; the paragraph re-inserted before `## The cloud container`, quoted back (`cloud.md:222-223`):
+  `When the record writer refuses, follow `skills/review-code/reference/review-record.md` § When it` / `refuses.`
+- Green: `1 passed, 5 deselected in 0.10s`.
+- Not proven by a red run: the second half of this test (the four restated phrases `Do not retry it`, `part i of n`, `split at finding boundaries`, `Never split one record` must be absent) was not neutralized; only the pointer needle was.
 
 ## 5. D1.6 answers on the issue
 
