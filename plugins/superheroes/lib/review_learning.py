@@ -236,15 +236,17 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     note = _refresh_default_branch(canon_root)  # Canon's write procedure step 1: fetch before every Canon lookup, the binding check included
     # both writes bind to one project: Canon's lookup for canon_root must land where it lands for cwd
     try:
-        canon_home = os.path.realpath(definition_doc.resolve_canon(root=canon_root)["path"])
-        project_home = os.path.realpath(definition_doc.resolve_canon(root=cwd)["path"])
+        with _scrubbed_environ():  # the lookup's repo-root probe inherits GIT_DIR / GIT_WORK_TREE otherwise
+            canon_home = os.path.realpath(definition_doc.resolve_canon(root=canon_root)["path"])
+            project_home = os.path.realpath(definition_doc.resolve_canon(root=cwd)["path"])
     except Exception as exc:  # CanonLookupError, UnknownSchemaVersion: both fail closed, as canon._locate does
         return _result(False, "refused", "canon-refused", "canon-lookup-failed: %s" % exc)
     if canon_home != project_home:
         return _result(False, "refused", "canon-root-mismatch",
                        "--canon-root resolves Canon to %s but --cwd resolves it to %s; nothing was written" % (canon_home, project_home))
     try:
-        res = _append_canon(canon_root, session_id, proposal, approval)
+        with _scrubbed_environ():  # canon._locate resolves the repository root with the ambient environment
+            res = _append_canon(canon_root, session_id, proposal, approval)
         line = res["appended"][0]
     except canon.Refusal as exc:
         reason = "proposal-invalid" if exc.payload["reason"] == "canon-stays-out" else "canon-refused"

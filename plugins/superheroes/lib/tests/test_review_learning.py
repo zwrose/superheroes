@@ -822,3 +822,27 @@ def test_tally_two_fixed_rows_sharing_a_key_are_one_catch_crediting_every_seat()
         got = RL.tally([_record(1, "s", D, rows, order)], [], D, until="2026-10-11")
         assert got["measured"] is True and got["unattributedCatches"] == 0
         assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
+
+
+def test_apply_canon_lookups_ignore_an_inherited_git_dir(proj, monkeypatch, tmp_path):
+    repo, _store = proj
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(str(other), "init", "-q")
+    _identity(repo)
+    bare = str(tmp_path / "origin.git")
+    _git(str(tmp_path), "init", "-q", "--bare", "-b", "main", bare)
+    _git(repo, "checkout", "-q", "-B", "main")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init", "--allow-empty")
+    _git(repo, "remote", "set-url", "origin", bare)
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "remote", "set-head", "origin", "main")
+    home = definition_doc.resolve_canon(root=repo)["gitRoot"]
+    os.makedirs(home, exist_ok=True)
+    _git(home, "init", "-q")
+    _identity(home)
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    got = _apply(proj, repo, _proposal(), APPROVAL)
+    assert (got["ok"], got["outcome"]) == (True, "applied"), got
+    assert os.environ["GIT_DIR"] == str(other / ".git")
