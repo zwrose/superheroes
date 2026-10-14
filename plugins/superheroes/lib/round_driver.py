@@ -4723,7 +4723,7 @@ def _close_lifted_only_judgment_gate(state, config):
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
     state["pending"] = None
-    _queue_fix_batch(state, config, rows + _lifted_fix_rows(state, rows))
+    _queue_fix_batch(state, config, rows + _split_lifted_rows(state, rows)[0])
 
 
 def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None,

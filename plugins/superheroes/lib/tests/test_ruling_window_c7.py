@@ -914,6 +914,30 @@ def test_guidance_on_the_lifted_choice_with_the_blocker_out_keeps_the_choice_for
     assert "minor choice" in _rows_by_title(after)
 
 
+def test_guidance_on_one_lifted_choice_keeps_an_undecided_choice_out_of_the_fixer(
+        tmp_path, keep_severity):
+    """axis: the judgment gate holds one blocker plus two lifted Minor choices; the blocker is ruled
+    out and only one choice gets guidance, so the other, undecided choice never reaches the fixer."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("choice M", 2), _choice("choice N", 3)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-mn")
+    state = _state(session_dir)
+    key_b = _finding_key_by_title(state, "blocker B")
+    key_m = _finding_key_by_title(state, "choice M")
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mn.json", [
+        {"id": key_b, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()},
+        {"id": key_m, "ruling": "guidance", "reason": "owner call", "guidance": "do the choice"}]))
+    assert out.get("ok") is True, out
+    rows = _rows_by_title(_state(session_dir))
+    assert "choice M" in rows
+    assert "choice N" not in rows
+    after = _state(session_dir)
+    assert "choice N" in [f.get("title") for f in after.get("findings") or []]
+    key_n = _finding_key_by_title(after, "choice N")
+    assert key_n not in [r.get("findingKey") for r in after.get("rulingsLog") or []]
+
+
 def test_ruling_a_withdrawn_batchs_only_blocker_out_drops_its_lifted_minor(tmp_path, keep_severity):
     """axis: a withdrawn fixer batch holds one Important blocker and a lifted real-consequence Minor;
     ruling the blocker out of scope leaves no eligible blocker, so the lifted Minor does not go out
