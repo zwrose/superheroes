@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""PreCompact hook — charter-aware compaction preserve/drop skeleton (#911).
+"""PreCompact hook — the plain-text fallback for the compaction directive (#911, #1814).
 
-Emits a top-level ``additionalContext`` key (not ``hookSpecificOutput``) so the
-harness accepts the payload and steers the compaction summarizer. Fail-open:
-never exit non-zero, never raise — blocking auto-compact can wedge a session.
+Claude Code appends this hook's raw stdout to the compaction instructions; it ignores
+``additionalContext``, so the output here is plain text, not JSON. The directive text and the
+checkpoint-file path both come from ``lib/compaction_directive.py`` — this hook holds neither.
+
+The compaction mod is the primary path. When it has already delivered for this session (a
+fresh ``<session_id>.delivered`` marker, consumed here so a retry cannot reuse it) this hook prints nothing; otherwise it prints the
+directive for the detected mode plus this session's checkpoint notes. The owner's own
+``custom_instructions`` are deliberately NOT repeated — the harness already carries them.
+
+Fail-open: never exit non-zero, never raise — blocking auto-compact can wedge a session.
 """
 import json
 import os
@@ -11,69 +18,26 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 
-from charter_detect import detect_charter
-
-_COMPACTION_SKELETONS = {
-    "showrunner": """\
-Superheroes charter session — summarization directive for SHOWRUNNER.
-
-PRESERVE (compact pointers and state, not raw artifacts):
-- Resume-point pointer: where it lives in the session, not its full contents
-- Live build lanes and their current state (fresh / stale / terminal / parked)
-- Vet ordinal and which wave or build is under review
-- Open owner decisions awaiting an answer
-- Any hard line or standing owner ruling currently in force
-
-DROP (recoverable from GitHub or the ledger — do not spend summary budget):
-- Verbatim tool output, file diffs, probe transcripts, and command stdout
-""",
-    "workhorse": """\
-Superheroes charter session — summarization directive for WORKHORSE.
-
-PRESERVE (compact pointers and state, not raw artifacts):
-- Issue number being built
-- Current work order and its scope fence
-- Build worktree path and branch name
-- Which receipts have been earned versus still owed
-- Any open blocker or park condition
-
-DROP (recoverable from GitHub or the ledger — do not spend summary budget):
-- Verbatim tool output, file diffs, probe transcripts, and command stdout
-""",
-    "detective": """\
-Superheroes charter session — summarization directive for DETECTIVE.
-
-PRESERVE (compact pointers and state, not raw artifacts):
-- Incident under diagnosis and its issue number
-- Hypotheses already ruled out and what ruled them out
-- Demonstration state: what has been reproduced or A/B'd, and on which disposable copy
-- Named diagnosis budget and how much of it is spent
-- The standing prohibition: the examined surface is never edited
-
-DROP (recoverable from GitHub or the ledger — do not spend summary budget):
-- Verbatim tool output, file diffs, probe transcripts, and command stdout
-""",
-}
-
 
 def main():
     try:
+        import compaction_directive
         raw = sys.stdin.read() or "{}"
         payload = json.loads(raw)
-    except (ValueError, TypeError):
+    except Exception:
         return 0
     if not isinstance(payload, dict):
         return 0
 
-    charter = detect_charter(payload.get("transcript_path"))
-    if charter is None:
+    session_id = payload.get("session_id")
+    if compaction_directive.consume_delivered(session_id):
         return 0
 
-    skeleton = _COMPACTION_SKELETONS.get(charter)
-    if not skeleton:
-        return 0
-
-    sys.stdout.write(json.dumps({"additionalContext": skeleton}) + "\n")
+    mode = compaction_directive.detect_mode(payload.get("transcript_path"))
+    notes, mtime = compaction_directive.read_notes(session_id)
+    text = compaction_directive.compose(
+        mode, notes, compaction_directive.checkpoint_path(session_id), mtime)
+    sys.stdout.write(text.rstrip("\n") + "\n")
     return 0
 
 
