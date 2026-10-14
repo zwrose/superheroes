@@ -355,7 +355,8 @@ listed. Deleting a session needs the owner's word every time.
 
 **What each kind of session can do.** A background helper has no tool that archives a session:
 its CLI can stop, attach and delete sessions, but not archive one. A cloud session's own tools
-include one that archives a session by its id. Confirm every archive from the session list, and
+can include one that archives a session by its id; a builder without one says so on its issue, as
+the builder's cloud reference says. Confirm every archive from the session list, and
 report one that is not confirmed as the cleanup's steps say.
 
 ## Adoption mechanics

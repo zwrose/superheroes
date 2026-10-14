@@ -244,12 +244,21 @@ def _setting_on(w):
 def _setting_reads(monkeypatch, got):
     import project_config
 
-    def get_item(*args, **kwargs):
+    def read(*args, **kwargs):
         if isinstance(got, BaseException):
             raise got
         return got
 
-    monkeypatch.setattr(project_config, "get_item", get_item)
+    monkeypatch.setattr(project_config, "read", read)
+
+
+def _read_payload(items, **flags):
+    """What `project_config.read` returns for a profile that was read, with the given items."""
+    return {"profileAbsent": False, "profileUnparseable": False, "behind": False, "items": items, **flags}
+
+
+def _cloud_item(**fields):
+    return {"slug": "cloudBuilds", "raw": None, "source": "stamped", "malformed": False, **fields}
 
 
 def test_cloud_setup_does_not_import_the_check_orchestrator():
@@ -367,9 +376,9 @@ def test_a_setting_still_on_beside_a_marker_that_lost_its_setting_part_is_not_ca
 
 @pytest.mark.parametrize("answer", [
     RuntimeError("config store gone"),
-    {"action": "refused", "reason": "unknown-slug"},
-    {"effective": "yes"},
-    {"effective": None},
+    _read_payload([]),
+    _read_payload([_cloud_item(effective="yes")]),
+    _read_payload([_cloud_item(effective=None)]),
     ["not", "a", "mapping"],
 ])
 def test_an_unreadable_setting_is_claimed_neither_on_nor_off(w, monkeypatch, answer):
@@ -384,6 +393,91 @@ def test_an_unreadable_setting_is_claimed_neither_on_nor_off(w, monkeypatch, ans
     _marker(w, ["reviewer"])
     [got] = _lines(w)
     assert got["mark"] == "Renew now" and got["line"].endswith(RENEW + " " + SETTING_UNREAD)
+
+
+def test_a_corrupt_profile_is_an_unreadable_setting_not_the_default_off(w):
+    # axis: a corrupt profile is an unreadable setting, a missing one is off — see bite-proof record c8c_wo_d.md
+    _record(w, ACCOUNT, "2026-10-25")
+    _setting_on(w)
+    _write_corrupt_profile(w)
+    _marker(w, ["version"])
+    [got] = _lines(w)
+    assert got["line"] == ("Cloud reviewer pass: the last cloud check failed on version. "
+                           + CS._SETTING_UNREAD)
+    assert "stay off" not in got["line"] and "still on" not in got["line"]
+    _marker(w, ["reviewer"])
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now" and got["line"].endswith(RENEW + " " + CS._SETTING_UNREAD)
+    assert "stay off" not in got["line"] and "still on" not in got["line"]
+
+
+def test_a_missing_profile_reads_as_cloud_builds_off(w):
+    # axis: a corrupt profile is an unreadable setting, a missing one is off — see bite-proof record c8c_wo_d.md
+    _record(w, ACCOUNT, "2026-10-25")
+    _marker(w, ["version"])
+    assert CS._cloud_builds_setting(w[0], w[1]) is False
+    [got] = _lines(w)
+    assert got["line"].endswith(CS._CHECK_AGAIN)
+    assert CS._SETTING_UNREAD not in got["line"]
+
+
+def _write_corrupt_profile(w):
+    import core_md
+    path = core_md.core_path(w[0], w[1])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("this is not a profile\n")
+
+
+@pytest.mark.parametrize("answer, expected", [
+    (_read_payload([_cloud_item(effective=True)]), True),
+    (_read_payload([_cloud_item(effective=False)]), False),
+    (_read_payload([_cloud_item(effective=True)], profileUnparseable=None), None),
+    (_read_payload([_cloud_item(effective=False)], profileUnparseable="yes"), None),
+    (_read_payload([_cloud_item(effective=False, malformed=True)]), None),
+    (_read_payload([{"slug": "dial", "effective": True, "malformed": False}]), None),
+    (_read_payload([_cloud_item(effective=1)]), None),
+])
+def test_the_setting_is_a_bool_only_for_a_read_profile_with_a_well_formed_item(w, monkeypatch, answer, expected):
+    _setting_reads(monkeypatch, answer)
+    assert CS._cloud_builds_setting(w[0], w[1]) is expected
+
+
+@pytest.mark.parametrize("flags", [
+    {"profileUnparseable": True},
+    {"profileAbsent": True, "profileUnparseable": True},
+])
+def test_an_unparseable_report_is_off_without_a_core_file_and_unreadable_with_one(w, monkeypatch, flags):
+    _setting_reads(monkeypatch, _read_payload([_cloud_item(effective=False)], **flags))
+    assert CS._cloud_builds_setting(w[0], w[1]) is False
+    _write_corrupt_profile(w)
+    assert CS._cloud_builds_setting(w[0], w[1]) is None
+
+
+def test_a_presence_check_that_raises_is_an_unreadable_setting(w, monkeypatch):
+    import core_md
+    _setting_reads(monkeypatch, _read_payload([_cloud_item(effective=False)], profileUnparseable=True))
+
+    def core_path(*args, **kwargs):
+        raise OSError("store gone")
+
+    monkeypatch.setattr(core_md, "core_path", core_path)
+    assert CS._cloud_builds_setting(w[0], w[1]) is None
+
+
+def test_the_presence_check_writes_nothing(w, monkeypatch):
+    import core_md
+    seen = []
+    real = core_md.core_path
+
+    def core_path(*args, **kwargs):
+        seen.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(core_md, "core_path", core_path)
+    _setting_reads(monkeypatch, _read_payload([_cloud_item(effective=False)], profileUnparseable=True))
+    assert CS._cloud_builds_setting(w[0], w[1]) is False
+    assert seen == [{"persist_backfill": False}]
 
 
 def test_cloud_checks_still_on_wording_is_read_from_cloud_setup():

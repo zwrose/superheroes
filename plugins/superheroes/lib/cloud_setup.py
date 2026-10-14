@@ -390,13 +390,27 @@ def _lapse_line(days, lapses, next_pass_days, live):
 
 
 def _cloud_builds_setting(cwd, root):
-    """The project's cloud-builds setting as it stands: True, False, or None when it cannot be read.
-    `read` collapses an unreadable setting to off, so the gardening line asks directly. Never raises."""
+    """The project's cloud-builds setting as it stands: True or False only when the profile was read and the
+    item is well formed, else None. No profile file means cloud builds are off, since the setting lives in the
+    profile. A profile file that exists but cannot be read is unknown, and `read` reports both as unparseable,
+    so the core file's presence tells them apart. Never raises."""
     try:
+        import core_md
         import project_config
 
-        effective = project_config.get_item(
-            cwd, project_config.CLOUD_BUILDS_SLUG, root=root, persist_backfill=False)["effective"]
+        got = project_config.read(cwd, root, persist_backfill=False)
+        if not isinstance(got, dict):
+            return None
+        unparseable = got.get("profileUnparseable")
+        # axis: a corrupt profile is an unreadable setting, a missing one is off — see bite-proof record c8c_wo_d.md
+        if unparseable is True:
+            return None if os.path.lexists(core_md.core_path(cwd, root, persist_backfill=False)) else False
+        if unparseable is not False:
+            return None
+        item = next((i for i in got["items"] if i["slug"] == project_config.CLOUD_BUILDS_SLUG), None)
+        if not isinstance(item, dict) or item.get("malformed"):
+            return None
+        effective = item["effective"]
     except Exception:
         return None
     return effective if isinstance(effective, bool) else None

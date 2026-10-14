@@ -101,6 +101,13 @@ def test_section_says_the_helper_never_deletes_and_deleting_needs_the_owner():
     assert "Deleting a session needs the owner's word every time." in text
 
 
+def test_section_does_not_promise_a_cloud_session_an_archive_tool():
+    # axis: the section never promises every cloud session an archive tool — see bite-proof record c8c_wo_d.md
+    text = _collapsed(_section())
+    assert "A cloud session's own tools include one" not in text
+    assert "can include one that archives a session" in text
+
+
 def test_section_restates_none_of_the_relays_steps():
     # axis: the relay's steps keep one home, in the wave-watch reference — see bite-proof record c8c_wo_c.md
     text = _section()
