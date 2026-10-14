@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 
 import model_registry
+import review_findings_schema
 
 from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
@@ -186,7 +187,8 @@ SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
 FINDING_KEY_FIELD = "findingKey"
 
-DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
+# The three settled outcomes (craft, left-for-owner, ruling) are written only by the end-of-loop settle.
+DISPOSITIONS = ("fixed", "refuted", "out-of-scope") + review_findings_schema.OUTCOMES[2:]
 FOLLOW_UP_FIELDS = ("item", "revisitTrigger", "classClosure")
 
 
@@ -347,7 +349,7 @@ def disposition_ledger_owner_classification(state):
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
-    "outOfScopeReason", "followUp", MERGED_INTO_FIELD,
+    "outOfScopeReason", "followUp", MERGED_INTO_FIELD, "settledReason", "decidedBy",
 )
 
 

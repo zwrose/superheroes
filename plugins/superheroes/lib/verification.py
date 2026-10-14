@@ -10,6 +10,7 @@ import re
 
 import break_it
 import circuit_breaker
+import finding_outcomes
 import panel_tally
 import round_phases
 
@@ -232,6 +233,7 @@ def _merge_group(members):
         return {}
     rep = max(members, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
     merged = dict(rep)
+    merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(members)
     bodies = []
     for m in members:
         body = m.get("body")

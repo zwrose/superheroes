@@ -66,6 +66,7 @@ import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import finding_outcomes  # noqa: E402
 import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
@@ -897,6 +898,8 @@ def _merge_same_finding(existing, incoming):
         merged = dict(incoming)
     else:
         merged = dict(existing)
+    merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(
+        [existing, incoming])
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
     merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
