@@ -240,13 +240,16 @@ declined with a trigger by default.
    - **Who logs it.** The act that observes it logs it, at that moment. The advisor appends it during
      that vet, while reading that diagnosis or field report, or when the owner reports it. The act's own
      durable record states the append, as item 4 requires.
-     An escape is logged once: the act reads the misses log first, and when an earlier act already
-     logged that PR's escape, it appends nothing and its record says the escape was already logged.
-   - **What the entry says.** The PR, a link to that PR's
+     An escape is logged once per bug: the act reads the misses log first, and when an earlier act
+     already logged that same bug from that PR, it appends nothing and its record says the escape was
+     already logged. A different bug from the same PR is a separate escape and gets its own entry.
+   - **What the entry says.** The PR, a short description of the bug, a link to that PR's
      [review record](../../../rubric/glossary.md#review-record) (the record is one hop from the PR), the
      date of the review that record holds, and one call. The call is **missed** when no finding in the
      record names the bug. It is **seen and left** when a finding names it and its outcome let it
-     through: shown wrong, a craft call, left for the owner, or a ruling.
+     through: shown wrong, a craft call, left for the owner, or a ruling. A finding whose outcome is
+     fixed but whose fix did not hold counts as **missed**, because the review did not stop the bug;
+     the entry then names that finding and says its fix did not hold.
    - **Counting starts at adoption.** A review escape counts only when the review it traces to is dated
      on or after the project's [adoption day](#calibration-changes-and-time-complaints), so no reviewer
      seat is judged on reviews from before the project adopted this way of learning. An escape traced
@@ -579,13 +582,10 @@ advisor run together to keep calibration honest.
      the condition window. The record keeps no first date for a finding, so a catch carried from a
      review before the adoption day into a later re-review counts by the later date; the advisor
      weighs that before relying on a seat's count. The advisor reads the counts and judges. Missing
-     evidence reads unmeasured, never zero: an undated or unreadable record, an undated escape or
-     one whose call is neither, and a record inside the counting range that is a refusal, has lost
-     its reviewers or findings, lacks its `pr` or `sessionId`, could not read a reviewer's raw
-     output, has a damaged reviewer or finding row, or repeats a PR already supplied each turn the
-     whole tally unmeasured (`incomplete-evidence`) instead of counting as nothing. A record dated
-     outside the range is left out unread. A condition window that opens before the adoption day
-     also reads unmeasured, as `short-of-window`, and that is the reason reported. A catch is
+     evidence reads unmeasured, never zero: the helper's tally contract says which records and escapes
+     it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
+     reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
+     is left out unread. A catch is
      credited to every seat whose lens the finding names (a fixed finding in the security lens
      counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
      in that seat's lens.
