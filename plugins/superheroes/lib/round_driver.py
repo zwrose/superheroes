@@ -862,6 +862,7 @@ def _diff_scope_ok(finding, valid):
 
 
 COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
+COMPILE_DROP_NO_CONSEQUENCE = "no stated consequence"
 
 
 def _coerce_line(value):
@@ -938,6 +939,9 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
          dimensions unioned, tradeoff OR-ed. NOT the line-less file::title identity, which collapses
          two distinct-line findings that share a title (a dropped blocker);
       6. nit cap.
+    A finding that states no consequence (`finding_outcomes.has_stated_consequence`) is dropped
+    after the citation, line and diff-scope checks; a break-it-stamped finding is held to the same
+    rule — `scope_exempt` exempts diff scope only.
     Returns (compiled, drops) where each drop names WHY (never silently dropped)."""
     if not isinstance(findings, list):
         findings = []
@@ -965,6 +969,10 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
         if not trusted and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": "outside the round diff scope"})
+            continue
+        if not finding_outcomes.has_stated_consequence(f):
+            drops.append({"file": fc.get("file"), "line": fc.get("line"),
+                          "title": fc.get("title"), "reason": COMPILE_DROP_NO_CONSEQUENCE})
             continue
         fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))

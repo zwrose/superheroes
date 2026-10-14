@@ -24,7 +24,14 @@ _TRI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TRI)
 
 _bootstrap = _TRI._bootstrap
-_blocking_finding = _TRI._blocking_finding
+
+
+def _blocking_finding(title, line):
+    finding = _TRI._blocking_finding(title, line)
+    finding["consequence"] = "a reviewer-found defect stays in the change"
+    return finding
+
+
 _state = _TRI._state
 _fake_git = _TRI._fake_git
 _drive_to_phase = _TRI._drive_to_phase

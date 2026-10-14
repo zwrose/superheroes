@@ -18,6 +18,7 @@ the diff, the repo, and the target record.
 ## Your task
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
 finding and whether any new issues were introduced. Cite quoted support for every conclusion.
+Each new issue you report is a finding in the base rubric's findings shape, `consequence` and `consequenceKind` included; a new issue with no stated consequence is not taken into the review.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
