@@ -53,7 +53,7 @@ OWNER_MESSAGE_MERGED = ("#%d is merged. I've asked its cloud builder to archive 
                         "You'll get one prompt for it: tap Allow once.")
 OWNER_MESSAGE_CLOSED = ("#%d is closed. I've asked its cloud builder to archive itself. "
                         "You'll get one prompt for it: tap Allow once.")
-_RECEIPT_KEYS = ("repo", "pr", "session", "msgId", "outcome", "at")
+_RECEIPT_KEYS = ("repo", "pr", "session", "msgId", "outcome", "at", "closedAt")
 _LOCK_WAIT_SECONDS = 30
 _GH_TIMEOUT = 60
 _SHA_RE = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
@@ -104,15 +104,17 @@ def _load(repo_root, env):
             isinstance(r, dict) and set(r) == set(_RECEIPT_KEYS)
             and isinstance(r["repo"], str) and isinstance(r["pr"], int) and isinstance(r["session"], str)
             and isinstance(r["msgId"], str) and r["outcome"] in OUTCOMES and isinstance(r["at"], str)
+            and isinstance(r["closedAt"], str)
             for r in receipts)):
         return _refusal("cleanup-state-unreadable"), None
     return path, receipts
 
 
-def _same_receipt(receipt, repo, pr, session):
+def _same_receipt(receipt, repo, pr, session, closed_at=None):
     """Repository names compare without case (GitHub spells a repository as it likes); the receipt keeps
-    the spelling it was saved with."""
-    return (receipt["repo"].lower(), receipt["pr"], receipt["session"]) == (repo.lower(), pr, session)
+    the spelling it was saved with. With `closed_at`, the receipt must also be for that closure of the PR."""
+    same = (receipt["repo"].lower(), receipt["pr"], receipt["session"]) == (repo.lower(), pr, session)
+    return same and (closed_at is None or receipt["closedAt"] == closed_at)
 
 
 def _save(path, receipts):
@@ -199,10 +201,11 @@ def _epoch(stamp):
         return None
 
 
-def _adopting_successor(repo_root, lid, lane, issues, pr, branch, env):
+def _adopting_successor(repo_root, lid, lane, issues, pr, branch, closed, env):
     """(launchId, lane, refusal): the latest later cloud lane of the given issues whose premise adopts this PR
     or its branch and whose fold shows a started cloud session; the given lane when there is none (an empty
-    lane when the PR had no older cloud lane, so any such adopter is found). Read from the reserved records,
+    lane when the PR had no older cloud lane, so any such adopter is found). A lane reserved after the PR
+    closed (`closed`, epoch seconds) cannot have finished it and never qualifies. Read from the reserved records,
     which carry the premise `cloud_recover.successor` wrote."""
     ll = _sib("launch_ledger")
     got = ll.read(repo_root, env=env)
@@ -223,7 +226,7 @@ def _adopting_successor(repo_root, lid, lane, issues, pr, branch, env):
     later = [(i["reservedIndex"], k, i) for k, i in fold["launches"].items()
              if i["place"] == ll.PLACE_CLOUD and i["issue"] in issues
              and isinstance(i.get("cloudSessionName"), str) and i["cloudSessionName"]
-             and i["reservedIndex"] > lane.get("reservedIndex", -1) and adopts(premises.get(k))]
+             and i["reservedIndex"] > lane.get("reservedIndex", -1) and i["reservedTs"] <= closed and adopts(premises.get(k))]
     if not later:
         return lid, lane, None
     best = max(later, key=lambda t: t[0])
@@ -246,6 +249,11 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     opened = _epoch(pull.get("created_at"))
     if opened is None:
         return _refusal("pr-unreadable"), None
+    # axis: a successor lane reserved after the PR closed is a new build, not the finisher, so the close time bounds adoption
+    closed_at = pull.get("merged_at" if outcome == "merged" else "closed_at")
+    closed = _epoch(closed_at)
+    if closed is None:
+        return _refusal("pr-unreadable"), None
     cp = _sib("cloud_parked")
     issues = cp._linked_issues(pull.get("body"), repo)
     if not issues:
@@ -263,7 +271,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     lanes = [(lid, lane) for lid, lane, _ in found if lane]
     if not lanes and not launch_id:
         # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup
-        lid, lane, reason = _adopting_successor(repo_root, None, {}, issues, pr, _name(pull.get("head"), "ref"), env)
+        lid, lane, reason = _adopting_successor(repo_root, None, {}, issues, pr, _name(pull.get("head"), "ref"), closed, env)
         if reason:
             return _refusal(reason), None
         lanes = [(lid, lane)] if lane else []
@@ -274,7 +282,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     lid, lane = lanes[0]
     if not launch_id:
         # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup
-        lid, lane, reason = _adopting_successor(repo_root, lid, lane, [lane.get("issue")], pr, _name(pull.get("head"), "ref"), env)
+        lid, lane, reason = _adopting_successor(repo_root, lid, lane, [lane.get("issue")], pr, _name(pull.get("head"), "ref"), closed, env)
         if reason:
             return _refusal(reason), None
     session = lane.get("cloudSessionName")
@@ -283,7 +291,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     path, receipts = _load(repo_root, env)
     if receipts is None:
         return path, None
-    request = next((r for r in receipts if _same_receipt(r, repo, pr, session)), {"state": "none"})
+    request = next((r for r in receipts if _same_receipt(r, repo, pr, session, closed_at)), {"state": "none"})
     head = pull.get("head")
     facts = {"branch": _name(head, "ref"), "headSha": _name(head, "sha"), "headRepo": _name(head, "repo", "full_name"),
              "baseRepo": _name(pull.get("base"), "repo", "full_name")}
@@ -292,7 +300,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     result = {"ok": True, "action": "cleanup", "outcome": outcome, "repo": repo, "pr": pr, "issue": lane.get("issue"),
               "launchId": lid, "session": session, "sessionId": lane.get("cloudSessionId"),
               "configDir": lane.get("configDir"), "archiveText": None if delivered else text % pr,
-              "request": request, "branch": facts["branch"], "headSha": facts["headSha"]}
+              "request": request, "closedAt": closed_at, "branch": facts["branch"], "headSha": facts["headSha"]}
     # axis: a confirmed delivery needs no further send, so a retried cleanup carries no archive text
     if delivered:
         result["alreadyDelivered"] = True
@@ -327,7 +335,7 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     if receipts is None:
         return path
     texts = {"merged": OWNER_MESSAGE_MERGED, "closed": OWNER_MESSAGE_CLOSED}
-    old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"])), None)
+    old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"], got["closedAt"])), None)
     # axis: a pending write over a delivered receipt grants no reservation, so a caller holding a stale plan sends nothing
     if old is not None and old["outcome"] == "delivered" and outcome == "pending":
         return _refusal("request-delivered")
@@ -339,8 +347,10 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     if old is not None and old["outcome"] in ("pending", "uncertain") and old["msgId"] != msg_id:
         return _refusal("request-uncertain")
     receipt = {"repo": repo, "pr": number, "session": got["session"], "msgId": msg_id, "outcome": outcome,
-               "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    receipts[:] = [r for r in receipts if r is not old] + [receipt]
+               "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "closedAt": got["closedAt"]}
+    # a receipt of an earlier closure of this PR is superseded by the one for this closure
+    receipts[:] = [r for r in receipts if not _same_receipt(r, repo, number, got["session"])] + [receipt]
     if not _save(path, receipts):
         return _refusal("cleanup-state-unwritable")
     # axis: the owner is told the builder was asked only once the request is confirmed delivered — see bite-proof record c8_cloud_cleanup

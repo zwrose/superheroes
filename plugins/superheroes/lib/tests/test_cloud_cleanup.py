@@ -83,10 +83,11 @@ class Gh:
 
 
 def _pull(issues=(101,), state="closed", merged=True, head_sha=None, head_repo=REPO, ref=BRANCH,
-          created_at="2100-01-01T00:00:00Z"):
+          created_at="2100-01-01T00:00:00Z", closed_at="2026-10-12T10:00:00Z"):
     body = "Closes " + ", closes ".join("#%d" % i for i in issues) + "\n\nthe work" if issues else "the work"
     head = {"ref": ref, "sha": head_sha, "repo": {"full_name": head_repo} if head_repo else None}
-    return {"state": state, "merged": merged, "merged_at": "2026-10-12T10:00:00Z" if merged else None, "created_at": created_at,
+    return {"state": state, "merged": merged, "merged_at": "2026-10-12T10:00:00Z" if merged else None,
+            "closed_at": closed_at if state == "closed" else None, "created_at": created_at,
             "body": body,
             "head": head, "base": {"ref": "main", "repo": {"full_name": REPO}}}
 
@@ -413,7 +414,7 @@ def test_the_plan_carries_the_lanes_facts_and_the_newest_cloud_lane_of_the_issue
     got = _plan(w)
     assert got == {"ok": True, "action": "cleanup", "outcome": "merged", "repo": REPO, "pr": PR, "issue": 101,
                    "launchId": "l-2", "session": "session-two", "sessionId": "session_01AbCdEf123", "configDir": None,
-                   "archiveText": CC.ARCHIVE_TEXT_MERGED % PR, "request": {"state": "none"}, "branch": BRANCH,
+                   "archiveText": CC.ARCHIVE_TEXT_MERGED % PR, "request": {"state": "none"}, "closedAt": "2026-10-12T10:00:00Z", "branch": BRANCH,
                    "headSha": w.head}
 
 
@@ -772,3 +773,75 @@ def test_two_overlapping_pending_writes_for_the_same_pr_and_session_give_one_res
     assert results["caller-2"] == {"ok": False, "reason": "request-in-progress"}
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "pending")]
+
+
+_AFTER = 1_800_000_000
+_CLOSED_AT = "2027-01-15T08:00:00Z"  # epoch 1_800_000_000 is 2027-01-15T08:00:00Z
+
+
+def test_a_branch_adopting_lane_reserved_after_the_pr_closed_is_not_chosen(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at=_CLOSED_AT)
+    reserved = _reserved("l-2", BATCH, ["l-2"], w.repo, issue=101, place="cloud", cloudEnvironment="env-fixture-one",
+                         pluginVersion="1.2.3", ts=_AFTER + 3600)
+    reserved["premise"] = dict(reserved.get("premise") or {}, adoptsBranch=BRANCH, adoptsHead=w.head)
+    assert ll.reserve(w.repo, reserved, env=w.env)["ok"]
+    started = _started("l-2")
+    started.update(cloudSessionName="session-two", cloudSessionId="session_01AbCdEf123")
+    assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1" and got["session"] == "session-one"
+
+
+def test_a_lane_reserved_before_the_pr_closed_and_adopting_it_is_chosen(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at=_CLOSED_AT)
+    _adopter(w, "l-2", 101, "session-two", _AFTER - 3600)
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
+
+
+def test_a_merged_pr_bounds_adoption_by_its_merge_time(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED, closed_at=_CLOSED_AT)  # merged_at is 2026-10-12
+    _adopter(w, "l-2", 101, "session-two", _AFTER - 3600)  # after the merge, before closed_at
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-1"
+
+
+def test_a_pr_without_a_readable_close_time_is_unreadable(w):
+    _lane(w, "l-1", 101, ts=_T1)
+    for bad in (None, "yesterday", 5):
+        w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at=bad)
+        assert _plan(w) == {"ok": False, "reason": "pr-unreadable"}
+        merged = _pull(head_sha=w.head, created_at=_OPENED)
+        merged["merged_at"] = bad
+        w.gh.pulls[PR] = merged
+        assert _plan(w) == {"ok": False, "reason": "pr-unreadable"}
+
+
+def test_a_delivered_receipt_for_an_earlier_closure_does_not_suppress_a_request_after_a_reopen(w):
+    _lane(w, "l-1", 101, ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at="2026-10-12T10:00:00Z")
+    first = _record(w, "m-1", "delivered")
+    assert first["ok"] and first["request"]["closedAt"] == "2026-10-12T10:00:00Z"
+    assert _plan(w)["alreadyDelivered"] is True  # the current closure is still covered
+    w.gh.pulls[PR] = _pull(head_sha=w.head, merged=False, created_at=_OPENED, closed_at="2026-10-13T10:00:00Z")
+    again = _plan(w)
+    assert again["ok"] and again["request"] == {"state": "none"} and again["archiveText"] is not None
+    assert "alreadyDelivered" not in again
+    second = _record(w, "m-2", "delivered")
+    assert second["ok"] and "already" not in second and second["request"]["msgId"] == "m-2"
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["closedAt"]) for r in json.load(fh)] == [("m-2", "2026-10-13T10:00:00Z")]
+
+
+def test_a_state_file_with_a_receipt_lacking_closed_at_is_unreadable(w):
+    _lane(w, "l-1", 101, ts=_T1)
+    assert _record(w, "m-1", "delivered")["ok"]
+    with open(_state_file(w), encoding="utf-8") as fh:
+        saved = json.load(fh)
+    del saved[0]["closedAt"]
+    with open(_state_file(w), "w", encoding="utf-8") as fh:
+        json.dump(saved, fh)
+    assert _plan(w) == {"ok": False, "reason": "cleanup-state-unreadable"}
