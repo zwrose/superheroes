@@ -30,7 +30,19 @@ rulings. See [Canon's contract](canon-contract.md).
 ### Decision walk
 
 A sitting in which the owner takes batched decisions, from the command or from a conversation.
-"Walk" alone means this.
+"Walk" alone, outside a PR sheet, means this.
+
+### Walk
+
+The part of a PR sheet where the owner tries the change, stop by stop, answering each stop with the
+[check pattern](#answer-pattern). A look-only stop is one the owner only looks at.
+
+### Answer pattern
+
+One of the four shapes a question on a sheet is answered in, as
+[the four answer patterns](../theme/review-template.md#the-four-answer-patterns) states: agree
+(accept or discuss), pick (one of the options), check (works, a problem or skip) and sign-off (the
+merge verdict). Adding a pattern takes the owner's ruling.
 
 ### Owner-vs-craft line
 
