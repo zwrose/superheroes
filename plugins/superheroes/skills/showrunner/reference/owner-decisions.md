@@ -701,13 +701,15 @@ say how it changes and what the advisor says when the owner finds a review slow.
   `adopt` with another date refuses. With no day recorded, every count reads unmeasured. The advisor
   records the day at the first gardening pass that finds it missing, and says so in that pass's record.
   Counting starts on that day, so nothing earlier is counted.
-- **When the owner says a review took too long,** the advisor answers with four things, all from the
-  PR's [review record](../../../rubric/glossary.md#review-record):
-  1. whether the calibration is right for that change, meaning its lane and risk areas;
-  2. whether the review loop followed it: the reviewers it ran, its rounds, and whether it stopped at
-     its cap;
-  3. what the review spent its time on: the record's cost and rounds, and which reviewers and fix
-     rounds took the time;
+- **When the owner says a review took too long,** the advisor answers with four things:
+  1. whether the calibration is right for that change: the lane, from the PR's
+     [review record](../../../rubric/glossary.md#review-record), and the risk areas the change
+     touches, read with `lib/risk_areas.py touched` over the PR's changed paths;
+  2. whether the review loop followed it: the reviewers that ran, the rounds, and whether the loop
+     stopped at its cap, all from the review record;
+  3. what the review spent its time on: the record's cost (reviewer minutes) and its rounds. The
+     record does not time fix rounds, so the answer says how many fix rounds ran and that their time
+     is not recorded, and does not estimate it;
   4. a proposed calibration change, or none, with its reason.
 
   **The complaint is never treated as an instruction to go faster.** The loop keeps spending the time
