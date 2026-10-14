@@ -31,17 +31,15 @@
     "tokenUsage": {
       "complete": true,
       "expectedLeaves": [
-        "test-reviewer:r1",
-        "synthesis:r1"
+        "test-reviewer:r1"
       ],
       "missing": [],
       "present": [
-        "synthesis:r1",
         "test-reviewer:r1"
       ],
-      "total": 1001
+      "total": 1000
     }
   },
   "terminal": "clean",
-  "tokenTotal": 1001
+  "tokenTotal": 1000
 }
