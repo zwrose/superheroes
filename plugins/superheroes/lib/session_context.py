@@ -209,7 +209,9 @@ def checkpoint_file_record(session_id):
     if not path:
         return ""
     return ("This session's checkpoint notes file: %s "
-            "(if it exists, it holds this session's checkpoint notes)" % path)
+            "(if it exists, it holds this session's checkpoint notes; "
+            "/superheroes:checkpoint saves it there — the mod does, where present, "
+            "otherwise the skill writes it)" % path)
 
 
 # ----------------------------------------------------------------- cache hygiene nudge

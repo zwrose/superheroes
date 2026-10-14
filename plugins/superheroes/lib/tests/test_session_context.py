@@ -604,7 +604,9 @@ def test_checkpoint_file_record_follows_resolved_roots(tmp_path, monkeypatch, _c
                         lambda cwd, root=None: {"storageMode": "in-repo"})
     out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", session_id=_SID)
     assert ("### Checkpoint file\nThis session's checkpoint notes file: %s "
-            "(if it exists, it holds this session's checkpoint notes)" % _cfg) in out
+            "(if it exists, it holds this session's checkpoint notes; "
+            "/superheroes:checkpoint saves it there — the mod does, where present, "
+            "otherwise the skill writes it)" % _cfg) in out
     assert (out.index("### Resolved plugin roots") < out.index("### Checkpoint file")
             < out.index("### Covenant"))
 

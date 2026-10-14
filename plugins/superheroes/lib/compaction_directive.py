@@ -11,6 +11,7 @@ object on stdout and exits 0 on success, 1 with ``{"ok": false, "reason": "<toke
 refusal (argparse usage errors keep argparse's own exit 2).
 
     python3 -B compaction_directive.py path --session-id ID
+    python3 -B compaction_directive.py save --session-id ID        (notes text on stdin)
     python3 -B compaction_directive.py mode --transcript P
     python3 -B compaction_directive.py instructions --session-id ID [--transcript P]
                                                     [--user-instructions TEXT]
@@ -22,6 +23,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -191,6 +193,48 @@ def read_notes(session_id, env=None, max_chars=20000):
         return "", None
 
 
+def _atomic_write(path, text):
+    """Write ``text`` to ``path`` through a temp file in the same directory and ``os.replace``:
+    the destination is only ever absent/old or complete. Raises on I/O failure (temp removed)."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".checkpoint.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def save_notes(session_id, text, env=None):
+    """Atomically replace this session's checkpoint notes with ``text``; the notes path, or
+    ``None`` when there is no path. The destination is only replaced once the whole text is
+    on disk, so a failed save leaves the last good notes intact. Raises on I/O failure."""
+    path = checkpoint_path(session_id, env)
+    if path is None:
+        return None
+    _atomic_write(path, text)
+    return path
+
+
+def mark_delivered(session_id, env=None, now=None):
+    """Atomically publish this session's delivery marker (a complete timestamp or no marker at
+    all, so a failed write cannot leave an empty or partial marker for the PreCompact fallback to
+    consume); the marker path, or ``None`` when there is no path. Raises on I/O failure."""
+    path = delivered_marker_path(session_id, env)
+    if path is None:
+        return None
+    _atomic_write(path, str(int((time.time() if now is None else now) * 1000)))
+    return path
+
+
 def _iso_utc(mtime):
     try:
         stamp = datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc)
@@ -267,17 +311,28 @@ def _glue_user_instructions(argv):
     return out
 
 
+# The CLI vocabulary (verb names and flag names) lives in compaction_cli.json, the one
+# definition the Claude Code mod (hooks/mod/argv.ts) reads too. Whether a flag is
+# required is this parser's own semantics and stays here, keyed by the JSON's role names.
+_CLI_VOCABULARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compaction_cli.json")
+_REQUIRED_ROLES = {
+    "path": ("sessionId",),
+    "save": ("sessionId",),
+    "mark": ("sessionId",),
+    "mode": ("transcriptPath",),
+    "instructions": ("sessionId",),
+}
+
+
 def _build_parser():
+    with open(_CLI_VOCABULARY, encoding="utf-8") as fh:
+        verbs = json.load(fh)["verbs"]
     ap = argparse.ArgumentParser(prog="compaction_directive.py")
     sub = ap.add_subparsers(dest="verb", required=True)
-    p = sub.add_parser("path")
-    p.add_argument("--session-id", required=True)
-    m = sub.add_parser("mode")
-    m.add_argument("--transcript", required=True)
-    i = sub.add_parser("instructions")
-    i.add_argument("--session-id", required=True)
-    i.add_argument("--transcript")
-    i.add_argument("--user-instructions")
+    for verb, flags in verbs.items():
+        vp = sub.add_parser(verb)
+        for role, flag in flags.items():
+            vp.add_argument(flag, required=role in _REQUIRED_ROLES[verb])
     return ap
 
 
@@ -289,6 +344,27 @@ def _verb_path(args):
     if path is None or marker is None:
         return _refuse("config-dir-unresolved")
     return _emit({"ok": True, "path": path, "markerPath": marker})
+
+
+def _verb_save(args):
+    if not _valid_session_id(args.session_id):
+        return _refuse("session-id-invalid")
+    text = sys.stdin.read()
+    if not text.strip():
+        return _refuse("empty-notes")
+    path = save_notes(args.session_id, text)
+    if path is None:
+        return _refuse("config-dir-unresolved")
+    return _emit({"ok": True, "path": path})
+
+
+def _verb_mark(args):
+    if not _valid_session_id(args.session_id):
+        return _refuse("session-id-invalid")
+    path = mark_delivered(args.session_id)
+    if path is None:
+        return _refuse("config-dir-unresolved")
+    return _emit({"ok": True, "path": path})
 
 
 def _verb_mode(args):
@@ -314,7 +390,7 @@ def main(argv=None):
     argv = _glue_user_instructions(list(sys.argv[1:] if argv is None else argv))
     args = _build_parser().parse_args(argv)     # argparse usage errors exit 2 by design
     try:
-        verb = {"path": _verb_path, "mode": _verb_mode, "instructions": _verb_instructions}
+        verb = {"path": _verb_path, "save": _verb_save, "mark": _verb_mark, "mode": _verb_mode, "instructions": _verb_instructions}
         return verb[args.verb](args)
     except Exception:
         return _refuse("internal-error")
