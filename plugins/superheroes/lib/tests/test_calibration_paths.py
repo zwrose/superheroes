@@ -21,7 +21,7 @@ import store_core as sc
 from test_mode_migrate import _init_repo, _seed_flip_inputs, _stage_to_phase
 
 _BLOCK = "## Model tiers\nreviewer-deep: opus\n"
-_REFUSAL = {"status": "blocked", "reason": "calibration-write-in-cloud-session"}
+_REFUSAL = {"status": "blocked", "reason": sc.CLOUD_REFUSAL_REASON}
 
 
 def _cloud(monkeypatch, value="true"):
@@ -292,7 +292,7 @@ def test_cli_write_prints_one_json_refusal_line_and_exits_1_in_a_cloud_session(
     out = capsys.readouterr().out
     assert rc == 1
     assert len(out.splitlines()) == 1
-    assert json.loads(out) == {"ok": False, "reason": "calibration-write-in-cloud-session"}
+    assert json.loads(out) == {"ok": False, "reason": sc.CLOUD_REFUSAL_REASON}
     assert _snapshot(tmp_path) == before
 
 
@@ -415,7 +415,7 @@ def test_sweep_removes_nothing_in_a_cloud_session(tmp_path, monkeypatch):
     out = ss.sweep(root=str(root), include_unknown=True)
     assert _snapshot(tmp_path) == before
     assert out["deleted"] == [] and out["errors"] == []
-    assert out["refused"] == "calibration-write-in-cloud-session"
+    assert out["refused"] == sc.CLOUD_REFUSAL_REASON
     assert set(out) >= {"projectsRoot", "deleted", "kept", "includeUnknown", "errors"}
 
 
