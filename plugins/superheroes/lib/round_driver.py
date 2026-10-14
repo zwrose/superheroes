@@ -4709,7 +4709,8 @@ def _reconcile_queue_after_emitted_rulings(state, extra_rows=None):
 def _close_lifted_only_judgment_gate(state, config):
     """A pending owner-judgment gate whose every blocking row (the blocking tradeoffs and the carried
     mechanical blockers) has since been ruled out holds only lifted non-blocking choices: with no
-    eligible blocker to lift beside, it closes and the round settles as an exclusion-emptied batch."""
+    eligible blocker to lift beside, it closes and the round settles as an exclusion-emptied batch —
+    unless a lifted row carries an owner ``guidance``/``fix`` decision, which still goes to the fixer."""
     if state.get("step") != P_JUDGMENT or state.get("terminal"):
         return
     rows = [f for f in (state.get("_judgmentFindings") or []) + (state.get("_judgmentMechanical") or [])
@@ -4722,7 +4723,7 @@ def _close_lifted_only_judgment_gate(state, config):
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
     state["pending"] = None
-    _queue_fix_batch(state, config, rows)
+    _queue_fix_batch(state, config, rows + _lifted_fix_rows(state, rows))
 
 
 def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None,

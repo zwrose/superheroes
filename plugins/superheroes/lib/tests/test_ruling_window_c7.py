@@ -893,6 +893,27 @@ def test_ruling_the_only_blocker_out_clears_a_lifted_only_judgment_gate(tmp_path
     assert not after.get("pending")
 
 
+def test_guidance_on_the_lifted_choice_with_the_blocker_out_keeps_the_choice_for_the_fixer(
+        tmp_path, keep_severity):
+    """axis: the judgment gate holds one mechanical blocker plus a lifted Minor choice; one ruling
+    file gives the choice guidance and marks the blocker out of scope, so the owner-guided choice
+    still reaches the fixer and the gate does not converge without it."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-guided-oos")
+    state = _state(session_dir)
+    key_b = _finding_key_by_title(state, "blocker B")
+    key_m = _finding_key_by_title(state, "minor choice")
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", [
+        {"id": key_b, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()},
+        {"id": key_m, "ruling": "guidance", "reason": "owner call", "guidance": "do the choice"}]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") != "converged"
+    assert "minor choice" in _rows_by_title(after)
+
+
 def test_ruling_a_withdrawn_batchs_only_blocker_out_drops_its_lifted_minor(tmp_path, keep_severity):
     """axis: a withdrawn fixer batch holds one Important blocker and a lifted real-consequence Minor;
     ruling the blocker out of scope leaves no eligible blocker, so the lifted Minor does not go out
