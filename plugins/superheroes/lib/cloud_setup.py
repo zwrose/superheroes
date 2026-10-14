@@ -364,7 +364,7 @@ def _lapse_line(days, lapses, next_pass_days, live):
     when = "%d %s" % (lapses.day, lapses.strftime("%b"))
     if not live:
         return "Renew now", "Cloud reviewer pass: lapsed %s. %s" % (when, _RENEW)
-    # axis: a pass that will not last to the next gardening pass is marked Renew now — see bite-proof record c8_cloud_cleanup
+    # axis: a pass that will not last to the next gardening pass is marked Renew now — see bite-proof record c8b_setup_and_gardening
     if days <= 0:
         return "Renew now", "Cloud reviewer pass: lapses today, %s. It won't last to the next gardening pass. %s" % (
             when, _RENEW)
