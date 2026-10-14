@@ -200,8 +200,7 @@ def _commit_canon(res, line):
         failure = "git could not be run (%s: %s)" % (type(exc).__name__, exc)
     if failure:
         # a commit that errored or timed out continues only when HEAD shows it landed (the one shared proof)
-        with _scrubbed_environ():
-            landed = project_config._commit_landed(git_root, rel, before_head, [line])
+        landed = project_config._commit_landed(git_root, rel, before_head, [line])
         if landed is not True:
             return None, failure + ("; git could not say whether the commit landed" if landed is None else "")
     try:
@@ -233,20 +232,25 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     if root is not None and os.path.realpath(os.path.expanduser(root)) != control_plane.store_root():
         return _result(False, "refused", "store-override-unsupported",
                        "Canon's append cannot take a store root; --root %s is not the ambient store" % root)
+    # one scrubbed span from the fetch through the calibration write: every git probe below (the lookups, canon._locate,
+    # project_config's core.md and project-store resolution) acts on the repository it was given, not GIT_DIR / GIT_WORK_TREE
+    with _scrubbed_environ():
+        return _apply_bound(cwd, proposal, approval, canon_root, session_id, root)
+
+
+def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
     note = _refresh_default_branch(canon_root)  # Canon's write procedure step 1: fetch before every Canon lookup, the binding check included
     # both writes bind to one project: Canon's lookup for canon_root must land where it lands for cwd
     try:
-        with _scrubbed_environ():  # the lookup's repo-root probe inherits GIT_DIR / GIT_WORK_TREE otherwise
-            canon_home = os.path.realpath(definition_doc.resolve_canon(root=canon_root)["path"])
-            project_home = os.path.realpath(definition_doc.resolve_canon(root=cwd)["path"])
+        canon_home = os.path.realpath(definition_doc.resolve_canon(root=canon_root)["path"])
+        project_home = os.path.realpath(definition_doc.resolve_canon(root=cwd)["path"])
     except Exception as exc:  # CanonLookupError, UnknownSchemaVersion: both fail closed, as canon._locate does
         return _result(False, "refused", "canon-refused", "canon-lookup-failed: %s" % exc)
     if canon_home != project_home:
         return _result(False, "refused", "canon-root-mismatch",
                        "--canon-root resolves Canon to %s but --cwd resolves it to %s; nothing was written" % (canon_home, project_home))
     try:
-        with _scrubbed_environ():  # canon._locate resolves the repository root with the ambient environment
-            res = _append_canon(canon_root, session_id, proposal, approval)
+        res = _append_canon(canon_root, session_id, proposal, approval)
         line = res["appended"][0]
     except canon.Refusal as exc:
         reason = "proposal-invalid" if exc.payload["reason"] == "canon-stays-out" else "canon-refused"

@@ -842,7 +842,18 @@ def test_apply_canon_lookups_ignore_an_inherited_git_dir(proj, monkeypatch, tmp_
     os.makedirs(home, exist_ok=True)
     _git(home, "init", "-q")
     _identity(home)
+    # the other checkout carries its own in-repo calibration; the redirected variables must not carry the write there
+    _identity(str(other))
+    mode_registry.write_registry(str(other), mode_registry.IN_REPO, "rk2", root=_store)
+    core_md.write(str(other), {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+                              "patterns": "- x: a.ts:1"}, "confirmed", root=_store, now="2026-06-26")
+    other_before = _bytes(core_md.core_path(str(other), _store))
+    mine_before = _bytes(core_md.core_path(repo, _store))
+    assert other_before is not None and other_before != mine_before
     monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
     got = _apply(proj, repo, _proposal(), APPROVAL)
     assert (got["ok"], got["outcome"]) == (True, "applied"), got
-    assert os.environ["GIT_DIR"] == str(other / ".git")
+    assert os.environ["GIT_DIR"] == str(other / ".git") and os.environ["GIT_WORK_TREE"] == str(other)
+    assert _bytes(core_md.core_path(repo, _store)) != mine_before  # the calibration landed in the requested project
+    assert _bytes(core_md.core_path(str(other), _store)) == other_before  # and the other checkout's core.md is untouched
