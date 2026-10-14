@@ -333,8 +333,12 @@ def test_synthesis_passes_the_grouping_through(tmp_path):
         hand = {"grouping": grouping}
         return hand, [_result_env(RA.SEAT_SYNTHESIS, {"grouping": grouping})], {}
 
+    # A fixer outside the anthropic family and a known host family make the synthesis seat
+    # seatable on `claude`; an unseatable synthesis folds no grouping and has nothing to pass through.
+    cfg = _cfg_proven(fixerVendor="codex")
+    cfg["seatMap"] = dict(cfg["seatMap"], hostFamily="anthropic")
     artifact, hand = _assert_fold_equivalent(
-        tmp_path, RD.P_SYNTHESIS, build,
+        tmp_path, RD.P_SYNTHESIS, build, cfg=cfg,
         respond_factory=lambda: _responder(round1_findings=_TWO_FINDINGS, grouping=grouping))
     assert artifact["grouping"] == grouping
 

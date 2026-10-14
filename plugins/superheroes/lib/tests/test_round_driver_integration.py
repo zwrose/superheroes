@@ -485,7 +485,10 @@ def test_advance_folds_the_panel_through_the_real_adapter(tmp_path):
 def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_path):
     """EVERY phase in `round_adapters.ADAPTER_PHASES` folds through the real seam, and the session
     reaches its terminal receipt through `advance` alone — no hand `submit` anywhere."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    # The synthesis seat is seated only outside the makers' families: a fixer outside the anthropic
+    # family and a known host family seat it on `claude`, so `dispatch-synthesis` is emitted and folds.
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"))
     folded = _drive_to_terminal(session_dir, gitdir,
                                 [_blocking_finding("missing bounds guard", 2)], head_path)
 

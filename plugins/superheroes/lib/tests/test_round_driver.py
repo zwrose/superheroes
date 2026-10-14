@@ -559,6 +559,12 @@ def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
     raise AssertionError("never reached %s within %d steps" % (target_phase, max_steps))
 
 
+def _synthesis_seatable_map(vendors, fixer_vendor):
+    """An assertable seat map whose host family is known and outside the makers', so the synthesis
+    seat can stand on `claude` (needs a fixer other than `claude`, so that the makers exclude anthropic)."""
+    return dict(_assertable_seat_map(vendors, fixer_vendor), hostFamily="anthropic")
+
+
 def _at(tmp_path, target_phase, cfg=None):
     """Drive a fresh session to `target_phase`. `cfg` overrides the default profile so a test can
     pin real config the guard must stay blind to (e.g. a configured `verifyCommand`)."""
@@ -1059,7 +1065,10 @@ def test_submit_audits_collection_manifest_key_refused(tmp_path):
 def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
     """A refused manifest key does not run the fold — no auditRounds entry, no _auditOutcome, no
     decisions recorded."""
-    d, n = _at(tmp_path, RD.P_AUDITS)
+    d = str(tmp_path)
+    n = _drive_to_phase(d, _cfg(fixerVendor="codex"), _responder(
+        round1_findings=_A_FINDING, seat_map=_synthesis_seatable_map(["claude", "codex"], "codex")),
+        RD.P_AUDITS)
     good, _targets = _audit_artifact(n)
     bad = dict(good)
     bad["collectionManifest"] = {"no-such-key": "claude"}
@@ -3258,6 +3267,7 @@ _ALL_CHANNELS = {
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],
+    "synthesisUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude"}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",

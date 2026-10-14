@@ -3003,7 +3003,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # emitted and the round folds exactly as an empty grouping would — every verified finding
         # stays separate (nothing dropped) and the receipt discloses it.
         cfg = state.get("config") or {}
-        _record_round(state, "synthesisUnseatable", {
+        _record_round_append(state, "synthesisUnseatable", {
             "makerFamilies": sorted(receipt_disclosures.accumulated_maker_families(state)),
             "fixerVendor": cfg.get("fixerVendor")})
         _decision(state, "synthesis-unseatable",

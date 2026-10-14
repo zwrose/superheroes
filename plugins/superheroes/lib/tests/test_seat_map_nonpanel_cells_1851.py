@@ -37,7 +37,7 @@ COMPOSE_BASE = [
 
 def _real_cell(role, vendor):
     cell = MR.matrix_config(role, vendor)
-    return [vendor, *cell]
+    return None if cell is None else [vendor, *cell]
 
 
 @pytest.fixture
@@ -216,8 +216,12 @@ def test_live_vendors_path_synthesizes_both_cells_per_listed_vendor(capsys):
 
     assert receipt["nonPanelLiveCellsSource"] == "synthesized"
     assert receipt["nonPanelLiveCells"] == _expected_cells(["codex", "cursor"])
-    for role in SM.NONPANEL_CELL_ROLES:
-        assert _real_cell(role, "codex") in receipt["nonPanelLiveCells"]
+    for vendor in ("codex", "cursor"):
+        for role in ("verifier", "reviewer-deep"):
+            assert _real_cell(role, vendor) in receipt["nonPanelLiveCells"]
+        # the registry lists no synthesis cell for this vendor (that row has only `claude`), so the
+        # receipt holds none: it carries exactly the cells the registry lists
+        assert _real_cell("synthesis", vendor) is None
 
 
 def test_live_vendors_path_lists_only_the_listed_vendors(capsys):
