@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The review learning loop's code (#1718, review C10): the adoption day, the owner-approved
+"""The review learning loop's code: the adoption day, the owner-approved
 calibration change, and the seat tally that starts counting at the adoption day.
 
 CLI (`python3 -B lib/review_learning.py <verb>`; one JSON object on stdout; exit 0 on ok, 1 on a refusal):
