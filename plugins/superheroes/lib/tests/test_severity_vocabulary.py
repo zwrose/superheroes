@@ -55,7 +55,8 @@ def _cfg(**over):
 
 
 def _finding(title="null deref", severity="Important", file="f.py", line=1, **kw):
-    base = {"title": title, "severity": severity, "file": file, "line": line}
+    base = {"title": title, "severity": severity, "file": file, "line": line,
+            "consequence": "a reviewer-found defect stays in the change"}
     base.update(kw)
     return base
 
@@ -180,7 +181,8 @@ def test_mechanical_compile_stamps_before_dedupe_merge():
 
 
 def test_mechanical_compile_nit_cap_overflow_stays_nit():
-    findings = [{"title": "nit%d" % i, "severity": "nit", "file": "f.py", "line": i + 1}
+    findings = [{"title": "nit%d" % i, "severity": "nit", "file": "f.py", "line": i + 1,
+                 "consequence": "a reviewer-found defect stays in the change"}
                 for i in range(9)]
     compiled, _ = RD.mechanical_compile(findings, None)
     summary = [f for f in compiled if f.get("summaryEntry")]

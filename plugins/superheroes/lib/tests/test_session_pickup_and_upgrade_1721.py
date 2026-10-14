@@ -36,8 +36,10 @@ from test_round_driver_no_records_seed_1721 import _recording  # noqa: E402
 TOKEN = RD.SESSION_FROM_EARLIER_VERSION
 MARKER = RD.UPGRADE_RESTART_MARKER_FILE
 _FINDINGS = [
-    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1},
-    {"title": "nit", "severity": "Minor", "file": "f.py", "line": 2},
+    {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+     "consequence": "a reviewer-found defect stays in the change"},
+    {"title": "nit", "severity": "Minor", "file": "f.py", "line": 2,
+     "consequence": "a reviewer-found defect stays in the change"},
 ]
 _CERT_FILES = {
     "certification-receipt.json": b'{"fixture": "earlier-version receipt", "bytes": 4711}\n',
