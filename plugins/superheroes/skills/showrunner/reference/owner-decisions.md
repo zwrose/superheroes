@@ -568,8 +568,7 @@ advisor run together to keep calibration honest.
      escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
      window".
    - **The counts come from `lib/review_learning.py tally`.** It reads review records (every record of each PR it covers, earliest included) and logged
-     escapes only, counts only reviews dated on or after the adoption day and inside the condition
-     window, and decides nothing. The advisor reads the counts and judges. Missing evidence reads
+     escapes only, and decides nothing. A review is dated by the PR's first review record and counts only when that date is on or after the adoption day and inside the condition window; catches are read from the PR's latest record. The advisor reads the counts and judges. Missing evidence reads
      unmeasured, never zero: a record or escape that is undated or has lost its reviewers or findings
      turns the whole tally unmeasured (`incomplete-evidence`), as does a record whose earlier record is not supplied, lacks its `pr` or `sessionId`, or has a reviewer or finding row that is damaged, instead of counting as nothing. A catch is credited to the seat whose lens the finding names (a fixed finding in the security lens counts toward the security seat, whichever dispatch raised it), so the count is findings fixed in that seat's lens.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)

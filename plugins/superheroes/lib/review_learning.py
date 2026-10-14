@@ -10,6 +10,7 @@ CLI (`python3 -B lib/review_learning.py <verb>`; one JSON object on stdout; exit
 """
 import argparse
 import collections
+import contextlib
 import datetime
 import json
 import os
@@ -141,6 +142,20 @@ def _run_git(cwd, *args):
                           timeout=GIT_TIMEOUT_SECONDS, env=definition_doc._scrubbed_git_env())
 
 
+@contextlib.contextmanager
+def _scrubbed_environ():
+    """The ambient environment minus the git routing variables `_run_git` removes, for the span of the
+    block, so a shared probe that cannot take an env acts on the repository it was given."""
+    scrubbed = definition_doc._scrubbed_git_env()
+    gone = {k: v for k, v in os.environ.items() if k not in scrubbed}
+    for k in gone:
+        del os.environ[k]
+    try:
+        yield
+    finally:
+        os.environ.update(gone)
+
+
 def _commit_canon(res, line):
     """Canon's write procedure steps 7-8: commit only Canon's paths, then see the line in HEAD."""
     git_root = res["gitRoot"]
@@ -163,7 +178,8 @@ def _commit_canon(res, line):
         failure = "git could not be run (%s: %s)" % (type(exc).__name__, exc)
     if failure:
         # a commit that errored or timed out continues only when HEAD shows it landed (the one shared proof)
-        landed = project_config._commit_landed(git_root, rel, before_head, [line])
+        with _scrubbed_environ():
+            landed = project_config._commit_landed(git_root, rel, before_head, [line])
         if landed is not True:
             return None, failure + ("; git could not say whether the commit landed" if landed is None else "")
     try:
@@ -266,25 +282,15 @@ def _merged_member(f):
     return review_record_session.merged_into(f.get("reason")) is not None
 
 
-def _find(parent, node):
-    while parent.get(node, node) != node:
-        parent[node] = parent.get(parent[node], parent[node])
-        node = parent[node]
-    return node
-
-
-def _union(parent, a, b):
-    ra, rb = _find(parent, a), _find(parent, b)
-    if ra != rb:
-        parent[rb] = ra
-
-
 def tally(records, escapes, since, *, until=None, window_days=None):
-    """Count seat reviews and catches. A catch is credited to the seat whose lens the finding names (the
-    record's finding `reviewer` is its dimension, not the dispatch that raised it), so `seats[...]["caught"]`
-    reads "findings fixed in this seat's lens", whichever dispatch raised them. `records` is every review record of each PR it covers, earliest
-    included: a catch is dated by the earliest record carrying it, so a record whose `previousRecord`
-    is not among the given records reads `incomplete-evidence`, never a count."""
+    """Count seat reviews and catches per PR. A PR is dated by its earliest review record and counts only when
+    that date falls inside the counting range (on or after the adoption day and inside the window); a PR first
+    reviewed earlier is left out whole. A counted PR's reviews are its records (up to `until`) with a seat row
+    that ran, and its catches are read from its latest record alone: each distinct fixed finding that is not a
+    merged member, credited to the seat its lens names. `records` is every review record of each PR it covers,
+    earliest included: a record whose `previousRecord` is not among them reads `incomplete-evidence`, never a count.
+    A catch is credited to the seat whose lens the finding names (the record's finding `reviewer` is its
+    dimension, not the dispatch that raised it)."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
@@ -306,8 +312,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return "beforeWindow" if d < low else "afterWindow" if d > end else None
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
-    seen, unattributed, incomplete, parent = {}, 0, False, {}
-    present, merged_fixed = collections.defaultdict(set), []  # per PR: finding ids/keys given, and the representatives fixed members name  # incomplete: evidence went missing, so no count is a zero
+    unattributed, incomplete = 0, False  # incomplete: evidence went missing, so no count is a zero
+    by_pr = {}
     given = {v for r in records if isinstance(r, dict) for v in (r.get("url"), r.get("id")) if isinstance(v, (str, int))} \
         if isinstance(records, list) else set()
     for rec in records if isinstance(records, list) else []:
@@ -345,43 +351,27 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
             incomplete = True
             continue
-        if outside(day):
-            left[outside(day)] += 1
-        for row in rec.get("reviewers") or []:
-            if (not outside(day) and row["ran"] != review_record.RAN_NOT_RUN):
-                for seat in _seats(row.get("name")):
-                    reviews[seat].add((rec.get("pr"), rec.get("sessionId")))
-        for f in rec.get("findings") or []:
-            key = f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")
-            present[rec.get("pr")].update(v for v in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)) if v is not None)
-            if key is not None and _merged_member(f) and day <= end and f.get("outcome") == _FIXED:
-                merged_fixed.append((rec.get("pr"), review_record_session.merged_into(f.get("reason"))))
-            if key is None:
-                continue
-            member = _merged_member(f)
-            pr_key = rec.get("pr")
-            for name in (f.get("id"), f.get(session_contract.FINDING_KEY_FIELD)):
-                if name is not None:
-                    _union(parent, (pr_key, key), (pr_key, name))
-            if member:  # a member and its representative are one catch for the PR, whichever record names the link
-                _union(parent, (pr_key, key), (pr_key, review_record_session.merged_into(f.get("reason"))))
-            hit = seen.setdefault((pr_key, key), {"fixed": False, "at": {}})
-            # only an outcome recorded on or before the cutoff establishes a fix; a later record still dates the finding
-            hit["fixed"] = hit["fixed"] or (not member and day <= end and f.get("outcome") == _FIXED)
-            at = hit["at"].setdefault(_stamp(rec.get("writtenAt"), day), (day, set()))
-            at[1].update(_seats(f.get("reviewer")))
-    if any(rep not in present[pr] for pr, rep in merged_fixed):  # a fixed member whose representative is missing lost its catch
-        incomplete = True
-    families = {}
-    for node, hit in seen.items():  # merged members and their representatives pool into one family
-        fam = families.setdefault(_find(parent, node), {"fixed": False, "at": {}})
-        fam["fixed"] = fam["fixed"] or hit["fixed"]
-        for stamp, (d, seats) in hit["at"].items():
-            pooled = fam["at"].setdefault(stamp, (d, set()))
-            pooled[1].update(seats)
-    for hit in families.values():  # a catch is dated by, and credited to, the earliest record that carries it, once
-        earliest_day, seats = hit["at"][min(hit["at"])]
-        if hit["fixed"] and not outside(earliest_day):
+        if day > end:
+            left["afterWindow"] += 1
+            continue
+        by_pr.setdefault(pr, []).append((_stamp(rec.get("writtenAt"), day), len(by_pr.get(pr, [])), day, rec))
+    for recs in by_pr.values():
+        recs.sort(key=lambda t: t[:2])
+        # a PR first reviewed before the adoption day is left out whole
+        if recs[0][2] < low:
+            left["beforeWindow"] += len(recs)
+            continue
+        for _, _, _, rec in recs:
+            for row in rec["reviewers"]:
+                if row["ran"] != review_record.RAN_NOT_RUN:
+                    for seat in _seats(row.get("name")):
+                        reviews[seat].add((rec["pr"], rec["sessionId"]))
+        fixed = {}  # the latest record's catches, one per findingKey
+        for f in recs[-1][3]["findings"]:
+            if f.get("outcome") == _FIXED and not _merged_member(f):
+                fixed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"), f)
+        for f in fixed.values():
+            seats = _seats(f.get("reviewer"))
             unattributed += not seats
             caught.update(seats)
     counts = {"missed": 0, "seenAndLeft": 0}
