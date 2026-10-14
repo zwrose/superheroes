@@ -600,3 +600,16 @@ def test_a_merged_real_consequence_is_not_settled_as_craft():
     merged = RD._merge_same_finding(older, newer)
     assert merged["consequenceKind"] == "real"
     assert merged[SC.RAISED_SEQ_FIELD] == newer[SC.RAISED_SEQ_FIELD]
+    # Through settlement: the staged code-quality report must not turn the real finding into craft.
+    state = RD.new_state({"repoRoot": "/nonexistent-review-project"})
+    RD._stage_findings(state, [f])
+    RD._set_findings(state, state["_toVerify"])
+    state["round"] = 2
+    RD._stage_findings(state, [dict(f, consequence="harder to read", consequenceKind="code-quality")])
+    RD._seed_findings_before_record_park(state)
+    RD._park_cannot_certify(state, "record write failed")
+    assert state[SC.DISPOSITION_LEDGER_KEY][0]["disposition"] == "left-for-owner"
+    import review_record_session as RRS
+    exported = RRS._findings(state)[0]
+    assert exported["outcome"] == "left-for-owner"
+    assert exported["consequence"] == "lost work"

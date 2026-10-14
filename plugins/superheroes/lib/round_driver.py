@@ -1889,6 +1889,10 @@ def _newest_content(row, live):
     row_seq = row.get(session_contract.RAISED_SEQ_FIELD)
     if (isinstance(live_seq, int) and not isinstance(live_seq, bool)
             and isinstance(row_seq, int) and not isinstance(row_seq, bool) and row_seq > live_seq):
+        kind_key = review_findings_schema.CONSEQUENCE_KIND_KEY
+        if (live.get(kind_key) == review_findings_schema.REAL
+                and row.get(kind_key) != review_findings_schema.REAL):
+            return live  # a newer code-quality report never replaces a real consequence
         return row
     return live
 
