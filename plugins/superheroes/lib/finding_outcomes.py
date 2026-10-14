@@ -12,8 +12,9 @@ case it is decided by a named ruling. A decision is on record only when it is an
 entry, a recorded residual, or a settled saved sheet answer for the pull request. Severity
 never decides an outcome.
 
-The module is pure: it reads no file, runs no git or subprocess and touches no network.
-Callers pass text and dicts in. Anything missing or malformed fails closed, toward the owner.
+The rules are pure: they read no file, run no git or subprocess and touch no network. Callers
+pass text and dicts in. The one reader is decision_sources, which gathers the Canon and residual
+text the rules are given. Anything missing or malformed fails closed, toward the owner.
 """
 import canon
 import review_findings_schema
@@ -187,3 +188,38 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
         why = "; the cited decision is not on record: " + text
     return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": None}
+
+
+def decision_sources(repo_root, base_ref, sheet_answers=None, pr=None):
+    """The `sources` dict on_record reads: the Canon text, the ratified residuals and, when given, the sheet answers.
+
+    A source that cannot be read is left out, so a decision that cites it is not on record. Canon is
+    both copies (the working copy and the default branch's), so a supersession on the default branch
+    retires an entry the working copy still holds. Residuals come from the review base when it pins
+    them, else from the calibration store. Never raises."""
+    sources = {}
+    # With no repository named nothing is read: the ambient project's Canon is never taken for this one's.
+    named = isinstance(repo_root, str) and repo_root.strip() != ""
+    try:
+        if not named:
+            raise ValueError("no repository root")
+        _, working, default_text = canon._locate(repo_root)
+        sources["canonText"] = working + "\n" + default_text
+    except Exception:  # noqa: BLE001 — fail closed: no Canon text means no Canon decision
+        sources.pop("canonText", None)
+    try:
+        if not named:
+            raise ValueError("no repository root")
+        import round_orders
+        text, provenance, failure = round_orders.resolve_order_residuals(repo_root, base_ref)
+        if not failure and isinstance(text, str) and text.strip():
+            sources["residualText"] = text
+            based = isinstance(provenance, str) and "(base-pinned)" in provenance
+            sources["residualSource"] = "base" if based else "calibration store"
+    except Exception:  # noqa: BLE001 — fail closed: no residual text means no residual decision
+        sources.pop("residualText", None)
+        sources.pop("residualSource", None)
+    if isinstance(sheet_answers, dict):
+        sources["sheetAnswers"] = sheet_answers
+        sources["pr"] = pr
+    return sources
