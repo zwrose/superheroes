@@ -422,7 +422,7 @@ Resolve `ROOT_DIR` as in every other recipe here, then run `python3 -B
 "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor|claude>` — optional `--repo-root`,
 `--run-dir`, `--timeout`, and `--wave <id>` (the launcher's wave id, recorded on the result); only
 the engine name is required. Each invocation allocates a unique dispatch order id; a `--run-dir` that
-already holds a folded terminal result refuses `run-dir-reused` with nothing launched. It dispatches through the shell's own
+already holds a folded terminal result refuses `run-dir-reused` with nothing launched. A review or write dispatch that reuses an opened run dir with a different prompt than the one it was opened with refuses `run-dir-prompt-mismatch` with nothing launched and the stored result not returned. It dispatches through the shell's own
 library entry on the engine's declared native channel (the typed file for codex and cursor, the
 materialized structured output for claude), using that
 engine's `reviewer-deep` cell, and grades three legs **separately**:
