@@ -186,3 +186,14 @@ Axis: the branch step issues exactly one DELETE and refuses `delete-unconfirmed`
 - Red: last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_timed_out_delete_is_never_followed_by_a_second_delete_in_the_same_run` and `1 failed in 8.57s`; `{'ok': True} != {'ok': False}` (the second DELETE removed the branch).
 - Restore: the inverse edit; the DELETE call and re-read stand at the `branch` body's indent, with no loop, and `cloud_cleanup.py:460` reads `        _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)`.
 - Green: `1 passed` (the same node, after the restore).
+
+## 14. A failed state write grants no send reservation
+
+Axis: when the state write fails for real, `record(..., "pending")` returns `cleanup-state-unwritable`, nothing is on disk, a fresh `plan` shows no request, and a later `pending` write is granted once the write works.
+
+- Test: `test_a_pending_write_whose_state_write_fails_grants_no_reservation` (`T1`). It patches `os.replace` to raise `OSError` for the state file only, so `_save` and `store_core.atomic_write` run unpatched and `_save`'s own handler takes the failure.
+- Neutralization (`_save`): the `except Exception:` handler's `return False` became `return True`.
+- Command, each time, from `plugins/superheroes/lib`: `scripts/pinned-python -B -m pytest tests/test_cloud_cleanup.py -q -k test_a_pending_write_whose_state_write_fails_grants_no_reservation`.
+- Red: last lines: `tests/test_cloud_cleanup.py:978: AssertionError` (the `cleanup-state-unwritable` assertion), `FAILED tests/test_cloud_cleanup.py::test_a_pending_write_whose_state_write_fails_grants_no_reservation` and `1 failed, 76 deselected in 0.63s`.
+- Restore: the inverse edit; `cloud_cleanup.py:124-126` read `    except Exception:`, `        return False`, `    return True`. `git diff plugins/superheroes/lib/cloud_cleanup.py` is empty.
+- Green: `1 passed, 76 deselected in 0.54s`.

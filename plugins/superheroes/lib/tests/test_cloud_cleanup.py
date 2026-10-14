@@ -962,3 +962,22 @@ def test_a_delivered_settle_with_failing_github_reads_returns_the_owner_message_
     done = _record(w, "m-1", "delivered")
     assert done["ok"] and done["ownerMessage"] == CC.OWNER_MESSAGE_MERGED % PR
     assert _record(w, "m-1", "delivered")["already"] is True
+
+
+def test_a_pending_write_whose_state_write_fails_grants_no_reservation(w, monkeypatch):
+    _lane(w, "l-1", 101)
+    real_replace = os.replace
+
+    def failing_replace(src, dst, *a, **kw):
+        if os.path.basename(str(dst)) == CC.STATE_NAME:
+            raise OSError("disk full")
+        return real_replace(src, dst, *a, **kw)
+
+    # the failure is real: `_save` runs unpatched and its own handler turns the OSError into a refusal
+    monkeypatch.setattr(os, "replace", failing_replace)
+    assert _record(w, "m-1", "pending") == {"ok": False, "reason": "cleanup-state-unwritable"}
+    assert not os.path.exists(_state_file(w))
+    assert _plan(w)["request"] == {"state": "none"}
+    monkeypatch.setattr(os, "replace", real_replace)
+    granted = _record(w, "m-2", "pending")
+    assert granted["ok"] and granted["request"]["msgId"] == "m-2" and granted["request"]["outcome"] == "pending"
