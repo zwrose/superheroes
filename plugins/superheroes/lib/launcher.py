@@ -30,6 +30,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import cloud_ready  # noqa: E402
+import cloud_setup  # noqa: E402
 import config_dir  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
@@ -2029,6 +2030,9 @@ def _spawn_attempt(
         "logPath": log_path,
         "errPath": err_path,
     }
+    # axis: the child's birth identity is recorded at spawn so a reused pid is told from the lane's child.
+    # Empty on any failed read; the spawn never depends on it.
+    started.update(ll.read_birth_identity(proc.pid))
     if isinstance(evidence, str) and evidence.strip():
         started["evidence"] = evidence
     append_result = _append_under_lock(repo_root, started, env=env)
@@ -2048,7 +2052,8 @@ def _spawn_attempt(
                     "logPath": log_path,
                     "errPath": err_path,
                 },
-                **({"evidence": started["evidence"]} if "evidence" in started else {})
+                **({"evidence": started["evidence"]} if "evidence" in started else {}),
+                **{field: started[field] for field in ll._BIRTH_IDENTITY_FIELDS if field in started}
             ),
         )
         fail_reason = _terminalization_reason(term, append_result["reason"])
@@ -2899,6 +2904,11 @@ def launch_build(
         reserved["place"] = PLACE_CLOUD
         reserved["cloudEnvironment"] = cloud_environment
         reserved["pluginVersion"] = plugin_ver
+        # The launching account's id, so a later reader decides "the advisor's account" by id,
+        # not by config-dir path. Omitted when the account cannot be read.
+        account_id = cloud_setup.launching_account(env, cwd=repo_root)
+        if isinstance(account_id, str) and account_id:
+            reserved["accountId"] = account_id
     else:
         reserved["worktree"] = worktree_path
         reserved["sessionId"] = compose_result["sessionId"]
@@ -3328,6 +3338,9 @@ def _try_reserve_for_refusal(
         reserved["place"] = PLACE_CLOUD
         reserved["cloudEnvironment"] = cloud_environment
         reserved["pluginVersion"] = plugin_version
+        account_id = cloud_setup.launching_account(env, cwd=repo_root)
+        if isinstance(account_id, str) and account_id:
+            reserved["accountId"] = account_id
     result = ll.reserve(repo_root, reserved, env=env)
     # This accounting reservation can itself land on a live lane's surfaces, so it carries
     # the same disclosure a normal reservation does (#1054). Dropping it here is how the

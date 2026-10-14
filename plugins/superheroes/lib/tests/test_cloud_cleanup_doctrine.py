@@ -71,7 +71,7 @@ def _collapsed(path):
 
 def _reminder_hits(lines):
     """Lines naming the archive that carry a reminder verb no negation directly governs; a line with no
-    reminder verb is a hit on a weak word (again, still waiting, unanswered) with no negation ahead of it."""
+    reminder verb is a hit on any weak word (again, still waiting, unanswered) that no negation directly governs."""
     hits = []
     for line in lines:
         if not _ARCHIVE.search(line):
@@ -81,8 +81,8 @@ def _reminder_hits(lines):
             if any(not _NEGATION_BEFORE.search(line[: m.start()]) for m in verbs):
                 hits.append(line.strip())
             continue
-        weak = _WEAK_WORDS.search(line)
-        if weak and not re.search(r"\b(?:nothing|never|no|not)\b", line[: weak.start()], re.IGNORECASE):
+        # axis: every weak word is tested for a negation directly before it, not just the first — see bite-proof record c8a_wo4.md
+        if any(not _NEGATION_BEFORE.search(line[: m.start()]) for m in _WEAK_WORDS.finditer(line)):
             hits.append(line.strip())
     return hits
 
@@ -92,6 +92,11 @@ def test_the_reminder_detector_ties_a_negation_to_the_reminder_verb():
     assert _reminder_hits(["If no response arrives, remind the owner about the archive prompt."])
     assert not _reminder_hits(["When the archive prompt goes unanswered, the session stays listed and nothing reminds the owner."])
     assert not _reminder_hits(["If the archive prompt is unanswered, never remind the owner."])
+    # a negation sitting earlier in a condition does not govern a later weak word
+    assert _reminder_hits(["If the owner has not answered the archive prompt, ask again."])
+    # two weak words: only the first is negated, so the second still hits
+    assert _reminder_hits(["The archive prompt is never unanswered, so ask again."])
+    assert not _reminder_hits(["Nothing reminds the owner again about the archive prompt."])
 
 
 def test_no_reminder_about_an_unanswered_archive_prompt():

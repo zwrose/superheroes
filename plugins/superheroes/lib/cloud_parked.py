@@ -23,6 +23,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_NAME = "cloud-parked.json"
 UNCERTAIN = "send-uncertain"  # a send-back whose delivery could not be confirmed; never resent on its own
 OUTCOMES = ("sent-back", UNCERTAIN, "closed", "owner-let-through")
+_RESOLVED = ("closed", "owner-let-through")  # outcomes after which the park needs no renewal advice
 NOTICE_TEXT = ("#%d is parked. The reviewer pass lapsed mid-build, so its review didn't run. "
                "Renew the pass and I'll send it back for review.")
 SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's review now, as your "
@@ -126,12 +127,13 @@ def _locked(fn):
     return wrapper
 
 
-def _lapses(repo_root, env, config_dir=None, environment=None):
-    """The lapse date in the setup record of the account the lane ran on: the account its `config_dir`
-    names when that is a non-empty string, else the caller's own. A `config_dir` that is the default
-    root is the default account (no override), as the launcher records it. When `environment` is a
-    non-empty string the record must name that environment. None when the account cannot be resolved
-    or the record is missing, unreadable, for another environment or has no date."""
+def _lapses(repo_root, env, config_dir=None, environment=None, account_id=None):
+    """The lapse date in the setup record of the account the lane ran on: the lane's own `account_id` when
+    it carries one, else the account its `config_dir` names when that is a non-empty string, else the
+    caller's own. A `config_dir` that is the default root is the default account (no override), as the
+    launcher records it. When `environment` is a non-empty string the record must name that environment.
+    None when the account cannot be resolved or the record is missing, unreadable, for another
+    environment or has no date."""
     cs = _sib("cloud_setup")
     cd = _sib("config_dir")
     if isinstance(config_dir, str) and config_dir:
@@ -141,7 +143,11 @@ def _lapses(repo_root, env, config_dir=None, environment=None):
             env = bare
         else:
             env = dict(env, **{cd.CONFIG_DIR_ENV: config_dir})
-    account = cs.launching_account(env=env, cwd=repo_root)
+    # axis: the lane's recorded account id decides, whatever config path the advisor runs under — see bite-proof record c8a_wo4.md
+    if isinstance(account_id, str) and account_id:
+        account = account_id
+    else:
+        account = cs.launching_account(env=env, cwd=repo_root)
     if account and _sib("cloud_check").read_failed_check(repo_root, account) is not None:
         return None  # the latest check failed (or its marker is unreadable): the saved date is stale
     record = cs.read(repo_root, account)["record"] if account else None
@@ -258,12 +264,15 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     parked_on = _park_day(parks[-1].get("created_at"))
     park_id = parks[-1].get("id")
     park_id = park_id if isinstance(park_id, (str, int)) and not isinstance(park_id, bool) else None
-    if known and known[0]["outcome"] in (None, "sent-back", UNCERTAIN, "owner-let-through"):
+    if known:
         seen = known[0].get(_PARK_KEY)
         newer = park_id != seen if (park_id is not None and seen is not None) else (
             bool(parked_on) and parked_on > known[0]["parkedOn"])
     else:
         newer = False
+    # axis: a resolved park that is not newer gets no renewal advice — see bite-proof record c8a_wo4.md
+    if known and not newer and known[0]["outcome"] in _RESOLVED:
+        return {"ok": True, "kind": "park-resolved", "pr": pr, "text": None}
     if not known or newer:
         if parked_on is None:
             return _refusal("park-date-unreadable")
@@ -326,7 +335,8 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             out["unread"].append({"pr": e["pr"], "reason": ledger_reason})
             continue
         issue = lane.get("issue") if lane else (issues[0] if issues else None)
-        lapses = _lapses(repo_root, env, lane.get("configDir"), lane.get("cloudEnvironment"))
+        lapses = _lapses(repo_root, env, lane.get("configDir"), lane.get("cloudEnvironment"),
+                         lane.get("accountId"))
         if not _renewed(e["parkedOn"], lapses, day):
             out["notRenewed"].append(e["pr"])
             continue
