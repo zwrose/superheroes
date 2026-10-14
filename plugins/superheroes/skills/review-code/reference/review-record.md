@@ -18,6 +18,10 @@ Earlier ones are never edited; the latest is the current record, and it links th
 (`<!-- superheroes:review-raw-output -->`), verbatim unless withheld (below), and the record links it
 under `rawOutputs`. Each review ends by writing it. A raw output that holds a credential-shaped assignment (a secret-named field followed by `:` or `=`) or a private-key block is withheld: its comment says so and gives the line count, and its findings stay in the record. Any record text holding one reads `[REDACTED FIELD]`, and secret-named structured fields read `[REDACTED]`.
 
+A record that does not fit one comment posts as a head comment plus part comments (`<!-- superheroes:review-record-part -->`), each under GitHub's limit. The parts go up first, then the head, which names them by comment id and carries a hash and a length that check them. `read`, and the next write's look at the earlier record, join the parts back into the whole record. A part that is missing, altered or cut short makes the record unreadable (`review-record-unreadable`); a part comment is never a record by itself, and a write that stops part-way leaves parts no head names, never a half record. When even the head would be too long, its summary shows a count (listed in the full record) in place of the long lists; the full lists stay in the record.
+
+Each finding carries the sheet part its outcome lands in (`sheetPart`; none while the outcome is undecided). The writer re-checks every cited decision against what is on record when it writes: a `ruling` whose cited decision is not on record becomes `left-for-owner`, and a finding left for the owner whose cited decision is on record becomes a `ruling`. Each change is listed under `decisionRechecks`, and the finding's reason says why. A ruling that cites no decision names its basis in prose and is left as it is. The summary says how many rounds ran against which cap (the round cap or the round ceiling) and whether the loop stopped at it, and lists findings that were not taken into the review, with their reasons, under `refused`.
+
 Across sessions the account must relist every finding the latest earlier record listed (matched by identity
 key; an unresolved one stays pending, null), or the write refuses `review-record-unaccounted`.
 
@@ -37,11 +41,12 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `reviewers`: each `{name, vendor, model, planned, ran, runDir}` plus optional `notIndependent` (bool; accepted and ignored, the record computes it),
   `ownerWord` (`{words, where}`), `commit` (the commit that reviewer reviewed, when it is not the final commit; a row that names none is judged against the final commit). List every planned reviewer, ran or not. `runDir`: its run directory, or empty.
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
-  reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
+  reviewer, findingKey}`; `consequence`, `findingKey` may be null. Optional `decidedBy`: null, or the decision the outcome rests on, `{kind: "canon" | "residual" | "sheet-answer", ref}` (`ref` is a string, or `{pr, card}` for a sheet answer). The writer checks it against what is on record. `id` is the reviewer's own (never
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
-- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked), optional `makers` (each `{family, source}`).
+- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}` plus optional `capKind` (`"rounds"`, the default, when the cap is the round cap; `"ceiling"` when the stop was the round ceiling), `checked` (what was checked), optional `makers` (each `{family, source}`).
+- Optional `refused`: findings a reviewer raised that were not taken into the review, each `{title, reason}` plus optional `file`, `line`, `round`. They are listed, never counted as findings. Optional `sheetAnswers`: the PR sheet store's saved answers, which a sheet-answer `decidedBy` is checked against. Optional `baseRef`: the commit the recorded residuals are read at.
 - `goAheads`: the owner's word to go on without a planned review. Either
-  `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`. Each of `canonId`, `words` and `where` is a non-empty string; a go-ahead missing one, or carrying anything else there, does not count and the PR stays parked. A reviewer's `ownerWord` is a separate channel: the owner's word that let a same-family reviewer run.
+  `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`. Each of `canonId`, `words` and `where` is a non-empty string; a go-ahead missing one, or carrying anything else there, does not count and the PR stays parked. A standing ruling counts only while its Canon entry is on record; if it is not, the go-ahead is incomplete and the PR stays parked. A reviewer's `ownerWord` is a separate channel: the owner's word that let a same-family reviewer run.
 
 Every finding gets a reason and an outcome (`null` while undecided): fixed, shown wrong, a craft call,
 left for the owner, or settled by an owner ruling. Exact spellings: `review_findings_schema.OUTCOMES`.
@@ -116,7 +121,7 @@ Refusals, before anything is posted:
   overwrite a record by hand.
 - `review-record-unaccounted`: relist each named earlier finding in the account and write again.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
-- `review-record-too-large`: shorten the account's long text (or split the raw output file) and write again.
+- `review-record-too-large`: a raw output file is over GitHub's limit (split it), or the summary alone cannot fit one comment (shorten the account's long names or lists); then write again. A long record is not refused for its length: it posts in parts.
 - `review-record-forbidden-claim`: rewrite the account text the writer quotes in its summary.
 - `review-record-gh-failed`: GitHub could not be read or written. Retry; else park and report.
 - `review-record-internal-error`: park the PR and report it.
@@ -140,7 +145,8 @@ Reading and independence are computed by the record, never taken from the sessio
 - **`reading-next`.** `review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]` prints one JSON object `{"next": ..., "reason": ...}` for a review whose reading is not shown. It makes no model call and writes nothing. Its four answers: `accept` when any run's record shows a reading; `rerun` when exactly one run was made and it shows none; `move-up` when two runs show none and the seat map allows it; `park` otherwise, including when no run is given. Move-up needs all of these: the seat map has a roster, a seat entry for every roster seat, every seat filled and naming a family, no seat in a maker's family, and at least one maker family given. A missing, unreadable or non-JSON seat map is `park`. More than two runs are read as two.
 
 - A planned review that did not run, with no owner go-ahead: the PR stays parked.
-- With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed.
+- With a go-ahead: the record names the missing review and the go-ahead, and is still not reviewed. A standing-ruling go-ahead counts only when the writer finds its Canon entry on record at write time; an owner's-words go-ahead needs no such check.
+- A finding whose ruling cites a decision that is not on record when the record is written is listed as left for the owner, so the record reads not reviewed until the owner decides.
 - The record and the PR text never say a change has no bugs; they say what was checked and what
   is left.
 
