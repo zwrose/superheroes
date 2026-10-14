@@ -290,18 +290,13 @@ def test_script_publishes_no_stamp_when_a_calibration_file_cannot_be_written(tmp
 
 def test_script_exits_zero_even_when_every_tool_fails(tmp_path):
     w = _inside(tmp_path)
-    text = _compose(w)["text"]
-    stub = tmp_path / "failing"
-    stub.mkdir()
-    for name in ("git", "npm"):
-        (stub / name).write_text("#!/bin/bash\nexit 1\n")
-        (stub / name).chmod(0o755)
-    env = {"HOME": str(w.home), "PATH": "%s:/usr/bin:/bin" % stub}
-    proc = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0
-    log = (w.home / "superheroes-cloud-setup.log").read_text()
-    assert "plugin FAILED" in log and "reviewer cli FAILED" in log
-    assert "duplication checker FAILED" in log
+    proc, log = _run_script(w, _compose(w)["text"], code=1, pinned=True)
+    assert proc.returncode == 0, proc.stderr
+    setup_log = (w.home / "superheroes-cloud-setup.log").read_text()
+    assert "plugin FAILED" in setup_log and "reviewer cli FAILED" in setup_log
+    assert "duplication checker FAILED" in setup_log
+    calls = log.read_text()
+    assert "apt-get " in calls and "uv " in calls
 
 
 def test_setup_text_installs_the_sandbox_tools_and_the_pinned_python_before_the_wait(tmp_path):

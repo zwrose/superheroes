@@ -219,11 +219,13 @@ credential-shaped assignment or a private-key block is withheld and the comment 
 a findings file's text unrendered. The review session's own directory lives only on the container
 and is lost when the session ends.
 
-When the record writer refuses `review-record-too-large`, read its detail. If it names the account,
-shorten the account to the outcome of each round, pointing at the per-round findings comments, and
-write it again. If it names a raw output file, split that file into bounded comments, each under
-the comment cap, and write again. Never split one record across several comments, because
-the reader parses one comment.
+When the record writer refuses `review-record-too-large`, no record comment was posted and the
+refusal repeats on every retry: the session writer regenerates the account and the raw output files
+from the stored seat payloads each time, so shortening or splitting by hand changes nothing it
+reads. Do not retry it. The review record is missing: post the review receipt on the PR as a
+comment naming the head it reviewed, leave the PR not ready, and park, naming the oversized record
+(the refusal's detail gives the character count, and names the raw output file when one is the cause).
+Never split one record across several comments, because the reader parses one comment.
 
 ## The cloud container
 

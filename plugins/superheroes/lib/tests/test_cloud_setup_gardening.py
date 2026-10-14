@@ -18,8 +18,7 @@ ACCOUNT = "acct-fixture-one"
 OTHER_ACCOUNT = "acct-fixture-two"
 STAMP = "sha256:" + "ab" * 32
 TODAY = datetime.date(2026, 10, 16)
-RENEW = ("Run the pass command and paste the new pass into the environment. "
-         "Sign the reviewer in again if the date does not move.")
+RENEW = CS._RENEW
 UNREADABLE = "Cloud reviewer pass: the setup record could not be read."
 
 

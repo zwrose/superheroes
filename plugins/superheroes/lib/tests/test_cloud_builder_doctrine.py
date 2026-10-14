@@ -107,11 +107,12 @@ def test_each_review_rounds_findings_land_on_the_pr_as_the_round_lands():
 
 
 def test_a_review_record_over_the_cap_is_shortened_never_split():
-    # axis: a too-large record is shortened to per-round outcomes and rewritten as one comment
+    # axis: a too-large record is not retried or split; the builder parks naming the missing record
     body = _section(_CLOUD, "Review")
     for needle in (
         "`review-record-too-large`",
-        "pointing at the per-round findings comments",
+        "Do not retry it",
+        "park, naming the oversized record",
         "Never split one record across several comments",
         "the reader parses one comment",
     ):
