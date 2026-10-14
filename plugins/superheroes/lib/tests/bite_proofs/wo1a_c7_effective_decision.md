@@ -1,8 +1,9 @@
 # Bite-proof record — one effective decision per finding (test_effective_decision_c7.py)
 
-Four entries, one per declared guarded element. Each ran with the detector unedited, against HEAD
+Five entries, one per declared guarded element (BP-4 re-run and BP-5 added in review round 6). Each ran with the detector unedited, against HEAD
 `5eb23f5b`, as a targeted edit to `plugins/superheroes/lib/round_driver.py` restored by the exact
-inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Every run used:
+inverse edit (no `git checkout`, `restore`, `reset` or `stash`). The BP-4 re-run and BP-5 ran
+against HEAD `e7e5840d` plus the uncommitted round-6 fix, the same way. Every run used:
 
 `python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 0 -k <test name>`
 
@@ -225,9 +226,14 @@ Raw green:
 
 ## BP-4 — the gate-skip candidate in the reader
 
-- guarded element: `_gate_decision_candidates`, `round_driver.py:1805-1806` (the `skip` arm).
-- axis: an owner-gate `skip` is a decision and keeps binding the finding after a reword.
-- detector: `test_t4_gate_skip_binds_a_reword`
+Re-run in review round 6 (the owner-gate ruling narrowed the carry to guidance), against the
+revised detector; the earlier capture against `test_t4_gate_skip_binds_a_reword` is superseded
+because that detector asserted a skip carries to a reword, which the narrowed carry no longer does.
+
+- guarded element: `_gate_decision_candidates`, the `skip` arm (`round_driver.py:1929-1930`).
+- axis: an owner-gate `skip` is a decision on its own finding — restaged, the finding stays
+  out of scope.
+- detector: `test_t4_gate_skip_binds_its_finding_but_never_a_reword`
 - neutralization: drop gate `skip` candidates.
   - before: `            if disposition == "skip":` / `                ruling = "out-of-scope"`
   - after:  `            if disposition == "skip":` / `                continue`
@@ -237,14 +243,16 @@ Raw red:
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_______________________ test_t4_gate_skip_binds_a_reword _______________________
+____________ test_t4_gate_skip_binds_its_finding_but_never_a_reword ____________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-6/test_t4_gate_skip_binds_a_rewo0')
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-96/test_t4_gate_skip_binds_its_fi0')
 
-    def test_t4_gate_skip_binds_a_reword(tmp_path):
-        """axis: an owner-gate skip is a decision — it keeps binding the finding after a reword.
+    def test_t4_gate_skip_binds_its_finding_but_never_a_reword(tmp_path):
+        """axis: an owner-gate skip is a decision on its own finding (restaged, it stays skipped and is
+        not put to the owner again) — and it never carries: a later, different finding at the skipped
+        location is judged fresh and reaches the fix batch.
     
-        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-4)
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-4, BP-5)
         """
         session_dir = L2E._parked_judgment_session(tmp_path)
         out = L2E._pending_submit(session_dir, {"dispositions": [
@@ -255,48 +263,158 @@ tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-6/test_t4_gate_skip_bi
         skip_row = state["rounds"][str(state["round"])]["judgmentDispositions"][0]
         assert (skip_row["file"], skip_row["line"]) == ("f.py", 1)
         assert skip_row["rulingSeq"] == state["rulingSeqCounter"]
+        assert skip_row["followUp"] == L2E._WELL_FORMED
+        base = copy.deepcopy(state)
+        # the skipped finding itself, restaged a round later: the whole decision, follow-up included
         state["round"] += 1
-        reworded = _finding("widen the public API", line=1, file="f.py")
-        key_new = RD._finding_identity_key(reworded)
-        RD._stage_findings(state, [reworded])
->       assert state["findingLineage"] == {key_new: L2E._TRADEOFF_ID}
+        original = _finding("widen the API", line=1, file="f.py", tradeoff=True)
+        RD._stage_findings(state, [original])
+        restaged = L2E._ledger_by_key(state)[L2E._TRADEOFF_ID]
+>       assert restaged["disposition"] == "out-of-scope"
                ^^^^^^^^^^^^^^^^^^^^^^^
-E       KeyError: 'findingLineage'
+E       KeyError: 'disposition'
 
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_effective_decision_c7.py:211: KeyError
+/home/user/wt-l2a/plugins/superheroes/lib/tests/test_effective_decision_c7.py:216: KeyError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t4_gate_skip_binds_a_reword
-1 failed, 20 deselected in 1.57s
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t4_gate_skip_binds_its_finding_but_never_a_reword
+1 failed, 33 deselected in 1.43s
 ```
 
-The red is on the claimed axis: the gate-fold assertions before it (the skip row's location and
-`rulingSeq`) passed, so the skip was recorded; with the candidate dropped the reader has no decision
-to carry, and no lineage is written for the reword.
+The red is on the claimed axis: the gate-fold assertions before it passed, so the skip was
+recorded; with the candidate dropped the restaged finding carries no out-of-scope disposition.
 
-- restore: `continue` changed back to `ruling = "out-of-scope"`.
-- restore receipt: `round_driver.py:1805-1806` reads
-  `            if disposition == "skip":` / `                ruling = "out-of-scope"`. The final
-  `git diff` is empty (below).
+- restore: `continue` changed back to `ruling = "out-of-scope"` by the exact inverse edit.
 
 Raw green:
 
 ```
 .                                                                        [100%]
-1 passed, 20 deselected in 1.46s
+1 passed, 33 deselected in 1.46s
+```
+
+## BP-5 — only a guidance decision carries (`_LineageCarry.apply`)
+
+- guarded element: the guidance-only check in `_LineageCarry.apply` (`round_driver.py:1682`).
+- axis: a skip — an owner-gate skip or a `rule` out-of-scope ruling — never carries to a later,
+  different finding at the decided location; that finding is judged fresh and reaches the fix batch.
+- detectors: `test_t4_gate_skip_binds_its_finding_but_never_a_reword`,
+  `test_a_rule_out_of_scope_ruling_never_carries_to_a_reword`
+- neutralization: let an out-of-scope decision carry again.
+  - before: `        if not isinstance(effective, dict) or effective.get("ruling") != "guidance":`
+  - after:  `        if not isinstance(effective, dict) or effective.get("ruling") not in ("guidance", "out-of-scope"):`
+
+Run: `python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 0 -p no:cacheprovider -k "test_t4_gate_skip_binds_its_finding_but_never_a_reword or test_a_rule_out_of_scope_ruling_never_carries_to_a_reword"`
+
+Raw red:
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+____________ test_t4_gate_skip_binds_its_finding_but_never_a_reword ____________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-94/test_t4_gate_skip_binds_its_fi0')
+
+    def test_t4_gate_skip_binds_its_finding_but_never_a_reword(tmp_path):
+        """axis: an owner-gate skip is a decision on its own finding (restaged, it stays skipped and is
+        not put to the owner again) — and it never carries: a later, different finding at the skipped
+        location is judged fresh and reaches the fix batch.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-4, BP-5)
+        """
+        session_dir = L2E._parked_judgment_session(tmp_path)
+        out = L2E._pending_submit(session_dir, {"dispositions": [
+            {"id": L2E._TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
+             "followUp": dict(L2E._WELL_FORMED)}]})
+        assert out["ok"] is True, out
+        state = L2E._load_state(session_dir)
+        skip_row = state["rounds"][str(state["round"])]["judgmentDispositions"][0]
+        assert (skip_row["file"], skip_row["line"]) == ("f.py", 1)
+        assert skip_row["rulingSeq"] == state["rulingSeqCounter"]
+        assert skip_row["followUp"] == L2E._WELL_FORMED
+        base = copy.deepcopy(state)
+        # the skipped finding itself, restaged a round later: the whole decision, follow-up included
+        state["round"] += 1
+        original = _finding("widen the API", line=1, file="f.py", tradeoff=True)
+        RD._stage_findings(state, [original])
+        restaged = L2E._ledger_by_key(state)[L2E._TRADEOFF_ID]
+        assert restaged["disposition"] == "out-of-scope"
+        assert restaged["followUp"] == L2E._WELL_FORMED
+        assert RD._filter_excluded_discharged_fixes(state, [original]) == ([], None)
+        # normal routing honors it: never put to the owner again
+        state["findings"] = [dict(original, verdict="CONFIRMED")]
+        RD._after_findings_settled(state, state["config"])
+        assert state["step"] != RD.P_JUDGMENT
+        assert not state.get("_judgmentFindings")
+        assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
+        # the review record's rulings list stays rule-sourced only
+        assert RD._standing_rulings_for_orders(state) == ([], None)
+        # a later, different finding at the skipped location is judged fresh: it reaches the fix batch
+        state = base
+        state["round"] += 1
+        different = _finding("widen the public API", line=1, file="f.py")
+        key_new = RD._finding_identity_key(different)
+        RD._stage_findings(state, [different])
+>       assert key_new not in (state.get("findingLineage") or {})
+E       AssertionError: assert 'f.py::widen the public api@L1' not in (({'f.py::widen the public api@L1': 'f.py::widen the api@L1'}))
+E        +  where {'f.py::widen the public api@L1': 'f.py::widen the api@L1'} = <built-in method get of dict object at 0x7f48d075e6c0>('findingLineage')
+E        +    where <built-in method get of dict object at 0x7f48d075e6c0> = {'_changedSubjectsSincePanel': [], '_coverage': [], '_incompletePanel': False, '_receiptFault': None, ...}.get
+
+/home/user/wt-l2a/plugins/superheroes/lib/tests/test_effective_decision_c7.py:233: AssertionError
+__________ test_a_rule_out_of_scope_ruling_never_carries_to_a_reword ___________
+
+    def test_a_rule_out_of_scope_ruling_never_carries_to_a_reword():
+        """axis: a rule out-of-scope ruling binds its own finding only — a reworded finding at its
+        location is judged fresh and is not excluded from the fix batch."""
+        state = _mem_state()
+        _add_rule(state, _key("original"), "out-of-scope", rnd=1)
+        reworded = _finding("reworded")
+        RD._stage_findings(state, [reworded])
+>       _no_carry(state)
+
+/home/user/wt-l2a/plugins/superheroes/lib/tests/test_effective_decision_c7.py:531: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = {'schemaVersion': 5, 'sessionGeneration': 4, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 2, ...}
+
+    def _no_carry(state):
+>       assert not state.get("findingLineage")
+E       AssertionError: assert not {'a.py::reworded@L10': 'a.py::original@L10'}
+E        +  where {'a.py::reworded@L10': 'a.py::original@L10'} = <built-in method get of dict object at 0x7f48d0753140>('findingLineage')
+E        +    where <built-in method get of dict object at 0x7f48d0753140> = {'schemaVersion': 5, 'sessionGeneration': 4, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 2, ...}.get
+
+/home/user/wt-l2a/plugins/superheroes/lib/tests/test_effective_decision_c7.py:93: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_t4_gate_skip_binds_its_finding_but_never_a_reword
+FAILED plugins/superheroes/lib/tests/test_effective_decision_c7.py::test_a_rule_out_of_scope_ruling_never_carries_to_a_reword
+2 failed, 32 deselected in 1.49s
+```
+
+Both reds are on the claimed axis: with the narrowing neutralized, the different finding is written
+into `findingLineage` under the skipped finding (gate skip) and under the out-of-scope ruling.
+
+- restore: the exact inverse edit; line 1682 reads
+  `        if not isinstance(effective, dict) or effective.get("ruling") != "guidance":` again.
+
+Raw green:
+
+```
+..                                                                       [100%]
+2 passed, 32 deselected in 1.50s
 ```
 
 ## Closing evidence (after the last restore)
 
-Whole-file run, `python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 0`:
+Whole-file run, `python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest plugins/superheroes/lib/tests/test_effective_decision_c7.py -q -n 0 -p no:cacheprovider`:
 
 ```
-.....................                                                    [100%]
-21 passed in 2.83s
+..................................                                       [100%]
+34 passed in 3.21s
 ```
 
-`git diff -- plugins/superheroes/lib/round_driver.py` printed nothing (exit 0, empty output).
+The BP-4 and BP-5 edits were each restored by the exact inverse edit before this run; the only
+remaining `round_driver.py` change at that point was the uncommitted round-6 fix itself.
 
 ## What is NOT proven by this record
 
 The fail-closed edge tests (`test_t5` .. `test_t11`) and the extra tests have no recorded
-neutralization; the order's declared set is exactly the four elements above.
+neutralization; the declared set is exactly the five elements above.

@@ -592,7 +592,7 @@ def test_a_staged_newer_report_settles_over_the_older_live_copy():
     assert row["consequenceKind"] == "real"
     import review_record_session as RRS
     exported = RRS._findings(state)[0]
-    assert exported["consequence"] == "lost work"
+    assert "lost work" in exported["consequence"]
     assert exported["outcome"] == "left-for-owner"
 
 
@@ -620,4 +620,23 @@ def test_a_merged_real_consequence_is_not_settled_as_craft():
     import review_record_session as RRS
     exported = RRS._findings(state)[0]
     assert exported["outcome"] == "left-for-owner"
-    assert exported["consequence"] == "lost work"
+    assert exported["consequence"].startswith("lost work")
+
+
+def test_a_later_code_quality_reraise_keeps_the_held_real_consequence():
+    state = RD.new_state({"repoRoot": "/nonexistent-review-project"})
+    f = {"file": "f.py", "line": 1, "title": "Bug", "severity": "Minor",
+         "consequence": "lost work", "consequenceKind": "real"}
+    RD._stage_findings(state, [f])
+    RD._set_findings(state, state["_toVerify"])
+    state["round"] = 2
+    RD._stage_findings(state, [dict(f, severity="Important", consequence="harder to read",
+                                    consequenceKind="code-quality")])
+    RD._seed_findings_before_record_park(state)
+    RD._park_cannot_certify(state, "record write failed")
+    row = state[SC.DISPOSITION_LEDGER_KEY][0]
+    assert row["consequenceKind"] == "real"
+    assert row["disposition"] == "left-for-owner"
+    assert "lost work" in row["consequence"]
+    import review_record_session as RRS
+    assert RRS._findings(state)[0]["outcome"] == "left-for-owner"
