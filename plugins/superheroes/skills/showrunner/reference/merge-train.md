@@ -221,7 +221,8 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    message id the send will carry. For another account, run the relay's `ensure` and `compose` first
    (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
    the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
-   id, so use `same-account-<pr number>`. Then run `cloud_cleanup.py record --repo-root <root> --repo
+   id, so make one unique to this attempt, `same-account-<pr number>-<UTC timestamp>`, and keep it for
+   this attempt's `pending` and final writes (a settlement carrying an older attempt's id then never matches a newer reservation). Then run `cloud_cleanup.py record --repo-root <root> --repo
    <owner/name> --pr <number> --msg-id <id> --outcome pending --launch-id <the plan's launchId>`. That write is the
    reservation to send: when it is refused (`request-in-progress`, `request-uncertain` or
    `request-delivered`), another caller holds or has settled the request, so send nothing and go on. Only when it succeeds, send the plan's

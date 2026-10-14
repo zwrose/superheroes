@@ -360,7 +360,7 @@ def gardening_lines(cwd, next_pass_days, today=None, root=None):
     except OSError:
         return [{"account": None, "mark": None, "line": "Cloud reviewer pass: the setup record could not be read."}]
     if today is None:
-        today = datetime.date.today()
+        today = datetime.datetime.now(datetime.timezone.utc).date()
     elif isinstance(today, str):
         today = datetime.date.fromisoformat(today)
     lines = []

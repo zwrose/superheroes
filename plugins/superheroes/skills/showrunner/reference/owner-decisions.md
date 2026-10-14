@@ -554,7 +554,13 @@ advisor run together to keep calibration honest.
    cadence trigger 1 above states) and say each line it returns
    as it is, with `Renew now` before a line that carries that mark. The line names the days left and the lapse date and, when the pass would lapse
    before the next pass is owed, the two hand steps: run the pass command, and paste the new pass into
-   the cloud environment. A project with no cloud setup gets no line. **Nothing reads the pass's lapse
+   the cloud environment. **After the owner pastes the new pass, finish the renewal.** Have a cloud
+   session run `cloud_pass.py confirm`, then record it on the owner's machine with `cloud_pass.py
+   record-confirmation`, which moves the saved lapse date, then send the parked builds back as
+   `skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back says. If the
+   confirmed lapse date did not move past the old one, the pass command copied the same sign-in again,
+   so tell the owner the separate reviewer sign-in must be signed in again before the pass command.
+   A project with no cloud setup gets no line. **Nothing reads the pass's lapse
    date between passes.** Once it has lapsed, the launch report and a parked pull request's notice say
    so; that is not a warning ahead of the lapse.
 

@@ -169,3 +169,16 @@ def test_an_unreadable_setup_directory_is_one_unreadable_line(w, monkeypatch):
 
     monkeypatch.setattr(os, "listdir", _denied)
     assert _lines(w) == [{"account": None, "mark": None, "line": UNREADABLE}]
+
+
+def test_without_a_today_the_utc_date_is_used(w, monkeypatch):
+    class _Clock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is datetime.timezone.utc
+            return cls(2026, 10, 16, 23, 30, tzinfo=tz)
+
+    monkeypatch.setattr(CS.datetime, "datetime", _Clock)
+    _record(w, ACCOUNT, "2026-10-19")
+    [got] = CS.gardening_lines(w[0], 7, root=w[1])
+    assert got["line"].startswith("Cloud reviewer pass: 3 days left, lapses 19 Oct."), got

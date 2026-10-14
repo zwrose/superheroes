@@ -616,3 +616,13 @@ def test_a_final_outcome_for_the_pending_message_id_replaces_the_reservation(w):
     assert done["ok"] and done["request"]["outcome"] == "failed"
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [(msg_id, "failed")]
+
+
+def test_a_final_outcome_with_an_older_attempts_id_does_not_replace_a_newer_pending_reservation(w):
+    _lane(w, "l-1", 101)
+    older, newer = "same-account-%d-20261014T100000Z" % PR, "same-account-%d-20261014T100500Z" % PR
+    assert _record(w, older, "pending")["ok"] and _record(w, older, "failed")["ok"]
+    assert _record(w, newer, "pending")["ok"]
+    assert not _record(w, older, "failed")["ok"]
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [(newer, "pending")]
