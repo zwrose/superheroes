@@ -542,6 +542,43 @@ def test_pr_sheet_red_fixtures_are_refused_by_both_readers(build, change):
     assert check_sheet_problems(sheet) != []
 
 
+def carried_pr_sheet(build=pr_sheet):
+    sheet = build()
+    sheet["prSheet"]["previousCommit"] = "abcdef0"
+    sheet["prSheet"]["carriedForward"] = {"sheets": ["a" * 64, "b" * 64], "date": "2026-09-30", "moved": "The branch was brought current with main.",
+                                          "whyNotMaterial": "Main added only a README line."}
+    return sheet
+
+
+def test_a_pr_or_stack_sheet_with_a_carried_forward_verdict_validates_on_both_readers():
+    # Axis: a pr sheet and a stack sheet that carry a verdict forward (with previousCommit) are accepted by the schema and the page's check.
+    for build in (pr_sheet, stack_sheet):
+        sheet = carried_pr_sheet(build)
+        assert errors_for(sheet) == [], sheet["kind"]
+        assert check_sheet_problems(sheet) == [], sheet["kind"]
+
+
+CARRIED_RED_FIXTURES = [
+    ("carried-without-previous-commit", lambda s: s["prSheet"].pop("previousCommit")),
+    ("carried-with-no-digests", lambda s: s["prSheet"]["carriedForward"].__setitem__("sheets", [])),
+    ("carried-digest-not-hex", lambda s: s["prSheet"]["carriedForward"].__setitem__("sheets", ["XYZ"])),
+    ("carried-digest-repeated", lambda s: s["prSheet"]["carriedForward"].__setitem__("sheets", ["a" * 64, "a" * 64])),
+    ("carried-date-not-a-date", lambda s: s["prSheet"]["carriedForward"].__setitem__("date", "30 September")),
+    ("carried-moved-empty", lambda s: s["prSheet"]["carriedForward"].__setitem__("moved", "")),
+    ("carried-why-missing", lambda s: s["prSheet"]["carriedForward"].pop("whyNotMaterial")),
+    ("carried-unknown-key", lambda s: s["prSheet"]["carriedForward"].__setitem__("extra", 1)),
+]
+
+
+@pytest.mark.parametrize("change", [c for _, c in CARRIED_RED_FIXTURES], ids=[n for n, _ in CARRIED_RED_FIXTURES])
+def test_a_carried_forward_block_that_breaks_its_rules_is_refused_by_both_readers(change):
+    # Axis: carriedForward without previousCommit, with no digest, a repeated or non-hex digest, a date that is not YYYY-MM-DD, an empty or missing text, or an unknown key is refused by the schema and by the page's check.
+    sheet = carried_pr_sheet()
+    change(sheet)
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
 def test_pr_sheet_accepts_no_cards_a_null_ci_commit_and_a_null_lane():
     # Axis: a pr or stack sheet with no cards, a null ci commit, and a null lane and lane reason is accepted by both readers.
     for build in (pr_sheet, stack_sheet):

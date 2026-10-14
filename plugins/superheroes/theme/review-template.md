@@ -161,10 +161,13 @@ is not counted as an answer.
 `<digest>` is the SHA-256, in lowercase hex, of the exact bytes of the published `sheet.json` as the
 page fetched them (the bytes themselves, so a file with a byte-order mark hashes with it), and the
 document's `sheet` equals it. Each revision of the sheet has its own document, so a republished final
-sheet has a new digest and starts unsigned, and a page showing an older revision never touches a newer
-one. When the sheet reopens, the page reads only the document whose id is its own digest, and restores
-the pick and note only when that document fits `$defs/verdict` and its `sheet` equals the digest.
-Another revision's document is ignored. A verdict of null (a note saved before any pick, or a
+sheet has a new digest and starts unsigned, and so does a PR or stack sheet republished with a material
+move (`previousCommit` alone); a page showing an older revision never touches a newer one. When the
+sheet reopens, the page reads only the document whose id is its own digest, and restores the pick and
+note only when that document fits `$defs/verdict` and its `sheet` equals the digest. Another revision's
+document is ignored. That holds for a final sheet, and for a PR or stack sheet with no carry; the one
+exception is a PR or stack sheet republished with `carriedForward`, which reads through its chain
+(§ A carried PR). A verdict of null (a note saved before any pick, or a
 cleared verdict) restores only the note. A browser that cannot compute the digest (no
 `crypto.subtle`) leaves the last card's controls off, with a plain line on the card saying it can't
 tell which version of the sheet this is, and reads and writes nothing under `verdict`.
@@ -283,7 +286,27 @@ result; publish each listed path in `files`. A picture it could not copy shows a
 
 A sheet republished for a new commit carries `previousCommit` and shows a heading and note saying the PR changed. An item's id
 stays the same while its finding and its shown content do, so answers to unchanged items are kept. The
-verdict starts over, because its digest is new.
+verdict starts over, because its digest is new. That is a material republish.
+
+### A carried PR
+
+When the PR moved but the move is not material (a bring-current from the base branch with no conflict,
+say), the advisor gives the builder `carriedForward` in its input: the earlier sheet's path (`fromSheet`),
+each covered PR's new head (`heads`), the `date`, what `moved`, and `whyNotMaterial`. The built sheet then
+carries `previousCommit` (the earlier sheet's commit) and `prSheet.carriedForward`, whose `sheets` lists
+the digest of the earlier sheet and then the digests that one carried, newest first. The sheet shows a
+dated Carried forward box in place of the changed box, and the answers to unchanged items are kept as for
+any republish.
+
+Its verdict is read through that chain, by one rule that the page and the index's row both follow: take the
+first digest, from the sheet's own and then `sheets` in order, under which the store holds any verdict
+document. That document is the verdict only if it fits `$defs/verdict` and its `sheet` equals the digest it
+was found under; if not there is no verdict, and the older digests are not tried. A Merge found that way
+stands as it would on its own sheet: every item accepted, no walk Problem left, and `covers` equal to the
+answers now. So a Merge saved on an earlier revision keeps standing on the carried sheet until the owner
+changes an answer, and a Not yet or a cleared verdict saved on any revision in the chain ends it. Every
+write goes to the sheet's own digest: tapping Merge again, or changing an answer under a carried Merge,
+saves a null there first. A sheet with `previousCommit` alone has no chain and reads only its own digest.
 
 ### How a PR sheet's answers come back
 
@@ -365,7 +388,9 @@ for "done". When the chat and the index disagree, the advisor asks.
 On a final sheet the session reads `answers` and `verdict/<digest>` together, where `<digest>` is the
 SHA-256 of the `sheet.json` it published (for example `shasum -a 256 sheet.json`). It reads only that
 document and uses it only when its `sheet` equals that digest, so a republished final sheet starts
-unsigned because its digest is new. A card with no stored answer or a stored answer of null (a
+unsigned because its digest is new. A PR or stack sheet does the same, except that one republished with
+`carriedForward` reads the first revision in its chain that has a document (§ A carried PR); a material
+republish starts unsigned. A card with no stored answer or a stored answer of null (a
 cleared pick), a final sheet with no verdict document, or a verdict of null (a cleared verdict) is
 unanswered: the session asks rather than assuming. A saved Approve never counts as approval on its
 own; the owner's word in the chat does.

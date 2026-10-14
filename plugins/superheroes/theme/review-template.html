@@ -1628,6 +1628,8 @@
     let onePage = false;
     // The PR's number (the stack's on a stack sheet) and the words under "pr" in sheet-words.json, for those two kinds.
     let prNumber = 0;
+    // The digests of the earlier sheets a pr or stack sheet carries its verdict forward from, newest first (prSheet.carriedForward.sheets); empty when it carries none.
+    let carriedSheets = [];
     let prWords = null;
     // The index's words (the "index" block of sheet-words.json) and rows, and the zoom words an opened picture's buttons take (from "pr"); null or empty on other kinds.
     let indexWords = null;
@@ -1997,7 +1999,7 @@
     const PR_WORD_KEYS = [
       "nothingToAccept", "historyCap", "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark",
       "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
-      "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
+      "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
       "acceptedCount", "nothingToAcceptCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
@@ -2157,6 +2159,15 @@
       const box = prSection("section", "pr-changed", "sh-box");
       box.appendChild(textElement("h2", "", prWords.changedHeading));
       box.appendChild(textElement("p", "", fill(prWords.changed, { previous: shortCommit(previousCommit) })));
+      return box;
+    }
+
+    // The box under What changed on a sheet that carries the earlier sheet's answers and Merge forward across a move that is not material; it replaces the changed box.
+    function buildCarried(prSheet) {
+      const carried = prSheet.carriedForward;
+      const box = prSection("section", "pr-carried", "sh-box");
+      box.appendChild(textElement("h2", "", prWords.carriedHeading));
+      box.appendChild(textElement("p", "", fill(prWords.carried, { date: carried.date, previous: shortCommit(prSheet.previousCommit), moved: carried.moved, why: carried.whyNotMaterial })));
       return box;
     }
 
@@ -2371,7 +2382,8 @@
     // (when it did), the walk, and the heading of What you're accepting with its line when there are no cards.
     function prHead(prSheet, hasCards) {
       const parts = [buildWhatChanged(prSheet)];
-      if (prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
+      if (prSheet.carriedForward !== undefined) parts.push(buildCarried(prSheet));
+      else if (prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
       if (prSheet.walk !== undefined) parts.push(buildWalk(prSheet.walk));
       const accepting = textElement("h2", "", prWords.acceptingHeading);
       accepting.id = "pr-accepting";
@@ -2420,6 +2432,7 @@
       onePage = onePageKind(sheetKind);
       sheetPage.className = onePage ? "sheet-page is-pr" : "sheet-page";
       prNumber = revisedKind(sheetKind) ? sheet.prSheet.number : 0;
+      carriedSheets = revisedKind(sheetKind) && sheet.prSheet.carriedForward !== undefined ? sheet.prSheet.carriedForward.sheets : [];
       indexRows = sheetKind === "index" ? sheet.index.rows : [];
       viewerZoom.replaceChildren(...(onePage ? zoomButtons() : []));
       footerHost.replaceChildren(...(sheetKind === "index" ? [textElement("p", "sh-caption", indexWords.done)] : onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
@@ -2468,12 +2481,16 @@
     }
 
     // The last card's saved verdict puts its pick and note back, and counts as nothing on the sheet. It is applied after the answers
-    // are, because a Merge is judged against them. Only this revision's own document is looked at (the one under its digest, and only when its own sheet field says
-    // the same): another revision's document is never read, so nothing of it is restored.
+    // are, because a Merge is judged against them. The document read is the first one held under this revision's digest and then, on a sheet that carries a verdict forward,
+    // under each earlier digest it names, in that order (pr_state reads the same chain): the first revision with any document decides, and that document counts only when its own
+    // sheet field names the revision it was found under. An older revision is never read past a document in between, and a sheet that carries nothing reads only its own digest.
+    // Every write still goes to this revision's own digest.
     function applyVerdict(verdicts) {
       if (verdictController === null) return;
-      const stored = documentData(verdicts.docs.find(function (doc) { return doc.id === sheetDigest; }));
-      if (stored === null || typeof stored.sheet !== "string" || stored.sheet !== sheetDigest) return;
+      const held = [sheetDigest].concat(carriedSheets).map(function (digest) { return verdicts.docs.find(function (doc) { return doc.id === digest; }); })
+        .find(function (doc) { return doc !== undefined; });
+      const stored = documentData(held);
+      if (stored === null || typeof stored.sheet !== "string" || stored.sheet !== held.id) return;
       // A Merge stands only on the answers it was given for, which are the ones the cards were just restored with; any other restores cleared, with its note, and nothing is written.
       verdictController.restore(revisedKind(sheetKind) && stored.verdict === "merge" && !coversHold(stored.covers) ? { ...stored, verdict: null } : stored);
     }

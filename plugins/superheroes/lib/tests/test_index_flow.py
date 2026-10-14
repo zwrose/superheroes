@@ -320,6 +320,29 @@ def test_a_walk_answer_for_a_stop_key_the_sheet_no_longer_has_is_ignored_on_both
     assert view["standing"] is False and view["walk"] == _fill(PW["walkCount"], walked=1, total=2)
 
 
+def _carried(previous, head):
+    """The sheet republished for a new head with its answers and Merge carried forward from the previous sheet, so its chain names that sheet and every one it carried from."""
+    advisor = dict(_load("input-big.json"), carriedForward={"fromSheet": "previous/sheet.json", "heads": {"214": head}, "date": "2026-10-01",
+                                                          "moved": "the base moved", "whyNotMaterial": "the merge was clean and the behavior is the same"})
+    return pr_sheet.build([_load("record-big.json")], advisor, WORDS["pr"], previous=_bytes(previous))
+
+
+CARRY_1 = _carried(BIG, "c" * 40)
+CARRY_2 = _carried(CARRY_1, "d" * 40)
+CHAIN = [_sheet_digest(CARRY_2), _sheet_digest(CARRY_1), _sheet_digest(BIG)]
+
+
+def _chain_store(documents):
+    """A store whose verdict documents sit under the chain positions given (0 newest); each is (verdict, sheet position it names, or None for a foreign digest)."""
+    answers = _answers(CARRY_2)
+    verdicts = {}
+    for position, (verdict, names) in documents.items():
+        digest = CHAIN[position]
+        verdicts[digest] = {"verdict": verdict, "note": "", "sheet": "0" * 64 if names is None else CHAIN[names],
+                            **({"covers": _covers(answers)} if verdict == "merge" else {})}
+    return _store(answers, verdicts)
+
+
 def _stale(covers):
     return [covers[0].split("@")[0] + "@" + "0" * 16] + covers[1:]
 
@@ -349,10 +372,20 @@ CENSUS = [
     ("walk-problem-before-merge", BIG, _with_merge(BIG, _answers(BIG), _problem("before-merge")), "being-fixed"),
     ("stack-all-accepted-merge", STACK, _with_merge(STACK, _answers(STACK)), "ready"),
     ("stack-no-answers", STACK, _store(), "needs-you"),
+    # The carry chain: a sheet carried twice reads its own digest, then the sheet it came from, then the one before; the first revision holding a document decides.
+    ("carried-merge-stands", CARRY_2, _chain_store({2: ("merge", 2)}), "ready"),
+    ("carried-merge-from-the-middle-stands", CARRY_2, _chain_store({1: ("merge", 1)}), "ready"),
+    ("own-null-verdict-overrides-a-carried-merge", CARRY_2, _chain_store({0: (None, 0), 2: ("merge", 2)}), "needs-you"),
+    ("own-not-yet-overrides-a-carried-merge", CARRY_2, _chain_store({0: ("not-yet", 0), 1: ("merge", 1)}), "needs-you"),
+    ("withdrawal-on-a-middle-revision-overrides-an-older-merge", CARRY_2, _chain_store({1: ("not-yet", 1), 2: ("merge", 2)}), "needs-you"),
+    ("own-merge-wins-over-a-middle-withdrawal", CARRY_2, _chain_store({0: ("merge", 0), 1: ("not-yet", 1)}), "ready"),
+    ("carried-document-naming-another-digest-does-not-stand", CARRY_2, _chain_store({2: ("merge", None)}), "needs-you"),
+    ("carried-document-naming-a-neighbour-digest-does-not-stand", CARRY_2, _chain_store({2: ("merge", 1)}), "needs-you"),
+    ("own-document-naming-another-digest-blocks-a-carried-merge", CARRY_2, _chain_store({0: ("merge", None), 2: ("merge", 2)}), "needs-you"),
 ]
 
 
-# Bites on: pr_state and the page disagreeing about one store: a Merge standing on one side only (the covers comparison, the digest, the accepted count, a walk Problem's fix), a send-back seen on one side only, or the accepted and walked counts differing.
+# Bites on: pr_state and the page disagreeing about one store: a Merge standing on one side only (the covers comparison, the digest, the accepted count, a walk Problem's fix), a send-back seen on one side only, or the accepted and walked counts differing. The carry-chain rows bite on: the verdict chain read differently by the two sides (a carried Merge not standing, a newer null or Not yet document not overriding an older Merge, a withdrawal on a middle revision read past, or a document whose sheet field names another digest standing).
 @pytest.mark.parametrize("sheet,store,expected", [row[1:] for row in CENSUS], ids=[row[0] for row in CENSUS])
 def test_the_index_and_the_page_agree_about_the_same_store(sheet, store, expected):
     state = _state(sheet, store)

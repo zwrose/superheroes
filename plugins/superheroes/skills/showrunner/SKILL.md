@@ -590,11 +590,15 @@ above).
    the chat. After the merge, the PR's receipt (each answer and the verdict, written back to the PR
    per `owner-decisions.md`) records it on the PR.
    **How long it lasts, and what puts a PR back outside the word.** The word covers the PR at the
-   commit its sheet describes. When the PR's head commit moves after its sheet was published (a
-   fix, a bring-current, a fold), the sheet is replaced by an unsigned one for the new commit, which
-   keeps the answers to unchanged items and starts the verdict over. A verdict saved on the old
-   sheet never counts for the new commit, and the PR asks again. A PR opened after the word gets its
-   own sheet. The owner may withdraw the word at any time, by changing the verdict or saying so in
+   commit its sheet describes. When the PR's head commit moves after its sheet was published, you
+   judge the move by the material-consequence line, and doubt counts as material. A move with no
+   material consequence (a base update with no conflict, a mechanical bring-current, a craft fix)
+   keeps the word: you republish the sheet for the new commit carrying the answers and the verdict
+   forward, with a dated note saying what moved and why it is not material. A move that is material,
+   or in doubt, is republished unsigned: the sheet shows "This PR changed", keeps the answers to
+   unchanged items, and starts the verdict over, and a verdict saved on the old sheet never counts.
+   How you judge and publish it is in `owner-decisions.md`. A PR opened after the word gets its own
+   sheet. The owner may withdraw the word at any time, by changing the verdict or saying so in
    the chat, and a withdrawn word covers nothing from that moment.
    **The stack is the unit of merge** — whole stacks only, never a vetted prefix; see
    [native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack
@@ -614,8 +618,8 @@ above).
    within minutes, and the word and the act sit in one thread. There is no separate list of
    executed merges. The chat reports and each PR's receipt are the record.
    **The red train.** When a lane goes red on the union or on `main`'s post-merge run, you may
-   prepare and push a craft fix without asking, but the fix moves a head or opens a PR, so the merge
-   it needs asks again through that PR's sheet. Recipe:
+   prepare and push a craft fix without asking. A fix that moves a head keeps the word when the move
+   is not material; a fix that opens a new PR asks through that PR's own sheet. Recipe:
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md`.
    **Force-push.** State the reason in chat first, then proceed only on a word the owner gives for
    that force-push after hearing the reason. The merge word does not cover it. Record the word and
