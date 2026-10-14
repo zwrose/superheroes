@@ -39,7 +39,7 @@ Write a JSON file with `"schema": "review-account/1"` and these keys:
 - `findings`: each as `{id, title, severity, file, line, body, consequence, outcome, reason,
   reviewer, findingKey}`; `consequence`, `findingKey` may be null. `id` is the reviewer's own (never
   a staged `v0`) and never the identity: `session_contract.finding_identity_key` is.
-- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}`, `checked` (what was checked), optional `makers` (each `{family, source}`).
+- `rawFindingsFiles`, `rounds` as `{count, cap, stoppedAtCap}` plus an optional `wider` (a list of `{round, why}`, an integer round and a non-blank reason; left out when no round was wider), `checked` (what was checked), optional `makers` (each `{family, source}`).
 - `goAheads`: the owner's word to go on without a planned review. Either
   `{reviewer, kind: "standing-ruling", canonId}` or `{reviewer, kind: "owner-words", words, where}`. Each of `canonId`, `words` and `where` is a non-empty string; a go-ahead missing one, or carrying anything else there, does not count and the PR stays parked. A reviewer's `ownerWord` is a separate channel: the owner's word that let a same-family reviewer run.
 
@@ -84,7 +84,7 @@ The extras file holds only what the driver never does: `{"schema": "review-sessi
 
 What comes from the session:
 
-- `rounds`: the count of rounds, the configured cap, and whether the loop stopped at it.
+- `rounds`: the count of rounds, the configured cap, and whether the loop stopped at it. When a round ran a full panel instead of auditing the last fixes, `wider` lists each such round with the reason the round recorded as its focus, and the record's summary says "Round N looked wider than the last fixes: <why>" for each. The key is absent when no round was wider.
 - `reviewers`: one row per recorded review seat, with the commit that seat cited as the one it covered. A superseded attempt is left out and the highest attempt of a slot counts. A seat recorded missing is a reviewer that did not run, unless a later round ran the same seat. A seat the seat map marks same-family carries `notIndependent`.
 - `runDir`: a directory in `runDirs` is bound to the one seat whose recorded runner nonce equals the nonce in that directory's engine record. A directory that matches no seat or several, or cannot be read, is not used. A seat with no run directory reads "reported by the session".
 - `makers`: the extras' makers, plus the fixer's family (source `review loop fixer`) when a round ran a fixer.

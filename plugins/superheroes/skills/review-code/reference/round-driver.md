@@ -34,6 +34,11 @@ artifact. **Prose-driven review** on the read-only path (`--review-only`) is a d
 lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
 is not governed by this loop contract.
 
+Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
+keys of the previous round's fix batch>]}` for a delta round, or `{"on": "wider", "why": "<the
+reason>"}` for a full panel (an unknown fix surface, or a confirmation re-arm). Round 1 records no
+`focus`. The review record lists every wider round with its reason.
+
 Single-vendor environments stay **on** the mandated path: the same driver, the same journal, and,
 when no live vendor sits outside the fixer's and the makers' families, a fix whose audit does not
 run (it is never counted as audited) with `independence: "degraded"` on the terminal certification

@@ -5131,6 +5131,7 @@ def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_s
     _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
+    _record_round(state, "focus", {"on": "wider", "why": detail})
     state["fullPanelRan"] = False
     state["step"] = P_PANEL
     return True
@@ -5145,6 +5146,17 @@ def _after_unknown_surface_panel(
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_PANEL
         state["step"] = P_VERIFY
+
+
+def _fix_batch_keys(state):
+    """The finding keys of the previous round's fix batch, in batch order, each once."""
+    keys = []
+    for f in state.get("fixBatch") or []:
+        if isinstance(f, dict):
+            key = _finding_key_of(f)
+            if key not in keys:
+                keys.append(key)
+    return keys
 
 
 def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
@@ -5202,6 +5214,7 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
+    _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_POST_AUDITS
     state["step"] = P_AUDITS
@@ -5594,6 +5607,7 @@ def _settle_delta_converged(state, config):
             return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
+        _record_round(state, "focus", {"on": "wider", "why": followup.get("reason")})
         state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
         state["step"] = P_PANEL
         return
