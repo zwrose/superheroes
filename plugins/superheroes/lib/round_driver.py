@@ -217,6 +217,7 @@ WITHDRAW_WORKTREE_DIRTY = "withdraw-worktree-dirty"
 WITHDRAW_HEAD_MOVED = "withdraw-head-moved"
 WITHDRAW_HEAD_UNANCHORED = "withdraw-head-unanchored"
 WITHDRAW_GIT_UNAVAILABLE = "withdraw-git-unavailable"
+WITHDRAW_WRONG_WORKTREE = "withdraw-wrong-worktree"
 FIXER_ATTEMPT_WITHDRAWN = "fixer-attempt-withdrawn"
 WITHDRAW_RESTORE_CHECKED = "checked"
 WITHDRAW_RESTORE_NOT_CHECKED = "not-checked"
@@ -4426,6 +4427,9 @@ def _lift_marker_for(finding, disposition_row, decision):
     out-of-scope disposition under a later guidance decision does not block it."""
     ruling = decision.get("ruling") if isinstance(decision, dict) else None
     disposition = disposition_row.get("disposition")
+    if finding.get(session_contract.MERGED_INTO_FIELD) or disposition_row.get(
+            session_contract.MERGED_INTO_FIELD):
+        return None
     if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL
             and ruling != "out-of-scope" and disposition != "out-of-scope"
             and not _disposition_is_current(disposition_row)):
@@ -4450,8 +4454,14 @@ def _lifted_fix_rows(state, rows):
     lineage = _lineage_map(state)
     held = _fix_row_roots(state, rows)
     effective = _live_ruling_by_key(state)
+    live_keys = {_fix_batch_row_key(f) for f in findings if isinstance(f, dict)}
+    # A guidance-named finding that left the live list (scoped synthesis archives it to the ledger)
+    # still rides the batch.
+    archived = [ledger_by_key[k] for k, d in effective.items()
+                if isinstance(d, dict) and d.get("ruling") == "guidance"
+                and k not in live_keys and isinstance(ledger_by_key.get(k), dict)]
     lifted = []
-    for finding in findings:
+    for finding in list(findings) + archived:
         if not isinstance(finding, dict) or finding.get("summaryEntry"):
             continue
         key = _fix_batch_row_key(finding)
@@ -4503,6 +4513,7 @@ def _split_lifted_rows(state, rows):
 def _lifted_judgment_rows(state, rows):
     """The lifted rows beside the blocking ``rows`` that must go to the owner-judgment gate before
     any fixer leg is composed (``_route_judgment_blockers``)."""
+    rows, _fault = _filter_excluded_discharged_fixes(state, rows)
     if not rows:
         return []
     return _split_lifted_rows(state, rows)[1]
@@ -7764,6 +7775,12 @@ def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
     if repo_root is None and git is None:
         return None, None, WITHDRAW_RESTORE_NOT_CHECKED
     root = repo_root or os.getcwd()
+    recorded = (state.get("config") or {}).get("repoRoot")
+    if (isinstance(recorded, str) and recorded
+            and os.path.realpath(recorded) != os.path.realpath(root)):
+        return (WITHDRAW_WRONG_WORKTREE,
+                "%r is not the session's worktree %r" % (root, recorded),
+                WITHDRAW_RESTORE_NOT_CHECKED)
     run_git = git or store_core.run_git
     anchor = _orders_anchor(state, session_dir, rnd, P_FIXER, attempt) or {}
     bound = anchor.get("headSha")

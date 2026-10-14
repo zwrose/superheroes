@@ -144,9 +144,12 @@ def _throwaway_repo(tmp_path, name="wt"):
     return repo, _git(repo, "rev-parse", "HEAD")
 
 
-def _bind_anchor_head(session_dir, head):
-    """Bind the pending fixer attempt's orders anchor to `head` (None drops the head)."""
+def _bind_anchor_head(session_dir, head, repo=None):
+    """Bind the pending fixer attempt's orders anchor to `head` (None drops the head) and, with
+    `repo`, the session's recorded worktree to it."""
     state = _state(session_dir)
+    if repo is not None:
+        state["config"]["repoRoot"] = str(repo)
     pend = state["pending"]
     key = RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])
     anchor = dict(state["_ordersAnchors"][key])
@@ -192,10 +195,13 @@ def test_t1_ruling_while_pending_reaches_the_fix(tmp_path, keep_severity):
     assert _journal_refusals(session_dir, "ruling-attempt-pending")
 
     repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, head)
+    session_repo = _state(session_dir)["config"]["repoRoot"]
+    _bind_anchor_head(session_dir, head, repo)
     withdrawn = RD.cmd_withdraw(session_dir, k, "owner ruled on F", repo_root=str(repo))
     assert withdrawn.get("ok") is True and withdrawn.get("restoreCheck") == "checked", withdrawn
     state = _state(session_dir)
+    state["config"]["repoRoot"] = session_repo
+    RD.save_state(session_dir, state)
     assert state["pending"] is None and state["step"] == P_FIXER
     assert state["withdrawnFixerAttempts"] == [
         {"round": 1, "attempt": k, "reason": "owner ruled on F", "restoreCheck": "checked"}]
@@ -450,7 +456,7 @@ def test_edge2_restore_check_refusals(tmp_path, keep_severity, case, token):
     session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e2")
     k = _state(session_dir)["pending"]["attempt"]
     repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head)
+    _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head, repo)
     kwargs = {"repo_root": str(repo)}
     if case == "tracked-change":
         (repo / "a.txt").write_text("changed by the stopped fixer\n", encoding="utf-8")
@@ -487,7 +493,7 @@ def test_withdraw_verb_runs_through_the_command_line(tmp_path, keep_severity, ca
     session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-cli")
     k = _state(session_dir)["pending"]["attempt"]
     repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, head)
+    _bind_anchor_head(session_dir, head, repo)
     capsys.readouterr()
     code = RD.main(["withdraw", "--session-dir", session_dir, "--attempt", str(k),
                     "--reason", "owner ruled", "--repo-root", str(repo)])
@@ -766,3 +772,65 @@ def test_guidance_on_an_unqueued_minor_during_an_emitted_attempt_joins_the_queue
     assert _queue_keys(after) == [key_m]
     assert after["_fixQueue"][0]["lifted"] == "guidance"
     assert after["pending"] == state["pending"]
+
+
+# --- review round 1: worktree binding, ledger-only guidance targets, merged members, eligible blockers
+
+def test_withdraw_refuses_a_worktree_other_than_the_sessions(tmp_path, keep_severity):
+    """axis: the restore check reads the session's own worktree — a clean sibling at the same head
+    never stands in for the dirty one."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-wrong-wt")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    other, _other_head = _throwaway_repo(tmp_path, "other")
+    _bind_anchor_head(session_dir, head, repo)
+    before = _state_bytes(session_dir)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(other))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-wrong-worktree", out
+    assert _state_bytes(session_dir) == before
+    assert RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))["ok"] is True
+
+
+def test_a_merged_member_is_never_lifted_by_guidance():
+    """axis: a finding synthesis merged into another carries `mergedInto` and never rides a batch."""
+    merged = session_contract.MERGED_INTO_FIELD
+    guidance = {"ruling": "guidance"}
+    assert RD._lift_marker_for({"title": "t"}, {}, guidance) == RD.LIFT_GUIDANCE
+    assert RD._lift_marker_for({merged: "rep"}, {}, guidance) is None
+    assert RD._lift_marker_for({}, {merged: "rep"}, guidance) is None
+    assert RD._lift_marker_for({merged: "rep", "consequenceKind": "real"}, {}, None) is None
+
+
+def test_guidance_on_an_archived_finding_still_rides_the_next_batch(tmp_path, keep_severity):
+    """axis: guidance on an unresolved Minor that scoped synthesis archived to the ledger is
+    recovered when the next batch is composed for another blocker."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-archived")
+    state = _state(session_dir)
+    quality = _finding_key_by_title(state, "quality minor")
+    blocker = next(dict(f) for f in state["findings"] if f.get("title") == "blocker B")
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", quality, "tidy the names"))["ok"]
+    state = _state(session_dir)
+    RD._set_findings(state, [blocker])
+    assert RD._live_finding_by_key(state, quality) is None
+    lifted = RD._lifted_fix_rows(state, [blocker])
+    assert [(_key(row), row["lifted"]) for row in lifted] == [(quality, RD.LIFT_GUIDANCE)]
+
+
+def test_a_ruled_out_blocker_does_not_pull_a_choice_to_the_owner(tmp_path, keep_severity):
+    """axis: the lift joins a fixer leg that is going out — with the only blocker ruled out, a
+    lifted product choice is not put to the owner."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-oos-blocker")
+    state = _state(session_dir)
+    blocking = RD._blocking(state["findings"])
+    assert [row["title"] for row in RD._lifted_judgment_rows(state, blocking)] == ["minor choice"]
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "oos-b.json", [
+        {"id": _finding_key_by_title(state, "blocker B"), "ruling": "out-of-scope",
+         "reason": "later", "followUp": _follow_up()}]))["ok"]
+    state = _state(session_dir)
+    assert RD._lifted_judgment_rows(state, RD._blocking(state["findings"])) == []

@@ -607,6 +607,7 @@ recorded), `withdraw-reason-missing` (blank `--reason`).
 
 Then the restore check reads the worktree at `--repo-root` (default: the current directory):
 `withdraw-head-unanchored` when the attempt's orders carry no head to compare with,
+`withdraw-wrong-worktree` when `--repo-root` is not the session's recorded worktree,
 `withdraw-git-unavailable` when git cannot report, `withdraw-worktree-dirty` when a tracked file is
 changed or an untracked file sits outside the session directory, and `withdraw-head-moved` when
 `HEAD` is not the head the driver bound into the attempt's orders. A passing check is recorded as
