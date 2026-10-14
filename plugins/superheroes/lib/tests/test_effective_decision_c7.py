@@ -204,16 +204,31 @@ def test_t4_gate_skip_binds_a_reword(tmp_path):
     skip_row = state["rounds"][str(state["round"])]["judgmentDispositions"][0]
     assert (skip_row["file"], skip_row["line"]) == ("f.py", 1)
     assert skip_row["rulingSeq"] == state["rulingSeqCounter"]
+    assert skip_row["followUp"] == L2E._WELL_FORMED
     state["round"] += 1
-    reworded = _finding("widen the public API", line=1, file="f.py")
+    reworded = _finding("widen the public API", line=1, file="f.py", tradeoff=True)
     key_new = RD._finding_identity_key(reworded)
     RD._stage_findings(state, [reworded])
     assert state["findingLineage"] == {key_new: L2E._TRADEOFF_ID}
-    assert L2E._ledger_by_key(state)[key_new]["disposition"] == "out-of-scope"
+    carried = L2E._ledger_by_key(state)[key_new]
+    assert carried["disposition"] == "out-of-scope"
+    assert carried["followUp"] == L2E._WELL_FORMED
     assert key_new in RD._live_out_of_scope_ruling_keys(state)
     assert RD._filter_excluded_discharged_fixes(state, [reworded]) == ([], None)
     # the review record's rulings list stays rule-sourced only
     assert RD._standing_rulings_for_orders(state) == ([], None)
+    # normal routing: the carried skip is honored, never put to the owner again
+    state["findings"] = [dict(reworded, verdict="CONFIRMED")]
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] != RD.P_JUDGMENT
+    assert not state.get("_judgmentFindings")
+    assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
+    # the original wording restaged a round later keeps the whole decision, follow-up included
+    state["round"] += 1
+    RD._stage_findings(state, [_finding("widen the API", line=1, file="f.py")])
+    restaged = L2E._ledger_by_key(state)[L2E._TRADEOFF_ID]
+    assert restaged["disposition"] == "out-of-scope"
+    assert restaged["followUp"] == L2E._WELL_FORMED
 
 
 def test_t5_edge1_two_compiled_findings_at_the_location_do_not_carry():
@@ -341,3 +356,68 @@ def test_gate_skip_after_rule_guidance_renders_nothing():
     _batch(state, _finding("subject"))
     assert RD._live_ruling_by_key(state)[key]["ruling"] == "out-of-scope"
     assert _entries(state) == []
+
+
+def test_gap_sweep_in_the_same_round_never_aliases_to_a_reraised_decided_finding():
+    """axis: the ambiguity guards span the whole round — a gap sweep staged after the panel sees the
+    panel's findings (the decided original re-raised, or another finding at the location)."""
+    state = _mem_state()
+    key_f = _key("original")
+    _add_rule(state, key_f, "out-of-scope", rnd=1)
+    # control: the gap finding alone in the round carries
+    control = copy.deepcopy(state)
+    RD._stage_findings(control, [_finding("independent gap issue")])
+    assert control["findingLineage"] == {_key("independent gap issue"): key_f}
+    # the panel re-raises the decided original; the gap sweep then stages an independent finding
+    RD._stage_findings(state, [_finding("original")])
+    gap = _finding("independent gap issue")
+    RD._stage_findings(state, [gap])
+    _no_carry(state)
+    assert RD._filter_excluded_discharged_fixes(state, [gap]) == ([gap], None)
+    # another finding already raised at the location this round blocks the carry the same way
+    state = _mem_state()
+    _add_rule(state, key_f, "out-of-scope", rnd=1)
+    RD._stage_findings(state, [_finding("unrelated panel issue")])
+    state.pop("findingLineage", None)
+    state["decisions"] = [d for d in state["decisions"] if d["kind"] != "ruling-carried"]
+    RD._stage_findings(state, [_finding("independent gap issue")])
+    assert _key("independent gap issue") not in (state.get("findingLineage") or {})
+
+
+def test_fix_as_suggested_supersedes_an_earlier_skip_and_guidance():
+    """axis: the owner's later fix-as-suggested is the effective decision — an earlier skip no longer
+    excludes the finding and earlier guidance no longer renders."""
+    state = _mem_state(3)
+    key = _key("subject")
+    _add_gate(state, 1, key, "skip", seq=RD._next_ruling_seq(state))
+    _add_gate(state, 2, key, "fix-as-suggested", seq=RD._next_ruling_seq(state))
+    assert RD._live_ruling_by_key(state)[key]["ruling"] == "fix"
+    row = _finding("subject")
+    assert RD._filter_excluded_discharged_fixes(state, [row]) == ([row], None)
+    state = _mem_state(3)
+    _add_rule(state, key, "guidance", guidance="OLD GUIDANCE", rnd=1)
+    _add_gate(state, 2, key, "fix-as-suggested", seq=RD._next_ruling_seq(state))
+    _batch(state, _finding("subject"))
+    assert _entries(state) == []
+
+
+@pytest.mark.parametrize("disposition", [{"disposition": "fix-as-suggested"}, {}])
+def test_fix_at_the_gate_after_a_skip_reaches_the_fixer(disposition):
+    """axis: through the judgment fold, a fix choice (explicit or fail-closed) on a finding an earlier
+    round skipped clears the restaged out-of-scope disposition and queues the fix."""
+    state = _mem_state(2)
+    finding = _finding("subject", tradeoff=True)
+    key = RD._finding_identity_key(finding)
+    _add_gate(state, 1, key, "skip", seq=RD._next_ruling_seq(state))
+    RD._stage_findings(state, [finding])
+    assert L2E._ledger_by_key(state)[key]["disposition"] == "out-of-scope"
+    state["findings"] = [dict(finding)]
+    state["_judgmentFindings"] = [dict(finding)]
+    state["_judgmentMechanical"] = []
+    RD._fold_judgment(state, state["config"], {"dispositions": [dict(disposition, id=key)]})
+    logged = state["rounds"]["2"]["judgmentDispositions"][-1]
+    assert logged["rulingSeq"] == state["rulingSeqCounter"]
+    assert RD._live_ruling_by_key(state)[key]["ruling"] == "fix"
+    assert state["step"] == RD.P_FIXER
+    assert key in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
+    assert L2E._ledger_by_key(state)[key].get("disposition") != "out-of-scope"

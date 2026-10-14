@@ -1597,21 +1597,38 @@ def _seed_collapsed_nits(state, ledger, seen, finding, round_no):
 class _LineageCarry:
     """A reworded finding takes the decision of the finding it rewords (``state["findingLineage"]``).
 
-    One compile's view: the compiled keys, the count of compiled findings per (file, line), and the
-    decided keys with the location their decision row records. ``apply`` carries only when ALL hold:
-    the finding has no decision and no lineage entry of its own; exactly one lineage root holds a
-    decision recorded at the finding's file and integer line; that root's group has no member among
-    this compile's keys; and the finding is the only compiled finding at that file and line."""
+    The round's view: the keys raised this round (this compile's, plus every finding an earlier
+    staging in the same round — the panel before a gap sweep — already seeded on the ledger), the
+    count of those findings per (file, line), and the decided keys with the location their decision
+    row records. ``apply`` carries only when ALL hold: the finding has no decision and no lineage
+    entry of its own; exactly one lineage root holds a decision recorded at the finding's file and
+    integer line; that root's group has no member raised this round; and the finding is the only
+    finding raised this round at that file and line."""
 
-    def __init__(self, state, compiled):
+    def __init__(self, state, compiled, ledger=None):
         self.compiled_keys = set()
         self.at_location = {}
+        raised = {}
+        unkeyed = []
         for finding in compiled:
             if not isinstance(finding, dict):
                 continue
             key = _finding_identity_key(finding)
             if key:
-                self.compiled_keys.add(key)
+                raised.setdefault(key, finding)
+            else:
+                unkeyed.append(finding)
+        round_no = state.get("round") if isinstance(state, dict) else None
+        for entry in ledger if isinstance(ledger, list) else []:
+            if not isinstance(entry, dict) or entry.get("summaryEntry"):
+                continue
+            if entry.get(session_contract.RAISED_ROUND_FIELD) != round_no:
+                continue
+            key = _finding_identity_key(entry)
+            if key:
+                raised.setdefault(key, entry)
+        self.compiled_keys = set(raised)
+        for finding in list(raised.values()) + unkeyed:
             location = self.location_of(finding)
             if location is not None:
                 self.at_location[location] = self.at_location.get(location, 0) + 1
@@ -1655,6 +1672,22 @@ class _LineageCarry:
                   "%s takes the decision on %s (same file and line, reworded)" % (key, root))
 
 
+def _ledger_follow_up(ledger, seen, key):
+    """The ``followUp`` an out-of-scope ledger entry holds for ``key``, else None."""
+    if not isinstance(key, str) or key not in seen:
+        return None
+    entry = ledger[seen[key]]
+    if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+        return None
+    return _follow_up_of(entry)
+
+
+def _follow_up_of(row):
+    """A copy of the row's ``followUp`` when it holds one as an object, else None."""
+    follow_up = row.get("followUp") if isinstance(row, dict) else None
+    return dict(follow_up) if isinstance(follow_up, dict) else None
+
+
 def _stage_findings(state, compiled):
     """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate. Each member
     a Nit-cap summary row collapsed is seeded too and recorded ``craft`` at once."""
@@ -1670,7 +1703,7 @@ def _stage_findings(state, compiled):
     round_no = state["round"]
     seeded = False
     sanitized = []
-    carry = _LineageCarry(state, compiled)
+    carry = _LineageCarry(state, compiled, ledger)
     for finding in compiled:
         if not isinstance(finding, dict):
             sanitized.append(finding)
@@ -1680,14 +1713,22 @@ def _stage_findings(state, compiled):
             sanitized.append(finding)
             continue
         carry.apply(state, finding, key)
+        held_follow_up = _ledger_follow_up(ledger, seen, key)
         entry = _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
         sanitized.append(entry)
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
         if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
+            # A decision row written before skips carried their follow-up recovers it from the
+            # ledger: this key's own (read before the re-seed stripped it), else the decided key's.
+            follow_up = _follow_up_of(live_oos)
+            if follow_up is None:
+                follow_up = held_follow_up
+            if follow_up is None:
+                follow_up = _ledger_follow_up(ledger, seen, live_oos.get("findingKey"))
             _record_disposition(
                 state, key, "out-of-scope", round_no,
                 outOfScopeReason=live_oos.get("reason"),
-                followUp=live_oos.get("followUp"),
+                followUp=follow_up,
                 rulingSeq=live_oos.get("seq"))
         _seed_collapsed_nits(state, ledger, seen, finding, round_no)
         seeded = True
@@ -1786,8 +1827,11 @@ def _is_plain_int(value):
 def _gate_decision_candidates(state):
     """Owner-gate decisions across every round's ``judgmentDispositions``, shaped like ruling rows.
 
-    ``skip`` is an ``out-of-scope`` decision and ``fix-with-guidance`` (with guidance text) a
-    ``guidance`` decision; every other gate disposition is not a decision."""
+    ``skip`` is an ``out-of-scope`` decision (carrying its ``followUp`` when the fold recorded one),
+    ``fix-with-guidance`` (with guidance text) a ``guidance`` decision, and ``fix-as-suggested`` a
+    ``fix`` decision — the owner's choice to fix as suggested, which supersedes an earlier skip or
+    guidance and itself neither excludes nor guides; every other gate disposition is not a
+    decision."""
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return []
@@ -1811,6 +1855,8 @@ def _gate_decision_candidates(state):
                 ruling = "out-of-scope"
             elif disposition == "fix-with-guidance":
                 ruling = "guidance"
+            elif disposition == "fix-as-suggested":
+                ruling = "fix"
             else:
                 continue
             key = _history_row_key(item)
@@ -1824,6 +1870,8 @@ def _gate_decision_candidates(state):
                 if not isinstance(guidance, str) or not guidance.strip():
                     continue
                 row["guidance"] = guidance.strip()
+            if ruling == "out-of-scope" and _follow_up_of(item) is not None:
+                session_contract.copy_follow_up_field(item, row)
             for field in ("file", "line", "title"):
                 if item.get(field) is not None:
                     row[field] = item.get(field)
@@ -3925,7 +3973,12 @@ def _route_judgment_blockers(state, blocking):
     straight into the fix batch alongside the fix-disposed judgment findings (never abandoned).
     Returns True when it took over routing (the caller must return); False when the batch is purely
     mechanical (the caller composes the fix batch as before)."""
-    judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")]
+    # A tradeoff whose effective decision is already a (non-Critical) skip — the owner's own, or one
+    # carried to a rewording — is not put to the owner again: the fix-batch exclusion honors it.
+    decided_out = _live_out_of_scope_ruling_keys(state)
+    judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")
+                and not (_finding_key_of(f) in decided_out
+                         and not _live_out_of_scope_blocks_row(f))]
     if not judgment:
         return False
     mechanical = [f for f in blocking if isinstance(f, dict) and not f.get("tradeoff")]
@@ -4041,15 +4094,19 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
                             "title": f.get("title"), "severity": f.get("severity"),
                             "reason": reason.strip()})
+            follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
                           "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
                           "disposition": "skip", "reason": reason.strip()}
+            if follow_up is not None:
+                # The skip is a standing decision: its follow-up travels with it, so a later round
+                # that restages the finding (or a rewording of it) reapplies the whole decision.
+                session_contract.copy_follow_up_field({"followUp": follow_up}, skip_entry)
             _stamp_ruling_seq(state, skip_entry)
             disposition_log.append(skip_entry)
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
                       % (f.get("title") or fid, reason.strip()))
-            follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             disp_kwargs = {"outOfScopeReason": reason.strip()}
             if follow_up is not None:
                 disp_kwargs = dict(disp_kwargs, followUp=follow_up)
@@ -4068,20 +4125,28 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
-            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
-                                    "title": f.get("title"),
-                                    "disposition": "fix-as-suggested"})
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                     "disposition": "fix-as-suggested"}
+            _stamp_ruling_seq(state, entry)
+            disposition_log.append(entry)
         else:
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
-            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
-                                    "title": f.get("title"),
-                                    "disposition": "fix-as-suggested", "failClosed": True})
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                     "disposition": "fix-as-suggested", "failClosed": True}
+            _stamp_ruling_seq(state, entry)
+            disposition_log.append(entry)
             _decision(state, "judgment-fail-closed",
                       "judgment blocker %r had no valid disposition (%r) — folded as "
                       "fix-as-suggested (a judgment blocker is never silently skipped)"
                       % (f.get("title") or fid, disposition))
+        # A fix choice is the finding's latest decision: it supersedes an earlier skip (its
+        # out-of-scope disposition is cleared here, as a later ``rule`` guidance clears one) and
+        # earlier guidance (the effective-decision reader ranks this sequenced entry last).
+        _clear_out_of_scope_disposition(state, fid)
         fix_batch.append(g)
     if skipped:
         state["_skippedBlockers"] = (state.get("_skippedBlockers") or []) + skipped
