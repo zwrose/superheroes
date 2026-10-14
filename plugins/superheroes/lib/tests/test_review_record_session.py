@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+import canon
 import circuit_breaker
 import decision_kinds
 import handback_gate as hg
@@ -28,14 +29,17 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
             "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
 KEY = "a.py::t@L3"
+STANDING = "2026-01-02-abcd1234-1"
+CANON_SOURCES = {"canonText": canon.entry_line(STANDING, "2026-01-02", "standing", "a ruling",
+                                               'owner\'s words: "go"', "issue thread")}
 
 
 class Fake:
     """Injectable readers with an in-memory comment list; records create calls."""
 
-    def __init__(self, head=HEAD, runs=None):
+    def __init__(self, head=HEAD, runs=None, sources=None):
         self.comments, self.writes = [], []
-        self.head, self.runs = head, runs or {}
+        self.head, self.runs, self.sources = head, runs or {}, sources or {}
 
     def readers(self):
         return {
@@ -48,7 +52,12 @@ class Fake:
             "list_comments": lambda pr, repo: list(self.comments),
             "create_comment": self._create,
             "changed_paths": lambda pr, repo: ["README.md"],
+            "decision_sources": self._sources,
         }
+
+    def _sources(self, root, base_ref, sheet_answers, pr):
+        extra = {"sheetAnswers": sheet_answers, "pr": pr} if isinstance(sheet_answers, dict) else {}
+        return {**self.sources, **extra}
 
     def _create(self, pr, repo, body):
         c = {"id": len(self.comments) + 1, "author": "bot", "body": body, "url": f"http://c/{len(self.comments) + 1}"}
@@ -170,12 +179,12 @@ def test_the_same_session_with_the_head_moved_reads_not_reviewed(tmp_path):
 
 @pytest.mark.parametrize("go_ahead", [
     None,
-    {"kind": "standing-ruling", "canonId": "standing-1"},
+    {"kind": "standing-ruling", "canonId": STANDING},
     {"kind": "owner-words", "words": "go on without it", "where": "the issue thread"},
 ])
 def test_a_specialist_that_did_not_run_parks_unless_the_owner_went_ahead(tmp_path, go_ahead):
     s = Session(tmp_path).seat("code-reviewer").seat("security-reviewer", cmd="record-missing")
-    fake = Fake()
+    fake = Fake(sources=CANON_SOURCES)
     gone = "security-reviewer (round 1)"
     out = send(tmp_path, s.save(), fake, goAheads=[dict(go_ahead, reviewer=gone)] if go_ahead else [])
     # bites on: a seat that never reported being left out of the record, or a go-ahead lifting the parking wrongly
@@ -184,6 +193,17 @@ def test_a_specialist_that_did_not_run_parks_unless_the_owner_went_ahead(tmp_pat
     assert [m["name"] for m in rec["missingReviews"]] == [gone]
     assert out["parked"] is (go_ahead is None)
     assert (rec["missingReviews"][0]["goAhead"] or {}).get("kind") == (go_ahead or {}).get("kind")
+
+
+def test_a_standing_ruling_go_ahead_whose_canon_entry_is_not_on_record_leaves_the_pr_parked(tmp_path):
+    s = Session(tmp_path).seat("code-reviewer").seat("security-reviewer", cmd="record-missing")
+    fake = Fake()
+    gone = "security-reviewer (round 1)"
+    out = send(tmp_path, s.save(), fake, goAheads=[{"kind": "standing-ruling", "canonId": STANDING, "reviewer": gone}])
+    # bites on: a standing-ruling go-ahead lifting the parking with no Canon entry on record behind it
+    assert out["ok"] and out["status"] == "not-reviewed", out
+    assert out["parked"] is True
+    assert not rr.read(7, readers=fake.readers())["missingReviews"][0]["goAhead"]
 
 
 def test_a_record_written_through_this_files_fake_never_reaches_the_real_changed_paths_reader(tmp_path, monkeypatch):
