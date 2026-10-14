@@ -179,7 +179,7 @@ def _pages(run, path, env):
     """Every item of a paginated REST list, or None when any page failed or was not a JSON list of objects
     (a page that is a bare object, such as `{}`, is unreadable)."""
     code, out, _ = _gh(run, ["api", "--paginate", path], env)
-    if code != 0:
+    if code != 0 or not out.strip():
         return None
     decoder, at, found = json.JSONDecoder(), 0, []
     try:
@@ -295,7 +295,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     lid, lane = lanes[0]
     if not launch_id:
         # axis: a later lane that adopted this PR (or its branch) is the one that finished it, so cleanup follows it — see bite-proof record c8_cloud_cleanup
-        lid, lane, reason = _adopting_successor(repo_root, lid, lane, [lane.get("issue")], pr, _name(pull.get("head"), "ref"), closed, env)
+        lid, lane, reason = _adopting_successor(repo_root, lid, lane, issues, pr, _name(pull.get("head"), "ref"), closed, env)
         if reason:
             return _refusal(reason), None
     session = lane.get("cloudSessionName")

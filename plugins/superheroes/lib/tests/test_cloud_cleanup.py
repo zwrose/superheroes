@@ -343,7 +343,7 @@ def test_a_branch_is_kept_when_a_later_open_pr_uses_it_as_base_after_an_unrelate
 
 def test_an_open_pr_listing_that_is_not_a_json_list_is_unreadable_and_nothing_is_deleted(w):
     _lane(w, "l-1", 101)
-    for raw in ("{}", '[]\n{"head": {}}'):
+    for raw in ("{}", '[]\n{"head": {}}', "", " \n"):
         w.gh.open_raw = raw
         assert _branch(w) == {"ok": False, "reason": "open-prs-unreadable"}
         assert BRANCH in _remote_branches(w) and w.gh.deletes == []
@@ -899,3 +899,20 @@ def test_a_final_outcome_for_an_unknown_message_is_refused_and_writes_nothing(w)
     assert _record(w, "m-other", "delivered") == {"ok": False, "reason": "request-unknown"}
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "pending")]
+
+
+def test_an_empty_open_pr_response_is_unreadable_but_a_printed_empty_list_is_readable(w):
+    _lane(w, "l-1", 101)
+    w.gh.open_raw = ""
+    assert _branch(w) == {"ok": False, "reason": "open-prs-unreadable"}
+    assert w.gh.deletes == []
+    w.gh.open_raw = "[]"
+    assert _branch(w)["deleted"] is True
+
+
+def test_an_adopter_on_another_linked_issue_than_the_bound_lane_is_the_one_cleaned_up(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(issues=(101, 202), head_sha=w.head, created_at=_OPENED)
+    _adopter(w, "l-2", 202, "session-two", _T2)
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
