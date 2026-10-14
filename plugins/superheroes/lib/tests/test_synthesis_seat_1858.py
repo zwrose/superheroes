@@ -67,12 +67,14 @@ def _engine(monkeypatch, vendor):
                             lambda root: (vendor, RD.VENDOR_SOURCE_CONFIGURED))
 
 
-def _lib_run(monkeypatch, engine, synthesis, verifier_vendor, **cfg_kw):
-    """run_loop on a one-finding round; returns (result, loop receipt, state)."""
+def _lib_run(monkeypatch, engine, synthesis, verifier_vendor, findings=None, **cfg_kw):
+    """run_loop on a round that reports `findings` (one by default); returns (result, loop receipt,
+    state)."""
     _engine(monkeypatch, engine)
+    reported = _A_FINDING if findings is None else findings
 
     def reviewer(dim, tier, rnd, ctx):
-        return list(_A_FINDING) if rnd == 1 and dim == "code-reviewer" else []
+        return [dict(f) for f in reported] if rnd == 1 and dim == "code-reviewer" else []
 
     def verifier(clusters, rnd):
         return {"verdicts": [{"id": i, "verdict": "CONFIRMED", "evidence": "ran", "reason": "ran"}
@@ -151,11 +153,25 @@ def test_c1_library_unseatable_synthesis_emits_no_seam_call_and_discloses(monkey
     assert any(UNSEATABLE_LINE in line for line in loop_receipt["degraded"]), loop_receipt["degraded"]
 
 
-def test_c1_library_unseatable_synthesis_drops_nothing():
-    # axis: an empty grouping keeps every verified finding separate (merge_and_rank(verified, None))
-    verified = [dict(_A_FINDING[0], id="a"), dict(_A_FINDING[0], line=2, id="b")]
-    import verification
-    assert len(verification.merge_and_rank(verified, None)) == 2
+def test_c1_library_unseatable_synthesis_drops_nothing(monkeypatch):
+    """The unseatable-grouping path (`_nonpanel_unseatable(state, session_dir, P_SYNTHESIS)` into
+    `_fold_synthesis(state, config, {"grouping": None})`) keeps both verified findings, separate.
+
+    axis: an unseatable synthesis seat folds no grouping, so every verified finding survives the fold
+    — see bite-proof record c7l3_wo3_driver"""
+    two = [dict(_A_FINDING[0]), dict(_A_FINDING[0], line=2)]
+    calls = []
+    result, loop_receipt, state = _lib_run(
+        monkeypatch, "codex", lambda findings, rnd: calls.append(rnd), "codex", findings=two,
+        makers=["anthropic"])
+    assert calls == []
+    assert state["rounds"]["1"]["synthesisUnseatable"]
+    assert state["rounds"]["1"]["merges"] == []
+    ledger = {RD.session_contract.finding_identity_key(e): e
+              for e in state[RD.session_contract.DISPOSITION_LEDGER_KEY]}
+    assert sorted(ledger) == ["f.py::bug@L1", "f.py::bug@L2"], sorted(ledger)
+    # both reached the fixer and were audited: a finding dropped at the fold would be settled instead
+    assert [ledger[k]["disposition"] for k in sorted(ledger)] == ["fixed", "fixed"], ledger
 
 
 def test_c1_cli_unseatable_synthesis_is_never_offered_and_the_round_continues(tmp_path):
