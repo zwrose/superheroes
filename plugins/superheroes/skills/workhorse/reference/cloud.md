@@ -2,6 +2,7 @@
 
 - [Building in a cloud session](#building-in-a-cloud-session)
   - [When this file applies](#when-this-file-applies)
+  - [A headless session](#a-headless-session)
   - [Intake](#intake)
   - [Workspace](#workspace)
   - [Preflight](#preflight)
@@ -10,6 +11,7 @@
   - [When the advisor asks you to push](#when-the-advisor-asks-you-to-push)
   - [When the advisor asks you to archive your session](#when-the-advisor-asks-you-to-archive-your-session)
   - [Review](#review)
+  - [The cloud container](#the-cloud-container)
   - [Verify: cloud-only failures](#verify-cloud-only-failures)
   - [Handback](#handback)
   - [The gh calls on a cloud build's path](#the-gh-calls-on-a-cloud-builds-path)
@@ -32,6 +34,22 @@ setup placed, and the plugin refuses a calibration write. It has no owner to ask
 answer from the advisor before it can go on, it asks through the builder note (§ Asking the
 advisor). Its other comments report state and ask nothing: a refusal, a park, a lapsed-review
 notice, a review receipt.
+
+## A headless session
+
+The cloud builder runs headless. It starts in auto permission mode with the question dialog off
+(`--disallowedTools AskUserQuestion`), so it never asks a question in a dialog. Every question is a
+builder note on the issue (§ Asking the advisor). With no answer in the reply window it parks with
+its work pushed.
+
+Its launch prompt carries the owner's standing permission sentence from the cloud-launch block of
+`rubric/launch-doctrine.md`. In effect, the builder may push to its own build branch (the one it
+creates at intake, or the branch the launch adopts) and to any layer branch the issue's
+advisor-written order gives this session to build. It never pushes to a branch the order names only
+as a base; never a force-push, never `main`.
+
+A launch with no such sentence: push only to the session's own branch, and ask by builder note
+before any other.
 
 ## Intake
 
@@ -135,7 +153,9 @@ Writes go one per call: one comment, one edit.
    comment text, headed as a builder note for the advisor and ending that the builder is waiting.
 3. Post that text on the build's issue.
 4. Wait in-turn for the advisor-reply window that `rubric/review-discipline.md` § Size sets. Poll the issue's comments (§ GitHub reads) and watch for an
-   incoming message. An answer that arrives either way is the advisor's.
+   incoming message. The advisor answers by message and may post the same answer on the issue as the
+   durable record: act on either copy inside the reply window, the message or the issue comment
+   carrying the advisor's answer.
 5. With no answer in that time, **park**. Commit and push what is done, post a park comment on the
    issue, and end the turn. The comment says what is done and pushed with its head SHA, what is
    blocked, and what the builder needs.
@@ -192,12 +212,45 @@ record as missing. A record that was written and reads `not-reviewed` for any ot
 an owner-authorized go-ahead covering a missing review, is a written record: handback follows
 `skills/review-code/reference/review-record.md`.
 
+After each review round, post that round's raw findings (or a short "no findings" line) as a PR
+comment naming the round and the head it reviewed, before starting the next round. The review
+session's own directory lives only on the container and is lost when the session ends.
+
+When the record writer refuses `review-record-too-large`, shorten the account to the outcome of each
+round, pointing at the per-round findings comments, and write it again. Never split one record
+across several comments, because the reader parses one comment.
+
+## The cloud container
+
+- The setup text installs `bubblewrap` and `socat` (the Claude write sandbox needs both on Linux;
+  without them every claude implementer dispatch fails at start) and the project's pinned
+  interpreter. When any of them is missing, install it with the package manager (or
+  `uv python install`) before the first dispatch and disclose it in the build record.
+- The write sandbox has no network. An implementer order inlines or cites only what is in the
+  worktree.
+- The commit signer is not reachable from inside the write sandbox, so implementers never commit.
+  The builder commits their work from its own shell.
+- The sandbox refuses `-X pycache_prefix`. A cloud gate command drops it and keeps `-B`, because the
+  flag guards a macOS bytecode cache, not this container.
+- The size count, run as `python3 -B <plugin root>/lib/size_count.py count --base <sha> --worktree`,
+  can fail inside the sandbox on stray dotfiles in the home directory
+  (`git-failed: ./.bash_profile`). Run it from the builder's own shell.
+
 ## Verify: cloud-only failures
 
 A test that fails only because of the cloud environment is not a product defect and is never
-silenced. An example is a permission test that cannot fail when the session runs as root.
-Establish the cause, keep the failing command and its output in the build record, and disclose it.
-Claim verification only with green CI on the same PR head.
+silenced. A failure counts as environment-only only when both hold:
+
+1. The same test fails the same way on the base commit in the same container.
+2. Its output shows a named limitation of the container: the session runs as root (a read or write
+   that a mode bit should have stopped succeeds), or the interpreter is not the project's pin.
+
+Anything else that is red on the base too is an unresolved base failure. Report it as that, never
+as environment-only.
+
+Keep the failing command and its output in the build record, and disclose it. Claim verification
+only with green CI on the same PR head. Where the project owns the test, the preferred remedy is a
+test made independent of the user, which is the durable fix.
 
 ## Handback
 
