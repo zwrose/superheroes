@@ -18,7 +18,8 @@ ACCOUNT = "acct-fixture-one"
 OTHER_ACCOUNT = "acct-fixture-two"
 STAMP = "sha256:" + "ab" * 32
 TODAY = datetime.date(2026, 10, 16)
-RENEW = "Run the pass command and paste the new pass into the environment."
+RENEW = ("Run the pass command and paste the new pass into the environment. "
+         "Sign the reviewer in again if the date does not move.")
 UNREADABLE = "Cloud reviewer pass: the setup record could not be read."
 
 
@@ -182,3 +183,25 @@ def test_without_a_today_the_utc_date_is_used(w, monkeypatch):
     _record(w, ACCOUNT, "2026-10-19")
     [got] = CS.gardening_lines(w[0], 7, root=w[1])
     assert got["line"].startswith("Cloud reviewer pass: 3 days left, lapses 19 Oct."), got
+
+
+def test_every_renew_now_line_tells_the_owner_to_sign_the_reviewer_in_again(w):
+    # axis: each Renew now line (lapsed, today, within the next pass, failed reviewer check) carries the sign-in sentence
+    import cloud_check
+    sentence = "Sign the reviewer in again if the date does not move."
+    seen = []
+    for days in (-4, 0, 3):
+        _record(w, ACCOUNT, _lapsing_in(days))
+        [got] = _lines(w)
+        assert got["mark"] == "Renew now", got
+        seen.append(got)
+    _record(w, ACCOUNT, "2026-10-25")
+    marker = cloud_check.failed_check_path(w[0], ACCOUNT, w[1])
+    with open(marker, "w", encoding="utf-8") as fh:
+        json.dump({"schema": "cloud-check-failed/1", "account": ACCOUNT, "failedParts": ["reviewer"]}, fh)
+    [got] = _lines(w)
+    assert got["mark"] == "Renew now", got
+    seen.append(got)
+    assert len(seen) == 4
+    for got in seen:
+        assert sentence in got["line"], got
