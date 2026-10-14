@@ -496,6 +496,17 @@ def test_an_open_pr_head_in_a_differently_cased_repository_spelling_keeps_the_br
     assert BRANCH in _remote_branches(w)
 
 
+def test_receipts_for_two_different_pull_requests_both_survive_in_the_state_file(w):
+    other = PR + 1
+    w.gh.pulls[other] = _pull(head_sha=w.head)
+    _lane(w, "l-1", 101)
+    assert CC.record(w.repo, REPO, PR, "m-1", "delivered", env=w.env, run=w.gh)["ok"]
+    assert CC.record(w.repo, REPO, other, "m-2", "delivered", env=w.env, run=w.gh)["ok"]
+    with open(_state_file(w), encoding="utf-8") as fh:
+        saved = json.load(fh)
+    assert sorted((r["pr"], r["msgId"]) for r in saved) == [(PR, "m-1"), (other, "m-2")]
+
+
 def test_a_receipt_saved_under_a_differently_cased_repository_is_found_by_plan_and_record(w):
     _lane(w, "l-1", 101)
     assert _record(w, "m-1", "delivered")["ok"]
@@ -527,6 +538,21 @@ def test_a_later_lane_that_adopted_the_pr_is_the_one_cleaned_up(w):
     got = _plan(w)
     assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
     assert _record(w, "m-1", "delivered")["request"]["session"] == "session-two"
+
+
+def test_a_successor_whose_premise_carries_only_the_adopted_branch_and_head_is_the_one_cleaned_up(w):
+    _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
+    reserved = _reserved("l-2", BATCH, ["l-2"], w.repo, issue=101, place="cloud", cloudEnvironment="env-fixture-one",
+                         pluginVersion="1.2.3", ts=_T2)
+    reserved["premise"] = dict(reserved.get("premise") or {}, adoptsBranch=BRANCH, adoptsHead=w.head)
+    assert "adopts" not in reserved["premise"]
+    assert ll.reserve(w.repo, reserved, env=w.env)["ok"]
+    started = _started("l-2")
+    started.update(cloudSessionName="session-two", cloudSessionId="session_01AbCdEf123")
+    assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
 
 
 def _adopter(w, launch_id, issue, session, ts):
