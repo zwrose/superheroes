@@ -527,7 +527,7 @@ def _entry_dir_is_live(root, entry_id, *, strict=False):
     In strict mode, an unstatable path or a non-directory raises ``PointerUnreadable``;
     ``FileNotFoundError`` returns False (dangling pointer). In fail-open mode, uses
     ``os.path.isdir`` (stat errors read as not live)."""
-    path = os.path.join(root, "entries", entry_id)
+    path = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
     if not strict:
         return os.path.isdir(path)
     try:
@@ -636,7 +636,7 @@ def resolve_global(cwd, root, _consumer="store_core", heal=True, *, strict=False
         write_pointer(root, rh, entry_id)
         healed = True
 
-    entry_dir = os.path.join(root, "entries", entry_id)
+    entry_dir = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
     if heal and healed:
         write_keys_json(entry_dir, ident)
     return {"entry_id": entry_id, "dir": entry_dir, "healed": healed}

@@ -140,6 +140,25 @@ def test_legacy_store_name_matches_calibration_resolves_path(tmp_path):
     assert cp.is_calibration_path(path) is True
 
 
+def test_live_legacy_entry_resolves_under_the_shared_entries_dirname(tmp_path):
+    # the existing-pointer branch: store_core resolves a LIVE entry, and that dir is the one the
+    # guard classifies (both read calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    legacy_root = tmp_path / "legacy-root"
+    ident = sc.derive_identifiers(str(repo))
+    entry_id = ident["gitdir_hash"]
+    (legacy_root / cp.LEGACY_STORE_ENTRIES_DIRNAME / entry_id).mkdir(parents=True)
+    sc.write_pointer(str(legacy_root), ident["gitdir_hash"], entry_id)
+    g = sc.resolve_global(str(repo), str(legacy_root), heal=False, _consumer="test")
+    assert g is not None and g["dir"] == os.path.join(
+        str(legacy_root), cp.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
+    path = cr._legacy_global_profile_path(str(repo), legacy_root=str(legacy_root))
+    assert path == os.path.join(g["dir"], cp.LEGACY_STORE_PROFILE_FILENAME)
+    assert cp.is_calibration_path(path) is True
+
+
 # ------------------------------------------------------------------ store_core.atomic_write
 
 @pytest.mark.parametrize("rel", [r for i, r, e in _TABLE if e], ids=[i for i, r, e in _TABLE if e])
