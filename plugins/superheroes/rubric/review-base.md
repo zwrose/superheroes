@@ -177,7 +177,8 @@ as one.
 
 ## Severity caps
 
-- **Nits:** at most 5 reported per review; summarize the rest as a count.
+- **Nits:** at most 5 code-quality-only Nits (`consequenceKind: code-quality`) reported per review;
+  summarize the rest as a count. A Nit with a real consequence is never capped.
 - **Critical / Important:** uncapped (load-bearing).
 - **Minor:** uncapped, but each must pass the verification rules; if reporting
   >10, dedupe — they're usually facets of one issue.

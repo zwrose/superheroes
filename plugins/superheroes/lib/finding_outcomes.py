@@ -19,7 +19,6 @@ import canon
 import review_findings_schema
 
 DECISION_KINDS = ("canon", "residual", "sheet-answer")
-_SUPERSEDES_PREFIX = "supersedes: "
 
 
 def has_stated_consequence(finding):
@@ -54,14 +53,6 @@ def merged_consequence(members):
     return ("\n\n".join(texts) if texts else None), kind
 
 
-def _supersedes_target(line):
-    """The id a complete entry line names in its supersedes field, or None."""
-    for field in line.split(canon.SEP)[4:-2]:
-        if field.startswith(_SUPERSEDES_PREFIX):
-            return field[len(_SUPERSEDES_PREFIX):].strip()
-    return None
-
-
 def canon_decides(canon_text, entry_id):
     """True only when canon_text holds exactly one distinct complete entry with this id and no
     complete entry supersedes it; two different entries sharing an id resolve for no reader."""
@@ -73,7 +64,7 @@ def canon_decides(canon_text, entry_id):
             continue
         if canon.ids_in(line) == {entry_id}:
             held.add(line)
-        if _supersedes_target(line) == entry_id:
+        if (canon.entry_fields(line) or {}).get("supersedes") == entry_id:
             return False
     return len(held) == 1
 

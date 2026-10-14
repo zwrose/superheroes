@@ -1578,9 +1578,10 @@ def _seed_collapsed_nits(state, ledger, seen, finding, round_no):
         if not key:
             continue
         held = ledger[seen[key]] if key in seen else None
-        if (isinstance(held, dict) and held.get(review_findings_schema.CONSEQUENCE_KIND_KEY)
-                != review_findings_schema.CODE_QUALITY):
-            continue  # an already-held finding with a real consequence keeps its owner path
+        live = _live_finding_by_key(state, key)
+        if any(isinstance(h, dict) and h.get(review_findings_schema.CONSEQUENCE_KIND_KEY)
+               != review_findings_schema.CODE_QUALITY for h in (held, live)):
+            continue  # an already-held finding (ledger or live) with a real consequence keeps its owner path
         _seed_ledger_entry(state, ledger, seen, member, key, round_no)
         _record_disposition(
             state, key, "craft", round_no,

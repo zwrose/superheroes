@@ -2120,6 +2120,9 @@ def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_pat
     assert ledger[confirmed_key]["disposition"] == "left-for-owner"
     assert ledger[confirmed_key]["followUp"] == follow_up
     assert ledger[plausible_key].get("disposition") == "left-for-owner"
+    assert ledger[confirmed_key].get("outOfScopeReason")
+    assert "outOfScopeReason" not in ledger[plausible_key]
+    assert "followUp" not in ledger[plausible_key]
 
 
 def test_accept_risk_never_dispositions_critical_targets(tmp_path):
