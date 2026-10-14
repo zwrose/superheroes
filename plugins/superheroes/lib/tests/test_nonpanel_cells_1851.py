@@ -350,17 +350,17 @@ def test_every_non_panel_phase_maps_to_a_cell_role():
     assert set(RD._NONPANEL_PHASE_ROLE) == set(RD._NONPANEL_REVIEWER_PHASES)
 
 
-# --- I1: the claude host rule and the legacy rule, read directly ---------------------------------
+# --- I1: the claude host rule, read directly -----------------------------------------------------
 
 def test_cell_proof_rules_read_directly():
     cfg = {"vendors": ["claude", "codex"]}
     # claude is a host seat: proven on every shape, even an unprobed one
     for sm in ({}, _map(source="unprobed"), {"nonPanelLiveCells": "x"}):
         assert RDS.nonpanel_cell_proven(cfg, sm, "claude", "verifier") is True
-    # legacy: live in the config
-    assert RDS.nonpanel_cell_proven(cfg, {}, "codex", "verifier") is True
+    # a key-less or absent map proves no non-claude cell
+    assert RDS.nonpanel_cell_proven(cfg, {}, "codex", "verifier") is False
     assert RDS.nonpanel_cell_proven(cfg, {}, "cursor", "verifier") is False
-    assert RDS.nonpanel_cell_proven(cfg, None, "codex", "reviewer-deep") is True
+    assert RDS.nonpanel_cell_proven(cfg, None, "codex", "reviewer-deep") is False
     # evidence present: only a listed cell
     sm = _map(cells=[VERIFIER_CELL["codex"]], source="synthesized")
     assert RDS.nonpanel_cell_proven(cfg, sm, "codex", "verifier") is True
