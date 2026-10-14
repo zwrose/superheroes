@@ -47,6 +47,7 @@ _FALLBACK_DIMENSION_ENUM = (
     "Grounding",
 )
 _FALLBACK_CONFIDENCE_ENUM = ("High", "Low", None)
+_FALLBACK_CONSEQUENCE_KIND_ENUM = ("code-quality", "real", None)
 _FALLBACK_FINDING_PROPERTY_SCHEMAS = {
     key: {} for key in _FALLBACK_CANONICAL_MEMBER_KEYS
 }
@@ -58,7 +59,7 @@ _FALLBACK_FINDING_PROPERTY_SCHEMAS["tradeoff"] = {"type": ["boolean", "null"]}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["consequence"] = {"type": ["string", "null"]}
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["consequenceKind"] = {
     "type": ["string", "null"],
-    "enum": ["code-quality", "real", None],
+    "enum": list(_FALLBACK_CONSEQUENCE_KIND_ENUM),
 }
 
 SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
