@@ -3,6 +3,7 @@ fetches origin/main, right before it builds the sanitized view. Real git, no net
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -178,3 +179,64 @@ def test_ensure_history_gets_the_callers_short_wait_exactly_with_no_floor(tmp_pa
     clone, shas = make_shallow_clone(tmp_path)
     review(tmp_path, clone, shas[2], clean_review_runner(), max_wait=0)
     assert seen == [0]
+
+
+class _ClockShim:
+    """engine_dispatch's `time` module with a monotonic clock a test can push forward by hand;
+    sleeping does not wait, and every other name is the real `time`'s."""
+
+    def __init__(self):
+        self.offset = 0.0
+
+    def monotonic(self):
+        return time.monotonic() + self.offset
+
+    def sleep(self, _seconds):
+        pass
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def test_history_time_is_charged_to_the_first_wait_slice_only(tmp_path, monkeypatch):
+    # axis: the cloud history time comes off the first supervise slice only; every later slice gets
+    # the full MAX_SYNC_WAIT (FU7) — see bite-proof record c8a_wo2.md
+    import cloud_builder
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    # The sanitized view commits with the ambient git config; a host that signs every commit
+    # (commit.gpgsign=true with no signer reachable) would stop the view before the wait loop.
+    monkeypatch.setattr(engine_dispatch.sanitized_view, "_GIT_IDENTITY",
+                        engine_dispatch.sanitized_view._GIT_IDENTITY + ("-c", "commit.gpgsign=false"))
+    shim = _ClockShim()
+    monkeypatch.setattr(engine_dispatch, "time", shim)
+    real_ensure_history = cloud_builder.ensure_history
+
+    def slow_ensure_history(repo_root, **kw):
+        result = real_ensure_history(repo_root, **kw)   # the view still builds
+        shim.offset += 100.0                             # and history took about 100 s
+        return result
+
+    monkeypatch.setattr(cloud_builder, "ensure_history", slow_ensure_history)
+    slices = []
+
+    def fake_supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
+        slices.append(deadline - shim.monotonic())
+        terminal = len(slices) >= 3
+        return engine_dispatch._with_run_fields(
+            {"ok": terminal, "terminal": terminal,
+             "reason": None if terminal else engine_dispatch.dispatch_outcome.REASON_RUNNING,
+             "detail": "captured", "attempts": 1, "forfeited": False},
+            run_dir=run_dir_real, argv=[],
+        )
+
+    monkeypatch.setattr(engine_dispatch, "_supervise", fake_supervise)
+    monkeypatch.setattr(engine_dispatch, "SUPERVISOR_POLL_INTERVAL", 0.01)
+    clone, shas = make_shallow_clone(tmp_path)
+    res = review(tmp_path, clone, shas[0], clean_review_runner(), max_wait=None)
+    assert res["terminal"] is True, res
+    assert res["cloudHistory"]["ok"] is True
+    assert len(slices) == 3
+    full = engine_dispatch.MAX_SYNC_WAIT
+    assert abs(slices[0] - (full - 100)) < 5, slices
+    assert abs(slices[1] - full) < 5, slices
+    assert abs(slices[2] - full) < 5, slices

@@ -18,6 +18,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import calibration_paths  # noqa: E402  (sibling; the in-repo calibration directory's one home)
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
@@ -464,7 +465,7 @@ def relocate_file(src, dst):
 
 def in_repo_core_rel_path():
     """Relative path from repository root to in-repo ``core.md`` — layout home for drift guards."""
-    return os.path.join(".claude", "superheroes", CORE_FILENAME)
+    return os.path.join(calibration_paths.IN_REPO_DIR, CORE_FILENAME)
 
 
 def _core_candidates(cwd, root=None):
