@@ -382,6 +382,9 @@ def _merge_live_cells_source(sources: list) -> object:
     best_rank = -1
     worst_value = None
     for source in sources:
+        if not isinstance(source, str):
+            # a malformed (unhashable / non-string) source proves nothing: least trusted, unprobed
+            source = liveness_cache.LIVE_CELLS_SOURCE_UNPROBED
         rank = _LIVE_CELLS_SOURCE_TRUST.get(source, _UNRECOGNIZED_LIVE_CELLS_SOURCE_TRUST)
         if rank < best_rank or best_rank < 0:
             best_rank = rank

@@ -349,6 +349,15 @@ def test_projection_merges_the_nonpanel_source_to_the_least_trusted():
     assert SMR.emit_receipt_seat_map(_state(probed, synthesized))["nonPanelLiveCellsSource"] == "synthesized"
 
 
+@pytest.mark.parametrize("bad", [["probed"], {"a": 1}, 7, None])
+def test_projection_malformed_nonpanel_source_merges_to_unprobed(bad):
+    probed = _seat_map(nonPanelLiveCellsSource="probed", nonPanelLiveCells=[CODEX_VERIFIER_TRIPLE])
+    malformed = _seat_map(nonPanelLiveCellsSource=bad, nonPanelLiveCells=[])
+
+    assert SMR.emit_receipt_seat_map(_state(malformed))["nonPanelLiveCellsSource"] == "unprobed"
+    assert SMR.emit_receipt_seat_map(_state(probed, malformed))["nonPanelLiveCellsSource"] == "unprobed"
+
+
 def test_projection_unions_the_nonpanel_cells():
     first = _seat_map(nonPanelLiveCellsSource="probed", nonPanelLiveCells=[CODEX_VERIFIER_TRIPLE])
     second = _seat_map(nonPanelLiveCellsSource="probed", nonPanelLiveCells=[CURSOR_VERIFIER_TRIPLE])
