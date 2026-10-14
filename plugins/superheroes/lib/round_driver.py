@@ -4535,11 +4535,12 @@ def _lift_into_fix_batch(state, rows):
     return list(rows) + lifted
 
 
-def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
+def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0, lift=True):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
 
     The round's first batch (``reset_accumulator`` with ``batch_index`` 0) also takes the lifted
-    findings (``_lift_into_fix_batch``) after the blocking rows, under the same cap and slicing.
+    findings (``_lift_into_fix_batch``) after the blocking rows, under the same cap and slicing —
+    unless ``lift`` is False (stall recovery keeps its composed set exactly).
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
     setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
@@ -4569,7 +4570,7 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "fix batch emptied by discharged-finding exclusion — "
                       "remaining queue exhausted, the round proceeds to post-fix")
         return "excluded"
-    if reset_accumulator and batch_index == 0 and filtered:
+    if lift and reset_accumulator and batch_index == 0 and filtered:
         filtered = _lift_into_fix_batch(state, filtered)
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
@@ -6039,7 +6040,7 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     if batch:
         if _route_judgment_blockers(state, batch):
             return
-        _queue_fix_batch(state, config, batch)
+        _queue_fix_batch(state, config, batch, lift=False)
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
         _park_cannot_certify(
             state,
@@ -6172,7 +6173,7 @@ def _fold_stall(state, config, artifact):
             state["step"] = P_TERMINAL
             return
         state["_oneMoreRoundUsed"] = True
-        _queue_fix_batch(state, config, [dict(t) for t in targets])
+        _queue_fix_batch(state, config, [dict(t) for t in targets], lift=False)
         return
     else:
         # an ineligible accept-the-risk or an unknown choice fails closed to a park.

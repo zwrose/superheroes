@@ -834,3 +834,24 @@ def test_a_ruled_out_blocker_does_not_pull_a_choice_to_the_owner(tmp_path, keep_
          "reason": "later", "followUp": _follow_up()}]))["ok"]
     state = _state(session_dir)
     assert RD._lifted_judgment_rows(state, RD._blocking(state["findings"])) == []
+
+
+def test_stall_recovery_batch_takes_no_lifted_rows_and_merged_members_never_lift(tmp_path, keep_severity):
+    """axis: the stall-recovery batch is exactly its composed set; a synthesis-merged member is
+    never lifted as an independent fix."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-stall-nolift")
+    state = _state(session_dir)
+    assert any(f.get("consequenceKind") == "real" for f in state["findings"])
+    state["pending"] = None
+    state["rounds"]["1"].pop("liftedIntoFixBatch", None)
+    stalled = {"id": "stalled", "severity": "Important", "file": "a.py", "line": 1,
+               "title": "stalled target", "body": "b"}
+    assert RD._queue_fix_batch(state, state["config"], [dict(stalled)], lift=False) == "queued"
+    assert [r.get("id") for r in state["_fixBatch"]] == ["stalled"]
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+    real = {"consequenceKind": "real"}
+    assert RD._lift_marker_for(real, {}, None) == "real-consequence"
+    merged = {"consequenceKind": "real", session_contract.MERGED_INTO_FIELD: "rep"}
+    assert RD._lift_marker_for(merged, {}, {"ruling": "guidance"}) is None
+    assert RD._lift_marker_for(real, {session_contract.MERGED_INTO_FIELD: "rep"},
+                               {"ruling": "guidance"}) is None
