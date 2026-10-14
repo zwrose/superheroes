@@ -426,6 +426,17 @@ def test_t8_a_summary_row_without_members_is_ignored(sources_calls):
     assert all("disposition" not in r for r in ledger.values() if r.get("summaryEntry"))
 
 
+def test_t8_a_collapsed_duplicate_never_downgrades_a_held_real_consequence_nit():
+    real = _finding("Dup", 1, "Nit", "real")
+    members = [_finding("Quality %d" % i, i + 2, "Nit") for i in range(5)] + [_finding("Dup", 1, "Nit")]
+    summary = {"summaryEntry": True, "members": members, "file": None, "line": None}
+    state = RD.new_state(TRD._cfg())
+    RD._stage_findings(state, [real])
+    RD._stage_findings(state, [summary])
+    RD._set_terminal(state, "converged")
+    assert _ledger(state)["f.py::dup@L1"]["disposition"] == "left-for-owner"
+
+
 # --- T9: findings at the same place and title are merged and the merge is recorded ------------
 
 def test_t9_same_place_duplicates_merge_and_record_the_merge():
@@ -445,6 +456,8 @@ def test_t9_same_place_duplicates_merge_and_record_the_merge():
     None, "canon", ["canon", "x"], {}, {"kind": "canon"}, {"kind": "canon", "ref": "  "},
     {"kind": "canon", "ref": 5}, {"kind": "residual", "ref": ""}, {"kind": "other", "ref": "x"},
     {"kind": "canon", "ref": "x", "extra": 1}, {"kind": "sheet-answer", "ref": "card-1"},
+    {"kind": "sheet-answer", "ref": None}, {"kind": "sheet-answer", "ref": 5},
+    {"kind": "sheet-answer", "ref": True},
     {"kind": "sheet-answer", "ref": {"pr": "7", "card": "c1"}},
     {"kind": "sheet-answer", "ref": {"pr": True, "card": "c1"}},
     {"kind": "sheet-answer", "ref": {"pr": 7, "card": " "}},
