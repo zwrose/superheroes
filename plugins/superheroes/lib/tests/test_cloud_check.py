@@ -1537,7 +1537,10 @@ def test_start_spawns_in_the_repository_root_with_a_copy_of_the_environment(tmp_
     _start(local, spawner, env=env, timeout=7)
     call = spawner.calls[0]
     assert os.path.realpath(call["cwd"]) == os.path.realpath(local.cwd)
-    assert call["env"] == env and call["env"] is not env and call["timeout"] == 7
+    import launcher
+    expected = dict(env)
+    launcher.pin_effort(expected, model_registry.resolve_dispatch("mechanical", "claude", None)["effort"])
+    assert call["env"] == expected and call["env"] is not env and call["timeout"] == 7
     assert os.path.isdir(os.path.dirname(call["log_path"]))
     spawner2 = Spawner()
     CC.start(sub, environment=ENV_ID, env=env, spawn_fn=spawner2, nonce=NONCE)
