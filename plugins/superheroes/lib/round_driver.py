@@ -4693,6 +4693,25 @@ def _reconcile_queue_after_emitted_rulings(state, extra_rows=None):
     return "queue-reconciled"
 
 
+def _close_lifted_only_judgment_gate(state, config):
+    """A pending owner-judgment gate whose every blocking row (the blocking tradeoffs and the carried
+    mechanical blockers) has since been ruled out holds only lifted non-blocking choices: with no
+    eligible blocker to lift beside, it closes and the round settles as an exclusion-emptied batch."""
+    if state.get("step") != P_JUDGMENT or state.get("terminal"):
+        return
+    rows = [f for f in (state.get("_judgmentFindings") or []) + (state.get("_judgmentMechanical") or [])
+            if isinstance(f, dict) and circuit_breaker.is_blocking(f.get("severity"))]
+    if not rows:
+        return
+    remaining, fault = _filter_excluded_discharged_fixes(state, rows)
+    if fault is not None or remaining:
+        return
+    state.pop("_judgmentFindings", None)
+    state.pop("_judgmentMechanical", None)
+    state["pending"] = None
+    _queue_fix_batch(state, config, rows)
+
+
 def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None,
                                          emitted=False):
     """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling.
@@ -4700,6 +4719,9 @@ def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session
     ``emitted`` is True while the pending fixer attempt has emitted its orders: that slice is never
     reshaped — the ``extra_rows`` join the later slices of the round (``_fixQueue``), which are
     reconciled."""
+    if state.get("step") == P_JUDGMENT:
+        _close_lifted_only_judgment_gate(state, config)
+        return None
     if state.get("step") != P_FIXER:
         return None
     if emitted:

@@ -872,3 +872,22 @@ def test_stall_recovery_batch_keeps_no_lift_through_the_owner_judgment_gate(monk
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": fid, "disposition": "fix"}]})
     assert seen and set(seen) == {False}
+
+
+def test_ruling_the_only_blocker_out_clears_a_lifted_only_judgment_gate(tmp_path, keep_severity):
+    """axis: the judgment gate holds one mechanical blocker plus a lifted Minor choice; ruling the
+    blocker out of scope leaves no eligible blocker, so the gate closes and the loop converges
+    instead of still asking the owner about the Minor."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-oos")
+    state = _state(session_dir)
+    key = _finding_key_by_title(state, "blocker B")
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
+        {"id": key, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()}]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") == "converged", after.get("step")
+    assert not after.get("_judgmentFindings") and not after.get("_judgmentMechanical")
+    assert not after.get("pending")
