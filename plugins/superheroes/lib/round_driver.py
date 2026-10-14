@@ -986,7 +986,7 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None):
     for f in findings:
         if not isinstance(f, dict):
             continue
-        if f.get("file") is None or f.get("line") is None:
+        if not isinstance(f.get("file"), str) or f.get("line") is None:
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
@@ -3272,6 +3272,19 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     state["step"] = P_SYNTHESIS
 
 
+def _sync_merged_consequences(state, kept):
+    """Carry a synthesized representative's merged consequence onto its ledger row, so a later
+    re-seed or restage from the ledger cannot lose a member's real consequence."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    for finding in kept:
+        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        if key in seen:
+            for field in ("consequence", "consequenceKind"):
+                if field in finding:
+                    ledger[seen[key]][field] = finding[field]
+
+
 def _fold_synthesis(state, config, artifact):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
@@ -3324,6 +3337,7 @@ def _fold_synthesis(state, config, artifact):
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
+    _sync_merged_consequences(state, kept)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
     # a delta settle — the delta round has its own scoped scan + audit breaker.)
     plan = delta_surface.shard_plan(state.get("reviewedDiff") or "")
