@@ -282,12 +282,12 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
         if reason:
             return _refusal(reason), None
     lanes = [(lid, lane) for lid, lane, _ in found if lane]
-    if not lanes and not launch_id:
+    if len(lanes) != 1 and not launch_id:
         # axis: a cloud builder that adopted a PR built elsewhere postdates it, so adopters are searched before refusing — see bite-proof record c8_cloud_cleanup
         lid, lane, reason = _adopting_successor(repo_root, None, {}, issues, pr, _name(pull.get("head"), "ref"), closed, env)
         if reason:
             return _refusal(reason), None
-        lanes = [(lid, lane)] if lane else []
+        lanes = [(lid, lane)] if lane else lanes
     if not lanes:
         return _refusal("no-cloud-lane"), None
     if len(lanes) > 1:
@@ -362,8 +362,10 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
     # axis: a pending write over a delivered receipt grants no reservation, so a caller holding a stale plan sends nothing
     if old is not None and old["outcome"] == "delivered" and outcome == "pending":
         return _refusal("request-delivered")
-    if old is not None and old["outcome"] == "delivered":
-        return {"ok": True, "already": True, "request": old, "ownerMessage": texts[old["closure"]] % number}
+    # axis: a settlement never downgrades a definite outcome, so a stale uncertain (or any later settle) leaves a failed receipt as it is
+    if old is not None and old["outcome"] in ("delivered", "failed") and outcome != "pending":
+        return {"ok": True, "already": True, "request": old,
+                "ownerMessage": texts[old["closure"]] % number if old["outcome"] == "delivered" else None}
     # axis: a pending write is an exclusive send reservation, refused whatever its message id when a request is already pending or uncertain
     if old is not None and outcome == "pending" and old["outcome"] in ("pending", "uncertain"):
         return _refusal("request-in-progress" if old["outcome"] == "pending" else "request-uncertain")

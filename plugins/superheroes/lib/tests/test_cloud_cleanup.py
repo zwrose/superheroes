@@ -678,6 +678,16 @@ def test_a_cloud_builder_that_adopted_a_locally_built_pr_is_cleaned_up_with_no_o
     assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
 
 
+def test_an_explicit_adopter_resolves_two_linked_issue_lanes_and_none_stays_ambiguous(w):
+    _lane(w, "l-1", 101, session="session-a", outcome="park", ts=_T1)
+    _lane(w, "l-3", 202, session="session-b", outcome="park", ts=_T1)
+    w.gh.pulls[PR] = _pull(issues=(101, 202), head_sha=w.head, created_at=_OPENED)
+    assert _plan(w) == {"ok": False, "reason": "lane-ambiguous"}
+    _adopter(w, "l-2", 101, "session-two", _T2)
+    got = _plan(w)
+    assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
+
+
 def test_a_reservation_that_never_started_a_session_never_wins_the_adoption(w):
     _lane(w, "l-1", 101, session="session-one", outcome="park", ts=_T1)
     w.gh.pulls[PR] = _pull(head_sha=w.head, created_at=_OPENED)
@@ -737,6 +747,16 @@ def test_a_pending_write_after_another_caller_delivered_is_refused_and_leaves_th
     assert _record(w, "m-2", "pending") == {"ok": False, "reason": "request-delivered"}
     with open(_state_file(w), encoding="utf-8") as fh:
         assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "delivered")]
+
+
+def test_a_stale_uncertain_settlement_never_downgrades_a_failed_receipt(w):
+    _lane(w, "l-1", 101)
+    assert _record(w, "m-1", "pending")["ok"] and _record(w, "m-1", "failed")["ok"]
+    got = _record(w, "m-1", "uncertain")
+    assert got["ok"] and got["already"] and got["ownerMessage"] is None and got["request"]["outcome"] == "failed"
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "failed")]
+    assert _record(w, "m-2", "pending")["ok"]
 
 
 def test_a_final_outcome_for_the_pending_message_id_replaces_the_reservation(w):
