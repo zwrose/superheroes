@@ -26,9 +26,9 @@ again right before the delete and the delete is skipped if it moved. The REST de
 condition, so a push that lands between that last read and the delete is not caught; that window is accepted,
 because the pull request is already merged or closed and its builder is finished.
 The delete's own result is never trusted: the branch step reports what a re-read of the branch shows. After
-the delete the branch is read again; absent is deleted, still at the PR's head is deleted once more (one retry,
-never more) and then refused as `delete-unconfirmed`, any other sha is `branch-moved`, and a branch that cannot
-be read is `delete-outcome-unknown`.
+the one delete the branch is read again; absent is deleted, still at the PR's head is refused as
+`delete-unconfirmed`, any other sha is `branch-moved`, and a branch that cannot be read is `delete-outcome-unknown`.
+The advisor running the step again starts from the top, so every pre-delete check runs again.
 """
 import argparse
 import datetime
@@ -53,7 +53,7 @@ OWNER_MESSAGE_MERGED = ("#%d is merged. I've asked its cloud builder to archive 
                         "You'll get one prompt for it: tap Allow once.")
 OWNER_MESSAGE_CLOSED = ("#%d is closed. I've asked its cloud builder to archive itself. "
                         "You'll get one prompt for it: tap Allow once.")
-_RECEIPT_KEYS = ("repo", "pr", "session", "msgId", "outcome", "at", "closedAt")
+_RECEIPT_KEYS = ("repo", "pr", "session", "msgId", "outcome", "at", "closedAt", "closure")
 _LOCK_WAIT_SECONDS = 30
 _GH_TIMEOUT = 60
 _SHA_RE = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
@@ -104,7 +104,7 @@ def _load(repo_root, env):
             isinstance(r, dict) and set(r) == set(_RECEIPT_KEYS)
             and isinstance(r["repo"], str) and isinstance(r["pr"], int) and isinstance(r["session"], str)
             and isinstance(r["msgId"], str) and r["outcome"] in OUTCOMES and isinstance(r["at"], str)
-            and isinstance(r["closedAt"], str)
+            and isinstance(r["closedAt"], str) and r["closure"] in ("merged", "closed")
             for r in receipts)):
         return _refusal("cleanup-state-unreadable"), None
     return path, receipts
@@ -339,45 +339,46 @@ def record(repo_root, repo, pr, msg_id, outcome, *, launch_id=None, env=None, ru
         return _refusal("msg-id-invalid")
     if outcome not in OUTCOMES:
         return _refusal("outcome-invalid")
-    got = plan(repo_root, repo, number, launch_id=launch_id, env=env, run=run)
-    if not got["ok"]:
-        return got
-    if got["action"] == "none":
-        return _refusal("pr-open")
+    if outcome == "pending":
+        got = plan(repo_root, repo, number, launch_id=launch_id, env=env, run=run)
+        if not got["ok"]:
+            return got
+        if got["action"] == "none":
+            return _refusal("pr-open")
     path, receipts = _load(repo_root, env)
     if receipts is None:
         return path
     texts = {"merged": OWNER_MESSAGE_MERGED, "closed": OWNER_MESSAGE_CLOSED}
-    # axis: a final outcome settles the receipt that reserved its msg id, whatever the PR's closure is now — a
-    # reopen and a second close must not carry an earlier closure's outcome onto the new one
+    # axis: a final outcome settles the receipt that reserved its msg id from the receipt alone, with no GitHub read, so an outage
+    # cannot strand a reserved send; a pending write needs the fresh closed-PR read and the lane binding
     if outcome == "pending":
         old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"], got["closedAt"])), None)
+        base = {"session": got["session"], "closedAt": got["closedAt"], "closure": got["outcome"]}
     else:
-        old = next((r for r in receipts if _same_receipt(r, repo, number, got["session"]) and r["msgId"] == msg_id), None)
+        old = next((r for r in receipts if r["repo"].lower() == repo.lower() and r["pr"] == number and r["msgId"] == msg_id), None)
         if old is None:
             return _refusal("request-unknown")
+        base = old
     # axis: a pending write over a delivered receipt grants no reservation, so a caller holding a stale plan sends nothing
     if old is not None and old["outcome"] == "delivered" and outcome == "pending":
         return _refusal("request-delivered")
     if old is not None and old["outcome"] == "delivered":
-        return {"ok": True, "already": True, "request": old, "ownerMessage": texts[got["outcome"]] % number}
+        return {"ok": True, "already": True, "request": old, "ownerMessage": texts[old["closure"]] % number}
     # axis: a pending write is an exclusive send reservation, refused whatever its message id when a request is already pending or uncertain
     if old is not None and outcome == "pending" and old["outcome"] in ("pending", "uncertain"):
         return _refusal("request-in-progress" if old["outcome"] == "pending" else "request-uncertain")
-    if old is not None and old["outcome"] in ("pending", "uncertain") and old["msgId"] != msg_id:
-        return _refusal("request-uncertain")
-    receipt = {"repo": repo, "pr": number, "session": got["session"], "msgId": msg_id, "outcome": outcome,
+    receipt = {"repo": repo, "pr": number, "session": base["session"], "msgId": msg_id, "outcome": outcome,
                "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-               "closedAt": got["closedAt"] if old is None else old["closedAt"]}
+               "closedAt": base["closedAt"], "closure": base["closure"]}
     if old is None:
         # a receipt of an earlier closure of this PR is superseded by the one for this closure
-        receipts[:] = [r for r in receipts if not _same_receipt(r, repo, number, got["session"])] + [receipt]
+        receipts[:] = [r for r in receipts if not _same_receipt(r, repo, number, base["session"])] + [receipt]
     else:
         receipts[:] = [receipt if r is old else r for r in receipts]
     if not _save(path, receipts):
         return _refusal("cleanup-state-unwritable")
     # axis: the owner is told the builder was asked only once the request is confirmed delivered — see bite-proof record c8_cloud_cleanup
-    owner = texts[got["outcome"]] % number if receipt["outcome"] == "delivered" else None
+    owner = texts[receipt["closure"]] % number if receipt["outcome"] == "delivered" else None
     return {"ok": True, "request": receipt, "ownerMessage": owner}
 
 
@@ -452,26 +453,24 @@ def branch(repo_root, repo, pr, *, launch_id=None, env=None, run=None):
         # The sha was read just above and is compared with the PR's head; the REST delete has no expected-sha
         # condition, so a push landing between that read and the delete is not caught (accepted: the PR is
         # already merged or closed and its builder is finished).
-        # The delete's own result is never trusted: its exit code, output and errors decide nothing. The branch
-        # step reports what a re-read of the branch shows. A ref still at the PR's head is deleted once more
-        # (one retry, never more); any other sha is a moved branch; an unreadable ref is an unknown outcome.
+        # The delete's own result is never trusted: its exit code, output and errors decide nothing. One DELETE is
+        # issued; the branch step reports what a re-read shows. A ref still at the PR's head is refused as
+        # unconfirmed, any other sha is a moved branch, an unreadable ref is an unknown outcome. The advisor running
+        # the step again starts from the top, so every pre-delete check runs again.
         target = "repos/%s/git/refs/heads/%s" % (repo, urllib.parse.quote(name, safe="/"))
-        detail = ""
-        for _try in (1, 2):
-            _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)
-            detail = next((ln for ln in (err or out).splitlines() if ln.strip()), "")
-            # axis: only a 404 read-back after the delete is absent; the delete's own result says nothing — see bite-proof record c8_cloud_cleanup
-            after, why, absent = _ref_sha(repo, name, env, run)
-            if absent:
-                deleted, already = True, None
-                break
-            # axis: a branch that is unreadable after the delete is an unknown outcome, never a success — see bite-proof record c8_cloud_cleanup
-            if why:
-                return _refusal("delete-outcome-unknown",
-                                detail="the branch could not be read after the delete, so whether it was deleted is unknown")
-            # axis: a branch that moved during the delete is never reported deleted — see bite-proof record c8_cloud_cleanup
-            if after != head_sha:
-                return _refusal("branch-moved")
+        _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)
+        detail = next((ln for ln in (err or out).splitlines() if ln.strip()), "")
+        # axis: only a 404 read-back after the delete is absent; the delete's own result says nothing — see bite-proof record c8_cloud_cleanup
+        after, why, absent = _ref_sha(repo, name, env, run)
+        if absent:
+            deleted, already = True, None
+        # axis: a branch that is unreadable after the delete is an unknown outcome, never a success — see bite-proof record c8_cloud_cleanup
+        elif why:
+            return _refusal("delete-outcome-unknown",
+                            detail="the branch could not be read after the delete, so whether it was deleted is unknown")
+        # axis: a branch that moved during the delete is never reported deleted — see bite-proof record c8_cloud_cleanup
+        elif after != head_sha:
+            return _refusal("branch-moved")
         else:
             return _refusal("delete-unconfirmed", detail=detail)
     names = _listing(repo, env, run)

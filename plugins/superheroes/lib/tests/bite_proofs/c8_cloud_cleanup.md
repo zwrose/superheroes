@@ -115,7 +115,7 @@ Axis: the branch step reports what a re-read shows, never what the DELETE return
 - Restore: the inverse edit; `cloud_cleanup.py:426` reads `            _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)` and line 427 is the `detail =` line.
 - Green: `1 passed, 58 deselected in 1.50s`.
 
-## 7. The single retry
+## 7. The single retry (superseded by entry 13: the retry was removed by the advisor's ruling)
 
 Axis: a DELETE that left the ref at the PR's head is issued once more, so a lost first DELETE still deletes.
 
@@ -176,3 +176,13 @@ Axis: the cleanup heading and its distinctive step (`cloud_cleanup.py plan --rep
 - Red: last lines: `AssertionError: [('skills/showrunner/reference/merge-train.md', 'heading'), ('skills/showrunner/reference/merge-train.md', 'procedure step')]`, `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup_doctrine.py::test_cleanup_procedure_has_one_home_and_the_others_point_to_it` and `1 failed, 8 deselected in 0.18s`. It shows the scan finds both needles in a document it does not exclude; it does not show that a copy elsewhere would be caught.
 - Restore: the inverse edit; `test_cloud_cleanup_doctrine.py:124` reads `        if rel != _MERGE_TRAIN`.
 - Green: `1 passed, 8 deselected in 0.17s`.
+
+## 13. One DELETE, never a second
+
+Axis: the branch step issues exactly one DELETE and refuses `delete-unconfirmed` when the re-read still shows the PR's head. Supersedes entry 7.
+
+- Neutralization (`branch`): the DELETE and its re-read were wrapped in `for _try in (1, 2):` with `if absent: break` after the re-read (a second DELETE is reintroduced).
+- Node: `T1 -k test_a_timed_out_delete_is_never_followed_by_a_second_delete_in_the_same_run`.
+- Red: last lines: `FAILED plugins/superheroes/lib/tests/test_cloud_cleanup.py::test_a_timed_out_delete_is_never_followed_by_a_second_delete_in_the_same_run` and `1 failed in 8.57s`; `{'ok': True} != {'ok': False}` (the second DELETE removed the branch).
+- Restore: the inverse edit; the DELETE call and re-read stand at the `branch` body's indent, with no loop, and `cloud_cleanup.py:460` reads `        _, out, err = _gh(run, ["api", "-X", "DELETE", target], env)`.
+- Green: `1 passed` (the same node, after the restore).

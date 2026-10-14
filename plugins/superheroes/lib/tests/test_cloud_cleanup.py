@@ -167,7 +167,8 @@ def test_an_open_pr_after_a_handback_or_a_park_gets_no_message_no_deletion_and_n
     none = {"ok": True, "action": "none", "reason": "pr-open"}
     assert _plan(w) == none
     assert _branch(w) == none
-    assert _record(w, "m-1", "delivered") == {"ok": False, "reason": "pr-open"}
+    assert _record(w, "m-1", "pending") == {"ok": False, "reason": "pr-open"}
+    assert _record(w, "m-1", "delivered") == {"ok": False, "reason": "request-unknown"}
     assert _remote_branches(w) == ["feature", "main"]
     assert not os.path.exists(_state_file(w))
     assert {c[-1] for c in w.gh.calls} == {"repos/%s/pulls/%d" % (REPO, PR)}
@@ -202,20 +203,20 @@ def test_the_delete_takes_its_host_from_gh_not_from_a_built_url(w):
     assert w.gh.delete_envs[0]["GH_HOST"] == "ghe.example.com"
 
 
-def test_a_delete_that_fails_and_leaves_the_branch_is_retried_once_then_refused_with_the_first_line(w):
+def test_a_delete_that_fails_and_leaves_the_branch_is_issued_once_and_refused_with_the_first_line(w):
     _lane(w, "l-1", 101)
     w.gh.delete_result = SimpleNamespace(returncode=1, stdout="", stderr="\ngh: Resource not accessible (HTTP 403)\nmore")
     assert _branch(w) == {"ok": False, "reason": "delete-unconfirmed", "detail": "gh: Resource not accessible (HTTP 403)"}
-    assert len(w.gh.deletes) == 2 and BRANCH in _remote_branches(w)
+    assert len(w.gh.deletes) == 1 and BRANCH in _remote_branches(w)
 
 
-def test_a_422_or_404_delete_with_the_branch_still_present_is_retried_once_then_refused(w):
+def test_a_422_or_404_delete_with_the_branch_still_present_is_issued_once_and_refused(w):
     _lane(w, "l-1", 101)
     for status in ("404", "422"):
         w.gh.deletes.clear()
         w.gh.delete_result = SimpleNamespace(returncode=1, stdout="", stderr="gh: x (HTTP %s)" % status)
         assert _branch(w) == {"ok": False, "reason": "delete-unconfirmed", "detail": "gh: x (HTTP %s)" % status}
-        assert len(w.gh.deletes) == 2 and BRANCH in _remote_branches(w)
+        assert len(w.gh.deletes) == 1 and BRANCH in _remote_branches(w)
 
 
 def test_a_failing_delete_exit_code_does_not_matter_when_the_read_back_shows_the_branch_gone(w):
@@ -230,7 +231,7 @@ def test_a_failing_delete_exit_code_does_not_matter_when_the_read_back_shows_the
         assert len(w.gh.deletes) == 1
 
 
-def test_a_delete_that_could_not_run_and_left_the_branch_is_retried_once_then_refused(w):
+def test_a_delete_that_could_not_run_and_left_the_branch_is_issued_once_and_refused(w):
     _lane(w, "l-1", 101)
 
     class Boom(Gh):
@@ -243,7 +244,7 @@ def test_a_delete_that_could_not_run_and_left_the_branch_is_retried_once_then_re
     boom.__dict__.update(w.gh.__dict__)
     got = CC.branch(w.repo, REPO, PR, env=w.env, run=boom)
     assert got == {"ok": False, "reason": "delete-unconfirmed", "detail": ""}
-    assert len(boom.deletes) == 2 and BRANCH in boom.branches
+    assert len(boom.deletes) == 1 and BRANCH in boom.branches
 
 
 def test_a_timed_out_delete_whose_ref_is_gone_reads_deleted(w):
@@ -254,19 +255,18 @@ def test_a_timed_out_delete_whose_ref_is_gone_reads_deleted(w):
     assert len(w.gh.deletes) == 1 and _remote_branches(w) == ["main"]
 
 
-def test_a_timed_out_delete_whose_ref_is_still_at_the_head_is_retried_once_and_re_read(w):
+def test_a_timed_out_delete_whose_ref_is_still_at_the_head_is_refused_as_unconfirmed_after_one_delete(w):
     _lane(w, "l-1", 101)
-    w.gh.delete_script = [(False, True), (True, False)]
-    assert _branch(w) == {"ok": True, "action": "cleanup", "branch": BRANCH, "deleted": True, "already": None,
-                          "listing": ["main"]}
-    assert len(w.gh.deletes) == 2 and _remote_branches(w) == ["main"]
-
-
-def test_two_timed_out_deletes_that_both_leave_the_branch_at_the_head_are_refused_after_exactly_two_deletes(w):
-    _lane(w, "l-1", 101)
-    w.gh.delete_script = [(False, True), (False, True), (True, False)]
+    w.gh.delete_script = [(False, True)]
     assert _branch(w) == {"ok": False, "reason": "delete-unconfirmed", "detail": ""}
-    assert len(w.gh.deletes) == 2 and BRANCH in _remote_branches(w)
+    assert len(w.gh.deletes) == 1 and BRANCH in _remote_branches(w)
+
+
+def test_a_timed_out_delete_is_never_followed_by_a_second_delete_in_the_same_run(w):
+    _lane(w, "l-1", 101)
+    w.gh.delete_script = [(False, True), (True, False)]  # a second DELETE would remove the branch
+    assert _branch(w) == {"ok": False, "reason": "delete-unconfirmed", "detail": ""}
+    assert len(w.gh.deletes) == 1 and BRANCH in _remote_branches(w)
 
 
 def test_a_ref_that_reads_another_sha_after_the_delete_is_refused_as_moved(w):
@@ -389,7 +389,7 @@ def test_a_delete_the_read_back_does_not_confirm_is_refused(w):
     w.gh.ref_override[BRANCH] = w.head  # the read keeps reporting the branch after the delete
     out = _branch(w)
     assert out["ok"] is False and out["reason"] == "delete-unconfirmed"
-    assert len(w.gh.deletes) == 2
+    assert len(w.gh.deletes) == 1
 
 
 # ---------------------------------------------------------------- binding the PR to its lane
@@ -572,7 +572,7 @@ def test_record_and_branch_keep_the_explicit_launch_selection(w):
     w.gh.pulls[PR] = _pull(issues=(101, 202), head_sha=w.head)
     _lane(w, "l-1", 101, session="session-a")
     _lane(w, "l-2", 202, session="session-b")
-    assert _record(w, "m-1", "delivered") == {"ok": False, "reason": "lane-ambiguous"}
+    assert _record(w, "m-1", "pending") == {"ok": False, "reason": "lane-ambiguous"}
     got = _sent(w, "m-1", "delivered", launch_id="l-2")
     assert got["ok"] and got["request"]["session"] == "session-b"
     out = CC.branch(w.repo, REPO, PR, launch_id="l-2", env=w.env, run=w.gh)
@@ -916,3 +916,29 @@ def test_an_adopter_on_another_linked_issue_than_the_bound_lane_is_the_one_clean
     _adopter(w, "l-2", 202, "session-two", _T2)
     got = _plan(w)
     assert got["ok"] and got["launchId"] == "l-2" and got["session"] == "session-two"
+
+
+def _all_reads_fail(w):
+    w.gh.__class__ = type("Down", (Gh,), {"__call__": lambda self, argv, **kw: SimpleNamespace(
+        returncode=1, stdout="", stderr="gh: Server Error (HTTP 500)")})
+
+
+def test_a_final_outcome_settles_a_saved_pending_receipt_while_every_github_read_fails_and_a_retry_is_then_possible(w):
+    _lane(w, "l-1", 101)
+    assert _record(w, "m-1", "pending")["ok"]
+    _all_reads_fail(w)
+    assert _record(w, "m-1", "failed")["request"]["outcome"] == "failed"
+    with open(_state_file(w), encoding="utf-8") as fh:
+        assert [(r["msgId"], r["outcome"]) for r in json.load(fh)] == [("m-1", "failed")]
+    w.gh.__class__ = Gh
+    again = _record(w, "m-2", "pending")
+    assert again["ok"] and again["request"]["outcome"] == "pending"
+
+
+def test_a_delivered_settle_with_failing_github_reads_returns_the_owner_message_of_the_prs_closure(w):
+    _lane(w, "l-1", 101)
+    assert _record(w, "m-1", "pending")["ok"]
+    _all_reads_fail(w)
+    done = _record(w, "m-1", "delivered")
+    assert done["ok"] and done["ownerMessage"] == CC.OWNER_MESSAGE_MERGED % PR
+    assert _record(w, "m-1", "delivered")["already"] is True
