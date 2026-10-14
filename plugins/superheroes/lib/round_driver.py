@@ -189,6 +189,9 @@ RULING_GUIDANCE_OMITTED = "ruling-guidance-omitted"
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
+MIRROR_FILE = "loop-state.mirror.json"
+MIRROR_SCHEMA = "loop-state-mirror/1"
+FULL_PANEL_NOT_RERAISED = "full-panel-not-reraised"
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RULE_CMD = session_contract.RULE_CMD
@@ -2269,9 +2272,34 @@ def _migrate_judgment_step(state):
     return state
 
 
+def _mirror_bytes(session_dir, state_bytes):
+    """The mirror envelope for the exact bytes about to be written to the state file: the session id
+    (None when `meta.json` is absent or unreadable), the sha256 of those bytes, and the bytes
+    themselves as text. `_repair_state_if_damaged` restores the state file from it."""
+    return _canonical({
+        "schema": MIRROR_SCHEMA,
+        "sessionId": _meta_session_id(session_dir),
+        "stateSha256": hashlib.sha256(state_bytes).hexdigest(),
+        "state": state_bytes.decode("utf-8"),
+    }).encode("utf-8")
+
+
+def _stage_state(c, session_dir, state_bytes):
+    """Stage the state file and its mirror in commit `c`. Every two-phase commit that replaces the
+    state file goes through here, so no commit writes the state without its mirror."""
+    c.add_replace_file(os.path.join(session_dir, STATE_FILE), state_bytes)
+    c.add_replace_file(os.path.join(session_dir, MIRROR_FILE), _mirror_bytes(session_dir, state_bytes))
+
+
+def _write_state_bytes(session_dir, state_bytes):
+    """The one direct writer of the state file: the state, then its mirror, each atomically."""
+    round_commit.atomic_write_bytes(os.path.join(session_dir, STATE_FILE), state_bytes)
+    round_commit.atomic_write_bytes(os.path.join(session_dir, MIRROR_FILE),
+                                    _mirror_bytes(session_dir, state_bytes))
+
+
 def save_state(session_dir, state):
-    path = os.path.join(session_dir, STATE_FILE)
-    round_commit.atomic_write_bytes(path, _canonical(state).encode("utf-8"))
+    _write_state_bytes(session_dir, _canonical(state).encode("utf-8"))
 
 
 # =============================================================================================
@@ -2729,6 +2757,67 @@ def _break_it_run_keys(runs, compiled):
     return out
 
 
+def _panel_raised_keys(compiled):
+    """Identity keys of every finding a panel took in, including each Nit a summary row collapsed."""
+    raised = set()
+    for finding in compiled if isinstance(compiled, list) else ():
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if key:
+            raised.add(key)
+        members = finding.get("members") if finding.get("summaryEntry") else None
+        for member in members if isinstance(members, list) else ():
+            member_key = _finding_identity_key(member) if isinstance(member, dict) else None
+            if member_key:
+                raised.add(member_key)
+    return raised
+
+
+def _rounds_with_fix_report(state):
+    """{round: keys} for each earlier round whose fixer reported fixes, was not escalated, and
+    recorded the identity keys of the findings it was handed (`fixReportedKeys`)."""
+    reported = {}
+    rounds = state.get("rounds")
+    for round_text, rec in (rounds.items() if isinstance(rounds, dict) else ()):
+        fix = rec.get("fix") if isinstance(rec, dict) else None
+        keys = rec.get("fixReportedKeys") if isinstance(rec, dict) else None
+        if (not isinstance(fix, dict) or not fix.get("fixes") or fix.get("escalated")
+                or not isinstance(keys, list) or not str(round_text).isdigit()):
+            continue
+        reported[int(round_text)] = {k for k in keys if isinstance(k, str) and k}
+    return reported
+
+
+def _credit_fixes_not_reraised(state, compiled):
+    """A finding a fixer reported fixed, that this complete full panel did not raise again, is
+    `fixed` — provided the fix report came after the finding's latest raise. Called before the
+    panel's findings are staged, so the end-of-loop settle never counts it a leftover. A finding
+    that already has a current disposition, was merged into another, or holds an out-of-scope
+    ruling is left as it is."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return
+    raised_now = _panel_raised_keys(compiled)
+    reported = _rounds_with_fix_report(state)
+    if not reported:
+        return
+    receipt = {"kind": FULL_PANEL_NOT_RERAISED, "panelRound": state["round"]}
+    for key, entry in list(ledger_by_key.items()):
+        if (not isinstance(entry, dict) or key in raised_now
+                or entry.get(session_contract.MERGED_INTO_FIELD)
+                or entry.get("disposition") == "out-of-scope"
+                or _disposition_is_current(entry)):
+            continue
+        raised_round = entry.get(session_contract.RAISED_ROUND_FIELD)
+        if isinstance(raised_round, bool) or not isinstance(raised_round, int):
+            continue
+        # axis: a fix report made before the finding's latest raise says nothing about the raise after it — see bite-proof record c7l3_wo3_driver
+        if any(raised_round <= fix_round < state["round"] and key in keys
+               for fix_round, keys in reported.items()):
+            _record_disposition(state, key, "fixed", state["round"], dispositionReceipt=receipt)
+
+
 def _fold_panel(state, config, artifact, session_dir=None):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -2928,6 +3017,9 @@ def _fold_panel(state, config, artifact, session_dir=None):
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
+    # axis: only a complete panel can confirm a fix by silence — an incomplete one may simply not have looked — see bite-proof record c7l3_wo3_driver
+    if state["round"] >= 2 and not incomplete:
+        _credit_fixes_not_reraised(state, compiled)
     _stage_findings(state, compiled)
     state["step"] = P_VERIFIERS
 
@@ -4204,6 +4296,12 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     _record_round_append(state, "fixBatches",
                          {"index": index, "size": len(slice_),
                           "fixes": len(artifact.get("fixes") or [])})
+    # A `fixes` entry is the orchestrator's git-derived record and names no finding, so the keys of
+    # the findings this slice handed the fixer ride beside it: the later-panel credit reads them.
+    reported_keys = list(rec.get("fixReportedKeys") or []) if index >= 1 and isinstance(rec, dict) else []
+    if artifact.get("fixes"):
+        reported_keys += [k for k in (_finding_identity_key(f) for f in slice_ if isinstance(f, dict)) if k]
+    _record_round(state, "fixReportedKeys", reported_keys)
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
         head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
@@ -7025,8 +7123,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         rulingFileSha256=file_sha, count=len(parsed))
     try:
         c = round_commit.begin(session_dir, "rule-record")
-        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
-                           _canonical(state).encode("utf-8"))
+        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
         journal_path = os.path.join(session_dir, JOURNAL_FILE)
         c.add_journal_append(journal_path, journal_entry)
         c.run()
@@ -7157,8 +7254,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 }
             try:
                 c = round_commit.begin(session_dir, "submit-accept")
-                c.add_replace_file(os.path.join(session_dir, STATE_FILE),
-                                   _canonical(state).encode("utf-8"))
+                _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
                 if round_records_sidecar is not None:
                     rr_path, rr_bytes = round_records_sidecar
                     c.add_external_sidecar(rr_bytes, lambda p=rr_path: p,
@@ -7913,6 +8009,11 @@ def _upgrade_gate(session_dir, cmd):
     once-only marker."""
     if not _earlier_generation_unfinished(session_dir):
         return None
+    return _upgrade_refusal(session_dir, cmd)
+
+
+def _upgrade_refusal(session_dir, cmd):
+    """The `session-from-earlier-version` refusal body, writing the once-only marker."""
     already_restarted, written = _write_upgrade_marker(session_dir, cmd)
     refusal = {"ok": False, "reason": SESSION_FROM_EARLIER_VERSION,
                "restart": RESTART_FRESH_SESSION, "alreadyRestarted": already_restarted,
@@ -7941,6 +8042,9 @@ def _upgrade_gate_unlocked(session_dir, cmd):
 
 
 def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_resolver_for=None):
+    """None to carry on, or a refusal. The caller holds the session lock. Replays any sealed commit,
+    then repairs a damaged `loop-state.json` from its mirror: the one shared call path every locked
+    command takes between its upgrade gate and its first state load."""
     if sidecar_resolver_for is None:
         sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
     if sidecar_target is None:
@@ -7951,6 +8055,82 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     except round_commit.CommitRefused as exc:
         return _refuse_cmd(session_dir, cmd, "commit-recovery-failed", fault=FAULT_INTERNAL,
                            detail="%s: %s" % (exc.reason, exc.detail))
+    return _repair_state_if_damaged(session_dir, cmd)
+
+
+def _state_damage(session_dir):
+    """How `loop-state.json` is damaged: `missing`, `unreadable`, `not-json` or `not-an-object`; None
+    when it reads as a JSON object. The same read `load_state` makes, classified."""
+    path = os.path.join(session_dir, STATE_FILE)
+    if not os.path.exists(path):
+        return "missing"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except OSError:
+        return "unreadable"
+    except (ValueError, RecursionError):
+        return "not-json"
+    return None if isinstance(data, dict) else "not-an-object"
+
+
+def _read_mirror_state(session_dir):
+    """(state_bytes, state, earlier) from the mirror, or None when it cannot be trusted. `earlier`
+    is True for a mirror of an unfinished earlier-version session, which is never restored."""
+    try:
+        obj, err = round_records.read_json(os.path.join(session_dir, MIRROR_FILE))
+    except RecursionError:
+        return None
+    if err is not None or not isinstance(obj, dict) or obj.get("schema") != MIRROR_SCHEMA:
+        return None
+    text = obj.get("state")
+    if not isinstance(text, str):
+        return None
+    state_bytes = text.encode("utf-8")
+    # axis: a mirror whose bytes do not hash to the hash it carries is torn, so it restores nothing — see bite-proof record c7l3_wo3_driver
+    if hashlib.sha256(state_bytes).hexdigest() != obj.get("stateSha256"):
+        return None
+    try:
+        state = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    # axis: a mirror of an unfinished earlier-version session is refused with the restart answer, never restored — see bite-proof record c7l3_wo3_driver
+    if _state_is_earlier_unfinished(state):
+        return state_bytes, state, True
+    if _state_version(state) is None:
+        return None
+    mirror_id = obj.get("sessionId")
+    meta_id = _meta_session_id(session_dir)
+    if mirror_id is not None and meta_id is not None and mirror_id != meta_id:
+        return None
+    return state_bytes, state, False
+
+
+def _repair_state_if_damaged(session_dir, cmd):
+    """None to carry on, or the `session-from-earlier-version` refusal. The caller holds the session
+    lock and has run commit recovery. A `loop-state.json` that reads as a JSON object is left alone.
+    A damaged one (missing, unreadable, not JSON, not an object) is restored from the mirror the last
+    committed write left, byte for byte, and one `repair` row is journalled. A mirror that cannot be
+    trusted changes nothing: the command then meets the refusal it always met. `load_state` never
+    repairs, because it is also read outside the lock."""
+    damaged = _state_damage(session_dir)
+    if damaged is None:
+        return None
+    mirror = _read_mirror_state(session_dir)
+    if mirror is None:
+        return None
+    state_bytes, state, earlier = mirror
+    if earlier:
+        return _upgrade_refusal(session_dir, cmd)
+    try:
+        _write_state_bytes(session_dir, state_bytes)
+    except OSError:
+        if _state_damage(session_dir) is not None:
+            return None  # the state could not be restored: the command meets its usual refusal
+    _journal_event(session_dir, "repair", "session-repaired", damaged=damaged,
+                   round=state.get("round"))
     return None
 
 
@@ -9597,8 +9777,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     sidecar_writes = _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload)
     try:
         c = round_commit.begin(session_dir, "orders-emit")
-        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
-                           _canonical(state).encode("utf-8"))
+        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
         c.add_replace_file(path, round_records.canonical(manifest).encode("utf-8"))
         for sidecar_path, sidecar_bytes in sidecar_writes:
             c.add_replace_file(sidecar_path, sidecar_bytes)
@@ -11705,7 +11884,7 @@ def build_attestation_receipt(session_dir, state, binding, note, roster=None):
     `cmd_attest` finalizes `artifacts` after every other session mutation except the live journal and
     loop-state: the receipt is written once against the final bytes, then the sidecar is published
     against that receipt (which appends sidecar-repair journal lines), so `driver-journal.jsonl` and
-    `loop-state.json` are excluded from the digest set — same contract class as STATE_FILE. The
+    `loop-state.json` (and its mirror) are excluded from the digest set — same contract class as STATE_FILE. The
     receipt file itself is excluded because it is written last and cannot hash itself. `roster` may be supplied when `state` is
     already terminal (pending cleared) but was captured from the failure phase beforehand."""
     receipt = build_receipt(state, session_dir, form=RECEIPT_FORM_ATTESTED)
@@ -11762,6 +11941,7 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
                                                          exclude=(RECEIPT_FILE,
                                                                   RECEIPT_INTERIM_FILE,
                                                                   STATE_FILE,
+                                                                  MIRROR_FILE,
                                                                   JOURNAL_FILE,
                                                                   round_records.LOCK_FILE))
             return _cmd_attest_locked(session_dir, failure_ref, note, git=git, state=state,
@@ -11808,8 +11988,7 @@ def _cmd_attest_locked(session_dir, failure_ref, note, git=None, state=None, bin
     try:
         c = round_commit.begin(session_dir, "attest-finalize")
         c.add_replace_file(path, receipt_bytes)
-        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
-                           _canonical(state).encode("utf-8"))
+        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), attested_entry)
         if prepared.get("needs_write"):
             c.add_external_sidecar(prepared["sidecar_bytes"], prepared["resolver"])

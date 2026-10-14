@@ -3476,6 +3476,10 @@ def test_attest_writes_an_uncertified_receipt_with_its_evidence(tmp_path, adapte
     assert RD.RECEIPT_FILE not in receipt["artifacts"]
     assert RD.STATE_FILE not in receipt["artifacts"]
     assert RD.JOURNAL_FILE not in receipt["artifacts"]
+    # the state mirror is rewritten with every state write, so it is no more a stable artifact than
+    # the state file: it sits in the session dir at attest time and is never digested
+    assert os.path.isfile(os.path.join(d, RD.MIRROR_FILE))
+    assert RD.MIRROR_FILE not in receipt["artifacts"]
     for rel, digest in receipt["artifacts"].items():
         assert digest and len(digest) == 64
         with open(os.path.join(d, rel), "rb") as fh:
