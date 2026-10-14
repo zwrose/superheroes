@@ -451,10 +451,20 @@ def test_t5_the_order_sidecar_carries_the_hunks(tmp_path):
 
 
 def test_t5_the_audit_order_asks_for_unnamed_change():
+    # the template's prose never names a contract field (test_round_orders); the driver renders the
+    # contract block, so the field name is asserted on the rendered order, the instruction on the template
     with open(os.path.join(_LIB, os.pardir, "rubric", "orders", "dispatch-audits.md"),
               encoding="utf-8") as fh:
-        text = fh.read()
-    assert "`unnamedChange`" in text and "`fixHunks`" in text
+        text = " ".join(fh.read().split())
+    assert "say so in plain words" in text and "behaviour the finding does not name" in text
+    assert "`fixHunks`" in text
+    with open(os.path.join(_HERE, "fixtures", "orders", "golden", "dispatch-audits.txt"),
+              encoding="utf-8") as fh:
+        rendered = fh.read()
+    assert "Optional keys: " in rendered
+    optional = [line for line in rendered.splitlines() if line.startswith("Optional keys: ")][0]
+    assert "unnamedChange" in optional.split(": ", 1)[1].split(", ")
+    assert "unnamedChange type: string" in rendered
 
 
 # --- Part B: the ruling field -------------------------------------------------------------------

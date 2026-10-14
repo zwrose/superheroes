@@ -20,9 +20,9 @@ Return exactly one audit result for this target. Judge whether the fix clearly a
 finding and whether any new issues were introduced. Cite quoted support for every conclusion.
 Each new issue you report is a finding in the base rubric's findings shape, `consequence` and `consequenceKind` included; a new issue with no stated consequence is not taken into the review.
 Compare the fix (`fixHunks` in the audit target) with what the finding names: its title, body,
-suggestion and consequence. When the fix changes behaviour the finding does not name, say so in
-`unnamedChange`, in plain words, whatever your ruling; leave it out when the fix changes nothing
-beyond what the finding names.
+suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does
+not name, say so in plain words in the result's field for an unnamed behaviour change; leave that
+field out when the fix changes nothing beyond what the finding names.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
