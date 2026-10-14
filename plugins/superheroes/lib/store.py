@@ -16,6 +16,7 @@ import re
 import stat
 import sys
 
+import calibration_paths
 import core_md
 from store_core import (
     normalize_remote,
@@ -241,12 +242,12 @@ def resolve(cwd, root):
         g = resolve_global(cwd, root, _consumer="test_pilot store", strict=True)
     except PointerUnreadable as exc:
         entry_id = ident["gitdir_hash"]
-        entry_dir = os.path.join(root, "entries", entry_id)
+        entry_dir = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
         machine = {k: v for k, v in _entry_dirs(entry_dir).items()
                    if k in ("plans_dir", "state_dir", "artifacts_dir")}
         return _none_resolve(entry_id, machine, _pointer_refusal(exc))
     entry_id = g["entry_id"] if g else ident["gitdir_hash"]
-    entry_dir = os.path.join(root, "entries", entry_id)
+    entry_dir = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
     machine = {k: v for k, v in _entry_dirs(entry_dir).items()
                if k in ("plans_dir", "state_dir", "artifacts_dir")}
 
@@ -340,7 +341,7 @@ def create(cwd, location, root):
         entry_dir = existing["dir"]
     else:
         entry_id = ident["gitdir_hash"]
-        entry_dir = os.path.join(root, "entries", entry_id)
+        entry_dir = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
 
     # #428/#724: classify the global-entry legacy candidate unconditionally (using the same
     # entry_dir fallback as pre-#782), so a surviving entry dir with profile.md but no key
@@ -371,7 +372,7 @@ def create(cwd, location, root):
         entry_dir = existing["dir"]
     else:
         entry_id = ident["gitdir_hash"]
-        entry_dir = os.path.join(root, "entries", entry_id)
+        entry_dir = os.path.join(root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, entry_id)
 
     if location == "in-repo":
         base = os.path.join(repo_root, ".claude", "test-pilot")
