@@ -1589,6 +1589,67 @@ def _seed_collapsed_nits(state, ledger, seen, finding, round_no):
             + str(member.get(review_findings_schema.CONSEQUENCE_KEY) or "no consequence stated"))
 
 
+class _LineageCarry:
+    """A reworded finding takes the decision of the finding it rewords (``state["findingLineage"]``).
+
+    One compile's view: the compiled keys, the count of compiled findings per (file, line), and the
+    decided keys with the location their decision row records. ``apply`` carries only when ALL hold:
+    the finding has no decision and no lineage entry of its own; exactly one lineage root holds a
+    decision recorded at the finding's file and integer line; that root's group has no member among
+    this compile's keys; and the finding is the only compiled finding at that file and line."""
+
+    def __init__(self, state, compiled):
+        self.compiled_keys = set()
+        self.at_location = {}
+        for finding in compiled:
+            if not isinstance(finding, dict):
+                continue
+            key = _finding_identity_key(finding)
+            if key:
+                self.compiled_keys.add(key)
+            location = self.location_of(finding)
+            if location is not None:
+                self.at_location[location] = self.at_location.get(location, 0) + 1
+        rows, readable = _decision_candidates(state)
+        self.readable = readable
+        self.decided = {}
+        for index, row in enumerate(rows):
+            key = row.get("findingKey")
+            if isinstance(key, str) and key:
+                held = self.decided.get(key)
+                if held is None or _decision_order((index, row)) > _decision_order(held):
+                    self.decided[key] = (index, row)
+
+    @staticmethod
+    def location_of(row):
+        file = row.get("file")
+        line = row.get("line")
+        if isinstance(file, str) and file and _is_plain_int(line):
+            return (file, line)
+        return None
+
+    def apply(self, state, finding, key):
+        lineage = _lineage_map(state)
+        if not self.readable or key in self.decided or key in lineage:
+            return
+        location = self.location_of(finding)
+        if location is None or self.at_location.get(location) != 1:
+            return
+        roots = set()
+        for decided_key, (_index, row) in self.decided.items():
+            if self.location_of(row) == location:
+                roots.add(_lineage_root(lineage, decided_key))
+        if len(roots) != 1:
+            return
+        root = next(iter(roots))
+        group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
+        if group & self.compiled_keys:
+            return
+        state.setdefault("findingLineage", {})[key] = root
+        _decision(state, "ruling-carried",
+                  "%s takes the decision on %s (same file and line, reworded)" % (key, root))
+
+
 def _stage_findings(state, compiled):
     """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate. Each member
     a Nit-cap summary row collapsed is seeded too and recorded ``craft`` at once."""
@@ -1604,6 +1665,7 @@ def _stage_findings(state, compiled):
     round_no = state["round"]
     seeded = False
     sanitized = []
+    carry = _LineageCarry(state, compiled)
     for finding in compiled:
         if not isinstance(finding, dict):
             sanitized.append(finding)
@@ -1612,6 +1674,7 @@ def _stage_findings(state, compiled):
         if not key:
             sanitized.append(finding)
             continue
+        carry.apply(state, finding, key)
         entry = _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
         sanitized.append(entry)
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
@@ -1640,6 +1703,14 @@ def _next_ruling_seq(state):
     counter = state.get("rulingSeqCounter", 0) + 1
     state["rulingSeqCounter"] = counter
     return counter
+
+
+def _stamp_ruling_seq(state, entry):
+    """Stamp an owner-gate decision with ``rulingSeq`` from the counter the ``rule`` verb uses, so the
+    two decision sources share one sequence. A malformed counter leaves the entry unsequenced (older
+    than every sequenced decision) rather than failing the fold."""
+    if _ruling_seq_counter_fault(state) is None:
+        entry["rulingSeq"] = _next_ruling_seq(state)
 
 
 def _read_rulings_log(state):
@@ -1683,17 +1754,145 @@ def _writable_rulings_log(state):
     return log
 
 
-def _live_ruling_by_key(state):
-    """Latest rulings-log row per finding key."""
-    rows, fault = _read_rulings_log(state)
-    if fault is not None:
+def _lineage_map(state):
+    """``{key: rootKey}`` from ``state["findingLineage"]`` — malformed entries read as absent."""
+    raw = state.get("findingLineage") if isinstance(state, dict) else None
+    if not isinstance(raw, dict):
         return {}
+    return {k: v for k, v in raw.items()
+            if isinstance(k, str) and k and isinstance(v, str) and v}
+
+
+def _lineage_root(lineage, key):
+    """The root of ``key``: itself when absent from the lineage; a cycle reads as its own root."""
+    root = key
+    for _ in range(len(lineage) + 1):
+        nxt = lineage.get(root)
+        if nxt is None or nxt == root:
+            return root
+        root = nxt
+    return key
+
+
+def _is_plain_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _gate_decision_candidates(state):
+    """Owner-gate decisions across every round's ``judgmentDispositions``, shaped like ruling rows.
+
+    ``skip`` is an ``out-of-scope`` decision and ``fix-with-guidance`` (with guidance text) a
+    ``guidance`` decision; every other gate disposition is not a decision."""
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return []
+    out = []
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        log = round_entry.get("judgmentDispositions")
+        if not isinstance(log, list):
+            continue
+        for item in log:
+            if not isinstance(item, dict):
+                continue
+            disposition = item.get("disposition")
+            if disposition == "skip":
+                ruling = "out-of-scope"
+            elif disposition == "fix-with-guidance":
+                ruling = "guidance"
+            else:
+                continue
+            key = _history_row_key(item)
+            if not key:
+                continue
+            row = {"findingKey": key, "ruling": ruling, "reason": item.get("reason"),
+                   "seq": item.get("rulingSeq") if _is_plain_int(item.get("rulingSeq")) else None,
+                   "round": rnd_num, "source": "gate"}
+            if ruling == "guidance":
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if not isinstance(guidance, str) or not guidance.strip():
+                    continue
+                row["guidance"] = guidance.strip()
+            for field in ("file", "line", "title"):
+                if item.get(field) is not None:
+                    row[field] = item.get(field)
+            out.append(row)
+    return out
+
+
+def _decision_candidates(state, *, with_rules=True):
+    """``(rows, readable)``: every ``rulingsLog`` row (``source: "rule"``) and every owner-gate
+    decision, in log order. ``readable`` is False — and ``rows`` empty — when ``rulingsLog`` is
+    malformed; ``with_rules=False`` reads the gate decisions alone."""
+    rows = []
+    if with_rules:
+        rule_rows, fault = _read_rulings_log(state)
+        if fault is not None:
+            return [], False
+        for entry in rule_rows:
+            entry["source"] = "rule"
+            rows.append(entry)
+    rows.extend(_gate_decision_candidates(state))
+    return rows, True
+
+
+def _decision_order(indexed_row):
+    """Sort key for the one sequence: a sequenced decision outranks every unsequenced one; among
+    unsequenced decisions the later round wins; a remaining tie goes to the later row."""
+    index, row = indexed_row
+    seq = row.get("seq")
+    rnd = row.get("round")
+    return (1 if _is_plain_int(seq) else 0,
+            seq if _is_plain_int(seq) else 0,
+            rnd if _is_plain_int(rnd) else -1,
+            index)
+
+
+def _effective_decisions(state, *, with_rules=True):
+    """``{key: row}``: the one effective decision for every finding key that has one.
+
+    Invariant: for every finding the loop holds there is exactly ONE effective decision — the
+    latest one by a single sequence (``rulingSeq`` from ``_next_ruling_seq``, shared by the ``rule``
+    verb and the owner-judgment gate fold; a gate entry with no sequence is older than every
+    sequenced decision, and among those the later round wins) — read through this one reader.
+    That decision binds the finding under any wording a later round gives it at the same location
+    (``state["findingLineage"]``, written by ``_stage_findings``): every key of a lineage group maps
+    to the group's one decision, and the fixer order renders only that decision."""
+    rows, readable = _decision_candidates(state, with_rules=with_rules)
+    if not readable:
+        return {}
+    lineage = _lineage_map(state)
+    best = {}
+    for indexed in enumerate(rows):
+        key = indexed[1].get("findingKey")
+        if not isinstance(key, str) or not key:
+            continue
+        root = _lineage_root(lineage, key)
+        held = best.get(root)
+        if held is None or _decision_order(indexed) > _decision_order(held):
+            best[root] = indexed
     by_key = {}
-    for entry in rows:
-        key = entry.get("findingKey")
+    for indexed in enumerate(rows):
+        key = indexed[1].get("findingKey")
         if isinstance(key, str) and key:
-            by_key[key] = entry
+            by_key[key] = best[_lineage_root(lineage, key)][1]
+    for key in list(lineage) + list(best):
+        root = _lineage_root(lineage, key)
+        if root in best:
+            by_key[key] = best[root][1]
     return by_key
+
+
+def _live_ruling_by_key(state):
+    """The effective decision per finding key (``{key: row}``) — see ``_effective_decisions``.
+    An unreadable ``rulingsLog`` reads as ``{}``."""
+    return _effective_decisions(state)
 
 
 def _live_out_of_scope_ruling_for_key(state, key):
@@ -3562,21 +3761,22 @@ def _gate_guidance_entries(state, rnd):
             batch_keys.add(key)
     sliced = bool(state.get("_fixQueue")) or (state.get("_fixBatchIndex") or 0) >= 1
     _validate_gate_guidance_logs(rounds, rnd, batch_keys)
-    ruling_channel = []
-    for key in sorted(batch_keys):
-        live = _live_ruling_by_key(state).get(key)
+    effective = _live_ruling_by_key(state)
+    if _read_rulings_log(state)[1] is not None:
+        # An unreadable rulings log still hides every rule decision (the reader returns {}); the
+        # owner-gate decisions stay readable on their own, as they were before the shared reader.
+        effective = _effective_decisions(state, with_rules=False)
+
+    def guided(key):
+        """The effective decision for ``key`` when it is a usable ``guidance``, else None."""
+        live = effective.get(key)
         if not isinstance(live, dict) or live.get("ruling") != "guidance":
-            continue
+            return None
         guidance = live.get("guidance")
         if not isinstance(guidance, str) or not guidance.strip():
-            continue
-        entry = {"id": key, "guidance": guidance.strip(), "rulingChannel": True}
-        live_row = _live_finding_by_key(state, key)
-        if isinstance(live_row, dict):
-            for field in ("title", "file", "line"):
-                if live_row.get(field) is not None:
-                    entry[field] = live_row.get(field)
-        ruling_channel.append(entry)
+            return None
+        return live
+
     out = []
     covered_keys = set()
     round_entry = rounds.get(str(rnd))
@@ -3596,28 +3796,44 @@ def _gate_guidance_entries(state, rnd):
                     continue
                 if sliced and key not in batch_keys:
                     continue
+                live = guided(key)
+                if (live is None or live.get("source") != "gate" or live.get("findingKey") != key
+                        or str(live.get("round")) != str(rnd)
+                        or live.get("guidance") != guidance.strip()):
+                    continue
                 covered_keys.add(key)
                 out.append({"id": key, "title": item.get("title"),
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
-    history = _finding_history(state)
+    ruling_channel = []
     for key in sorted(batch_keys):
         if key in covered_keys:
             continue
-        slot = history.get(key)
-        if not isinstance(slot, dict):
+        live = guided(key)
+        if live is None:
             continue
-        gate_ruling = slot.get("gateRuling")
-        if not isinstance(gate_ruling, dict):
+        carried_from = live.get("findingKey") if live.get("findingKey") != key else None
+        live_row = _live_finding_by_key(state, key)
+        if live.get("source") == "gate":
+            entry = {"id": key, "title": live.get("title"), "file": live.get("file"),
+                     "line": live.get("line"), "guidance": live["guidance"].strip(),
+                     "round": live.get("round")}
+            if carried_from is not None and isinstance(live_row, dict):
+                for field in ("title", "file", "line"):
+                    if live_row.get(field) is not None:
+                        entry[field] = live_row.get(field)
+            if carried_from is not None:
+                entry["carriedFrom"] = carried_from
+            out.append(entry)
             continue
-        if gate_ruling.get("disposition") != "fix-with-guidance":
-            continue
-        guidance = gate_ruling.get("guidance")
-        if not isinstance(guidance, str) or not guidance.strip():
-            continue
-        out.append({"id": key, "title": gate_ruling.get("title"),
-                    "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
-                    "guidance": guidance.strip(), "round": gate_ruling.get("round")})
+        entry = {"id": key, "guidance": live["guidance"].strip(), "rulingChannel": True}
+        if isinstance(live_row, dict):
+            for field in ("title", "file", "line"):
+                if live_row.get(field) is not None:
+                    entry[field] = live_row.get(field)
+        if carried_from is not None:
+            entry["carriedFrom"] = carried_from
+        ruling_channel.append(entry)
     return out + ruling_channel
 
 
@@ -3820,9 +4036,11 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
                             "title": f.get("title"), "severity": f.get("severity"),
                             "reason": reason.strip()})
-            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
-                                    "title": f.get("title"), "disposition": "skip",
-                                    "reason": reason.strip()})
+            skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                          "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                          "disposition": "skip", "reason": reason.strip()}
+            _stamp_ruling_seq(state, skip_entry)
+            disposition_log.append(skip_entry)
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
                       % (f.get("title") or fid, reason.strip()))
@@ -3841,6 +4059,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
                      "line": f.get("line"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
+            _stamp_ruling_seq(state, entry)
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
@@ -6967,6 +7186,10 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             "rulingFileSha256": file_sha,
             "by": by,
         }
+        if isinstance(candidate, dict):
+            for field in ("file", "line"):
+                if candidate.get(field) is not None:
+                    log_row[field] = candidate.get(field)
         session_contract.copy_follow_up_field(entry, log_row)
         session_contract.copy_decided_by_field(entry, log_row)
         if entry.get("guidance") is not None:
@@ -9201,7 +9424,7 @@ def _standing_rulings_for_orders(state):
         return [], "%s: %s" % fault
     return ([{"findingKey": key, "reason": entry.get("reason")}
              for key, entry in _live_ruling_by_key(state).items()
-             if entry.get("ruling") == "out-of-scope"], None)
+             if entry.get("ruling") == "out-of-scope" and entry.get("source") == "rule"], None)
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,

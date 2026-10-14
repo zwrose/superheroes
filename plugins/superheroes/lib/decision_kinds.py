@@ -27,6 +27,7 @@ DECISION_KINDS = (
     "not-discharged",
     "panel-seat-missing",
     "receipt-missing-seat",
+    "ruling-carried",
     "ruling-recorded",
     "round-ceiling",
     "scoped-finder-skipped",
