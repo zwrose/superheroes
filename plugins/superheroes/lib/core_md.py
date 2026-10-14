@@ -2584,9 +2584,10 @@ def write_guardian_cadence(cwd, cadence, *, root=None):
         return {"action": "written"}
 
 
-def layer_path(cwd, hero, root=None):
+def layer_path(cwd, hero, root=None, *, persist_backfill=True):
     """Mode-aware path to a hero layer file, co-located with core.md."""
-    return os.path.join(os.path.dirname(core_path(cwd, root)), hero + ".md")
+    keyword = {} if persist_backfill else {"persist_backfill": False}
+    return os.path.join(os.path.dirname(core_path(cwd, root, **keyword)), hero + ".md")
 
 
 def _layer_path(cwd, hero, root=None):

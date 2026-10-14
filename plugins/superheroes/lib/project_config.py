@@ -536,7 +536,7 @@ def read(cwd, root=None, *, persist_backfill=True):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
     keyword = {} if persist_backfill else {"persist_backfill": False}
     facts = core_md.read(cwd, root, **keyword)
-    guardian_cfg = guardian_sweep.read_config(cwd, root)
+    guardian_cfg = guardian_sweep.read_config(cwd, root, **keyword)
     if facts is None:
         absent_items = []
         dial_entry = _resolve_item_entry(_SLUG_INDEX["dial"], None)
