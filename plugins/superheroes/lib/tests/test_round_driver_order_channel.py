@@ -76,6 +76,18 @@ def _mixed_seat_map():
     return {"seats": seats}
 
 
+def _nonpanel_cell_proof(vendors):
+    """The seat-map keys proving each vendor's dispatched non-panel cells (`verifier`,
+    `reviewer-deep`) live: the non-panel selector seats a non-claude reviewer only on proven cells."""
+    cells = []
+    for role in ("verifier", "reviewer-deep"):
+        for vendor in vendors:
+            cell = MR.matrix_config(role, vendor)
+            if cell is not None:
+                cells.append([vendor, cell[0], cell[1]])
+    return {"nonPanelLiveCells": cells, "nonPanelLiveCellsSource": "synthesized"}
+
+
 def _emit(tmp_path, name, seat_map):
     """Run `next` so the driver RENDERS and writes the round's order files; return {seat: text}."""
     session_dir = str(tmp_path / name)
@@ -463,7 +475,8 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     os.makedirs(session_dir, exist_ok=True)
     out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
                                     "fixerVendor": "claude", "verifyCommand": "none",
-                                    "seatMap": _mixed_seat_map()})
+                                    "seatMap": dict(_mixed_seat_map(),
+                                                    **_nonpanel_cell_proof(["claude", "codex"]))})
     assert out["ok"], out
     ok, state = RD.load_state(session_dir)
     assert ok, state

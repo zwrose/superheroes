@@ -567,8 +567,14 @@ def _synthesis_seatable_map(vendors, fixer_vendor):
 
 def _at(tmp_path, target_phase, cfg=None):
     """Drive a fresh session to `target_phase`. `cfg` overrides the default profile so a test can
-    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`)."""
+    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`). A walk through
+    synthesis defaults to a profile that seats it: a `codex` fixer and a known, non-maker host family."""
     d = str(tmp_path)
+    if cfg is None and target_phase == RD.P_SYNTHESIS:
+        respond = _responder(round1_findings=_A_FINDING,
+                             seat_map=_synthesis_seatable_map(["claude", "codex"], "codex"))
+        n = _drive_to_phase(d, _cfg(fixerVendor="codex"), respond, target_phase)
+        return d, n
     n = _drive_to_phase(d, cfg or _cfg(), _responder(round1_findings=_A_FINDING), target_phase)
     return d, n
 
