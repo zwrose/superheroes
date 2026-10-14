@@ -11,15 +11,17 @@ moved); 3 `cmd_submit` fold-path refusal of a withdrawn attempt; 4 `_next_dispat
 5 conditional `ruling-attempt-pending`; 6 real-consequence lift.
 
 Capture disclosures: the element 1 red is the last 40 lines of the run (the head of the failure listing is
-cut). The element 2 red has the echoed test-source lines (indented four spaces) and blank lines removed;
-the failure block, assertion and summary are whole. All other captures are whole.
+cut). All other captures are whole. Elements 1 and 2 were re-run (new captures, new line numbers) after
+the restore check began resolving the repo root through `store_core.repo_root` instead of a
+`rev-parse --show-toplevel` call; elements 3-6 are unchanged from the earlier run.
 
 ## 1. Withdraw restore check, dirty tree
 
-- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7504` (`if dirty:`). Axis: a
+- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7509` (`if dirty:`). Axis: a
   worktree still holding the stopped fixer's changes is refused with `withdraw-worktree-dirty`.
 - Detector: `test_edge2_restore_check_refusals[tracked-change-withdraw-worktree-dirty]`.
-- Neutralization: `    if dirty:` -> `    if False and dirty:` (asserted once by the edit tool; line 7504 re-read).
+- Neutralization: `    if dirty:` -> `    if False and dirty:` (asserted once by the edit tool; re-run after the
+  fix that resolves the repo root through `store_core.repo_root`).
 - Raw red (last 40 lines of the run):
 
 ```
@@ -56,60 +58,92 @@ keep_severity = None, case = 'tracked-change', token = 'withdraw-worktree-dirty'
 >       assert out.get("ok") is False and out.get("reason") == token, out
 E       AssertionError: {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}
 E       assert (True is False)
-E        +  where True = <built-in method get of dict object at 0x7f90424fd200>('ok')
-E        +    where <built-in method get of dict object at 0x7f90424fd200> = {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}.get
+E        +  where True = <built-in method get of dict object at 0x7fd69fdacf40>('ok')
+E        +    where <built-in method get of dict object at 0x7fd69fdacf40> = {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}.get
 
 /home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:466: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restore_check_refusals[tracked-change-withdraw-worktree-dirty]
-1 failed in 1.56s
+1 failed in 6.95s
 ```
 
 - Axis check: the withdraw went through (`ok: True`, `restoreCheck: checked`) where the refusal token
   `withdraw-worktree-dirty` was expected — red on the refusal axis.
-- Restore: inverse edit `    if False and dirty:` -> `    if dirty:`. Restore receipt (line 7504-7505 re-read):
+- Restore: inverse edit `    if False and dirty:` -> `    if dirty:`. Restore receipt (lines 7509-7510 re-read):
   `    if dirty:` / `        return (WITHDRAW_WORKTREE_DIRTY,`.
 - Raw green:
 
 ```
 .                                                                        [100%]
-1 passed in 8.06s
+1 passed in 6.07s
 ```
 
 ## 2. Withdraw restore check, HEAD moved
 
-- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7509` (`if head != bound:`). Axis:
+- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7514` (`if head != bound:`). Axis:
   a worktree at a different head than the attempt started from is refused with `withdraw-head-moved`.
 - Detector: `test_edge2_restore_check_refusals[head-moved-withdraw-head-moved]`.
-- Neutralization: `    if head != bound:` -> `    if False and head != bound:` (line 7509 re-read).
-- Raw red (source-echo lines removed, see disclosure above):
+- Neutralization: `    if head != bound:` -> `    if False and head != bound:` (asserted once by the edit
+  tool; re-run after the same fix).
+- Raw red (whole run):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______ test_edge2_restore_check_refusals[head-moved-withdraw-head-moved] _______
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-32/test_edge2_restore_check_refus0')
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-74/test_edge2_restore_check_refus0')
 keep_severity = None, case = 'head-moved', token = 'withdraw-head-moved'
+
+    @pytest.mark.parametrize("case,token", [
+        ("tracked-change", "withdraw-worktree-dirty"),
+        ("untracked-file", "withdraw-worktree-dirty"),
+        ("head-moved", "withdraw-head-moved"),
+        ("no-anchor-head", "withdraw-head-unanchored"),
+        ("git-unavailable", "withdraw-git-unavailable"),
+    ])
+    def test_edge2_restore_check_refusals(tmp_path, keep_severity, case, token):
+        """axis: the worktree must be back at the attempt's starting head with nothing left over.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (elements 1, 2)
+        """
+        session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e2")
+        k = _state(session_dir)["pending"]["attempt"]
+        repo, head = _throwaway_repo(tmp_path)
+        _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head)
+        kwargs = {"repo_root": str(repo)}
+        if case == "tracked-change":
+            (repo / "a.txt").write_text("changed by the stopped fixer\n", encoding="utf-8")
+        elif case == "untracked-file":
+            (repo / "stray.txt").write_text("left behind\n", encoding="utf-8")
+        elif case == "head-moved":
+            (repo / "a.txt").write_text("two\n", encoding="utf-8")
+            _git(repo, "commit", "-q", "-a", "-m", "second")
+        elif case == "git-unavailable":
+            kwargs = {"repo_root": str(repo), "git": lambda cwd, *args: None}
+        before = _state_bytes(session_dir)
+        out = RD.cmd_withdraw(session_dir, k, "owner ruled", **kwargs)
 >       assert out.get("ok") is False and out.get("reason") == token, out
 E       AssertionError: {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}
 E       assert (True is False)
-E        +  where True = <built-in method get of dict object at 0x7fc68ea69d00>('ok')
-E        +    where <built-in method get of dict object at 0x7fc68ea69d00> = {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}.get
+E        +  where True = <built-in method get of dict object at 0x7fdc16ee1d40>('ok')
+E        +    where <built-in method get of dict object at 0x7fdc16ee1d40> = {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}.get
+
 /home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:466: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restore_check_refusals[head-moved-withdraw-head-moved]
-1 failed in 7.56s
+1 failed in 3.59s
 ```
 
 - Axis check: same as element 1 for the head token; the fixture commits (clean tree, moved head), so the
   dirty check does not fire first.
-- Restore: inverse edit. Restore receipt (lines 7509-7510 re-read): `    if head != bound:` /
+- Restore: inverse edit. Restore receipt (lines 7514-7515 re-read): `    if head != bound:` /
   `        return (WITHDRAW_HEAD_MOVED,`.
 - Raw green:
 
 ```
 .                                                                        [100%]
-1 passed in 1.99s
+1 passed in 2.37s
 ```
 
 ## 3. Fold-path refusal of a withdrawn attempt in `cmd_submit`
@@ -332,10 +366,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t5_undispose
 
 ## Final restore receipt
 
-After the last restore, `git diff -- plugins/superheroes/lib/round_driver.py` printed nothing (exit 0):
-
-```
-$ git diff -- plugins/superheroes/lib/round_driver.py
-$ echo "diff exit $?"
-diff exit 0
-```
+After the last restore, `git diff -- plugins/superheroes/lib/round_driver.py` shows only the
+repo-root-resolver fix in `_withdraw_restore_check` (the `rev-parse --show-toplevel` call replaced by
+`store_core.repo_root(root)`, with `RepoRootUnavailable` returned as `withdraw-git-unavailable`); no
+neutralization remains.
