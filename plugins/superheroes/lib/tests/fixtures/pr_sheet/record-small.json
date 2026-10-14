@@ -1,0 +1,13 @@
+{
+  "schema": "review-record/1",
+  "pr": 211,
+  "sessionId": "session-211",
+  "lane": {"value": "light", "reason": "A wording change on the receipt page.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334", "source": "GitHub checks"},
+  "reviewers": [{"name": "code-reviewer", "family": "codex", "ran": "engine-record"}],
+  "findings": [],
+  "missingReviews": [],
+  "rounds": {"count": 1, "stoppedAtCap": false, "source": "reported by the session"}
+}
