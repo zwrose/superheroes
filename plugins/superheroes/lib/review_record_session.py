@@ -221,11 +221,15 @@ def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE):
 
 
 def _audit_reviewers(state, rnd, audits):
-    """One reviewer per auditor vendor whose authenticated audit result the round persisted, at the audits' emission head."""
+    """One reviewer per auditor vendor whose authenticated audit result the round persisted, at the audits' emission head,
+    and one unrun reviewer when an audit entry names no auditor (a planned audit that returned nothing)."""
     head = _panel_head(state, rnd, phase=round_phases.P_AUDITS)
-    vendors = sorted({a["auditor"] for a in audits if isinstance(a, dict) and isinstance(a.get("auditor"), str) and a["auditor"]})
-    return [_reviewer(state, rnd, f"auditor {v}", "audits ", True, {"vendor": v, "model": "unknown"},
-                      commit=head, phase=round_phases.P_AUDITS) for v in vendors] if head else []
+    named = [a.get("auditor") if isinstance(a, dict) else None for a in audits]
+    vendors = sorted({v for v in named if isinstance(v, str) and v})
+    out = [_reviewer(state, rnd, f"auditor {v}", "audits ", True, {"vendor": v, "model": "unknown"},
+                     commit=head, phase=round_phases.P_AUDITS) for v in vendors] if head else []
+    silent = any(not (isinstance(v, str) and v) for v in named)
+    return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
 
 
 def _status_reviewers(state, setup=None):
@@ -325,53 +329,11 @@ def _latest_ruling(rep, by_key, rulings):
     return max(found, key=lambda r: r["seq"] if _int(r.get("seq")) else -1) if found else {}
 
 
-def _decided_by(rep, outcome, by_key, state):
-    """The cited decision an outcome rests on: the ledger row's own, else the citation of the group's single
-    newest decision, when that is a logged ruling that postdates the finding's latest raise. The group is the
-    finding's keys, those merged into it and its lineage; the decisions are every rulings-log row and every
-    gate fix/skip/guidance row, ordered as the driver orders them (a sequenced decision outranks an unsequenced
-    one, then the later round, then the later row). Any newer row of any kind leaves no citation to recover."""
-    if outcome is None:
-        return None
+def _decided_by(rep, outcome):
+    """The cited decision the settled ledger row carries (the driver's settle puts it there); an older ledger
+    without it leaves the finding as settled."""
     held = sc.decided_by_of(rep)
-    if isinstance(held, dict):
-        return held
-    if outcome not in (_LEFT_FOR_OWNER, _RULING):
-        return None
-    group = _group(rep, by_key)
-    lin = state.get("findingLineage")
-    lin = lin if isinstance(lin, dict) else {}
-
-    def root(k):
-        for _ in range(len(lin) + 1):
-            k = lin[k] if isinstance(lin.get(k), str) and lin[k] != k else k
-        return k
-    keys = {sc.finding_identity_key(r) for r in group} | {rep.get("id")}
-    roots = {root(k) for k in keys if isinstance(k, str)}
-    keys |= {k for k in lin if isinstance(k, str) and root(k) in roots} | roots
-    rows = [dict(r, _rule=True) for r in state.get("rulingsLog") or () if isinstance(r, dict)] \
-        if isinstance(state.get("rulingsLog"), list) else []
-    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
-    for rnd_key in sorted(rounds, key=lambda k: (not str(k).isdigit(), int(k) if str(k).isdigit() else 0)):
-        log = rounds[rnd_key].get("judgmentDispositions") if isinstance(rounds[rnd_key], dict) else None
-        rows += [dict(i, round=int(rnd_key), seq=i.get("rulingSeq"),
-                      findingKey=i.get(sc.FINDING_KEY_FIELD) if i.get(sc.FINDING_KEY_FIELD) is not None
-                      else sc.finding_identity_key(i) if i.get("file") is not None and i.get("line") is not None else None)
-                 for i in log if isinstance(i, dict) and i.get("disposition") in ("skip", "fix-with-guidance", "fix-as-suggested")
-                 and str(rnd_key).isdigit()] if isinstance(log, list) else []
-    mine = [(i, r) for i, r in enumerate(rows) if isinstance(r.get("findingKey"), str) and r["findingKey"] in keys]
-    if not mine:
-        return None
-    newest = max(mine, key=lambda ir: (_int(ir[1].get("seq")), ir[1]["seq"] if _int(ir[1].get("seq")) else 0,
-                                       ir[1]["round"] if _int(ir[1].get("round")) else -1, ir[0]))[1]
-    decided = newest.get("decidedBy")
-    raised = [r.get(sc.RAISED_ROUND_FIELD) for r in group]
-    # the rulings log and the ledger keep separate counters, so recency is read from the rounds
-    # axis: a ruling older than the finding's latest raise decides nothing about it — see bite-proof record c7l3_wo2_session_writer
-    if newest.get("_rule") and isinstance(decided, dict) and _int(newest.get("round")) and all(_int(r) for r in raised) \
-            and newest["round"] >= max(raised):
-        return decided
-    return None
+    return held if outcome is not None and isinstance(held, dict) else None
 
 
 def _decide(own, by_key, rulings):
@@ -435,7 +397,7 @@ def _findings(state):
             reason += f" (merged into {_id(rep, sc.finding_identity_key(rep))})"
         dim = row.get("dimension")
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
-                    "decidedBy": _decided_by(rep, outcome, by_key, state) if rep is not None else None,
+                    "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail"))})

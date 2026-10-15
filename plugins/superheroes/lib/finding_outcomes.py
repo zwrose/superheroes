@@ -87,7 +87,8 @@ def _is_int(value):
 
 
 def sheet_answer_decides(answers, ref, pr):
-    """True only when the cited card of this pull request holds a settled aligned or option answer."""
+    """True only when the cited card of this pull request holds a settled aligned or option answer. An aligned
+    answer counts only while the published card (answers["cards"][card]["options"]) is known to offer no options."""
     if not isinstance(answers, dict) or not isinstance(ref, dict):
         return False
     if not (_is_int(pr) and _is_int(ref.get("pr")) and ref["pr"] == pr):
@@ -101,7 +102,9 @@ def sheet_answer_decides(answers, ref, pr):
         return False
     answer = doc.get("answer")
     if answer == "aligned":
-        return True
+        published = answers.get("cards")
+        published = published.get(card) if isinstance(published, dict) else None
+        return isinstance(published, dict) and published.get("options") == []
     option_id = doc.get("optionId")
     return answer == "option" and isinstance(option_id, str) and option_id.strip() != ""
 
@@ -171,7 +174,8 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
 
     Craft when the only consequence is code quality (it wins over any ruling); a named ruling
     when the latest rulings-log row cites a decision that is on record; otherwise left for the
-    owner, with open_reason and, when a cited decision did not resolve, why. Never reads severity.
+    owner, with open_reason and, when a cited decision did not resolve, why; that leftover keeps the citation,
+    so the record writer can promote it if the decision is on record by write time. Never reads severity.
     """
     outcomes = review_findings_schema.OUTCOMES
     craft, left_for_owner, ruled = outcomes[2], outcomes[3], outcomes[4]
@@ -187,7 +191,7 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
         why = "; the cited decision is not on record: " + text
-    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": None}
+    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
 
 
 def decision_sources(repo_root, base_ref, sheet_answers=None, pr=None):

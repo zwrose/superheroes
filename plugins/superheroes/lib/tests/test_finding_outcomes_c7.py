@@ -29,7 +29,8 @@ def _entry(entry_id, supersedes=None, words='owner\'s words: "go"'):
 
 
 def _sheet(answer, option_id=None):
-    return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": None}}}
+    return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": None}},
+            "cards": {"c1": {"options": []}}}
 
 
 # --- E1: a stated consequence ---------------------------------------------------------------
@@ -227,6 +228,17 @@ def test_e5_sheet_answer_decides(answers, ref, pr, expected):
     assert FO.sheet_answer_decides(answers, ref, pr) is expected
 
 
+def test_aligned_counts_only_while_the_published_card_offers_no_options():
+    ref = {"pr": 9, "card": "c1"}
+    base = _sheet("aligned")
+    assert FO.sheet_answer_decides(base, ref, 9) is True
+    # bites on: a saved aligned answer accepted for a card that has since gained options, or for one nothing can check
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": ["allow-leftovers"]}}), ref, 9) is False
+    assert FO.sheet_answer_decides({"answers": base["answers"]}, ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": "x"}), ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={}), ref, 9) is False
+
+
 # --- E6: on_record ----------------------------------------------------------------------------
 
 def _sources(**extra):
@@ -313,9 +325,9 @@ def test_e7_unresolved_decided_by_stays_with_owner_with_reason_appended():
                     sources=_sources(), open_reason=OPEN)
     assert out["outcome"] == "left-for-owner"
     assert out["reason"] == OPEN + "; the cited decision is not on record: the cited Canon entry is not on record"
-    assert out["decidedBy"] is None
+    assert out["decidedBy"] == {"kind": "canon", "ref": OTHER_ID}  # the citation stays, for the writer's write-time re-check
     out = FO.settle(finding, ruling={"decidedBy": {"kind": "canon", "ref": CANON_ID}}, open_reason=OPEN)
-    assert out["outcome"] == "left-for-owner"
+    assert out["outcome"] == "left-for-owner" and out["decidedBy"] == {"kind": "canon", "ref": CANON_ID}
     assert out["reason"].endswith("no Canon text was available")
     assert FO.settle(finding, ruling={"note": "no decidedBy"}, open_reason=OPEN)["reason"] == OPEN
 

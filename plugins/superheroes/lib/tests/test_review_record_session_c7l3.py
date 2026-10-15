@@ -15,12 +15,13 @@ import circuit_breaker  # noqa: E402
 import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
 import round_driver as RD  # noqa: E402
+import round_phases  # noqa: E402
 
 from session_checkout import seed_session_meta  # noqa: E402
 from test_panel_diff_at_head_1419 import _commit_file, _init_two_commit_repo  # noqa: E402
 from test_round_driver import _cfg, _claim_reviewer, _drive_to_phase, _responder  # noqa: E402
 from test_review_record_session import (  # noqa: E402
-    CANON_SOURCES, CODEX, KEY, OOS, STANDING, UNFILLED_SEAT, Fake, Session, _by_key, extras, ledger_row, put_extras, send,
+    CANON_SOURCES, CODEX, HEAD, KEY, OOS, STANDING, UNFILLED_SEAT, Fake, Session, _by_key, extras, ledger_row, put_extras, send,
 )
 
 CANON = {"kind": "canon", "ref": STANDING}
@@ -114,6 +115,25 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
     assert early and not any(v["coversFinalCommit"] for v in early)
 
 
+def test_a_planned_audit_that_returned_nothing_stays_a_missing_review_beside_a_successful_one(tmp_path):
+    audits = [{"id": "a", "auditor": "codex", "ruling": "discharged"},
+              {"id": "b", "ruling": "not-discharged", "reason": "no audit result for this finding"}]
+    session = _hand_session(tmp_path, {1: {"code-reviewer": "run"}})
+    state = json.load(open(os.path.join(session, "loop-state.json")))
+    state["rounds"]["2"] = {"audits": audits}
+    state["_ordersAnchors"] = {"2:%s:0" % round_phases.P_AUDITS: {"headSha": HEAD}}
+    json.dump(state, open(os.path.join(session, "loop-state.json"), "w"))
+    rows = _names(rs.account_from_session(session, extras(), Fake().readers()))
+    # bites on: the reviewer roster built only from audits that name an auditor, hiding the audit that never returned
+    assert rows["audits auditor codex (round 2)"]["ran"] is True
+    assert rows["audits auditor (round 2)"]["ran"] is False
+    fake = Fake()
+    out = send(tmp_path, session, fake)
+    assert out["ok"], out
+    rec = rr.read(7, readers=fake.readers())
+    assert "audits auditor (round 2)" in [m["name"] for m in rec["missingReviews"]] and out["status"] == "not-reviewed"
+
+
 def test_a_hand_submit_reviewer_is_posted_as_reported_by_the_session_and_a_missing_one_as_missing(tmp_path):
     seat = {"vendor": "codex", "model": CODEX}
     session = _hand_session(tmp_path, {1: {"code-reviewer": "run", "security-reviewer": "missing"}},
@@ -194,75 +214,61 @@ def test_a_ledger_decision_rides_along_and_a_finding_with_none_carries_null(tmp_
     assert found["decidedBy"] is None and found["outcome"] == "left-for-owner"
 
 
-def test_a_ruling_logged_after_the_raise_supplies_the_decision(tmp_path):
-    s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling()])
-    found = _found(s.seat("code-reviewer").save())
-    # bites on: the decision a ruling cites being lost between the session and the account
-    assert (found["outcome"], found["decidedBy"]) == ("ruling", CANON)
-
-
-def test_a_ruling_logged_against_a_finding_merged_into_it_supplies_the_decision(tmp_path):
-    ledger = [ledger_row(MEMBER, id="m-1", disposition=None, mergedInto=KEY), ledger_row(KEY, id="rep-1", **OOS)]
-    session = Session(tmp_path, dispositionLedger=ledger, rulingsLog=[_ruling(MEMBER)]).seat("code-reviewer").save()
-    assert _found(session)["decidedBy"] == CANON and _found(session, MEMBER)["decidedBy"] == CANON
-
-
-def test_edge_5_a_ruling_older_than_the_findings_latest_raise_is_not_recovered(tmp_path):
-    row = ledger_row(raisedRound=3, **OOS)
-    older = Session(tmp_path, dispositionLedger=[row], rulingsLog=[_ruling(rnd=2)]).seat("code-reviewer").save()
-    # bites on: a ruling given before the finding was raised again being cited as the decision on the re-raise
-    assert _found(older)["decidedBy"] is None
-    (tmp_path / "same").mkdir()
-    same = Session(tmp_path / "same", dispositionLedger=[row], rulingsLog=[_ruling(rnd=3)]).seat("code-reviewer").save()
-    assert _found(same)["decidedBy"] == CANON
-    (tmp_path / "merged").mkdir()
-    ledger = [ledger_row(MEMBER, id="m-1", disposition=None, mergedInto=KEY, raisedRound=4), ledger_row(KEY, **OOS)]
-    late = Session(tmp_path / "merged", dispositionLedger=ledger, rulingsLog=[_ruling(rnd=3)]).seat("code-reviewer").save()
-    assert _found(late)["decidedBy"] is None  # the member's re-raise is the group's latest raise
-
-
 def _gate(disposition="fix-as-suggested", seq=2, **over):
     return {"disposition": disposition, "findingKey": KEY, "rulingSeq": seq, **over}
 
 
-def test_a_newer_owner_decision_to_fix_supersedes_the_ruling_it_follows(tmp_path):
-    rounds = {"1": {"judgmentDispositions": [_gate(seq=2)]}}
-    s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling(rnd=1, seq=1)], rounds=rounds)
-    # bites on: a superseded skip's citation restored, so an unfixed finding is promoted to a ruling
-    assert _found(s.seat("code-reviewer").save())["decidedBy"] is None
-    (tmp_path / "older").mkdir()
-    older = Session(tmp_path / "older", dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling(rnd=1, seq=3)],
-                    rounds=rounds)
-    assert _found(older.seat("code-reviewer").save())["decidedBy"] == CANON
-
-
-def test_an_owner_decision_to_fix_on_the_lineage_root_supersedes_the_ruling_on_a_reworded_finding(tmp_path):
-    root_key = "root.py::original@L1"
-    rounds = {"1": {"judgmentDispositions": [_gate(seq=2, findingKey=root_key)]}}
-    kw = dict(dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling(rnd=1, seq=1)], rounds=rounds)
-    # bites on: the gate lookup keyed on the representative's own keys, so a fix decision on the lineage root is missed
-    linked = Session(tmp_path, findingLineage={KEY: root_key}, **kw)
-    assert _found(linked.seat("code-reviewer").save())["decidedBy"] is None
-    (tmp_path / "unlinked").mkdir()
-    unlinked = Session(tmp_path / "unlinked", **kw)
-    assert _found(unlinked.seat("code-reviewer").save())["decidedBy"] == CANON
-
-
 _LIN = "root.py::original@L1"
-_GUIDE = {"disposition": "fix-with-guidance", "guidanceText": "fix it this way"}
+CHILD = "a.py::reworded@L3"
 
 
-@pytest.mark.parametrize("log,rounds,expected", [
-    ([_ruling(rnd=1, seq=1)], {}, CANON),  # nothing newer: the citation is recovered
-    ([_ruling(rnd=1, seq=1)], {"1": {"judgmentDispositions": [_gate(seq=2)]}}, None),  # gate fix
-    ([_ruling(rnd=1, seq=1)], {"1": {"judgmentDispositions": [_gate("skip", seq=2)]}}, None),  # gate skip
-    ([_ruling(rnd=1, seq=1)], {"1": {"judgmentDispositions": [dict(_gate(seq=2, findingKey=_LIN), **_GUIDE)]}}, None),  # guidance, lineage key
-    ([_ruling(rnd=1, seq=1), _ruling(_LIN, rnd=1, seq=2, ruling="guidance", decided_by=None)], {}, None),  # ruling, lineage key
-])
-def test_the_citation_is_recovered_only_when_the_groups_newest_decision_is_the_ruling_carrying_it(tmp_path, log, rounds, expected):
-    # bites on: the recovery ignoring any one kind of newer decision (gate fix, gate skip, guidance, a lineage ruling)
-    s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=log, rounds=rounds, findingLineage={KEY: _LIN})
-    assert _found(s.seat("code-reviewer").save())["decidedBy"] == expected
+def _settled(tmp_path, monkeypatch, rows, log=(), rounds=None, lineage=None, at_settle=None):
+    """A session whose open findings the real driver settles (its own effective-decision reader), with the
+    decision sources it reads at settle time; the writer then reads only what the driver left in the ledger."""
+    monkeypatch.setattr(RD, "_decision_sources", lambda state: dict(at_settle or {}))
+    s = Session(tmp_path, dispositionLedger=[ledger_row(k, **OOS) for k in rows], rulingsLog=list(log),
+                rounds=rounds or {"1": {}}, findingLineage=lineage or {}, dispositionLedgerOwner="ledger", dispositionSeqCounter=10)
+    RD._settle_open_findings(s.state)
+    return s.seat("code-reviewer").save()
+
+
+def test_a_leftover_whose_ruling_cites_a_decision_that_lands_before_the_write_reads_ruling(tmp_path, monkeypatch):
+    session = _settled(tmp_path, monkeypatch, [KEY], [_ruling(rnd=1, seq=1)])  # not on record at settle time
+    # bites on: the driver dropping the citation of a leftover, or the adapter not carrying the ledger's own
+    assert _found(session)["outcome"] == "left-for-owner" and _found(session)["decidedBy"] == CANON
+    fake = Fake(sources=CANON_SOURCES)
+    assert send(tmp_path, session, fake)["ok"]
+    (posted,) = _by_key(fake)
+    assert posted["outcome"] == "ruling" and posted["decidedBy"] == CANON
+    still = Fake()  # the decision never lands: the finding stays with the owner
+    (tmp_path / "w2").mkdir()
+    assert send(tmp_path / "w2", session, still)["ok"]
+    assert _by_key(still)[0]["outcome"] == "left-for-owner"
+
+
+def test_a_reworded_finding_is_not_promoted_by_a_skip_given_on_its_original(tmp_path, monkeypatch):
+    log = [_ruling(rnd=2, seq=2)]  # a Canon-cited skip on KEY alone; CHILD is KEY's reworded descendant
+    session = _settled(tmp_path, monkeypatch, [KEY, CHILD], log, lineage={CHILD: KEY}, at_settle=CANON_SOURCES)
+    # bites on: a skip reaching a reworded finding through the lineage (the driver confines it to its own key)
+    assert (_found(session)["outcome"], _found(session)["decidedBy"]) == ("ruling", CANON)
+    assert (_found(session, CHILD)["outcome"], _found(session, CHILD)["decidedBy"]) == ("left-for-owner", None)
+    fake = Fake(sources=CANON_SOURCES)
+    assert send(tmp_path, session, fake)["ok"]
+    assert sorted(f["outcome"] for f in _by_key(fake)) == ["left-for-owner", "ruling"]
+
+
+@pytest.mark.parametrize("rounds", [
+    {"1": {"judgmentDispositions": [_gate(seq=2)]}},  # gate fix
+    {"1": {"judgmentDispositions": [_gate("skip", seq=2)]}},  # gate skip
+    {"1": {"judgmentDispositions": [dict(_gate(seq=2, findingKey=_LIN), disposition="fix-with-guidance", guidanceText="g")]}},
+], ids=["fix", "skip", "guidance-on-lineage-root"])
+def test_a_newer_decision_supersedes_the_ruling_and_no_citation_is_kept(tmp_path, monkeypatch, rounds):
+    session = _settled(tmp_path, monkeypatch, [KEY], [_ruling(rnd=1, seq=1)], rounds, {KEY: _LIN}, CANON_SOURCES)
+    # bites on: a superseded ruling's citation kept or restored, so an unfixed finding is promoted to a ruling
+    assert (_found(session)["outcome"], _found(session)["decidedBy"]) == ("left-for-owner", None)
+    (tmp_path / "older").mkdir()
+    older = _settled(tmp_path / "older", monkeypatch, [KEY], [_ruling(rnd=1, seq=3)], rounds, {KEY: _LIN}, CANON_SOURCES)
+    assert _found(older)["outcome"] == "ruling"  # the same decision, newer than the gate row, stands
 
 
 def test_the_session_base_ref_is_the_default_when_the_extra_is_absent(tmp_path):
@@ -303,14 +309,6 @@ def test_an_attributed_ruling_logged_against_a_merged_member_settles_the_represe
     assert found[KEY]["outcome"] == "ruling"
     assert found[MEMBER]["outcome"] == "ruling"
     assert found[MEMBER]["reason"] == "belongs to the follow-up (ruled by the owner, 2030-01-02) (merged into rep-1)"
-
-
-def test_the_latest_ruling_among_the_group_stands(tmp_path):
-    ledger = [ledger_row(MEMBER, id="m-1", disposition=None, mergedInto=KEY), ledger_row(KEY, id="rep-1", **OOS)]
-    newer = _ruling(MEMBER, seq=5, decided_by={"kind": "canon", "ref": "canon-2"})
-    older = _ruling(KEY, seq=2)
-    s = Session(tmp_path, dispositionLedger=ledger, rulingsLog=[newer, older]).seat("code-reviewer")
-    assert _found(s.save())["decidedBy"] == {"kind": "canon", "ref": "canon-2"}
 
 
 def test_edge_6_a_merge_chain_that_does_not_resolve_stays_undecided(tmp_path):
