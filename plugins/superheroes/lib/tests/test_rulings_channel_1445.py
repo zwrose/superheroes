@@ -356,12 +356,13 @@ def test_ruling_target_ambiguous_when_staged_id_reused():
 
 
 def test_rule_refuses_when_fixer_orders_already_emitted(tmp_path):
-    """axis: rule refuses ruling-attempt-pending once the pending fixer attempt has emitted orders."""
-    session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
-    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    """axis: rule refuses ruling-attempt-pending when a target is in the batch the pending fixer
+    attempt emitted (a row still in the queue is recorded instead — see test_ruling_window_c7)."""
+    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     before = _state_bytes(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
-        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
+        {"id": id_a, "ruling": "out-of-scope", "reason": "defer A",
          "followUp": _follow_up()}]))
     assert out.get("ok") is False, out
     assert out.get("reason") == "ruling-attempt-pending", out
@@ -443,14 +444,18 @@ def test_edge6_two_rule_calls_append(tmp_path):
 
 
 def test_edge7_guidance_off_batch_no_supersede(tmp_path):
+    """axis: guidance on a row outside the emitted batch is recorded at once and leaves the pending
+    attempt and its emitted batch as they were."""
     session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-    before = _state_bytes(session_dir)
+    before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "guidance", "reason": "off batch", "guidance": "later"}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == "ruling-attempt-pending", out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"] == before["pending"]
+    assert after["_fixBatch"] == before["_fixBatch"]
+    assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 1
 
 
 def test_rule_refuses_emitted_fixer_when_ruling_would_empty_batch(tmp_path):
@@ -567,7 +572,8 @@ def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):
         RD._fix_batch_file_sha256(session_dir, rnd, state)
 
 
-def test_edge9_non_fixer_step_refuses_guidance(tmp_path):
+def test_edge9_non_fixer_step_accepts_guidance(tmp_path):
+    """axis: guidance is accepted at a step that is not the fixer step (it used to be refused)."""
     session_dir, gitdir, head_path, row_a, _ = _pending_fixer_two_findings(tmp_path)
     state = _state(session_dir)
     rnd = state["round"]
@@ -580,12 +586,12 @@ def test_edge9_non_fixer_step_refuses_guidance(tmp_path):
         RD.P_AUDITS, state, state.get("config") or {})
     _write_dispatch_manifest(session_dir, pend, _slots_of(roster), _auditor_vendor_for(state))
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
-    before = _state_bytes(session_dir)
+    log_before = len(_state(session_dir).get("rulingsLog") or [])
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
-    assert out.get("ok") is False, out
-    assert out.get("reason") == RD.RULING_GUIDANCE_NOT_FIXER, out
-    assert _state_bytes(session_dir) == before
+    assert out.get("ok") is True, out
+    log_after = _state(session_dir)["rulingsLog"]
+    assert len(log_after) == log_before + 1 and log_after[-1]["ruling"] == "guidance"
 
 
 def _owner_absent(state):

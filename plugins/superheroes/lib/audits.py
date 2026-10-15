@@ -80,8 +80,14 @@ def _resolve_expected_auditor(fid, finding, expected_auditors):
     return None, False
 
 
+def has_usable_unnamed_change(value):
+    """True when `value` is a non-blank string — the auditor's plain-words statement of behaviour the
+    fix changes that its finding does not name. Absent, null or blank means none."""
+    return isinstance(value, str) and bool(value.strip())
+
+
 def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None,
-                        carry_fields=()):
+                        carry_fields=(), change_allowed_ids=()):
     """Consume per-finding fix-audit rulings; fail-closed on ambiguity, silence, and malformation.
 
     `audited`  — findings already carrying a unique staged `id` (via verification.stage_ids)
@@ -101,8 +107,14 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                  selected auditor. Provenance rests on the orchestrator's dispatch manifest; the fold
                  cannot cryptographically verify engine identity and does not pretend to.
 
+    `change_allowed_ids` — target ids whose finding carries a ruling that allows the fix to change
+                 behaviour the finding does not name. A clearing result that states such a change
+                 (`unnamedChange`) stays discharged only for these ids (its audit entry records
+                 `allowedChange`); for any other id it is `not-discharged` and listed in
+                 `unnamedChange`. A non-string, non-null `unnamedChange` is malformed.
+
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched, unauthenticated, echoMismatch}. Each `audits` entry carries the EFFECTIVE
+    unmatched, unauthenticated, echoMismatch, unnamedChange}. Each `audits` entry carries the EFFECTIVE
     (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the
@@ -152,6 +164,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     unaudited, malformed = [], []
     unauthenticated = []
     echo_mismatch = []
+    unnamed_change = []
+    allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
     matched_ids = set()
 
     def _reject_unauthenticated(base, fid, reason, cause):
@@ -161,6 +175,17 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             unauthenticated.append(fid)
             not_discharged.append(fid)
         base.update(ruling="not-discharged", reason=reason, unauthenticatedCause=cause)
+        audits.append(base)
+
+    def refuse_unnamed_change(base, fid, text, candidates):
+        """A clearing result that states behaviour its finding does not name, with no ruling that
+        allows it: not-discharged, disclosed as `unnamedChange`; any new issues it carried stay."""
+        if fid is not None:
+            unnamed_change.append(fid)
+            not_discharged.append(fid)
+        new_issues.extend(candidates)
+        base.update(ruling="not-discharged",
+                    reason="the fix changes behaviour its finding does not name: %s" % text)
         audits.append(base)
 
     for f in audited:
@@ -271,8 +296,27 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                     echo_mismatch.append(fid)
                 base["echoMismatch"] = {"echo": echo, "manifest": manifest_vendor}
 
+        # A clearing result that names behaviour its finding does not name is accepted only when the
+        # finding's ruling allows the change. Provenance (above) keeps its precedence.
+        unnamed = r.get("unnamedChange")
+        if ruling in _CLEARS and unnamed is not None and not isinstance(unnamed, str):
+            if fid is not None:
+                malformed.append(fid)
+            base.update(ruling="not-discharged",
+                        reason="`unnamedChange` is not a string — treated as not-discharged")
+            audits.append(base)
+            if fid is not None:
+                not_discharged.append(fid)
+            continue
+        unnamed_text = unnamed.strip() if has_usable_unnamed_change(unnamed) else None
+
         if ruling == "discharged":
+            if has_reason and unnamed_text and fid not in allowed_ids:
+                refuse_unnamed_change(base, fid, unnamed_text, [])
+                continue
             if has_reason:
+                if unnamed_text:
+                    base["allowedChange"] = unnamed_text
                 base.update(ruling="discharged", reason=reason.strip())
                 if isinstance(evidence, str) and evidence.strip():
                     base["evidence"] = evidence
@@ -293,7 +337,12 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
 
         if ruling == "discharged-but-new-issue":
             candidates = _valid_new_issues(r.get("newIssues"), fid)
+            if candidates and unnamed_text and fid not in allowed_ids:
+                refuse_unnamed_change(base, fid, unnamed_text, candidates)
+                continue
             if candidates:
+                if unnamed_text:
+                    base["allowedChange"] = unnamed_text
                 base.update(ruling="discharged-but-new-issue",
                             reason=reason.strip() if has_reason else "fix discharged; new issue emitted")
                 if isinstance(evidence, str) and evidence.strip():
@@ -342,4 +391,5 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         "unmatched": unmatched,
         "unauthenticated": unauthenticated,
         "echoMismatch": echo_mismatch,
+        "unnamedChange": unnamed_change,
     }

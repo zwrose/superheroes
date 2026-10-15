@@ -28,6 +28,8 @@ belongs to and lists every change with its replacement.
 - `rule` accepts an optional `decidedBy` (`{kind: canon|residual|sheet-answer, ref}`) to name the decision a ruling rests on, and refuses a malformed one with `ruling-decided-by-malformed`. A caller that wants a ruling to settle a finding as `ruling` must now supply it.
 - The advisor's vet now reads the review record. In place of the certified-loop check and the seat-provenance parity check, it checks that the record exists, that the checks ran on the PR's final commit, and that no leftover skipped the owner's review. After a project adopts this release, a full or light PR with no review record is not returned as ready.
 
+A consuming project sees these review-loop changes with the record. A ruling binds the next fix across rewording and replaces earlier guidance. A pending fixer attempt can be withdrawn (`withdraw`) so a ruling reaches the next fix, and guidance is accepted at any step. A finding with a real consequence rides in a fix batch whatever its severity, and an out-of-scope finding is offered to a fixer at most once. A fix the auditor says changes behaviour its finding does not name is not credited without a ruling that allows it. Each round from 2 on records its focus, either the last round's fixes or wider with the reason, and the review record lists every wider round. An engine review run opened before the upgrade reads its result schema as changed, so re-dispatch it.
+
 ### Review: what retires
 
 These retirements ship in the same release as the review record, and never apart from it.

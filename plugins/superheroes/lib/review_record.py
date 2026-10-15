@@ -224,6 +224,13 @@ def _readers(overrides):
 
 # --- the account ---
 
+def _wider_ok(wider):
+    """``rounds.wider`` is a list of ``{round, why}``: an integer round and a non-blank reason."""
+    return isinstance(wider, list) and all(
+        isinstance(w, dict) and isinstance(w.get("round"), int) and not isinstance(w["round"], bool)
+        and isinstance(w.get("why"), str) and bool(w["why"].strip()) for w in wider)
+
+
 def _step_ok(v):
     return v is None or (isinstance(v, int) and not isinstance(v, bool))
 
@@ -292,7 +299,8 @@ def _validate(a):
     chk(isinstance(rounds, dict) and isinstance(rounds.get("count"), int)
         and (rounds.get("cap") is None or isinstance(rounds["cap"], int))
         and isinstance(rounds.get("stoppedAtCap"), bool)
-        and rounds.get("capKind", CAP_KINDS[0]) in CAP_KINDS, "rounds")
+        and rounds.get("capKind", CAP_KINDS[0]) in CAP_KINDS
+        and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "sheetAnswers": None, "baseRef": None, **a,
@@ -735,7 +743,7 @@ def build_record(account, readers):
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
         "refused": a["refused"], "unreadFiles": unread, "rawOutputs": [],
         "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
-        "missingReviews": missing, "rounds": dict(a["rounds"], source=SESSION),
+        "missingReviews": missing, "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
                  "tokens": sum(toks) if toks else None, "source": "engine records",
@@ -1082,6 +1090,9 @@ def _summary(r, level):
                      + " wait for the owner's decision")
     if r["parked"]:
         waits.append("a review with no go-ahead is parked until the owner decides")
+    wider = r["rounds"].get("wider") if isinstance(r.get("rounds"), dict) else None
+    wider_lines = [f"Round {w['round']} looked wider than the last fixes: {w['why']}"
+                   for w in wider or [] if isinstance(w, dict)]
     waits_text = ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner."
     checked = list(r["checked"][:2])
     missing = r["whatIsMissing"]
@@ -1116,11 +1127,13 @@ def _summary(r, level):
         *([_refused_line(refused, compact)] if refused else []),
         *who,
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
-        *([_reviewer_shed_line(r)] if r.get("reviewerShed") else [])]
+        *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
+        *wider_lines]
     # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.
-    _assert_no_bug_free_claim("\n".join(l for l in lines if l is not floor_line))
+    # The wider lines carry the driver's own reason text, literal data like the floor line.
+    _assert_no_bug_free_claim("\n".join(l for l in lines if l is not floor_line and l not in wider_lines))
     return "\n".join(lines)
 
 

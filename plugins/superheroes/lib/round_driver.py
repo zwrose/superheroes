@@ -207,7 +207,21 @@ RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
 RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
 RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
 RULINGS_LOG_MALFORMED = "rulings-log-malformed"
-RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
+WITHDRAW_CMD = "withdraw"
+WITHDRAW_SESSION_TERMINAL = "withdraw-session-terminal"
+WITHDRAW_NOT_FIXER = "withdraw-not-fixer"
+WITHDRAW_ATTEMPT_MISMATCH = "withdraw-attempt-mismatch"
+WITHDRAW_NOT_EMITTED = "withdraw-not-emitted"
+WITHDRAW_REASON_MISSING = "withdraw-reason-missing"
+WITHDRAW_WORKTREE_DIRTY = "withdraw-worktree-dirty"
+WITHDRAW_HEAD_MOVED = "withdraw-head-moved"
+WITHDRAW_HEAD_UNANCHORED = "withdraw-head-unanchored"
+WITHDRAW_GIT_UNAVAILABLE = "withdraw-git-unavailable"
+FIXER_ATTEMPT_WITHDRAWN = "fixer-attempt-withdrawn"
+WITHDRAW_RESTORE_CHECKED = "checked"
+WITHDRAW_RESTORE_NOT_CHECKED = "not-checked"
+LIFT_REAL_CONSEQUENCE = "real-consequence"
+LIFT_GUIDANCE = "guidance"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 
@@ -1594,6 +1608,161 @@ def _seed_collapsed_nits(state, ledger, seen, finding, round_no):
             + str(member.get(review_findings_schema.CONSEQUENCE_KEY) or "no consequence stated"))
 
 
+class _LineageCarry:
+    """A reworded finding takes the decision of the finding it rewords (``state["findingLineage"]``).
+
+    The round's view: the keys raised this round (this compile's, plus every finding an earlier
+    staging in the same round — the panel before a gap sweep — already seeded on the ledger), the
+    count of those findings per (file, line), and the decided keys with the location their decision
+    row records. ``apply`` carries only when ALL hold: the finding has no decision and no lineage
+    entry of its own; exactly one lineage root holds a decision recorded at the finding's file and
+    integer line, and that root's effective decision is guidance (a skip never carries); that root's
+    group has no member raised this round; and the finding is the only finding raised this round at
+    that file and line."""
+
+    def __init__(self, state, compiled, ledger=None):
+        self.compiled_keys = set()
+        self.at_location = {}
+        raised = {}
+        unkeyed = []
+        rows = []
+        for finding in compiled:
+            if not isinstance(finding, dict):
+                continue
+            rows.append(finding)
+            # A Nit-cap summary row's collapsed members are raised this round too.
+            members = finding.get("members") if finding.get("summaryEntry") else None
+            if isinstance(members, list):
+                rows.extend(m for m in members if isinstance(m, dict))
+        for finding in rows:
+            key = _finding_identity_key(finding)
+            if key:
+                raised.setdefault(key, finding)
+            else:
+                unkeyed.append(finding)
+        round_no = state.get("round") if isinstance(state, dict) else None
+        for entry in ledger if isinstance(ledger, list) else []:
+            if not isinstance(entry, dict) or entry.get("summaryEntry"):
+                continue
+            if entry.get(session_contract.RAISED_ROUND_FIELD) != round_no:
+                continue
+            key = _finding_identity_key(entry)
+            if key:
+                raised.setdefault(key, entry)
+        self.round_no = round_no
+        self.raised = raised
+        self.compiled_keys = set(raised)
+        for finding in list(raised.values()) + unkeyed:
+            location = self.location_of(finding)
+            if location is not None:
+                self.at_location[location] = self.at_location.get(location, 0) + 1
+        rows, readable = _decision_candidates(state)
+        self.readable = readable
+        self.effective = _effective_decisions(state) if readable else {}
+        self.decided = {}
+        for index, row in enumerate(rows):
+            key = row.get("findingKey")
+            if isinstance(key, str) and key:
+                held = self.decided.get(key)
+                if held is None or _decision_order((index, row)) > _decision_order(held):
+                    self.decided[key] = (index, row)
+
+    @staticmethod
+    def location_of(row):
+        file = row.get("file")
+        line = row.get("line")
+        if isinstance(file, str) and file and _is_plain_int(line):
+            return (file, line)
+        return None
+
+    def apply(self, state, finding, key):
+        lineage = _lineage_map(state)
+        if not self.readable or key in self.decided or key in lineage:
+            return
+        location = self.location_of(finding)
+        if location is None or self.at_location.get(location) != 1:
+            return
+        roots = set()
+        for decided_key, (_index, row) in self.decided.items():
+            if self.location_of(row) == location:
+                roots.add(_lineage_root(lineage, decided_key))
+        if len(roots) != 1:
+            return
+        root = next(iter(roots))
+        # Only a guidance decision carries. A skip (a ``rule`` out-of-scope ruling or an owner-gate
+        # skip) never does: a location match does not prove the new finding is the one the owner
+        # waived, so it is judged fresh — fixed, or left for the owner.
+        effective = self.effective.get(root)
+        if not isinstance(effective, dict) or effective.get("ruling") != "guidance":
+            return
+        group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
+        if group & self.compiled_keys:
+            return
+        state.setdefault("findingLineage", {})[key] = root
+        state.setdefault("findingLineageRound", {})[key] = state.get("round")
+        _decision(state, "ruling-carried",
+                  "%s takes the decision on %s (same file and line, reworded)" % (key, root))
+
+    def revoke_ambiguous(self, state):
+        """Undo a carry an earlier staging of THIS round made, when the round's view now breaks
+        one of its conditions — another finding raised at its file and line, or a member of its
+        group (the decided original included) raised this round. A carry is provisional until the
+        round's last staging; one from an earlier round stands. The inherited out-of-scope
+        disposition goes with the revoked carry, so the finding is judged fresh."""
+        lineage = _lineage_map(state)
+        rounds = state.get("findingLineageRound")
+        if not lineage or not isinstance(rounds, dict):
+            return
+        for key in sorted(lineage):
+            if rounds.get(key) != self.round_no or key not in self.raised:
+                continue
+            root = _lineage_root(lineage, key)
+            group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
+            location = self.location_of(self.raised[key])
+            if (location is not None and self.at_location.get(location) == 1
+                    and not ((group - {key}) & self.compiled_keys)):
+                continue
+            state["findingLineage"].pop(key, None)
+            rounds.pop(key, None)
+            lineage = _lineage_map(state)
+            if _live_out_of_scope_ruling_for_key(state, key) is None:
+                _clear_out_of_scope_disposition(state, key)
+            _decision(state, "ruling-carry-revoked",
+                      "%s no longer takes the decision on %s (a later staging this round raised "
+                      "another finding at that place, or the original)" % (key, root))
+
+
+def _ledger_out_of_scope_entry(ledger, seen, key):
+    if not isinstance(key, str) or key not in seen:
+        return None
+    entry = ledger[seen[key]]
+    if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+        return None
+    return entry
+
+
+def _ledger_out_of_scope_reason(ledger, seen, key):
+    entry = _ledger_out_of_scope_entry(ledger, seen, key)
+    return entry.get("outOfScopeReason") if entry is not None else None
+
+
+def _ledger_follow_up(ledger, seen, key, *, reason=None):
+    """The ``followUp`` an out-of-scope ledger entry holds for ``key``, else None; with ``reason``,
+    only when that entry was recorded for a decision with that reason."""
+    entry = _ledger_out_of_scope_entry(ledger, seen, key)
+    if entry is None:
+        return None
+    if reason is not None and entry.get("outOfScopeReason") != reason:
+        return None
+    return _follow_up_of(entry)
+
+
+def _follow_up_of(row):
+    """A copy of the row's ``followUp`` when it holds one as an object, else None."""
+    follow_up = row.get("followUp") if isinstance(row, dict) else None
+    return dict(follow_up) if isinstance(follow_up, dict) else None
+
+
 def _stage_findings(state, compiled):
     """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate. Each member
     a Nit-cap summary row collapsed is seeded too and recorded ``craft`` at once."""
@@ -1609,6 +1778,8 @@ def _stage_findings(state, compiled):
     round_no = state["round"]
     seeded = False
     sanitized = []
+    carry = _LineageCarry(state, compiled, ledger)
+    carry.revoke_ambiguous(state)
     for finding in compiled:
         if not isinstance(finding, dict):
             sanitized.append(finding)
@@ -1617,14 +1788,29 @@ def _stage_findings(state, compiled):
         if not key:
             sanitized.append(finding)
             continue
+        carry.apply(state, finding, key)
+        held_follow_up = _ledger_follow_up(ledger, seen, key)
+        held_reason = _ledger_out_of_scope_reason(ledger, seen, key)
         entry = _seed_ledger_entry(state, ledger, seen, finding, key, round_no)
         sanitized.append(entry)
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
         if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
+            # Only a legacy decision row — an unsequenced gate skip, written before skips carried
+            # their follow-up — recovers one from the ledger, and only from an entry recorded for
+            # that same decision (its reason): this key's own (read before the re-seed stripped
+            # it), else the decided key's. A sequenced decision without a follow-up keeps none.
+            follow_up = _follow_up_of(live_oos)
+            if (follow_up is None and live_oos.get("source") == "gate"
+                    and not _is_plain_int(live_oos.get("seq"))):
+                reason = live_oos.get("reason")
+                follow_up = (held_follow_up if held_reason == reason else None)
+                if follow_up is None:
+                    follow_up = _ledger_follow_up(ledger, seen, live_oos.get("findingKey"),
+                                                  reason=reason)
             _record_disposition(
                 state, key, "out-of-scope", round_no,
                 outOfScopeReason=live_oos.get("reason"),
-                followUp=live_oos.get("followUp"),
+                followUp=follow_up,
                 rulingSeq=live_oos.get("seq"))
         _seed_collapsed_nits(state, ledger, seen, finding, round_no)
         seeded = True
@@ -1645,6 +1831,14 @@ def _next_ruling_seq(state):
     counter = state.get("rulingSeqCounter", 0) + 1
     state["rulingSeqCounter"] = counter
     return counter
+
+
+def _stamp_ruling_seq(state, entry):
+    """Stamp an owner-gate decision with ``rulingSeq`` from the counter the ``rule`` verb uses, so the
+    two decision sources share one sequence. A malformed counter leaves the entry unsequenced (older
+    than every sequenced decision) rather than failing the fold."""
+    if _ruling_seq_counter_fault(state) is None:
+        entry["rulingSeq"] = _next_ruling_seq(state)
 
 
 def _read_rulings_log(state):
@@ -1688,17 +1882,176 @@ def _writable_rulings_log(state):
     return log
 
 
-def _live_ruling_by_key(state):
-    """Latest rulings-log row per finding key."""
-    rows, fault = _read_rulings_log(state)
-    if fault is not None:
+def _lineage_map(state):
+    """``{key: rootKey}`` from ``state["findingLineage"]`` — malformed entries read as absent."""
+    raw = state.get("findingLineage") if isinstance(state, dict) else None
+    if not isinstance(raw, dict):
         return {}
+    return {k: v for k, v in raw.items()
+            if isinstance(k, str) and k and isinstance(v, str) and v}
+
+
+def _holds_out_of_scope_disposition(state, key):
+    """True when the live finding or the ledger entry for ``key`` holds an out-of-scope disposition."""
+    live = _live_finding_by_key(state, key)
+    if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
+        return True
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return False
+    stored = ledger_by_key.get(key)
+    return isinstance(stored, dict) and stored.get("disposition") == "out-of-scope"
+
+
+def _lineage_group(state, key):
+    """Every key sharing ``key``'s lineage root (``key`` and the root included), sorted."""
+    lineage = _lineage_map(state)
+    root = _lineage_root(lineage, key)
+    return sorted({key, root} | {k for k in lineage if _lineage_root(lineage, k) == root})
+
+
+def _lineage_root(lineage, key):
+    """The root of ``key``: itself when absent from the lineage; a cycle reads as its own root."""
+    root = key
+    for _ in range(len(lineage) + 1):
+        nxt = lineage.get(root)
+        if nxt is None or nxt == root:
+            return root
+        root = nxt
+    return key
+
+
+def _is_plain_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _gate_decision_candidates(state):
+    """Owner-gate decisions across every round's ``judgmentDispositions``, shaped like ruling rows.
+
+    ``skip`` is an ``out-of-scope`` decision (carrying its ``followUp`` when the fold recorded one),
+    ``fix-with-guidance`` a ``guidance`` decision (a ``fix`` decision when it carries no guidance
+    text), and ``fix-as-suggested`` a ``fix`` decision — the owner's choice to fix as suggested, which supersedes an earlier skip or
+    guidance and itself neither excludes nor guides; every other gate disposition is not a
+    decision."""
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return []
+    out = []
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        log = round_entry.get("judgmentDispositions")
+        if not isinstance(log, list):
+            continue
+        for item in log:
+            if not isinstance(item, dict):
+                continue
+            disposition = item.get("disposition")
+            if disposition == "skip":
+                ruling = "out-of-scope"
+            elif disposition == "fix-with-guidance":
+                ruling = "guidance"
+            elif disposition == "fix-as-suggested":
+                ruling = "fix"
+            else:
+                continue
+            key = _history_row_key(item)
+            if not key:
+                continue
+            row = {"findingKey": key, "ruling": ruling, "reason": item.get("reason"),
+                   "seq": item.get("rulingSeq") if _is_plain_int(item.get("rulingSeq")) else None,
+                   "round": rnd_num, "source": "gate"}
+            if ruling == "guidance":
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if isinstance(guidance, str) and guidance.strip():
+                    row["guidance"] = guidance.strip()
+                else:
+                    # fix-with-guidance with no usable text is a fix decision: it still
+                    # supersedes earlier guidance rather than letting that guidance return.
+                    row["ruling"] = "fix"
+            if ruling == "out-of-scope" and _follow_up_of(item) is not None:
+                session_contract.copy_follow_up_field(item, row)
+            for field in ("file", "line", "title"):
+                if item.get(field) is not None:
+                    row[field] = item.get(field)
+            out.append(row)
+    return out
+
+
+def _decision_candidates(state, *, with_rules=True):
+    """``(rows, readable)``: every ``rulingsLog`` row (``source: "rule"``) and every owner-gate
+    decision, in log order. ``readable`` is False — and ``rows`` empty — when ``rulingsLog`` is
+    malformed; ``with_rules=False`` reads the gate decisions alone."""
+    rows = []
+    if with_rules:
+        rule_rows, fault = _read_rulings_log(state)
+        if fault is not None:
+            return [], False
+        for entry in rule_rows:
+            entry["source"] = "rule"
+            rows.append(entry)
+    rows.extend(_gate_decision_candidates(state))
+    return rows, True
+
+
+def _decision_order(indexed_row):
+    """Sort key for the one sequence: a sequenced decision outranks every unsequenced one; among
+    unsequenced decisions the later round wins; a remaining tie goes to the later row."""
+    index, row = indexed_row
+    seq = row.get("seq")
+    rnd = row.get("round")
+    return (1 if _is_plain_int(seq) else 0,
+            seq if _is_plain_int(seq) else 0,
+            rnd if _is_plain_int(rnd) else -1,
+            index)
+
+
+def _effective_decisions(state, *, with_rules=True):
+    """``{key: row}``: the one effective decision for every finding key that has one.
+
+    Invariant: for every finding the loop holds there is exactly ONE effective decision — the
+    latest one by a single sequence (``rulingSeq`` from ``_next_ruling_seq``, shared by the ``rule``
+    verb and the owner-judgment gate fold; a gate entry with no sequence is older than every
+    sequenced decision, and among those the later round wins) — read through this one reader.
+    A guidance or fix decision binds the finding under any wording a later round gives it at the
+    same location (``state["findingLineage"]``, written by ``_stage_findings``): it is the decision of
+    every key of the lineage group. An out-of-scope decision (a skip) binds only the key it was given
+    on — through a lineage it never reaches another member, which reads the latest decision that does
+    reach it. The fixer order renders only the effective decision."""
+    rows, readable = _decision_candidates(state, with_rules=with_rules)
+    if not readable:
+        return {}
+    lineage = _lineage_map(state)
+    groups = {}
+    for indexed in enumerate(rows):
+        key = indexed[1].get("findingKey")
+        if not isinstance(key, str) or not key:
+            continue
+        groups.setdefault(_lineage_root(lineage, key), []).append(indexed)
     by_key = {}
-    for entry in rows:
-        key = entry.get("findingKey")
-        if isinstance(key, str) and key:
-            by_key[key] = entry
+    for key in set(lineage) | {indexed[1]["findingKey"] for group in groups.values()
+                               for indexed in group}:
+        best = None
+        for indexed in groups.get(_lineage_root(lineage, key), []):
+            row = indexed[1]
+            if row.get("ruling") == "out-of-scope" and row.get("findingKey") != key:
+                continue  # a skip stays on the finding it was given on
+            if best is None or _decision_order(indexed) > _decision_order(best):
+                best = indexed
+        if best is not None:
+            by_key[key] = best[1]
     return by_key
+
+
+def _live_ruling_by_key(state):
+    """The effective decision per finding key (``{key: row}``) — see ``_effective_decisions``.
+    An unreadable ``rulingsLog`` reads as ``{}``."""
+    return _effective_decisions(state)
 
 
 def _live_out_of_scope_ruling_for_key(state, key):
@@ -3581,21 +3934,22 @@ def _gate_guidance_entries(state, rnd):
             batch_keys.add(key)
     sliced = bool(state.get("_fixQueue")) or (state.get("_fixBatchIndex") or 0) >= 1
     _validate_gate_guidance_logs(rounds, rnd, batch_keys)
-    ruling_channel = []
-    for key in sorted(batch_keys):
-        live = _live_ruling_by_key(state).get(key)
+    effective = _live_ruling_by_key(state)
+    if _read_rulings_log(state)[1] is not None:
+        # An unreadable rulings log still hides every rule decision (the reader returns {}); the
+        # owner-gate decisions stay readable on their own, as they were before the shared reader.
+        effective = _effective_decisions(state, with_rules=False)
+
+    def guided(key):
+        """The effective decision for ``key`` when it is a usable ``guidance``, else None."""
+        live = effective.get(key)
         if not isinstance(live, dict) or live.get("ruling") != "guidance":
-            continue
+            return None
         guidance = live.get("guidance")
         if not isinstance(guidance, str) or not guidance.strip():
-            continue
-        entry = {"id": key, "guidance": guidance.strip(), "rulingChannel": True}
-        live_row = _live_finding_by_key(state, key)
-        if isinstance(live_row, dict):
-            for field in ("title", "file", "line"):
-                if live_row.get(field) is not None:
-                    entry[field] = live_row.get(field)
-        ruling_channel.append(entry)
+            return None
+        return live
+
     out = []
     covered_keys = set()
     round_entry = rounds.get(str(rnd))
@@ -3615,28 +3969,44 @@ def _gate_guidance_entries(state, rnd):
                     continue
                 if sliced and key not in batch_keys:
                     continue
+                live = guided(key)
+                if (live is None or live.get("source") != "gate" or live.get("findingKey") != key
+                        or str(live.get("round")) != str(rnd)
+                        or live.get("guidance") != guidance.strip()):
+                    continue
                 covered_keys.add(key)
                 out.append({"id": key, "title": item.get("title"),
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
-    history = _finding_history(state)
+    ruling_channel = []
     for key in sorted(batch_keys):
         if key in covered_keys:
             continue
-        slot = history.get(key)
-        if not isinstance(slot, dict):
+        live = guided(key)
+        if live is None:
             continue
-        gate_ruling = slot.get("gateRuling")
-        if not isinstance(gate_ruling, dict):
+        carried_from = live.get("findingKey") if live.get("findingKey") != key else None
+        live_row = _live_finding_by_key(state, key)
+        if live.get("source") == "gate":
+            entry = {"id": key, "title": live.get("title"), "file": live.get("file"),
+                     "line": live.get("line"), "guidance": live["guidance"].strip(),
+                     "round": live.get("round")}
+            if carried_from is not None and isinstance(live_row, dict):
+                for field in ("title", "file", "line"):
+                    if live_row.get(field) is not None:
+                        entry[field] = live_row.get(field)
+            if carried_from is not None:
+                entry["carriedFrom"] = carried_from
+            out.append(entry)
             continue
-        if gate_ruling.get("disposition") != "fix-with-guidance":
-            continue
-        guidance = gate_ruling.get("guidance")
-        if not isinstance(guidance, str) or not guidance.strip():
-            continue
-        out.append({"id": key, "title": gate_ruling.get("title"),
-                    "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
-                    "guidance": guidance.strip(), "round": gate_ruling.get("round")})
+        entry = {"id": key, "guidance": live["guidance"].strip(), "rulingChannel": True}
+        if isinstance(live_row, dict):
+            for field in ("title", "file", "line"):
+                if live_row.get(field) is not None:
+                    entry[field] = live_row.get(field)
+        if carried_from is not None:
+            entry["carriedFrom"] = carried_from
+        ruling_channel.append(entry)
     return out + ruling_channel
 
 
@@ -3723,7 +4093,12 @@ def _route_judgment_blockers(state, blocking):
     straight into the fix batch alongside the fix-disposed judgment findings (never abandoned).
     Returns True when it took over routing (the caller must return); False when the batch is purely
     mechanical (the caller composes the fix batch as before)."""
-    judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")]
+    # A tradeoff whose effective decision is already a (non-Critical) skip — the owner's own, or one
+    # carried to a rewording — is not put to the owner again: the fix-batch exclusion honors it.
+    decided_out = _live_out_of_scope_ruling_keys(state)
+    judgment = [f for f in blocking if isinstance(f, dict) and f.get("tradeoff")
+                and not (_finding_key_of(f) in decided_out
+                         and not _live_out_of_scope_blocks_row(f))]
     if not judgment:
         return False
     mechanical = [f for f in blocking if isinstance(f, dict) and not f.get("tradeoff")]
@@ -3771,6 +4146,15 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     (every judgment finding skipped and no mechanical blocker) the loop settles into a converged
     terminal with the skips disclosed."""
     raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    seq_fault = _ruling_seq_counter_fault(state)
+    if seq_fault is not None:
+        # Every gate decision is sequenced on the counter the ``rule`` verb uses; recorded without a
+        # sequence it would rank below an older sequenced decision (a fix choice losing to an
+        # earlier skip), so the fold parks instead of recording it.
+        _park_cannot_certify(state, "%s: %s" % seq_fault)
+        state.pop("_judgmentFindings", None)
+        state.pop("_judgmentMechanical", None)
+        return
     oversize = judgment_guidance_oversize_fault(artifact)
     if oversize:
         _park_cannot_certify(state, oversize)
@@ -3830,22 +4214,32 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     fix_batch = [dict(f) for f in (state.get("_judgmentMechanical") or []) if isinstance(f, dict)]
     skipped = []
     disposition_log = []
+    reopened = []
     for i, f in enumerate(judgment):
         fid = row_ids[i]
         d = by_id.get(fid) if isinstance(by_id.get(fid), dict) else {}
         disposition = d.get("disposition")
         reason = d.get("reason")
         if disposition == "skip" and isinstance(reason, str) and reason.strip():
-            skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
-                            "title": f.get("title"), "severity": f.get("severity"),
-                            "reason": reason.strip()})
-            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
-                                    "title": f.get("title"), "disposition": "skip",
-                                    "reason": reason.strip()})
+            # A lifted Minor/Nit product choice put to the owner is not a blocker: its skip is
+            # recorded (disposition and decision below) but never rides the skipped-blocker channel.
+            if circuit_breaker.is_blocking(f.get("severity")):
+                skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
+                                "title": f.get("title"), "severity": f.get("severity"),
+                                "reason": reason.strip()})
+            follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
+            skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                          "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                          "disposition": "skip", "reason": reason.strip()}
+            if follow_up is not None:
+                # The skip is a standing decision: its follow-up travels with it, so a later round
+                # that restages the finding (or a rewording of it) reapplies the whole decision.
+                session_contract.copy_follow_up_field({"followUp": follow_up}, skip_entry)
+            _stamp_ruling_seq(state, skip_entry)
+            disposition_log.append(skip_entry)
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
                       % (f.get("title") or fid, reason.strip()))
-            follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             disp_kwargs = {"outOfScopeReason": reason.strip()}
             if follow_up is not None:
                 disp_kwargs = dict(disp_kwargs, followUp=follow_up)
@@ -3860,23 +4254,35 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
                      "line": f.get("line"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
+            _stamp_ruling_seq(state, entry)
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
-            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
-                                    "title": f.get("title"),
-                                    "disposition": "fix-as-suggested"})
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                     "disposition": "fix-as-suggested"}
+            _stamp_ruling_seq(state, entry)
+            disposition_log.append(entry)
         else:
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
-            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
-                                    "title": f.get("title"),
-                                    "disposition": "fix-as-suggested", "failClosed": True})
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                     "disposition": "fix-as-suggested", "failClosed": True}
+            _stamp_ruling_seq(state, entry)
+            disposition_log.append(entry)
             _decision(state, "judgment-fail-closed",
                       "judgment blocker %r had no valid disposition (%r) — folded as "
                       "fix-as-suggested (a judgment blocker is never silently skipped)"
                       % (f.get("title") or fid, disposition))
+        # A fix choice is the finding's latest decision: it supersedes an earlier skip (its
+        # out-of-scope disposition is cleared here, as a later ``rule`` guidance clears one) and
+        # earlier guidance (the effective-decision reader ranks this sequenced entry last).
+        for member in _lineage_group(state, fid):
+            if member != fid and _holds_out_of_scope_disposition(state, member):
+                reopened.append(member)
+            _clear_out_of_scope_disposition(state, member)
         fix_batch.append(g)
     if skipped:
         state["_skippedBlockers"] = (state.get("_skippedBlockers") or []) + skipped
@@ -3884,6 +4290,16 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
     _record_round(state, "judgmentDispositions", disposition_log)
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
+    # A lineage member whose own skip the fix choice superseded is reopened: when it is a blocking
+    # finding this round it joins the fix batch rather than being left unfixed.
+    queued = {_fix_batch_row_key(r) for r in fix_batch}
+    for member in reopened:
+        live = _live_finding_by_key(state, member)
+        if (member not in queued and isinstance(live, dict)
+                and circuit_breaker.is_blocking(live.get("severity"))
+                and _live_out_of_scope_ruling_for_key(state, member) is None):
+            fix_batch.append(dict(live))
+            queued.add(member)
     if fix_batch:
         _queue_fix_batch(state, config, fix_batch)
         return
@@ -3912,7 +4328,7 @@ def _after_findings_settled(state, config):
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
     if blocking:
-        if _route_judgment_blockers(state, blocking):
+        if _route_judgment_blockers(state, blocking + _lifted_judgment_rows(state, blocking)):
             return
         _queue_fix_batch(state, config, [dict(f) for f in blocking])
     else:
@@ -3979,6 +4395,67 @@ def _filter_excluded_discharged_fixes(state, rows):
     return filtered, None
 
 
+def _out_of_scope_episode(decision):
+    """The episode id of an out-of-scope decision: its ``seq``, or ``round:<n>`` for an unsequenced
+    legacy gate decision."""
+    seq = decision.get("seq")
+    if _is_plain_int(seq):
+        return seq
+    return "round:%s" % decision.get("round")
+
+
+def _drop_spent_out_of_scope_rows(state, rows):
+    """``(kept, spent)``: ``rows`` less those whose finding is out of scope and was already offered to
+    a fixer in an earlier round of the same episode. A row that passes while out of scope is recorded
+    in ``state["outOfScopeFixerRounds"]`` (keyed by lineage root). A spent row's out-of-scope
+    disposition is recorded again with the round it was offered in, keeping its ``followUp``."""
+    effective = _live_ruling_by_key(state)
+    lineage = _lineage_map(state)
+    this_round = state["round"]
+    spent_log = state.get("outOfScopeFixerRounds")
+    if not isinstance(spent_log, dict):
+        spent_log = {}
+    kept, spent = [], []
+    for row in rows:
+        key = _fix_batch_row_key(row)
+        decision = effective.get(key) if key else None
+        if not isinstance(decision, dict) or decision.get("ruling") != "out-of-scope":
+            kept.append(row)
+            continue
+        root = _lineage_root(lineage, key)
+        episode = _out_of_scope_episode(decision)
+        held = spent_log.get(root)
+        offered = (held.get("rounds") if isinstance(held, dict) and held.get("episode") == episode
+                   and isinstance(held.get("rounds"), list) else [])
+        earlier = [rnd for rnd in offered if rnd != this_round]
+        if earlier:
+            spent.append((key, row, earlier[0]))
+            continue
+        spent_log[root] = {"episode": episode, "rounds": [this_round]}
+        kept.append(row)
+    if spent_log:
+        state["outOfScopeFixerRounds"] = spent_log
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    for key, row, offered_round in spent:
+        held_row = ledger_by_key.get(key)
+        if not isinstance(held_row, dict):
+            held_row = row
+        # Re-record the disposition whole (it replaces the family), keeping what it carried — its
+        # followUp included — and naming the round the finding was already offered in.
+        fields = {name: value for name, value
+                  in session_contract.disposition_family_snapshot(held_row).items()
+                  if name not in ("disposition", "dispositionRound")}
+        reason = (
+            "out of scope; already offered to a fixer in round %s and not offered again while it "
+            "stays out of scope" % offered_round)
+        _record_disposition(state, key, "out-of-scope", this_round,
+                            **dict(fields, outOfScopeReason=reason))
+        _decision(state, "out-of-scope-fix-spent",
+                  "%s is out of scope and was already offered to a fixer in round %s — not offered "
+                  "again" % (key, offered_round))
+    return kept, [key for key, _row, _rnd in spent]
+
+
 def _resolve_empty_fix_batch_convergence(state, config):
     """Route an exclusion-emptied batch through the path's own resolver (A2)."""
     round_rec = state.get("rounds", {}).get(str(state["round"]), {})
@@ -3988,8 +4465,131 @@ def _resolve_empty_fix_batch_convergence(state, config):
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
+def _fix_row_roots(state, rows):
+    """The lineage roots of the finding keys the ``rows`` hold — a reworded finding and the one it
+    rewords are one finding."""
+    lineage = _lineage_map(state)
+    roots = set()
+    for row in rows or []:
+        key = _fix_batch_row_key(row)
+        if key:
+            roots.add(_lineage_root(lineage, key))
+    return roots
+
+
+def _lift_marker_for(finding, disposition_row, decision):
+    """``LIFT_REAL_CONSEQUENCE`` / ``LIFT_GUIDANCE`` when this live finding must ride the fix batch
+    though no blocking row names it, else None.
+
+    Real consequence: the finding states a real consequence and holds no disposition at all (a
+    fixed, refuted, merged or collapsed finding, and an out-of-scope one, never ride). Guidance: the
+    finding's one effective decision is ``guidance`` and it is not fixed or refuted; a stale
+    out-of-scope disposition under a later guidance decision does not block it."""
+    ruling = decision.get("ruling") if isinstance(decision, dict) else None
+    disposition = disposition_row.get("disposition")
+    if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL
+            and ruling != "out-of-scope" and disposition != "out-of-scope"
+            and not _disposition_is_current(disposition_row)):
+        return LIFT_REAL_CONSEQUENCE
+    if (ruling == "guidance"
+            and not (disposition in ("fixed", "refuted") and _disposition_is_current(disposition_row))):
+        return LIFT_GUIDANCE
+    return None
+
+
+def _lifted_fix_rows(state, rows):
+    """Live findings that join a round's fix batch beside the blocking ``rows``: every undisposed
+    finding with a real consequence, and every finding an effective ``guidance`` decision names, each
+    a copy carrying its ``lifted`` marker, in severity order. A finding already in ``rows`` (under
+    any wording of its lineage) is never added twice."""
+    findings = state.get("findings")
+    if not isinstance(findings, list):
+        return []
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return []
+    lineage = _lineage_map(state)
+    held = _fix_row_roots(state, rows)
+    effective = _live_ruling_by_key(state)
+    lifted = []
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("summaryEntry"):
+            continue
+        key = _fix_batch_row_key(finding)
+        if not key:
+            continue
+        root = _lineage_root(lineage, key)
+        if root in held:
+            continue
+        stored = ledger_by_key.get(key)
+        marker = _lift_marker_for(finding, stored if isinstance(stored, dict) else finding,
+                                  effective.get(key))
+        if marker is None:
+            continue
+        held.add(root)
+        row = dict(finding)
+        row["lifted"] = marker
+        lifted.append(row)
+    lifted.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
+    return lifted
+
+
+# The effective decisions that are the owner's word to fix a finding: a fix choice at the owner gate
+# and guidance (from the gate or the `rule` verb).
+_OWNER_FIX_RULINGS = ("fix", "guidance")
+
+
+def _lift_awaits_owner_judgment(row, decision):
+    """True when a lifted row is a product choice (``tradeoff: true``) that no effective owner
+    decision authorizes fixing yet. Such a row never rides an autonomous fix batch: it goes to the
+    owner-judgment gate beside the round's blockers, as a blocking tradeoff does."""
+    ruling = decision.get("ruling") if isinstance(decision, dict) else None
+    return bool(row.get("tradeoff")) and ruling not in _OWNER_FIX_RULINGS
+
+
+def _split_lifted_rows(state, rows):
+    """``(autonomous, awaiting_judgment)``: the lifted rows for the offered ``rows`` after the
+    discharge filter, split by ``_lift_awaits_owner_judgment``. A ledger read fault lifts nothing."""
+    lifted, fault = _filter_excluded_discharged_fixes(state, _lifted_fix_rows(state, rows))
+    if fault is not None or not lifted:
+        return [], []
+    effective = _live_ruling_by_key(state)
+    autonomous, awaiting = [], []
+    for row in lifted:
+        decision = effective.get(_fix_batch_row_key(row))
+        (awaiting if _lift_awaits_owner_judgment(row, decision) else autonomous).append(row)
+    return autonomous, awaiting
+
+
+def _lifted_judgment_rows(state, rows):
+    """The lifted rows beside the blocking ``rows`` that must go to the owner-judgment gate before
+    any fixer leg is composed (``_route_judgment_blockers``)."""
+    if not rows:
+        return []
+    return _split_lifted_rows(state, rows)[1]
+
+
+def _lift_into_fix_batch(state, rows):
+    """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered,
+    non-empty offered set: the lift joins a fixer leg that is going out, it never starts one. A lifted
+    product choice no owner decision authorizes is held out (``_lift_awaits_owner_judgment``) — the
+    settle paths route it to the owner gate first."""
+    lifted, _awaiting = _split_lifted_rows(state, rows)
+    if not lifted:
+        return rows
+    keys = [_fix_batch_row_key(row) for row in lifted]
+    _record_round(state, "liftedIntoFixBatch", keys)
+    _decision(state, "fix-batch-lifted",
+              "%d finding(s) with a real consequence or a guidance decision join this round's "
+              "fix batch: %s" % (len(keys), ", ".join(keys)))
+    return list(rows) + lifted
+
+
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    The round's first batch (``reset_accumulator`` with ``batch_index`` 0) also takes the lifted
+    findings (``_lift_into_fix_batch``) after the blocking rows, under the same cap and slicing.
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
     setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
@@ -4005,20 +4605,32 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
+    discharge_survivors = len(filtered)
+    spent_keys = []
+    if filtered:
+        filtered, spent_keys = _drop_spent_out_of_scope_rows(state, filtered)
     if offered_nonempty and not filtered:
-        rec = state["rounds"].setdefault(str(state["round"]), {})
-        prior = rec.get("fixBatchExcludedByDischarge") or 0
-        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
+        # Only rows the discharge filter dropped count as excluded by discharge; rows the
+        # once-per-episode rule dropped do not.
+        excluded_by_discharge = len(rows) - discharge_survivors
+        if excluded_by_discharge:
+            rec = state["rounds"].setdefault(str(state["round"]), {})
+            prior = rec.get("fixBatchExcludedByDischarge") or 0
+            _record_round(state, "fixBatchExcludedByDischarge", prior + excluded_by_discharge)
+        why = ("discharged-finding exclusion" if not spent_keys else
+               "the once-per-episode out-of-scope rule (%d finding(s) already offered to a fixer)"
+               % len(spent_keys))
         if batch_index == 0:
             _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by discharged-finding exclusion — "
-                      "without fixer dispatch")
+                      "fix batch emptied by %s — without fixer dispatch" % why)
             _resolve_empty_fix_batch_convergence(state, config)
         else:
             _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by discharged-finding exclusion — "
-                      "remaining queue exhausted, the round proceeds to post-fix")
+                      "fix batch emptied by %s — remaining queue exhausted, the round proceeds "
+                      "to post-fix" % why)
         return "excluded"
+    if reset_accumulator and batch_index == 0 and filtered:
+        filtered = _lift_into_fix_batch(state, filtered)
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
@@ -4051,6 +4663,46 @@ def _offered_fixer_rows(state, extra_rows=None):
     return offered
 
 
+def _guidance_named_rows(state, named):
+    """Lifted copies of the findings a just-recorded ``guidance`` ruling names that the fixer step's
+    batch and queue do not hold yet — the same ``lifted`` marker the round's first batch uses. A fixed
+    or refuted finding, and a finding the batch already holds (under any wording), is not named
+    again. ``named`` is ``[(findingKey, resolved row)]``."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        ledger_by_key = {}
+    lineage = _lineage_map(state)
+    held = _fix_row_roots(state, _offered_fixer_rows(state))
+    effective = _live_ruling_by_key(state)
+    rows = []
+    for key, candidate in named:
+        root = _lineage_root(lineage, key)
+        if root in held:
+            continue
+        source = _live_finding_by_key(state, key)
+        if not isinstance(source, dict):
+            source = candidate
+        if not isinstance(source, dict):
+            continue
+        stored = ledger_by_key.get(key)
+        if _lift_marker_for(source, stored if isinstance(stored, dict) else source,
+                            effective.get(key)) is None:
+            continue
+        held.add(root)
+        row = dict(source)
+        row["lifted"] = LIFT_GUIDANCE
+        rows.append(row)
+    if rows:
+        keys = [_fix_batch_row_key(row) for row in rows]
+        _record_round(state, "liftedIntoFixBatch",
+                      list(state["rounds"].get(str(state["round"]), {}).get(
+                          "liftedIntoFixBatch") or []) + keys)
+        _decision(state, "fix-batch-lifted",
+                  "guidance names %d finding(s) the fix batch did not hold: %s"
+                  % (len(keys), ", ".join(keys)))
+    return rows
+
+
 def _sync_pending_after_ruling_reconcile(state):
     """Drop or refresh a stored fixer pending whose payload no longer matches the reconciled slice."""
     pending = state.get("pending")
@@ -4068,10 +4720,47 @@ def _sync_pending_after_ruling_reconcile(state):
     state["pending"] = updated
 
 
-def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
-    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
+def _reconcile_queue_after_emitted_rulings(state, extra_rows=None):
+    """Filter the not-yet-emitted slices (``_fixQueue``) through the ruling filter, after appending
+    the rows the ruling brought in (``extra_rows`` — guidance-named or reopened findings) that neither
+    the emitted slice nor the queue holds. The emitted slice (``_fixBatch``) and the pending payload
+    stay exactly as they are; the appended rows ride a later slice of the round."""
+    queue = state.get("_fixQueue")
+    queue = [row for row in queue if isinstance(row, dict)] if isinstance(queue, list) else []
+    held = set()
+    for row in list(state.get("_fixBatch") or []) + queue:
+        if isinstance(row, dict):
+            key = _fix_batch_row_key(row)
+            if key:
+                held.add(key)
+    for row in extra_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in held:
+                continue
+            held.add(key)
+        queue.append(dict(row))
+    if not queue:
+        return None
+    filtered, fault = _filter_excluded_discharged_fixes(state, queue)
+    if fault is None:
+        state["_fixQueue"] = filtered
+    return "queue-reconciled"
+
+
+def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None,
+                                         emitted=False):
+    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling.
+
+    ``emitted`` is True while the pending fixer attempt has emitted its orders: that slice is never
+    reshaped — the ``extra_rows`` join the later slices of the round (``_fixQueue``), which are
+    reconciled."""
     if state.get("step") != P_FIXER:
         return None
+    if emitted:
+        return _reconcile_queue_after_emitted_rulings(state, extra_rows)
     offered = _offered_fixer_rows(state, extra_rows)
     if not offered:
         return None
@@ -4699,6 +5388,7 @@ def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_s
     _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
+    _record_round(state, "focus", {"on": "wider", "why": detail})
     state["fullPanelRan"] = False
     state["step"] = P_PANEL
     return True
@@ -4713,6 +5403,17 @@ def _after_unknown_surface_panel(
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_PANEL
         state["step"] = P_VERIFY
+
+
+def _fix_batch_keys(state):
+    """The finding keys of the previous round's fix batch, in batch order, each once."""
+    keys = []
+    for f in state.get("fixBatch") or []:
+        if isinstance(f, dict):
+            key = _finding_key_of(f)
+            if key not in keys:
+                keys.append(key)
+    return keys
 
 
 def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
@@ -4770,9 +5471,23 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
+    _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_POST_AUDITS
     state["step"] = P_AUDITS
+
+
+def _fix_hunks_over_line(audit_targets_map, file, line):
+    """The hunks of the fix surface in ``file`` over the finding's location — the same location
+    (the line and its margin) and the same overlap test ``delta_surface.split_fix_surface`` used to
+    attribute them; empty when the file or line is unusable."""
+    if not isinstance(audit_targets_map, dict) or not isinstance(file, str) or not file:
+        return []
+    ranges = delta_surface.fixed_locations([{"file": file, "line": line}]).get(file)
+    if not ranges:
+        return []
+    return [hunk for hunk in audit_targets_map.get(file) or []
+            if isinstance(hunk, dict) and delta_surface._overlaps(hunk, ranges)]
 
 
 def _audit_targets(state, config, audit_targets_map):
@@ -4814,6 +5529,12 @@ def _audit_targets(state, config, audit_targets_map):
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
         }
+        # The auditor compares the fix with what the finding names: its body, suggestion and
+        # consequence ride every target, beside the hunks of the fix over the finding's line.
+        for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY):
+            if f.get(carried) is not None:
+                row[carried] = f[carried]
+        row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
             for carried in ("suggestion", "body", break_it.RUN_FIELD):
@@ -4907,9 +5628,31 @@ def _fold_audits(state, config, artifact, session_dir=None):
     if no_auditor_ids:
         results = [r for r in results
                    if not (isinstance(r, dict) and r.get("id") in no_auditor_ids)]
+    # A fix may change behaviour its finding does not name only where the finding's one effective
+    # decision is a guidance ruling that says so (`allowsChange`); the owner gate never carries it.
+    effective = _live_ruling_by_key(state)
+    change_allowed_ids = [
+        t.get("id") for t in targets
+        if isinstance(t, dict) and isinstance(t.get("id"), str)
+        and isinstance(effective.get(t["id"]), dict)
+        and effective[t["id"]].get("ruling") == "guidance"
+        and effective[t["id"]].get("allowsChange") is True]
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
                                          collection_manifest=collection_manifest,
-                                         carry_fields=(session_contract.FINDING_KEY_FIELD,))
+                                         carry_fields=(session_contract.FINDING_KEY_FIELD,),
+                                         change_allowed_ids=change_allowed_ids)
+    # A lifted Minor/Nit target is audited and its discharge recorded like any other, but it never
+    # drives the loop: a not-discharged non-blocking target is held out of `notDischarged` (which
+    # restarts fixing, parks at the cap and feeds stall recovery) and out of the stall breaker's
+    # audit round — the rubric's rule that a Minor/Nit never changes the verdict.
+    nonblocking_ids = {t.get("id") for t in targets
+                       if isinstance(t, dict) and t.get("id") is not None
+                       and not circuit_breaker.is_blocking(t.get("severity"))}
+    held_open = [aid for aid in outcome.get("notDischarged") or [] if aid in nonblocking_ids]
+    if held_open:
+        outcome["notDischarged"] = [aid for aid in outcome["notDischarged"]
+                                    if aid not in nonblocking_ids]
+        outcome["notDischargedNonBlocking"] = held_open
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -4920,7 +5663,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
         {"identity": a.get("identity"), "ruling": a.get("ruling"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
-        for a in outcome["audits"]]}
+        for a in outcome["audits"] if a.get("id") not in nonblocking_ids]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         audit_reason = None
@@ -4951,6 +5694,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
                       "found: %s — not-discharged"
                       % (pid, pid, found_keys))
         _decision(state, "audit-provenance-fail", detail)
+    unnamed_ids = list(outcome.get("unnamedChange") or [])
+    if unnamed_ids:
+        _record_round(state, "auditUnnamedChange", unnamed_ids)
+        _decision(state, "audit-unnamed-change",
+                  "the fix changes behaviour its finding does not name, so it is not accepted "
+                  "without a ruling: %s" % ", ".join(unnamed_ids))
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
                   "audit result for %s echoed a vendor other than the recorded dispatch provenance "
@@ -4968,6 +5717,9 @@ def _fold_audits(state, config, artifact, session_dir=None):
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
+    for aid in held_open:
+        _decision(state, "not-discharged-nonblocking",
+                  "%s — a lifted non-blocking finding; recorded, never a reason to keep fixing" % aid)
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
         state["step"] = P_VERIFY
         return
@@ -5100,7 +5852,7 @@ def _settle_delta(state, config):
         nd_targets = [dict(t) for t in audit_targets
                       if isinstance(t, dict) and t.get("id") in nd_ids]
         batch = _union_open_blockers(new_blocking, nd_targets)
-        if _route_judgment_blockers(state, batch):
+        if _route_judgment_blockers(state, batch + _lifted_judgment_rows(state, batch)):
             return
         _queue_fix_batch(state, config, batch)
         return
@@ -5127,6 +5879,7 @@ def _settle_delta_converged(state, config):
             return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
+        _record_round(state, "focus", {"on": "wider", "why": followup.get("reason")})
         state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
         state["step"] = P_PANEL
         return
@@ -6878,6 +7631,12 @@ def _validate_ruling_entries(doc):
             if _guidance_oversize(guidance):
                 return None, None, RULING_GUIDANCE_OVERSIZE
             entry["guidance"] = guidance.strip()
+            if "allowsChange" in spec:
+                if not isinstance(spec.get("allowsChange"), bool):
+                    return None, None, RULING_FILE_SHAPE
+                entry["allowsChange"] = spec["allowsChange"]
+        elif "allowsChange" in spec:
+            return None, None, RULING_FILE_SHAPE
         parsed.append(entry)
     return parsed, provenance, None
 
@@ -6948,21 +7707,27 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             if circuit_breaker.is_critical(sev):
                 return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
                                    id=entry["id"])
-    if (isinstance(pending, dict) and pending.get("phase") == P_FIXER
-            and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
-                                            pending.get("attempt"))):
-        return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
-                           phase=pending.get("phase"), rnd=pending.get("round"),
-                           attempt=pending.get("attempt"))
-    if state.get("step") != P_FIXER:
+    emitted = (isinstance(pending, dict) and pending.get("phase") == P_FIXER
+               and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                               pending.get("attempt")))
+    if emitted:
+        batch_roots = _fix_row_roots(state, state.get("_fixBatch"))
+        lineage = _lineage_map(state)
         for entry in parsed:
-            if entry["ruling"] == "guidance":
+            key, _candidate, _fault = _resolve_ruling_target(state, entry["id"])
+            if _lineage_root(lineage, key) in batch_roots:
                 return _refuse_cmd(
-                    session_dir, RULE_CMD, RULING_GUIDANCE_NOT_FIXER,
-                    phase=phase, rnd=rnd, attempt=attempt)
+                    session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
+                    phase=pending.get("phase"), rnd=pending.get("round"),
+                    attempt=pending.get("attempt"), id=entry["id"],
+                    detail=("a fixer attempt is running on a batch this ruling would change: "
+                            "stop the fixer, restore the worktree to the head the attempt "
+                            "started from, run `withdraw` for attempt %s, then `rule` again"
+                            % pending.get("attempt")))
     cfg = state.get("config") or {}
     round_rulings = []
-    restored_rows = []
+    guidance_keys = []
+    reopened_rows = []  # lineage members whose own skip a guidance ruling reopened (kept by exact key)
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
@@ -6986,10 +7751,16 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             "rulingFileSha256": file_sha,
             "by": by,
         }
+        if isinstance(candidate, dict):
+            for field in ("file", "line"):
+                if candidate.get(field) is not None:
+                    log_row[field] = candidate.get(field)
         session_contract.copy_follow_up_field(entry, log_row)
         session_contract.copy_decided_by_field(entry, log_row)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
+        if "allowsChange" in entry:
+            log_row["allowsChange"] = entry["allowsChange"]
         _writable_rulings_log(state).append(log_row)
         round_rulings.append(dict(log_row))
         if entry["ruling"] == "out-of-scope":
@@ -6998,6 +7769,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
                 rulingSeq=seq)
         elif entry["ruling"] == "guidance":
+            guidance_keys.append((key, candidate))
             live_row = _live_finding_by_key(state, key)
             ledger_oos = isinstance(live_row, dict) and live_row.get("disposition") == "out-of-scope"
             if not ledger_oos:
@@ -7008,14 +7780,25 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             prior_oos = isinstance(prior_live, dict) and prior_live.get("ruling") == "out-of-scope"
             if prior_oos or ledger_oos:
                 _clear_out_of_scope_disposition(state, key)
-                restore = _live_finding_by_key(state, key) or candidate
-                if isinstance(restore, dict):
-                    restored_rows.append(dict(restore))
+            # A lineage member whose own skip this guidance now supersedes reopens with it.
+            for member in _lineage_group(state, key):
+                if member == key or _live_out_of_scope_ruling_for_key(state, member) is not None:
+                    continue
+                if _holds_out_of_scope_disposition(state, member):
+                    _clear_out_of_scope_disposition(state, member)
+                    restore = _live_finding_by_key(state, member)
+                    if isinstance(restore, dict):
+                        reopened_rows.append(dict(restore))
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
+    named_rows = []
+    if state.get("step") == P_FIXER:
+        # While an attempt is emitted these rows cannot be in its batch (a ruling on that batch was
+        # refused above): they join the later slices of the round.
+        named_rows = _guidance_named_rows(state, guidance_keys) + reopened_rows
     _reconcile_fixer_queue_after_rulings(
-        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+        state, cfg, extra_rows=named_rows, session_dir=session_dir, emitted=emitted)
     if state.get("step") == P_FIXER:
         pending_render_check = state.get("pending")
         rnd_render = None
@@ -7053,6 +7836,173 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             and not state.get("terminal")):
         response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
     return response
+
+
+def _withdrawn_fixer_attempts(state, rnd):
+    """The fixer attempts of round ``rnd`` the orchestrator withdrew, as a set of ints."""
+    rows = state.get("withdrawnFixerAttempts") if isinstance(state, dict) else None
+    out = set()
+    if isinstance(rows, list):
+        for row in rows:
+            if (isinstance(row, dict) and row.get("round") == rnd
+                    and _is_plain_int(row.get("attempt"))):
+                out.add(row["attempt"])
+    return out
+
+
+def _fixer_attempt_withdrawn_refusal(session_dir, cmd, state, attempt, expect_round=None,
+                                     expect_phase=None, phase=P_FIXER):
+    """The ``fixer-attempt-withdrawn`` refusal when a fold-path call addresses a withdrawn fixer
+    attempt of the current round, else None. It runs before the checks that would read the missing
+    pending step, so the refusal names the real cause. A call aimed at a pending step of another
+    phase (or round) is never read as addressing the fixer attempt."""
+    if phase != P_FIXER or not _is_plain_int(attempt):
+        return None
+    rnd = state.get("round")
+    if expect_round is not None and expect_round != rnd:
+        return None
+    if expect_phase is not None and expect_phase != P_FIXER:
+        return None
+    pending = state.get("pending")
+    if isinstance(pending, dict) and pending.get("phase") != P_FIXER:
+        return None
+    if attempt not in _withdrawn_fixer_attempts(state, rnd):
+        return None
+    return _refuse_cmd(session_dir, cmd, FIXER_ATTEMPT_WITHDRAWN, phase=P_FIXER, rnd=rnd,
+                       attempt=attempt,
+                       detail=("fixer attempt %s was withdrawn; its result can never fold. Run "
+                               "`next` to emit a fresh attempt" % attempt))
+
+
+def _untracked_outside_session(session_dir, toplevel, line):
+    """True when a ``git status --porcelain`` untracked line names a path outside ``session_dir``
+    (a path that cannot be read, or a toplevel that cannot be resolved, counts as outside)."""
+    path = line[3:].strip()
+    if not path or path.startswith('"') or not toplevel:
+        return True
+    resolved = os.path.realpath(os.path.join(toplevel, path))
+    root = os.path.realpath(session_dir)
+    return not (resolved == root or resolved.startswith(root + os.sep))
+
+
+def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
+    """``(refusal token or None, detail, restoreCheck)`` — has the worktree been put back to the head
+    the fixer attempt started from? With no repo root and no git seam (library path) nothing is
+    checked and the record says so."""
+    if repo_root is None and git is None:
+        return None, None, WITHDRAW_RESTORE_NOT_CHECKED
+    root = repo_root or os.getcwd()
+    run_git = git or store_core.run_git
+    anchor = _orders_anchor(state, session_dir, rnd, P_FIXER, attempt) or {}
+    bound = anchor.get("headSha")
+    if not isinstance(bound, str) or not bound:
+        return (WITHDRAW_HEAD_UNANCHORED,
+                "the orders of fixer attempt %s carry no head the worktree can be compared "
+                "with" % attempt, WITHDRAW_RESTORE_NOT_CHECKED)
+    head = run_git(root, "rev-parse", "HEAD")
+    status = run_git(root, "status", "--porcelain", "--untracked-files=all")
+    if not head or status is None:
+        return (WITHDRAW_GIT_UNAVAILABLE,
+                "git could not report the worktree state at %r" % root,
+                WITHDRAW_RESTORE_NOT_CHECKED)
+    lines = [line for line in status.splitlines() if line.strip()]
+    toplevel = None
+    if any(line.startswith("??") for line in lines):
+        try:
+            toplevel = store_core.repo_root(root)
+        except store_core.RepoRootUnavailable as exc:
+            return (WITHDRAW_GIT_UNAVAILABLE,
+                    "the repository root could not be resolved at %r: %s" % (root, exc),
+                    WITHDRAW_RESTORE_NOT_CHECKED)
+    dirty = [line for line in lines
+             if not line.startswith("??")
+             or _untracked_outside_session(session_dir, toplevel, line)]
+    if dirty:
+        return (WITHDRAW_WORKTREE_DIRTY,
+                "the worktree still holds the stopped fixer's changes (%s); restore it before "
+                "withdrawing" % "; ".join(line.strip() for line in dirty[:5]),
+                WITHDRAW_RESTORE_NOT_CHECKED)
+    if head != bound:
+        return (WITHDRAW_HEAD_MOVED,
+                "the worktree is at %s but fixer attempt %s started from %s; restore it before "
+                "withdrawing" % (head, attempt, bound), WITHDRAW_RESTORE_NOT_CHECKED)
+    return None, None, WITHDRAW_RESTORE_CHECKED
+
+
+def cmd_withdraw(session_dir, attempt, reason, repo_root=None, git=None):
+    """Close a pending fixer attempt the orchestrator has stopped, so a ruling can reach the fix.
+
+    The attempt must be the pending ``dispatch-fixer`` attempt with its orders emitted. The worktree
+    must be back at the head the attempt started from with no changes left by the stopped fixer
+    (``restoreCheck: "checked"``); a library call with neither ``repo_root`` nor ``git`` skips that
+    check and records ``"not-checked"``. The commit clears the pending step and leaves the fix batch
+    where it was, so a following ``rule`` reconciles it and a following ``next`` emits a fresh
+    attempt; the withdrawn attempt can never fold."""
+    try:
+        with round_records.session_lock(session_dir):
+            upgrade = _upgrade_gate(session_dir, WITHDRAW_CMD)
+            if upgrade is not None:
+                return upgrade
+            refusal = _commit_recover_or_refuse(session_dir, WITHDRAW_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_withdraw_locked(session_dir, attempt, reason, repo_root, git)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, WITHDRAW_CMD, held)
+
+
+def _cmd_withdraw_locked(session_dir, attempt, reason, repo_root, git):
+    state, refusal = _load_driver_state(session_dir, WITHDRAW_CMD)
+    if refusal is not None:
+        return refusal
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_SESSION_TERMINAL)
+    pending = state.get("pending")
+    if not isinstance(pending, dict) or pending.get("phase") != P_FIXER:
+        return _refuse_cmd(
+            session_dir, WITHDRAW_CMD, WITHDRAW_NOT_FIXER,
+            phase=pending.get("phase") if isinstance(pending, dict) else None,
+            detail="only a pending fixer attempt can be withdrawn")
+    rnd = pending.get("round")
+    if not _is_plain_int(attempt) or attempt != pending.get("attempt"):
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_ATTEMPT_MISMATCH, phase=P_FIXER,
+                           rnd=rnd, attempt=attempt, pendingAttempt=pending.get("attempt"))
+    if not _journal_has_orders_emitted(session_dir, rnd, P_FIXER, attempt):
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_NOT_EMITTED, phase=P_FIXER,
+                           rnd=rnd, attempt=attempt,
+                           detail="the fixer attempt has emitted no orders; a ruling can be "
+                                  "recorded without withdrawing it")
+    if not isinstance(reason, str) or not reason.strip():
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, WITHDRAW_REASON_MISSING, phase=P_FIXER,
+                           rnd=rnd, attempt=attempt)
+    reason = reason.strip()
+    token, detail, restore_check = _withdraw_restore_check(
+        session_dir, state, rnd, attempt, repo_root, git)
+    if token is not None:
+        return _refuse_cmd(session_dir, WITHDRAW_CMD, token, phase=P_FIXER, rnd=rnd,
+                           attempt=attempt, detail=detail)
+    withdrawn = state.get("withdrawnFixerAttempts")
+    withdrawn = list(withdrawn) if isinstance(withdrawn, list) else []
+    withdrawn.append({"round": rnd, "attempt": attempt, "reason": reason,
+                      "restoreCheck": restore_check})
+    state["withdrawnFixerAttempts"] = withdrawn
+    _decision(state, FIXER_ATTEMPT_WITHDRAWN,
+              "fixer attempt %s of round %s withdrawn: %s" % (attempt, rnd, reason))
+    state["pending"] = None
+    journal_entry = _journal_entry_for_commit(
+        session_dir, WITHDRAW_CMD, FIXER_ATTEMPT_WITHDRAWN, phase=P_FIXER, round=rnd,
+        attempt=attempt, reason=reason, restoreCheck=restore_check)
+    try:
+        c = round_commit.begin(session_dir, "withdraw")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, WITHDRAW_CMD, exc, phase=P_FIXER,
+                                        rnd=rnd, attempt=attempt)
+    return {"ok": True, "withdrawn": {"round": rnd, "attempt": attempt},
+            "restoreCheck": restore_check}
 
 
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
@@ -7371,6 +8321,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         if fault:
             return _receipt_fault_response(fault)
         return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
+    withdrawn_refusal = _fixer_attempt_withdrawn_refusal(
+        session_dir, "submit", state, attempt, phase=phase)
+    if withdrawn_refusal is not None:
+        return withdrawn_refusal
     if not _via_advance and state.get("_advanceUsed"):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": (state.get("pending") or {}).get("round"),
@@ -8141,6 +9095,10 @@ def _next_dispatch_attempt(session_dir, rnd, phase, state):
     candidates = [
         _max_used_attempt(session_dir, rnd, phase),
     ]
+    if phase == P_FIXER:
+        # A withdrawn attempt's order files stay on disk and it can never fold: no later attempt
+        # of the round takes its number.
+        candidates.extend(_withdrawn_fixer_attempts(state, rnd))
     prior = state.get("lastAccepted")
     if prior and prior.get("phase") == phase and prior.get("round") == rnd:
         att = prior.get("attempt", 0)
@@ -9220,7 +10178,7 @@ def _standing_rulings_for_orders(state):
         return [], "%s: %s" % fault
     return ([{"findingKey": key, "reason": entry.get("reason")}
              for key, entry in _live_ruling_by_key(state).items()
-             if entry.get("ruling") == "out-of-scope"], None)
+             if entry.get("ruling") == "out-of-scope" and entry.get("source") == "rule"], None)
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
@@ -10143,6 +11101,11 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
+    withdrawn_refusal = _fixer_attempt_withdrawn_refusal(
+        session_dir, "record-result", state, attempt, expect_round=expect_round,
+        expect_phase=expect_phase)
+    if withdrawn_refusal is not None:
+        return withdrawn_refusal
     if state.get("_submitUsed"):
         return _refuse_cmd(
             session_dir, "record-result", "record-submit-interleaved",
@@ -10536,6 +11499,11 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     state, refusal = _load_driver_state(session_dir, "record-missing")
     if refusal is not None:
         return refusal
+    withdrawn_refusal = _fixer_attempt_withdrawn_refusal(
+        session_dir, "record-missing", state, attempt, expect_round=expect_round,
+        expect_phase=expect_phase)
+    if withdrawn_refusal is not None:
+        return withdrawn_refusal
     if state.get("_submitUsed"):
         return _refuse_cmd(
             session_dir, "record-missing", "record-submit-interleaved",
@@ -12062,6 +13030,14 @@ def build_parser():
                               dest="ruling_file")
     cli_contract.add_argument(pru, "--by", contract="free-text", required=True)
 
+    pwd = sub.add_parser("withdraw")
+    cli_contract.add_argument(pwd, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pwd, "--attempt", contract="integer", required=True, type=int)
+    cli_contract.add_argument(pwd, "--reason", contract="free-text", required=True)
+    cli_contract.add_argument(pwd, "--repo-root", contract="repo-root", default=None,
+                              help="worktree the stopped fixer worked in, checked before the "
+                                   "withdrawal (default: cwd)")
+
     return parser
 
 
@@ -12255,6 +13231,11 @@ def _dispatch(args):
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "rule":
         out = cmd_rule(args.session_dir, args.ruling_file, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "withdraw":
+        out = cmd_withdraw(args.session_dir, args.attempt, args.reason,
+                           repo_root=args.repo_root or os.getcwd())
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:
