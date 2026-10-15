@@ -5628,15 +5628,16 @@ def _fold_audits(state, config, artifact, session_dir=None):
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
+    still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
         # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
+        # An unresolvable notDischarged list leaves every restage mark in place (fail closed).
         reopened = state.get("restagedAfterDispositionSeq")
-        if reopened:
+        if reopened and still_open is not None:
             ledger_now, _lf = _disposition_ledger_by_key(state)
-            for member in (_ruling_closure(state, ledger_now or {}, tid) - {tid}
-                           - set(outcome.get("notDischarged") or [])):
+            for member in _ruling_closure(state, ledger_now or {}, tid) - {tid} - still_open:
                 reopened.pop(member, None)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
