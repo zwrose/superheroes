@@ -14,6 +14,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import model_registry
+import seat_map
 
 _MISSING = object()
 
@@ -184,6 +185,10 @@ def normalize_seat_pin_map(raw):
     pins = {}
     invalid = {}
     for seat, pin in raw.items():
+        canonical = seat_map.LEGACY_SEAT_ALIASES.get(seat, seat)
+        if canonical != seat and canonical in raw:
+            continue  # explicit canonical key wins over the legacy alias
+        seat = canonical
         if not isinstance(pin, dict):
             invalid[seat] = "pin must be an object with a vendor"
             continue

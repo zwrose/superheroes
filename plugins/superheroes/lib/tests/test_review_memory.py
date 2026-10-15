@@ -32,7 +32,7 @@ def test_corrupt_round_records_report_corrupt(tmp_path):
     rm = load_memory()
     path = tmp_path / "round-records.json"
     path.write_text("{corrupt", encoding="utf-8")
-    state = rm.load_records_state(str(path), ["test-reviewer"])
+    state = rm.load_records_state(str(path), ["test-role"])
     assert state["ok"] is False
     assert state["state"] == "corrupt"
 

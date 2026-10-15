@@ -49,6 +49,12 @@ normal first write. The advisor still re-stamps it when a body rewrite dropped i
 itself on a body that predates this contract. The advisor's write replaces the reminder comment,
 which makes the slot's state readable from the body alone:
 
+**The slot span is the advisor's alone.** Nothing of yours goes between the `advisor-vet` marker and
+the `<!-- superheroes:build-record -->` marker except the reminder comment. The advisor's write
+replaces that whole span, so the DoD table and every other marked section sit below the build
+record. `vet_slot.py` refuses with `slot-span-foreign-content` on a body that has another
+`superheroes:` marker line in the span, and its `handback` verb catches it before you hand back.
+
 | The slot shows | It means |
 |---|---|
 | Marker and reminder | The owner-half write is owed. The receipt may already exist, because the advisor posts it before writing the body, so check for an existing vet-receipt comment before posting another. |
@@ -141,7 +147,7 @@ deleted non-test files are reported, not counted (`rubric/review-discipline.md` 
 ## The DoD disposition table
 
 The PR body carries a DoD disposition table, marked `<!-- superheroes:dod-table -->`, against the
-issue or spec. It has one row per Definition-of-Done bullet, each **done** with an evidence pointer,
+issue or spec. It sits below the build-record marker, never in the advisor-vet slot span. It has one row per Definition-of-Done bullet, each **done** with an evidence pointer,
 or **deferred** with a filed issue and a one-line reason. It differs from the review dispositions
 table: that one grades review findings, and this one grades every specified claim as shipped,
 deferred, or dropped. It is the honesty marker the review seat verifies (CONVENTIONS `§10.7`,
