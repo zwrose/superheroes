@@ -3140,6 +3140,7 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
         if entry_key in raised_now:
             rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
             reraised_groups.add(_finding_identity_key(rep) if isinstance(rep, dict) else entry_key)
+            reraised_groups.update(_lineage_group(state, entry_key))
     raised_now = raised_now | reraised_groups
     reported = _rounds_with_fix_report(state)
     if not reported:
@@ -9086,10 +9087,10 @@ def _repair_state_if_damaged(session_dir, cmd):
     try:
         _write_state_bytes(session_dir, state_bytes)
     except (OSError, round_commit.CommitRefused) as exc:
-        if _state_damage(session_dir) is not None:
-            return None  # the state could not be restored: the command meets its usual refusal
-        # The state file parses while the sealed repair is unfinished: a later commit would be
-        # overwritten when recovery replays it, so the command stops here.
+        if _state_damage(session_dir) not in (None, "missing"):
+            return None  # still unreadable: the command meets its usual refusal
+        # A missing state would bootstrap a fresh session over the mirror, and a sealed repair left
+        # unfinished would be replayed over any later commit, so the command stops here.
         return _refuse_cmd(session_dir, cmd, "commit-recovery-failed", fault=FAULT_INTERNAL,
                            detail="session repair: %s" % exc)
     _journal_event(session_dir, "repair", "session-repaired", damaged=damaged,

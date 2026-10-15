@@ -30,7 +30,7 @@ import test_round_driver as TRD  # noqa: E402
 RD = TRD.RD  # run_loop runs on test_round_driver's own load of the module
 
 CONSEQUENCE = "users lose their saved work"
-RECEIPT = {"kind": "full-panel-not-reraised", "panelRound": 2}
+RECEIPT = {"kind": SC.FULL_PANEL_NOT_RERAISED, "panelRound": 2}
 
 
 def _finding(title="Bug", line=1):
@@ -291,3 +291,11 @@ def test_state_and_mirror_land_in_one_commit(tmp_path, monkeypatch):
     RD.round_commit.recover(d)
     assert os.path.exists(os.path.join(d, RD.STATE_FILE))
     assert os.path.exists(os.path.join(d, RD.MIRROR_FILE))
+
+
+def test_a_reraise_of_a_lineage_linked_original_withholds_the_reworded_keys_credit():
+    state = _round_one_state(_finding(), _finding("Bug reworded", 1))
+    state["findingLineage"] = {_key("Bug reworded"): _key()}
+    _fix(state, batch=[f for f in state["findings"] if f["title"] == "Bug reworded"])
+    _panel(state, raised=[_finding()])
+    assert "disposition" not in _ledger(state)[_key("Bug reworded")]

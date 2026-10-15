@@ -248,6 +248,19 @@ def test_a_repair_commit_that_fails_after_the_state_lands_stops_the_command(
     assert _repair_rows(session_dir) == []
 
 
+def test_a_repair_that_fails_while_the_state_is_still_missing_stops_the_command(tmp_path, monkeypatch):
+    session_dir = _session(tmp_path)
+    os.remove(_state_path(session_dir))
+
+    def fails_before_landing(sd, state_bytes):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(RD, "_write_state_bytes", fails_before_landing)
+    out = RD.cmd_next(session_dir)
+    assert out["ok"] is False and out["reason"] == "commit-recovery-failed", out
+    assert not os.path.exists(_state_path(session_dir))
+
+
 def test_a_state_that_cannot_be_read_is_classed_unreadable_and_refused_as_before(tmp_path):
     session_dir = _session(tmp_path)
     os.remove(_state_path(session_dir))
