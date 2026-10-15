@@ -473,7 +473,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
         if not batch:
             return {}
         # Attribute the fix-batch findings to a reviewer dim for recurrence tracking.
-        dim_name = reviewer_set[0] if reviewer_set else "test-reviewer"
+        dim_name = reviewer_set[0] if reviewer_set else "test-role"
         first = batch[0] if isinstance(batch[0], dict) else {}
         prefix = str(first.get("dimension") or "").split()[0].lower()
         for r in reviewer_set:
@@ -560,8 +560,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     # After each full panel fold, persist round records (panel path may certify with no fix).
     _orig_fold_panel = RD._fold_panel
 
-    def _fold_panel_persist(state, config, artifact):
-        _orig_fold_panel(state, config, artifact)
+    def _fold_panel_persist(state, config, artifact, **kwargs):
+        _orig_fold_panel(state, config, artifact, **kwargs)
         rnd = state["round"]
         kind = "baseline" if rnd <= 1 else (
             "confirmation" if (state.get("rounds") or {}).get(str(rnd), {}).get("roundKind")

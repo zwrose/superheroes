@@ -74,6 +74,9 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "GROUPING_OUTPUT_PATH",
     "PR_CHECKOUT_PATH",
     "PRIOR_COMMENTS_PATH",
+    "ROLE_BRIEF_PATH",
+    "RISK_AREAS_TEXT",
+    "BREAK_IT_GRAMMAR_TEXT",
 })
 
 _COMMON_CONTEXT_KEYS = (
@@ -371,6 +374,20 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     focus = ph.get("FOCUS_NOTES", "").strip()
     ph["FOCUS_CONTEXT_LINE"] = (
         "- Focus: %s" % focus if focus else ""
+    )
+    role_brief = ph.get("ROLE_BRIEF_PATH", "").strip()
+    ph["ROLE_BRIEF_LINE"] = (
+        "- Your role brief (read it first; it binds over the generic assignment above): %s"
+        % role_brief if role_brief else ""
+    )
+    risk_text = ph.get("RISK_AREAS_TEXT", "").strip()
+    ph["RISK_AREAS_LINE"] = (
+        "- Risk areas this change touches: %s" % risk_text if risk_text else ""
+    )
+    grammar_text = ph.get("BREAK_IT_GRAMMAR_TEXT", "").strip()
+    ph["BREAK_IT_GRAMMAR_BLOCK"] = (
+        "- The break-it block (a break-it finding's suggestion is exactly this; the loop parses it):\n\n"
+        + grammar_text if grammar_text else ""
     )
     return ph
 
