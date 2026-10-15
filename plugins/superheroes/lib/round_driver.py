@@ -2328,9 +2328,10 @@ def _settle_open_findings(state, cap=False):
         if pending is not None:
             reason = "owner ruling %s (%s) was recorded but never sent to a fixer; %s" % (
                 pending["seq"], pending["ruling"], why_open)
-        # a newer guidance decision on a merged member binds the finding over the older skip
+        # a newer guidance decision on a merged member binds the finding over the older skip;
+        # with no bound decision at all the out-of-scope reason stands
         if (row.get("disposition") == "out-of-scope" and pending is None
-                and (bound[key] or {}).get("ruling") == "out-of-scope"):
+                and (not bound[key] or bound[key].get("ruling") == "out-of-scope")):
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
             content, ruling=bound[key], sources=sources, open_reason=reason)
