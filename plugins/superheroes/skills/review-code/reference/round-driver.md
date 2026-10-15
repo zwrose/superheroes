@@ -641,8 +641,8 @@ leg: a round with no blocking finding converges as before, and its remaining fin
 the end.
 
 A below-blocking product choice (`tradeoff: true`) is never lifted autonomously, and it is never put
-to `present-judgment`, which holds blocking findings only. It rides a fix batch only when its
-effective decision is the owner's word to fix it (a `guidance` or `fix` decision, from `rule` or the
+to the owner-judgment gate, which holds blocking findings only. It rides a fix batch only when
+its effective decision is the owner's word to fix it (a `guidance` or `fix` decision, from `rule` or the
 gate); otherwise it stays live and the end-of-loop settle leaves it for the owner. A row an owner
 decision names does start a fixer leg of its own: when every blocker of the round was skipped at the
 gate or ruled out of scope, the named rows still reach a fixer before the round settles, while a
