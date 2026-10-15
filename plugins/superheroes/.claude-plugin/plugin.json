@@ -1,6 +1,32 @@
 {
   "name": "superheroes",
   "version": "0.42.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoCheckpointTokens": {
+      "type": "number",
+      "title": "Auto-checkpoint threshold (tokens)",
+      "description": "Context size at which the session saves its checkpoint notes and compacts itself.",
+      "default": 500000,
+      "min": 50000,
+      "max": 2000000
+    },
+    "autoCheckpointAllowance": {
+      "type": "number",
+      "title": "Auto-checkpoint allowance (tokens)",
+      "description": "How many tokens before the harness's own auto-compaction the checkpoint must land.",
+      "default": 120000,
+      "min": 0,
+      "max": 1000000
+    },
+    "autoCheckpointMode": {
+      "type": "string",
+      "title": "Auto-checkpoint mode",
+      "description": "auto: checkpoint and compact on its own; click-only: only when you press Now on the band; off: never.",
+      "default": "auto",
+      "options": ["auto", "click-only", "off"]
+    }
+  },
   "description": "The discipline layer around AI build sessions: Showrunner (advisor), Workhorse (builder), Detective (observe-only diagnosis), The Architect (spec), Review Crew (cross-vendor review), Test-Pilot (browser evidence), Guardian (repo-health sweeps) — one plugin.",
   "author": {
     "name": "zwrose"

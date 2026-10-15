@@ -8,6 +8,7 @@ a model's silence or malformed verdict never drops a finding.
 """
 import re
 
+import break_it
 import circuit_breaker
 import panel_tally
 import round_phases
@@ -365,6 +366,21 @@ def merge_and_rank(survivors, grouping=None):
         grouped_ids = set()
         for g in groups:
             members = [by_id[mid] for mid in g["member_ids"]]
+            merged_ids = list(g["member_ids"])
+            if len(members) > 1:
+                # axis: a break-it finding carries a test and its run record; merging it into a
+                # group would fold that away, so it leaves any multi-member group unmerged
+                for m in [m for m in members if break_it.is_break_it(m)]:
+                    findings.append(dict(m))
+                    members.remove(m)
+                    merged_ids.remove(m["id"])
+                if len(members) == 1:
+                    findings.append(dict(members[0]))
+                    grouped_ids.update(g["member_ids"])
+                    continue
+                if not members:
+                    grouped_ids.update(g["member_ids"])
+                    continue
             merged = _merge_group(members)
             rep = max(members, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
             kept_id = rep.get("id")
@@ -372,7 +388,7 @@ def merge_and_rank(survivors, grouping=None):
             findings.append(merged)
             merges.append({
                 "group_id": g["group_id"],
-                "member_ids": list(g["member_ids"]),
+                "member_ids": merged_ids,
                 "kept_id": kept_id,
             })
             grouped_ids.update(g["member_ids"])
