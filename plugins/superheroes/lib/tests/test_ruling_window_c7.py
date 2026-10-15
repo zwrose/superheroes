@@ -1001,3 +1001,51 @@ def test_an_autonomous_lifted_minor_alone_still_converges():
     state, row = _lifted_minor_state()
     assert RD._queue_fix_batch(state, state["config"], [row]) == "excluded"
     assert state.get("terminal") == "converged"
+
+
+def test_guidance_survives_skipping_the_gate_when_a_ruled_out_blocker_is_carried(
+        tmp_path, keep_severity):
+    """axis: a ruled-out mechanical blocker still carried by the gate does not hide accepted guidance
+    on a Minor from the fixer when the owner then skips the gate's tradeoff blocker."""
+    tradeoff = _finding("tradeoff blocker", 2)
+    tradeoff["tradeoff"] = True
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_finding("blocker B", 1), tradeoff,
+                   _finding("quality minor", 3, "Minor", "code-quality")],
+        to_phase=RD.P_JUDGMENT, name="c7-carried-oos")
+    state = _state(session_dir)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "oos-b.json", [
+        {"id": _finding_key_by_title(state, "blocker B"), "ruling": "out-of-scope",
+         "reason": "later", "followUp": _follow_up()}]))["ok"]
+    key_m = _finding_key_by_title(state, "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "TIDY-THE-MINOR"))["ok"]
+    [jid] = _judgment_ids(_state(session_dir))
+    out = _fold_judgment(tmp_path, session_dir, gitdir,
+                         [{"id": jid, "disposition": "skip", "reason": "keep the current shape"}])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"]["phase"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["quality minor"]
+
+
+def test_an_untracked_symlink_outside_the_session_is_dirty_whatever_it_points_at(tmp_path):
+    """axis: containment is judged by where the entry sits, not by where a symlink leads."""
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "scratch.py").write_text("x", encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    os.symlink(str(session / "scratch.py"), str(repo / "src" / "helper.py"))
+    assert RD._untracked_outside_session(str(session), str(repo), "?? src/helper.py") is True
+
+
+def test_an_empty_disposition_never_fixes_a_lifted_product_choice(tmp_path, keep_severity):
+    """axis: a lifted Minor product choice the owner left undisposed is not fixed by the fail-closed
+    default; the blocker alone goes to the fixer."""
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-undecided")
+    out = _fold_judgment(tmp_path, session_dir, gitdir, [])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B"]

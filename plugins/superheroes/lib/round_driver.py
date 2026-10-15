@@ -4266,6 +4266,8 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             _stamp_ruling_seq(state, entry)
             disposition_log.append(entry)
         else:
+            if not circuit_breaker.is_blocking(f.get("severity")):
+                continue  # an undecided lifted product choice is left for the owner, never fixed
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
@@ -4303,7 +4305,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
                 and _live_out_of_scope_ruling_for_key(state, member) is None):
             fix_batch.append(dict(live))
             queued.add(member)
-    if not fix_batch and not no_lift:
+    if not _filter_excluded_discharged_fixes(state, fix_batch)[0] and not no_lift:
         # An owner guidance/fix decision recorded at this gate on a lifted row still reaches a fixer.
         guided = [r for r in _split_lifted_rows(state, judgment)[0]
                   if not _holds_only_autonomous_lifts(state, [r])]
@@ -7809,7 +7811,8 @@ def _untracked_outside_session(session_dir, toplevel, line):
     path = line[3:].strip()
     if not path or path.startswith('"') or not toplevel:
         return True
-    resolved = os.path.realpath(os.path.join(toplevel, path))
+    entry = os.path.normpath(os.path.join(toplevel, path))
+    resolved = os.path.join(os.path.realpath(os.path.dirname(entry)), os.path.basename(entry))
     root = os.path.realpath(session_dir)
     return not (resolved == root or resolved.startswith(root + os.sep))
 
