@@ -598,7 +598,8 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" withdraw --session-dir "$SESSION_DIR"
 
 `withdraw` closes the pending `dispatch-fixer` attempt the orchestrator has stopped, so a ruling can
 reach the fix. Stop the fixer first and put the worktree back to the head the attempt started from
-(discard its uncommitted changes, and reset any commit it made); then run `withdraw`, `rule`, and
+(restore only the paths the attempt changed and reset any commit it made; move any pre-existing
+file aside, never delete it); then run `withdraw`, `rule`, and
 `next`. The driver checks, in this order, and refuses with a journaled token that leaves
 `loop-state.json` untouched: `withdraw-session-terminal` (the session is over), `withdraw-not-fixer`
 (no pending step, or it is not the fixer), `withdraw-attempt-mismatch` (`--attempt` is not the

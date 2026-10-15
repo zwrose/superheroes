@@ -7867,8 +7867,8 @@ def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
              or _untracked_outside_session(session_dir, toplevel, line)]
     if dirty:
         return (WITHDRAW_WORKTREE_DIRTY,
-                "the worktree still holds the stopped fixer's changes (%s); restore it before "
-                "withdrawing" % "; ".join(line.strip() for line in dirty[:5]),
+                "the worktree holds uncommitted paths (%s); restore only those the attempt "
+                "changed, move any pre-existing file aside (never delete it), then withdraw" % "; ".join(line.strip() for line in dirty[:5]),
                 WITHDRAW_RESTORE_NOT_CHECKED)
     if head != bound:
         return (WITHDRAW_HEAD_MOVED,
