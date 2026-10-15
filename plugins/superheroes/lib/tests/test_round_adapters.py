@@ -1206,7 +1206,7 @@ def test_payload_contract_optional_keys_match_checker(phase):
             payload[field] = "not-a-bool"
         elif field == "newIssues":
             payload[field] = "not-a-list"
-        elif field == "exit":
+        elif field in ("exit", "unnamedChangeAllowedBySeq"):
             payload[field] = "not-an-int"
         elif field == "outputSha256":
             payload[field] = 1
