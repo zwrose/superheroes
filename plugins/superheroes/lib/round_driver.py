@@ -2250,6 +2250,14 @@ def _disposition_is_current(row):
             and disp_seq > raised_seq)
 
 
+def _restaged_after(state, key, row):
+    """True when an owner ruling sent the finding back to a fixer after ``row``'s disposition: that
+    disposition is the one the ruling reopened, so it no longer settles the finding."""
+    mark = (state.get("restagedAfterDispositionSeq") or {}).get(key)
+    seq = row.get(session_contract.DISPOSITION_SEQ_FIELD)
+    return _is_plain_int(mark) and _is_plain_int(seq) and seq <= mark
+
+
 def _skip_settle(state, fault):
     token = getattr(fault, "token", None) or "ledger-fault"
     detail = getattr(fault, "detail", None) or str(fault)
@@ -2294,7 +2302,7 @@ def _settle_open_findings(state, cap=False):
         row = ledger_by_key.get(key) or live_by_key[key]
         if not isinstance(row, dict) or row.get("summaryEntry") or row.get(session_contract.MERGED_INTO_FIELD):
             continue
-        if _disposition_is_current(row):
+        if _disposition_is_current(row) and not _restaged_after(state, key, row):
             continue
         todo.append((key, row, _newest_content(row, live_by_key.get(key))))
     if not todo:
@@ -4379,13 +4387,16 @@ def _filter_excluded_discharged_fixes(state, rows):
         return rows, fault
     oos_keys = _live_out_of_scope_ruling_keys(state)
     restaged = state.get("restagedAfterDispositionSeq") or {}
+    effective = _live_ruling_by_key(state)
     filtered = []
     for row in rows:
         if _excluded_discharged_fix_row(ledger_by_key, row, restaged):
             continue
         key = _fix_batch_row_key(row)
         if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
-            continue
+            bound = _row_decision(state, effective, ledger_by_key, key)
+            if bound is None or bound.get("ruling") not in _OWNER_FIX_RULINGS:
+                continue  # a newer fix ruling given to a merged-in finding outranks the skip
         filtered.append(row)
     return filtered, None
 
@@ -4399,15 +4410,14 @@ def _resolve_empty_fix_batch_convergence(state, config):
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
-def _fix_row_roots(state, rows):
-    """The lineage roots of the finding keys the ``rows`` hold — a reworded finding and the one it
-    rewords are one finding."""
-    lineage = _lineage_map(state)
+def _fix_row_roots(state, rows, ledger_by_key=None):
+    """The ruling roots of the finding keys the ``rows`` hold — a reworded finding, the one it
+    rewords and the findings merged into either are one finding."""
     roots = set()
     for row in rows or []:
         key = _fix_batch_row_key(row)
         if key:
-            roots.add(_lineage_root(lineage, key))
+            roots.add(_ruling_root(state, ledger_by_key or {}, key))
     return roots
 
 
@@ -4436,13 +4446,26 @@ def _merge_representative(state, ledger_by_key, key):
         key = into
 
 
+def _ruling_root(state, ledger_by_key, key):
+    """The one identity a ruling is matched on: ``key`` followed through its merges and its lineage
+    until neither moves it (a merged finding that was later reworded is still that one finding)."""
+    lineage = _lineage_map(state)
+    for _ in range(len(lineage) + len(ledger_by_key) + 2):
+        nxt = _lineage_root(lineage, _merge_representative(state, ledger_by_key, key))
+        if nxt == key:
+            break
+        key = nxt
+    return key
+
+
 def _row_decision(state, effective, ledger_by_key, key):
     """The decision that binds the fix-batch row ``key``: its own effective decision, or a later
     ``guidance``/``fix`` decision given to a finding that was merged into it."""
     best = effective.get(key)
+    root = _ruling_root(state, ledger_by_key, key)
     for member, decision in effective.items():
         if (member != key and decision.get("ruling") in _OWNER_FIX_RULINGS
-                and _merge_representative(state, ledger_by_key, member) == key
+                and _ruling_root(state, ledger_by_key, member) == root
                 and (best is None or _decision_order((0, decision)) > _decision_order((0, best)))):
             best = decision
     return best
@@ -4499,7 +4522,7 @@ def _resolve_ruled_batch(state, rows):
     lineage = _lineage_map(state)
     sent = state.get("sentUnderDecision") or {}
     batch = [dict(row) for row in rows]
-    held = _fix_row_roots(state, batch)
+    held = _fix_row_roots(state, batch, ledger_by_key)
     added = []
     decisions = {id(d): d for d in effective.values()}.values()
     for decision in sorted(decisions, key=_decision_seq):
@@ -4514,10 +4537,10 @@ def _resolve_ruled_batch(state, rows):
                        for d in state["decisions"]):
                 _decision(state, "ruling-no-live-finding", note)
             continue
-        if (_lineage_root(lineage, key) in held
-                or _row_decision(state, effective, ledger_by_key, key) is not decision):
+        root = _ruling_root(state, ledger_by_key, key)
+        if root in held or _row_decision(state, effective, ledger_by_key, key) is not decision:
             continue
-        held.add(_lineage_root(lineage, key))
+        held.add(root)
         if from_ledger:  # the ledger keeps its disposition; mark it as the one this ruling reopened
             state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
                 state.get("dispositionSeqCounter", 0))

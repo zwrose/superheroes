@@ -102,9 +102,38 @@ def _guidance_file(tmp_path, name, key, text):
         {"id": key, "ruling": "guidance", "reason": "owner call", "guidance": text}])
 
 
+def _order_path(session_dir):
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    assert reason is None, reason
+    seat, occurrence = RR.roster_slots(roster)[0]
+    skey = RR.storage_key(seat, occurrence)
+    return RR.order_prompt_path(session_dir, pend["round"], pend["phase"], skey, pend["attempt"]), skey
+
+
 def _order_text(session_dir):
-    """The fixer order the driver renders for the pending attempt."""
-    return _RC._fixer_order_text(session_dir)
+    """The fixer order the driver EMITTED for the pending attempt: the saved prompt, checked against
+    the emission anchor's hash (never a fresh render of the current state)."""
+    state = _state(session_dir)
+    pend = state["pending"]
+    path, skey = _order_path(session_dir)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    anchor = RD._orders_anchor(state, session_dir, pend["round"], pend["phase"], pend["attempt"])
+    assert anchor and anchor["orders"][skey] == RR.sha256_text(text), "saved prompt is not the emitted one"
+    return text
+
+
+def _emit_pending_orders(session_dir):
+    """Emit the pending fixer attempt's orders the way `next` does."""
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    assert reason is None, reason
+    RD._emit_orders_manifest(session_dir, state, pend["round"], pend["phase"], pend["attempt"],
+                             roster, journal_cmd="next", pending_payload=pend.get("payload"),
+                             seat_map=RD._effective_seat_map(state))
 
 
 def _drive_until(session_dir, gitdir, head_path, phase, max_steps=12):
@@ -152,13 +181,17 @@ def test_vet_442_ruling_on_an_emitted_order_is_accepted_and_reaches_the_next_ord
     emitted = _state(session_dir)
     assert RD._journal_has_orders_emitted(
         session_dir, emitted["round"], P_FIXER, emitted["pending"]["attempt"])
-    assert "TAKE-THE-SECOND-OPTION" not in _order_text(session_dir)
+    original_order = _order_text(session_dir)
+    assert "TAKE-THE-SECOND-OPTION" not in original_order
+    path, _skey = _order_path(session_dir)
 
     out = _rule(session_dir, _guidance_file(tmp_path, "r.json", key_a, "TAKE-THE-SECOND-OPTION"))
     assert out.get("ok") is True, out
     after = _state(session_dir)
     assert after["pending"] == emitted["pending"] and after["_fixBatch"] == emitted["_fixBatch"]
     assert after["rulingsLog"][-1]["ruling"] == "guidance"
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == original_order, "the order already out is left byte-identical"
 
     phase, folded = _drive_one_phase(session_dir, gitdir, [], head_path)
     assert phase == P_FIXER and folded.get("ok") and folded["folded"]["phase"] == P_FIXER, folded
@@ -621,4 +654,59 @@ def test_guidance_before_the_orders_go_out_brings_in_a_finding_the_batch_lacks(
     state = _state(session_dir)
     assert key_q in _batch_keys(state)
     assert key_q in [_key(row) for row in state["pending"]["payload"]["batch"]]
+    _emit_pending_orders(session_dir)
     assert "PULL-IT-IN" in _order_text(session_dir)
+
+
+# --- one identity for a ruling: merges and lineage followed together ---------------------------
+
+def _unit_pair(merged_into, member):
+    """A state whose live rows are `merged_into` (the representative) and `member` merged into it."""
+    state = _unit_state({"file": "a.py", "line": 1, "title": "rep"})
+    rep = RD._fix_batch_row_key(state["findings"][0])
+    state["findings"].append({"file": "a.py", "line": 2, "title": "member", "severity": "Important",
+                              "consequenceKind": "real", "id": "member",
+                              session_contract.MERGED_INTO_FIELD: rep})
+    return state, rep, RD._fix_batch_row_key(state["findings"][1])
+
+
+def test_a_member_merged_into_a_reworded_finding_binds_the_newer_guidance():
+    """axis: MERGE + LINEAGE — M merged into K, K reworded as N: M's newer guidance, not K's older,
+    is what the row for N carries, and the emitted batch row says where it came from."""
+    state, rep, member = _unit_pair(None, None)
+    state["findings"][0] = dict(state["findings"][0], title="reworded", line=3,
+                                 findingKey="a.py::reworded@L3")
+    new = RD._fix_batch_row_key(state["findings"][0])
+    assert new != rep
+    state["findingLineage"] = {new: rep}
+    _log_ruling(state, rep, guidance="OLD-GUIDANCE")
+    _log_ruling(state, member, guidance="NEW-GUIDANCE")
+    batch = RD._resolve_ruled_batch(state, [dict(state["findings"][0])])
+    assert [(RD._fix_batch_row_key(r), r.get("ruledBy")) for r in batch] == [(new, member)]
+    assert batch[0]["ruledBy"] == member and member != rep
+
+
+def test_a_newer_fix_ruling_on_a_merged_member_outranks_the_representatives_skip():
+    """axis: MERGE — K carries an older out-of-scope ruling, merged-in M a newer guidance: the batch
+    keeps K (exclusion and dispatch read the same decision)."""
+    state, rep, member = _unit_pair(None, None)
+    _log_ruling(state, rep, ruling="out-of-scope")
+    _log_ruling(state, member, guidance="STILL-FIX-IT")
+    filtered, fault = RD._filter_excluded_discharged_fixes(state, [dict(state["findings"][0])])
+    assert fault is None and [RD._fix_batch_row_key(r) for r in filtered] == [rep]
+
+
+def test_a_restaged_finding_is_not_settled_by_its_stale_fixed_disposition():
+    """axis: RESTAGE — a finding whose `fixed` disposition an owner ruling reopened is settled at the
+    end of the loop like any open one, not reported as fixed."""
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    key = "A"
+    RD._record_disposition(state, key, "fixed", 2)
+    for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        entry[session_contract.RAISED_SEQ_FIELD] = 0  # raised before the discharge
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    assert ledger[key]["disposition"] == "fixed"
+    state["restagedAfterDispositionSeq"] = {key: state["dispositionSeqCounter"]}
+    RD._set_terminal(state, "held")
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    assert ledger[key]["disposition"] != "fixed", ledger[key]
