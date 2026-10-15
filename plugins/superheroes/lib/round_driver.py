@@ -2302,7 +2302,8 @@ def _settle_open_findings(state, cap=False):
         row = ledger_by_key.get(key) or live_by_key[key]
         if not isinstance(row, dict) or row.get("summaryEntry") or row.get(session_contract.MERGED_INTO_FIELD):
             continue
-        if _disposition_is_current(row) and not _restaged_after(state, key, row):
+        pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
+        if _disposition_is_current(row) and not _restaged_after(state, key, row) and pending is None:
             continue
         todo.append((key, row, _newest_content(row, live_by_key.get(key))))
     if not todo:
@@ -2317,6 +2318,10 @@ def _settle_open_findings(state, cap=False):
             sources = {}
     for key, row, content in todo:
         reason = why_open
+        pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
+        if pending is not None:
+            reason = "owner ruling %s (%s) was recorded but never sent to a fixer; %s" % (
+                pending["seq"], pending["ruling"], why_open)
         if row.get("disposition") == "out-of-scope":
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
@@ -4481,30 +4486,63 @@ def _reopened_ledger_row(ledger_by_key, key):
     return reopened
 
 
+def _ruling_closure(state, ledger_by_key, key):
+    """Every key ``key`` reaches by alternating lineage-group membership and ``mergedInto`` (a key
+    merged into another, or another merged into it), until no new key appears. Cycle-safe."""
+    merged_into = {}
+    for finding in list(state.get("findings") or []) + list(ledger_by_key.values()):
+        at = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        into = finding.get(session_contract.MERGED_INTO_FIELD) if at else None
+        if isinstance(into, str) and into:
+            merged_into.setdefault(at, into)
+    seen, todo = set(), [key]
+    while todo:
+        at = todo.pop()
+        if at in seen:
+            continue
+        seen.add(at)
+        todo += _lineage_group(state, at)
+        todo += [merged_into[at]] if at in merged_into else []
+        todo += [k for k, into in merged_into.items() if into == at]
+    return seen
+
+
 def _ruled_row(state, ledger_by_key, decision, sent):
     """``(row, from_ledger)`` for the row an owner decision sends to a fixer, ``(None, False)`` when
-    it names no live finding: the one live finding it names, following the lineage and the merges.
-    A finding that is no longer live comes back from the ledger as an open finding when a fixer order
-    carried it before the ruling (the fix went against it) or when it left the live list with no
-    disposition."""
-    key = decision["findingKey"]
+    it names no live finding: the one live, unmerged finding in the ruling's closure, else the
+    restage candidate from the ledger (a finding a fixer order carried before the ruling, or one that
+    left the live list with no disposition)."""
     lineage = _lineage_map(state)
-    group = [key] + [k for k in _lineage_group(state, key) if k != key]
-    reps = [_merge_representative(state, ledger_by_key, k) for k in group]
-    for rep in reps:
-        row = _live_finding_by_key(state, rep)
+    closure = sorted(_ruling_closure(state, ledger_by_key, decision["findingKey"]))
+    for at in closure:
+        row = _live_finding_by_key(state, at)
         if (isinstance(row, dict) and not row.get(session_contract.MERGED_INTO_FIELD)
                 and not (row.get("disposition") in ("fixed", "refuted")
                          and _disposition_is_current(row))):
             return dict(row), False
-    sent_before = any(_lineage_root(lineage, k) in sent for k in group + reps)
-    for rep in reps:
-        # a finding with no disposition left the live list unsettled: the ruling still names it
-        if sent_before or not session_contract.disposition_value(ledger_by_key.get(rep)):
-            row = _reopened_ledger_row(ledger_by_key, rep)
+    sent_before = any(_lineage_root(lineage, k) in sent for k in closure)
+    for at in closure:
+        ledger_row = ledger_by_key.get(at)
+        if ((sent_before or not session_contract.disposition_value(ledger_row))
+                and not (isinstance(ledger_row, dict) and ledger_row.get(session_contract.MERGED_INTO_FIELD))):
+            row = _reopened_ledger_row(ledger_by_key, at)
             if row is not None:
                 return row, True
     return None, False
+
+
+def _undispatched_ruling(state, effective, ledger_by_key, key):
+    """The owner ``fix``/``guidance`` decision binding ``key`` that no fixer was ever sent, or None."""
+    decision = _row_decision(state, effective, ledger_by_key, key)
+    if (not isinstance(decision, dict) or decision.get("ruling") not in _OWNER_FIX_RULINGS
+            or not _is_plain_int(decision.get("seq"))):
+        return None
+    lineage = _lineage_map(state)
+    sent = state.get("sentUnderDecision") or {}
+    ats = (key, decision["findingKey"])
+    if any(sent.get(_lineage_root(lineage, at), -1) >= decision["seq"] for at in ats):
+        return None
+    return decision
 
 
 def _resolve_ruled_batch(state, rows):

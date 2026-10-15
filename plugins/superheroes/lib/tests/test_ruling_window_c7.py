@@ -727,3 +727,28 @@ def test_a_restaged_finding_that_is_capped_reads_unresolved_in_the_review_record
     by_key = {key: ledger[key]}
     outcome, reason, _rep = RRS._decide(ledger[key], by_key, {})
     assert outcome != "fixed" and "fixed and audited" not in str(reason), (outcome, reason)
+
+
+def test_guidance_on_a_merged_member_reaches_the_live_row_the_representative_was_reworded_into():
+    """axis: MERGE + LINEAGE — M merged into K, K reworded as live Minor N, newer guidance on M, and
+    N absent from the offered batch: the resolver sends N, not archived K."""
+    state = _unit_round([_unit_finding("N", 1, "Minor")])
+    RD._record_disposition(state, "K", "fixed", 1)
+    state["findingLineage"] = {"N": "K"}
+    state["findings"].append(_unit_finding("M", 2, "Important"))
+    state["findings"][-1][session_contract.MERGED_INTO_FIELD] = "K"
+    _log_ruling(state, "M", guidance="FOR-THE-LIVE-ONE")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [(RD._fix_batch_row_key(r), r.get("ruledBy")) for r in batch] == [("N", "M")]
+
+
+def test_an_undispatched_ruling_on_a_fixed_finding_settles_as_left_for_the_owner():
+    """axis: TERMINAL — A was fixed and audited, guidance on A was recorded but no fixer order ever
+    carried it, and the loop ends: A settles as left for the owner naming the ruling, not `fixed`."""
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    RD._record_disposition(state, "A", "fixed", 1)
+    seq = _log_ruling(state, "A", guidance="NEVER-SENT")
+    RD._set_terminal(state, "capped-with-open-blocker", cap=True)
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    assert ledger["A"]["disposition"] == "left-for-owner", ledger["A"]
+    assert "owner ruling %s" % seq in ledger["A"]["settledReason"], ledger["A"]
