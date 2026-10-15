@@ -201,6 +201,24 @@ def _panel_rounds_with_status(state):
             if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("seatStatus"), dict)}
 
 
+def _panel_head(state, rnd):
+    """The head the round's panel orders were emitted at (latest attempt). Round 1 carries no emission head: it
+    ran before any fix, at the session-setup head. None when state holds none."""
+    anchors = state.get("_ordersAnchors")
+    best = None
+    for key, anchor in (anchors.items() if isinstance(anchors, dict) else ()):
+        parts = str(key).split(":")
+        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == sc.PANEL_PHASE and parts[2].isdigit() \
+                and isinstance(anchor, dict) and isinstance(anchor.get("headSha"), str) and anchor["headSha"]:
+            if best is None or int(parts[2]) > best[0]:
+                best = (int(parts[2]), anchor["headSha"])
+    if best:
+        return best[1]
+    cfg = state.get("config")
+    head = cfg.get("headSha") if isinstance(cfg, dict) and str(rnd) == "1" else None
+    return head if isinstance(head, str) and head else None
+
+
 def _status_reviewers(state):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
@@ -222,7 +240,7 @@ def _status_reviewers(state):
             ran = seats[seat] == "run"  # any other value is never credited as run
             if not ran and any(r > rnd for r in ran_in.get(seat, ())):
                 continue  # a later round ran this seat: the earlier miss is recovered
-            out.append(_reviewer(state, rnd, seat, "", ran, phase=sc.PANEL_PHASE))
+            out.append(_reviewer(state, rnd, seat, "", ran, commit=_panel_head(state, rnd), phase=sc.PANEL_PHASE))
         out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
                 if not any(r > rnd for r in ran_in.get(seat, ()))]
     return out

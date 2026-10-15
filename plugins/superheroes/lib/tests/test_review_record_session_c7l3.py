@@ -2,6 +2,7 @@
 refused, names the cap the loop stopped at, and follows a ruling through a merge."""
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -51,7 +52,8 @@ def _hand_submit_two_panels(base):
     repo, base_sha, diff = _init_two_commit_repo(base)
     session = str(base / "session")
     seed_session_meta(session, repo)
-    cfg = _cfg(verifyCommand="pytest -q", diff=diff, repoRoot=repo, baseRef=base_sha)
+    setup_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    cfg = _cfg(verifyCommand="pytest -q", diff=diff, repoRoot=repo, baseRef=base_sha, headSha=setup_head)
     first = [{"title": "bug", "severity": "Important", "consequence": "a wrong answer", "file": "f.py", "line": 1}]
     worse = [{"title": "worse bug", "severity": "Critical", "consequence": "data loss", "file": "f.py", "line": 1}]
     answer = _responder(round1_findings=first, scoped=worse)
@@ -94,9 +96,12 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
     expected = {f"{seat} (round {n})" for n, s in status.items() for seat in s}
     assert set(_names(account)) == expected and len(account["reviewers"]) == len(expected)
     for v in account["reviewers"]:
-        assert v["ran"] is True and v["planned"] is True and v["runDir"] is None and v["commit"] is None
+        assert v["ran"] is True and v["planned"] is True and v["runDir"] is None
         assert v["vendor"] and v["model"] and "notIndependent" not in v
     assert account["rawFindingsFiles"] == [] and rs.HAND_SUBMIT_NOTE in account["checked"]
+    # bites on: a hand-submit row left unbound, which the writer then credits with the session's final head
+    assert all(isinstance(v["commit"], str) and v["commit"] for v in account["reviewers"])
+    assert {v["commit"] for v in _names(account).values() if "(round 1)" in v["name"]} != {account["finalCommit"]}
     fake = Fake(head=account["finalCommit"])
     out = send(tmp_path, session, fake)
     assert out["ok"], out
@@ -105,6 +110,8 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
     # the writer, not the adapter, decides whether a reviewer counts: no maker is named here, so none is credited
     assert {v["findingsCoverage"] for v in rec["reviewers"]} == {rr.SESSION} and {v["runDir"] for v in rec["reviewers"]} == {None}
     assert rs.HAND_SUBMIT_NOTE in json.dumps(rec)
+    early = [v for v in rec["reviewers"] if "(round 1)" in v["name"]]
+    assert early and not any(v["coversFinalCommit"] for v in early)
 
 
 def test_a_hand_submit_reviewer_is_posted_as_reported_by_the_session_and_a_missing_one_as_missing(tmp_path):
