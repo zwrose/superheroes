@@ -4345,8 +4345,12 @@ def _disposition_ledger_by_key(state):
     return by_key, None
 
 
-def _excluded_discharged_fix_row(ledger_by_key, row):
-    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate)."""
+def _excluded_discharged_fix_row(ledger_by_key, row, restaged=None):
+    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate).
+
+    ``restaged`` maps a finding key to the disposition counter when an owner ruling sent its finding
+    back to a fixer: a disposition at or before that mark is the one the ruling reopened, not a
+    discharge."""
     key = _finding_identity_key(row)
     if not key:
         return False
@@ -4360,6 +4364,9 @@ def _excluded_discharged_fix_row(ledger_by_key, row):
     disp_is_int = isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
     raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
     if disp_is_int and raised_is_int:
+        mark = (restaged or {}).get(key)
+        if _is_plain_int(mark) and disp_seq <= mark:
+            return False
         return disp_seq > raised_seq
     return False
 
@@ -4371,9 +4378,10 @@ def _filter_excluded_discharged_fixes(state, rows):
     if fault is not None:
         return rows, fault
     oos_keys = _live_out_of_scope_ruling_keys(state)
+    restaged = state.get("restagedAfterDispositionSeq") or {}
     filtered = []
     for row in rows:
-        if _excluded_discharged_fix_row(ledger_by_key, row):
+        if _excluded_discharged_fix_row(ledger_by_key, row, restaged):
             continue
         key = _fix_batch_row_key(row)
         if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
@@ -4469,7 +4477,7 @@ def _ruled_row(state, ledger_by_key, decision, sent):
     sent_before = any(_lineage_root(lineage, k) in sent for k in group + reps)
     for rep in reps:
         # a finding with no disposition left the live list unsettled: the ruling still names it
-        if sent_before or not (ledger_by_key.get(rep) or {}).get("disposition"):
+        if sent_before or not session_contract.disposition_value(ledger_by_key.get(rep)):
             row = _reopened_ledger_row(ledger_by_key, rep)
             if row is not None:
                 return row, True
@@ -4510,11 +4518,9 @@ def _resolve_ruled_batch(state, rows):
                 or _row_decision(state, effective, ledger_by_key, key) is not decision):
             continue
         held.add(_lineage_root(lineage, key))
-        if from_ledger:  # open again in the ledger too, or the discharged-fix exclusion drops it
-            ledger = _ensure_disposition_ledger_for_write(state)
-            at = _ledger_index_by_key(ledger).get(_finding_identity_key(row))
-            if at is not None:
-                ledger[at] = dict(row)
+        if from_ledger:  # the ledger keeps its disposition; mark it as the one this ruling reopened
+            state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
+                state.get("dispositionSeqCounter", 0))
         added.append(row)
     added.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
     if added:
