@@ -97,6 +97,21 @@ def test_every_state_write_leaves_a_mirror_of_the_exact_bytes(tmp_path):
     assert envelope["state"].encode("utf-8") == state_bytes
 
 
+def test_a_direct_save_refreshes_the_mirror_so_repair_restores_the_new_bytes(tmp_path):
+    session_dir = _session(tmp_path)
+    _ok, state = RD.load_state(session_dir)
+    state["directSaveMarker"] = "after-bootstrap"
+    RD.save_state(session_dir, state)
+    saved = _read(_state_path(session_dir))
+    assert b"directSaveMarker" in saved
+    envelope = json.loads(_read(_mirror_path(session_dir)))
+    assert envelope["state"].encode("utf-8") == saved
+    assert envelope["stateSha256"] == hashlib.sha256(saved).hexdigest()
+    _truncate(_state_path(session_dir))
+    assert RD.cmd_next(session_dir)["ok"] is True
+    assert _read(_state_path(session_dir)) == saved
+
+
 def test_the_mirror_of_a_state_with_no_session_id_names_none(tmp_path):
     state_bytes = b'{"round":1}'
     envelope = json.loads(RD._mirror_bytes(str(tmp_path), state_bytes))

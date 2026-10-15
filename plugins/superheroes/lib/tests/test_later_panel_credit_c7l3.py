@@ -99,6 +99,17 @@ def test_the_fixer_fold_records_the_keys_it_was_handed_beside_its_fix_report():
     assert state["rounds"]["1"]["fix"]["fixes"]
 
 
+@pytest.mark.parametrize("seat_override", [{"confidence": "low"}, {"tier": "reviewer"}])
+def test_a_complete_panel_that_does_not_qualify_gives_no_credit(seat_override):
+    state = _round_one_state(_finding())
+    _fix(state)
+    seats = {dim: {"findings": [], "confidence": "high"} for dim in RD._panel_dimensions(state["config"])}
+    seats["code-reviewer"].update(seat_override)
+    RD._fold_panel(state, state["config"], {"seats": seats})
+    assert state["fullPanelRan"] is True
+    assert _ledger(state)[_key()].get("disposition") != "fixed"
+
+
 def test_an_incomplete_panel_gives_no_credit():
     """axis: only a complete panel can confirm a fix by silence — an incomplete one may simply not have
     looked — see bite-proof record c7l3_wo3_driver"""

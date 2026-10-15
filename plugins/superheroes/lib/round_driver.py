@@ -3360,7 +3360,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
     # axis: only a complete panel can confirm a fix by silence — an incomplete one may simply not have looked — see bite-proof record c7l3_wo3_driver
-    if state["round"] >= 2 and not incomplete:
+    # Silence also needs the full-confidence reviewer-deep panel `_confirmation_qualifies` demands.
+    if (state["round"] >= 2 and not incomplete
+            and review_loop_plan._confirmation_qualifies(
+                next(r for r in state["_records"] if r.get("round") == state["round"]))):
         _credit_fixes_not_reraised(state, compiled, kept)
     _stage_findings(state, compiled)
     state["step"] = P_VERIFIERS

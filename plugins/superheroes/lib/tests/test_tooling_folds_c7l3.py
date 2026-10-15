@@ -57,23 +57,54 @@ def _pin_dispatch_temp_roots(tmp_path, monkeypatch):
 
 # --- run-dir replay: p1 / p2 / p3 / p4 / p5 ----------------------------------------------------
 
-def _review(tmp_path, run_dir, prompt, runner=None):
+def _review(tmp_path, run_dir, prompt, runner=None, max_wait=0):
     return TED.ED.dispatch_review(
         seat=TED._codex_seat(),
         prompt_path=TED._valid_prompt(tmp_path, prompt),
         repo_root=TED._repo(tmp_path),
         run_engine=runner or TED.FakeRunner([]),
         build_view=TED._fake_build_view(tmp_path),
-        run_dir=run_dir, max_wait=0, order_id="order-prompt",
+        run_dir=run_dir, max_wait=max_wait, order_id="order-prompt",
     )
 
 
-def _write(tmp_path, wt, run_dir, prompt, runner=None):
+def _write(tmp_path, wt, run_dir, prompt, runner=None, max_wait=0):
     return TEDW.ED.dispatch_write(
         seat=TEDW._codex_seat(), cwd=wt, run_dir=run_dir, order_id="order-prompt",
         prompt_path=TEDW._prompt(tmp_path, prompt),
-        run_engine=runner or TEDW.FakeRunner([]), max_wait=0,
+        run_engine=runner or TEDW.FakeRunner([]), max_wait=max_wait,
     )
+
+
+def test_p2b_review_completed_run_replays_only_for_the_same_prompt(tmp_path):
+    run_dir = str(tmp_path / "stored-review")
+    runner = TED.FakeRunner([(TED._CODEX_FINDINGS_STDOUT, False, 0, "")])
+    first = _review(tmp_path, run_dir, PROMPT_A, runner=runner, max_wait=60)
+    assert first["ok"] is True and first["terminal"] is True
+    assert len(runner.calls) == 1
+    other = _review(tmp_path, run_dir, PROMPT_B, runner=runner, max_wait=60)
+    assert other["detail"] == ED.PROMPT_REFUSAL_RUN_DIR_MISMATCH
+    assert other["attempts"] == 0
+    assert len(runner.calls) == 1
+    same = _review(tmp_path, run_dir, PROMPT_A, runner=runner, max_wait=60)
+    assert same["ok"] is True and same["terminal"] is True
+    assert len(runner.calls) == 1
+
+
+def test_p3b_write_completed_run_replays_only_for_the_same_prompt(tmp_path):
+    wt, _main = TEDW._linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "stored-write")
+    runner = TEDW.FakeRunner([(TEDW._build_ok_stdout(), False, 0, "")])
+    first = _write(tmp_path, wt, run_dir, "Build this.\n", runner=runner, max_wait=60)
+    assert first["ok"] is True and first["terminal"] is True
+    assert len(runner.calls) == 1
+    other = _write(tmp_path, wt, run_dir, "Build something else.\n", runner=runner, max_wait=60)
+    assert other["detail"] == ED.PROMPT_REFUSAL_RUN_DIR_MISMATCH
+    assert other["attempts"] == 0
+    assert len(runner.calls) == 1
+    same = _write(tmp_path, wt, run_dir, "Build this.\n", runner=runner, max_wait=60)
+    assert same["ok"] is True and same["terminal"] is True
+    assert len(runner.calls) == 1
 
 
 def test_p1_review_continuation_with_the_same_prompt_is_not_refused(tmp_path):
