@@ -249,7 +249,10 @@ screens of its own. The board draws the wording the owner reads, on seven artboa
 "6 Cleanup" and "7 The gardening pass". (source: board · 1 Setup) The archive prompt on "6 Cleanup"
 is the platform's own wording and is drawn as it appears. (source: board · 6 Cleanup) The board draws the case where the builder's
 session can archive itself; when it cannot, there is no prompt, the builder says so on its issue,
-and the owner archives the session by hand, as FR-28 to FR-30 say. (source: owner's ruling "124 a", 2026-10-14; owner's ruling "129 a", 2026-10-15)
+and the owner archives the session by hand, as FR-28 to FR-30 say. Where a later ruling changed the
+wording the board draws, this spec's text governs and the approved board is not redrawn: the cleanup
+prompt above, the "Renew now" line's sign-in sentence (FR-34) on "7 The gardening pass", and the
+reviewer sign-in being once per machine (FR-1) on "1 Setup". (source: owner's rulings "123 a" and "124 a", 2026-10-14; owner's ruling "129 a", 2026-10-15)
 
 ## Definition of done / success
 
@@ -392,10 +395,11 @@ and the owner archives the session by hand, as FR-28 to FR-30 say. (source: owne
 - **2026-10-15 (owner-stamped, substantive):** the consolidation re-read (owner's ruling "2 a",
   collector item 127) is done, and its findings are absorbed (owner's ruling "129 a", collector item
   129). FR-34's acceptance adds the sentence owner's ruling "123 a" put on the "Renew now" line: sign
-  the reviewer in again if the date does not move. FR-1's acceptance says the reviewer sign-in is done
-  once per machine the pass command runs on, not once per account (the owner's correction,
-  2026-10-14). UI/UX says the cleanup board draws the case where the builder can archive itself, and
-  that the hand archive applies otherwise. FR-21 and UFR-12 now cite the owner's headless ruling
+  the reviewer in again if the date does not move. FR-1's acceptance, set-up.md and the setup message say the
+  reviewer sign-in is done once per machine the pass command runs on, not once per account (the
+  owner's correction, 2026-10-14). UI/UX says the cleanup board draws the case where the builder can archive itself, that
+  the hand archive applies otherwise, and that where a later ruling changed a board's wording the
+  spec's text governs and the approved board is not redrawn. FR-21 and UFR-12 now cite the owner's headless ruling
   (Canon 2026-10-13-dcc2b5e5-1) instead of "craft, for your veto". The frontmatter date is current.
   The re-read found nothing else to change: the auto-mode ruling (Canon 2026-10-12-dcc2b5e5-1) is
   consistent with the spec and needs no amendment. The owner's re-stamp of the consolidated body is

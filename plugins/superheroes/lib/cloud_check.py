@@ -64,7 +64,7 @@ _SETUP_MESSAGE = (
     "every build names this environment itself.\n"
     "2. Paste the setup text into it. I've written it below.\n"
     "3. Sign in once to the reviewer on your machine, with a sign-in kept apart from your main one. "
-    "The pass is made from it. You only do this the first time on this account, and I'll walk you "
+    "The pass is made from it. You only do this the first time on this machine, and I'll walk you "
     "through it.\n"
     "4. Paste the reviewer pass into the environment. Run the pass command on your machine and it "
     "puts the pass on your clipboard.\n"
