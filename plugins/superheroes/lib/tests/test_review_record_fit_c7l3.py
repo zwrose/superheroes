@@ -414,7 +414,7 @@ def test_the_real_source_reader_reads_nothing_for_a_missing_repository_and_never
     assert "canonText" not in FO.decision_sources(str(tmp_path), None)
 
 
-SHEET = {"answers": {"c1": {"answer": "accept", "optionId": None, "note": None}}}
+SHEET = {"answers": {"c1": {"answer": "aligned", "optionId": None, "note": None}}}
 SHEET_BY = {"kind": "sheet-answer", "ref": {"pr": 7, "card": "c1"}}
 
 

@@ -87,7 +87,7 @@ def _is_int(value):
 
 
 def sheet_answer_decides(answers, ref, pr):
-    """True only when the cited card of this pull request holds a settled accept or option answer."""
+    """True only when the cited card of this pull request holds a settled aligned or option answer."""
     if not isinstance(answers, dict) or not isinstance(ref, dict):
         return False
     if not (_is_int(pr) and _is_int(ref.get("pr")) and ref["pr"] == pr):
@@ -100,7 +100,7 @@ def sheet_answer_decides(answers, ref, pr):
     if not isinstance(doc, dict):
         return False
     answer = doc.get("answer")
-    if answer == "accept":
+    if answer == "aligned":
         return True
     option_id = doc.get("optionId")
     return answer == "option" and isinstance(option_id, str) and option_id.strip() != ""

@@ -248,6 +248,23 @@ def test_an_owner_decision_to_fix_on_the_lineage_root_supersedes_the_ruling_on_a
     assert _found(unlinked.seat("code-reviewer").save())["decidedBy"] == CANON
 
 
+_LIN = "root.py::original@L1"
+_GUIDE = {"disposition": "fix-with-guidance", "guidanceText": "fix it this way"}
+
+
+@pytest.mark.parametrize("log,rounds,expected", [
+    ([_ruling(rnd=1, seq=1)], {}, CANON),  # nothing newer: the citation is recovered
+    ([_ruling(rnd=1, seq=1)], {"1": {"judgmentDispositions": [_gate(seq=2)]}}, None),  # gate fix
+    ([_ruling(rnd=1, seq=1)], {"1": {"judgmentDispositions": [_gate("skip", seq=2)]}}, None),  # gate skip
+    ([_ruling(rnd=1, seq=1)], {"1": {"judgmentDispositions": [dict(_gate(seq=2, findingKey=_LIN), **_GUIDE)]}}, None),  # guidance, lineage key
+    ([_ruling(rnd=1, seq=1), _ruling(_LIN, rnd=1, seq=2, ruling="guidance", decided_by=None)], {}, None),  # ruling, lineage key
+])
+def test_the_citation_is_recovered_only_when_the_groups_newest_decision_is_the_ruling_carrying_it(tmp_path, log, rounds, expected):
+    # bites on: the recovery ignoring any one kind of newer decision (gate fix, gate skip, guidance, a lineage ruling)
+    s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=log, rounds=rounds, findingLineage={KEY: _LIN})
+    assert _found(s.seat("code-reviewer").save())["decidedBy"] == expected
+
+
 def test_the_session_base_ref_is_the_default_when_the_extra_is_absent(tmp_path):
     session = Session(tmp_path, config={"maxRounds": 7, "baseRef": "abc123"}).seat("code-reviewer").save()
     assert rs.account_from_session(session, extras())["baseRef"] == "abc123"

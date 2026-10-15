@@ -202,26 +202,26 @@ def test_residual_decides(text, ref, expected):
 # --- E5: sheet answers ------------------------------------------------------------------------
 
 @pytest.mark.parametrize("answers,ref,pr,expected", [
-    (_sheet("accept"), {"pr": 9, "card": "c1"}, 9, True),
+    (_sheet("aligned"), {"pr": 9, "card": "c1"}, 9, True),
     (_sheet("option", "opt-a"), {"pr": 9, "card": "c1"}, 9, True),
-    (_sheet("accept"), {"pr": 8, "card": "c1"}, 9, False),
-    (_sheet("accept"), {"pr": True, "card": "c1"}, 1, False),
-    (_sheet("accept"), {"pr": 1, "card": "c1"}, True, False),
+    (_sheet("aligned"), {"pr": 8, "card": "c1"}, 9, False),
+    (_sheet("aligned"), {"pr": True, "card": "c1"}, 1, False),
+    (_sheet("aligned"), {"pr": 1, "card": "c1"}, True, False),
     (_sheet("discuss"), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("something-else"), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet(None), {"pr": 9, "card": "c1"}, 9, False),
-    (_sheet("aligned"), {"pr": 9, "card": "c1"}, 9, False),
+    (_sheet("accept"), {"pr": 9, "card": "c1"}, 9, False),  # not in the sheet's answer vocabulary
     (_sheet("option"), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("option", ""), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("option", 4), {"pr": 9, "card": "c1"}, 9, False),
-    (_sheet("accept"), {"pr": 9, "card": "missing"}, 9, False),
-    (_sheet("accept"), {"pr": 9}, 9, False),
-    ({"answers": {"c1": "accept"}}, {"pr": 9, "card": "c1"}, 9, False),
+    (_sheet("aligned"), {"pr": 9, "card": "missing"}, 9, False),
+    (_sheet("aligned"), {"pr": 9}, 9, False),
+    ({"answers": {"c1": "aligned"}}, {"pr": 9, "card": "c1"}, 9, False),
     ({"answers": []}, {"pr": 9, "card": "c1"}, 9, False),
     ({}, {"pr": 9, "card": "c1"}, 9, False),
     (None, {"pr": 9, "card": "c1"}, 9, False),
-    (_sheet("accept"), "c1", 9, False),
-    (_sheet("accept"), None, 9, False),
+    (_sheet("aligned"), "c1", 9, False),
+    (_sheet("aligned"), None, 9, False),
 ], ids=lambda v: None)
 def test_e5_sheet_answer_decides(answers, ref, pr, expected):
     assert FO.sheet_answer_decides(answers, ref, pr) is expected
@@ -231,7 +231,7 @@ def test_e5_sheet_answer_decides(answers, ref, pr, expected):
 
 def _sources(**extra):
     base = {"canonText": _entry(CANON_ID), "residualText": "a known gap",
-            "residualSource": "base", "sheetAnswers": _sheet("accept"), "pr": 9}
+            "residualSource": "base", "sheetAnswers": _sheet("aligned"), "pr": 9}
     base.update(extra)
     return base
 
