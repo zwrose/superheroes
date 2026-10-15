@@ -314,7 +314,7 @@ def test_real_record_paths_carry_complete_revision_identity(tmp_path, adapters):
     assert row["citedHead"] == anchor.get("headSha") == HEAD_SHA
 
     missing_seat = "security-reviewer"
-    sweep_seat = "test-reviewer"
+    sweep_seat = "test-role"
     for other in RD.DIMENSIONS:
         if other not in (seat, missing_seat, sweep_seat):
             _land_and_record(d, other)

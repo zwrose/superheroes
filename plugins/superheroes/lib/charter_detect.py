@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Charter detection from session transcripts.
 
-Long-lived superheroes sessions run under one of three charters (showrunner,
-workhorse, or detective), loaded via slash command (COMMAND_CHARTERS). Hooks need to know which
+Long-lived superheroes sessions run under one of four charters (showrunner,
+workhorse, detective, or discovery), loaded via slash command (COMMAND_CHARTERS). Hooks need to know which
 charter is active without wedging compaction — so detection is best-effort,
 never raises, and reads the append-only JSONL transcript forward from the
 start (charter invocations appear early; a tail window would miss them in long
@@ -15,10 +15,11 @@ import sys
 
 MAX_SCAN_BYTES = 200 * 1024 * 1024
 
-CHARTER_NAMES = ("showrunner", "workhorse", "detective")
+CHARTER_NAMES = ("showrunner", "workhorse", "detective", "discovery")
 
 # The one name-to-charter table: every slash command that loads a charter.
-# The resume and handoff skills load the showrunner charter for their seat.
+# The resume and handoff skills load the showrunner charter for their seat; the discovery
+# charter loads by its skill name (architect-discovery) or the skill's alias (discovery).
 # Bites on: a charter-loading command name that is exactly a key here; a key
 # missing from the table, or a near-miss name, detects as None.
 COMMAND_CHARTERS = {
@@ -27,6 +28,8 @@ COMMAND_CHARTERS = {
     "showrunner-handoff": "showrunner",
     "workhorse": "workhorse",
     "detective": "detective",
+    "architect-discovery": "discovery",
+    "discovery": "discovery",
 }
 
 _PREFILTER = "/superheroes:"

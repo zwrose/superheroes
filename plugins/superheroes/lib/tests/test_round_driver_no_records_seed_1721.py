@@ -89,7 +89,7 @@ def test_new_state_takes_nothing_from_a_records_file(tmp_path):
     records.write_bytes(RM.records_bytes(_another_sessions_records()))
     before = records.read_bytes()
     with _recording() as reads:
-        state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+        state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     assert state["round"] == 1
     assert state["_records"] == []
     assert state["_coverage"] == []
@@ -104,7 +104,7 @@ def test_new_state_takes_nothing_from_a_records_file(tmp_path):
 def test_run_loop_replaces_a_preexisting_file_without_reading_it(tmp_path):
     records = tmp_path / "round-records.json"
     records.write_bytes(RM.records_bytes(_another_sessions_records()))
-    cfg = _cfg_cert(dimensions=["test-reviewer", "code-reviewer"], recordsPath=str(records),
+    cfg = _cfg_cert(dimensions=["test-role", "code-reviewer"], recordsPath=str(records),
                     maxRounds=8)
     with _recording() as reads:
         _, state = _run_loop_capturing_state(_vacuous_round1_seams(), cfg)
@@ -146,7 +146,7 @@ def test_cli_next_and_submit_replace_a_preexisting_file_without_reading_it(tmp_p
 def test_corrupt_preexisting_file_does_not_park_and_is_replaced(tmp_path):
     records = tmp_path / "round-records.json"
     records.write_text("{corrupt not-a-list")
-    cfg = _cfg_cert(dimensions=["test-reviewer"], recordsPath=str(records))
+    cfg = _cfg_cert(dimensions=["test-role"], recordsPath=str(records))
     with _recording() as reads:
         receipt, state = _run_loop_capturing_state(_seams(), cfg)
     assert _reads_of(reads, records) == []
