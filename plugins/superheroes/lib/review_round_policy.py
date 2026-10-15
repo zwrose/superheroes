@@ -6,6 +6,7 @@ round kind, reviewer run/skip choices, tiers, and cheap-result escalation policy
 """
 
 import circuit_breaker
+import review_seats
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
@@ -14,14 +15,7 @@ CHEAP = "reviewer"
 # rework counts as "cross-cutting" and re-arms one more full confirmation.
 MAX_CONFIRMATIONS = 2
 CROSS_CUTTING_SUBJECTS = 3
-SUBJECT_FALLBACK = {
-    "test": "Test",
-    "security": "Security",
-    "code": "Code",
-    "architecture": "Architecture",
-    "failure": "Failure-Mode",
-    "premortem": "Failure-Mode",
-}
+SUBJECT_FALLBACK = review_seats.SUBJECT_FALLBACK
 POLICY_SUBJECTS = set(SUBJECT_FALLBACK.values())
 
 

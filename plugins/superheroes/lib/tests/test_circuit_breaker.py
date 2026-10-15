@@ -153,7 +153,7 @@ def test_no_halt_at_max_iterations_once_resolved():
 def _run21_reviewers():
     return [
         "architecture-reviewer", "code-reviewer", "security-reviewer",
-        "test-reviewer", "premortem-reviewer",
+        "test-role", "premortem-reviewer",
     ]
 
 

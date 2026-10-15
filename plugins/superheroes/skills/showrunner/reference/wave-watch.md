@@ -323,8 +323,8 @@ The wire values for `state`, `reason`, and `flag` are the constants in `lib/wave
 deliberately not restated here.
 
 **Complete** (`STACK_STATE_COMPLETE`) means every position from `1` through `layersPlanned` has a
-stack member whose vet reads READY at that pull request's **current** head — the stack goes on the
-click list whole. Stop watching the batch only when every stack in the payload is complete; while
+stack member whose vet reads READY at that pull request's **current** head — the stack gets its
+one sheet, whole. Stop watching the batch only when every stack in the payload is complete; while
 another stack in it is still incomplete, keep watching as the stack-state baseline limit below
 describes. A position the watcher could not read
 — its read budget ran out, or a pull-request or verdict read was refused — counts as not READY,
