@@ -1401,7 +1401,7 @@ def test_created_canon_has_the_file_shape_and_the_header_from_this_repos_canon(t
     assert w.migrate_landed()["action"] == "migrated"
     repo_canon = open(os.path.join(_REPO_ROOT, "docs", "superheroes", "canon.md")).read().splitlines()
     header = "\n".join(repo_canon[2:5])
-    assert PC._CANON_HEADER == header
+    assert PC.canon.HEADER == "# Canon\n\n%s\n\n## Entries\n\n" % header
     text = open(w.canon).read()
     assert text.startswith("# Canon\n\n%s\n\n## Entries\n\n- **" % header)
     assert text.endswith("\n") and not text.endswith("\n\n")

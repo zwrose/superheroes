@@ -129,7 +129,7 @@ def test_one_line_certification_only_key_forbids_attested_and_interim():
     try:
         attested = RD.build_attestation_receipt("/tmp", RD.new_state(_cfg()), {"ref": "1"}, "note")
         attested["artifacts"] = {"session/x": "abc"}
-        attested["roster"] = {"test-reviewer": "recorded"}
+        attested["roster"] = {"test-role": "recorded"}
         attested[fake_key] = True
         ok, reason = RD.validate_receipt(attested)
         assert ok is False, reason
