@@ -28,11 +28,11 @@ def test_malformed_previous_dimension_is_fail_safe():
 def test_fractional_round_string_is_malformed():
     out = RP.plan_round({
         "round": "2.5",
-        "dimensions": ["test-reviewer"],
+        "dimensions": ["test-role"],
         "changedSubjects": ["Test"],
         "previous": {},
     })
-    assert out["dimensions"]["test-reviewer"]["reason"] == "malformed round state"
+    assert out["dimensions"]["test-role"]["reason"] == "malformed round state"
     assert out["escalationPolicy"] == "deep-only"
 
 

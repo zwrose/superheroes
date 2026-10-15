@@ -124,14 +124,14 @@ def _append_reviewer_pass_section(boot, result, raised, scrubbed=True):
     return boot + "\n\n### Reviewer pass\n" + line
 
 
-def _bootstrap(cwd, transcript_path, host, source=None):
+def _bootstrap(cwd, transcript_path, host, source=None, session_id=None):
     """The always-on project-context block. On a TOTAL failure (assemble unimportable/raised),
     return a minimal in-context breadcrumb (B6, #315) rather than '' — so a fully-failed bootstrap
     still leaves the running agent something to read back, not silence (stderr is invisible to it)."""
     try:
         import session_context
         block = session_context.assemble(
-            cwd, transcript_path, _PLUGIN_ROOT, host, source=source)
+            cwd, transcript_path, _PLUGIN_ROOT, host, source=source, session_id=session_id)
         return block if (block and block.strip()) else ""
     except Exception as exc:
         sys.stderr.write("superheroes session_start: bootstrap skipped (%s)\n" % type(exc).__name__)
@@ -169,13 +169,19 @@ def main():
         pass_raised = type(exc).__name__
         _scrub_pass_env({})
 
-    boot = _bootstrap(cwd, transcript_path, args.host, source=source)   # always-on, gated by nothing
+    boot = _bootstrap(cwd, transcript_path, args.host, source=source,
+                      session_id=payload.get("session_id"))   # always-on, gated by nothing
     boot = _append_host_model_section(boot, host_model)
     boot = _append_reviewer_pass_section(boot, pass_result, pass_raised, scrubbed)
     if boot:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",
                                    "additionalContext": boot}}) + "\n")
+    try:
+        import compaction_directive
+        compaction_directive.reap(payload.get("session_id"), cwd=cwd)
+    except Exception:
+        pass
     try:
         import cache_markers
         swept = cache_markers.sweep_stale(_PLUGIN_ROOT)
