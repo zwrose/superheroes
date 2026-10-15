@@ -1,0 +1,154 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "stack",
+  "title": "Gift cards",
+  "prSheet": {
+    "number": 4,
+    "commit": "3333333ccccccc3333333ccccccc3333333ccccc",
+    "whatChanged": {
+      "summary": "Customers can buy a gift card, spend it at checkout and see what is left on it.",
+      "reviewers": [
+        {
+          "name": "code-reviewer",
+          "family": "codex",
+          "ran": "engine-record"
+        },
+        {
+          "name": "design-reviewer",
+          "family": "claude",
+          "ran": "reported-by-session",
+          "notIndependent": true
+        }
+      ],
+      "caught": [
+        "#5: A gift card could be created with a negative balance"
+      ],
+      "rounds": 7,
+      "stoppedAtCap": true,
+      "ci": {
+        "state": "green",
+        "commit": "3333333ccccccc3333333ccccccc3333333ccccc"
+      },
+      "lane": "light",
+      "laneReason": "Shows a number that checkout already computes."
+    },
+    "craft": [
+      {
+        "title": "The balance shows two decimal places",
+        "detail": "Money is shown to the cent everywhere else.",
+        "pr": 7
+      }
+    ],
+    "alreadyDecided": [
+      {
+        "title": "The balance is hidden until the customer signs in",
+        "detail": "Ruled earlier: balances are account data.",
+        "pr": 7
+      }
+    ],
+    "history": [
+      "#5: 2 rounds ran.",
+      "#5: Checks were green, run on 1111111aaaaaaa1111111aaaaaaa1111111aaaaa.",
+      "#6: 4 rounds ran.",
+      "#6: The loop stopped at its round cap.",
+      "#6: security-reviewer did not run. Go-ahead to merge without it: \"Merge without the security read\" (the chat on 2026-03-02).",
+      "#6: Checks were green, run on 2222222bbbbbbb2222222bbbbbbb2222222bbbbb.",
+      "#6: design-reviewer is from a maker's model family, so its review was not independent.",
+      "#7: 1 rounds ran.",
+      "#7: Checks were green, run on 3333333ccccccc3333333ccccccc3333333ccccc."
+    ],
+    "walk": {
+      "open": {
+        "label": "Open the test shop"
+      },
+      "picturesFrom": "the advisor's own test shop",
+      "stops": [
+        {
+          "id": "gift-card-table",
+          "key": "gift-card-table-18668f855294",
+          "title": "The gift-card table",
+          "pr": 5,
+          "group": "Gift cards",
+          "kind": "look",
+          "steps": [],
+          "expect": "The new table in the admin view.",
+          "pictures": []
+        },
+        {
+          "id": "checkout-redeem",
+          "key": "checkout-redeem-449ec5af939f",
+          "title": "Spending a card at checkout",
+          "pr": 6,
+          "group": "Gift cards",
+          "kind": "try",
+          "steps": [
+            "Pay with a gift card"
+          ],
+          "expect": "The balance drops by the price.",
+          "pictures": []
+        }
+      ]
+    },
+    "prs": [
+      {
+        "number": 5,
+        "title": "Add the gift-card table",
+        "commit": "1111111aaaaaaa1111111aaaaaaa1111111aaaaa"
+      },
+      {
+        "number": 6,
+        "title": "Redeem a gift card at checkout",
+        "commit": "2222222bbbbbbb2222222bbbbbbb2222222bbbbb"
+      },
+      {
+        "number": 7,
+        "title": "Show the gift-card balance",
+        "commit": "3333333ccccccc3333333ccccccc3333333ccccc"
+      }
+    ]
+  },
+  "cards": [
+    {
+      "id": "f-a64d7a0d1734",
+      "callKind": "Leftover · #6",
+      "warning": false,
+      "question": "A gift card that covers part of an order leaves the rest unpaid",
+      "context": [
+        {
+          "title": "If left",
+          "blocks": [
+            {
+              "paragraph": "A customer with a small gift card may reach the end of checkout and be asked for a second payment they did not expect."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "keep-it",
+          "label": "Keep it",
+          "consequence": "Ships as is; no follow-up.",
+          "sendsBack": false
+        },
+        {
+          "id": "fix-in-a-follow-up",
+          "label": "Fix in a follow-up",
+          "consequence": "Ships now; a follow-up issue is filed with a revisit date.",
+          "sendsBack": false
+        },
+        {
+          "id": "fix-before-merge",
+          "label": "Fix before merge",
+          "consequence": "The PR goes back for the fix and returns with a new sheet.",
+          "sendsBack": true
+        }
+      ],
+      "recommendation": {
+        "text": "Fix it before merge",
+        "reason": "A surprise second payment loses the sale.",
+        "optionId": "fix-before-merge"
+      }
+    }
+  ]
+}

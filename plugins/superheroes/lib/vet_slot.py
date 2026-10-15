@@ -12,8 +12,9 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of nine reasons (``bad-argument``, ``read-failed``,
-``markers-invalid``, ``receipt-missing``, ``followup-undispositioned``,
+check is a refusal with one of ten reasons (``bad-argument``, ``read-failed``,
+``markers-invalid``, ``slot-span-foreign-content`` (another ``superheroes:`` marker line
+inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed``,
 ``write-unconfirmed``) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
@@ -136,6 +137,15 @@ def analyze_body(body):
     if offsets["advisor-vet"] >= offsets["build-record"]:
         raise _Refusal("markers-invalid", "advisor-vet marker is not above the build-record marker")
     followups = read_marker_list(body, FOLLOWUPS_MARKER_NAME, after=offsets["build-record"])
+    span_start = body.index("\n", offsets["advisor-vet"]) + 1
+    for offset, line in _live_lines(body):
+        stripped = line.strip()
+        # axis: any other superheroes marker line inside the slot span refuses slot-span-foreign-content
+        if span_start <= offset < offsets["build-record"] and stripped.startswith("<!-- superheroes:"):
+            name = re.match(r"<!-- (superheroes:[^\s>]*)", stripped).group(1)
+            raise _Refusal("slot-span-foreign-content",
+                           "the slot span holds the %s marker; nothing goes between the advisor-vet"
+                           " and build-record markers, so move it below the build-record marker" % name)
     return offsets["advisor-vet"], offsets["build-record"], followups
 
 

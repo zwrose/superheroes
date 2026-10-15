@@ -24,7 +24,9 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_cleanup  # noqa: E402
-_BASE = "b300a85d64b4f339900509800ee6d9f60485c0f2"
+# The layer below's head this layer is built on (its bring-current head with main, so main's
+# changes to duties 1 to 7 count as the base, not as this layer's).
+_BASE = "0e3761754fb20001076bd025c15a3b39e92be1ca"
 
 _REF = "skills/showrunner/reference"
 _MERGE_TRAIN = f"{_REF}/merge-train.md"
