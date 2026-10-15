@@ -1324,3 +1324,66 @@ def test_a_provisional_carry_stays_revocable_after_a_synthesis_merge():
     carry.at_location = {("a.py", 1): 2}
     carry.revoke_ambiguous(state)
     assert "A" not in state["findingLineage"] and state["findingLineage"]["B"] == "C"
+
+
+def test_guidance_on_a_member_of_an_archived_representative_queues_it():
+    """axis: A merged into B, both archived by a later pass — guidance on A queues archived B."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("A", 2, "Minor", kind="code-quality"),
+                             _unit_finding("B", 3, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "A", "B")
+    RD._set_findings(state, [_unit_finding("Z", 4, "Important")])
+    assert RD._live_finding_by_key(state, "B") is None
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="tidy it"))
+    rows = RD._guidance_named_rows(state, [("A", _unit_finding("A", 2, "Minor", kind="code-quality"))])
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["B"]
+
+
+def test_guidance_on_a_merged_member_after_its_representative_is_archived():
+    """axis: M merged into R, then R archived (M live or gone) — guidance on M queues archived R."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("R", 3, "Minor", kind="code-quality"),
+                             _unit_finding("M", 2, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "M", "R")
+    RD._set_findings(state, [_unit_finding("Z", 4, "Important")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    rows = RD._guidance_named_rows(state, [("M", _unit_finding("M", 2, "Minor", kind="code-quality"))])
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["R"]
+
+
+def test_a_merge_cycle_stops_the_representative_walk():
+    state = RD.new_state()
+    RD._set_findings(state, [dict(_unit_finding("A", 2, "Minor"), mergedInto="B"),
+                             dict(_unit_finding("B", 3, "Minor"), mergedInto="A")])
+    key, row = RD._merge_representative(state, {}, "A", state["findings"][0], None)
+    assert key in ("A", "B") and row.get("mergedInto")
+
+
+def test_withdraw_refuses_when_the_starting_head_was_not_captured(tmp_path, keep_severity):
+    """axis: a null restoreHead is an unanchored attempt — never the certified head."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-nullhead")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    state = _state(session_dir)
+    state["config"]["repoRoot"] = str(repo)
+    key = RD._anchor_key(state["pending"]["round"], state["pending"]["phase"], k)
+    state["_ordersAnchors"][key].update(restoreHead=None, headSha=head)
+    RD.save_state(session_dir, state)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-head-unanchored", out
+
+
+def test_restore_head_is_captured_from_the_configured_checkout(tmp_path, keep_severity):
+    """axis: restoreHead reads the checkout the fixer orders name (config.repoRoot), not the cwd."""
+    repo, _head0 = _throwaway_repo(tmp_path, "cfgrepo")
+    (repo / "src").mkdir()
+    (repo / "src" / "f00.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "src")
+    _git(repo, "commit", "-q", "-m", "second")
+    head = _git(repo, "rev-parse", "HEAD")
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("bounds F", 1)], name="c7-cfgroot", repoRoot=str(repo))
+    state = _state(session_dir)
+    pend = state["pending"]
+    anchor = state["_ordersAnchors"][RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])]
+    assert anchor["restoreHead"] == head

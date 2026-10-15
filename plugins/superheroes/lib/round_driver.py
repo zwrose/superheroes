@@ -4635,6 +4635,24 @@ def _offered_fixer_rows(state, extra_rows=None):
     return offered
 
 
+def _merge_representative(state, ledger_by_key, key, source, stored):
+    """``(key, row)`` of the row ``key`` currently stands for: follow ``mergedInto`` (first hop from
+    the source or its ledger row, then from the live row if any, else the ledger row) until a row
+    with none. The row is the live finding, else the archived ledger row; a cycle or an unknown
+    target stops at the last known row."""
+    cur, row, seen = key, source, {key}
+    nxt = (source or {}).get(session_contract.MERGED_INTO_FIELD) or (stored or {}).get(
+        session_contract.MERGED_INTO_FIELD)
+    while nxt and nxt not in seen:
+        seen.add(nxt)
+        found = _live_finding_by_key(state, nxt) or ledger_by_key.get(nxt)
+        if not isinstance(found, dict):
+            break
+        cur, row = nxt, found
+        nxt = found.get(session_contract.MERGED_INTO_FIELD)
+    return cur, row
+
+
 def _guidance_named_rows(state, named):
     """Lifted copies of the findings a just-recorded ``guidance`` ruling names that the fixer step's
     batch and queue do not hold yet — the same ``lifted`` marker the round's first batch uses. A fixed
@@ -4658,17 +4676,10 @@ def _guidance_named_rows(state, named):
         if not isinstance(source, dict):
             continue
         stored = ledger_by_key.get(key)
-        rep = (source.get(session_contract.MERGED_INTO_FIELD)
-               or (stored or {}).get(session_contract.MERGED_INTO_FIELD))
-        for _ in range(len(ledger_by_key) + len(lineage) + 1):  # follow mergedInto to the live row
-            nxt = rep and ((_live_finding_by_key(state, rep) or ledger_by_key.get(rep) or {})
-                           .get(session_contract.MERGED_INTO_FIELD))
-            if not nxt or nxt == rep:
-                break
-            rep = nxt
-        rep_row = _live_finding_by_key(state, rep) if rep else None
-        if isinstance(rep_row, dict) and not rep_row.get(session_contract.MERGED_INTO_FIELD):
-            # the live representative; a stale merge mark on its ledger row (merged, then re-raised) is dropped
+        rep, rep_row = _merge_representative(state, ledger_by_key, key, source, stored)
+        if rep != key:
+            # the representative (live, else archived in the ledger); a stale merge mark on its
+            # ledger row (merged, then re-raised) is dropped
             key, source = rep, rep_row
             stored = {k: v for k, v in (ledger_by_key.get(rep) or {}).items()
                       if k != session_contract.MERGED_INTO_FIELD}
@@ -7859,7 +7870,7 @@ def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
                 WITHDRAW_RESTORE_NOT_CHECKED)
     run_git = git or store_core.run_git
     anchor = _orders_anchor(state, session_dir, rnd, P_FIXER, attempt) or {}
-    bound = anchor.get("restoreHead") or anchor.get("headSha")
+    bound = anchor["restoreHead"] if "restoreHead" in anchor else anchor.get("headSha")
     if not isinstance(bound, str) or not bound:
         return (WITHDRAW_HEAD_UNANCHORED,
                 "the orders of fixer attempt %s carry no head the worktree can be compared "
@@ -10523,7 +10534,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
     if certified_head:
         anchor["headSha"] = certified_head
-    if phase == P_FIXER and (root := _resolve_repo_root(session_dir, state)):
+    if phase == P_FIXER and (root := (state.get("config") or {}).get("repoRoot")
+                             or _resolve_repo_root(session_dir, state)):
         anchor["restoreHead"] = store_core.run_git(root, "rev-parse", "HEAD") or None
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
