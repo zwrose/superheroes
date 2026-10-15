@@ -3708,6 +3708,10 @@ def _fold_synthesis(state, config, artifact):
                     _record_merged_into(state, key, kept_key)
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
+    carried = state.pop("_guidedCarry", None) or []
+    if carried:
+        held_keys = {_finding_identity_key(f) for f in kept if isinstance(f, dict)}
+        kept = list(kept) + [f for f in carried if _finding_identity_key(f) not in held_keys]
     _set_findings(state, kept)
     _sync_merged_consequences(state, kept)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
@@ -5712,6 +5716,28 @@ def _after_audits(state, config):
     _fold_scoped(state, config, {})
 
 
+def _guided_live_findings(state):
+    """Live findings an effective ``guidance``/``fix`` decision names that no fixer has been offered
+    yet (still liftable): the post-audit fold must not archive them before the lift sees them."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return []
+    effective = _live_ruling_by_key(state)
+    out = []
+    for finding in state.get("findings") or []:
+        if not isinstance(finding, dict) or finding.get("summaryEntry"):
+            continue
+        key = _fix_batch_row_key(finding)
+        decision = effective.get(key) if key else None
+        if not isinstance(decision, dict) or decision.get("ruling") not in _OWNER_FIX_RULINGS:
+            continue
+        stored = ledger_by_key.get(key)
+        if _lift_marker_for(finding, stored if isinstance(stored, dict) else finding,
+                            decision) == LIFT_GUIDANCE:
+            out.append(finding)
+    return out
+
+
 def _fold_scoped(state, config, artifact):
     """Fold the scoped new-finding scan over the fix's new surface; its candidates + the audits'
     new-issue candidates route through the same stage/cluster/verify fold."""
@@ -5721,14 +5747,17 @@ def _fold_scoped(state, config, artifact):
     compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
     _record_compile_drops(state, drops)
     state["_postAudit"] = True
+    carried = _guided_live_findings(state)
     if compiled:
+        if carried:
+            state["_guidedCarry"] = carried
         _stage_findings(state, compiled)
         state["step"] = P_VERIFIERS
         # after verify+synthesis, _after_findings_settled runs; but for delta rounds we need the
         # audit-breaker + confirmation re-arm, handled in _settle_delta.
         state["_settleDelta"] = True
         return
-    _set_findings(state, [])
+    _set_findings(state, carried)
     _settle_delta(state, config)
 
 

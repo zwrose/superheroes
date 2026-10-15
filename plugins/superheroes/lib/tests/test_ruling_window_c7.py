@@ -1404,3 +1404,19 @@ def test_batch_composition_never_holds_an_archived_representative_until_it_is_ra
                              _unit_finding("B", 5, "Minor", kind="code-quality")])
     RD._after_findings_settled(state, state["config"])
     assert "B" in _unit_batch(state)
+
+
+def test_guidance_given_during_audits_survives_the_clean_postaudit_fold(tmp_path, keep_severity):
+    """axis: a live code-quality Minor given guidance is not archived by the clean post-audit fold
+    (`_fold_scoped` with no new findings); it stays live, so the lift offers it to a fixer."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-audit-guided")
+    state = _state(session_dir)
+    quality = _finding_key_by_title(state, "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", quality, "tidy the names"))["ok"]
+    state = _state(session_dir)
+    assert RD._live_finding_by_key(state, quality) is not None
+    RD._fold_scoped(state, state["config"], {"findings": []})
+    assert RD._live_finding_by_key(state, quality) is not None
+    sent = {RD._fix_batch_row_key(r) for r in (state.get("_fixBatch") or [])}
+    lifted = {RD._fix_batch_row_key(r) for r in RD._lifted_fix_rows(state, [])}
+    assert quality in sent | lifted
