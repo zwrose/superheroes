@@ -162,8 +162,8 @@ two) and 5 Definition of done rows.
 | FR-26 | 1 | rule | A cloud build's PR merges only on the owner's merge word, as any build's does. | **C1b** |
 | FR-27 | 1 | rule | Nothing a cloud builder does alters the calibration on the owner's machine. | **C6** |
 | FR-28 | 1 | GWT | Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the… | **C8** |
-| FR-29 | 1 | rule | The advisor's message names the merged build and the one tap. | **C8** |
-| FR-30 | 1 | rule | The archive prompt is the only step left to the owner. | **C8** |
+| FR-29 | 1 | rule | The advisor's message names the merged build, the one tap when the builder can archive itself, and the hand archive when it cannot. | **C8** |
+| FR-30 | 1 | rule | The archive prompt, or a hand archive when there is no prompt, is the only step left to the owner. | **C8** |
 | FR-31 | 1 | rule | The plugin does not clean up a builder that hands back or parks. The builder's pushed work stays for the vet,… | **C8** |
 | FR-32 | 1 | GWT | Given a cloud build whose PR is closed unmerged, when the advisor closes out the build, then the advisor asks… | **C8** |
 | FR-33 | 1 | rule | The line reads as the board draws it, with the days left and the date. | **C8** |

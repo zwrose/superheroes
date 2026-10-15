@@ -291,7 +291,7 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - This piece adds no recovery machinery beyond what these requirements name. Cloud builders are
   assumed reliable, and more recovery is built only after failures show what shape it needs. (source: Canon 2026-10-10-ca3e7e0d-20)
 - A cloud builder runs on the project's rules and the plugin's rules only. (source: Canon 2026-10-10-ca3e7e0d-14)
-- Cleanup of a finished cloud builder takes one tap from the owner, for now. (source: Canon 2026-10-10-ca3e7e0d-11)
+- Cleanup of a finished cloud builder takes one tap from the owner when the builder's session can archive itself, and otherwise a hand archive of that session, for now. (source: Canon 2026-10-15-dcc2b5e5-1)
 
 ## Out of scope
 
@@ -377,6 +377,11 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   archive when there is no prompt, is the only step left to the owner (owner's ruling "125 a",
   collector item 125). FR-28's and FR-30's statements are unchanged. Sections touched: Part D ·
   cleaning up a finished cloud builder (FR-28, FR-30), Amendments.
+- **2026-10-15 (owner-stamped, substantive):** the cleanup assumption follows the same conditional
+  form: one tap from the owner when the builder's session can archive itself, otherwise a hand
+  archive of that session, for now (owner's ruling "126 a", collector item 126). Its source moves
+  from Canon 2026-10-10-ca3e7e0d-11 to 2026-10-15-dcc2b5e5-1, which supersedes it. Sections
+  touched: Assumptions, Amendments.
 
 ## Coverage
 
