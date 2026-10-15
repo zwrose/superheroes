@@ -1,0 +1,16 @@
+{
+  "schema": "review-record/1",
+  "pr": 7,
+  "sessionId": "session-7",
+  "lane": {"value": "light", "reason": "Shows a number that checkout already computes.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "3333333ccccccc3333333ccccccc3333333ccccc", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "3333333ccccccc3333333ccccccc3333333ccccc", "source": "GitHub checks"},
+  "reviewers": [{"name": "code-reviewer", "family": "codex", "ran": "engine-record"}],
+  "findings": [
+    {"id": "J1", "outcome": "craft", "title": "The balance shows two decimal places", "reason": "Money is shown to the cent everywhere else.", "consequence": null, "findingKey": "giftcard/balance-format"},
+    {"id": "J2", "outcome": "ruling", "title": "The balance is hidden until the customer signs in", "reason": "Ruled earlier: balances are account data.", "consequence": null, "findingKey": "giftcard/balance-hidden"}
+  ],
+  "missingReviews": [],
+  "rounds": {"count": 1, "stoppedAtCap": false, "source": "reported by the session"}
+}

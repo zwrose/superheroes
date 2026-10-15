@@ -161,11 +161,17 @@ def _bind(ran, run_dirs, engine_run):
     return {k: v[0] for k, v in hits.items() if len(v) == 1}
 
 
+# The `(round N)` suffix a persisted reviewer name carries: the one home of the format. `_reviewer` writes it
+# through REVIEWER_ROUND_FORMAT; REVIEWER_ROUND_SUFFIX is the pattern that strips it (review_learning's tally).
+REVIEWER_ROUND_FORMAT = " (round {rnd})"
+REVIEWER_ROUND_SUFFIX = re.compile(r"\s*\(round \d+\)$")
+
+
 def _reviewer(state, rnd, seat, stem, ran, same, env=None, ev=None, commit=None, run_dir=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
     entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
-    out = {"name": f"{stem}{seat} (round {rnd})", "planned": True, "ran": ran,
+    out = {"name": f"{stem}{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": ran,
            "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
            "model": _text(env.get("model"), entry.get("model"), ev.get("engineModel")) or "unknown",
            "commit": commit, "runDir": run_dir}
@@ -233,6 +239,17 @@ def _decide(own, by_key, rulings):
     return _LEFT_FOR_OWNER, why, rep
 
 
+MERGED_INTO_FORMAT = " (merged into {})"  # the one mark a merged member row's reason ends with
+_MERGED_INTO = re.compile(r"\(merged into (.*)\)$")  # built from MERGED_INTO_FORMAT above; keep the two together
+
+
+def merged_into(reason):
+    """The representative id a merged member row's reason names (the mark `MERGED_INTO_FORMAT` writes), or None."""
+    # the carry path appends CARRIED after the mark each later review; the mark's own end is what remains
+    found = _MERGED_INTO.search(reason.replace(CARRIED, "")) if isinstance(reason, str) else None
+    return found.group(1) if found else None
+
+
 def _id(row, key):
     rid = row.get("id")
     return rid if isinstance(rid, str) and rid and not verification.is_staged_id(rid) else key
@@ -264,7 +281,7 @@ def _findings(state):
             continue
         outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings)
         if rep is not None and reason and sc.finding_identity_key(rep) != key:
-            reason += f" (merged into {_id(rep, sc.finding_identity_key(rep))})"
+            reason += MERGED_INTO_FORMAT.format(_id(rep, sc.finding_identity_key(rep)))
         dim = row.get("dimension")
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
