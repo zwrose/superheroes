@@ -4515,18 +4515,21 @@ def _ruling_closure(state, ledger_by_key, key):
     return seen
 
 
-def _ruled_row(state, ledger_by_key, decision, sent):
+def _ruled_row(state, ledger_by_key, decision, sent, effective=None):
     """``(row, from_ledger)`` for the row an owner decision sends to a fixer, ``(None, False)`` when
     it names no live finding: the one live, unmerged finding in the ruling's closure, else the
     restage candidate from the ledger (a finding a fixer order carried before the ruling, or one that
     left the live list with no disposition)."""
     lineage = _lineage_map(state)
     closure = sorted(_ruling_closure(state, ledger_by_key, decision["findingKey"]))
+    if effective is None:
+        effective = _live_ruling_by_key(state)
     for at in closure:
         row = _live_finding_by_key(state, at)
         if (isinstance(row, dict) and not row.get(session_contract.MERGED_INTO_FIELD)
                 and not (row.get("disposition") in ("fixed", "refuted")
-                         and _disposition_is_current(row))):
+                         and _disposition_is_current(row))
+                and _row_decision(state, effective, ledger_by_key, at) is decision):
             return dict(row), False
     sent_before = any(_lineage_root(lineage, k) in sent for k in closure)
     latest = None  # the most recently raised eligible version, not the first lexical one
@@ -4581,7 +4584,7 @@ def _resolve_ruled_batch(state, rows):
         if (decision.get("ruling") not in _OWNER_FIX_RULINGS or not _is_plain_int(decision.get("seq"))
                 or sent.get(_lineage_root(lineage, decision["findingKey"]), -1) >= decision["seq"]):
             continue
-        row, from_ledger = _ruled_row(state, ledger_by_key, decision, sent)
+        row, from_ledger = _ruled_row(state, ledger_by_key, decision, sent, effective)
         key = _fix_batch_row_key(row) if row else None
         if key is None:
             note = "ruling %s on %s names no live finding" % (decision["seq"], decision["findingKey"])
@@ -4596,6 +4599,13 @@ def _resolve_ruled_batch(state, rows):
         if from_ledger:  # the ledger keeps its disposition; mark it as the one this ruling reopened
             state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
                 state.get("dispositionSeqCounter", 0))
+        else:  # a live rewording carries the ruling: the closure's discharged members are reopened too
+            for member in _ruling_closure(state, ledger_by_key, key) - {key}:
+                entry = ledger_by_key.get(member)
+                if (isinstance(entry, dict) and entry.get("disposition") in ("fixed", "refuted")
+                        and _disposition_is_current(entry)):
+                    state.setdefault("restagedAfterDispositionSeq", {})[member] = (
+                        state.get("dispositionSeqCounter", 0))
         added.append(row)
     added.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
     if added:

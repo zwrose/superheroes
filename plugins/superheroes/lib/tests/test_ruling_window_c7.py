@@ -924,3 +924,32 @@ def test_a_ruling_awaiting_batch_resolution_keeps_the_real_consequence_on_a_same
         dict(_unit_finding("A", 1, "Important", kind="code-quality"), consequence="harder to read"),
         "A", 2)
     assert entry["consequenceKind"] == "real" and "data loss" in entry["consequence"], entry
+
+
+def test_a_ruling_skips_a_lineage_member_whose_own_decision_is_a_skip_and_reaches_the_one_it_binds():
+    """axis: LINEAGE — live Minors A and Z share a lineage link, guidance on Z then a skip on A alone:
+    the resolver sends Z (the row the guidance binds), not A first in the closure."""
+    state = _unit_round([_unit_finding("A", 1, "Minor"), _unit_finding("Z", 2, "Minor")])
+    state["findingLineage"] = {"Z": "A"}
+    _log_ruling(state, "Z", guidance="FIX-Z")
+    _log_ruling(state, "A", ruling="out-of-scope")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["Z"]
+
+
+def test_late_guidance_on_a_fixed_finding_reopens_it_when_a_live_rewording_carries_the_ruling():
+    """axis: RESTAGE — fixed real-consequence A gets guidance, live rewording Z is sent: A is marked
+    reopened too, so a retry that ends undischarged does not settle A as fixed."""
+    state = _unit_round([_unit_finding("Z", 2, "Minor", kind="code-quality")])
+    RD._record_disposition(state, "A", "fixed", 1)
+    for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        entry[session_contract.RAISED_SEQ_FIELD] = 0
+        entry["consequence"], entry["consequenceKind"] = "data loss", "real"
+    state["findingLineage"] = {"Z": "A"}
+    _log_ruling(state, "A", guidance="LATE")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["Z"]
+    assert state["restagedAfterDispositionSeq"] == {"A": state["dispositionSeqCounter"]}
+    RD._set_terminal(state, "held")
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    assert ledger["A"]["disposition"] != "fixed", ledger["A"]
