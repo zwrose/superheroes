@@ -244,7 +244,7 @@ def _audit_reviewers(state, rnd, audits, later=frozenset()):
     return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
 
 
-def _status_reviewers(state, setup=None):
+def _status_reviewers(state, setup=None, rows=()):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
     status = _panel_rounds_with_status(state)
@@ -279,6 +279,13 @@ def _status_reviewers(state, setup=None):
     for rnd, audits in by_round.items():
         later = {_audit_key(a) for r, rows in by_round.items() if r > rnd for a in rows if isinstance(a, dict) and not _audit_silent(a)}
         out += _audit_reviewers(state, rnd, audits, later)
+    for rnd, phase in sorted({(r["round"], r["phase"]) for r in rows if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
+                              and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, *_RAW_PHASES[1:])}):
+        prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)] \
+            if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase
+        head = _panel_head(state, rnd, setup, phase)
+        out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head),
+                             {"vendor": _text(*prov) or "unknown", "model": "unknown"}, commit=head, phase=phase))
     return out
 
 
@@ -481,7 +488,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings = _findings(state)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
-        reviewers, raw = _status_reviewers(state, meta.get("headSha")), []
+        reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
     else:
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                     review_record._readers(readers)["engine_run"], raw_dir)
