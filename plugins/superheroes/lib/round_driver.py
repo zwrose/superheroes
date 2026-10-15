@@ -1556,7 +1556,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
         entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
-    if isinstance(existing, dict) and not _disposition_is_current(existing):
+    if isinstance(existing, dict) and (not _disposition_is_current(existing)
+                                       or _restaged_after(state, key, existing)):
         # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
         # never turns a real one into a craft decision.
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
@@ -2309,7 +2310,9 @@ def _settle_open_findings(state, cap=False):
     if not todo:
         return
     sources = {}
-    if any(session_contract.decided_by_of(rulings.get(key)) for key, _, _ in todo):
+    bound = {key: _row_decision(state, rulings, ledger_by_key, key) or rulings.get(key)
+             for key, _, _ in todo}
+    if any(session_contract.decided_by_of(bound[key]) for key, _, _ in todo):
         try:
             sources = _decision_sources(state)
         except Exception:  # noqa: BLE001 — fail closed: no sources, nothing on record
@@ -2322,10 +2325,10 @@ def _settle_open_findings(state, cap=False):
         if pending is not None:
             reason = "owner ruling %s (%s) was recorded but never sent to a fixer; %s" % (
                 pending["seq"], pending["ruling"], why_open)
-        if row.get("disposition") == "out-of-scope":
+        if row.get("disposition") == "out-of-scope" and pending is None:
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
-            content, ruling=rulings.get(key), sources=sources, open_reason=reason)
+            content, ruling=bound[key], sources=sources, open_reason=reason)
         live = live_by_key.get(key)
         if content is row and live is not None and live is not row:
             # The newer staged report outranks the live copy: the owner record reads live content first.
@@ -4452,15 +4455,9 @@ def _merge_representative(state, ledger_by_key, key):
 
 
 def _ruling_root(state, ledger_by_key, key):
-    """The one identity a ruling is matched on: ``key`` followed through its merges and its lineage
-    until neither moves it (a merged finding that was later reworded is still that one finding)."""
-    lineage = _lineage_map(state)
-    for _ in range(len(lineage) + len(ledger_by_key) + 2):
-        nxt = _lineage_root(lineage, _merge_representative(state, ledger_by_key, key))
-        if nxt == key:
-            break
-        key = nxt
-    return key
+    """The one identity a ruling is matched on: the smallest key of ``key``'s ``_ruling_closure`` —
+    the same closure ``_ruled_row`` locates a row by, so every member of the group shares one root."""
+    return min(_ruling_closure(state, ledger_by_key, key))
 
 
 def _row_decision(state, effective, ledger_by_key, key):

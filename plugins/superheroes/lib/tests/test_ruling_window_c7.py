@@ -752,3 +752,55 @@ def test_an_undispatched_ruling_on_a_fixed_finding_settles_as_left_for_the_owner
     ledger, _ = RD._disposition_ledger_by_key(state)
     assert ledger["A"]["disposition"] == "left-for-owner", ledger["A"]
     assert "owner ruling %s" % seq in ledger["A"]["settledReason"], ledger["A"]
+
+
+def test_newer_guidance_on_a_member_survives_a_merge_reword_merge_chain():
+    """axis: MERGE + LINEAGE — M merged into K, K reworded as N, N merged into live P: the guidance
+    on M, newer than K's already-sent one, is the one P carries; locating and selecting agree."""
+    state = _unit_round([_unit_finding("P", 1, "Important")])
+    for key, into in (("K", None), ("M", "K"), ("N", "P")):
+        row = _unit_finding(key, 2, "Important")
+        if into:
+            row[session_contract.MERGED_INTO_FIELD] = into
+        state["findings"].append(row)
+    state["findingLineage"] = {"N": "K"}
+    old = _log_ruling(state, "K", guidance="OLD")
+    state["sentUnderDecision"] = {RD._lineage_root(RD._lineage_map(state), "K"): old}
+    _log_ruling(state, "M", guidance="NEW")
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    roots = {RD._ruling_root(state, ledger, k) for k in ("K", "M", "N", "P")}
+    assert len(roots) == 1
+    batch = RD._resolve_ruled_batch(state, [dict(state["findings"][0])])
+    assert [(RD._fix_batch_row_key(r), r.get("ruledBy")) for r in batch] == [("P", "M")]
+
+
+def test_a_restaged_finding_reported_as_code_quality_keeps_its_real_consequence():
+    """axis: RESTAGE — a fixed real-consequence finding reopened by a ruling and re-reported as code
+    quality only keeps its real consequence when reseeded."""
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    RD._record_disposition(state, "A", "fixed", 1)
+    for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        entry[session_contract.RAISED_SEQ_FIELD] = 0
+        entry["consequence"], entry["consequenceKind"] = "data loss", "real"
+    state["restagedAfterDispositionSeq"] = {"A": state["dispositionSeqCounter"]}
+    ledger = state[session_contract.DISPOSITION_LEDGER_KEY]
+    seen = {"A": 0}
+    entry = RD._seed_ledger_entry(
+        state, ledger, seen,
+        dict(_unit_finding("A", 1, "Important", kind="code-quality"), consequence="harder to read"),
+        "A", 2)
+    assert entry["consequenceKind"] == "real" and "data loss" in entry["consequence"], entry
+
+
+def test_a_capped_pending_newer_ruling_on_a_merged_member_is_not_hidden_by_an_old_skip():
+    """axis: TERMINAL + MERGE — B merged into A, A carries an older out-of-scope skip, newer guidance
+    on B never sent, loop caps: the record names the unsent ruling, not the obsolete skip."""
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    RD._record_disposition(state, "A", "out-of-scope", 1, outOfScopeReason="leave it as it is")
+    state["findings"].append(_unit_finding("B", 2, "Important"))
+    state["findings"][-1][session_contract.MERGED_INTO_FIELD] = "A"
+    _log_ruling(state, "A", ruling="out-of-scope")
+    seq = _log_ruling(state, "B", guidance="DO-IT")
+    RD._set_terminal(state, "capped-with-open-blocker", cap=True)
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    assert "owner ruling %s" % seq in str(ledger["A"].get("settledReason")), ledger["A"]
