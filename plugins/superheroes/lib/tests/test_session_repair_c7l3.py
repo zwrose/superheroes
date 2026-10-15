@@ -215,6 +215,39 @@ def test_a_damaged_state_is_restored_from_the_mirror_and_journalled(tmp_path, ki
     assert rows[0]["round"] == rnd
 
 
+def test_cli_next_repairs_a_missing_state_before_the_fresh_session_checks(tmp_path, monkeypatch, capsys):
+    session_dir = _session(tmp_path)
+    before = _read(_state_path(session_dir))
+    os.remove(_state_path(session_dir))
+    monkeypatch.setattr(RD.review_base_guard, "check_base",
+                        lambda *a, **k: {"ok": True, "baseRef": "main"})
+    RD.main(["next", "--session-dir", session_dir])
+    assert "round-diff-required" not in capsys.readouterr().out
+    assert _read(_state_path(session_dir)) == before
+    assert len(_repair_rows(session_dir)) == 1
+
+
+@pytest.mark.parametrize("via", ["cmd_next", "cli"])
+def test_a_repair_commit_that_fails_after_the_state_lands_stops_the_command(
+        tmp_path, monkeypatch, capsys, via):
+    session_dir = _session(tmp_path)
+    before = _read(_state_path(session_dir))
+    os.remove(_state_path(session_dir))
+
+    def state_lands_then_mirror_fails(sd, state_bytes):
+        _write(_state_path(sd), state_bytes)
+        raise OSError("mirror replace failed")
+
+    monkeypatch.setattr(RD, "_write_state_bytes", state_lands_then_mirror_fails)
+    if via == "cmd_next":
+        out = RD.cmd_next(session_dir)
+    else:
+        assert RD.main(["next", "--session-dir", session_dir]) == 1
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["ok"] is False and out["reason"] == "commit-recovery-failed", out
+    assert _repair_rows(session_dir) == []
+
+
 def test_a_state_that_cannot_be_read_is_classed_unreadable_and_refused_as_before(tmp_path):
     session_dir = _session(tmp_path)
     os.remove(_state_path(session_dir))

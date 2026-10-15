@@ -9085,9 +9085,13 @@ def _repair_state_if_damaged(session_dir, cmd):
         return _upgrade_refusal(session_dir, cmd)
     try:
         _write_state_bytes(session_dir, state_bytes)
-    except (OSError, round_commit.CommitRefused):
+    except (OSError, round_commit.CommitRefused) as exc:
         if _state_damage(session_dir) is not None:
             return None  # the state could not be restored: the command meets its usual refusal
+        # The state file parses while the sealed repair is unfinished: a later commit would be
+        # overwritten when recovery replays it, so the command stops here.
+        return _refuse_cmd(session_dir, cmd, "commit-recovery-failed", fault=FAULT_INTERNAL,
+                           detail="session repair: %s" % exc)
     _journal_event(session_dir, "repair", "session-repaired", damaged=damaged,
                    round=state.get("round"))
     return None
@@ -13228,6 +13232,18 @@ def main(argv=None):
         return 1
 
 
+def _repair_before_fresh_checks(session_dir):
+    """None to carry on, or a refusal. Takes the session lock for a damaged `loop-state.json` with a mirror only,
+    and runs the recovery and repair `cmd_next` would run."""
+    if _state_damage(session_dir) is None or not os.path.exists(os.path.join(session_dir, MIRROR_FILE)):
+        return None
+    try:
+        with round_records.session_lock(session_dir):
+            return _commit_recover_or_refuse(session_dir, "next")
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "next", held)
+
+
 def _dispatch(args):
     # An unfinished session from an earlier plugin version is refused before any other check here
     # reads its saved state.
@@ -13236,6 +13252,12 @@ def _dispatch(args):
         sys.stdout.write(json.dumps(upgrade) + "\n")
         return 1
     if args.cmd == "next":
+        # A missing state file with a valid mirror is repaired before the fresh-session checks below
+        # read it as a new session.
+        pre = _repair_before_fresh_checks(args.session_dir)
+        if pre is not None:
+            sys.stdout.write(json.dumps(pre) + "\n")
+            return 1
         overrides = {}
         if args.leg:
             overrides["leg"] = args.leg
