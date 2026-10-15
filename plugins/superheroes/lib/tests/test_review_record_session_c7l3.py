@@ -236,6 +236,18 @@ def test_a_newer_owner_decision_to_fix_supersedes_the_ruling_it_follows(tmp_path
     assert _found(older.seat("code-reviewer").save())["decidedBy"] == CANON
 
 
+def test_an_owner_decision_to_fix_on_the_lineage_root_supersedes_the_ruling_on_a_reworded_finding(tmp_path):
+    root_key = "root.py::original@L1"
+    rounds = {"1": {"judgmentDispositions": [_gate(seq=2, findingKey=root_key)]}}
+    kw = dict(dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling(rnd=1, seq=1)], rounds=rounds)
+    # bites on: the gate lookup keyed on the representative's own keys, so a fix decision on the lineage root is missed
+    linked = Session(tmp_path, findingLineage={KEY: root_key}, **kw)
+    assert _found(linked.seat("code-reviewer").save())["decidedBy"] is None
+    (tmp_path / "unlinked").mkdir()
+    unlinked = Session(tmp_path / "unlinked", **kw)
+    assert _found(unlinked.seat("code-reviewer").save())["decidedBy"] == CANON
+
+
 def test_the_session_base_ref_is_the_default_when_the_extra_is_absent(tmp_path):
     session = Session(tmp_path, config={"maxRounds": 7, "baseRef": "abc123"}).seat("code-reviewer").save()
     assert rs.account_from_session(session, extras())["baseRef"] == "abc123"
