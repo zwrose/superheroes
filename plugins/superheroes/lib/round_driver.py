@@ -5083,6 +5083,11 @@ def _audit_result_entry_fault(entry, index, target_ids):
     # The grounds test is `audits.has_usable_reason`, the fold's OWN predicate — one function, not a
     # second copy of the rule, so the guard can never accept a reason the fold rejects (or refuse one
     # it would honor). Same shared-home discipline as `has_usable_new_issues` below.
+    named_seq = entry.get("unnamedChangeAllowedBySeq")
+    if named_seq is not None and not audits.is_decision_seq(named_seq):
+        return ("%s `unnamedChangeAllowedBySeq` is %r, not an integer; expected the sequence number "
+                "of the one carried owner decision that permits the change, or leave the field out"
+                % (where, named_seq))
     unnamed = entry.get("unnamedChange")
     if unnamed is not None and not isinstance(unnamed, str):
         return ("%s `unnamedChange` is %s, not a string; expected a plain-words string, or leave the "
@@ -5852,26 +5857,42 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # ruling recorded after the audit order went out was never weighed, so it stays pending.
     effective = _live_ruling_by_key(state)
     ledger_by_key, _fault = _disposition_ledger_by_key(state)
-    # The target's own decision, or any batch sibling's carried on the target, credits a change when
-    # it is still the current effective decision (same seq) and allows it. A replaced or withdrawn
-    # ruling credits nothing.
+    # The auditor names the one carried decision whose guidance permits the reported change
+    # (`unnamedChangeAllowedBySeq`); the fold verifies it. The named seq must be carried on this target
+    # (its own or a batch sibling's), still be that finding's current effective decision, and allow
+    # the change; a sibling's decision never overrides the target's own `allowsChange: false`. Any
+    # other case credits nothing, and the change stays an unnamed-change refusal.
+    named_by_id = {}
+    for r in results:
+        if isinstance(r, dict) and isinstance(r.get("id"), str):
+            named_by_id.setdefault(r["id"], r.get("unnamedChangeAllowedBySeq"))
     bound_by_id = {}
     for t in targets:
-        if isinstance(t, dict) and isinstance(t.get("id"), str):
-            candidates = [(t["id"], t.get("ownerRulingSeq"))]
-            for b in t.get("batchFindings") or []:
-                if isinstance(b, dict) and isinstance(b.get("id"), str):
-                    candidates.append((b["id"], b.get("ownerRulingSeq")))
-            credited = []
-            for cid, carried_seq in candidates:
-                bound = _row_decision(state, effective, ledger_by_key, cid)
-                if (carried_seq is not None and isinstance(bound, dict)
-                        and bound.get("ruling") == "guidance"
-                        and bound.get("allowsChange") is True
-                        and carried_seq == _decision_seq(bound)):
-                    credited.append(bound)
-            if credited:
-                bound_by_id[t["id"]] = credited
+        if not (isinstance(t, dict) and isinstance(t.get("id"), str)):
+            continue
+        named = named_by_id.get(t["id"])
+        if not audits.is_decision_seq(named):
+            continue
+        candidates = [(t["id"], t.get("ownerRulingSeq"))]
+        for b in t.get("batchFindings") or []:
+            if isinstance(b, dict) and isinstance(b.get("id"), str):
+                candidates.append((b["id"], b.get("ownerRulingSeq")))
+        own_now = _row_decision(state, effective, ledger_by_key, t["id"])
+        credited = []
+        for cid, carried_seq in candidates:
+            if carried_seq != named:
+                continue
+            bound = _row_decision(state, effective, ledger_by_key, cid)
+            if (isinstance(bound, dict)
+                    and bound.get("ruling") == "guidance"
+                    and bound.get("allowsChange") is True
+                    and carried_seq == _decision_seq(bound)):
+                if (cid != t["id"] and isinstance(own_now, dict)
+                        and own_now.get("allowsChange") is False):
+                    continue
+                credited.append(bound)
+        if credited:
+            bound_by_id[t["id"]] = credited[:1]
     change_allowed_ids = list(bound_by_id)
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
                                          collection_manifest=collection_manifest,

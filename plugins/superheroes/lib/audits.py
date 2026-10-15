@@ -89,6 +89,11 @@ def has_usable_unnamed_change(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def is_decision_seq(value):
+    """True when `value` is an integer (never a bool) — the sequence of a carried owner decision."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None,
                         carry_fields=(), change_allowed_ids=()):
     """Consume per-finding fix-audit rulings; fail-closed on ambiguity, silence, and malformation.
@@ -114,7 +119,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                  behaviour the finding does not name. A clearing result that states such a change
                  (`unnamedChange`) stays discharged only for these ids (its audit entry records
                  `allowedChange`); for any other id it is `not-discharged` and listed in
-                 `unnamedChange`. A non-string, non-null `unnamedChange` is malformed.
+                 `unnamedChange`. A non-string, non-null `unnamedChange` is malformed, and so is a
+                 non-integer, non-null `unnamedChangeAllowedBySeq` (the fold, not this function,
+                 verifies the named decision before an id is listed here).
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
     unmatched, unauthenticated, echoMismatch, unnamedChange}. Each `audits` entry carries the EFFECTIVE
@@ -307,6 +314,16 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 malformed.append(fid)
             base.update(ruling="not-discharged",
                         reason="`unnamedChange` is not a string — treated as not-discharged")
+            audits.append(base)
+            if fid is not None:
+                not_discharged.append(fid)
+            continue
+        named_seq = r.get("unnamedChangeAllowedBySeq")
+        if ruling in _CLEARS and named_seq is not None and not is_decision_seq(named_seq):
+            if fid is not None:
+                malformed.append(fid)
+            base.update(ruling="not-discharged",
+                        reason="`unnamedChangeAllowedBySeq` is not an integer — treated as not-discharged")
             audits.append(base)
             if fid is not None:
                 not_discharged.append(fid)

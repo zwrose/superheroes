@@ -365,6 +365,8 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
                       "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
             if rnd in unnamed_rounds:
                 result["unnamedChange"] = UNNAMED
+                if t.get("ownerRulingSeq") is not None:
+                    result["unnamedChangeAllowedBySeq"] = t["ownerRulingSeq"]
                 if refusal_ruling != "discharged":
                     result.update(ruling=refusal_ruling, reason="an additional behavior change needs permission")
             out.append(result)
@@ -580,6 +582,8 @@ def test_t4_edge8_the_audit_contract_declares_unnamed_change_as_an_optional_stri
     assert reason is None
     assert "unnamedChange" in contract["optional"]
     assert contract["types"]["unnamedChange"] == "string"
+    assert "unnamedChangeAllowedBySeq" in contract["optional"]
+    assert contract["types"]["unnamedChangeAllowedBySeq"] == "integer"
 
 
 def test_t4_edge8_a_native_audit_branch_with_a_null_unnamed_change_normalizes_and_parses():
@@ -860,6 +864,7 @@ def test_a_merged_members_newer_ruling_decides_the_allowance_and_the_audit_targe
     state["_auditTargets"] = [target]
     artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
                              "evidence": "tests", "unnamedChange": UNNAMED,
+                             "unnamedChangeAllowedBySeq": target.get("ownerRulingSeq"),
                              "auditorVendor": target.get("auditorVendor")}],
                 "collectionManifest": {key_a: target.get("auditorVendor")}}
     RD._fold_audits(state, state["config"], artifact)
@@ -966,18 +971,73 @@ def test_an_allowing_ruling_replaced_while_the_audit_is_pending_credits_nothing(
     assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
 
 
-def test_a_siblings_allowing_guidance_covers_a_change_the_other_auditor_reports():
+def _sibling_pair(a_allows=None, b_allows=True):
+    """A staged two-finding batch; A (key_a) and B (key_b) each carry a decision when given."""
     state = _staged_state([_finding("Rep finding", 1), _finding("Other defect", 2)])
     state["config"] = TRD._cfg(fixerVendor="claude")
     key_a, key_b = _key("Rep finding", 1), _key("Other defect", 2)
     state["fixBatch"] = list(state["findings"])
-    _decide(state, key_b, "guidance", 1, allowsChange=True)
+    if a_allows is not None:
+        _decide(state, key_a, "guidance", 1, allowsChange=a_allows,
+                guidance="Keep all timeout retries unchanged.")
+    if b_allows is not None:
+        _decide(state, key_b, "guidance", 1, allowsChange=b_allows,
+                guidance="Changing the log format is fine.")
     targets = RD._audit_targets(state, state["config"], {})
     target_a = [t for t in targets if t["id"] == key_a][0]
+    state["_auditTargets"] = targets
+    return state, target_a, key_a, key_b
+
+
+def _seq(state, key):
+    return RD._decision_seq(RD._live_ruling_by_key(state)[key])
+
+
+def test_a_siblings_allowing_guidance_covers_a_change_the_other_auditor_reports():
+    state, target_a, key_a, key_b = _sibling_pair()
     (sibling,) = target_a["batchFindings"]
     assert sibling["id"] == key_b and sibling["ownerRuling"]["allowsChange"] is True
-    assert sibling["ownerRulingSeq"] == RD._decision_seq(RD._live_ruling_by_key(state)[key_b])
-    state["_auditTargets"] = targets
-    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED)
+    assert sibling["ownerRulingSeq"] == _seq(state, key_b)
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED,
+                        unnamedChangeAllowedBySeq=_seq(state, key_b))
     assert outcome["discharged"] == [key_a] and outcome["unnamedChange"] == []
-    assert state["sentUnderDecision"][key_b] >= 1
+    # only the named sibling decision is marked delivered, for both findings it covers
+    assert set(state["sentUnderDecision"].values()) == {_seq(state, key_b)}
+
+
+def test_a_forbidding_decision_is_not_overridden_by_a_siblings_allowance_named_by_seq():
+    state, target_a, key_a, key_b = _sibling_pair(a_allows=False)
+    outcome = _fold_one(state, target_a, key_a, unnamedChange="it disables retries",
+                        unnamedChangeAllowedBySeq=_seq(state, key_b))
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    audit = state["rounds"]["1"]["audits"][0]
+    assert audit["ruling"] == "not-discharged" and "allowedChange" not in audit
+
+
+def test_an_unnamed_change_with_no_seq_is_refused_even_with_a_siblings_allowance():
+    state, target_a, key_a, _key_b = _sibling_pair(a_allows=False)
+    outcome = _fold_one(state, target_a, key_a, unnamedChange="it disables retries")
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+
+
+def test_a_named_seq_that_has_since_been_replaced_is_refused():
+    state, target_a, key_a, key_b = _sibling_pair()
+    named = _seq(state, key_b)
+    _decide(state, key_b, "guidance", 1, allowsChange=True, guidance="Another ruling.")
+    assert _seq(state, key_b) != named
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED, unnamedChangeAllowedBySeq=named)
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+
+
+def test_a_named_seq_not_carried_on_the_target_is_refused():
+    state, target_a, key_a, key_b = _sibling_pair()
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED,
+                        unnamedChangeAllowedBySeq=_seq(state, key_b) + 1000)
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+
+
+@pytest.mark.parametrize("value", ["3", True, 1.5, [1]])
+def test_a_non_integer_named_seq_is_malformed(value):
+    state, target_a, key_a, key_b = _sibling_pair()
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED, unnamedChangeAllowedBySeq=value)
+    assert outcome["discharged"] == [] and outcome["malformed"] == [key_a]

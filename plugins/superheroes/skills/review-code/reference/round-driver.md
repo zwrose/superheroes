@@ -733,8 +733,10 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   (`follow_up_shape_fault`, `lib/session_contract.py`).
 - Where each is recorded: `fixed` at the audits fold for every target the independent auditor
   discharged — and only for a target whose auditor named no unnamed behaviour change (`unnamedChange`,
-  the behaviour the fix changes that its finding does not name), or whose finding's effective
-  decision is a `guidance` ruling with `allowsChange: true`; any other target is `not-discharged`
+  the behaviour the fix changes that its finding does not name), or whose auditor named, by
+  `unnamedChangeAllowedBySeq`, a carried decision (the target's own or a batch sibling's) that is
+  still current, is a `guidance` ruling with `allowsChange: true` and is not overridden by the
+  target's own `allowsChange: false`; any other target is `not-discharged`
   with the auditor's reason, recorded as `auditUnnamedChange` on the round with an
   `audit-unnamed-change` decision, and returns to the fix list; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an

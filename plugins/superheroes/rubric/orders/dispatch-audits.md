@@ -25,8 +25,12 @@ not name, say so in plain words in the result's field for an unnamed behaviour c
 behaviour that neither this finding nor another finding in `batchFindings` names, by their text (a
 sibling's body and suggestion ride its entry): a change that belongs to a sibling finding's fix is
 not unnamed. Report every other change there even when an attached `ownerRuling` (this finding's or a
-sibling's) allows it: you never decide allowance, the fold does. Leave that
-field out when every change in `fixerDelta` is named by a finding of the batch.
+sibling's) allows it. Then, in the field for the allowing decision, give the sequence number
+(`ownerRulingSeq`, an integer) of the one carried decision (this finding's own, or a sibling's from
+`batchFindings`) whose guidance text explicitly names the behaviour you reported. Leave that field
+out when no carried decision's guidance names it, and when this finding's own decision forbids it; a
+decision about some other behaviour does not permit this one. The fold verifies the named decision and
+makes the call. Leave both fields out when every change in `fixerDelta` is named by a finding of the batch.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
