@@ -42,14 +42,14 @@ def test_partial_usage_is_not_benchmark_valid(tmp_path):
 
 def test_dimension_counts_record_run_skip_and_tiers():
     record = RT.build_record(
-        rounds=[{"round": 1, "dimensions": {"test-reviewer": {"status": "run", "tier": "reviewer-deep"}, "security-reviewer": {"status": "skipped", "tier": "reviewer-deep", "escalated": True}}}],
-        expected_leaves=["test-reviewer:r1"],
-        usage={"test-reviewer:r1": {"total": 7}},
+        rounds=[{"round": 1, "dimensions": {"test-role": {"status": "run", "tier": "reviewer-deep"}, "security-reviewer": {"status": "skipped", "tier": "reviewer-deep", "escalated": True}}}],
+        expected_leaves=["test-role:r1"],
+        usage={"test-role:r1": {"total": 7}},
         benchmark=False,
     )
-    assert record["dimensionCounts"]["test-reviewer"]["run"] == 1
+    assert record["dimensionCounts"]["test-role"]["run"] == 1
     assert record["dimensionCounts"]["security-reviewer"]["skipped"] == 1
-    assert record["dimensionCounts"]["test-reviewer"]["deep"] == 1
+    assert record["dimensionCounts"]["test-role"]["deep"] == 1
     assert record["dimensionCounts"]["security-reviewer"]["escalated"] == 1
 
 

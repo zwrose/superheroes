@@ -1,0 +1,26 @@
+{
+  "schema": "index-input/1",
+  "questions": [
+    {
+      "id": "old-orders",
+      "question": "Should a disabled account's old orders stay visible to support?",
+      "context": [
+        {"title": "Where it stands", "blocks": [{"paragraph": "The order-history build is paused on this. Support asked; the spec doesn't say."}]}
+      ],
+      "options": [
+        {"id": "keep-visible", "label": "Keep them visible", "consequence": "Support can still look up an old order for a refund."},
+        {"id": "hide-them", "label": "Hide them", "consequence": "A disabled account shows nothing, and a refund needs an engineer."}
+      ],
+      "recommendation": {"text": "Keep them visible", "reason": "Support needs them for refunds.", "optionId": "keep-visible"},
+      "pictures": [
+        {"path": "elsewhere/cart-empty.png", "alt": "The order list of a disabled account", "caption": "Today it is empty"}
+      ]
+    }
+  ],
+  "mergeOrder": [211, 214],
+  "prs": [
+    {"number": 4, "link": "https://sheets.example.test/stack-4", "sheet": "stack/sheet.json", "store": "stack/store.json"},
+    {"number": 214, "link": "https://sheets.example.test/pr-214", "sheet": "big/sheet.json", "store": "big/store.json"},
+    {"number": 211, "link": "https://sheets.example.test/pr-211", "sheet": "small/sheet.json", "store": "small/store.json"}
+  ]
+}
