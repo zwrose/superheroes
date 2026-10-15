@@ -2167,12 +2167,15 @@ def _record_merged_into(state, key, into_key):
     if live is not None:
         _apply_disposition_family(live, family)
     if key != into_key:
-        # The representative carries guidance given to a member before the merge; a later merge the
-        # other way flips the edge rather than closing a cycle.
+        # The representative carries guidance given to a member before the merge; a merge that
+        # would close a cycle at any depth cuts the representative's old edge and keeps the rest.
         lineage = state.setdefault("findingLineage", {})
-        if _lineage_root(lineage, into_key) == key:
-            lineage.pop(into_key, None)
+        prior = lineage.get(key)
         lineage[key] = into_key
+        if _lineage_root(lineage, key) == key:
+            lineage.pop(into_key)
+            if prior and (r := _lineage_root(lineage, prior)) != into_key:
+                lineage[r] = into_key
 
 
 # ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
@@ -4637,6 +4640,7 @@ def _guidance_named_rows(state, named):
     for key, candidate in named:
         root = _lineage_root(lineage, key)
         if root in held:
+            _note_sent_under_decision(state, [key])
             continue
         source = _live_finding_by_key(state, key)
         if not isinstance(source, dict):

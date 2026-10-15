@@ -1217,3 +1217,31 @@ def test_a_skip_on_a_merged_member_does_not_reach_its_representative():
     RD._record_merged_into(state, "A", "B")
     assert RD._live_ruling_by_key(state).get("A", {}).get("ruling") == "out-of-scope"
     assert "B" not in RD._live_ruling_by_key(state)
+
+
+def test_a_merge_that_reverses_below_the_root_keeps_the_lineage_acyclic():
+    """axis: keep A over B, then B over C, then C over B — the lineage stays acyclic, every key
+    reaches the current representative, and guidance still lands on it."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="use the helper"))
+    RD._record_merged_into(state, "B", "A")
+    RD._record_merged_into(state, "C", "B")
+    RD._record_merged_into(state, "B", "C")
+    lineage = RD._lineage_map(state)
+    assert {RD._lineage_root(lineage, key) for key in ("A", "B", "C")} == {"C"}
+    live = RD._live_ruling_by_key(state).get("C")
+    assert isinstance(live, dict) and live.get("guidance") == "use the helper"
+
+
+def test_replacement_guidance_on_a_held_minor_refreshes_the_sent_decision():
+    """axis: guidance ruled again on a Minor the batch already holds is recorded as sent under the
+    new decision, so a nonblocking audit does not start another leg for it."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert _unit_batch(state) == ["M"] and state["liftedAtSeq"] == {"M": 1}
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"),
+                  dict(findingKey="M", ruling="guidance", guidance="SECOND"))
+    RD._guidance_named_rows(state, [("M", _unit_finding("M", 2, "Minor", kind="code-quality"))])
+    assert state["liftedAtSeq"] == {"M": 2}
