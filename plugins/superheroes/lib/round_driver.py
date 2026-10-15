@@ -2328,7 +2328,9 @@ def _settle_open_findings(state, cap=False):
         if pending is not None:
             reason = "owner ruling %s (%s) was recorded but never sent to a fixer; %s" % (
                 pending["seq"], pending["ruling"], why_open)
-        if row.get("disposition") == "out-of-scope" and pending is None:
+        # a newer guidance decision on a merged member binds the finding over the older skip
+        if (row.get("disposition") == "out-of-scope" and pending is None
+                and (bound[key] or {}).get("ruling") == "out-of-scope"):
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
             content, ruling=bound[key], sources=sources, open_reason=reason)
@@ -5639,7 +5641,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
-    history = _finding_history(state)
+    effective = _live_ruling_by_key(state)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5674,12 +5676,17 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if reviewed_diff is not None:
             row["fixerDelta"] = _fixer_delta_lines(
                 reviewed_diff, state.get("headDiff"), f.get("file"), f.get("line"))
-        # A scope refusal recorded on an earlier attempt stays open: the baseline advances with each
-        # fixer attempt, so the rejected change no longer shows in `fixerDelta`.
-        prior = (history.get(tid) or history.get(_history_row_key(f)) or {}).get("priorAudit")
-        if (isinstance(prior, dict) and prior.get("ruling") == "not-discharged"
-                and str(prior.get("reason") or "").startswith(audits.UNNAMED_CHANGE_REASON_PREFIX)):
-            row["priorScopeRefusal"] = {"round": prior.get("round"), "reason": prior["reason"]}
+        # The finding's effective ruling rides the target, so an auditor weighing a change the finding
+        # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
+        # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
+        # ordinary not-discharged loop, with no state of its own.
+        decision = effective.get(tid)
+        if isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS:
+            owner_ruling = {"ruling": decision["ruling"], "reason": decision.get("reason")}
+            for carried in ("guidance", "allowsChange"):
+                if decision.get(carried) is not None:
+                    owner_ruling[carried] = decision[carried]
+            row["ownerRuling"] = owner_ruling
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
             for carried in ("suggestion", "body", break_it.RUN_FIELD):
@@ -5844,6 +5851,15 @@ def _fold_audits(state, config, artifact, session_dir=None):
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
     targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
+    # A decision the audit credited a fix under has been delivered: the resolver must not send it again.
+    lineage = _lineage_map(state)
+    for audit in outcome["audits"]:
+        if audit.get("allowedChange") and audit.get("id") in change_allowed_ids:
+            decision = effective[audit["id"]]
+            sent = state.setdefault("sentUnderDecision", {})
+            for at in (audit["id"], decision.get("findingKey")):
+                root = _lineage_root(lineage, at)
+                sent[root] = max(sent.get(root, 0), _decision_seq(decision))
     still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))

@@ -337,7 +337,7 @@ def test_t4_edge6_an_unauthenticated_clearing_result_stays_unauthenticated():
 
 # --- Part B: the loop ---------------------------------------------------------------------------
 
-def _unnamed_change_loop(captured_state, *, allow):
+def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,)):
     key = _key("Null deref")
     offers, seen_targets, history = [], [], {}
 
@@ -362,7 +362,7 @@ def _unnamed_change_loop(captured_state, *, allow):
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
                       "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
-            if rnd == 2:
+            if rnd in unnamed_rounds:
                 result["unnamedChange"] = UNNAMED
             out.append(result)
         return out
@@ -658,7 +658,7 @@ def test_a_spent_episode_survives_a_lineage_root_change(empty_batch_calls):
 def test_the_audit_order_names_the_fixer_delta():
     text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
                              "dispatch-audits.md")).read()
-    assert "fixerDelta" in text and "priorScopeRefusal" in text
+    assert "fixerDelta" in text and "ownerRuling" in text
 
 
 @pytest.mark.parametrize("value", [[], 5, {"a": 1}, True])
@@ -742,20 +742,37 @@ def test_fixer_delta_does_not_invent_changes_where_hunks_merge():
     assert "++guard()" in row["fixerDelta"] and not any("pr_b" in d and d[0] in "+-" for d in row["fixerDelta"])
 
 
-def test_a_scope_refusal_stays_on_the_target_across_the_fixer_retry():
+def test_a_scope_refused_fix_stays_not_discharged_until_the_fix_drops_the_change(captured_state):
+    key, state, offers, seen_targets, _history = _unnamed_change_loop(
+        captured_state, allow=False, unnamed_rounds=(2, 3))
+    audits_by_round = {rnd: state["rounds"][rnd]["audits"][0] for rnd in ("2", "3", "4")}
+    assert audits_by_round["2"]["ruling"] == "not-discharged"
+    assert audits_by_round["3"]["ruling"] == "not-discharged"
+    assert audits_by_round["3"]["reason"].startswith(UNNAMED_REASON_PREFIX)
+    assert audits_by_round["4"]["ruling"] == "discharged"
+    assert [rnd for rnd, _keys in offers][:3] == [1, 2, 3]
+    assert state["terminal"] == "converged"
+    assert _ledger(state)[key]["disposition"] == "fixed"
+    assert _ledger(state)[key]["dispositionRound"] == 4
+    assert all("ownerRuling" not in t for targets in seen_targets for t in targets)
+
+
+def test_an_allowing_guidance_ruling_rides_the_audit_target(captured_state):
+    key, state, _offers, seen_targets, _history = _unnamed_change_loop(captured_state, allow=True)
+    target = seen_targets[-1][0]
+    assert target["ownerRuling"] == {"ruling": "guidance", "reason": "owner call",
+                                     "guidance": "keep the retry behaviour", "allowsChange": True}
+    assert state["rounds"]["2"]["audits"][0]["allowedChange"] == UNNAMED
+
+
+def test_an_audit_target_with_no_owner_ruling_carries_none():
     state = RD.new_state(TRD._cfg(fixerVendor="claude"))
-    finding = _finding("Near the top", 2)
-    state["fixBatch"] = [finding]
-    key = RD._finding_key_of(finding)
-    state["rounds"] = {"2": {"audits": [{
-        "id": key, SC.FINDING_KEY_FIELD: key, "ruling": "not-discharged",
-        "reason": AU.UNNAMED_CHANGE_REASON_PREFIX + "it also disables retry"}]}}
+    state["fixBatch"] = [_finding("Near the top", 2)]
     (row,) = RD._audit_targets(state, state["config"], {})
-    assert row["priorScopeRefusal"]["round"] == 2
-    assert "disables retry" in row["priorScopeRefusal"]["reason"]
-    state["rounds"]["2"]["audits"][0]["reason"] = "the guard is missing"
+    assert "ownerRuling" not in row
+    _decide(state, RD._finding_key_of(state["fixBatch"][0]), "out-of-scope", 1)
     (row,) = RD._audit_targets(state, state["config"], {})
-    assert "priorScopeRefusal" not in row
+    assert "ownerRuling" not in row
 
 
 def test_a_gate_skip_decision_carries_its_ruling_time_severity():
