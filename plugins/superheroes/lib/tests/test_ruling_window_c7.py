@@ -144,9 +144,12 @@ def _throwaway_repo(tmp_path, name="wt"):
     return repo, _git(repo, "rev-parse", "HEAD")
 
 
-def _bind_anchor_head(session_dir, head):
-    """Bind the pending fixer attempt's orders anchor to `head` (None drops the head)."""
+def _bind_anchor_head(session_dir, head, repo=None):
+    """Bind the pending fixer attempt's orders anchor to `head` (None drops the head) and, with
+    `repo`, the session's recorded worktree to it."""
     state = _state(session_dir)
+    if repo is not None:
+        state["config"]["repoRoot"] = str(repo)
     pend = state["pending"]
     key = RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])
     anchor = dict(state["_ordersAnchors"][key])
@@ -192,10 +195,13 @@ def test_t1_ruling_while_pending_reaches_the_fix(tmp_path, keep_severity):
     assert _journal_refusals(session_dir, "ruling-attempt-pending")
 
     repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, head)
+    session_repo = _state(session_dir)["config"]["repoRoot"]
+    _bind_anchor_head(session_dir, head, repo)
     withdrawn = RD.cmd_withdraw(session_dir, k, "owner ruled on F", repo_root=str(repo))
     assert withdrawn.get("ok") is True and withdrawn.get("restoreCheck") == "checked", withdrawn
     state = _state(session_dir)
+    state["config"]["repoRoot"] = session_repo
+    RD.save_state(session_dir, state)
     assert state["pending"] is None and state["step"] == P_FIXER
     assert state["withdrawnFixerAttempts"] == [
         {"round": 1, "attempt": k, "reason": "owner ruled on F", "restoreCheck": "checked"}]
@@ -385,8 +391,9 @@ def test_guidance_ruled_at_the_fixer_step_lifts_a_finding_the_batch_lacks(tmp_pa
 
 
 def test_lift_marker_decision_table():
-    """axis: which findings the lift selects."""
+    """axis: which findings the lift selects — a product choice rides only on an owner decision."""
     real = {"consequenceKind": "real"}
+    choice = {"consequenceKind": "real", "tradeoff": True}
     quality = {"consequenceKind": "code-quality"}
     live = lambda ruling: {"ruling": ruling}  # noqa: E731
     fixed = {"disposition": "fixed", "dispositionSeq": 5, "raisedSeq": 1}
@@ -398,6 +405,13 @@ def test_lift_marker_decision_table():
     assert RD._lift_marker_for(quality, {}, live("guidance")) == "guidance"
     assert RD._lift_marker_for(quality, {"disposition": "out-of-scope"}, live("guidance")) == "guidance"
     assert RD._lift_marker_for(quality, fixed, live("guidance")) is None
+    assert RD._lift_marker_for(choice, {}, None) is None
+    assert RD._lift_marker_for(choice, {}, live("out-of-scope")) is None
+    assert RD._lift_marker_for(choice, {}, live("guidance")) == "guidance"
+    assert RD._lift_marker_for(choice, {}, live("fix")) == "guidance"
+    assert RD._lift_marker_for(choice, fixed, live("fix")) is None
+    assert RD._lift_marker_for({"consequenceKind": "real", "tradeoff": None}, {}, None) \
+        == "real-consequence"
 
 
 # --- fail-closed edges ---------------------------------------------------------------------------
@@ -450,7 +464,7 @@ def test_edge2_restore_check_refusals(tmp_path, keep_severity, case, token):
     session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e2")
     k = _state(session_dir)["pending"]["attempt"]
     repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head)
+    _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head, repo)
     kwargs = {"repo_root": str(repo)}
     if case == "tracked-change":
         (repo / "a.txt").write_text("changed by the stopped fixer\n", encoding="utf-8")
@@ -483,11 +497,31 @@ def test_library_withdraw_without_a_repo_records_not_checked(tmp_path, keep_seve
     assert _state(session_dir)["withdrawnFixerAttempts"][0]["restoreCheck"] == "not-checked"
 
 
+@pytest.mark.parametrize("ignore", ["dirty", "all"])
+def test_withdraw_sees_submodule_edits_whatever_the_ignore_setting(tmp_path, keep_severity, ignore):
+    """axis: the restore check reports a tracked edit inside a submodule even when
+    `submodule.<name>.ignore` would hide it from a plain status."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-sub-" + ignore)
+    k = _state(session_dir)["pending"]["attempt"]
+    sub, _sub_head = _throwaway_repo(tmp_path, "subsrc")
+    repo, head = _throwaway_repo(tmp_path)
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "vendored")
+    _git(repo, "config", "-f", ".gitmodules", "submodule.vendored.ignore", ignore)
+    _git(repo, "config", "submodule.vendored.ignore", ignore)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "add submodule")
+    head = _git(repo, "rev-parse", "HEAD")
+    _bind_anchor_head(session_dir, head, repo)
+    (repo / "vendored" / "a.txt").write_text("edited by the stopped fixer\n", encoding="utf-8")
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-worktree-dirty", out
+
+
 def test_withdraw_verb_runs_through_the_command_line(tmp_path, keep_severity, capsys):
     session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-cli")
     k = _state(session_dir)["pending"]["attempt"]
     repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, head)
+    _bind_anchor_head(session_dir, head, repo)
     capsys.readouterr()
     code = RD.main(["withdraw", "--session-dir", session_dir, "--attempt", str(k),
                     "--reason", "owner ruled", "--repo-root", str(repo)])
@@ -608,8 +642,9 @@ def test_edge6_out_of_scope_and_fixed_findings_are_never_lifted(tmp_path, keep_s
 
 
 def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severity):
-    """axis: the lift never starts a fixer leg. A Minor-only round converges with no fixer leg, and an
-    empty offered set lifts nothing even though real-consequence findings are live."""
+    """axis: an autonomous lift never starts a fixer leg. A Minor-only round converges with no fixer
+    leg, and an empty offered set lifts nothing (and records no exclusion) though real-consequence
+    findings are live."""
     minor_only = tmp_path / "minor-only"
     minor_only.mkdir()
     session_dir, gitdir, head_path = _bootstrap(minor_only, name="c7-e7")
@@ -625,9 +660,11 @@ def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severit
     assert any(f.get("consequenceKind") == "real" for f in state["findings"])
     state["pending"] = None
     state["rounds"]["1"].pop("liftedIntoFixBatch", None)
-    assert RD._queue_fix_batch(state, state["config"], []) == "queued"
-    assert state["_fixBatch"] == [] and state["_fixQueue"] == []
+    before = (state.get("_fixBatch"), state.get("_fixQueue"), state.get("step"))
+    assert RD._queue_fix_batch(state, state["config"], []) == "empty"
+    assert (state.get("_fixBatch"), state.get("_fixQueue"), state.get("step")) == before
     assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+    assert "fixBatchExcludedByDischarge" not in state["rounds"]["1"]
 
 
 # --- review round 1: a lifted product choice, a lifted non-blocking audit, an emitted-time guidance
@@ -648,57 +685,173 @@ def _fold_judgment(tmp_path, session_dir, gitdir, dispositions):
     return RD.cmd_advance(session_dir, git=_RC._fake_git(gitdir), owner_artifact_path=str(path))
 
 
-def test_a_lifted_product_choice_goes_to_the_owner_not_the_fixer(tmp_path, keep_severity):
-    """axis: an undisposed real-consequence Minor carrying `tradeoff: true` is put to the owner gate
-    beside the round's mechanical blocker — never handed to the fixer without an owner decision."""
+def _gate_blocker(title, line):
+    finding = _finding(title, line)
+    finding["tradeoff"] = True
+    return finding
+
+
+def test_an_undecided_product_choice_is_not_lifted_beside_a_blocker(tmp_path, keep_severity):
+    """axis: I1 — an undecided real-consequence Minor product choice never rides the blocker's batch."""
     session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-choice")
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)], name="c7-choice")
     state = _state(session_dir)
-    assert [row["title"] for row in state["_judgmentFindings"]] == ["minor choice"]
-    assert [row["title"] for row in state["_judgmentMechanical"]] == ["blocker B"]
-    assert not state.get("_fixBatch")
+    assert [row["title"] for row in state["_fixBatch"]] == ["blocker B"]
+    assert not state.get("_fixQueue")
+    assert not state.get("_judgmentFindings") and not state.get("_judgmentMechanical")
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
 
 
-def test_a_skipped_lifted_choice_stays_out_and_is_not_a_skipped_blocker(tmp_path, keep_severity):
-    """axis: the owner skips the lifted choice — the blocker alone goes to the fixer, and the Minor's
-    skip is recorded without riding the skipped-blocker channel."""
-    session_dir, gitdir, _h = _session(
+def test_t_ii_a_guided_choice_rides_the_batch_beside_a_blocker(tmp_path, keep_severity):
+    """axis: I1(b) — a product choice a `rule` guidance decision names joins the blocker's batch."""
+    session_dir, gitdir, head_path = _session(
         tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-choice-skip")
+        to_phase=RD.P_VERIFIERS, name="c7-choice-guided")
+    key_m = _finding_key_by_title(_state(session_dir), "minor choice")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "DO-THE-CHOICE"))["ok"]
+    _drive_to_phase(session_dir, gitdir, [], head_path, P_FIXER)
+    by_title = _rows_by_title(_state(session_dir))
+    assert set(by_title) == {"blocker B", "minor choice"}
+    assert by_title["minor choice"]["lifted"] == "guidance"
+    assert "DO-THE-CHOICE" in _order_text(session_dir)
+
+
+def test_t_ii_b_a_guided_choice_survives_the_only_blocker_ruled_out_at_the_fixer(
+        tmp_path, keep_severity):
+    """axis: I1(b) — with the only blocker ruled out at the fixer step, the guided choice still gets
+    a fixer leg and the round does not converge past it."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)], name="c7-choice-b-oos")
+    state = _state(session_dir)
+    assert [row["title"] for row in state["_fixBatch"]] == ["blocker B"]
+    key_b = _finding_key_by_title(state, "blocker B")
+    key_m = _finding_key_by_title(state, "minor choice")
+    _strip_fixer_orders_emitted(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", [
+        {"id": key_b, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()},
+        {"id": key_m, "ruling": "guidance", "reason": "owner call", "guidance": "do the choice"}]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") != "converged"
+    assert after["step"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["minor choice"]
+
+
+def _unit_finding(key, line, severity, *, tradeoff=False, kind="real"):
+    return dict(findingKey=key, title=key, file="a.py", line=line, severity=severity,
+                tradeoff=tradeoff, consequenceKind=kind)
+
+
+def _unit_round(findings):
+    """A state with ``findings`` routed through the driver's own settle entry point."""
+    state = RD.new_state()
+    RD._set_findings(state, [dict(f) for f in findings])
+    RD._after_findings_settled(state, state["config"])
+    return state
+
+
+def _unit_rulings(state, *rows):
+    state.update(rulingSeqCounter=len(rows),
+                 rulingsLog=[dict(row, seq=i) for i, row in enumerate(rows, 1)])
+
+
+def _unit_batch(state):
+    return [row["findingKey"] for row in state.get("_fixBatch") or []]
+
+
+def _unit_gate_ids(state):
+    return RD._judgment_row_ids(state["_judgmentFindings"])
+
+
+@pytest.mark.parametrize("blocker_is_tradeoff", [False, True], ids=["mechanical", "gate-blocker"])
+def test_t_i_an_undecided_product_choice_is_left_for_the_owner(blocker_is_tradeoff):
+    """axis: I1/I2 — an undecided below-blocking product choice never enters the owner gate or a fix
+    batch, and the end-of-loop settle leaves it for the owner."""
+    state = _unit_round([_unit_finding("B", 1, "Important", tradeoff=blocker_is_tradeoff),
+                         _unit_finding("M", 2, "Minor", tradeoff=True)])
+    if blocker_is_tradeoff:
+        assert state["step"] == RD.P_JUDGMENT
+        assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["B"]
+        assert state["_judgmentMechanical"] == []
+        RD._fold_judgment(state, state["config"], {"dispositions": [
+            {"id": _unit_gate_ids(state)[0], "disposition": "fix-as-suggested"}]})
+    assert state["step"] == P_FIXER
+    assert _unit_batch(state) == ["B"] and not state.get("_fixQueue")
+    assert not state.get("_judgmentFindings") and not state.get("_judgmentMechanical")
+    RD._set_terminal(state, "converged")
+    ledger, fault = RD._disposition_ledger_by_key(state)
+    assert fault is None
+    assert ledger["M"]["disposition"] == "left-for-owner", ledger["M"]
+
+
+def test_t_ii_c_a_guided_choice_survives_skipping_the_only_gate_blocker():
+    """axis: I1(b)/I3 — with the gate's only blocker skipped, a guided product choice still reaches
+    the fixer through the chokepoint."""
+    state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
+                         _unit_finding("M", 2, "Minor", tradeoff=True)])
+    assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="apply it"))
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+    assert state["step"] == P_FIXER
+    assert _unit_batch(state) == ["M"]
+    assert not state.get("terminal")
+
+
+def test_an_undecided_choice_does_not_survive_skipping_the_only_gate_blocker():
+    """axis: I1/E4 — with the gate's only blocker skipped and nothing owner-named, the round settles
+    as it always did, with no exclusion counted and no fix batch."""
+    state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
+                         _unit_finding("M", 2, "Minor", tradeoff=True)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+    assert state.get("terminal") == "converged"
+    assert state["step"] != P_FIXER and not state.get("_fixBatch")
+    assert "fixBatchExcludedByDischarge" not in state["rounds"]["1"]
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+
+
+@pytest.mark.parametrize("target,other", [("Q", "M"), ("M", "Q")], ids=["quality", "choice"])
+def test_t_iii_the_fixer_receives_only_the_owner_named_minor(target, other):
+    """axis: I1/I2/I3 — with the mechanical blocker ruled out and the gate's blocker skipped, the
+    fixer batch holds the one Minor an owner decision names and never the other."""
+    state = _unit_round([
+        _unit_finding("B", 1, "Important"),
+        _unit_finding("J", 2, "Important", tradeoff=True),
+        _unit_finding("M", 3, "Minor", tradeoff=True),
+        _unit_finding("Q", 4, "Minor", kind="code-quality")])
+    assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
+    assert [r["findingKey"] for r in state["_judgmentMechanical"]] == ["B"]
+    _unit_rulings(state, dict(findingKey="B", ruling="out-of-scope"),
+                  dict(findingKey=target, ruling="guidance", guidance="apply it"))
+    RD._reconcile_fixer_queue_after_rulings(state, state["config"])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+    assert state["step"] == P_FIXER
+    assert _unit_batch(state) == [target]
+    assert other not in _unit_batch(state) + [r["findingKey"] for r in state.get("_fixQueue") or []]
+
+
+def test_guidance_at_the_judgment_gate_survives_skipping_the_last_blocker(tmp_path, keep_severity):
+    """axis: I1(b)/I3 — guidance ruled on a code-quality Minor while the owner gate is open still
+    reaches a fixer when the owner then skips the gate's only blocker."""
+    blocker = _finding("tradeoff blocker", 1)
+    blocker["tradeoff"] = True
+    session_dir, gitdir, _h = _session(
+        tmp_path, [blocker, _finding("quality minor", 2, "Minor", "code-quality")],
+        to_phase=RD.P_JUDGMENT, name="c7-judgment-guidance-skip")
+    state = _state(session_dir)
+    key_m = _finding_key_by_title(state, "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "TIDY-THE-MINOR"))["ok"]
     [jid] = _judgment_ids(_state(session_dir))
     out = _fold_judgment(tmp_path, session_dir, gitdir,
-                         [{"id": jid, "disposition": "skip", "reason": "keep the current wording"}])
+                         [{"id": jid, "disposition": "skip", "reason": "keep the current shape"}])
     assert out.get("ok") is True, out
     after = _state(session_dir)
     assert after["pending"]["phase"] == P_FIXER
-    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B"]
-    assert not after.get("_fixQueue")
-    assert not after.get("_skippedBlockers")
-
-
-def test_a_lifted_choice_the_owner_approves_rides_the_batch(tmp_path, keep_severity):
-    """axis: once the owner chooses to fix the lifted choice it joins the blocker's batch."""
-    session_dir, gitdir, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-choice-fix")
-    [jid] = _judgment_ids(_state(session_dir))
-    out = _fold_judgment(tmp_path, session_dir, gitdir,
-                         [{"id": jid, "disposition": "fix-as-suggested"}])
-    assert out.get("ok") is True, out
-    after = _state(session_dir)
-    assert after["pending"]["phase"] == P_FIXER
-    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B", "minor choice"]
-
-
-def test_lift_awaits_owner_judgment_decision_table():
-    """axis: which lifted rows wait for the owner."""
-    choice = {"tradeoff": True}
-    assert RD._lift_awaits_owner_judgment(choice, None) is True
-    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "out-of-scope"}) is True
-    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "fix"}) is False
-    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "guidance"}) is False
-    assert RD._lift_awaits_owner_judgment({"tradeoff": None}, None) is False
+    assert [row["title"] for row in after["_fixBatch"]] == ["quality minor"]
+    assert "TIDY-THE-MINOR" in _order_text(session_dir)
 
 
 def test_a_not_discharged_lifted_minor_never_keeps_the_loop_fixing(tmp_path, keep_severity):
@@ -766,3 +919,504 @@ def test_guidance_on_an_unqueued_minor_during_an_emitted_attempt_joins_the_queue
     assert _queue_keys(after) == [key_m]
     assert after["_fixQueue"][0]["lifted"] == "guidance"
     assert after["pending"] == state["pending"]
+
+
+# --- review round 1: worktree binding, ledger-only guidance targets, merged members, eligible blockers
+
+def test_withdraw_refuses_a_worktree_other_than_the_sessions(tmp_path, keep_severity):
+    """axis: the restore check reads the session's own worktree — a clean sibling at the same head
+    never stands in for the dirty one."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-wrong-wt")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    other, _other_head = _throwaway_repo(tmp_path, "other")
+    _bind_anchor_head(session_dir, head, repo)
+    before = _state_bytes(session_dir)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(other))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-wrong-worktree", out
+    assert _state_bytes(session_dir) == before
+    assert RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))["ok"] is True
+
+
+def test_a_merged_member_is_never_lifted_by_guidance():
+    """axis: a finding synthesis merged into another carries `mergedInto` and never rides a batch."""
+    merged = session_contract.MERGED_INTO_FIELD
+    guidance = {"ruling": "guidance"}
+    assert RD._lift_marker_for({"title": "t"}, {}, guidance) == RD.LIFT_GUIDANCE
+    assert RD._lift_marker_for({merged: "rep"}, {}, guidance) is None
+    assert RD._lift_marker_for({}, {merged: "rep"}, guidance) is None
+    assert RD._lift_marker_for({merged: "rep", "consequenceKind": "real"}, {}, None) is None
+
+
+def test_guidance_on_an_archived_finding_never_rides_the_next_batch(tmp_path, keep_severity):
+    """axis: guidance never reaches an archived row directly (advisor ruling, issue #1868): a Minor
+    that scoped synthesis archived to the ledger is not lifted into the next batch."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-archived")
+    state = _state(session_dir)
+    quality = _finding_key_by_title(state, "quality minor")
+    blocker = next(dict(f) for f in state["findings"] if f.get("title") == "blocker B")
+    minor = next(dict(f) for f in state["findings"] if f.get("title") == "quality minor")
+    state["pending"] = None
+    RD._set_findings(state, [blocker])
+    assert RD._live_finding_by_key(state, quality) is None
+    RD.save_state(session_dir, state)
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", quality, "tidy the names"))["ok"]
+    state = _state(session_dir)
+    assert (RD._live_ruling_by_key(state).get(quality) or {}).get("ruling") == "guidance"
+    assert RD._guidance_named_rows(state, [(quality, {"title": "quality minor"})]) == []
+    for held in ("_fixBatch", "_fixQueue"):
+        assert quality not in {RD._fix_batch_row_key(r) for r in state.get(held) or []}
+    # raised again, the finding is live and the recorded guidance reaches the fix
+    RD._set_findings(state, [blocker, minor])
+    assert RD._live_finding_by_key(state, quality) is not None
+    rows = RD._guidance_named_rows(state, [(quality, RD._live_finding_by_key(state, quality))])
+    assert [r.get("lifted") for r in rows] == ["guidance"]
+
+
+def test_replacement_guidance_on_an_archived_member_dispatches_nothing():
+    """axis: A merged into B, both archived, then A's merge mark dropped by a replacing ruling while
+    the lineage A->B survives — the archived member is never lifted or sent to a fixer."""
+    state = _archived_member_state()
+    assert state["findingLineage"]["A"] == "B"
+    assert {_key(r) for r in RD._lifted_fix_rows(state, [])} <= {"Z"}
+    RD._after_findings_settled(state, state["config"])
+    assert "A" not in _unit_batch(state) and "B" not in _unit_batch(state)
+    assert "A" not in (state.get("liftedAtSeq") or {})
+
+
+def test_stall_recovery_batch_takes_no_lifted_rows_and_merged_members_never_lift(tmp_path, keep_severity):
+    """axis: the stall-recovery batch is exactly its composed set; a synthesis-merged member is
+    never lifted as an independent fix."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-stall-nolift")
+    state = _state(session_dir)
+    assert any(f.get("consequenceKind") == "real" for f in state["findings"])
+    state["pending"] = None
+    state["rounds"]["1"].pop("liftedIntoFixBatch", None)
+    stalled = {"id": "stalled", "severity": "Important", "file": "a.py", "line": 1,
+               "title": "stalled target", "body": "b"}
+    assert RD._queue_fix_batch(state, state["config"], [dict(stalled)], lift=False) == "queued"
+    assert [r.get("id") for r in state["_fixBatch"]] == ["stalled"]
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+    real = {"consequenceKind": "real"}
+    assert RD._lift_marker_for(real, {}, None) == "real-consequence"
+    merged = {"consequenceKind": "real", session_contract.MERGED_INTO_FIELD: "rep"}
+    assert RD._lift_marker_for(merged, {}, {"ruling": "guidance"}) is None
+    assert RD._lift_marker_for(real, {session_contract.MERGED_INTO_FIELD: "rep"},
+                               {"ruling": "guidance"}) is None
+
+
+def test_stall_recovery_batch_keeps_no_lift_through_the_owner_judgment_gate(monkeypatch):
+    """axis: a stall batch routed through owner judgment folds into a fix batch without lifting."""
+    tradeoff = {"title": "widen the API", "severity": "Important", "file": "j.py", "line": 3,
+                "tradeoff": True}
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "claude"})
+    seen = []
+    monkeypatch.setattr(RD, "_queue_fix_batch",
+                        lambda st, cfg, rows, **kw: seen.append(kw.get("lift", True)))
+    RD._route_stall_self_recovery(state, state["config"], [dict(tradeoff)], None, {})
+    assert seen == []
+    fid = RD._judgment_row_ids(state["_judgmentFindings"])[0]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": fid, "disposition": "fix"}]})
+    assert seen and set(seen) == {False}
+
+
+def test_ruling_the_gates_blockers_out_clears_the_gate_and_converges(tmp_path, keep_severity):
+    """axis: I2/I3 — the gate holds one mechanical and one tradeoff blocker; ruling both out leaves
+    nothing to put to the owner, so the gate closes and the loop converges without asking about the
+    Minor product choice."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _gate_blocker("tradeoff J", 2),
+                   _choice("minor choice", 3)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-oos")
+    state = _state(session_dir)
+    assert [row["title"] for row in state["_judgmentFindings"]] == ["tradeoff J"]
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
+        {"id": _finding_key_by_title(state, title), "ruling": "out-of-scope",
+         "reason": "not this change", "followUp": _follow_up()}
+        for title in ("blocker B", "tradeoff J")]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") == "converged", after.get("step")
+    assert not after.get("_judgmentFindings") and not after.get("_judgmentMechanical")
+    assert not after.get("pending")
+
+
+def test_guidance_on_the_choice_with_the_gate_blockers_out_keeps_it_for_the_fixer(
+        tmp_path, keep_severity):
+    """axis: I1(b)/I3 — one ruling file rules the gate's blockers out and gives a Minor product choice
+    guidance: the gate closes through the chokepoint and the guided choice reaches the fixer."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _gate_blocker("tradeoff J", 2),
+                   _choice("minor choice", 3)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-guided-oos")
+    state = _state(session_dir)
+    entries = [{"id": _finding_key_by_title(state, title), "ruling": "out-of-scope",
+                "reason": "not this change", "followUp": _follow_up()}
+               for title in ("blocker B", "tradeoff J")]
+    entries.append({"id": _finding_key_by_title(state, "minor choice"), "ruling": "guidance",
+                    "reason": "owner call", "guidance": "do the choice"})
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", entries))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") != "converged"
+    assert [row["title"] for row in after["_fixBatch"]] == ["minor choice"]
+
+
+def test_guidance_on_one_choice_keeps_an_undecided_choice_out_of_the_fixer(
+        tmp_path, keep_severity):
+    """axis: I1 — the gate's blockers are ruled out and only one of two Minor product choices gets
+    guidance, so the undecided one never reaches the fixer."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _gate_blocker("tradeoff J", 2),
+                   _choice("choice M", 3), _choice("choice N", 4)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-mn")
+    state = _state(session_dir)
+    entries = [{"id": _finding_key_by_title(state, title), "ruling": "out-of-scope",
+                "reason": "not this change", "followUp": _follow_up()}
+               for title in ("blocker B", "tradeoff J")]
+    entries.append({"id": _finding_key_by_title(state, "choice M"), "ruling": "guidance",
+                    "reason": "owner call", "guidance": "do the choice"})
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mn.json", entries))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    rows = _rows_by_title(after)
+    assert "choice M" in rows
+    assert "choice N" not in rows
+    assert "choice N" in [f.get("title") for f in after.get("findings") or []]
+    key_n = _finding_key_by_title(after, "choice N")
+    assert key_n not in [r.get("findingKey") for r in after.get("rulingsLog") or []]
+
+
+def test_ruling_a_withdrawn_batchs_only_blocker_out_drops_its_lifted_minor(tmp_path, keep_severity):
+    """axis: a withdrawn fixer batch holds one Important blocker and a lifted real-consequence Minor;
+    ruling the blocker out of scope leaves no eligible blocker, so the lifted Minor does not go out
+    alone and the loop converges."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-withdrawn-oos")
+    state = _state(session_dir)
+    assert [r["title"] for r in state["_fixBatch"]][0] == "blocker B"
+    out = RD.cmd_withdraw(session_dir, state["pending"]["attempt"], "rule the blocker out")
+    assert out.get("ok") is True, out
+    key = _finding_key_by_title(_state(session_dir), "blocker B")
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
+        {"id": key, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()}]))
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after.get("terminal") == "converged", (after.get("step"), after.get("_fixBatch"))
+
+
+def _lifted_minor_state(decision_rows=None, gate=None):
+    state = RD.new_state()
+    state["rulingsLog"] = decision_rows or []
+    if gate:
+        state["rounds"] = {"1": {"judgmentDispositions": gate}}
+    return state, dict(findingKey="m", severity="Minor", lifted="real-consequence")
+
+
+def test_a_lifted_minor_with_guidance_stays_when_it_is_the_only_row():
+    state, row = _lifted_minor_state([dict(findingKey="m", ruling="guidance", guidance="fix it", seq=1)])
+    assert RD._queue_fix_batch(state, state["config"], [row]) == "queued"
+    assert state.get("terminal") != "converged"
+
+
+def test_a_lifted_minor_the_owner_approved_to_fix_stays_when_it_is_the_only_row():
+    state, row = _lifted_minor_state(gate=[dict(findingKey="m", disposition="fix-as-suggested", rulingSeq=1)])
+    assert RD._queue_fix_batch(state, state["config"], [row]) == "queued"
+    assert state.get("terminal") != "converged"
+
+
+def test_an_autonomous_lifted_minor_alone_still_converges():
+    state, row = _lifted_minor_state()
+    assert RD._queue_fix_batch(state, state["config"], [row]) == "excluded"
+    assert state.get("terminal") == "converged"
+
+
+def test_guidance_survives_skipping_the_gate_when_a_ruled_out_blocker_is_carried(
+        tmp_path, keep_severity):
+    """axis: I1(b)/I3 — a ruled-out mechanical blocker still carried by the gate does not hide
+    accepted guidance on a Minor from the fixer when the owner then skips the gate's tradeoff
+    blocker."""
+    tradeoff = _finding("tradeoff blocker", 2)
+    tradeoff["tradeoff"] = True
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_finding("blocker B", 1), tradeoff,
+                   _finding("quality minor", 3, "Minor", "code-quality")],
+        to_phase=RD.P_JUDGMENT, name="c7-carried-oos")
+    state = _state(session_dir)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "oos-b.json", [
+        {"id": _finding_key_by_title(state, "blocker B"), "ruling": "out-of-scope",
+         "reason": "later", "followUp": _follow_up()}]))["ok"]
+    key_m = _finding_key_by_title(state, "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "TIDY-THE-MINOR"))["ok"]
+    [jid] = _judgment_ids(_state(session_dir))
+    out = _fold_judgment(tmp_path, session_dir, gitdir,
+                         [{"id": jid, "disposition": "skip", "reason": "keep the current shape"}])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert after["pending"]["phase"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["quality minor"]
+
+
+def test_an_untracked_symlink_outside_the_session_is_dirty_whatever_it_points_at(tmp_path):
+    """axis: containment is judged by where the entry sits, not by where a symlink leads."""
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "scratch.py").write_text("x", encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    os.symlink(str(session / "scratch.py"), str(repo / "src" / "helper.py"))
+    assert RD._untracked_outside_session(str(session), str(repo), "?? src/helper.py") is True
+
+
+def test_an_empty_disposition_fixes_the_gate_blocker_and_never_a_product_choice(
+        tmp_path, keep_severity):
+    """axis: E5/I1 — a gate blocker with no disposition folds as fix-as-suggested (fail closed) and
+    an undecided Minor product choice beside it never rides along."""
+    session_dir, gitdir, _h = _session(
+        tmp_path, [_gate_blocker("tradeoff J", 1), _choice("minor choice", 2)],
+        to_phase=RD.P_JUDGMENT, name="c7-choice-undecided")
+    assert [row["title"] for row in _state(session_dir)["_judgmentFindings"]] == ["tradeoff J"]
+    out = _fold_judgment(tmp_path, session_dir, gitdir, [])
+    assert out.get("ok") is True, out
+    after = _state(session_dir)
+    assert [row["title"] for row in after["_fixBatch"]] == ["tradeoff J"]
+    assert after["_fixBatch"][0].get("judgmentFailClosed") is True
+
+
+def test_no_blocker_drops_each_autonomous_lift_beside_an_owner_named_row():
+    """axis: with no eligible blocker in the first batch, an autonomous lift is dropped one by one
+    while the owner-named row stays and starts the leg."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="q", ruling="guidance", guidance="tidy it"))
+    auto = dict(findingKey="r", severity="Minor", lifted=RD.LIFT_REAL_CONSEQUENCE)
+    named = dict(findingKey="q", severity="Minor", lifted=RD.LIFT_GUIDANCE)
+    assert RD._queue_fix_batch(state, state["config"], [auto, named]) == "queued"
+    assert _unit_batch(state) == ["q"]
+
+
+def test_guidance_on_a_minor_starts_a_leg_when_the_round_has_no_blocker():
+    """axis: a round with no blocking finding routes through the chokepoint, so an owner-named Minor
+    gets a fixer leg instead of the round converging over it."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
+    assert not state.get("terminal")
+
+
+def test_guidance_given_before_a_merge_reaches_the_surviving_representative():
+    """axis: guidance recorded on a finding synthesis later merges into another is the effective
+    decision of the representative the fixer order reads."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="use the helper"))
+    RD._record_merged_into(state, "A", "B")
+    live = RD._live_ruling_by_key(state).get("B")
+    assert isinstance(live, dict) and live.get("guidance") == "use the helper"
+
+
+def test_guidance_already_sent_to_a_fixer_never_restarts_a_blocker_free_leg():
+    """axis: a blocker-free round starts a leg only for an owner-named row not yet sent under its
+    current decision; once sent it converges, and a newer ruling makes the row eligible again."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
+    state.update(step=None, _fixBatch=[], _fixQueue=[])
+    RD._after_findings_settled(state, state["config"])
+    assert state.get("terminal") == "converged" and not state.get("_fixBatch")
+    state.pop("terminal")
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"),
+                  dict(findingKey="M", ruling="guidance", guidance="tidy it differently"))
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
+
+
+def test_a_later_merge_never_makes_the_lineage_a_cycle():
+    """axis: when synthesis later keeps the other finding as representative, the merge edge flips
+    instead of closing a cycle, so guidance still reaches the current representative."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="B", ruling="guidance", guidance="use the helper"))
+    RD._record_merged_into(state, "B", "A")
+    RD._record_merged_into(state, "A", "B")
+    assert RD._lineage_root(RD._lineage_map(state), "A") == RD._lineage_root(
+        RD._lineage_map(state), "B")
+    for key in ("A", "B"):
+        live = RD._live_ruling_by_key(state).get(key)
+        assert isinstance(live, dict) and live.get("guidance") == "use the helper"
+
+
+def test_a_skip_on_a_merged_member_does_not_reach_its_representative():
+    """axis: only guidance follows a merge edge; a skip stays on the finding it was given on."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="A", ruling="out-of-scope", reason="later"))
+    RD._record_merged_into(state, "A", "B")
+    assert RD._live_ruling_by_key(state).get("A", {}).get("ruling") == "out-of-scope"
+    assert "B" not in RD._live_ruling_by_key(state)
+
+
+def test_a_merge_that_reverses_below_the_root_keeps_the_lineage_acyclic():
+    """axis: keep A over B, then B over C, then C over B — the lineage stays acyclic, every key
+    reaches the current representative, and guidance still lands on it."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="use the helper"))
+    RD._record_merged_into(state, "B", "A")
+    RD._record_merged_into(state, "C", "B")
+    RD._record_merged_into(state, "B", "C")
+    lineage = RD._lineage_map(state)
+    assert {RD._lineage_root(lineage, key) for key in ("A", "B", "C")} == {"C"}
+    live = RD._live_ruling_by_key(state).get("C")
+    assert isinstance(live, dict) and live.get("guidance") == "use the helper"
+
+
+def test_replacement_guidance_on_a_held_minor_refreshes_the_sent_decision():
+    """axis: guidance ruled again on a Minor the batch already holds is recorded as sent under the
+    new decision, so a nonblocking audit does not start another leg for it."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert _unit_batch(state) == ["M"] and state["liftedAtSeq"] == {"M": 1}
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"),
+                  dict(findingKey="M", ruling="guidance", guidance="SECOND"))
+    RD._guidance_named_rows(state, [("M", _unit_finding("M", 2, "Minor", kind="code-quality"))])
+    assert state["liftedAtSeq"] == {"M": 2}
+
+
+def test_a_sent_decision_survives_a_merge_into_a_new_representative():
+    """axis: guidance already sent under a finding is still sent after synthesis merges it into
+    another representative, so a blocker-free round does not start a second leg for it."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert _unit_batch(state) == ["M"]
+    RD._record_merged_into(state, "M", "N")
+    state.update(step=None, _fixBatch=[], _fixQueue=[])
+    RD._set_findings(state, [_unit_finding("N", 2, "Minor", kind="code-quality")])
+    RD._after_findings_settled(state, state["config"])
+    assert state.get("terminal") == "converged" and not state.get("_fixBatch")
+
+
+def test_merge_clears_the_provisional_carry_stamp():
+    """A confirmed merge replaces a provisional carry edge, so a later staging cannot revoke it."""
+    state = {"round": 2, "findings": [], "findingLineage": {"B": "O"},
+             "findingLineageRound": {"B": 2}}
+    RD._record_merged_into(state, "B", "R")
+    assert state["findingLineage"]["B"] == "R" and "B" not in state["findingLineageRound"]
+
+
+def test_guidance_on_a_merged_member_queues_the_live_representative_not_an_archived_root():
+    """axis: B merged into A, then re-raised with C merged into B — guidance on C reaches live B."""
+    state = RD.new_state()
+    RD._record_merged_into(state, "B", "A")
+    RD._set_findings(state, [_unit_finding("B", 2, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "C", "B")
+    _unit_rulings(state, dict(findingKey="C", ruling="guidance", guidance="tidy it"))
+    rows = RD._guidance_named_rows(state, [("C", _unit_finding("C", 3, "Minor", kind="code-quality"))])
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["B"]
+
+
+def test_guidance_on_a_chain_merged_member_still_reaches_the_live_representative():
+    """axis: M merged into N and N into R (A->B->C chain) — guidance on M queues the live R."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("R", 2, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "N", "R")
+    RD._record_merged_into(state, "M", "N")
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    rows = RD._guidance_named_rows(state, [("M", _unit_finding("M", 3, "Minor", kind="code-quality"))])
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["R"]
+
+
+def test_a_provisional_carry_stays_revocable_after_a_synthesis_merge():
+    """axis: B provisionally takes A's guidance, synthesis merges B into C — the inferred A link
+    keeps its stamp and a later crowded location revokes it, leaving the B->C merge."""
+    state = RD.new_state()
+    state["round"] = 2
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="use the helper"))
+    state["findingLineage"] = {"B": "A"}
+    state["findingLineageRound"] = {"B": 2}
+    RD._record_merged_into(state, "B", "C")
+    assert state["findingLineageRound"] == {"A": 2} and state["findingLineage"]["A"] == "C"
+    carry = RD._LineageCarry(state, [], [])
+    carry.raised = {"B": {"file": "a.py", "line": 1}, "D": {"file": "a.py", "line": 1}}
+    carry.decided = {"A": (0, {"file": "a.py", "line": 1})}
+    carry.at_location = {("a.py", 1): 2}
+    carry.revoke_ambiguous(state)
+    assert "A" not in state["findingLineage"] and state["findingLineage"]["B"] == "C"
+
+
+def test_withdraw_refuses_when_the_worktree_head_differs_from_the_certified_head(tmp_path, keep_severity):
+    """axis: withdrawal compares the worktree HEAD with the orders anchor's certified head only."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-certhead")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    _bind_anchor_head(session_dir, "a" * 40, repo)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-head-moved", out
+    assert head in out.get("detail", "") and "a" * 40 in out.get("detail", ""), out
+
+
+def _archived_member_state():
+    """A merged into live B; B then archived; A's ruling replaced by guidance (merge mark dropped)."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("A", 2, "Minor", kind="code-quality"),
+                             _unit_finding("B", 3, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "A", "B")
+    RD._set_findings(state, [_unit_finding("Z", 4, "Important")])
+    assert RD._live_finding_by_key(state, "B") is None
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="tidy it"))
+    return state
+
+
+def test_guidance_never_queues_an_archived_representative_and_waits_for_its_next_raise():
+    """axis: guidance on A (merged into archived B) queues nothing; once B is raised again it does."""
+    state = _archived_member_state()
+    named = [("A", _unit_finding("A", 2, "Minor", kind="code-quality"))]
+    assert RD._guidance_named_rows(state, named) == []
+    RD._set_findings(state, [_unit_finding("B", 5, "Minor", kind="code-quality")])
+    rows = RD._guidance_named_rows(state, named)
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["B"]
+
+
+def test_a_guided_blocker_sent_to_the_fixer_is_recorded_as_delivered():
+    """axis: an ordinary blocking row with guidance is stamped sent, so a later archive cannot
+    re-lift it as unsent guidance."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("G", 2, "Important")])
+    _unit_rulings(state, dict(findingKey="G", ruling="guidance", guidance="use the helper"))
+    RD._after_findings_settled(state, state["config"])
+    assert _unit_batch(state) == ["G"]
+    assert state["liftedAtSeq"]["G"] == RD._decision_seq(RD._live_ruling_by_key(state)["G"]) > 0
+
+
+def test_batch_composition_never_holds_an_archived_representative_until_it_is_raised_again():
+    """axis: end to end through the fix batch — guidance on A (merged into archived B) never puts B
+    in the batch while B is archived, and reaches the fix once B is raised again."""
+    state = _archived_member_state()
+    RD._after_findings_settled(state, state["config"])
+    assert "B" not in _unit_batch(state)
+    state = _archived_member_state()
+    RD._set_findings(state, [_unit_finding("Z", 4, "Important"),
+                             _unit_finding("B", 5, "Minor", kind="code-quality")])
+    RD._after_findings_settled(state, state["config"])
+    assert "B" in _unit_batch(state)
+
+
+def test_guidance_given_during_audits_survives_the_clean_postaudit_fold(tmp_path, keep_severity):
+    """axis: a live code-quality Minor given guidance is not archived by the clean post-audit fold
+    (`_fold_scoped` with no new findings); it stays live, so the lift offers it to a fixer."""
+    session_dir, _g, _h = _minors_session(tmp_path, "c7-audit-guided")
+    state = _state(session_dir)
+    quality = _finding_key_by_title(state, "quality minor")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", quality, "tidy the names"))["ok"]
+    state = _state(session_dir)
+    assert RD._live_finding_by_key(state, quality) is not None
+    RD._fold_scoped(state, state["config"], {"findings": []})
+    assert RD._live_finding_by_key(state, quality) is not None
+    sent = {RD._fix_batch_row_key(r) for r in (state.get("_fixBatch") or [])}
+    lifted = {RD._fix_batch_row_key(r) for r in RD._lifted_fix_rows(state, [])}
+    assert quality in sent | lifted

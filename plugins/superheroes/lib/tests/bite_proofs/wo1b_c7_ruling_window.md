@@ -6,18 +6,25 @@ edit tool, restored by the inverse edit. Every run: `python3 -B -X pycache_prefi
 pytest '<exact node id>' -q -n 0`. Pytest-internal paths (`/tmp/claude-0/pytest-of-root/...`) are session
 scratch, not secrets; nothing else is redacted.
 
-Declared guarded elements (six): 1 withdraw restore check (dirty tree); 2 withdraw restore check (HEAD
+Declared guarded elements (eleven): 1 withdraw restore check (dirty tree); 2 withdraw restore check (HEAD
 moved); 3 `cmd_submit` fold-path refusal of a withdrawn attempt; 4 `_next_dispatch_attempt` floor;
-5 conditional `ruling-attempt-pending`; 6 real-consequence lift.
+5 conditional `ruling-attempt-pending`; 6 real-consequence lift; 7 product-choice exclusion in the
+real-consequence lift; 8 owner-judgment gate holds only blocking findings (`_after_findings_settled`
+entry; the `_settle_delta` entry is listed unproven); 9 owner-named lift when no offered row survives;
+10 autonomous lifts alone never start a leg (reconciled batch); 11 autonomous lifts never start a leg on
+an empty offered set.
 
 Capture disclosures: the element 1 red is the last 40 lines of the run (the head of the failure listing is
 cut). All other captures are whole. Elements 1 and 2 were re-run (new captures, new line numbers) after
 the restore check began resolving the repo root through `store_core.repo_root` instead of a
-`rev-parse --show-toplevel` call; elements 3-6 are unchanged from the earlier run.
+`rev-parse --show-toplevel` call; elements 3-6 are unchanged from the earlier run. Elements 7-11 were
+added when below-blocking product choices stopped entering the owner gate; their runs are the new
+captures below. The `round_driver.py:<line>` pointers of elements 1-6 were refreshed to the file as it
+stands after that change (the neutralized text is unchanged, the earlier captures are not re-run).
 
 ## 1. Withdraw restore check, dirty tree
 
-- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7509` (`if dirty:`). Axis: a
+- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7834` (`if dirty:`). Axis: a
   worktree still holding the stopped fixer's changes is refused with `withdraw-worktree-dirty`.
 - Detector: `test_edge2_restore_check_refusals[tracked-change-withdraw-worktree-dirty]`.
 - Neutralization: `    if dirty:` -> `    if False and dirty:` (asserted once by the edit tool; re-run after the
@@ -69,7 +76,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restor
 
 - Axis check: the withdraw went through (`ok: True`, `restoreCheck: checked`) where the refusal token
   `withdraw-worktree-dirty` was expected — red on the refusal axis.
-- Restore: inverse edit `    if False and dirty:` -> `    if dirty:`. Restore receipt (lines 7509-7510 re-read):
+- Restore: inverse edit `    if False and dirty:` -> `    if dirty:`. Restore receipt (lines 7834-7835 re-read):
   `    if dirty:` / `        return (WITHDRAW_WORKTREE_DIRTY,`.
 - Raw green:
 
@@ -80,7 +87,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restor
 
 ## 2. Withdraw restore check, HEAD moved
 
-- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7514` (`if head != bound:`). Axis:
+- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7839` (`if head != bound:`). Axis:
   a worktree at a different head than the attempt started from is refused with `withdraw-head-moved`.
 - Detector: `test_edge2_restore_check_refusals[head-moved-withdraw-head-moved]`.
 - Neutralization: `    if head != bound:` -> `    if False and head != bound:` (asserted once by the edit
@@ -137,7 +144,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restor
 
 - Axis check: same as element 1 for the head token; the fixture commits (clean tree, moved head), so the
   dirty check does not fire first.
-- Restore: inverse edit. Restore receipt (lines 7514-7515 re-read): `    if head != bound:` /
+- Restore: inverse edit. Restore receipt (lines 7839-7840 re-read): `    if head != bound:` /
   `        return (WITHDRAW_HEAD_MOVED,`.
 - Raw green:
 
@@ -148,14 +155,14 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restor
 
 ## 3. Fold-path refusal of a withdrawn attempt in `cmd_submit`
 
-- Guarded element and axis: `cmd_submit`, `round_driver.py:7908-7909` (the `_fixer_attempt_withdrawn_refusal`
+- Guarded element and axis: `cmd_submit`, `round_driver.py:8238-8239` (the `_fixer_attempt_withdrawn_refusal`
   call with `"submit"`). Axis: a submit addressed to a withdrawn fixer attempt is refused with
   `fixer-attempt-withdrawn`, naming the withdrawal.
 - Detector: `test_edge3_fold_paths_refuse_a_withdrawn_attempt` (its first loop leg is the submit; the
   record-result and record-missing legs are other call sites and are not neutralized here).
 - Neutralization: `        session_dir, "submit", state, attempt, phase=phase)` ->
   `        session_dir, "submit", state, None, phase=phase)` (the helper returns None for a non-int attempt;
-  edit-tool uniqueness-checked; line 7909 re-read).
+  edit-tool uniqueness-checked; line 8239 re-read).
 - Raw red:
 
 ```
@@ -197,7 +204,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge3_fold_p
 - Axis check: the submit is still refused, but by a different downstream check
   (`advance-submit-interleaved`); the detector bites on the refusal token, which is the axis (a wrong token
   counts as red).
-- Restore: inverse edit. Restore receipt (lines 7908-7909 re-read): `    withdrawn_refusal =
+- Restore: inverse edit. Restore receipt (lines 8238-8239 re-read): `    withdrawn_refusal =
   _fixer_attempt_withdrawn_refusal(` / `        session_dir, "submit", state, attempt, phase=phase)`.
 - Raw green:
 
@@ -208,12 +215,12 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge3_fold_p
 
 ## 4. `_next_dispatch_attempt` floor
 
-- Guarded element and axis: `_next_dispatch_attempt`, `round_driver.py:8685`
+- Guarded element and axis: `_next_dispatch_attempt`, `round_driver.py:9015`
   (`candidates.extend(_withdrawn_fixer_attempts(state, rnd))`). Axis: the attempt allocated after a
   withdrawal is strictly above the withdrawn one.
 - Detector: `test_edge4_fresh_attempt_is_above_the_withdrawn_one`.
 - Neutralization: `        candidates.extend(_withdrawn_fixer_attempts(state, rnd))` ->
-  `        candidates.extend(())` (line 8685 re-read).
+  `        candidates.extend(())` (line 9015 re-read).
 - Raw red:
 
 ```
@@ -253,7 +260,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge4_fresh_
 ```
 
 - Axis check: the allocator returned 0, the withdrawn attempt's own number, where > 0 was required.
-- Restore: inverse edit. Restore receipt (line 8685 re-read):
+- Restore: inverse edit. Restore receipt (line 9015 re-read):
   `        candidates.extend(_withdrawn_fixer_attempts(state, rnd))`.
 - Raw green:
 
@@ -264,12 +271,12 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge4_fresh_
 
 ## 5. Conditional `ruling-attempt-pending`
 
-- Guarded element and axis: `_cmd_rule_locked`, `round_driver.py:7321`
+- Guarded element and axis: `_cmd_rule_locked`, `round_driver.py:7627`
   (`if _lineage_root(lineage, key) in batch_roots:`). Axis: a ruling that targets a finding in the emitted
   fixer batch is refused with `ruling-attempt-pending`.
 - Detector: `test_t1_ruling_while_pending_reaches_the_fix`.
 - Neutralization: `            if _lineage_root(lineage, key) in batch_roots:` ->
-  `            if False and _lineage_root(lineage, key) in batch_roots:` (never refuses; line 7321 re-read).
+  `            if False and _lineage_root(lineage, key) in batch_roots:` (never refuses; line 7627 re-read).
 - Raw red:
 
 ```
@@ -304,7 +311,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t1_ruling_wh
 ```
 
 - Axis check: the rule was accepted (`ok: True`) where the refusal token was required.
-- Restore: inverse edit. Restore receipt (line 7321 re-read):
+- Restore: inverse edit. Restore receipt (line 7627 re-read):
   `            if _lineage_root(lineage, key) in batch_roots:`.
 - Raw green:
 
@@ -315,12 +322,12 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t1_ruling_wh
 
 ## 6. Real-consequence lift
 
-- Guarded element and axis: `_lift_marker_for`, `round_driver.py:4227` (the `LIFT_REAL_CONSEQUENCE`
+- Guarded element and axis: `_lift_marker_for`, `round_driver.py:4439` (the `LIFT_REAL_CONSEQUENCE`
   condition). Axis: an undisposed real-consequence Minor rides the first fixer order after the blocker.
 - Detector: `test_t5_undisposed_real_minors_ride_the_first_fixer_order`.
 - Neutralization: `    if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL`
   -> `    if (False and finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL`
-  (real-consequence branch only; the guidance branch is untouched; line 4227 re-read).
+  (real-consequence branch only; the guidance branch is untouched; line 4439 re-read).
 - Raw red:
 
 ```
@@ -355,7 +362,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t5_undispose
 ```
 
 - Axis check: the batch holds only the blocker; the two real-consequence Minors are missing from it.
-- Restore: inverse edit. Restore receipt (line 4227 re-read):
+- Restore: inverse edit. Restore receipt (line 4439 re-read):
   `    if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL`.
 - Raw green:
 
@@ -364,9 +371,276 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t5_undispose
 1 passed in 1.67s
 ```
 
+## 7. Product-choice exclusion in the real-consequence lift
+
+Runs 7-11 use the pinned runner: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-wo
+-m pytest '<exact node id>' -q -n 0 -p no:cacheprovider` from the worktree root. Pytest-internal paths
+(`/private/tmp/claude-501/pytest-of-zwrose/...`) are session scratch; nothing is redacted. Before the
+first neutralization `round_driver.py` was copied to session scratch; each restore was checked with
+`cmp` against that copy (`IDENTICAL`).
+
+- Guarded element and axis: `_lift_marker_for`, `round_driver.py:4440` (`and not finding.get("tradeoff")`
+  in the real-consequence branch). Axis: an undecided real-consequence Minor product choice
+  (`tradeoff: true`) never rides a fix batch autonomously.
+- Detector: `test_an_undecided_product_choice_is_not_lifted_beside_a_blocker`.
+- Neutralization: `            and not finding.get("tradeoff")` -> `            and True`.
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_an_undecided_product_choice_is_not_lifted_beside_a_blocker ________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1653/test_an_undecided_product_choi0')
+keep_severity = None
+
+    def test_an_undecided_product_choice_is_not_lifted_beside_a_blocker(tmp_path, keep_severity):
+        """axis: I1 — an undecided real-consequence Minor product choice never rides the blocker's batch."""
+        session_dir, _g, _h = _session(
+            tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)], name="c7-choice")
+        state = _state(session_dir)
+>       assert [row["title"] for row in state["_fixBatch"]] == ["blocker B"]
+E       AssertionError: assert ['blocker B', 'minor choice'] == ['blocker B']
+E         
+E         Left contains one more item: 'minor choice'
+E         Use -v to get more diff
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1868-e28e3164b3fd6e36/plugins/superheroes/lib/tests/test_ruling_window_c7.py:679: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_an_undecided_product_choice_is_not_lifted_beside_a_blocker
+1 failed in 5.78s
+```
+
+- Axis check: the batch holds the blocker and the undecided product choice; the choice was expected out.
+- Restore: inverse edit `            and True` -> `            and not finding.get("tradeoff")`. Restore
+  receipt: lines 4439-4441 re-read (`if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) ==
+  review_findings_schema.REAL` / `and not finding.get("tradeoff")` / `and ruling != "out-of-scope" and
+  disposition != "out-of-scope"`); `cmp` against the pre-neutralization copy: `IDENTICAL`.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 5.65s
+```
+
+## 8. Owner-judgment gate holds only blocking findings
+
+- Guarded element and axis: `_after_findings_settled`, `round_driver.py:4332`
+  (`_route_judgment_blockers(state, blocking)`). Axis: the rows put to the owner gate are the blocking
+  rows only; a below-blocking product choice never reaches `_judgmentFindings`. The same call shape at
+  the `_settle_delta` gate entry (`round_driver.py:5766`) is listed as unproven: no detector this
+  order adds drives a below-blocking tradeoff through the delta settle.
+- Detector: `test_t_i_an_undecided_product_choice_is_left_for_the_owner[mechanical]`.
+- Neutralization: `        if _route_judgment_blockers(state, blocking):` -> `        if
+  _route_judgment_blockers(state, blocking + [f for f in (state.get("findings") or []) if
+  f.get("tradeoff") and f not in blocking]):` (the live below-blocking product choice joins the rows
+  offered to the gate).
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_t_i_an_undecided_product_choice_is_left_for_the_owner[mechanical] ____
+
+blocker_is_tradeoff = False
+
+    @pytest.mark.parametrize("blocker_is_tradeoff", [False, True], ids=["mechanical", "gate-blocker"])
+    def test_t_i_an_undecided_product_choice_is_left_for_the_owner(blocker_is_tradeoff):
+        """axis: I1/I2 — an undecided below-blocking product choice never enters the owner gate or a fix
+        batch, and the end-of-loop settle leaves it for the owner."""
+        state = _unit_round([_unit_finding("B", 1, "Important", tradeoff=blocker_is_tradeoff),
+                             _unit_finding("M", 2, "Minor", tradeoff=True)])
+        if blocker_is_tradeoff:
+            assert state["step"] == RD.P_JUDGMENT
+            assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["B"]
+            assert state["_judgmentMechanical"] == []
+            RD._fold_judgment(state, state["config"], {"dispositions": [
+                {"id": _unit_gate_ids(state)[0], "disposition": "fix-as-suggested"}]})
+>       assert state["step"] == P_FIXER
+E       AssertionError: assert 'present-judgment' == 'dispatch-fixer'
+E         
+E         - dispatch-fixer
+E         + present-judgment
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1868-e28e3164b3fd6e36/plugins/superheroes/lib/tests/test_ruling_window_c7.py:759: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t_i_an_undecided_product_choice_is_left_for_the_owner[mechanical]
+1 failed in 0.62s
+```
+
+- Axis check: the round with a mechanical blocker and a below-blocking choice parked at the owner gate
+  (`present-judgment`) instead of the fixer step.
+- Restore: inverse edit back to `        if _route_judgment_blockers(state, blocking):`. Restore receipt:
+  lines 4331-4333 re-read (`    if blocking:` / `        if _route_judgment_blockers(state, blocking):`
+  / `            return`); `cmp` against the pre-neutralization copy: `IDENTICAL`.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 0.19s
+```
+
+## 9. Owner-named lift when no offered row survives
+
+- Guarded element and axis: `_queue_fix_batch`, `round_driver.py:4553`
+  (`if lift and reset_accumulator and batch_index == 0:`, whose call passes `owner_named_only=not
+  filtered`). Axis: with every offered row excluded or none offered (the gate's only blocker skipped),
+  a finding an owner decision names still gets a fixer leg.
+- Detector: `test_t_ii_c_a_guided_choice_survives_skipping_the_only_gate_blocker`.
+- Neutralization: `    if lift and reset_accumulator and batch_index == 0:` -> `    if lift and
+  reset_accumulator and batch_index == 0 and filtered:` (the lift only joins a non-empty batch).
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_t_ii_c_a_guided_choice_survives_skipping_the_only_gate_blocker ______
+
+    def test_t_ii_c_a_guided_choice_survives_skipping_the_only_gate_blocker():
+        """axis: I1(b)/I3 — with the gate's only blocker skipped, a guided product choice still reaches
+        the fixer through the chokepoint."""
+        state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
+                             _unit_finding("M", 2, "Minor", tradeoff=True)])
+        assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
+        _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="apply it"))
+        RD._fold_judgment(state, state["config"], {"dispositions": [
+            {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+>       assert state["step"] == P_FIXER
+E       AssertionError: assert 'terminal' == 'dispatch-fixer'
+E         
+E         - dispatch-fixer
+E         + terminal
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1868-e28e3164b3fd6e36/plugins/superheroes/lib/tests/test_ruling_window_c7.py:777: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t_ii_c_a_guided_choice_survives_skipping_the_only_gate_blocker
+1 failed in 0.20s
+```
+
+- Axis check: the round settled at the terminal with the guided choice never sent to a fixer.
+- Restore: inverse edit back to `    if lift and reset_accumulator and batch_index == 0:`. Restore receipt:
+  lines 4553-4554 re-read (`    if lift and reset_accumulator and batch_index == 0:` / `        filtered =
+  _lift_into_fix_batch(state, filtered, owner_named_only=not filtered)`); `cmp` against the
+  pre-neutralization copy: `IDENTICAL`.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 0.17s
+```
+
+## 10. Autonomous lifts alone never start a leg (reconciled batch)
+
+- Guarded element and axis: `_queue_fix_batch`, `round_driver.py:4551`
+  (`if batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):`). Axis: a batch left holding
+  only autonomous real-consequence lifts (their blocker ruled out) settles instead of dispatching a
+  fixer.
+- Detector: `test_an_autonomous_lifted_minor_alone_still_converges`.
+- Neutralization: `    if batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):` -> `    if
+  False and batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):`.
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_an_autonomous_lifted_minor_alone_still_converges _____________
+
+    def test_an_autonomous_lifted_minor_alone_still_converges():
+        state, row = _lifted_minor_state()
+>       assert RD._queue_fix_batch(state, state["config"], [row]) == "excluded"
+E       AssertionError: assert 'queued' == 'excluded'
+E         
+E         - excluded
+E         + queued
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1868-e28e3164b3fd6e36/plugins/superheroes/lib/tests/test_ruling_window_c7.py:1093: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_an_autonomous_lifted_minor_alone_still_converges
+1 failed in 0.18s
+```
+
+- Axis check: the lone autonomous lift was dispatched (`queued`) where the exclusion-emptied settle
+  (`excluded`) was expected.
+- Restore: inverse edit back to `    if batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):`.
+  Restore receipt: lines 4551-4552 re-read (that `if` / `        filtered = []`); `cmp` against the
+  pre-neutralization copy: `IDENTICAL`.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 0.17s
+```
+
+## 11. Autonomous lifts never start a leg on an empty offered set
+
+- Guarded element and axis: `_lift_into_fix_batch`, `round_driver.py:4517` (`if owner_named_only:`).
+  Axis: when no row is offered, only an owner-named finding is lifted; an undisposed real-consequence
+  finding alone never makes a batch, and the call reports `empty` with nothing recorded.
+- Detector: `test_edge7_a_round_with_no_offered_rows_lifts_nothing`.
+- Neutralization: `    if owner_named_only:` -> `    if False and owner_named_only:`.
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_edge7_a_round_with_no_offered_rows_lifts_nothing _____________
+
+tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1661/test_edge7_a_round_with_no_off0')
+keep_severity = None
+
+    def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severity):
+        """axis: an autonomous lift never starts a fixer leg. A Minor-only round converges with no fixer
+        leg, and an empty offered set lifts nothing (and records no exclusion) though real-consequence
+        findings are live."""
+        minor_only = tmp_path / "minor-only"
+        minor_only.mkdir()
+        session_dir, gitdir, head_path = _bootstrap(minor_only, name="c7-e7")
+        folded = _TRI._drive_to_terminal(
+            session_dir, gitdir, [_finding("only minor", 1, "Minor", "real")], head_path)
+        assert P_FIXER not in folded, folded
+        final = _state(session_dir)
+        assert final.get("terminal") == "converged"
+        assert "liftedIntoFixBatch" not in final["rounds"]["1"]
+    
+        session_dir, _g, _h = _minors_session(tmp_path, "c7-e7-direct")
+        state = _state(session_dir)
+        assert any(f.get("consequenceKind") == "real" for f in state["findings"])
+        state["pending"] = None
+        state["rounds"]["1"].pop("liftedIntoFixBatch", None)
+        before = (state.get("_fixBatch"), state.get("_fixQueue"), state.get("step"))
+>       assert RD._queue_fix_batch(state, state["config"], []) == "empty"
+E       AssertionError: assert 'queued' == 'empty'
+E         
+E         - empty
+E         + queued
+
+/Users/zwrose/.superheroes-worktrees/superheroes/issue-1868-e28e3164b3fd6e36/plugins/superheroes/lib/tests/test_ruling_window_c7.py:644: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge7_a_round_with_no_offered_rows_lifts_nothing
+1 failed in 10.56s
+```
+
+- Axis check: with nothing offered and no owner decision, the live real-consequence Minors made a batch
+  (`queued`); the first (Minor-only converges) half of the test passed before this point.
+- Restore: inverse edit back to `    if owner_named_only:`. Restore receipt: lines 4517-4519 re-read
+  (`    if owner_named_only:` / `        effective = _live_ruling_by_key(state)` / `        lifted = [row for
+  row in lifted if _owner_named_row(row, effective)]`); `cmp` against the pre-neutralization copy:
+  `IDENTICAL`.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 12.11s
+```
+
 ## Final restore receipt
 
 After the last restore, `git diff -- plugins/superheroes/lib/round_driver.py` shows only the
 repo-root-resolver fix in `_withdraw_restore_check` (the `rev-parse --show-toplevel` call replaced by
 `store_core.repo_root(root)`, with `RepoRootUnavailable` returned as `withdraw-git-unavailable`); no
 neutralization remains.
+
+Elements 7-11 were each restored by the inverse edit and checked against a pre-neutralization copy of
+`round_driver.py` with `cmp` (`IDENTICAL` every time); the file's remaining diff against the branch head
+is the order's own change (the lift no longer reaches the owner gate, the chokepoint lifts owner-named
+rows), not a neutralization.

@@ -6,6 +6,7 @@ Holds the decision kinds, the driver's verdict names, the verdict-to-terminal-st
 imports nothing from this plugin, so the round driver and the review record may both import it.
 """
 LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
+FIXER_ATTEMPT_WITHDRAWN = "fixer-attempt-withdrawn"
 
 DECISION_KINDS = (
     "audit-echo-mismatch",
@@ -22,7 +23,7 @@ DECISION_KINDS = (
     "fix-batch-excluded",
     "fix-batch-lifted",
     "fix-batch-split",
-    "fixer-attempt-withdrawn",
+    FIXER_ATTEMPT_WITHDRAWN,
     "judgment-fail-closed",
     "judgment-gate",
     "judgment-skip",
