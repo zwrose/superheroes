@@ -377,8 +377,10 @@ The balance it aims for is code quality without reviewing forever. (source: Cano
 **UFR-5.** If a review session is damaged partway, then the plugin shall repair it and carry on, and shall not abandon it. (source: Canon 2026-10-10-d6064e1d-11)
   - *Acceptance:* Given a session damaged after its second round, when the review resumes, then every finding and outcome from the first two rounds is still in the record. (source: Canon 2026-10-10-d6064e1d-11)
 
-**UFR-6.** If the PR's head commit moves after its sheet was published, then the plugin shall replace the sheet with an unsigned one for the new commit. (source: Canon 2026-10-09-d6064e1d-7)
-  - *Acceptance:* Given answers saved on the old sheet, when the new sheet opens, then it shows "This PR changed", keeps the answers to unchanged items, and starts the merge verdict over. (source: board · 3 Big PR sheet)
+**UFR-6.** If the PR's head commit moves after its sheet was published, then the plugin shall replace the sheet with an unsigned one for the new commit when the move carries a material consequence, and otherwise shall carry the sheet's answers and merge verdict forward to the new commit with a dated note. (source: Canon 2026-10-09-d6064e1d-7; Canon 2026-10-13-dcc2b5e5-2)
+  - *Acceptance:* Given answers saved on the old sheet and a head move with a material consequence, when the new sheet opens, then it shows "This PR changed", keeps the answers to unchanged items, and starts the merge verdict over. (source: board · 3 Big PR sheet)
+  - *Acceptance:* Given a saved "Merge" verdict and a head move with no material consequence (a base update with no conflict, a mechanical bring-current of a stack, or a craft fix), when the sheet for the new commit opens, then it shows a dated note saying what moved and why it is not material, and the verdict still stands. (source: Canon 2026-10-13-dcc2b5e5-2)
+  - *Acceptance (rule):* Whether a head move is material is judged by the material-consequence line; doubt counts as material. A merge word given for a batch of PRs stays good through routine updates. (source: Canon 2026-10-13-dcc2b5e5-2; Canon 2026-10-08-039e3d39-1; Canon 2026-10-08-039e3d39-3)
 
 **UFR-7.** If the chat answer and the index answer to one batch-1 question disagree, then the advisor shall ask the owner which one stands. (source: Canon 2026-10-09-d6064e1d-6)
   - *Acceptance:* Given "Keep them visible" on the index and "hide them" in the chat, when the advisor reads both, then the advisor acts on neither until the owner answers. (source: board · 1 The index)
@@ -435,7 +437,7 @@ The approved requirements and shipped rules below change under this spec. (sourc
 Scheduling the amendments to the approved specs is the advisor's. (source: Canon 2026-10-08-d6064e1d-8)
 
 - **The certification contract spec** (work item `part-b-spec-b-contract-re-derivation`): FR-D1 to FR-D9 and FR-M2. This spec retires the certificate those requirements define. FR-5 says which guard each of its four escape classes keeps. (source: vet round 1) The way back in its FR-D9, the prior plugin version kept runnable for one window after the deletion, is not kept. (source: Canon 2026-10-10-d6064e1d-15)
-- **The forward doctrine spec** (work item `part-b-spec-a-forward-doctrine`): FR-A4 and FR-A10, because the misses log and the gardening pass gain review escapes; FR-B3, because reviewer seats join the keep-or-retire list; FR-B4, whose review half this spec designs; FR-E1 item 10, because the threat-model item becomes Risk and trust; FR-F1, because the merge word becomes the saved "Merge" verdict plus "done", and a head move starts the verdict over; and FR-F5 and FR-F8, which describe certification. (source: vet round 1)
+- **The forward doctrine spec** (work item `part-b-spec-a-forward-doctrine`): FR-A4 and FR-A10, because the misses log and the gardening pass gain review escapes; FR-B3, because reviewer seats join the keep-or-retire list; FR-B4, whose review half this spec designs; FR-E1 item 10, because the threat-model item becomes Risk and trust; FR-F1, because the merge word becomes the saved "Merge" verdict plus "done", and a head move with a material consequence starts the verdict over while one without carries it forward (UFR-6); and FR-F5 and FR-F8, which describe certification. (source: vet round 1)
 - **The review surface spec** (`the-review-surface-d59417`): FR-3 and FR-6, because PR sheets carry their own answers. (source: vet round 1) Its FR-6 is amended to list the four accepted answer patterns, as FR-55 states them. What discovery's sheets offer stays the same. (source: Canon 2026-10-10-d6064e1d-17)
 - **The verification strategy spec** (`verification-strategy-for-the-superheroes-repo-c629cd`): FR-18 and its rule on which stage checks what, because the test lens becomes the test role. (source: vet round 1)
 - **The converge-faster spec** (`make-the-shared-review-and-fix-loop-converge-faste-4c45d8`): FR-8, FR-11 and its Out of scope. FR-34 and FR-35 replace its full confirmation round before certifying. (source: vet round 1)
@@ -477,7 +479,7 @@ Scheduling the amendments to the approved specs is the advisor's. (source: Canon
 
 ## Amendments
 
-_No amendments since the last full approval._
+- **2026-10-13 (owner-stamped, substantive):** a merge verdict survives a head move that carries no material consequence; only a material change republishes the sheet unsigned. The owner's words, in the advisor's chat on 2026-10-13: "the only time a re-sign should be needed is a material change to the PR" and "merge trains are impossible to authorize as a batch with this logic". Canon 2026-10-13-dcc2b5e5-2 replaces the head-move clause of Canon 2026-10-09-d6064e1d-7. The new child C12 (#1856) builds it. Sections touched: When things go wrong (UFR-6), What this spec changes elsewhere (the forward doctrine spec's FR-F1 line), Amendments; the register (R8) and the coverage map (UFR-6 rows).
 
 ## Coverage
 
