@@ -12,7 +12,7 @@ DEFAULT_PANEL_DIMENSIONS = (
     "architecture-reviewer",
     "code-reviewer",
     "security-reviewer",
-    "test-reviewer",
+    "test-role",
     "premortem-reviewer",
 )
 

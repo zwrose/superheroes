@@ -13,6 +13,8 @@ _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
 _HCHANGELOG = re.compile(r"^## \[?(\d+\.\d+\.\d+)\]?")
 _SKIP = frozenset({"__pycache__", ".in_use", ".orphaned_at"})
+# The three seats this planner serves; charter_detect gains charters (discovery) it does not adopt.
+ADOPT_ROLES = ("showrunner", "workhorse", "detective")
 
 def _vt(v):
     m = _VER.match(v)
@@ -198,7 +200,7 @@ def _plan(role, cache, from_v, to_v):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     p = ap.add_subparsers(dest="cmd", required=True).add_parser("plan")
-    p.add_argument("--role", required=True, choices=list(charter_detect.CHARTER_NAMES))
+    p.add_argument("--role", required=True, choices=list(ADOPT_ROLES))
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--from-root")
     g.add_argument("--from", dest="from_ver")

@@ -29,7 +29,7 @@ import review_round_policy
 
 DIMS = ["code-reviewer", "security-reviewer"]
 FULL_ROSTER = ["architecture-reviewer", "code-reviewer", "security-reviewer",
-               "test-reviewer", "premortem-reviewer"]
+               "test-role", "premortem-reviewer"]
 
 
 # ── fixture builders (through the real review_memory write path) ──
