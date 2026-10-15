@@ -65,7 +65,7 @@ grep-before-flag); emit at **Low** confidence if you cannot confirm the mirror.
 
 - A genuinely **new** requirement the owner is defining (not an echo of an existing fact).
 - Wording/style preferences that don't affect grounding.
-- Missing acceptance criteria (`test-reviewer`/`code-reviewer`), missing unhappy paths
+- Missing acceptance criteria (`test-role`/`code-reviewer`), missing unhappy paths
   (`premortem-reviewer`), scope coherence (`architecture-reviewer`), or access rules
   (`security-reviewer`) — those are other lenses' findings.
 - Leaked technical *how* — that is the Clarity lens (`code-reviewer`), not Grounding.

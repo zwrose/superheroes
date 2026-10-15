@@ -1,0 +1,65 @@
+// The one parser of the checkpoint block a session ends its reply with
+// (`skills/checkpoint/SKILL.md` step 4). Pure: no `claude-code` import.
+
+/** The one definition of the checkpoint fence's info string; tests import it, and the skill cites this file. */
+export const CHECKPOINT_INFO = 'superheroes-checkpoint'
+
+// CommonMark: a fence is three or more backticks (info string without a backtick)
+// or three or more tildes; it closes only on the same character, at least as long.
+const OPEN = /^ {0,3}(?:(`{3,})([^`]*)|(~{3,})(.*))$/
+const CLOSE_TICKS = /^ {0,3}(`{3,})[ \t]*$/
+const CLOSE_TILDES = /^ {0,3}(~{3,})[ \t]*$/
+
+/**
+ * The body of the last fenced block whose info string is exactly
+ * `superheroes-checkpoint`, without its fences and without the one trailing
+ * newline; null when there is none, the last one is never closed, its body is
+ * empty, or any non-blank line follows its closing fence (the block must end the reply). The checkpoint fence is three or more backticks and closes on a
+ * line of at least as many; any other fence (backtick or tilde) is walked past
+ * whole, so a checkpoint fence quoted inside it is not a block.
+ */
+export function extractCheckpointBlock(text: string): string | null {
+  const lines = text.split(/\r?\n/)
+  let last: { body: string[]; isClosed: boolean; end: number } | null = null
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const open = OPEN.exec(lines[i] ?? '')
+    if (open === null) {
+      continue
+    }
+
+    const isTilde = open[3] !== undefined
+    const width = (open[1] ?? open[3] ?? '').length
+    const info = (isTilde ? open[4] : open[2]) ?? ''
+    const closer = isTilde ? CLOSE_TILDES : CLOSE_TICKS
+    const body: string[] = []
+    let isClosed = false
+
+    for (i += 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? ''
+      const close = closer.exec(line)
+      if (close !== null && (close[1] ?? '').length >= width) {
+        isClosed = true
+        break
+      }
+      body.push(line)
+    }
+
+    if (!isTilde && info.trim() === CHECKPOINT_INFO) {
+      last = { body, isClosed, end: i }
+    }
+  }
+
+  if (last === null || !last.isClosed) {
+    return null
+  }
+
+  // The skill's contract: the block is the LAST thing in the reply.
+  if (lines.slice(last.end + 1).some((line) => line.trim() !== '')) {
+    return null
+  }
+
+  const body = last.body.join('\n')
+
+  return body.trim() === '' ? null : body
+}

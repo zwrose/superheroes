@@ -1038,3 +1038,641 @@ No State line calls any of them open. Result: verified.
  ]
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C6 size split into C6 and C6b (advisor craft call at the 600 bar): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv7",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 7
+ },
+ "override": "seven consumer lines gain C6b but only R8's and R11's first paragraphs change; light weight is enough for a re-allocation. Children counts C6, C6b and C7 (C7 now sits on C6b); the other child copies change only their layer count.",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "dod-adequacy"
+  },
+  {
+   "finding": "code-002",
+   "lens": "collisions"
+  },
+  {
+   "finding": "code-003",
+   "lens": "collisions"
+  }
+ ],
+ "invocation": "inv7",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  },
+  {
+   "part": "spec",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv7",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C6",
+   "status": "reviewed"
+  },
+  {
+   "part": "C6b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "C6b live-run DoD grades FR-21's second acceptance (builder note public on the fixture issue in a public repository); #1777 synced; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "R11's TRANSITION clause names the split layers carrying their parent's note (C4b, C5b, C6b); epic quote equal; round 2 clean",
+   "finding": "code-002",
+   "outcome": "verified"
+  },
+  {
+   "disposition": "package-fix",
+   "evidence": "epic closure evidence cites C6b for the ready-PR run through the pass; round 2 clean",
+   "finding": "code-003",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv7",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C6",
+   "result": "pass"
+  },
+  {
+   "child": "C6b",
+   "result": "pass"
+  },
+  {
+   "child": "C7",
+   "result": "pass"
+  }
+ ]
+}
+```
+
+**Owed: package read for the C7 size split (advisor, 2026-10-12; pending).** Cloud C7 (#1748) split at the 600 bar into C7 (answering a cloud builder) and C7b (recovering a cloud builder, #1784), on the docs PR that adds `children/C7b.md`. A touched-parts re-read is owed before the epic's body is re-injected with the new R8 and R11 quotes, in the shape of inv7: cause "C7 size split into C7 and C7b (advisor craft call at the 600 bar): touched-parts re-read"; parts C7, C7b and C8 (C8 now sits on C7b; the other child copies change only their layer count), the register (seven consumer lines gain C7b; R8's and R11's first paragraphs change) and the coverage map (six rows move from C7 to C7b). The advisor opens the invocation (inv8) with `package_read_audit.py open` when it runs the read and records its rounds and verification here; until then no inv8 record is written, so the trail stays conforming.
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C7 size split into C7 and C7b (advisor craft call at the 600 bar): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv8",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 7
+ },
+ "override": "seven consumer lines gain C7b, R8's order and R11's allocations change, six coverage rows move; C8 is touched only by renumbering; light weight is enough for a re-allocation",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "collisions"
+  }
+ ],
+ "invocation": "inv8",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C8",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv8",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "R11's TRANSITION clause now gives C7 and C7b each their own note (C7 builder notes, C7b cloud recovery); epic quote equal; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv8",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C7",
+   "result": "pass"
+  },
+  {
+   "child": "C7b",
+   "result": "pass"
+  },
+  {
+   "child": "C8",
+   "result": "pass"
+  }
+ ]
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "C7 second size split into C7, C7r and C7p (advisor craft call at the 450 stop line): touched-parts re-read",
+ "ceiling": 2,
+ "invocation": "inv9",
+ "kind": "invocation",
+ "measurables": {
+  "children": 5,
+  "registerEntries": 9
+ },
+ "override": "a re-allocation of already-read content across C7, C7r, C7p, C7b and C8, with no new requirement and no new register sentence beyond R8's order and R11's allocations; four consumer drops for C7 need checking; light weight with a 2-round ceiling is enough",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "collisions"
+  }
+ ],
+ "invocation": "inv9",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7r",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7p",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7b",
+   "status": "reviewed"
+  },
+  {
+   "part": "C8",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv9",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C7p",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "R11 gives C7p a section of orchestration.md for the lapsed-pass parked notice and send-back; epic quote equal; C7p.md and #1787 match; round 2 clean. Disclosed: round 1's seat run never folded a terminal record (its supervisor stalled after the engine wrote native-result-1.json); round 1's finding was read from that native result, and the control probe engaged",
+   "finding": "code-001",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv9",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C7",
+   "result": "pass"
+  },
+  {
+   "child": "C7r",
+   "result": "pass"
+  },
+  {
+   "child": "C7p",
+   "result": "pass"
+  },
+  {
+   "child": "C7b",
+   "result": "pass"
+  },
+  {
+   "child": "C8",
+   "result": "pass"
+  }
+ ]
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "vet 460 on cloud C7 PR #1789: R11 allocated orchestration.md to C1, C7p and C7b, but C7's builder-note sentences in the cloud-lane paragraph are C7's doctrine; R11 now allocates them",
+ "ceiling": 1,
+ "invocation": "inv10",
+ "kind": "invocation",
+ "measurables": {
+  "children": 1,
+  "registerEntries": 1
+ },
+ "override": "one clause added to R11's orchestration.md allocation, mirrored in the epic quote; nothing else moves",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv10",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C7",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [],
+ "invocation": "inv10",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C7",
+   "result": "pass"
+  }
+ ]
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "cause": "owner ruling 2026-10-12 (walk item 41 = a, collector #695 item 107): a new layer C7s, stack layers build in the cloud, between C7b and C8",
+ "ceiling": 2,
+ "invocation": "inv11",
+ "kind": "invocation",
+ "measurables": {
+  "children": 3,
+  "registerEntries": 5
+ },
+ "override": "one new layer with no spec criterion of its own (a declared note on FR-12), consumer lines on R5, R6, R8, R9 and R11, R8's order and narrow R11 clauses; C7b and C8 renumbered",
+ "seats": [
+  "{\"vendor\":\"codex\",\"model\":\"gpt-6.1-sol\",\"role\":\"reviewer-deep\"}"
+ ],
+ "weight": "light"
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [
+  {
+   "finding": "code-001",
+   "lens": "dod-adequacy"
+  }
+ ],
+ "invocation": "inv11",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "C7s",
+   "status": "reviewed"
+  },
+  {
+   "part": "C8",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 1
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [],
+ "findings": [],
+ "invocation": "inv11",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": true,
+ "parts": [
+  {
+   "part": "C7s",
+   "status": "reviewed"
+  },
+  {
+   "part": "C8",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7b",
+   "status": "reviewed"
+  },
+  {
+   "part": "register",
+   "status": "reviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "findings": [
+  {
+   "disposition": "package-fix",
+   "evidence": "C7s proves the stack route on a three-issue fixture stack (lower pair linked before the upper launches with a stack premise); C7s.md, #1791 body and coverage map synced; round 2 clean",
+   "finding": "code-001",
+   "outcome": "verified"
+  }
+ ],
+ "invocation": "inv11",
+ "kind": "verification",
+ "syncChecks": [
+  {
+   "child": "C7s",
+   "result": "pass"
+  },
+  {
+   "child": "C7b",
+   "result": "pass"
+  },
+  {
+   "child": "C8",
+   "result": "pass"
+  }
+ ]
+}
+```

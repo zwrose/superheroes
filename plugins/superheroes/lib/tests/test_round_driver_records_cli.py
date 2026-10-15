@@ -249,7 +249,7 @@ def _records_panel_submit_setup(tmp_path):
     records.write_bytes(before_bytes)
     session_dir = str(tmp_path / "session")
     os.makedirs(session_dir, exist_ok=True)
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=str(records))
+    cfg = _cfg(dimensions=["test-role"], recordsPath=str(records))
     respond = _responder(round1_findings=[_A_FINDING])
     n = RD.cmd_next(session_dir, cfg)
     assert n["ok"], n
@@ -332,8 +332,8 @@ def test_cli_and_run_loop_records_files_are_byte_identical(tmp_path):
   empty_bytes = RM.records_bytes([])
   records_cli.write_bytes(empty_bytes)
   records_loop.write_bytes(empty_bytes)
-  cfg_cli = _cfg(dimensions=["test-reviewer"], recordsPath=str(records_cli))
-  cfg_loop = _cfg(dimensions=["test-reviewer"], recordsPath=str(records_loop))
+  cfg_cli = _cfg(dimensions=["test-role"], recordsPath=str(records_cli))
+  cfg_loop = _cfg(dimensions=["test-role"], recordsPath=str(records_loop))
   respond = _responder(round1_findings=[finding])
   session_dir = str(tmp_path / "cli-session")
   os.makedirs(session_dir, exist_ok=True)
@@ -361,8 +361,8 @@ def test_cli_and_library_bytes_identical_same_round_ledger_dupes(tmp_path, monke
     monkeypatch.setattr(
         RD.review_memory, "load_records_state",
         lambda path, dims: {"ok": True, "records": []})
-    cfg_cli = _cfg(dimensions=["test-reviewer"], recordsPath=str(records_cli))
-    cfg_loop = _cfg(dimensions=["test-reviewer"], recordsPath=str(records_loop))
+    cfg_cli = _cfg(dimensions=["test-role"], recordsPath=str(records_cli))
+    cfg_loop = _cfg(dimensions=["test-role"], recordsPath=str(records_loop))
     state_cli = RD.new_state(dict(cfg_cli))
     state_cli["_records"] = [first, second]
     state_cli["rounds"] = {"1": {}}
@@ -381,12 +381,12 @@ def test_cmd_next_locked_refuses_records_path_race(tmp_path, monkeypatch):
     os.makedirs(session_dir)
     records = str(tmp_path / "records.json")
     open(records, "wb").write(RM.records_bytes([]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=records)
+    cfg = _cfg(dimensions=["test-role"], recordsPath=records)
     real_lock = RD.round_records.session_lock
 
     def lock_with_race(sd):
         if sd == session_dir and not os.path.exists(os.path.join(sd, RD.STATE_FILE)):
-            RD.save_state(sd, RD.new_state(_cfg(dimensions=["test-reviewer"])))
+            RD.save_state(sd, RD.new_state(_cfg(dimensions=["test-role"])))
         return real_lock(sd)
 
     monkeypatch.setattr(RD.round_records, "session_lock", lock_with_race)
@@ -402,7 +402,7 @@ def test_cmd_next_locked_idempotent_records_path_reissue_ok(tmp_path):
     os.makedirs(session_dir)
     records = str(tmp_path / "records.json")
     open(records, "wb").write(RM.records_bytes([]))
-    cfg = _cfg(dimensions=["test-reviewer"], recordsPath=records)
+    cfg = _cfg(dimensions=["test-role"], recordsPath=records)
     out0 = RD.cmd_next(session_dir, cfg)
     assert out0["ok"], out0
     out1 = RD.cmd_next(session_dir, cfg)
