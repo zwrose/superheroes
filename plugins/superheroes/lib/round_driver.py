@@ -1718,7 +1718,7 @@ class _LineageCarry:
             if rounds.get(key) != self.round_no or key not in self.raised:
                 continue
             root = _lineage_root(lineage, key)
-            group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
+            group = {root} | {k for k in lineage if k in rounds and _lineage_root(lineage, k) == root}
             location = self.location_of(self.raised[key])
             if (location is not None and self.at_location.get(location) == 1
                     and not ((group - {key}) & self.compiled_keys)):
@@ -2174,8 +2174,8 @@ def _record_merged_into(state, key, into_key):
         lineage[key] = into_key
         if _lineage_root(lineage, key) == key:
             lineage.pop(into_key)
-            if prior and (r := _lineage_root(lineage, prior)) != into_key:
-                lineage[r] = into_key
+        if prior and (r := _lineage_root(lineage, prior)) != _lineage_root(lineage, into_key):
+            lineage[r] = into_key
 
 
 # ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
