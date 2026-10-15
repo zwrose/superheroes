@@ -5606,6 +5606,17 @@ def _fix_hunks_over_line(audit_targets_map, file, line):
             if isinstance(hunk, dict) and delta_surface._overlaps(hunk, ranges)]
 
 
+def _fixer_delta_lines(fix_hunks, reviewed_hunks):
+    """The changed (``+``/``-``) lines of ``fix_hunks`` that no reviewed hunk at the same location
+    carries: what the fixer changed, apart from the PR's own changes already present when the
+    finding was reviewed."""
+    def changed(hunks):
+        return [ln for h in hunks if isinstance(h, dict) and isinstance(h.get("text"), str)
+                for ln in h["text"].splitlines()[1:] if ln[:1] in ("+", "-")]
+    baseline = set(changed(reviewed_hunks))
+    return [ln for ln in changed(fix_hunks) if ln not in baseline]
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -5655,6 +5666,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
         # of the same location is the baseline that tells the fixer's change from the PR's.
         row["reviewedHunks"] = _fix_hunks_over_line(
             reviewed_hunks_map, f.get("file"), f.get("line"))
+        if reviewed_hunks_map is not None:
+            row["fixerDelta"] = _fixer_delta_lines(row["fixHunks"], row["reviewedHunks"])
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
             for carried in ("suggestion", "body", break_it.RUN_FIELD):

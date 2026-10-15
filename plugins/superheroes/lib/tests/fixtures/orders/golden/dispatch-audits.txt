@@ -19,7 +19,7 @@ the diff, the repo, and the target record.
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
 finding and whether any new issues were introduced. Cite quoted support for every conclusion.
 Each new issue you report is a finding in the base rubric's findings shape, `consequence` and `consequenceKind` included; a new issue with no stated consequence is not taken into the review.
-Compare the fix (`fixHunks` in the audit target; `reviewedHunks` is the same location before the fix, so a change present in both is the PR's own, not the fix's) with what the finding names: its title, body,
+Compare the fix (`fixHunks` in the audit target; `reviewedHunks` is the same location before the fix, so a change present in both is the PR's own, not the fix's; `fixerDelta` lists the changed lines the fix itself added or removed) with what the finding names: its title, body,
 suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does
 not name, say so in plain words in the result's field for an unnamed behaviour change; leave that
 field out when the fix changes nothing beyond what the finding names.

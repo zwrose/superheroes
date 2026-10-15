@@ -679,3 +679,16 @@ def test_the_submit_guard_refuses_a_non_string_unnamed_change(value):
     ok["results"][0]["unnamedChange"] = value
     fault = RD.audit_results_fault(ok, targets)
     assert fault and "unnamedChange" in fault
+
+
+def test_audit_targets_name_the_fixers_own_changed_lines_apart_from_the_prs():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near the top", 2)]
+    pr = "@@ -1,3 +1,4 @@\n ctx\n+    log_request(x)\n ctx"
+    fixed = "@@ -1,3 +1,5 @@\n ctx\n+    log_request(x)\n+    if x is None: return\n ctx"
+    head = {"f.py": [{"start": 1, "end": 5, "text": fixed}]}
+    reviewed = {"f.py": [{"start": 1, "end": 4, "text": pr}]}
+    (row,) = RD._audit_targets(state, state["config"], head, reviewed_hunks_map=reviewed)
+    assert row["fixerDelta"] == ["+    if x is None: return"]
+    (row,) = RD._audit_targets(state, state["config"], head)
+    assert "fixerDelta" not in row
