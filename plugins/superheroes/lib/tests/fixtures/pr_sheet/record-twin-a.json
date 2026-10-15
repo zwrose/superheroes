@@ -1,0 +1,15 @@
+{
+  "schema": "review-record/1",
+  "pr": 241,
+  "sessionId": "session-241",
+  "lane": {"value": "full", "reason": "Touches the saved-card flow.", "source": "PR lane call"},
+  "makers": [{"name": "builder", "family": "claude"}],
+  "finalCommit": {"sha": "4444444ddddddd4444444ddddddd4444444ddddd", "source": "GitHub PR"},
+  "ci": {"state": "green", "sha": "4444444ddddddd4444444ddddddd4444444ddddd", "source": "GitHub checks"},
+  "reviewers": [{"name": "code-reviewer", "family": "codex", "ran": "engine-record"}],
+  "findings": [
+    {"id": "T1", "outcome": "left-for-owner", "title": "Saved cards are kept after an account is closed", "reason": "Only the owner can set the retention.", "consequence": "A closed account's card details stay on file longer than the customer expects.", "findingKey": "cards/kept-after-close"}
+  ],
+  "missingReviews": [],
+  "rounds": {"count": 1, "stoppedAtCap": false, "source": "reported by the session"}
+}

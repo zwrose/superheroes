@@ -1,0 +1,11 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "stack",
+  "number": 240,
+  "title": "Saved cards",
+  "summary": "Customers can save a card and remove it again.",
+  "prs": [
+    {"number": 241, "title": "Save a card"},
+    {"number": 242, "title": "Remove a saved card"}
+  ]
+}

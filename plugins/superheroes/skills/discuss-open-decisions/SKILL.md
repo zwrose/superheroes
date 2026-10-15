@@ -16,7 +16,7 @@ This skill is deliberately not the only path. The showrunner advisor delivers ow
 
 | Form | Behavior |
 | --- | --- |
-| `/superheroes:discuss-open-decisions` | Read the owner-decisions contract from disk, sweep the three bounded sources, filter, deliver batch 1, pause for batch-1 rulings, deliver batch 2, execute what batch 1 unblocked alongside batch-2 rulings, then deliver batch 3 — the click list — and close with the recap. Three batches, always in that order. Works in a showrunner charter or any session where the owner explicitly invokes it. |
+| `/superheroes:discuss-open-decisions` | Read the owner-decisions contract from disk, sweep the three bounded sources, filter, deliver batch 1, pause for batch-1 rulings, deliver batch 2, execute what batch 1 unblocked alongside batch-2 rulings, then send batch 3 — one sheet per PR — and close with the recap. Three batches, always in that order. Works in a showrunner charter or any session where the owner explicitly invokes it. |
 
 ## Step 1 — Read the contract
 
@@ -52,9 +52,11 @@ Each batch-1 item has already been graded at the door and been appended per Step
 
 Deliver per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`; write the numbered batch-1 list to a durable artifact now — the collector entry where the item has one, otherwise a durable note on the issue or PR it belongs to — and resume from that record, not session memory.
 
+Batch 1 goes in the chat with a link to the index, whose top carries the same questions. The first-answer rule and the disagreement rule are `owner-decisions.md`'s, in `## Delivery mechanics`.
+
 ## Step 5 — Pause for rulings
 
-Stop here and wait; record each ruling to the durable artifact as it lands.
+Stop here and wait. Rulings may land in the chat or on the index; record each to the durable artifact as it lands, per the first-answer and disagreement rules in `## Delivery mechanics`.
 
 If batch 1 is empty after filtering, skip to Step 6 per `## Delivery mechanics`.
 
@@ -64,7 +66,7 @@ Partial batch-1 answers still block batch-1 execution for the items left unanswe
 
 ## Step 6 — Deliver batch 2
 
-Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them. Each batch-2 item is graded at the door and is appended per Step 3 immediately before it is added to the durable numbered list and presented — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`.
+Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them. Each batch-2 item is graded at the door and is appended per Step 3 immediately before it is added to the durable numbered list and presented — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`. No batch-2 item concerns one specific PR, per `## Delivery mechanics`.
 
 ## Step 7 — Execute what the rulings unblocked
 
@@ -74,11 +76,11 @@ Record each batch-2 ruling to the durable artifact as it lands, then execute wha
 
 When a batch-2 ruling closes or declines a collector-backed item, strike it from the collector per showrunner duty 4.
 
-## Step 8 — Deliver batch 3, the click list
+## Step 8 — Send batch 3, the PR sheets
 
-Only once every batch-2 ruling has landed **and** what those rulings unblocked has been executed in Step 7 — a batch-2 ruling routinely sends a vetted PR back, so a list assembled before that execution can name a PR that is no longer mergeable. That is why this batch is assembled last rather than earlier.
+Only once every batch-2 ruling has landed **and** what those rulings unblocked has been executed in Step 7 — a ruling routinely sends a vetted PR back, so a sheet built before that execution can describe a PR that is no longer mergeable. That is why this batch is built last rather than earlier.
 
-Deliver per `## Delivery mechanics`: the mergeable PRs in merge order, each with the notable acceptances it carries and its exact merge command. What this batch asks for is the owner's word — merge, release, publish, and force-push stay outside what you execute on a ruling, per `## What batch-1 execution may and may not do`.
+Send one sheet per PR still mergeable, after walking each sheet's stops, per `## Delivery mechanics`. Read a sheet's answers only after the owner says "done". What the answers commit, and the merge word, are `## Delivery mechanics`' and showrunner duty 6's; merge, release, publish, and force-push stay outside what you execute on a ruling, per `## What batch-1 execution may and may not do`.
 
 ## Step 9 — Close with the recap
 
@@ -95,7 +97,7 @@ Close the sitting with the "what I decided for you" recap per `## Delivery mecha
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every invocation. |
 | "I'll deliver batch 2 after execution finishes" | see `## Delivery mechanics` |
 | "The numbers live in the chat — I'll remember" | see Step 4 |
-| "I'll draft the click list up front so it's ready" | see `## Delivery mechanics` — a batch-2 ruling routinely sends a vetted PR back; batch 3 is assembled after Step 7, not before. |
-| "The owner can ask for the merge commands if they want them" | see `## Delivery mechanics` — batch 3 is delivered, not requested. |
+| "I'll build the PR sheets up front so they're ready" | see `## Delivery mechanics` — a batch-1 or batch-2 ruling routinely sends a PR back; batch 3 is built after Step 7. |
+| "The owner saved Merge, so I can merge" | see `## Delivery mechanics` and showrunner duty 6 — nothing on a sheet is acted on before "done", and the word is the saved "Merge" verdict plus "done". |
 | "I decided those myself, so there's nothing to report" | see `## Craft calls and owner calls` and `## Delivery mechanics` |
 | "I'll append follow-ups to the collector — the owner can review them later" | see `## The front door`, `## The venue ladder`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every owner call is appended **before** it is proposed in this session's delivery message and discussed now. |

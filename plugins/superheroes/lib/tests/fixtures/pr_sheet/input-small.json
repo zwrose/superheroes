@@ -1,0 +1,7 @@
+{
+  "schema": "pr-sheet-input/1",
+  "kind": "pr",
+  "number": 211,
+  "title": "Reword the receipt page",
+  "summary": "The receipt page says 'Thank you for your order' in place of 'Order complete'."
+}

@@ -30,7 +30,19 @@ rulings. See [Canon's contract](canon-contract.md).
 ### Decision walk
 
 A sitting in which the owner takes batched decisions, from the command or from a conversation.
-"Walk" alone means this.
+"Walk" alone, outside a PR sheet, means this.
+
+### Walk
+
+The part of a PR sheet where the owner tries the change, stop by stop, answering each stop with the
+[check pattern](#answer-pattern). A look-only stop is one the owner only looks at.
+
+### Answer pattern
+
+One of the four shapes a question on a sheet is answered in, as
+[the four answer patterns](../theme/review-template.md#the-four-answer-patterns) states: agree
+(accept or discuss), pick (one of the options), check (works, a problem or skip) and sign-off (the
+merge verdict). Adding a pattern takes the owner's ruling.
 
 ### Owner-vs-craft line
 
@@ -180,8 +192,12 @@ item at the front door.
 
 ### Misses log
 
-The section of the pinned registry comment where the advisor records three kinds of miss:
-declined-then-escaped, launched-then-regretted, and mis-tiered.
+The section of the pinned registry comment where the advisor records four kinds of miss:
+declined-then-escaped, launched-then-regretted, mis-tiered, and [review escapes](#review-escape).
+
+### Review escape
+
+A bug traced after merge to a PR that had a review. The act that traces it logs it in the [misses log](#misses-log): a vet of a fix, a detective diagnosis, a field report, or the owner's own report. The entry links that PR's [review record](#review-record) and makes one call, missed or seen and left. It counts only from the project's adoption day. The rule for logging it is in [the owner-decisions reference](../skills/showrunner/reference/owner-decisions.md#every-grading-keeps-its-scoring-and-the-misses-log).
 
 ### Collector
 
@@ -269,6 +285,23 @@ The values a project supplies through `configure` that the plugin's rules read.
 ### Configuration item
 
 One value within [project configuration](#project-configuration).
+
+### Risk and trust
+
+The [configuration item](#configuration-item) that holds the project's threat model ("what we
+defend against") and its [risk areas](#risk-area). It is set up with the owner in one sitting with
+the advisor.
+
+### Risk area
+
+A named part of the project where a mistake costs money, customer data, safety, access, or something
+that cannot be undone. It names the parts it covers, why it is risky, and how hard a mistake there is
+to undo. A folder it names covers every file beneath that folder. A change that touches one is matched
+from the area itself, without model judgment.
+
+### Calibration
+
+The settings a review runs on: the project's [Risk and trust](#risk-and-trust) item and its [standing rulings](#standing-ruling) about leftovers. It changes only on the owner's yes, whether the change tightens or loosens it.
 
 ### Ground-truth sources
 
@@ -380,3 +413,11 @@ The owner's word that the spec may go to the advisor's vet. It is not approval, 
 ### Review record
 
 The plain account of one PR's review, written when the review ends on any lane. It holds what was checked, which reviewers ran, every finding and what happened to it, CI on the final commit, and what is left. Each review session adds its own record comment to the PR and never edits an earlier one; each reviewer's raw output is kept in its own comment that the record links. The rule for writing it is in [the review record reference](../skills/review-code/reference/review-record.md).
+
+### Test role
+
+The review panel's test seat. For each changed test it asks whether the test would fail if the code were wrong, and it reports tests that check nothing, pass by chance, or bloat the change. It asks for no coverage outside the project's risk areas and raises no test-style findings. Its method is in [the test role's agent file](../agents/test-role.md).
+
+### Break-it test
+
+A test the [test role](#test-role) writes for a change that touches a risk area, to try to break the change on a named risky scenario. The review loop runs it in a throwaway copy of the change. A failing run becomes a finding, and the test stays with the change once that finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
