@@ -470,12 +470,12 @@ def test_seat_status_policy_covers_a_roster_seat_that_landed_nothing_at_all(tmp_
     """No envelope is the same coverage gap as a recorded `seat-missing/1` — never a clean run."""
     _d, _n, state = _at(tmp_path, RD.P_PANEL)
     envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS
-                 if dim != "test-reviewer"]
+                 if dim != "test-role"]
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"])
     assert reason is None
-    assert "test-reviewer" not in artifact["seats"]
+    assert "test-role" not in artifact["seats"]
     assert artifact["provenance"]["missingSeats"] == [
-        {"seat": "test-reviewer", "occurrence": 0, "reason": RA.NO_ENVELOPE}]
+        {"seat": "test-role", "occurrence": 0, "reason": RA.NO_ENVELOPE}]
 
 
 def test_fold_fail_closed_policy_a_silent_verifier_cluster_is_omitted_not_emptied(tmp_path):

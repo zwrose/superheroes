@@ -9,6 +9,8 @@ DECISION_KINDS = (
     "audit-echo-mismatch",
     "audit-provenance-fail",
     "author-justified-drop",
+    "break-it-kept",
+    "break-it-run",
     "cannot-certify",
     "capped-with-open-blocker",
     "capped-with-open-critical",
