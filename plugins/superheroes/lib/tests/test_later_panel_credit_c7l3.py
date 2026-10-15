@@ -299,3 +299,17 @@ def test_a_reraise_of_a_lineage_linked_original_withholds_the_reworded_keys_cred
     _fix(state, batch=[f for f in state["findings"] if f["title"] == "Bug reworded"])
     _panel(state, raised=[_finding()])
     assert "disposition" not in _ledger(state)[_key("Bug reworded")]
+
+
+def test_a_reworded_reraise_at_the_same_location_withholds_the_credit():
+    """The panel's own staging links the reword to the guided original, so the original is not
+    credited fixed by a panel that raised it again under new wording (credit runs after staging)."""
+    state = _round_one_state(_finding())
+    state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_FIXER,
+                            "attempt": 0, "id": _key(), "findingKey": _key(),
+                            "ruling": "guidance", "reason": "because", "by": "owner",
+                            "file": "f.py", "line": 1, "guidance": "G1"}]
+    _fix(state)
+    _panel(state, raised=[_finding("Bug reworded")])
+    assert state["findingLineage"] == {_key("Bug reworded"): _key()}
+    assert "disposition" not in _ledger(state)[_key()]

@@ -3134,8 +3134,19 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     ledger_by_key, fault = _disposition_ledger_by_key(state)
     if fault is not None:
         return
+    # Link this panel's rewordings first (staging, which runs after, would): a reword of a fixed
+    # finding raises its group, so the original is not credited by a panel that raised it again.
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    carry = _LineageCarry(state, compiled, ledger)
+    carry.revoke_ambiguous(state)
+    for finding in compiled if isinstance(compiled, list) else ():
+        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+        if key:
+            carry.apply(state, finding, key)
     raised_now = _panel_raised_keys(compiled) | _panel_raised_keys(panel_raw)
     reraised_groups = set()
+    for raised_key in raised_now:
+        reraised_groups.update(_lineage_group(state, raised_key))
     for entry_key, entry in ledger_by_key.items():
         if entry_key in raised_now:
             rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
