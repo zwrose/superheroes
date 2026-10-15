@@ -3134,24 +3134,26 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     ledger_by_key, fault = _disposition_ledger_by_key(state)
     if fault is not None:
         return
-    # Link this panel's rewordings first (staging, which runs after, would): a reword of a fixed
-    # finding raises its group, so the original is not credited by a panel that raised it again.
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    carry = _LineageCarry(state, compiled, ledger)
-    carry.revoke_ambiguous(state)
+    # Link this panel's rewordings the way its staging (which runs after) will, on a scratch copy:
+    # a reword of a fixed finding raises its group, so the original is not credited by a panel that
+    # raised it again. The credit step never writes lineage or decisions; staging owns them.
+    ledger_rows, _ = session_contract.read_disposition_ledger(state)
+    scratch = copy.deepcopy(state)
+    carry = _LineageCarry(scratch, compiled, ledger_rows)
+    carry.revoke_ambiguous(scratch)
     for finding in compiled if isinstance(compiled, list) else ():
         key = _finding_identity_key(finding) if isinstance(finding, dict) else None
         if key:
-            carry.apply(state, finding, key)
+            carry.apply(scratch, finding, key)
     raised_now = _panel_raised_keys(compiled) | _panel_raised_keys(panel_raw)
     reraised_groups = set()
     for raised_key in raised_now:
-        reraised_groups.update(_lineage_group(state, raised_key))
+        reraised_groups.update(_lineage_group(scratch, raised_key))
     for entry_key, entry in ledger_by_key.items():
         if entry_key in raised_now:
             rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
             reraised_groups.add(_finding_identity_key(rep) if isinstance(rep, dict) else entry_key)
-            reraised_groups.update(_lineage_group(state, entry_key))
+            reraised_groups.update(_lineage_group(scratch, entry_key))
     raised_now = raised_now | reraised_groups
     reported = _rounds_with_fix_report(state)
     if not reported:

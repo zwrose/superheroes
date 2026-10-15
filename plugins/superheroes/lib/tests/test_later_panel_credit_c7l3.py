@@ -11,6 +11,7 @@ keys on the identity keys the fixer fold records beside it (`fixReportedKeys`), 
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/c7l3_wo3_driver.md
 """
+import copy
 import os
 import sys
 
@@ -313,3 +314,40 @@ def test_a_reworded_reraise_at_the_same_location_withholds_the_credit():
     _panel(state, raised=[_finding("Bug reworded")])
     assert state["findingLineage"] == {_key("Bug reworded"): _key()}
     assert "disposition" not in _ledger(state)[_key()]
+
+
+def _reword_linked_to_a_decided_original():
+    """A round-2 state whose original is guided and fixed, and the compile of a panel that raises
+    only a reword of it at the same file and line."""
+    state = _round_one_state(_finding())
+    state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_FIXER,
+                            "attempt": 0, "id": _key(), "findingKey": _key(),
+                            "ruling": "guidance", "reason": "because", "by": "owner",
+                            "file": "f.py", "line": 1, "guidance": "G1"}]
+    _fix(state)
+    compiled, _ = RD.mechanical_compile([_finding("Bug reworded")], TRD.DIFF)
+    return state, compiled
+
+
+def test_the_credit_step_leaves_lineage_and_decisions_as_they_were():
+    """The credit step links rewordings on a scratch copy only; lineage and decisions are written by
+    staging, never by the credit step."""
+    state, compiled = _reword_linked_to_a_decided_original()
+    lineage_before = copy.deepcopy(state.get("findingLineage"))
+    rounds_before = copy.deepcopy(state.get("findingLineageRound"))
+    decisions_before = copy.deepcopy(state["decisions"])
+    RD._credit_fixes_not_reraised(state, compiled)
+    assert state.get("findingLineage") == lineage_before
+    assert state.get("findingLineageRound") == rounds_before
+    assert state["decisions"] == decisions_before
+    assert "disposition" not in _ledger(state)[_key()]      # the reword still raises the original's group
+
+
+def test_staging_after_the_credit_step_records_one_ruling_carried_for_the_reword():
+    """The reword's lineage link is written once, by staging."""
+    state, compiled = _reword_linked_to_a_decided_original()
+    RD._credit_fixes_not_reraised(state, compiled)
+    RD._stage_findings(state, compiled)
+    carried = [d for d in state["decisions"] if d["kind"] == "ruling-carried"]
+    assert len(carried) == 1, carried
+    assert state["findingLineage"] == {_key("Bug reworded"): _key()}
