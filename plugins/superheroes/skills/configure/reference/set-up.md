@@ -542,8 +542,8 @@ or paste the id, and never use an id from anywhere but a `picked` result or a `m
    the pick is done: another account's pick in between would be read as this one.
 4. **Walk the reviewer sign-in, and confirm it is done.** Run `sign-in`. When `signedIn` is false,
    say its `message`, wait for the owner, and run it again until `signedIn` is true; then say its
-   `message`, which confirms the sign-in is in place. The sign-in is done once per Claude account,
-   and it comes before the pass command, which cannot work without it.
+   `message`, which confirms the sign-in is in place. The sign-in is done once per machine the pass
+   command runs on, and it comes before the pass command, which cannot work without it.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

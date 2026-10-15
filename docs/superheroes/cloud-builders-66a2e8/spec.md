@@ -10,7 +10,7 @@ approved: "2026-10-10"
 gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-10"
-updated: "2026-10-11"
+updated: "2026-10-15"
 ---
 # Cloud builders
 
@@ -57,7 +57,7 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
 ### Part A: setting a project up for the cloud
 
 **FR-1.** When the owner asks for cloud builds on a project, the plugin shall list the hand steps the owner does once and give the owner the setup text to paste. (source: board · 1 Setup; Canon 2026-10-10-ca3e7e0d-1) The owner picks the new cloud environment by name with Claude Code's environment picker, on the account the builds run on, and the plugin reads the picked environment's id from Claude Code's settings, because no session and no web page shows the id; the check session and every later launch name the environment by that id, so each project keeps its own environment whatever the account's default is. (source: Canon 2026-10-11-dcc2b5e5-5)
-  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names the hand steps in this order (make a cloud environment and pick it in Claude Code's environment picker, paste the setup text, sign in once to the independent reviewer with a sign-in kept apart from the owner's main one, paste the reviewer pass) and carries the setup text. The sign-in is done once per account, before the pass command first works, and the advisor walks the owner through it. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5; Canon 2026-10-11-dcc2b5e5-1)
+  - *Acceptance (Given-When-Then):* Given a project with no cloud setup, when the owner asks to set up cloud builds, then the advisor's message names the hand steps in this order (make a cloud environment and pick it in Claude Code's environment picker, paste the setup text, sign in once to the independent reviewer with a sign-in kept apart from the owner's main one, paste the reviewer pass) and carries the setup text. The sign-in is done once per machine the pass command runs on, before the pass command first works, and the advisor walks the owner through it. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5; Canon 2026-10-11-dcc2b5e5-1; owner's correction, 2026-10-14)
   - *Acceptance (rule):* The message tells the owner to run the pass command on the owner's machine, which puts the reviewer pass on the owner's clipboard. The plugin never asks the owner to type or paste the environment's id; a pick it cannot confirm is asked for again. (source: board · 1 Setup; Canon 2026-10-11-dcc2b5e5-5)
 
 **FR-2.** The setup text shall carry the plugin at the advisor's version, the tools a build needs, and the project's calibration where the project keeps its calibration outside the repository. (source: journeys; Canon 2026-10-10-ca3e7e0d-1)
@@ -122,7 +122,7 @@ Hands-off upkeep comes later with its own spec. (source: Canon 2026-10-10-ca3e7e
 **FR-20.** The cloud builder's first comment on its issue shall state that it is a cloud build, the plugin version it runs, and that its commits carry the cloud's own author name while the PR is under the owner's name. (source: board · 4 While a cloud build runs; craft, for your veto)
   - *Acceptance (rule):* The intake comment carries those three facts. (source: board · 4 While a cloud build runs)
 
-**FR-21.** When a cloud builder needs the advisor, the builder shall post its question as a comment on its issue. (source: craft, for your veto; board · 4 While a cloud build runs)
+**FR-21.** When a cloud builder needs the advisor, the builder shall post its question as a comment on its issue. (source: Canon 2026-10-13-dcc2b5e5-1; board · 4 While a cloud build runs)
   - *Acceptance (rule):* The comment is headed as a builder note for the advisor and says the builder is waiting. (source: board · 4 While a cloud build runs)
   - *Acceptance (rule):* On a public repository the comment is public, as builder comments already are. (source: board · 4 While a cloud build runs)
 
@@ -172,7 +172,7 @@ The gardening pass's duties are a closed list [cite: plugins/superheroes/skills/
   - *Acceptance (rule):* The line reads as the board draws it, with the days left and the date. (source: board · 7 The gardening pass)
 
 **FR-34.** When the reviewer pass will lapse before the next gardening pass is owed, the advisor shall tell the owner to renew it at this pass and say how. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
-  - *Acceptance (Given-When-Then):* Given a pass with three days left and a gardening pass owed every seven days, when the gardening pass runs, then the line is marked "Renew now" and names the two hand steps: run the pass command, and paste the new pass into the cloud environment. (source: board · 7 The gardening pass)
+  - *Acceptance (Given-When-Then):* Given a pass with three days left and a gardening pass owed every seven days, when the gardening pass runs, then the line is marked "Renew now", names the two hand steps (run the pass command, and paste the new pass into the cloud environment), and says to sign the reviewer in again if the date does not move. (source: board · 7 The gardening pass; owner's ruling "123 a", 2026-10-14)
 
 **FR-35.** The plugin shall give no warning ahead of the reviewer pass lapsing between gardening passes. (source: Canon 2026-10-10-ca3e7e0d-12; board · 7 The gardening pass)
   - *Acceptance (rule):* Between passes, nothing tells the owner the pass is about to lapse. Once it has lapsed, the launch report's reason, the line UFR-6 repeats and a parked PR's notice under UFR-8 still appear. (source: board · 7 The gardening pass; board · 3 The launch report; board · 5 Mid-build trouble)
@@ -232,8 +232,8 @@ The approved review spec already says what happens when a planned reviewer could
 **UFR-11.** If the owner does not answer the archive prompt, then the plugin shall leave the session listed and carry on. (source: Canon 2026-10-15-dcc2b5e5-1; board · 6 Cleanup)
   - *Acceptance (rule):* The plugin sends no reminder about an unanswered archive prompt. (source: board · 6 Cleanup)
 
-**UFR-12.** If a cloud builder posts a question while the advisor is away, then the question shall wait on the issue until the advisor is back. (source: craft, for your veto; board · 4 While a cloud build runs)
-  - *Acceptance:* Given the advisor is not running, when a cloud builder's question gets no answer, then the builder parks with its work pushed, and the advisor answers and resumes the lane when it is back. (source: craft, for your veto)
+**UFR-12.** If a cloud builder posts a question while the advisor is away, then the question shall wait on the issue until the advisor is back. (source: Canon 2026-10-13-dcc2b5e5-1; board · 4 While a cloud build runs)
+  - *Acceptance:* Given the advisor is not running, when a cloud builder's question gets no answer, then the builder parks with its work pushed, and the advisor answers and resumes the lane when it is back. (source: Canon 2026-10-13-dcc2b5e5-1)
 
 **UFR-13.** If a cloud builder stops with work it has not pushed, then the advisor shall first try to get that work pushed. (source: Canon 2026-10-10-ca3e7e0d-17)
   - *Acceptance:* Given a stalled cloud builder that still answers, when the advisor recovers the lane, then the advisor asks the builder once to push its work, and the new builder starts from what was pushed. (source: Canon 2026-10-10-ca3e7e0d-17; Canon 2026-10-10-ca3e7e0d-20)
@@ -247,7 +247,9 @@ https://claude.ai/artifact/KB6uNAzk5Ujoa6WzCN8xBy. (source: board · 1 Setup) Th
 screens of its own. The board draws the wording the owner reads, on seven artboards: "1 Setup",
 "2 The setting", "3 The launch report", "4 While a cloud build runs", "5 Mid-build trouble",
 "6 Cleanup" and "7 The gardening pass". (source: board · 1 Setup) The archive prompt on "6 Cleanup"
-is the platform's own wording and is drawn as it appears. (source: board · 6 Cleanup)
+is the platform's own wording and is drawn as it appears. (source: board · 6 Cleanup) The board draws the case where the builder's
+session can archive itself; when it cannot, there is no prompt, the builder says so on its issue,
+and the owner archives the session by hand, as FR-28 to FR-30 say. (source: owner's ruling "124 a", 2026-10-14; owner's ruling "129 a", 2026-10-15)
 
 ## Definition of done / success
 
@@ -387,6 +389,19 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   Constraints, Out of scope, Amendments. Amendments since approval now number more than five:
   the consolidation re-read is outstanding and owed by the advisor, and the owner's re-stamp of the
   consolidated body is outstanding and owed by the owner (collector item 127).
+- **2026-10-15 (owner-stamped, substantive):** the consolidation re-read (owner's ruling "2 a",
+  collector item 127) is done, and its findings are absorbed (owner's ruling "129 a", collector item
+  129). FR-34's acceptance adds the sentence owner's ruling "123 a" put on the "Renew now" line: sign
+  the reviewer in again if the date does not move. FR-1's acceptance says the reviewer sign-in is done
+  once per machine the pass command runs on, not once per account (the owner's correction,
+  2026-10-14). UI/UX says the cleanup board draws the case where the builder can archive itself, and
+  that the hand archive applies otherwise. FR-21 and UFR-12 now cite the owner's headless ruling
+  (Canon 2026-10-13-dcc2b5e5-1) instead of "craft, for your veto". The frontmatter date is current.
+  The re-read found nothing else to change: the auto-mode ruling (Canon 2026-10-12-dcc2b5e5-1) is
+  consistent with the spec and needs no amendment. The owner's re-stamp of the consolidated body is
+  still outstanding and is owed by the owner at the cloud closure sitting. Sections touched:
+  frontmatter, Part A · Setting a project up for the cloud (FR-1), Part C (FR-21), Part E (FR-34),
+  UFR-12, UI / UX, Amendments.
 
 ## Coverage
 
