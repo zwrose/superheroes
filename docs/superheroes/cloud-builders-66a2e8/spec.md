@@ -149,14 +149,14 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
 
 ### Part D: cleaning up a finished cloud builder
 
-**FR-28.** When a cloud builder's PR is merged, the advisor shall ask that builder to archive its own session. (source: Canon 2026-10-10-ca3e7e0d-11; board · 6 Cleanup)
+**FR-28.** When a cloud builder's PR is merged, the advisor shall ask that builder to archive its own session. (source: Canon 2026-10-15-dcc2b5e5-1; board · 6 Cleanup)
   - *Acceptance (Given-When-Then):* Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the platform's one prompt for that session when the builder's session can archive itself; otherwise the builder says so on its issue. (source: board · 6 Cleanup; owner's ruling "125 a", 2026-10-15)
 
 **FR-29.** When the advisor has asked a cloud builder to archive itself, the advisor shall tell the owner to expect one prompt and to tap Allow once if the builder's session has a tool to archive itself, and otherwise that the builder will say so on its issue and the session stays listed until the owner archives it by hand. (source: board · 6 Cleanup; owner's ruling "124 a", 2026-10-14)
   - *Acceptance (rule):* The advisor's message names the merged build, the one tap when the builder can archive itself, and the hand archive when it cannot. (source: board · 6 Cleanup; owner's ruling "124 a", 2026-10-14)
 
-**FR-30.** When a cloud build's PR is merged, the plugin shall leave nothing behind for that build except its session and its lane record: no branch on the repository, and no checkout or worktree on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-9; board · 6 Cleanup)
-  - *Acceptance (rule):* The archive prompt, or a hand archive when there is no prompt, is the only step left to the owner. (source: Canon 2026-10-10-ca3e7e0d-11; owner's ruling "125 a", 2026-10-15)
+**FR-30.** When a cloud build's PR is merged, the plugin shall leave nothing behind for that build except its session and its lane record: no branch on the repository, and no checkout or worktree on the owner's machine. (source: Canon 2026-10-15-dcc2b5e5-2; board · 6 Cleanup)
+  - *Acceptance (rule):* The archive prompt, or a hand archive when there is no prompt, is the only step left to the owner. (source: Canon 2026-10-15-dcc2b5e5-1; owner's ruling "125 a", 2026-10-15)
 
 **FR-31.** While a cloud build's PR is neither merged nor closed, the plugin shall keep the build's pushed branch. (source: craft, for your veto)
   - *Acceptance (rule):* The plugin does not clean up a builder that hands back or parks. The builder's pushed work stays for the vet, a renewed review or a recovery. (source: craft, for your veto; board · 5 Mid-build trouble)
@@ -229,7 +229,7 @@ The approved review spec already says what happens when a planned reviewer could
 **UFR-10.** If a cloud builder is recovered, then the advisor shall tell the owner when the builder stopped, where the lane was recovered, and how much work is being redone. (source: board · 5 Mid-build trouble)
   - *Acceptance (rule):* The work redone is the work since the builder's last push that could not be saved. (source: board · 5 Mid-build trouble; Canon 2026-10-10-ca3e7e0d-17)
 
-**UFR-11.** If the owner does not answer the archive prompt, then the plugin shall leave the session listed and carry on. (source: Canon 2026-10-10-ca3e7e0d-11; board · 6 Cleanup)
+**UFR-11.** If the owner does not answer the archive prompt, then the plugin shall leave the session listed and carry on. (source: Canon 2026-10-15-dcc2b5e5-1; board · 6 Cleanup)
   - *Acceptance (rule):* The plugin sends no reminder about an unanswered archive prompt. (source: board · 6 Cleanup)
 
 **UFR-12.** If a cloud builder posts a question while the advisor is away, then the question shall wait on the issue until the advisor is back. (source: craft, for your veto; board · 4 While a cloud build runs)
@@ -303,7 +303,7 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   That recurs with each calibration update, and with each sitting that changes calibration. (source: craft, for your veto; Canon 2026-10-10-ca3e7e0d-1)
 - The advisor, discovery and the detective in the cloud. They stay on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-16)
 - Any check that needs a phone or the owner's signed-in browser. (source: Canon 2026-10-10-ca3e7e0d-16)
-- Cleanup with no tap from the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
+- Cleanup with no tap from the owner. (source: Canon 2026-10-15-dcc2b5e5-1)
 - A build machine the owner hosts. (source: Canon 2026-10-10-ca3e7e0d-6)
 - Carrying a project's Canon or specs to the cloud when the project keeps them outside the
   repository. For now such a project's builds run on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-22)
@@ -380,9 +380,12 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
 - **2026-10-15 (owner-stamped, substantive):** the cleanup assumption follows the same conditional
   form: one tap from the owner when the builder's session can archive itself, otherwise a hand
   archive of that session, for now (owner's ruling "126 a", collector item 126). Its source moves
-  from Canon 2026-10-10-ca3e7e0d-11 to 2026-10-15-dcc2b5e5-1, which supersedes it. Sections
-  touched: Constraints, Amendments. This is the eighth amendment since approval: the
-  consolidation re-read is outstanding and owed by the advisor, and the owner's re-stamp of the
+  from Canon 2026-10-10-ca3e7e0d-11 to 2026-10-15-dcc2b5e5-1, which supersedes it, and
+  2026-10-15-dcc2b5e5-2 supersedes 2026-10-10-ca3e7e0d-9 to match; every source citing the
+  superseded entries now cites their replacements (FR-28, FR-30, UFR-11, Out of scope). Sections
+  touched: Part D · cleaning up a finished cloud builder (FR-28, FR-30 sources), UFR-11's source,
+  Constraints, Out of scope, Amendments. Amendments since approval now number more than five:
+  the consolidation re-read is outstanding and owed by the advisor, and the owner's re-stamp of the
   consolidated body is outstanding and owed by the owner (collector item 127).
 
 ## Coverage
