@@ -955,13 +955,22 @@ def test_guidance_on_an_archived_finding_never_rides_the_next_batch(tmp_path, ke
     state = _state(session_dir)
     quality = _finding_key_by_title(state, "quality minor")
     blocker = next(dict(f) for f in state["findings"] if f.get("title") == "blocker B")
+    minor = next(dict(f) for f in state["findings"] if f.get("title") == "quality minor")
     state["pending"] = None
+    RD._set_findings(state, [blocker])
+    assert RD._live_finding_by_key(state, quality) is None
     RD.save_state(session_dir, state)
     assert _rule(session_dir, _guidance_file(tmp_path, "g.json", quality, "tidy the names"))["ok"]
     state = _state(session_dir)
-    RD._set_findings(state, [blocker])
-    assert RD._live_finding_by_key(state, quality) is None
-    assert RD._lifted_fix_rows(state, [blocker]) == []
+    assert (RD._live_ruling_by_key(state).get(quality) or {}).get("ruling") == "guidance"
+    assert RD._guidance_named_rows(state, [(quality, {"title": "quality minor"})]) == []
+    for held in ("_fixBatch", "_fixQueue"):
+        assert quality not in {RD._fix_batch_row_key(r) for r in state.get(held) or []}
+    # raised again, the finding is live and the recorded guidance reaches the fix
+    RD._set_findings(state, [blocker, minor])
+    assert RD._live_finding_by_key(state, quality) is not None
+    rows = RD._guidance_named_rows(state, [(quality, RD._live_finding_by_key(state, quality))])
+    assert [r.get("lifted") for r in rows] == ["guidance"]
 
 
 def test_replacement_guidance_on_an_archived_member_dispatches_nothing():

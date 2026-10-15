@@ -4650,7 +4650,8 @@ def _guidance_named_rows(state, named):
             _note_sent_under_decision(state, [key])
             continue
         source = _live_finding_by_key(state, key)
-        if not isinstance(source, dict):
+        archived = not isinstance(source, dict)
+        if archived:
             source = candidate
         if not isinstance(source, dict):
             continue
@@ -4674,6 +4675,8 @@ def _guidance_named_rows(state, named):
             key, source = rep, rep_row  # a stale merge mark on its ledger row (merged, then re-raised) is dropped
             stored = {k: v for k, v in (ledger_by_key.get(rep) or {}).items()
                       if k != session_contract.MERGED_INTO_FIELD}
+        elif archived:
+            continue  # guidance never reaches an archived row; it waits on the lineage for a live raise
         if _lift_marker_for(source, stored if isinstance(stored, dict) else source,
                             effective.get(key)) is None:
             continue
