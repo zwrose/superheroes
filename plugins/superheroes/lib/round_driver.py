@@ -4536,7 +4536,8 @@ def _ruled_row(state, ledger_by_key, decision, sent, effective=None):
     for at in closure:
         ledger_row = ledger_by_key.get(at)
         if ((sent_before or not session_contract.disposition_value(ledger_row))
-                and not (isinstance(ledger_row, dict) and ledger_row.get(session_contract.MERGED_INTO_FIELD))):
+                and not (isinstance(ledger_row, dict) and ledger_row.get(session_contract.MERGED_INTO_FIELD))
+                and _row_decision(state, effective, ledger_by_key, at) is decision):
             row = _reopened_ledger_row(ledger_by_key, at)
             if row is None:
                 continue
@@ -4593,20 +4594,22 @@ def _resolve_ruled_batch(state, rows):
                 _decision(state, "ruling-no-live-finding", note)
             continue
         root = _ruling_root(state, ledger_by_key, key)
-        if root in held or _row_decision(state, effective, ledger_by_key, key) is not decision:
+        if _row_decision(state, effective, ledger_by_key, key) is not decision:
             continue
+        queued = root in held  # already offered: the ruling is satisfied by that row, not restaged
         held.add(root)
-        if from_ledger:  # the ledger keeps its disposition; mark it as the one this ruling reopened
+        if from_ledger and not queued:  # the ledger keeps its disposition; mark it as the one this ruling reopened
             state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
                 state.get("dispositionSeqCounter", 0))
-        else:  # a live rewording carries the ruling: the closure's discharged members are reopened too
-            for member in _ruling_closure(state, ledger_by_key, key) - {key}:
+        else:  # a live/offered rewording carries the ruling: the closure's discharged members are reopened too
+            for member in _ruling_closure(state, ledger_by_key, key) - (set() if queued else {key}):
                 entry = ledger_by_key.get(member)
                 if (isinstance(entry, dict) and entry.get("disposition") in ("fixed", "refuted")
                         and _disposition_is_current(entry)):
                     state.setdefault("restagedAfterDispositionSeq", {})[member] = (
                         state.get("dispositionSeqCounter", 0))
-        added.append(row)
+        if not queued:
+            added.append(row)
     added.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
     if added:
         _decision(state, "fix-batch-ruled",
@@ -5624,6 +5627,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
+        # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
+        reopened = state.get("restagedAfterDispositionSeq")
+        if reopened:
+            ledger_now, _lf = _disposition_ledger_by_key(state)
+            for member in _ruling_closure(state, ledger_now or {}, tid) - {tid}:
+                reopened.pop(member, None)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)

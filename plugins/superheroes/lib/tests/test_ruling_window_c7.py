@@ -953,3 +953,66 @@ def test_late_guidance_on_a_fixed_finding_reopens_it_when_a_live_rewording_carri
     RD._set_terminal(state, "held")
     ledger, _ = RD._disposition_ledger_by_key(state)
     assert ledger["A"]["disposition"] != "fixed", ledger["A"]
+
+
+def test_ledger_restage_skips_a_candidate_whose_own_decision_is_a_later_skip():
+    """axis: RESTAGE — A and reworded Z fixed, newer guidance on A then a skip on Z: the ledger fallback
+    ranks only rows the guidance binds, so A is sent, not the skipped newest wording Z."""
+    state = _unit_round([_unit_finding("Q", 1, "Minor")])
+    state["findings"] = []
+    for key, rnd in (("A", 1), ("Z", 3)):
+        RD._record_disposition(state, key, "fixed", rnd)
+        for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+            if RD._finding_identity_key(entry) == key:
+                entry.update(**{session_contract.RAISED_ROUND_FIELD: rnd,
+                                session_contract.RAISED_SEQ_FIELD: 0})
+    state["findingLineage"] = {"Z": "A"}
+    state["sentUnderDecision"] = {"A": 0}
+    _log_ruling(state, "A", guidance="GUIDE-A")
+    _log_ruling(state, "Z", ruling="out-of-scope")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["A"]
+
+
+def test_late_guidance_reopens_a_discharged_ancestor_when_the_rewording_is_already_offered():
+    """axis: RESTAGE — fixed real-consequence A gets guidance and rewording Z is already in the offered
+    batch: no second row is added, A is still marked reopened, and an undischarged retry does not
+    settle A as fixed."""
+    state = _unit_round([_unit_finding("Z", 2, "Important", kind="code-quality")])
+    RD._record_disposition(state, "A", "fixed", 1)
+    for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        entry[session_contract.RAISED_SEQ_FIELD] = 0
+        entry["consequence"], entry["consequenceKind"] = "data loss", "real"
+    state["findingLineage"] = {"Z": "A"}
+    _log_ruling(state, "A", guidance="LATE")
+    batch = RD._resolve_ruled_batch(state, [dict(state["findings"][0])])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["Z"]
+    assert state["restagedAfterDispositionSeq"] == {"A": state["dispositionSeqCounter"]}
+    RD._note_sent_under_decision(state, batch)
+    RD._set_terminal(state, "held")
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    assert ledger["A"]["disposition"] != "fixed", ledger["A"]
+
+
+def test_audit_discharge_of_the_ruled_rewording_supersedes_the_reopened_ancestor():
+    """axis: RESTAGE — A fixed, reopened for rewording Z, Z discharged at the audit fold: A's reopening
+    is superseded, so convergence does not settle A as left-for-owner."""
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "codex", "seatMap": {"hostFamily": "anthropic"}})
+    state["round"] = 2
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = "b" * 40
+    state["rounds"] = {"2": {"verifyResult": "pass"}}
+    z = {"title": "Z", "severity": "Important", "file": "f.py", "line": 1}
+    state["fixBatch"] = [z]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    zid = RD._finding_key_of(z)
+    RD._set_findings(state, [z])
+    RD._record_disposition(state, "A", "fixed", 1)
+    state["findingLineage"] = {zid: "A"}
+    state["restagedAfterDispositionSeq"] = {"A": state["dispositionSeqCounter"]}
+    state["_newSurface"] = True
+    auditor = state["_auditTargets"][0]["auditorVendor"]
+    RD._fold_audits(state, state["config"], {
+        "results": [{"id": zid, "ruling": "discharged", "reason": "gone"}],
+        "collectionManifest": {zid: auditor}})
+    assert "A" not in (state.get("restagedAfterDispositionSeq") or {})
