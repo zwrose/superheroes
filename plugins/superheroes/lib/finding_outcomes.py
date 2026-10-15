@@ -101,12 +101,15 @@ def sheet_answer_decides(answers, ref, pr):
     if not isinstance(doc, dict):
         return False
     answer = doc.get("answer")
+    published = answers.get("cards")
+    published = published.get(card) if isinstance(published, dict) else None
+    offered = published.get("options") if isinstance(published, dict) else None
     if answer == "aligned":
-        published = answers.get("cards")
-        published = published.get(card) if isinstance(published, dict) else None
-        return isinstance(published, dict) and published.get("options") == []
+        return offered == []
     option_id = doc.get("optionId")
-    return answer == "option" and isinstance(option_id, str) and option_id.strip() != ""
+    # an option answer counts only while the published card still offers that option
+    return answer == "option" and isinstance(option_id, str) and option_id.strip() != "" and isinstance(offered, list) \
+        and any((o.get("id") if isinstance(o, dict) else o) == option_id for o in offered)
 
 
 def _sheet_ref_text(ref):

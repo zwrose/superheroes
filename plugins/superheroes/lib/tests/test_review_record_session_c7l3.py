@@ -11,6 +11,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import audits  # noqa: E402
 import circuit_breaker  # noqa: E402
 import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
@@ -116,22 +117,49 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
 
 
 def test_a_planned_audit_that_returned_nothing_stays_a_missing_review_beside_a_successful_one(tmp_path):
-    audits = [{"id": "a", "auditor": "codex", "ruling": "discharged"},
-              {"id": "b", "ruling": "not-discharged", "reason": "no audit result for this finding"}]
+    rows = [{"id": "a", "auditor": "codex", "ruling": "discharged"},
+            {"id": "b", "ruling": "not-discharged", "reason": audits.NO_AUDIT_RESULT_REASON}]
     session = _hand_session(tmp_path, {1: {"code-reviewer": "run"}})
     state = json.load(open(os.path.join(session, "loop-state.json")))
-    state["rounds"]["2"] = {"audits": audits}
+    state["rounds"]["2"] = {"audits": rows}
     state["_ordersAnchors"] = {"2:%s:0" % round_phases.P_AUDITS: {"headSha": HEAD}}
     json.dump(state, open(os.path.join(session, "loop-state.json"), "w"))
-    rows = _names(rs.account_from_session(session, extras(), Fake().readers()))
+    names = _names(rs.account_from_session(session, extras(), Fake().readers()))
     # bites on: the reviewer roster built only from audits that name an auditor, hiding the audit that never returned
-    assert rows["audits auditor codex (round 2)"]["ran"] is True
-    assert rows["audits auditor (round 2)"]["ran"] is False
+    assert names["audits auditor codex (round 2)"]["ran"] is True
+    assert names["audits auditor (round 2)"]["ran"] is False
     fake = Fake()
     out = send(tmp_path, session, fake)
     assert out["ok"], out
     rec = rr.read(7, readers=fake.readers())
     assert "audits auditor (round 2)" in [m["name"] for m in rec["missingReviews"]] and out["status"] == "not-reviewed"
+
+
+def _audit_rounds(tmp_path, by_round):
+    tmp_path.mkdir()
+    session = _hand_session(tmp_path, {1: {"code-reviewer": "run"}})
+    state = json.load(open(os.path.join(session, "loop-state.json")))
+    for rnd, rows in by_round.items():
+        state["rounds"][str(rnd)] = {"audits": rows}
+        state.setdefault("_ordersAnchors", {})["%d:%s:0" % (rnd, round_phases.P_AUDITS)] = {"headSha": HEAD}
+    json.dump(state, open(os.path.join(session, "loop-state.json"), "w"))
+    return _names(rs.account_from_session(session, extras(), Fake().readers()))
+
+
+def test_a_completed_not_discharged_audit_is_a_reviewer_that_ran_and_a_later_audit_recovers_a_silent_one(tmp_path):
+    rejected = {"id": "f", "identity": "f", "ruling": "not-discharged", "reason": "the fix leaves the defect"}
+    silent = {"id": "g", "identity": "g", "ruling": "not-discharged", "reason": audits.NO_AUDIT_RESULT_REASON}
+    ok = lambda i: {"id": i, "identity": i, "auditor": "codex", "ruling": "discharged"}
+    # bites on: a rejection that carries no auditor field read as a planned audit that never ran
+    rows = _audit_rounds(tmp_path / "a", {2: [rejected]})
+    assert not [n for n in rows if n.startswith("audits auditor (")]
+    # bites on: a silent audit kept as missing after a later round audited the same target
+    rows = _audit_rounds(tmp_path / "b", {2: [silent], 3: [rejected | {"id": "g", "identity": "g"}]})
+    assert not [n for n in rows if n.startswith("audits auditor (")]
+    rows = _audit_rounds(tmp_path / "c", {2: [silent], 3: [ok("g")]})
+    assert rows["audits auditor codex (round 3)"]["ran"] is True and "audits auditor (round 2)" not in rows
+    # a silent target no later round audited stays missing
+    assert _audit_rounds(tmp_path / "d", {2: [silent], 3: [ok("f")]})["audits auditor (round 2)"]["ran"] is False
 
 
 def test_a_hand_submit_reviewer_is_posted_as_reported_by_the_session_and_a_missing_one_as_missing(tmp_path):

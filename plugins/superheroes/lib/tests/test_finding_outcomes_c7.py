@@ -30,7 +30,7 @@ def _entry(entry_id, supersedes=None, words='owner\'s words: "go"'):
 
 def _sheet(answer, option_id=None):
     return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": None}},
-            "cards": {"c1": {"options": []}}}
+            "cards": {"c1": {"options": [{"id": option_id}] if answer == "option" and option_id else []}}}
 
 
 # --- E1: a stated consequence ---------------------------------------------------------------
@@ -459,3 +459,12 @@ def test_compile_break_it_exempt_finding_with_no_consequence_is_dropped():
         [stated], COMPILE_DIFF, scope_exempt={id(stated)})
     assert drops == []
     assert [(f["file"], f["line"]) for f in compiled] == [("g.py", 9)]
+
+
+def test_an_option_answer_counts_only_while_the_published_card_still_offers_that_option():
+    ref = {"pr": 9, "card": "c1"}
+    base = _sheet("option", "opt-a")
+    # bites on: a saved option accepted after the card was republished without it, or for a card nothing can check
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": [{"id": "opt-b"}]}}), ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": []}}), ref, 9) is False
+    assert FO.sheet_answer_decides({"answers": base["answers"]}, ref, 9) is False

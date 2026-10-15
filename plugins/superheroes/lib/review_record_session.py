@@ -24,6 +24,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import audits as audits_mod  # noqa: E402
 import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
@@ -220,15 +221,24 @@ def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE):
     return _text(cfg.get("headSha") if isinstance(cfg, dict) else None, setup)
 
 
-def _audit_reviewers(state, rnd, audits):
+def _audit_key(a):
+    return a.get("identity") or a.get("id")
+
+
+def _audit_silent(a):
+    """An audit entry the round recorded as silence: no result came back, so no auditor ran for that target."""
+    return isinstance(a, dict) and a.get("reason") == audits_mod.NO_AUDIT_RESULT_REASON
+
+
+def _audit_reviewers(state, rnd, audits, later=frozenset()):
     """One reviewer per auditor vendor whose authenticated audit result the round persisted, at the audits' emission head,
-    and one unrun reviewer when an audit entry names no auditor (a planned audit that returned nothing)."""
+    and one unrun reviewer for a target the round recorded as silent that no later round `later` audited. Any other
+    entry, a not-discharged ruling included, is an auditor that ran."""
     head = _panel_head(state, rnd, phase=round_phases.P_AUDITS)
-    named = [a.get("auditor") if isinstance(a, dict) else None for a in audits]
-    vendors = sorted({v for v in named if isinstance(v, str) and v})
+    vendors = sorted({a["auditor"] for a in audits if isinstance(a, dict) and isinstance(a.get("auditor"), str) and a["auditor"]})
     out = [_reviewer(state, rnd, f"auditor {v}", "audits ", True, {"vendor": v, "model": "unknown"},
                      commit=head, phase=round_phases.P_AUDITS) for v in vendors] if head else []
-    silent = any(not (isinstance(v, str) and v) for v in named)
+    silent = any(_audit_silent(a) and _audit_key(a) not in later for a in audits)
     return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
 
 
@@ -260,9 +270,11 @@ def _status_reviewers(state, setup=None):
                                  commit=commit, phase=sc.PANEL_PHASE))
         out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
                 if not any(r > rnd for r in ran_in.get(seat, ()))]
-    for rnd in state["rounds"]:
-        audits = state["rounds"][rnd].get("audits") if isinstance(state["rounds"][rnd], dict) and str(rnd).isdigit() else None
-        out += _audit_reviewers(state, int(rnd), audits) if isinstance(audits, list) else []
+    by_round = {int(n): rec["audits"] for n, rec in state["rounds"].items()
+                if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("audits"), list)}
+    for rnd, audits in by_round.items():
+        later = {_audit_key(a) for r, rows in by_round.items() if r > rnd for a in rows if isinstance(a, dict) and not _audit_silent(a)}
+        out += _audit_reviewers(state, rnd, audits, later)
     return out
 
 
@@ -496,7 +508,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
             "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
-                       "capKind": "ceiling" if ceiling else "rounds", "stoppedAtCap": capped,
+                       "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
