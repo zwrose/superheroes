@@ -698,7 +698,8 @@ def _delta(reviewed_body, fixed_body, name="f.py", line=2, extra=()):
 def test_audit_targets_carry_the_fixers_own_diff_apart_from_the_prs():
     delta = _delta([" ctx", "+log_request(x)", " ctx"],
                    [" ctx", "+log_request(x)", "+if x is None: return", " ctx"])
-    assert delta[0].startswith("@@") and "++if x is None: return" in delta
+    assert delta[0].startswith("diff --git") and delta[1].startswith("@@")
+    assert "++if x is None: return" in delta
     assert "++log_request(x)" not in delta and "-+log_request(x)" not in delta
     state = RD.new_state(TRD._cfg(fixerVendor="claude"))
     state["fixBatch"] = [_finding("Near the top", 2)]
@@ -730,7 +731,32 @@ def test_fixer_delta_is_empty_for_a_target_file_the_fix_left_alone():
     reviewed = _diff(("f.py", [" c", "+retry()"]), other)
     state["headDiff"] = _diff(("f.py", [" c", "+retry()"]), ("g.py", [" c", "+a()", "+b()"]))
     f_row, g_row = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
-    assert f_row["fixerDelta"] == [] and "++b()" in g_row["fixerDelta"]
+    assert "++b()" in g_row["fixerDelta"] and f_row["fixerDelta"] == g_row["fixerDelta"]
+
+
+def test_a_fixer_delta_carries_the_files_the_attempt_changed_beyond_the_finding_s():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("In f", 2, file="f.py")]
+    reviewed = _diff(("f.py", [" c", "+x()"]), ("g.py", [" c", "+retry(3)"]))
+    state["headDiff"] = _diff(("f.py", [" c", "+x()", "+guard()"]), ("g.py", [" c", "+retry(5)"]))
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert "diff --git a/g.py b/g.py" in row["fixerDelta"] and "++retry(5)" in row["fixerDelta"]
+    assert "++guard()" in row["fixerDelta"]
+
+
+def test_findings_sharing_a_hunk_each_list_the_sibling_and_the_template_clears_its_fix():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Guard", 2, file="f.py"), _finding("Retry", 3, file="f.py")]
+    reviewed = _diff(("f.py", [" c", "+a()", "+b()"]))
+    state["headDiff"] = _diff(("f.py", [" c", "+a()", "+b()", "+guard()", "+retry()"]))
+    guard, retry = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert [b["title"] for b in guard["batchFindings"]] == ["Retry"]
+    assert [b["title"] for b in retry["batchFindings"]] == ["Guard"]
+    assert set(guard["batchFindings"][0]) == {"id", "file", "line", "title"}
+    assert guard["fixerDelta"] == retry["fixerDelta"]
+    text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
+                             "dispatch-audits.md")).read()
+    assert "batchFindings" in text and "sibling finding's fix is not unnamed" in text
 
 
 def test_fixer_delta_does_not_invent_changes_where_hunks_merge():
@@ -881,3 +907,25 @@ def test_the_next_audit_target_carries_the_last_audit_that_refused(captured_stat
     prior = seen_targets[1][0]["priorAudit"]
     assert prior["ruling"] == "not-discharged" and prior["round"] == 2
     assert prior["reason"].startswith(UNNAMED_REASON_PREFIX)
+
+
+def test_two_findings_sharing_a_lineage_root_each_keep_their_own_offer_episode(empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Critical"),
+                           _finding("Gate bypass reworded", severity="Critical")])
+    key_a, key_b = _key("Gate bypass"), _key("Gate bypass reworded")
+    state["findingLineage"] = {key_b: key_a}
+    _decide(state, key_a, "guidance", 1)
+    _decide(state, key_a, "out-of-scope", 1)
+    _decide(state, key_b, "out-of-scope", 1)
+    for key in (key_a, key_b):
+        RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                               followUp=_follow_up())
+    assert RD._lineage_root(RD._lineage_map(state), key_b) == RD._lineage_root(
+        RD._lineage_map(state), key_a)
+    assert _offer(state, 2) == ("queued", [key_a, key_b])
+    assert set(state["outOfScopeFixerRounds"]) == {key_a, key_b}
+    assert state["outOfScopeFixerRounds"][key_a]["episode"] != state["outOfScopeFixerRounds"][key_b]["episode"]
+    for rnd in (3, 4):
+        status, keys = _offer(state, rnd)
+        assert status == "excluded" and keys == []
+    assert len(_decisions(state, "out-of-scope-fix-spent")) == 4  # two findings, rounds 3 and 4

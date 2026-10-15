@@ -4450,11 +4450,10 @@ def _escalated_since_out_of_scope(decision, row):
 def _drop_spent_out_of_scope_rows(state, rows):
     """``(kept, spent)``: ``rows`` less those whose finding is out of scope and was already offered to
     a fixer in an earlier round of the same episode. A row that passes while out of scope is recorded
-    in ``state["outOfScopeFixerRounds"]`` (keyed by lineage root). A spent row's out-of-scope
+    in ``state["outOfScopeFixerRounds"]`` (keyed by the finding's own key). A spent row's out-of-scope
     disposition is recorded again with the round it was offered in, keeping its ``followUp``."""
     effective = _live_ruling_by_key(state)
     ledger_by_key, _fault = _disposition_ledger_by_key(state)
-    lineage = _lineage_map(state)
     this_round = state["round"]
     spent_log = state.get("outOfScopeFixerRounds")
     if not isinstance(spent_log, dict):
@@ -4472,20 +4471,17 @@ def _drop_spent_out_of_scope_rows(state, rows):
             # Critical still open, so it stays in the batch; the round caps bound repeat offers.
             kept.append(row)
             continue
-        root = _lineage_root(lineage, key)
         episode = _out_of_scope_episode(decision)
-        # A synthesis merge can move the root after the offer was logged under the old one: the
-        # decision's episode is the identity, so look under the key and the root alike.
-        held = spent_log.get(root)
-        if not (isinstance(held, dict) and held.get("episode") == episode):
-            held = spent_log.get(key)
+        # The record is keyed by the finding's own identity: two findings that share a lineage root
+        # but carry separate decisions each keep their own episode, so neither overwrites the other.
+        held = spent_log.get(key)
         offered = (held.get("rounds") if isinstance(held, dict) and held.get("episode") == episode
                    and isinstance(held.get("rounds"), list) else [])
         earlier = [rnd for rnd in offered if rnd != this_round]
         if earlier:
             spent.append((key, row, earlier[0]))
             continue
-        spent_log[root] = {"episode": episode, "rounds": [this_round]}
+        spent_log[key] = {"episode": episode, "rounds": [this_round]}
         kept.append(row)
     if spent_log:
         state["outOfScopeFixerRounds"] = spent_log
@@ -5596,19 +5592,21 @@ def _line_spans(section):
     return spans
 
 
-def _fixer_delta_lines(reviewed_diff, head_diff, file, line):
-    """The fix's own diff at a finding's location: the unified diff between the file's section of the
+def _fixer_delta_lines(reviewed_diff, head_diff, file, line, *, whole_file=False):
+    """The fix's own diff at a finding's location (every hunk of the file when ``whole_file``): the unified diff between the file's section of the
     reviewed (pre-fix) diff and of the post-fix head diff, hunk headers and context kept, only the hunks
     that sit over the finding's line (and margin). Each line keeps the PR diff's own prefix after the
     diff mark, so ``-+x`` is a PR addition the fixer removed and ``++x`` one it made. A file the fix
     left alone has identical sections and yields nothing."""
     ranges = delta_surface.fixed_locations([{"file": file, "line": line}]).get(file)
     before, after = _diff_section(reviewed_diff, file), _diff_section(head_diff, file)
-    if not ranges or before == after:
+    if (not ranges and not whole_file) or before == after:
         return []
     spans_b, spans_a = _line_spans(before), _line_spans(after)
 
     def over(spans, lo, hi):
+        if whole_file:
+            return True
         near = spans[lo:hi] if hi > lo else spans[max(lo - 1, 0):lo + 1]
         return any(sp and delta_surface._overlaps({"start": sp[0], "end": sp[1]}, ranges)
                    for sp in near)
@@ -5631,6 +5629,29 @@ def _fixer_delta_lines(reviewed_diff, head_diff, file, line):
     return delta
 
 
+def _diff_files(diff_text):
+    """The files a unified diff names, in order of first appearance."""
+    files = []
+    for ln in (diff_text or "").splitlines():
+        m = re.match(r"diff --git a/(.+) b/(.+)$", ln)
+        if m and m.group(2) not in files:
+            files.append(m.group(2))
+    return files
+
+
+def _attempt_fixer_delta(reviewed_diff, head_diff):
+    """The whole fixer attempt's delta: the fix's own diff (reviewed head -> fixed head) over every
+    file the attempt changed, not only a finding's location."""
+    delta = []
+    for file in _diff_files(reviewed_diff) + [f for f in _diff_files(head_diff)
+                                              if f not in _diff_files(reviewed_diff)]:
+        lines = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
+        if lines:
+            delta.append("diff --git a/%s b/%s" % (file, file))
+            delta.extend(lines)
+    return delta
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -5649,6 +5670,15 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     effective = _live_ruling_by_key(state)
     ledger_by_key, _fault = _disposition_ledger_by_key(state)
     history = _finding_history(state)
+    # The attempt's whole delta and the batch's findings in compact form ride every target, so the
+    # auditor attributes a change to any finding of the batch before calling it unnamed.
+    attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"))
+                     if reviewed_diff is not None else None)
+    batch_findings = []
+    for bf in state.get("fixBatch") or []:
+        if isinstance(bf, dict) and _finding_key_of(bf) not in [b["id"] for b in batch_findings]:
+            batch_findings.append({"id": _finding_key_of(bf), "file": bf.get("file"),
+                                   "line": bf.get("line"), "title": bf.get("title")})
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5679,10 +5709,11 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             if f.get(carried) is not None:
                 row[carried] = f[carried]
         row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
-        # `fixerDelta` is the fix's own diff (reviewed head -> fixed head) over the finding's location.
-        if reviewed_diff is not None:
-            row["fixerDelta"] = _fixer_delta_lines(
-                reviewed_diff, state.get("headDiff"), f.get("file"), f.get("line"))
+        # `fixerDelta` is the attempt's own diff (reviewed head -> fixed head) over every file it
+        # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
+        if attempt_delta is not None:
+            row["fixerDelta"] = list(attempt_delta)
+        row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
         # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
         # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the

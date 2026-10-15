@@ -19,10 +19,12 @@ the diff, the repo, and the target record.
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
 finding and whether any new issues were introduced. Cite quoted support for every conclusion.
 Each new issue you report is a finding in the base rubric's findings shape, `consequence` and `consequenceKind` included; a new issue with no stated consequence is not taken into the review.
-Compare the fix (`fixHunks` in the audit target; `fixerDelta` is the fix's own diff, reviewed head to fixed head, over that location, hunk headers and context kept; a line the PR diff carried shows after the diff mark, so `-+x` is a PR addition the fix removed and `++x` one it made. A target's `priorAudit` is the last audit of the finding: when it refused, say why, check whether that cause still stands in the fix. A target's `ownerRuling` is the owner's decision on the finding, its guidance and whether it allows a change the finding does not name (`allowsChange`): discharge a fix that makes such a change only when `ownerRuling` allows it) with what the finding names: its title, body,
+Compare the fix (`fixHunks` in the audit target; `fixerDelta` is the whole attempt's own diff, reviewed head to fixed head, over every file the attempt changed, each file under its `diff --git` line, hunk headers and context kept; `batchFindings` are the attempt's other findings, each with its file, line and title; a line the PR diff carried shows after the diff mark, so `-+x` is a PR addition the fix removed and `++x` one it made. A target's `priorAudit` is the last audit of the finding: when it refused, say why, check whether that cause still stands in the fix. A target's `ownerRuling` is the owner's decision on the finding, its guidance and whether it allows a change the finding does not name (`allowsChange`): discharge a fix that makes such a change only when `ownerRuling` allows it) with what the finding names: its title, body,
 suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does
-not name, say so in plain words in the result's field for an unnamed behaviour change; leave that
-field out when the fix changes nothing beyond what the finding names.
+not name, say so in plain words in the result's field for an unnamed behaviour change, but only for
+behaviour that neither this finding, nor another finding in `batchFindings`, nor an allowing
+`ownerRuling` names: a change that belongs to a sibling finding's fix is not unnamed. Leave that
+field out when every change in `fixerDelta` is named by a finding of the batch.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
