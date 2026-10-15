@@ -80,6 +80,9 @@ def _resolve_expected_auditor(fid, finding, expected_auditors):
     return None, False
 
 
+UNNAMED_CHANGE_REASON_PREFIX = "the fix changes behaviour its finding does not name: "
+
+
 def has_usable_unnamed_change(value):
     """True when `value` is a non-blank string — the auditor's plain-words statement of behaviour the
     fix changes that its finding does not name. Absent, null or blank means none."""
@@ -88,6 +91,11 @@ def has_usable_unnamed_change(value):
 
 # The reason an audit entry carries when no result came back for its target (silence, not a ruling).
 NO_AUDIT_RESULT_REASON = "no audit result for this finding — cannot certify the fix discharged"
+
+
+def is_decision_seq(value):
+    """True when `value` is an integer (never a bool) — the sequence of a carried owner decision."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None,
@@ -115,7 +123,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                  behaviour the finding does not name. A clearing result that states such a change
                  (`unnamedChange`) stays discharged only for these ids (its audit entry records
                  `allowedChange`); for any other id it is `not-discharged` and listed in
-                 `unnamedChange`. A non-string, non-null `unnamedChange` is malformed.
+                 `unnamedChange`. A non-string, non-null `unnamedChange` is malformed, and so is a
+                 non-integer, non-null `unnamedChangeAllowedBySeq` (the fold, not this function,
+                 verifies the named decision before an id is listed here).
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
     unmatched, unauthenticated, echoMismatch, unnamedChange}. Each `audits` entry carries the EFFECTIVE
@@ -189,7 +199,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             not_discharged.append(fid)
         new_issues.extend(candidates)
         base.update(ruling="not-discharged",
-                    reason="the fix changes behaviour its finding does not name: %s" % text)
+                    reason=UNNAMED_CHANGE_REASON_PREFIX + text)
         audits.append(base)
 
     for f in audited:
@@ -312,6 +322,16 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             if fid is not None:
                 not_discharged.append(fid)
             continue
+        named_seq = r.get("unnamedChangeAllowedBySeq")
+        if ruling in _CLEARS and named_seq is not None and not is_decision_seq(named_seq):
+            if fid is not None:
+                malformed.append(fid)
+            base.update(ruling="not-discharged",
+                        reason="`unnamedChangeAllowedBySeq` is not an integer — treated as not-discharged")
+            audits.append(base)
+            if fid is not None:
+                not_discharged.append(fid)
+            continue
         unnamed_text = unnamed.strip() if has_usable_unnamed_change(unnamed) else None
 
         if ruling == "discharged":
@@ -370,8 +390,12 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             mv = collection_manifest.get(fid) if isinstance(collection_manifest, dict) else None
             if isinstance(mv, str) and mv and mv == expected_auditor:
                 base["auditor"] = mv  # a completed rejection by the selected auditor is a reviewer that ran
-            base.update(ruling="not-discharged",
-                        reason=reason.strip() if has_reason else "not discharged")
+            kept_reason = reason.strip() if has_reason else "not discharged"
+            if unnamed_text:
+                # keep the auditor's account of the unnamed change: the next fixer reads it from
+                # the recorded reason (priorAudit.reason), so it knows what to undo.
+                kept_reason += " Unnamed change: " + unnamed_text
+            base.update(ruling="not-discharged", reason=kept_reason)
             audits.append(base)
             if fid is not None:
                 not_discharged.append(fid)

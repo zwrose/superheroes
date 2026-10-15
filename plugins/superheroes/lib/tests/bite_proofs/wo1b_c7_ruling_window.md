@@ -1,372 +1,661 @@
-# Bite-proof record: WO1b (C7 L2b, issue #1868) — the ruling window
+# Bite-proof record: the simple ruling window (C7 L2b, Canon 2026-10-15-dcc2b5e5-3)
 
-Detectors: `plugins/superheroes/lib/tests/test_ruling_window_c7.py` (unedited for every proof below).
-Neutralized file: `plugins/superheroes/lib/round_driver.py`, each time by one targeted edit through the
-edit tool, restored by the inverse edit. Every run: `python3 -B -X pycache_prefix=/tmp/claude-0/pyc -m
-pytest '<exact node id>' -q -n 0`. Pytest-internal paths (`/tmp/claude-0/pytest-of-root/...`) are session
-scratch, not secrets; nothing else is redacted.
+Guards of `round_driver.py` (`_cmd_rule_locked`, `_resolve_ruled_batch`, `_queue_fix_batch`) proven by
+`plugins/superheroes/lib/tests/test_ruling_window_c7.py`. This record replaces the earlier one, whose
+elements guarded code the Canon ruling removed (`withdraw`, the timing refusals, the autonomous lift,
+the carry/re-join paths).
 
-Declared guarded elements (six): 1 withdraw restore check (dirty tree); 2 withdraw restore check (HEAD
-moved); 3 `cmd_submit` fold-path refusal of a withdrawn attempt; 4 `_next_dispatch_attempt` floor;
-5 conditional `ruling-attempt-pending`; 6 real-consequence lift.
+Method, per element: one targeted string edit of `round_driver.py` (the neutralization, quoted);
+the detector node run alone, unedited (`-q -n 0`, never a filtered suite log); the inverse edit
+(the restore, quoted back); the same node run again. `sha256` of `round_driver.py` (first 16 hex
+digits) is `d82357d35b914254` before every neutralization and after every restore, so each restore
+returned the file byte for byte. Raw outputs are verbatim from the runs; temporary directory names
+(`/tmp/claude-0/pytest-of-root/...`) are the only environment detail in them.
 
-Capture disclosures: the element 1 red is the last 40 lines of the run (the head of the failure listing is
-cut). All other captures are whole. Elements 1 and 2 were re-run (new captures, new line numbers) after
-the restore check began resolving the repo root through `store_core.repo_root` instead of a
-`rev-parse --show-toplevel` call; elements 3-6 are unchanged from the earlier run.
+Guarded-element set (declared by this record; the order named elements i-vi):
 
-## 1. Withdraw restore check, dirty tree
+1. i — `rule` never refuses for timing (`_cmd_rule_locked`)
+2. ii — the resolution point attaches a ruling to the row it binds (`ruledBy`, `_resolve_ruled_batch`)
+3. iii — the resolution point adds an owner-named finding no fixer was sent (`added.append`)
+4. iv — it does not send a decision again (`sentUnderDecision` compare)
+5. v — it restages a finding fixed against a later ruling (`_reopened_ledger_row`)
+6. vi — no autonomous lift (`_queue_fix_batch` offers only blockers and owner-named rows)
+7. vii — a ruling never reshapes a fixer attempt whose orders are out (`if not emitted:` in `rule`)
+8. x — an unresolvable not-discharged list leaves every restage mark in place (`_fold_audits`, `still_open is not None`)
+9. xi — an audit that credits a fix under an allowing ruling marks that decision as sent (`_fold_audits`, `sentUnderDecision`)
 
-- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7509` (`if dirty:`). Axis: a
-  worktree still holding the stopped fixer's changes is refused with `withdraw-worktree-dirty`.
-- Detector: `test_edge2_restore_check_refusals[tracked-change-withdraw-worktree-dirty]`.
-- Neutralization: `    if dirty:` -> `    if False and dirty:` (asserted once by the edit tool; re-run after the
-  fix that resolves the repo root through `store_core.repo_root`).
-- Raw red (last 40 lines of the run):
+Unproven (no neutralization run; the order's budget allowed 14 bite-proof runs = 7 elements):
+the "ruling names no live finding" line and dispatch-nothing edge (`_ruled_row` returning
+`(None, False)`; covered by `test_a_ruling_naming_no_live_finding_dispatches_nothing_and_is_recorded`),
+and the single-writer census (`test_every_fixer_batch_passes_the_one_resolution_point`).
 
-```
-keep_severity = None, case = 'tracked-change', token = 'withdraw-worktree-dirty'
+## Element i. `rule` never refuses for timing
 
-    @pytest.mark.parametrize("case,token", [
-        ("tracked-change", "withdraw-worktree-dirty"),
-        ("untracked-file", "withdraw-worktree-dirty"),
-        ("head-moved", "withdraw-head-moved"),
-        ("no-anchor-head", "withdraw-head-unanchored"),
-        ("git-unavailable", "withdraw-git-unavailable"),
-    ])
-    def test_edge2_restore_check_refusals(tmp_path, keep_severity, case, token):
-        """axis: the worktree must be back at the attempt's starting head with nothing left over.
-    
-        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (elements 1, 2)
-        """
-        session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e2")
-        k = _state(session_dir)["pending"]["attempt"]
-        repo, head = _throwaway_repo(tmp_path)
-        _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head)
-        kwargs = {"repo_root": str(repo)}
-        if case == "tracked-change":
-            (repo / "a.txt").write_text("changed by the stopped fixer\n", encoding="utf-8")
-        elif case == "untracked-file":
-            (repo / "stray.txt").write_text("left behind\n", encoding="utf-8")
-        elif case == "head-moved":
-            (repo / "a.txt").write_text("two\n", encoding="utf-8")
-            _git(repo, "commit", "-q", "-a", "-m", "second")
-        elif case == "git-unavailable":
-            kwargs = {"repo_root": str(repo), "git": lambda cwd, *args: None}
-        before = _state_bytes(session_dir)
-        out = RD.cmd_withdraw(session_dir, k, "owner ruled", **kwargs)
->       assert out.get("ok") is False and out.get("reason") == token, out
-E       AssertionError: {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}
-E       assert (True is False)
-E        +  where True = <built-in method get of dict object at 0x7fd69fdacf40>('ok')
-E        +    where <built-in method get of dict object at 0x7fd69fdacf40> = {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}.get
+- **Guarded element:** `round_driver.py` `_cmd_rule_locked`, after `emitted = (...)`. Axis: REFUSAL — a ruling is recorded whichever step is pending, with the fixer orders already out.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_vet_442_ruling_on_an_emitted_order_is_accepted_and_reaches_the_next_order`
 
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:466: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restore_check_refusals[tracked-change-withdraw-worktree-dirty]
-1 failed in 6.95s
+**Neutralization.** Inserted after the `emitted = (...)` statement:
+
+```python
+    if emitted:
+        return _refuse_cmd(session_dir, RULE_CMD, "ruling-attempt-pending", phase=P_FIXER)
 ```
 
-- Axis check: the withdraw went through (`ok: True`, `restoreCheck: checked`) where the refusal token
-  `withdraw-worktree-dirty` was expected — red on the refusal axis.
-- Restore: inverse edit `    if False and dirty:` -> `    if dirty:`. Restore receipt (lines 7509-7510 re-read):
-  `    if dirty:` / `        return (WITHDRAW_WORKTREE_DIRTY,`.
-- Raw green:
+**Raw red** (exit 1):
 
 ```
-.                                                                        [100%]
-1 passed in 6.07s
-```
-
-## 2. Withdraw restore check, HEAD moved
-
-- Guarded element and axis: `_withdraw_restore_check`, `round_driver.py:7514` (`if head != bound:`). Axis:
-  a worktree at a different head than the attempt started from is refused with `withdraw-head-moved`.
-- Detector: `test_edge2_restore_check_refusals[head-moved-withdraw-head-moved]`.
-- Neutralization: `    if head != bound:` -> `    if False and head != bound:` (asserted once by the edit
-  tool; re-run after the same fix).
-- Raw red (whole run):
-
-```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 F                                                                        [100%]
 =================================== FAILURES ===================================
-______ test_edge2_restore_check_refusals[head-moved-withdraw-head-moved] _______
+_ test_vet_442_ruling_on_an_emitted_order_is_accepted_and_reaches_the_next_order _
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-74/test_edge2_restore_check_refus0')
-keep_severity = None, case = 'head-moved', token = 'withdraw-head-moved'
-
-    @pytest.mark.parametrize("case,token", [
-        ("tracked-change", "withdraw-worktree-dirty"),
-        ("untracked-file", "withdraw-worktree-dirty"),
-        ("head-moved", "withdraw-head-moved"),
-        ("no-anchor-head", "withdraw-head-unanchored"),
-        ("git-unavailable", "withdraw-git-unavailable"),
-    ])
-    def test_edge2_restore_check_refusals(tmp_path, keep_severity, case, token):
-        """axis: the worktree must be back at the attempt's starting head with nothing left over.
-    
-        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (elements 1, 2)
-        """
-        session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e2")
-        k = _state(session_dir)["pending"]["attempt"]
-        repo, head = _throwaway_repo(tmp_path)
-        _bind_anchor_head(session_dir, None if case == "no-anchor-head" else head)
-        kwargs = {"repo_root": str(repo)}
-        if case == "tracked-change":
-            (repo / "a.txt").write_text("changed by the stopped fixer\n", encoding="utf-8")
-        elif case == "untracked-file":
-            (repo / "stray.txt").write_text("left behind\n", encoding="utf-8")
-        elif case == "head-moved":
-            (repo / "a.txt").write_text("two\n", encoding="utf-8")
-            _git(repo, "commit", "-q", "-a", "-m", "second")
-        elif case == "git-unavailable":
-            kwargs = {"repo_root": str(repo), "git": lambda cwd, *args: None}
-        before = _state_bytes(session_dir)
-        out = RD.cmd_withdraw(session_dir, k, "owner ruled", **kwargs)
->       assert out.get("ok") is False and out.get("reason") == token, out
-E       AssertionError: {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}
-E       assert (True is False)
-E        +  where True = <built-in method get of dict object at 0x7fdc16ee1d40>('ok')
-E        +    where <built-in method get of dict object at 0x7fdc16ee1d40> = {'ok': True, 'withdrawn': {'round': 1, 'attempt': 0}, 'restoreCheck': 'checked'}.get
-
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:466: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge2_restore_check_refusals[head-moved-withdraw-head-moved]
-1 failed in 3.59s
-```
-
-- Axis check: same as element 1 for the head token; the fixture commits (clean tree, moved head), so the
-  dirty check does not fire first.
-- Restore: inverse edit. Restore receipt (lines 7514-7515 re-read): `    if head != bound:` /
-  `        return (WITHDRAW_HEAD_MOVED,`.
-- Raw green:
-
-```
-.                                                                        [100%]
-1 passed in 2.37s
-```
-
-## 3. Fold-path refusal of a withdrawn attempt in `cmd_submit`
-
-- Guarded element and axis: `cmd_submit`, `round_driver.py:7908-7909` (the `_fixer_attempt_withdrawn_refusal`
-  call with `"submit"`). Axis: a submit addressed to a withdrawn fixer attempt is refused with
-  `fixer-attempt-withdrawn`, naming the withdrawal.
-- Detector: `test_edge3_fold_paths_refuse_a_withdrawn_attempt` (its first loop leg is the submit; the
-  record-result and record-missing legs are other call sites and are not neutralized here).
-- Neutralization: `        session_dir, "submit", state, attempt, phase=phase)` ->
-  `        session_dir, "submit", state, None, phase=phase)` (the helper returns None for a non-int attempt;
-  edit-tool uniqueness-checked; line 7909 re-read).
-- Raw red:
-
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_______________ test_edge3_fold_paths_refuse_a_withdrawn_attempt _______________
-
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-34/test_edge3_fold_paths_refuse_a0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-15/test_vet_442_ruling_on_an_emit0')
 keep_severity = None
 
-    def test_edge3_fold_paths_refuse_a_withdrawn_attempt(tmp_path, keep_severity):
-        """axis: submit, record-result and record-missing addressed to a withdrawn fixer attempt name the
-        withdrawal, and leave the state alone."""
-        session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e3")
+    def test_vet_442_ruling_on_an_emitted_order_is_accepted_and_reaches_the_next_order(
+            tmp_path, keep_severity):
+        """axis: REFUSAL — a `guidance` ruling on a finding in the batch of a fixer order that is already
+        out is recorded (no `ruling-attempt-pending`), the attempt and its batch are left as they were,
+        the fixer's result folds normally, and the next fixer order carries the finding with the guidance.
+        """
+        session_dir, gitdir, head_path, key_a, key_b = _two_important(tmp_path, "c7-442")
+        emitted = _state(session_dir)
+        assert RD._journal_has_orders_emitted(
+            session_dir, emitted["round"], P_FIXER, emitted["pending"]["attempt"])
+        assert "TAKE-THE-SECOND-OPTION" not in _order_text(session_dir)
+    
+        out = _rule(session_dir, _guidance_file(tmp_path, "r.json", key_a, "TAKE-THE-SECOND-OPTION"))
+>       assert out.get("ok") is True, out
+E       AssertionError: {'ok': False, 'reason': 'ruling-attempt-pending'}
+E       assert False is True
+E        +  where False = <built-in method get of dict object at 0x7f426d9a4b80>('ok')
+E        +    where <built-in method get of dict object at 0x7f426d9a4b80> = {'ok': False, 'reason': 'ruling-attempt-pending'}.get
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:158: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_vet_442_ruling_on_an_emitted_order_is_accepted_and_reaches_the_next_order
+1 failed in 1.86s
+```
+
+**Restore.** Inverse edit: the two inserted lines removed. Restored lines (`round_driver.py:7521-7524`):
+
+```python
+    emitted = (isinstance(pending, dict) and pending.get("phase") == P_FIXER
+               and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                               pending.get("attempt")))
+    cfg = state.get("config") or {}
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 13.96s
+```
+
+## Element ii. the resolution point attaches a ruling to its row
+
+- **Guarded element:** `round_driver.py` `_resolve_ruled_batch`, the `ruledBy` stamp. Axis: ATTACH — guidance given to a finding merged into another renders on the representative the fixer is sent.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_a_ruling_on_a_member_merged_into_another_reaches_the_one_live_row`
+
+**Neutralization.** Replaced `row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding` with `pass  # a ruling given to a merged-in finding`.
+
+**Raw red** (exit 1):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_a_ruling_on_a_member_merged_into_another_reaches_the_one_live_row ____
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-17/test_a_ruling_on_a_member_merg0')
+keep_severity = None
+
+    def test_a_ruling_on_a_member_merged_into_another_reaches_the_one_live_row(
+            tmp_path, keep_severity):
+        """axis: ATTACH — guidance given on a finding merged into another binds the representative: the
+        representative is the row the next fixer order carries, with the member's guidance on it.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 2)
+        """
+        session_dir, gitdir, head_path, member, kept = _merged_into_session(tmp_path)
+        assert _rule(session_dir, _guidance_file(tmp_path, "g.json", member, "FOR-THE-MERGED"))["ok"]
+        _drive_one_phase(session_dir, gitdir, [], head_path)
+        state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+        assert state["round"] == 2
+        assert _batch_keys(state) == [kept] and _offered(state, session_dir, kept)
+        assert member not in _batch_keys(state)
+>       assert "FOR-THE-MERGED" in _order_text(session_dir)
+E       AssertionError: assert 'FOR-THE-MERGED' in 'You are the fixer for one round of an auto-fix code-review loop.\n\n## Input\n- Findings to fix: /tmp/claude-0/pytest...st-17/test_a_ruling_on_a_member_merg0/c7-merge/round-2/landing/dispatch-fixer/fixer-508e7896192355de.a0.payload.json\n'
+E        +  where 'You are the fixer for one round of an auto-fix code-review loop.\n\n## Input\n- Findings to fix: /tmp/claude-0/pytest...st-17/test_a_ruling_on_a_member_merg0/c7-merge/round-2/landing/dispatch-fixer/fixer-508e7896192355de.a0.payload.json\n' = _order_text('/tmp/claude-0/pytest-of-root/pytest-17/test_a_ruling_on_a_member_merg0/c7-merge')
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:414: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_ruling_on_a_member_merged_into_another_reaches_the_one_live_row
+1 failed in 3.23s
+```
+
+**Restore.** Inverse edit. Restored line (`round_driver.py:4530`):
+
+```python
+            row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 2.55s
+```
+
+## Element iii. the resolution point adds an owner-named finding no fixer was sent
+
+- **Guarded element:** `round_driver.py` `_resolve_ruled_batch`, `added.append(row)`. Axis: OWNER-NAMED, WHATEVER THE SEVERITY — a code-quality Minor named by `guidance` reaches the next fixer.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_a_minor_named_by_guidance_reaches_the_next_fixer`
+
+**Neutralization.** Replaced the statement `added.append(row)` (followed by `added.sort(`) with `pass`.
+
+**Raw red** (exit 1):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_a_minor_named_by_guidance_reaches_the_next_fixer _____________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-19/test_a_minor_named_by_guidance0')
+keep_severity = None
+
+    def test_a_minor_named_by_guidance_reaches_the_next_fixer(tmp_path, keep_severity):
+        """axis: OWNER-NAMED, WHATEVER THE SEVERITY — a code-quality Minor that was never in a fix batch,
+        named by a `guidance` ruling while the blocker's fixer is out, rides the next fixer order with the
+        guidance, and nothing else below blocking does.
+    
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 3)
+        """
+        session_dir, gitdir, head_path = _session(
+            tmp_path, [_finding("blocker B", 1),
+                       _finding("real minor", 2, "Minor", "real"),
+                       _finding("quality minor", 3, "Minor", "code-quality")], name="c7-minor")
         state = _state(session_dir)
-        k = state["pending"]["attempt"]
-        roster, _ = round_adapters.roster_for(P_FIXER, state, state.get("config") or {})
-        seat = RR.roster_slots(roster)[0][0]
-        assert RD.cmd_withdraw(session_dir, k, "owner ruled")["ok"]
-        before = _state_bytes(session_dir)
-        for out in (RD.cmd_submit(session_dir, P_FIXER, k, "h", {"fixes": []}),
-                    RD.cmd_record_result(session_dir, seat, attempt=k),
-                    RD.cmd_record_missing(session_dir, seat, k, "no-output")):
->           assert out.get("ok") is False and out.get("reason") == "fixer-attempt-withdrawn", out
-E           AssertionError: {'ok': False, 'reason': 'advance-submit-interleaved'}
-E           assert (False is False and 'advance-submit-interleaved' == 'fixer-attempt-withdrawn'
-E            +  where False = <built-in method get of dict object at 0x7f781aff1d00>('ok')
-E            +    where <built-in method get of dict object at 0x7f781aff1d00> = {'ok': False, 'reason': 'advance-submit-interleaved'}.get
-E             
-E             - fixer-attempt-withdrawn
-E             + advance-submit-interleaved)
+        assert [r["title"] for r in state["_fixBatch"]] == ["blocker B"]
+        key_q = _finding_key_by_title(state, "quality minor")
+        assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_q, "TIDY-THE-NAMES"))["ok"]
+        _drive_one_phase(session_dir, gitdir, [], head_path)
+>       state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:515: AssertionError
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:337: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+session_dir = '/tmp/claude-0/pytest-of-root/pytest-19/test_a_minor_named_by_guidance0/c7-minor'
+gitdir = '/tmp/claude-0/pytest-of-root/pytest-19/test_a_minor_named_by_guidance0/c7-minor-gitdir'
+head_path = '/tmp/claude-0/pytest-of-root/pytest-19/test_a_minor_named_by_guidance0/c7-minor-head.diff'
+phase = 'dispatch-fixer', max_steps = 12
+
+    def _drive_until(session_dir, gitdir, head_path, phase, max_steps=12):
+        """Drive pending phases (no new panel findings) until `phase` is pending."""
+        for _ in range(max_steps):
+            state = _state(session_dir)
+>           assert not state.get("terminal"), state.get("terminal")
+E           AssertionError: converged
+E           assert not 'converged'
+E            +  where 'converged' = <built-in method get of dict object at 0x7f8fe85b5640>('terminal')
+E            +    where <built-in method get of dict object at 0x7f8fe85b5640> = {'_advanceUsed': True, '_auditOutcome': {'ambiguous': [], 'audits': [{'auditor': 'codex', 'classKey': 'code-reviewer::...r::::blocker b', 'dimension': 'code-reviewer', 'evidence': 'read src/f00.py', ...}], '_changedSubjects': ['Code'], ...}.get
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:114: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge3_fold_paths_refuse_a_withdrawn_attempt
-1 failed in 1.68s
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_minor_named_by_guidance_reaches_the_next_fixer
+1 failed in 2.11s
 ```
 
-- Axis check: the submit is still refused, but by a different downstream check
-  (`advance-submit-interleaved`); the detector bites on the refusal token, which is the axis (a wrong token
-  counts as red).
-- Restore: inverse edit. Restore receipt (lines 7908-7909 re-read): `    withdrawn_refusal =
-  _fixer_attempt_withdrawn_refusal(` / `        session_dir, "submit", state, attempt, phase=phase)`.
-- Raw green:
+**Restore.** Inverse edit. Restored line (`round_driver.py:4518`):
+
+```python
+        added.append(row)
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
 
 ```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
-1 passed in 1.74s
+1 passed in 2.57s
 ```
 
-## 4. `_next_dispatch_attempt` floor
+## Element iv. the resolution point does not send a decision again
 
-- Guarded element and axis: `_next_dispatch_attempt`, `round_driver.py:8685`
-  (`candidates.extend(_withdrawn_fixer_attempts(state, rnd))`). Axis: the attempt allocated after a
-  withdrawal is strictly above the withdrawn one.
-- Detector: `test_edge4_fresh_attempt_is_above_the_withdrawn_one`.
-- Neutralization: `        candidates.extend(_withdrawn_fixer_attempts(state, rnd))` ->
-  `        candidates.extend(())` (line 8685 re-read).
-- Raw red:
+- **Guarded element:** `round_driver.py` `_resolve_ruled_batch`, the `sentUnderDecision` compare. Axis: NO REPEAT — a finding sent under a ruling is not sent again under it; a newer ruling sends it once more.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_a_decision_already_sent_is_not_sent_again`
+
+**Neutralization.** Replaced `or sent.get(_lineage_root(lineage, decision["findingKey"]), -1) >= decision["seq"]):` with `or False):`.
+
+**Raw red** (exit 1):
 
 ```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_____________ test_edge4_fresh_attempt_is_above_the_withdrawn_one ______________
+________________ test_a_decision_already_sent_is_not_sent_again ________________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_edge4_fresh_attempt_is_ab0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-21/test_a_decision_already_sent_i0')
 keep_severity = None
 
-    def test_edge4_fresh_attempt_is_above_the_withdrawn_one(tmp_path, keep_severity):
-        """axis: the attempt allocated after a withdrawal is strictly greater, its orders are emitted at
-        that attempt, and the withdrawn attempt's order files stay on disk untouched.
+    def test_a_decision_already_sent_is_not_sent_again(tmp_path, keep_severity):
+        """axis: NO REPEAT — a finding sent to a fixer under a ruling is not sent again under that same
+        ruling in any later round; a newer ruling on it is.
     
         bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 4)
         """
-        session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-e4")
-        state = _state(session_dir)
-        k = state["pending"]["attempt"]
-        old_order = _order_path(session_dir, state)
-        manifest = RD._orders_manifest_path(session_dir, state["round"], P_FIXER, k)
-        with open(old_order, "rb") as fh:
-            old_order_bytes = fh.read()
-        with open(manifest, "rb") as fh:
-            old_manifest_bytes = fh.read()
-        assert RD.cmd_withdraw(session_dir, k, "owner ruled")["ok"]
->       assert RD._next_dispatch_attempt(session_dir, state["round"], P_FIXER, _state(session_dir)) > k
-E       AssertionError: assert 0 > 0
-E        +  where 0 = <function _next_dispatch_attempt at 0x7f369682af20>('/tmp/claude-0/pytest-of-root/pytest-36/test_edge4_fresh_attempt_is_ab0/c7-e4', 1, 'dispatch-fixer', {'_advanceUsed': True, '_changedSubjectsSincePanel': [], '_coverage': [], '_fixBatch': [{'classification': 'mechanical...eviewer-found defect stays in the change', 'consequenceKind': 'real', 'detail': 'bounds F at src/f00.py:1', ...}], ...})
-E        +    where <function _next_dispatch_attempt at 0x7f369682af20> = RD._next_dispatch_attempt
-E        +    and   {'_advanceUsed': True, '_changedSubjectsSincePanel': [], '_coverage': [], '_fixBatch': [{'classification': 'mechanical...eviewer-found defect stays in the change', 'consequenceKind': 'real', 'detail': 'bounds F at src/f00.py:1', ...}], ...} = _state('/tmp/claude-0/pytest-of-root/pytest-36/test_edge4_fresh_attempt_is_ab0/c7-e4')
+        session_dir, gitdir, head_path, key_a, _key_b = _two_important(tmp_path, "c7-once")
+        assert _rule(session_dir, _guidance_file(tmp_path, "g1.json", key_a, "FIRST"))["ok"]
+        _drive_one_phase(session_dir, gitdir, [], head_path)
+        state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+        assert state["round"] == 2 and _offered(state, session_dir, key_a)
+        # round 2's fixer folds and its audit discharges A again: with no newer ruling, the loop converges
+>       _sent, state = _run_recording_fixer_batches(session_dir, gitdir, head_path)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:536: AssertionError
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:447: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+session_dir = '/tmp/claude-0/pytest-of-root/pytest-21/test_a_decision_already_sent_i0/c7-once'
+gitdir = '/tmp/claude-0/pytest-of-root/pytest-21/test_a_decision_already_sent_i0/c7-once-gitdir'
+head_path = '/tmp/claude-0/pytest-of-root/pytest-21/test_a_decision_already_sent_i0/c7-once-head.diff'
+max_steps = 30
+
+    def _run_recording_fixer_batches(session_dir, gitdir, head_path, max_steps=30):
+        """Drive to the terminal; the titles of every fixer batch the driver sent, in order."""
+        sent = []
+        for _ in range(max_steps):
+            state = _state(session_dir)
+            if state.get("terminal"):
+                return sent, state
+            if state["pending"]["phase"] == P_FIXER:
+                sent.append([r["title"] for r in state["_fixBatch"]])
+>               assert len(sent) <= 3, "a fixer was sent out again and again: %s" % sent
+E               AssertionError: a fixer was sent out again and again: [['bounds F'], ['bounds F'], ['bounds F'], ['bounds F']]
+E               assert 4 <= 3
+E                +  where 4 = len([['bounds F'], ['bounds F'], ['bounds F'], ['bounds F']])
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:290: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_edge4_fresh_attempt_is_above_the_withdrawn_one
-1 failed in 1.65s
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_decision_already_sent_is_not_sent_again
+1 failed in 3.79s
 ```
 
-- Axis check: the allocator returned 0, the withdrawn attempt's own number, where > 0 was required.
-- Restore: inverse edit. Restore receipt (line 8685 re-read):
-  `        candidates.extend(_withdrawn_fixer_attempts(state, rnd))`.
-- Raw green:
+**Restore.** Inverse edit. Restored line (`round_driver.py:4499`):
+
+```python
+                or sent.get(_lineage_root(lineage, decision["findingKey"]), -1) >= decision["seq"]):
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
 
 ```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
-1 passed in 1.85s
+1 passed in 5.54s
 ```
 
-## 5. Conditional `ruling-attempt-pending`
+## Element v. it restages a finding fixed against a later ruling
 
-- Guarded element and axis: `_cmd_rule_locked`, `round_driver.py:7321`
-  (`if _lineage_root(lineage, key) in batch_roots:`). Axis: a ruling that targets a finding in the emitted
-  fixer batch is refused with `ruling-attempt-pending`.
-- Detector: `test_t1_ruling_while_pending_reaches_the_fix`.
-- Neutralization: `            if _lineage_root(lineage, key) in batch_roots:` ->
-  `            if False and _lineage_root(lineage, key) in batch_roots:` (never refuses; line 7321 re-read).
-- Raw red:
+- **Guarded element:** `round_driver.py` `_reopened_ledger_row`. Axis: RESTAGE — a finding the fix archived as fixed comes back in the next round's fixer order with the ruling; the resolver does not write the ledger (the restage is marked in driver state, `restagedAfterDispositionSeq`, and the ledger keeps its fold-time record).
+- **Detector (run alone):** `test_ruling_window_c7.py::test_a_fix_that_went_against_the_ruling_is_sent_back_restaged`
+- **Re-recorded** after `c7-l2b-wo-census2`: the resolver no longer drops the disposition in the ledger, so `_reopened_ledger_row` now returns the row for the restage and `sha256(round_driver.py)` (first 16 hex digits) is `6d229dd833dbaef7` before the neutralization and after the restore.
+
+**Neutralization.** Inserted `    return None` as the statement after the docstring of `_reopened_ledger_row`.
+
+**Raw red** (exit 1):
 
 ```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_________________ test_t1_ruling_while_pending_reaches_the_fix _________________
+________ test_a_fix_that_went_against_the_ruling_is_sent_back_restaged _________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-38/test_t1_ruling_while_pending_r0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0')
 keep_severity = None
 
-    def test_t1_ruling_while_pending_reaches_the_fix(tmp_path, keep_severity):
-        """axis: a ruling given while a fixer attempt is pending is refused with the recovery, and after
-        `withdraw` it reaches the fix that follows; the withdrawn attempt can never fold.
+    def test_a_fix_that_went_against_the_ruling_is_sent_back_restaged(tmp_path, keep_severity):
+        """axis: RESTAGE — A is in an emitted order, the ruling arrives, the fix lands and A is archived as
+        fixed; the next round's fixer order still carries A with the ruling (the restage lives in driver
+        state; the ledger keeps its fold-time record).
     
-        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (elements 3, 5)
+        bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 5)
         """
-        session_dir, _gitdir, _head, key_f, _key_g = _two_important(tmp_path)
-        k = _state(session_dir)["pending"]["attempt"]
-        ruling = _guidance_file(tmp_path, "r.json", key_f, "wrap it in the retry guard")
-        before = _state_bytes(session_dir)
-        out = _rule(session_dir, ruling)
->       assert out.get("ok") is False and out.get("reason") == "ruling-attempt-pending", out
-E       AssertionError: {'ok': True, 'recorded': 1, 'rulingFileSha256': '17ee93be3925322d489590729b529fe2f6a5ca291535d5711cc7cd328ed5981d', 'action': 'dispatch-fixer', ...}
-E       assert (True is False)
-E        +  where True = <built-in method get of dict object at 0x7f4df0eeef80>('ok')
-E        +    where <built-in method get of dict object at 0x7f4df0eeef80> = {'ok': True, 'recorded': 1, 'rulingFileSha256': '17ee93be3925322d489590729b529fe2f6a5ca291535d5711cc7cd328ed5981d', 'action': 'dispatch-fixer', ...}.get
+        session_dir, gitdir, head_path, key_a, _key_b = _two_important(tmp_path, "c7-restage")
+        assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_a, "DO-NOT-DELETE-IT"))["ok"]
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the fixer folds
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the audit discharges A
+        state = _state(session_dir)
+        assert _ledger_row(state, key_a)["disposition"] == "fixed"
+    
+>       state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:189: AssertionError
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+session_dir = '/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0/c7-restage'
+gitdir = '/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0/c7-restage-gitdir'
+head_path = '/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0/c7-restage-head.diff'
+phase = 'dispatch-fixer', max_steps = 12
+
+    def _drive_until(session_dir, gitdir, head_path, phase, max_steps=12):
+        """Drive pending phases (no new panel findings) until `phase` is pending."""
+        for _ in range(max_steps):
+            state = _state(session_dir)
+>           assert not state.get("terminal"), state.get("terminal")
+E           AssertionError: converged
+E           assert not 'converged'
+E            +  where 'converged' = <built-in method get of dict object at 0x7ff91085f7c0>('terminal')
+E            +    where <built-in method get of dict object at 0x7ff91085f7c0> = {'_advanceUsed': True, '_auditOutcome': {'ambiguous': [], 'audits': [{'auditor': 'codex', 'classKey': 'code-reviewer::...er::::bounds g', 'dimension': 'code-reviewer', 'evidence': 'read src/f00.py', ...}], '_changedSubjects': ['Code'], ...}.get
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:114: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t1_ruling_while_pending_reaches_the_fix
-1 failed in 1.77s
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_fix_that_went_against_the_ruling_is_sent_back_restaged
+1 failed in 2.69s
 ```
 
-- Axis check: the rule was accepted (`ok: True`) where the refusal token was required.
-- Restore: inverse edit. Restore receipt (line 7321 re-read):
-  `            if _lineage_root(lineage, key) in batch_roots:`.
-- Raw green:
+**Restore.** Inverse edit (removed the inserted `return None`). Restored lines (`round_driver.py:4451-4455`):
+
+```python
+def _reopened_ledger_row(ledger_by_key, key):
+    """The finding's own ledger row as an open finding again (its disposition dropped), or None."""
+    row = ledger_by_key.get(key)
+    if not isinstance(row, dict):
+        return None
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `6d229dd833dbaef7` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
 
 ```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
-1 passed in 1.71s
+1 passed in 2.71s
 ```
 
-## 6. Real-consequence lift
+## Element vi. no autonomous lift
 
-- Guarded element and axis: `_lift_marker_for`, `round_driver.py:4227` (the `LIFT_REAL_CONSEQUENCE`
-  condition). Axis: an undisposed real-consequence Minor rides the first fixer order after the blocker.
-- Detector: `test_t5_undisposed_real_minors_ride_the_first_fixer_order`.
-- Neutralization: `    if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL`
-  -> `    if (False and finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL`
-  (real-consequence branch only; the guidance branch is untouched; line 4227 re-read).
-- Raw red:
+- **Guarded element:** `round_driver.py` `_queue_fix_batch`, directly after `filtered = _resolve_ruled_batch(state, filtered)`. Axis: NO AUTONOMOUS LIFT — a below-blocking finding no ruling names never rides a fix batch; it is settled at convergence.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_a_converged_loop_settles_its_minors_and_never_puts_them_in_a_fix_batch`
+
+**Neutralization.** Inserted, after that line, a re-creation of the removed lift (every live real-consequence non-blocking finding joins a batch that is going out):
+
+```python
+    if filtered:
+        filtered += [dict(f) for f in state.get("findings") or [] if isinstance(f, dict)
+                     and f.get("consequenceKind") == "real" and not circuit_breaker.is_blocking(f.get("severity"))
+                     and _fix_batch_row_key(f) not in {_fix_batch_row_key(r) for r in filtered}]
+```
+
+**Raw red** (exit 1):
 
 ```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 F                                                                        [100%]
 =================================== FAILURES ===================================
-__________ test_t5_undisposed_real_minors_ride_the_first_fixer_order ___________
+_ test_a_converged_loop_settles_its_minors_and_never_puts_them_in_a_fix_batch __
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-40/test_t5_undisposed_real_minors0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-25/test_a_converged_loop_settles_0')
 keep_severity = None
 
-    def test_t5_undisposed_real_minors_ride_the_first_fixer_order(tmp_path, keep_severity):
-        """axis: a round that sends a fixer out offers its undisposed real-consequence Minors in that same
-        batch, after the blocker, each marked; a code-quality Minor is not lifted.
+    def test_a_converged_loop_settles_its_minors_and_never_puts_them_in_a_fix_batch(
+            tmp_path, keep_severity):
+        """axis: NO AUTONOMOUS LIFT — a real-consequence Minor and a code-quality Minor, neither ruled,
+        ride no fixer batch; at convergence the first is left for the owner with its consequence and the
+        second is craft, and the session's left-for-owner count (what the review record names) is 1.
     
         bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 6)
         """
-        session_dir, _g, _h = _minors_session(tmp_path, "c7-lift")
-        state = _state(session_dir)
-        assert state["pending"]["phase"] == P_FIXER
-        by_title = _rows_by_title(state)
->       assert [row["title"] for row in state["_fixBatch"]] == [
-            "blocker B", "real minor one", "real minor two"]
-E       AssertionError: assert ['blocker B'] == ['blocker B',...al minor two']
-E         
-E         Right contains 2 more items, first extra item: 'real minor one'
-E         Use -v to get more diff
+        import review_record_session
+        session_dir, gitdir, head_path = _session(
+            tmp_path, [_finding("blocker B", 1),
+                       _finding("real minor", 2, "Minor", "real"),
+                       _finding("quality minor", 3, "Minor", "code-quality")], name="c7-settle")
+        sent, state = _run_recording_fixer_batches(session_dir, gitdir, head_path)
+        assert state["terminal"] == "converged"
+>       assert sent and all(titles == ["blocker B"] for titles in sent), sent
+E       AssertionError: [['blocker B', 'real minor']]
+E       assert ([['blocker B', 'real minor']] and False)
+E        +  where False = all(<generator object test_a_converged_loop_settles_its_minors_and_never_puts_them_in_a_fix_batch.<locals>.<genexpr> at 0x7f22acb27b90>)
 
-/home/user/wt-1868/plugins/superheroes/lib/tests/test_ruling_window_c7.py:323: AssertionError
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:311: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_t5_undisposed_real_minors_ride_the_first_fixer_order
-1 failed in 1.68s
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_converged_loop_settles_its_minors_and_never_puts_them_in_a_fix_batch
+1 failed in 2.02s
 ```
 
-- Axis check: the batch holds only the blocker; the two real-consequence Minors are missing from it.
-- Restore: inverse edit. Restore receipt (line 4227 re-read):
-  `    if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL`.
-- Raw green:
+**Restore.** Inverse edit: the four inserted lines removed. Restored lines (`round_driver.py:4568-4570`):
+
+```python
+    filtered = _resolve_ruled_batch(state, filtered)
+    if not filtered and not offered_nonempty:
+        return "empty"
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 1.91s
+```
+
+## Element vii. a ruling never reshapes a fixer attempt whose orders are out
+
+- **Guarded element:** `round_driver.py` `_cmd_rule_locked`, the `if not emitted:` before `_reconcile_fixer_queue_after_rulings`. Axis: NON-INTERFERENCE — the pending attempt, `_fixBatch`, `_fixQueue` and `fix-batch.json` stay as they were.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_a_ruling_on_a_row_in_the_emitted_order_leaves_the_attempt_untouched`
+
+**Neutralization.** Replaced `    if not emitted:` (directly above `_reconcile_fixer_queue_after_rulings(`) with `    if True:`.
+
+**Raw red** (exit 1):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_a_ruling_on_a_row_in_the_emitted_order_leaves_the_attempt_untouched ___
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_a_ruling_on_a_row_in_the_0')
+keep_severity = None
+
+    def test_a_ruling_on_a_row_in_the_emitted_order_leaves_the_attempt_untouched(
+            tmp_path, keep_severity):
+        """axis: NON-INTERFERENCE — an `out-of-scope` ruling on a row of the emitted batch is recorded but
+        the pending attempt, `_fixBatch`, `_fixQueue` and the emitted `fix-batch.json` stay byte-identical
+        (a fix under way is never stopped or re-sliced)."""
+        session_dir, _g, _h, key_a, _key_b = _two_important(tmp_path, "c7-untouched")
+        before = _state(session_dir)
+        path = os.path.join(RR.round_dir(session_dir, before["round"]), "fix-batch.json")
+        with open(path, "rb") as fh:
+            file_before = fh.read()
+        out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+            {"id": key_a, "ruling": "out-of-scope", "reason": "later", "followUp": _follow_up()}]))
+        assert out.get("ok") is True, out
+        after = _state(session_dir)
+        for field in ("pending", "_fixBatch", "_fixQueue", "_fixBatchIndex"):
+>           assert after.get(field) == before.get(field), field
+E           AssertionError: pending
+E           assert {'action': 'd...h-fixer', ...} == {'action': 'd...h-fixer', ...}
+E             
+E             Omitting 4 identical items, use -vv to show
+E             Differing items:
+E             {'payload': {'batch': [{'classification': 'mechanical', 'consequence': 'a reviewer-found defect stays in the change', 'consequenceKind': 'real', 'detail': 'bounds G at src/f00.py:2', ...}]}} != {'payload': {'batch': [{'classification': 'mechanical', 'consequence': 'a reviewer-found defect stays in the change', ...'a reviewer-found defect stays in the change', 'consequenceKind': 'real', 'detail': 'bounds G at src/f00.py:2', ...}]}}
+E             Use -v to get more diff
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:247: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_ruling_on_a_row_in_the_emitted_order_leaves_the_attempt_untouched
+1 failed in 1.59s
+```
+
+**Restore.** Inverse edit. Restored lines (`round_driver.py:7591-7593`):
+
+```python
+    if not emitted:
+        _reconcile_fixer_queue_after_rulings(
+            state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+```
+
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 1.79s
+```
+
+
+---
+
+## Element viii. a restaged row keeps the guidance link to its ruling
+
+**Test.** `test_ruling_window_c7.py::test_a_restaged_row_keeps_the_guidance_link_to_its_ruling`. **Axis:** the guidance block of the replacement fixer order names the restaged finding by its file, line and title, not by a record id.
+
+**Neutralization.** In `_gate_guidance_entries` replaced `_live_finding_by_key(state, key) or batch_rows.get(key)` with `_live_finding_by_key(state, key)`.
+
+**Raw red** (exit 1):
+
+```
+        assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_a, "DO-NOT-DELETE-IT"))["ok"]
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the fixer folds
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the audit discharges A
+        state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+        assert RD._live_finding_by_key(state, key_a) is None
+        row = _ledger_row(state, key_a)
+        text = _order_text(session_dir)
+>       assert "### %s:%s \u2014 %s" % (row["file"], row["line"], row["title"]) in text
+E       AssertionError: assert ('### %s:%s — %s' % ('src/f00.py', 1, 'bounds F')) in 'You are the fixer for one round of an auto-fix code-review loop.\n\n## Input\n- Findings to fix: /tmp/pytest-of-root/.../test_a_restaged_row_keeps_the_0/c7-restage-id/round-2/landing/dispatch-fixer/fixer-508e7896192355de.a0.payload.json\n'
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:328: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_restaged_row_keeps_the_guidance_link_to_its_ruling
+1 failed, 34 deselected in 35.52s
+```
+
+**Restore.** Inverse edit. `sha256(round_driver.py)` first 16 hex digits `0ee0e0606da6fe21` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
+
+```
+..                                                                       [100%]
+2 passed, 33 deselected in 3.21s
+```
+
+---
+
+## Element ix. a session from the generation before dispatch history is refused at `next`
+
+**Test.** `test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next`. **Axis:** a fixture session at the fixed generation 4 (`PRE_DISPATCH_HISTORY_GENERATION`, the release before dispatch history; never derived from `SESSION_GENERATION`) is refused with `session-from-earlier-version` (no backfill of `sentUnderDecision`).
+
+**Neutralization.** `round_driver._generation_is_current` made to return `True` for the run (the upgrade gate waved through), so the refusal assertion is the one that bites; the test no longer restates the generation value.
+
+**Raw red** (exit 1):
+
+```
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+out = {'ok': True, 'action': 'dispatch-panel', 'round': 1, 'phase': 'dispatch-panel', ...}
+already_restarted = False
+
+    def _assert_refusal(out, already_restarted):
+>       assert out["ok"] is False, out
+E       AssertionError: {'ok': True, 'action': 'dispatch-panel', 'round': 1, 'phase': 'dispatch-panel', ...}
+E       assert True is False
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_session_pickup_and_upgrade_1721.py:177: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next
+1 failed, 34 deselected in 1.38s
+```
+
+**Restore.** Inverse edits. `sha256(round_driver.py)` restored byte-for-byte from a backup copy.
+
+**Raw green** (exit 0):
+
+```
+..                                                                       [100%]
+2 passed, 33 deselected in 3.21s
+```
+
+---
+
+## Element x. an unresolvable not-discharged list leaves every restage mark in place
+
+- **Guarded element:** `round_driver.py` `_fold_audits`, the `if reopened and still_open is not None:` guard. Axis: FAIL CLOSED.
+- **Detector (run alone):** `test_ruling_window_c7.py::test_audit_discharge_keeps_every_restage_mark_when_the_open_list_cannot_be_resolved` (drives `_fold_audits`; `_open_audit_ids_from_not_discharged` is patched to return `None`).
+
+**Neutralization.** `if reopened and still_open is not None:` made `if reopened:`.
+
+**Raw red** (exit 1; the last lines of the run):
+
+```
+>               for member in _ruling_closure(state, ledger_now or {}, tid) - {tid} - still_open:
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: unsupported operand type(s) for -: 'set' and 'NoneType'
+
+/home/user/wt-l2c/plugins/superheroes/lib/round_driver.py:5872: TypeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_audit_discharge_keeps_every_restage_mark_when_the_open_list_cannot_be_resolved
+1 failed in 0.76s
+```
+
+**Restore.** Inverse edit; the restored line, quoted back from the file: `        if reopened and still_open is not None:` (`round_driver.py:5870`).
+
+**Raw green** (exit 0, last lines):
 
 ```
 .                                                                        [100%]
-1 passed in 1.67s
+1 passed in 0.10s
 ```
 
-## Final restore receipt
+---
 
-After the last restore, `git diff -- plugins/superheroes/lib/round_driver.py` shows only the
-repo-root-resolver fix in `_withdraw_restore_check` (the `rev-parse --show-toplevel` call replaced by
-`store_core.repo_root(root)`, with `RepoRootUnavailable` returned as `withdraw-git-unavailable`); no
-neutralization remains.
+## Element xi. an audit that credits a fix under an allowing ruling marks the decision as sent
+
+- **Guarded element:** `round_driver.py` `_fold_audits`, the `sent[root] = max(sent.get(root, 0), _decision_seq(decision))` line. Axis: DELIVERED DECISION.
+- **Detector (run alone):** `test_fix_scope_c7.py::test_t3_a_guidance_ruling_that_allows_the_change_keeps_the_fix_credited`.
+
+**Neutralization.** The line `sent[root] = max(sent.get(root, 0), _decision_seq(decision))` replaced by `pass`.
+
+**Raw red** (exit 1; the last lines of the run):
+
+```
+>       assert offers == [(1, [key])]
+E       AssertionError: assert [(1, ['f.py::...l deref@L1'])] == [(1, ['f.py::null deref@L1'])]
+E         
+E         Left contains one more item: (2, ['f.py::null deref@L1'])
+E         Use -v to get more diff
+
+/home/user/wt-l2c/plugins/superheroes/lib/tests/test_fix_scope_c7.py:403: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_scope_c7.py::test_t3_a_guidance_ruling_that_allows_the_change_keeps_the_fix_credited
+1 failed in 1.10s
+```
+
+**Restore.** Inverse edit; the restored line, quoted back from the file: `                sent[root] = max(sent.get(root, 0), _decision_seq(decision))` (`round_driver.py:5862`).
+
+**Raw green** (exit 0, last lines):
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```

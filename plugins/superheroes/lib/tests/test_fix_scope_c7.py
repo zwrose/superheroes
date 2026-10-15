@@ -81,6 +81,7 @@ def _decide(state, key, ruling, round_no, **extra):
            "by": "owner"}
     if ruling == "out-of-scope":
         row["followUp"] = _follow_up()
+        row["severity"] = "Critical"  # the snapshot the rule verb takes; tests drop it for the older shape
     if ruling == "guidance":
         row["guidance"] = "keep the retry behaviour"
     row.update(extra)
@@ -170,7 +171,7 @@ def test_t4_edge2_an_unsequenced_gate_skip_is_one_episode_per_its_round(empty_ba
     state = _staged_state([_finding("Gate bypass", severity="Critical")])
     key = _key("Gate bypass")
     state["rounds"]["1"] = {"judgmentDispositions": [
-        {"id": key, "file": "f.py", "line": 1, "title": "Gate bypass", "disposition": "skip",
+        {"id": key, "file": "f.py", "line": 1, "title": "Gate bypass", "disposition": "skip", "severity": "Critical",
          "reason": "owner accepted it"}]}
     assert _offer(state, 2) == ("queued", [key])
     assert state["outOfScopeFixerRounds"][key]["episode"] == "round:1"
@@ -337,7 +338,7 @@ def test_t4_edge6_an_unauthenticated_clearing_result_stays_unauthenticated():
 
 # --- Part B: the loop ---------------------------------------------------------------------------
 
-def _unnamed_change_loop(captured_state, *, allow):
+def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_ruling="discharged"):
     key = _key("Null deref")
     offers, seen_targets, history = [], [], {}
 
@@ -362,8 +363,12 @@ def _unnamed_change_loop(captured_state, *, allow):
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
                       "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
-            if rnd == 2:
+            if rnd in unnamed_rounds:
                 result["unnamedChange"] = UNNAMED
+                if t.get("ownerRulingSeq") is not None:
+                    result["unnamedChangeAllowedBySeq"] = t["ownerRulingSeq"]
+                if refusal_ruling != "discharged":
+                    result.update(ruling=refusal_ruling, reason="an additional behavior change needs permission")
             out.append(result)
         return out
 
@@ -403,6 +408,19 @@ def test_t3_a_guidance_ruling_that_allows_the_change_keeps_the_fix_credited(capt
     assert offers == [(1, [key])]
     row = _ledger(state)[key]
     assert row["disposition"] == "fixed" and row["dispositionRound"] == 2
+    # the compliant auditor reported the change; the fold allowed it and the ruling is delivered
+    assert state["sentUnderDecision"][key] >= 1
+
+
+def test_an_allowing_ruling_recorded_after_dispatch_is_delivered_when_the_audit_names_no_change(
+        captured_state):
+    # the audit discharges with no unnamed change: the ruling reached the audit, so it is not re-sent
+    key, state, offers, _seen, _history = _unnamed_change_loop(
+        captured_state, allow=True, unnamed_rounds=())
+    assert state["terminal"] == "converged"
+    assert offers == [(1, [key])]
+    assert state["sentUnderDecision"][key] >= 1
+    assert _ledger(state)[key]["disposition"] == "fixed"
 
 
 def test_t3_the_auditor_is_given_the_finding_text_and_the_fix_hunks(captured_state):
@@ -564,6 +582,8 @@ def test_t4_edge8_the_audit_contract_declares_unnamed_change_as_an_optional_stri
     assert reason is None
     assert "unnamedChange" in contract["optional"]
     assert contract["types"]["unnamedChange"] == "string"
+    assert "unnamedChangeAllowedBySeq" in contract["optional"]
+    assert contract["types"]["unnamedChangeAllowedBySeq"] == "integer"
 
 
 def test_t4_edge8_a_native_audit_branch_with_a_null_unnamed_change_normalizes_and_parses():
@@ -618,3 +638,406 @@ def test_t4_edge8_the_strict_schema_lists_unnamed_change_as_a_required_nullable_
     for schema_ in (ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW),
                     ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="findings")):
         ERC.assert_strict_mode_valid(schema_)
+
+
+# --- Review round 1 regressions ------------------------------------------------------------------
+
+def test_a_finding_raised_to_critical_after_its_out_of_scope_ruling_is_never_spent(
+        empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Important")])
+    key = _key("Gate bypass")
+    _decide(state, key, "out-of-scope", 1, severity="Important")
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                           followUp=_follow_up())
+    # re-raised as a blocker under the same key, through the real restaging (replaces the ledger entry)
+    state["round"] = 2
+    compiled, _ = RD.mechanical_compile([dict(_finding("Gate bypass", severity="Critical"))], None)
+    RD._stage_findings(state, compiled)
+    RD._set_findings(state, state["_toVerify"])
+    assert _ledger(state)[key]["severity"] == "Critical"
+    for rnd in (2, 3, 4):
+        assert _offer(state, rnd) == ("queued", [key])
+    assert empty_batch_calls == []
+    assert _decisions(state, "out-of-scope-fix-spent") == []
+
+
+def test_a_spent_episode_survives_a_lineage_root_change(empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Critical")])
+    key = _key("Gate bypass")
+    _decide(state, key, "out-of-scope", 1)
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                           followUp=_follow_up())
+    assert _offer(state, 2) == ("queued", [key])
+    # synthesis later merges the finding into another; the offer was logged under the old root
+    state["findingLineage"] = {key: _key("Other finding", 9)}
+    status, keys = _offer(state, 3)
+    assert status == "excluded" and keys == []
+    assert len(_decisions(state, "out-of-scope-fix-spent")) == 1
+
+
+def test_the_audit_order_names_the_fixer_delta():
+    text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
+                             "dispatch-audits.md")).read()
+    assert "fixerDelta" in text and "ownerRuling" in text
+
+
+@pytest.mark.parametrize("value", [[], 5, {"a": 1}, True])
+def test_the_submit_guard_refuses_a_non_string_unnamed_change(value):
+    targets = [{"id": "a"}]
+    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed"}]}
+    assert RD.audit_results_fault(ok, targets) is None
+    ok["results"][0]["unnamedChange"] = "it also stops retrying"
+    assert RD.audit_results_fault(ok, targets) is None
+    ok["results"][0]["unnamedChange"] = None
+    assert RD.audit_results_fault(ok, targets) is None
+    ok["results"][0]["unnamedChange"] = value
+    fault = RD.audit_results_fault(ok, targets)
+    assert fault and "unnamedChange" in fault
+
+
+def _diff(*files):
+    """A unified diff over {file: [body lines]}, one hunk per file starting at line 1."""
+    out = []
+    for name, body in files:
+        out += ["diff --git a/%s b/%s" % (name, name), "--- a/%s" % name, "+++ b/%s" % name,
+                "@@ -1,%d +1,%d @@" % (len(body), len(body))] + body
+    return "\n".join(out) + "\n"
+
+
+def _delta(reviewed_body, fixed_body, name="f.py", line=2, extra=()):
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near the top", line, file=name)]
+    state["headDiff"] = _diff((name, fixed_body), *extra)
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff=_diff((name, reviewed_body), *extra))
+    return row["fixerDelta"]
+
+
+def test_audit_targets_carry_the_fixers_own_diff_apart_from_the_prs():
+    delta = _delta([" ctx", "+log_request(x)", " ctx"],
+                   [" ctx", "+log_request(x)", "+if x is None: return", " ctx"])
+    assert delta[0].startswith("diff --git") and delta[1].startswith("@@")
+    assert "++if x is None: return" in delta
+    assert "++log_request(x)" not in delta and "-+log_request(x)" not in delta
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near the top", 2)]
+    (row,) = RD._audit_targets(state, state["config"], {})
+    assert "fixerDelta" not in row
+
+
+def test_fixer_delta_shows_a_reordering_the_signed_line_sets_cannot():
+    delta = _delta([" start()", "+charge()", " checkpoint()", " finish()"],
+                   [" start()", " checkpoint()", "+charge()", " finish()"])
+    assert delta.index("+ checkpoint()") < delta.index(" +charge()") < delta.index("- checkpoint()")
+
+
+def test_fixer_delta_shows_a_pure_removal():
+    delta = _delta([" ctx", "+guard()", "+retry()", " ctx"], [" ctx", "+guard()", " ctx"])
+    assert "-+retry()" in delta and not any(d.startswith("++") for d in delta)
+
+
+def test_fixer_delta_keeps_a_repeated_line_and_a_restored_removal():
+    assert "++charge()" in _delta([" c", "+charge()"], [" c", "+charge()", "+charge()"])
+    assert "--old()" in _delta([" c", "-old()", "+new()"], [" c", "+new()"])
+    assert _delta([" c", "+a()"], [" c", "+a()"]) == []
+
+
+def test_fixer_delta_is_empty_for_a_target_file_the_fix_left_alone():
+    other = ("g.py", [" c", "+a()"])
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("In f", 2, file="f.py"), _finding("In g", 2, file="g.py")]
+    reviewed = _diff(("f.py", [" c", "+retry()"]), other)
+    state["headDiff"] = _diff(("f.py", [" c", "+retry()"]), ("g.py", [" c", "+a()", "+b()"]))
+    f_row, g_row = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert "++b()" in g_row["fixerDelta"] and f_row["fixerDelta"] == g_row["fixerDelta"]
+
+
+def test_a_fixer_delta_carries_the_files_the_attempt_changed_beyond_the_finding_s():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("In f", 2, file="f.py")]
+    reviewed = _diff(("f.py", [" c", "+x()"]), ("g.py", [" c", "+retry(3)"]))
+    state["headDiff"] = _diff(("f.py", [" c", "+x()", "+guard()"]), ("g.py", [" c", "+retry(5)"]))
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert "diff --git a/g.py b/g.py" in row["fixerDelta"] and "++retry(5)" in row["fixerDelta"]
+    assert "++guard()" in row["fixerDelta"]
+
+
+def test_findings_sharing_a_hunk_each_list_the_sibling_and_the_template_clears_its_fix():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Guard", 2, file="f.py"), _finding("Retry", 3, file="f.py")]
+    reviewed = _diff(("f.py", [" c", "+a()", "+b()"]))
+    state["headDiff"] = _diff(("f.py", [" c", "+a()", "+b()", "+guard()", "+retry()"]))
+    guard, retry = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert [b["title"] for b in guard["batchFindings"]] == ["Retry"]
+    assert [b["title"] for b in retry["batchFindings"]] == ["Guard"]
+    assert set(guard["batchFindings"][0]) == {"id", "file", "line", "title"}
+    assert guard["fixerDelta"] == retry["fixerDelta"]
+    text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
+                             "dispatch-audits.md")).read()
+    text = " ".join(text.split())
+    assert "batchFindings" in text and "sibling finding's fix is not unnamed" in text
+
+
+def test_fixer_delta_does_not_invent_changes_where_hunks_merge():
+    def big(guard):
+        return ["diff --git a/f.py b/f.py", "--- a/f.py", "+++ b/f.py",
+                "@@ -7,7 +7,7 @@", " c", "+pr_a()", " c",
+                "@@ -27,7 +27,7 @@", " c", "+pr_b()", guard, " c"]
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near b", 30, file="f.py")]
+    state["headDiff"] = "\n".join(big("+guard()")) + "\n"
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff="\n".join(big(" c")) + "\n")
+    assert "++guard()" in row["fixerDelta"] and not any("pr_b" in d and d[0] in "+-" for d in row["fixerDelta"])
+
+
+def test_a_scope_refused_fix_stays_not_discharged_until_the_fix_drops_the_change(captured_state):
+    key, state, offers, seen_targets, _history = _unnamed_change_loop(
+        captured_state, allow=False, unnamed_rounds=(2, 3))
+    audits_by_round = {rnd: state["rounds"][rnd]["audits"][0] for rnd in ("2", "3", "4")}
+    assert audits_by_round["2"]["ruling"] == "not-discharged"
+    assert audits_by_round["3"]["ruling"] == "not-discharged"
+    assert audits_by_round["3"]["reason"].startswith(UNNAMED_REASON_PREFIX)
+    assert audits_by_round["4"]["ruling"] == "discharged"
+    assert [rnd for rnd, _keys in offers][:3] == [1, 2, 3]
+    assert state["terminal"] == "converged"
+    assert _ledger(state)[key]["disposition"] == "fixed"
+    assert _ledger(state)[key]["dispositionRound"] == 4
+    assert all("ownerRuling" not in t for targets in seen_targets for t in targets)
+
+
+def test_an_allowing_guidance_ruling_rides_the_audit_target(captured_state):
+    key, state, _offers, seen_targets, _history = _unnamed_change_loop(captured_state, allow=True)
+    target = seen_targets[-1][0]
+    assert target["ownerRuling"] == {"ruling": "guidance", "reason": "owner call",
+                                     "guidance": "keep the retry behaviour", "allowsChange": True}
+    assert state["rounds"]["2"]["audits"][0]["allowedChange"] == UNNAMED
+
+
+def test_an_audit_target_with_no_owner_ruling_carries_none():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near the top", 2)]
+    (row,) = RD._audit_targets(state, state["config"], {})
+    assert "ownerRuling" not in row
+    _decide(state, RD._finding_key_of(state["fixBatch"][0]), "out-of-scope", 1)
+    (row,) = RD._audit_targets(state, state["config"], {})
+    assert "ownerRuling" not in row
+
+
+def test_a_gate_skip_decision_carries_its_ruling_time_severity():
+    state = _staged_state([_finding("Gate bypass", severity="Important")])
+    key = _key("Gate bypass")
+    rows = RD._gate_decision_candidates({"rounds": {"1": {"judgmentDispositions": [
+        {"findingKey": key, "disposition": "skip", "reason": "r", "severity": "Important"}]}}})
+    assert rows[0]["severity"] == "Important"
+
+
+# --- one binding answer across a synthesis merge (_row_decision) ---------------------------------
+
+def _merged_pair_state():
+    """A is the live representative; B was merged into A. Returns (state, keyA, keyB)."""
+    state = _staged_state([_finding("Rep finding", 1), _finding("Member finding", 2)])
+    key_a, key_b = _key("Rep finding", 1), _key("Member finding", 2)
+    for row in state["findings"]:
+        if RD._finding_key_of(row) == key_b:
+            row[SC.MERGED_INTO_FIELD] = key_a
+    state["fixBatch"] = [f for f in state["findings"] if RD._finding_key_of(f) == key_a]
+    return state, key_a, key_b
+
+
+def test_a_merged_members_newer_guidance_binds_the_spent_out_of_scope_filter():
+    state, key_a, key_b = _merged_pair_state()
+    _decide(state, key_a, "out-of-scope", 1)
+    _decide(state, key_b, "guidance", 1)
+    state["round"] = 3
+    state["outOfScopeFixerRounds"] = {key_a: {"episode": 1, "rounds": [2]}}
+    kept, spent = RD._drop_spent_out_of_scope_rows(state, list(state["fixBatch"]))
+    assert [RD._finding_key_of(r) for r in kept] == [key_a] and spent == []
+
+
+@pytest.mark.parametrize("a_allows", [True, False])
+def test_a_merged_members_newer_ruling_decides_the_allowance_and_the_audit_target(a_allows):
+    state, key_a, key_b = _merged_pair_state()
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    _decide(state, key_a, "guidance", 1, allowsChange=a_allows)
+    _decide(state, key_b, "guidance", 1, allowsChange=not a_allows)
+    (target,) = RD._audit_targets(state, state["config"], {})
+    assert target["ownerRuling"]["allowsChange"] is (not a_allows)
+    state["_auditTargets"] = [target]
+    artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
+                             "evidence": "tests", "unnamedChange": UNNAMED,
+                             "unnamedChangeAllowedBySeq": target.get("ownerRulingSeq"),
+                             "auditorVendor": target.get("auditorVendor")}],
+                "collectionManifest": {key_a: target.get("auditorVendor")}}
+    RD._fold_audits(state, state["config"], artifact)
+    discharged = state["_auditOutcome"]["discharged"]
+    assert (discharged == [key_a]) is (not a_allows)
+
+
+def test_a_ruling_recorded_after_the_audit_target_stays_pending():
+    state, key_a, _key_b = _merged_pair_state()
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    _decide(state, key_a, "guidance", 1, allowsChange=True)
+    (target,) = RD._audit_targets(state, state["config"], {})
+    state["_auditTargets"] = [target]
+    newer = _decide(state, key_a, "guidance", 1, allowsChange=True)
+    artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
+                             "evidence": "tests", "unnamedChange": UNNAMED,
+                             "auditorVendor": target.get("auditorVendor")}],
+                "collectionManifest": {key_a: target.get("auditorVendor")}}
+    RD._fold_audits(state, state["config"], artifact)
+    outcome = state["_auditOutcome"]
+    assert newer > target["ownerRulingSeq"]
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
+
+
+# --- Review round 2 regressions ------------------------------------------------------------------
+
+def test_a_critical_is_never_spent_when_the_decision_has_no_severity_snapshot(empty_batch_calls):
+    # the older decision shape: no severity snapshot on the out-of-scope ruling
+    state = _staged_state([_finding("Gate bypass", severity="Important")])
+    key = _key("Gate bypass")
+    _decide(state, key, "out-of-scope", 1)
+    del state["rulingsLog"][-1]["severity"]
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                           followUp=_follow_up())
+    state["round"] = 2
+    compiled, _ = RD.mechanical_compile([dict(_finding("Gate bypass", severity="Critical"))], None)
+    RD._stage_findings(state, compiled)
+    RD._set_findings(state, state["_toVerify"])
+    for rnd in (2, 3, 4):
+        assert _offer(state, rnd) == ("queued", [key])
+    assert empty_batch_calls == []
+    assert _decisions(state, "out-of-scope-fix-spent") == []
+
+
+def test_a_not_discharged_audit_keeps_its_unnamed_change_for_the_next_fixer(captured_state):
+    key, state, offers, seen_targets, history = _unnamed_change_loop(
+        captured_state, allow=False, refusal_ruling="not-discharged")
+    reason = state["rounds"]["2"]["audits"][0]["reason"]
+    assert reason.startswith("an additional behavior change needs permission")
+    assert UNNAMED in reason
+    assert UNNAMED in history[key]["priorAudit"]["reason"]
+
+
+def test_the_next_audit_target_carries_the_last_audit_that_refused(captured_state):
+    key, state, offers, seen_targets, _history = _unnamed_change_loop(
+        captured_state, allow=False)
+    assert "priorAudit" not in seen_targets[0][0]
+    prior = seen_targets[1][0]["priorAudit"]
+    assert prior["ruling"] == "not-discharged" and prior["round"] == 2
+    assert prior["reason"].startswith(UNNAMED_REASON_PREFIX)
+
+
+def test_two_findings_sharing_a_lineage_root_each_keep_their_own_offer_episode(empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Critical"),
+                           _finding("Gate bypass reworded", severity="Critical")])
+    key_a, key_b = _key("Gate bypass"), _key("Gate bypass reworded")
+    state["findingLineage"] = {key_b: key_a}
+    _decide(state, key_a, "guidance", 1)
+    _decide(state, key_a, "out-of-scope", 1)
+    _decide(state, key_b, "out-of-scope", 1)
+    for key in (key_a, key_b):
+        RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                               followUp=_follow_up())
+    assert RD._lineage_root(RD._lineage_map(state), key_b) == RD._lineage_root(
+        RD._lineage_map(state), key_a)
+    assert _offer(state, 2) == ("queued", [key_a, key_b])
+    assert set(state["outOfScopeFixerRounds"]) == {key_a, key_b}
+    assert state["outOfScopeFixerRounds"][key_a]["episode"] != state["outOfScopeFixerRounds"][key_b]["episode"]
+    for rnd in (3, 4):
+        status, keys = _offer(state, rnd)
+        assert status == "excluded" and keys == []
+    assert len(_decisions(state, "out-of-scope-fix-spent")) == 4  # two findings, rounds 3 and 4
+
+
+def _fold_one(state, target, key, **extra):
+    state["_auditTargets"] = [target]
+    result = {"id": key, "ruling": "discharged", "reason": "fixed", "evidence": "tests",
+              "auditorVendor": target.get("auditorVendor")}
+    result.update(extra)
+    RD._fold_audits(state, state["config"], {
+        "results": [result], "collectionManifest": {key: target.get("auditorVendor")}})
+    return state["_auditOutcome"]
+
+
+def test_an_allowing_ruling_replaced_while_the_audit_is_pending_credits_nothing():
+    state, key_a, _key_b = _merged_pair_state()
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    _decide(state, key_a, "guidance", 1, allowsChange=True)
+    (target,) = RD._audit_targets(state, state["config"], {})
+    _decide(state, key_a, "out-of-scope", 1)
+    outcome = _fold_one(state, target, key_a, unnamedChange=UNNAMED)
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
+
+
+def _sibling_pair(a_allows=None, b_allows=True):
+    """A staged two-finding batch; A (key_a) and B (key_b) each carry a decision when given."""
+    state = _staged_state([_finding("Rep finding", 1), _finding("Other defect", 2)])
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    key_a, key_b = _key("Rep finding", 1), _key("Other defect", 2)
+    state["fixBatch"] = list(state["findings"])
+    if a_allows is not None:
+        _decide(state, key_a, "guidance", 1, allowsChange=a_allows,
+                guidance="Keep all timeout retries unchanged.")
+    if b_allows is not None:
+        _decide(state, key_b, "guidance", 1, allowsChange=b_allows,
+                guidance="Changing the log format is fine.")
+    targets = RD._audit_targets(state, state["config"], {})
+    target_a = [t for t in targets if t["id"] == key_a][0]
+    state["_auditTargets"] = targets
+    return state, target_a, key_a, key_b
+
+
+def _seq(state, key):
+    return RD._decision_seq(RD._live_ruling_by_key(state)[key])
+
+
+def test_a_siblings_allowing_guidance_covers_a_change_the_other_auditor_reports():
+    state, target_a, key_a, key_b = _sibling_pair()
+    (sibling,) = target_a["batchFindings"]
+    assert sibling["id"] == key_b and sibling["ownerRuling"]["allowsChange"] is True
+    assert sibling["ownerRulingSeq"] == _seq(state, key_b)
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED,
+                        unnamedChangeAllowedBySeq=_seq(state, key_b))
+    assert outcome["discharged"] == [key_a] and outcome["unnamedChange"] == []
+    # only the named sibling decision is marked delivered, for both findings it covers
+    assert set(state["sentUnderDecision"].values()) == {_seq(state, key_b)}
+
+
+def test_a_forbidding_decision_is_not_overridden_by_a_siblings_allowance_named_by_seq():
+    state, target_a, key_a, key_b = _sibling_pair(a_allows=False)
+    outcome = _fold_one(state, target_a, key_a, unnamedChange="it disables retries",
+                        unnamedChangeAllowedBySeq=_seq(state, key_b))
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    audit = state["rounds"]["1"]["audits"][0]
+    assert audit["ruling"] == "not-discharged" and "allowedChange" not in audit
+
+
+def test_an_unnamed_change_with_no_seq_is_refused_even_with_a_siblings_allowance():
+    state, target_a, key_a, _key_b = _sibling_pair(a_allows=False)
+    outcome = _fold_one(state, target_a, key_a, unnamedChange="it disables retries")
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+
+
+def test_a_named_seq_that_has_since_been_replaced_is_refused():
+    state, target_a, key_a, key_b = _sibling_pair()
+    named = _seq(state, key_b)
+    _decide(state, key_b, "guidance", 1, allowsChange=True, guidance="Another ruling.")
+    assert _seq(state, key_b) != named
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED, unnamedChangeAllowedBySeq=named)
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+
+
+def test_a_named_seq_not_carried_on_the_target_is_refused():
+    state, target_a, key_a, key_b = _sibling_pair()
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED,
+                        unnamedChangeAllowedBySeq=_seq(state, key_b) + 1000)
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+
+
+@pytest.mark.parametrize("value", ["3", True, 1.5, [1]])
+def test_a_non_integer_named_seq_is_malformed(value):
+    state, target_a, key_a, key_b = _sibling_pair()
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED, unnamedChangeAllowedBySeq=value)
+    assert outcome["discharged"] == [] and outcome["malformed"] == [key_a]
