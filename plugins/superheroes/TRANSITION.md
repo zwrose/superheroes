@@ -11,9 +11,10 @@ belongs to and lists every change with its replacement.
 
 ### Before you upgrade
 
-- After upgrading, run configure once. `rubric-version` moves from 11 to 12, so each project's review profile reads as behind until configure refreshes it.
+- After upgrading, run configure once. `rubric-version` moves from 11 to 13, so each project's review profile reads as behind until configure refreshes it.
 - After upgrading, the owner of an existing project does the risk sitting with the advisor. It is one conversation that sets how much review each kind of change gets.
 - The project keeps working before the sitting. Until then, every change whose risk is unclear goes to the full lane, and every leftover with a real consequence comes to the owner.
+- After upgrading, record the project's adoption day once: `lib/review_learning.py adopt --cwd <project> --date <today, UTC>`. Review escapes and the reviewer seats' records count only from that day.
 - The earlier plugin version is not kept runnable after this release. Downgrading under these changes is not supported.
 
 ### Review record
@@ -47,6 +48,13 @@ These retirements ship in the same release as the review record, and never apart
 - Heartbeat sweep entries gain `place`.
 - An older plugin build can still fold a ledger that holds a cloud lane, but it reads the lane as a local one, so its watch reports `builder-exited` for a cloud lane whose session is still working and its sweep reads the lane `unknown`. Before the first cloud lane enters a batch, every watch loop and sweep reading that ledger must run on a build that knows cloud lanes, so re-arm any watch loop armed from an older build first. After a rollback to an older build, treat a `builder-exited` on a cloud lane as unread and check the session in the host's session listing.
 
+### Review: the PR sheet builder
+
+- `pr_sheet.py build` makes a PR sheet's data file from the PR's review record and the advisor's input, `pr-sheet-input/1`, whose shape its module docstring defines. A stack that merges whole gets one sheet from all its records.
+- `theme/sheet.schema.json` gains the `pr` and `stack` sheet kinds, and on those kinds every option carries `sendsBack`. Discovery's remainder, final and plain sheets are unchanged.
+- A PR sheet's walk is answerable: Works (or Looks right on a look-only stop), Problem or Skip. A Problem asks whether to fix before merge or in a follow-up, and keeps the merge locked until it is answered. Its pictures are copied into the sheet's own published files, never linked by URL. The advisor's input `walk` is now an object (its shape is in `lib/pr_sheet.py`), and a PR sheet is published with the `assets` capability as well.
+- `pr_sheet.py index` builds the index from the advisor's `index-input/1` and each PR's sheet and store dump; a PR sheet's answer saves carry `revision` and a Merge verdict carries `covers`.
+
 ### Pilot: iPhone typing helper
 
 - `drive` now checks the phone's typing helper before every step except `describe-ui`, `list-simulators` and `screenshot`, and restarts it inside the handed phone when it is down. Its result gains `helper`: `up`, `restarted` or `down` (absent when a call never returned).
@@ -77,6 +85,52 @@ These retirements ship in the same release as the review record, and never apart
 - New `lib/cloud_pass.py`, the pass command. `make`, run on the owner's machine, builds a reviewer pass from a reviewer sign-in kept apart from the main one (by default the directory `.codex-cloud` under the home directory), with its renewal switched off, and puts four environment-variable lines on the clipboard for the cloud environment's variables: `SUPERHEROES_REVIEWER_PASS`, `CLAUDE_CODE_PLUGIN_DIRS` and the reviewer's two renewal endpoints. It writes no file and does not change the setup record. The first run needs a one-time sign-in to that separate sign-in, and the command says so.
 - In a cloud session the session-start hook writes the pass into the reviewer's default sign-in file before anything else runs, and adds a `### Reviewer pass` section to the session's bootstrap saying whether the pass is in place. Outside a cloud session the hook is unchanged.
 - `cloud_pass.py confirm`, run in a cloud session, prints one line saying whether the reviewer answers with the pass in that environment and the date the pass lapses. `cloud_pass.py record-confirmation`, run on the owner's machine with that line, moves the setup record's lapse date; nothing else moves it.
+
+### Vet slot: builder content in the slot span refuses
+
+- `vet_slot.py write`, `check` and `handback` refuse with the new token `slot-span-foreign-content` when any other `superheroes:` marker line (a `superheroes:dod-table` table, for example) sits between the `advisor-vet` and `build-record` markers. The detail names the marker, and nothing is written. Before, `write` silently deleted that content along with the old slot text.
+- A PR body that keeps its DoD table or other marked sections in that span must move them below the build-record marker before the advisor's write will run. The advisor's own slot text and the builder's reminder comment still write as before.
+
+### Canon: the write helper and the chat-ruling record
+
+- A project's advisor, and every other session, now writes Canon through `lib/canon.py`: `hold` for a ruling held on the collector, `append` for a new entry or held lines. Each takes a declared ground (`owner-call`, `principle`, `ceded-call` or `take-back`) and mints the id.
+- The helper refuses, with `canon-stays-out` and the record's home, an entry whose declared ground is a go-word (launch, merge, release, tier, filing, force-push), a collector disposition, or filing or phase bookkeeping. It recognizes only a ruling that is a collector disposition, owner's words that are a bare go-word, and a ruling that records filing with an issue reference. An act written as a full ruling sentence under a valid ground is not caught, so the session's own ground and the advisor's vet still have to catch it. A project whose advisor logged those into Canon from a project memory should drop that memory; the refusal names where each belongs.
+- A ruling given in chat now gets the standard chat-ruling record: one dated collector comment quoting the owner's words (`canon.py ruling-record --post` returns its permalink). An issue Anchor cites that permalink, so Canon is no longer the only reachable record of a chat ruling.
+- Nothing already in Canon changes, and no sweep is owed. Until a project adopts this release, its advisor writes Canon by hand as before.
+
+### The test role
+
+- The review panel's test seat is now the test role. Its agent is `test-role`, and its findings file and the `Test` dimension are unchanged. The `test-reviewer` agent is gone.
+- A `seatPins` entry under `test-reviewer` is read as the test role's pin, with nothing to rewrite. An explicit `test-role` pin wins.
+- The test role asks for no test coverage outside the project's risk areas and raises no test-style findings.
+- For a change that touches a risk area, the test role writes break-it tests. The review loop runs them in a throwaway copy of the change and keeps each one with the change once its finding is fixed.
+
+### Configure: Risk and trust
+
+- Item 10 is renamed "Risk and trust", and its slug `threatModel` is replaced by `riskAndTrust`. Callers of `project_config.py get --item threatModel` or `set --item threatModel` now get `unknown-slug`.
+- `set --item riskAndTrust` takes one half per call: `{"threatModel": ...}` or `{"riskAreas": [...]}`. Setting `riskAreas` replaces the whole list. `get --item riskAndTrust` returns `effective.threatModel` and `effective.riskAreas`.
+- A new reader, `lib/risk_areas.py touched --cwd . --path <path>`, says which risk areas a change touches. Its `riskAreas` is `set` (with `touched`) or `not-set` (with a `reason`: `missing`, `empty` or `unreadable`).
+- An existing project's threat model carries over unchanged as the first half, and its risk areas start empty.
+- The setup sitting lives in configure: set-up § 3.5, or view-and-tune's "Set up Risk and trust" for a project that is already configured.
+
+### The owner's decisions: batches, sheets and the merge word
+
+- Decisions come in three batches. Batch 1 holds what blocks work, in the chat and at the top of the index. Batch 2 holds decisions not tied to one PR, in the chat. Batch 3 is one sheet per PR, built after the first two are carried out.
+- The click list is gone.
+- The owner's word to merge is a saved "Merge" verdict on the PR's current sheet plus "done" in the chat. A chat message naming PRs is not the word.
+  - A head that moves after its sheet was published is judged by the material-consequence line, and doubt counts as material. A move with no material consequence (a base update with no conflict, a mechanical bring-current, a craft fix) keeps the word: the sheet is republished carrying the verdict forward, with a dated note saying what moved and why it is not material.
+  - A move that is material starts the verdict over: the sheet shows "This PR changed" and is unsigned. A PR opened after the word, or a layer linked onto a stack, is outside the word.
+- A "Fix in a follow-up" answer is the word to file that follow-up.
+- After the merge, the advisor writes the answers and the verdict back to the PR.
+- Until a project upgrades, its advisor keeps the click list and the chat merge word.
+
+### Review: learning from escapes
+
+- The misses log takes a fourth kind of miss, the review escape: a bug traced to a PR that had a review. The act that finds it logs it, links the PR's review record, and marks it missed or seen and left.
+- Each reviewer seat and the review record writer gets a keep-or-retire entry. A seat is judged on what it caught.
+- The gardening pass brings calibration proposals in batch 2. A loosening is shaped like a tightening. A change is applied only on the owner's yes and is recorded in Canon.
+- Counting starts at the adoption day, so no seat is judged on reviews from before it.
+- A complaint that a review took too long gets an answer about the calibration, never a faster loop.
 
 ## 0.42.0
 

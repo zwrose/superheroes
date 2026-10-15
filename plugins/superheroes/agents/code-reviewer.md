@@ -128,13 +128,17 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
 - **Focus bug that blocks a flow** — a focus trap or focus placement that prevents the user from completing or escaping a flow (e.g., a modal you can't leave and can't close). Not "focus order could be nicer" — actual blockage.
 - **Unreadable contrast** — a hardcoded color where the text is plausibly illegible. Values that route through the project's theme/design-token system are out of scope — the theme handles contrast. Propose the matching theme token.
 
+**Break-it tests the change keeps.**
+
+- A change may keep break-it tests: tests with taxonomy `break-it-test` that the review loop added to the change. Read them like any other test in the diff, **for bloat and for tests that pass without checking anything**. Flag a break-it test that duplicates another test, pins wording, or asserts nothing the changed code decides. Cite the test's `file:line` and say what it fails to check.
+
 ## Do NOT Flag
 
 - Pre-existing patterns in files the diff does not modify — pre-existing per the base rubric's diff-scope rule.
 - Architectural concerns (layering, module coupling) — that's `architecture-reviewer`'s domain. Two carve-outs you DO own locally, with their boundaries stated in "What to Flag": the diff-introduced **cognitive-complexity spike** (control-flow structure — but NOT raw file/function SIZE, which stays architecture's) and **YAGNI local code shape** (a dead param/flag/branch — but NOT module-level premature abstraction, which stays architecture's). Defer pure size and module-abstraction to architecture so the two agents never double-flag the same line.
 - Security implications of pattern violations — flag the missing auth/validation/ownership _as a pattern violation_; `security-reviewer` flags it _as a vulnerability_. Do not duplicate severity-Critical security framing here.
 - Any dimension the profile marks out of scope (e.g. general accessibility, if excluded). The three Self-usability breakage cases above are the only always-in-scope usability concerns — not general accessibility gaps.
-- Test mock patterns and coverage — that's `test-reviewer`.
+- Test quality: mock patterns, coverage, tests that check nothing, and test bloat. That goes to the test role (`test-role`).
 - Multi-step, systemic failure chains — concurrency races, partial-failure
   consistency across a multi-step write, dependency-failure stories, systemic
   resource exhaustion, migration/rollback risk — that's `premortem-reviewer`

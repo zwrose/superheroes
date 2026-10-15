@@ -514,13 +514,18 @@ def test_e2e_supervisor_rotation_survives(tmp_path, monkeypatch):
     assert first["terminal"] is False
     assert first["reason"] == "running"
 
-    pgid = _engine_pgid(run_dir)
-    assert pgid is not None
-    assert ED._process_group_alive(pgid)
+    # The slice can end before the detached run-child journals engine-started under load; wait on that event, bounded.
+    # Bites on the engine's process group surviving the first caller's slice end and finishing on attempt 1.
+    _wait_until(
+        time.monotonic() + 30,
+        lambda: _engine_pgid(run_dir) is not None and ED._process_group_alive(_engine_pgid(run_dir)),
+        "engine process group not recorded alive after the first slice returned",
+    )
 
     second = _poll_write_terminal(wt, run_dir, prompt_path, order_id="rotate-1")
     assert second["ok"] is True
     assert second["terminal"] is True
+    assert _count_attempt_started(run_dir) == 1
 
 
 # --- 4. Exit code survives supervisor -----------------------------------------
