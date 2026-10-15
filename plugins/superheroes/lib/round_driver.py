@@ -5652,6 +5652,18 @@ def _attempt_fixer_delta(reviewed_diff, head_diff):
     return delta
 
 
+def _carried_owner_ruling(decision):
+    """The owner-fix decision an audit target (or a sibling record) carries: ``(ownerRuling, seq)``,
+    or ``(None, None)`` when the decision is not an owner fix ruling."""
+    if not (isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS):
+        return None, None
+    owner_ruling = {"ruling": decision["ruling"], "reason": decision.get("reason")}
+    for carried in ("guidance", "allowsChange"):
+        if decision.get(carried) is not None:
+            owner_ruling[carried] = decision[carried]
+    return owner_ruling, _decision_seq(decision)
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -5677,8 +5689,19 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     batch_findings = []
     for bf in state.get("fixBatch") or []:
         if isinstance(bf, dict) and _finding_key_of(bf) not in [b["id"] for b in batch_findings]:
-            batch_findings.append({"id": _finding_key_of(bf), "file": bf.get("file"),
-                                   "line": bf.get("line"), "title": bf.get("title")})
+            sibling = {"id": _finding_key_of(bf), "file": bf.get("file"),
+                       "line": bf.get("line"), "title": bf.get("title")}
+            # A sibling carries its scope: body, suggestion and its effective owner ruling, so the
+            # auditor attributes a change to the finding whose scope names it.
+            for carried in ("body", "suggestion"):
+                if bf.get(carried) is not None:
+                    sibling[carried] = bf[carried]
+            sib_ruling, sib_seq = _carried_owner_ruling(
+                _row_decision(state, effective, ledger_by_key, sibling["id"]))
+            if sib_ruling is not None:
+                sibling["ownerRuling"] = sib_ruling
+                sibling["ownerRulingSeq"] = sib_seq
+            batch_findings.append(sibling)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5725,12 +5748,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if isinstance(prior, dict):
             row["priorAudit"] = {k: prior[k] for k in ("round", "ruling", "reason") if k in prior}
         decision = _row_decision(state, effective, ledger_by_key, tid)
-        if isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS:
-            owner_ruling = {"ruling": decision["ruling"], "reason": decision.get("reason")}
-            row["ownerRulingSeq"] = _decision_seq(decision)
-            for carried in ("guidance", "allowsChange"):
-                if decision.get(carried) is not None:
-                    owner_ruling[carried] = decision[carried]
+        owner_ruling, owner_seq = _carried_owner_ruling(decision)
+        if owner_ruling is not None:
+            row["ownerRulingSeq"] = owner_seq
             row["ownerRuling"] = owner_ruling
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
@@ -5832,14 +5852,26 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # ruling recorded after the audit order went out was never weighed, so it stays pending.
     effective = _live_ruling_by_key(state)
     ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    # The target's own decision, or any batch sibling's carried on the target, credits a change when
+    # it is still the current effective decision (same seq) and allows it. A replaced or withdrawn
+    # ruling credits nothing.
     bound_by_id = {}
     for t in targets:
         if isinstance(t, dict) and isinstance(t.get("id"), str):
-            bound = _row_decision(state, effective, ledger_by_key, t["id"])
-            if (isinstance(bound, dict) and bound.get("ruling") == "guidance"
-                    and bound.get("allowsChange") is True
-                    and t.get("ownerRulingSeq") == _decision_seq(bound)):
-                bound_by_id[t["id"]] = bound
+            candidates = [(t["id"], t.get("ownerRulingSeq"))]
+            for b in t.get("batchFindings") or []:
+                if isinstance(b, dict) and isinstance(b.get("id"), str):
+                    candidates.append((b["id"], b.get("ownerRulingSeq")))
+            credited = []
+            for cid, carried_seq in candidates:
+                bound = _row_decision(state, effective, ledger_by_key, cid)
+                if (carried_seq is not None and isinstance(bound, dict)
+                        and bound.get("ruling") == "guidance"
+                        and bound.get("allowsChange") is True
+                        and carried_seq == _decision_seq(bound)):
+                    credited.append(bound)
+            if credited:
+                bound_by_id[t["id"]] = credited
     change_allowed_ids = list(bound_by_id)
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
                                          collection_manifest=collection_manifest,
@@ -5906,9 +5938,20 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # A decision the audit credited a fix under has been delivered: the resolver must not send it again.
     lineage = _lineage_map(state)
     for audit in outcome["audits"]:
+        marked = []
         if audit.get("allowedChange") and audit.get("id") in change_allowed_ids:
-            decision = bound_by_id[audit["id"]]
-            sent = state.setdefault("sentUnderDecision", {})
+            marked.extend(bound_by_id[audit["id"]])
+        if audit.get("ruling") == "discharged" and audit.get("id") in targets_by_id:
+            # The allowing ruling reached the audit and the audit cleared the fix: delivered, with or without
+            # an unnamed change, so the resolver does not reopen it.
+            own = _row_decision(state, effective, ledger_by_key, audit["id"])
+            carried_seq = targets_by_id[audit["id"]].get("ownerRulingSeq")
+            if (isinstance(own, dict) and own.get("ruling") == "guidance"
+                    and own.get("allowsChange") is True and carried_seq is not None
+                    and carried_seq == _decision_seq(own)):
+                marked.append(own)
+        sent = state.setdefault("sentUnderDecision", {})
+        for decision in marked:
             for at in (audit["id"], decision.get("findingKey")):
                 root = _lineage_root(lineage, at)
                 sent[root] = max(sent.get(root, 0), _decision_seq(decision))

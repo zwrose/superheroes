@@ -406,6 +406,19 @@ def test_t3_a_guidance_ruling_that_allows_the_change_keeps_the_fix_credited(capt
     assert offers == [(1, [key])]
     row = _ledger(state)[key]
     assert row["disposition"] == "fixed" and row["dispositionRound"] == 2
+    # the compliant auditor reported the change; the fold allowed it and the ruling is delivered
+    assert state["sentUnderDecision"][key] >= 1
+
+
+def test_an_allowing_ruling_recorded_after_dispatch_is_delivered_when_the_audit_names_no_change(
+        captured_state):
+    # the audit discharges with no unnamed change: the ruling reached the audit, so it is not re-sent
+    key, state, offers, _seen, _history = _unnamed_change_loop(
+        captured_state, allow=True, unnamed_rounds=())
+    assert state["terminal"] == "converged"
+    assert offers == [(1, [key])]
+    assert state["sentUnderDecision"][key] >= 1
+    assert _ledger(state)[key]["disposition"] == "fixed"
 
 
 def test_t3_the_auditor_is_given_the_finding_text_and_the_fix_hunks(captured_state):
@@ -756,6 +769,7 @@ def test_findings_sharing_a_hunk_each_list_the_sibling_and_the_template_clears_i
     assert guard["fixerDelta"] == retry["fixerDelta"]
     text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
                              "dispatch-audits.md")).read()
+    text = " ".join(text.split())
     assert "batchFindings" in text and "sibling finding's fix is not unnamed" in text
 
 
@@ -929,3 +943,41 @@ def test_two_findings_sharing_a_lineage_root_each_keep_their_own_offer_episode(e
         status, keys = _offer(state, rnd)
         assert status == "excluded" and keys == []
     assert len(_decisions(state, "out-of-scope-fix-spent")) == 4  # two findings, rounds 3 and 4
+
+
+def _fold_one(state, target, key, **extra):
+    state["_auditTargets"] = [target]
+    result = {"id": key, "ruling": "discharged", "reason": "fixed", "evidence": "tests",
+              "auditorVendor": target.get("auditorVendor")}
+    result.update(extra)
+    RD._fold_audits(state, state["config"], {
+        "results": [result], "collectionManifest": {key: target.get("auditorVendor")}})
+    return state["_auditOutcome"]
+
+
+def test_an_allowing_ruling_replaced_while_the_audit_is_pending_credits_nothing():
+    state, key_a, _key_b = _merged_pair_state()
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    _decide(state, key_a, "guidance", 1, allowsChange=True)
+    (target,) = RD._audit_targets(state, state["config"], {})
+    _decide(state, key_a, "out-of-scope", 1)
+    outcome = _fold_one(state, target, key_a, unnamedChange=UNNAMED)
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
+
+
+def test_a_siblings_allowing_guidance_covers_a_change_the_other_auditor_reports():
+    state = _staged_state([_finding("Rep finding", 1), _finding("Other defect", 2)])
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    key_a, key_b = _key("Rep finding", 1), _key("Other defect", 2)
+    state["fixBatch"] = list(state["findings"])
+    _decide(state, key_b, "guidance", 1, allowsChange=True)
+    targets = RD._audit_targets(state, state["config"], {})
+    target_a = [t for t in targets if t["id"] == key_a][0]
+    (sibling,) = target_a["batchFindings"]
+    assert sibling["id"] == key_b and sibling["ownerRuling"]["allowsChange"] is True
+    assert sibling["ownerRulingSeq"] == RD._decision_seq(RD._live_ruling_by_key(state)[key_b])
+    state["_auditTargets"] = targets
+    outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED)
+    assert outcome["discharged"] == [key_a] and outcome["unnamedChange"] == []
+    assert state["sentUnderDecision"][key_b] >= 1
