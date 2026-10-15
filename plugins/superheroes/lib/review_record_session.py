@@ -202,7 +202,7 @@ def _panel_rounds_with_status(state):
             if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("seatStatus"), dict)}
 
 
-def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE):
+def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE, field="headSha"):
     """The head the round's `phase` orders were emitted at (latest attempt). Round 1's panel carries no emission
     head: it ran before any fix, at the session-setup head (`setup` is the meta's). None when none is recorded."""
     anchors = state.get("_ordersAnchors")
@@ -210,9 +210,9 @@ def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE):
     for key, anchor in (anchors.items() if isinstance(anchors, dict) else ()):
         parts = str(key).split(":")
         if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase and parts[2].isdigit() \
-                and isinstance(anchor, dict) and isinstance(anchor.get("headSha"), str) and anchor["headSha"]:
+                and isinstance(anchor, dict) and isinstance(anchor.get(field), str) and anchor[field]:
             if best is None or int(parts[2]) > best[0]:
-                best = (int(parts[2]), anchor["headSha"])
+                best = (int(parts[2]), anchor[field])
     if best:
         return best[1]
     if phase != sc.PANEL_PHASE or str(rnd) != "1":
@@ -285,7 +285,7 @@ def _status_reviewers(state, setup=None, rows=()):
             if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase
         head = _panel_head(state, rnd, setup, phase)
         out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head),
-                             {"vendor": _text(*prov) or "unknown", "model": "unknown"}, commit=head, phase=phase))
+                             {"vendor": _text(*prov, _panel_head(state, rnd, None, phase, "vendor")) or "unknown", "model": "unknown"}, commit=head, phase=phase))
     return out
 
 

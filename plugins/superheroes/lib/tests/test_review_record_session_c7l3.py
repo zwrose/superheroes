@@ -493,3 +493,19 @@ def test_a_hand_submit_verifier_gap_sweep_and_scoped_finder_are_listed_as_review
     assert names["verifiers reviewer (round 1)"]["ran"] is True and names["verifiers reviewer (round 1)"]["vendor"] == "codex"
     assert names["gap-sweep reviewer (round 1)"]["ran"] is False  # no recoverable head: a missing review, not a credited one
     assert set(names) >= {"code-reviewer (round 1)", "%s reviewer (round 1)" % round_phases.P_SCOPED.removeprefix("dispatch-")}
+
+
+def test_a_hand_submit_finder_row_carries_the_vendor_its_emission_recorded(tmp_path):
+    session = _hand_session(tmp_path, {1: {"code-reviewer": "run"}})
+    path = os.path.join(session, "loop-state.json")
+    state = json.load(open(path))
+    state["_ordersAnchors"] = {"1:%s:0" % ph: {"headSha": HEAD, "vendor": "codex"}
+                               for ph in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED)}
+    json.dump(state, open(path, "w"))
+    with open(os.path.join(session, "driver-journal.jsonl"), "a", encoding="utf-8") as fh:
+        for ph in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+            fh.write(json.dumps({"cmd": "submit", "outcome": "accepted", "phase": ph, "round": 1, "attempt": 0}) + "\n")
+    names = _names(rs.account_from_session(session, extras(), Fake().readers()))
+    # bites on: a finder row built with no provenance, which reads as an unknown vendor and demotes the review
+    assert names["gap-sweep reviewer (round 1)"]["vendor"] == "codex"
+    assert names["scoped-finder reviewer (round 1)"]["vendor"] == "codex"

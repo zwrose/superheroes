@@ -10539,6 +10539,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
     if certified_head:
         anchor["headSha"] = certified_head
+    if len(ran := {e.get("vendor") for e in seats.values() if isinstance(e, dict)}) == 1 and isinstance(v := next(iter(ran)), str):
+        anchor["vendor"] = v  # the one vendor the emission dispatched on: the record writer's hand-submit finder provenance
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
         anchors = {}
