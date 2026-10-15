@@ -153,7 +153,6 @@ def _bind_anchor_head(session_dir, head, repo=None):
     pend = state["pending"]
     key = RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])
     anchor = dict(state["_ordersAnchors"][key])
-    anchor.pop("restoreHead", None)
     if head is None:
         anchor.pop("headSha", None)
     else:
@@ -1263,21 +1262,6 @@ def test_a_sent_decision_survives_a_merge_into_a_new_representative():
     assert state.get("terminal") == "converged" and not state.get("_fixBatch")
 
 
-def test_withdraw_compares_against_the_actual_attempt_head(tmp_path, keep_severity):
-    """A session head that differs from the checkout's HEAD at emission does not refuse a clean
-    withdrawal: the anchor's restoreHead is the head the attempt actually started from."""
-    session_dir, _gitdir, _head, _kf, _kg = _two_important(tmp_path, name="c7-restore")
-    k = _state(session_dir)["pending"]["attempt"]
-    repo, head = _throwaway_repo(tmp_path)
-    _bind_anchor_head(session_dir, "a" * 40, repo)
-    state = _state(session_dir)
-    key = RD._anchor_key(state["pending"]["round"], state["pending"]["phase"], k)
-    state["_ordersAnchors"][key]["restoreHead"] = head
-    RD.save_state(session_dir, state)
-    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
-    assert out.get("ok") is True and out.get("restoreCheck") == "checked", out
-
-
 def test_merge_clears_the_provisional_carry_stamp():
     """A confirmed merge replaces a provisional carry edge, so a later staging cannot revoke it."""
     state = {"round": 2, "findings": [], "findingLineage": {"B": "O"},
@@ -1326,8 +1310,19 @@ def test_a_provisional_carry_stays_revocable_after_a_synthesis_merge():
     assert "A" not in state["findingLineage"] and state["findingLineage"]["B"] == "C"
 
 
-def test_guidance_on_a_member_of_an_archived_representative_queues_it():
-    """axis: A merged into B, both archived by a later pass — guidance on A queues archived B."""
+def test_withdraw_refuses_when_the_worktree_head_differs_from_the_certified_head(tmp_path, keep_severity):
+    """axis: withdrawal compares the worktree HEAD with the orders anchor's certified head only."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-certhead")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    _bind_anchor_head(session_dir, "a" * 40, repo)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-head-moved", out
+    assert head in out.get("detail", "") and "a" * 40 in out.get("detail", ""), out
+
+
+def _archived_member_state():
+    """A merged into live B; B then archived; A's ruling replaced by guidance (merge mark dropped)."""
     state = RD.new_state()
     RD._set_findings(state, [_unit_finding("A", 2, "Minor", kind="code-quality"),
                              _unit_finding("B", 3, "Minor", kind="code-quality")])
@@ -1335,55 +1330,25 @@ def test_guidance_on_a_member_of_an_archived_representative_queues_it():
     RD._set_findings(state, [_unit_finding("Z", 4, "Important")])
     assert RD._live_finding_by_key(state, "B") is None
     _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="tidy it"))
-    rows = RD._guidance_named_rows(state, [("A", _unit_finding("A", 2, "Minor", kind="code-quality"))])
+    return state
+
+
+def test_guidance_never_queues_an_archived_representative_and_waits_for_its_next_raise():
+    """axis: guidance on A (merged into archived B) queues nothing; once B is raised again it does."""
+    state = _archived_member_state()
+    named = [("A", _unit_finding("A", 2, "Minor", kind="code-quality"))]
+    assert RD._guidance_named_rows(state, named) == []
+    RD._set_findings(state, [_unit_finding("B", 5, "Minor", kind="code-quality")])
+    rows = RD._guidance_named_rows(state, named)
     assert [RD._fix_batch_row_key(row) for row in rows] == ["B"]
 
 
-def test_guidance_on_a_merged_member_after_its_representative_is_archived():
-    """axis: M merged into R, then R archived (M live or gone) — guidance on M queues archived R."""
+def test_a_guided_blocker_sent_to_the_fixer_is_recorded_as_delivered():
+    """axis: an ordinary blocking row with guidance is stamped sent, so a later archive cannot
+    re-lift it as unsent guidance."""
     state = RD.new_state()
-    RD._set_findings(state, [_unit_finding("R", 3, "Minor", kind="code-quality"),
-                             _unit_finding("M", 2, "Minor", kind="code-quality")])
-    RD._record_merged_into(state, "M", "R")
-    RD._set_findings(state, [_unit_finding("Z", 4, "Important")])
-    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
-    rows = RD._guidance_named_rows(state, [("M", _unit_finding("M", 2, "Minor", kind="code-quality"))])
-    assert [RD._fix_batch_row_key(row) for row in rows] == ["R"]
-
-
-def test_a_merge_cycle_stops_the_representative_walk():
-    state = RD.new_state()
-    RD._set_findings(state, [dict(_unit_finding("A", 2, "Minor"), mergedInto="B"),
-                             dict(_unit_finding("B", 3, "Minor"), mergedInto="A")])
-    key, row = RD._merge_representative(state, {}, "A", state["findings"][0], None)
-    assert key in ("A", "B") and row.get("mergedInto")
-
-
-def test_withdraw_refuses_when_the_starting_head_was_not_captured(tmp_path, keep_severity):
-    """axis: a null restoreHead is an unanchored attempt — never the certified head."""
-    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-nullhead")
-    k = _state(session_dir)["pending"]["attempt"]
-    repo, head = _throwaway_repo(tmp_path)
-    state = _state(session_dir)
-    state["config"]["repoRoot"] = str(repo)
-    key = RD._anchor_key(state["pending"]["round"], state["pending"]["phase"], k)
-    state["_ordersAnchors"][key].update(restoreHead=None, headSha=head)
-    RD.save_state(session_dir, state)
-    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
-    assert out.get("ok") is False and out.get("reason") == "withdraw-head-unanchored", out
-
-
-def test_restore_head_is_captured_from_the_configured_checkout(tmp_path, keep_severity):
-    """axis: restoreHead reads the checkout the fixer orders name (config.repoRoot), not the cwd."""
-    repo, _head0 = _throwaway_repo(tmp_path, "cfgrepo")
-    (repo / "src").mkdir()
-    (repo / "src" / "f00.py").write_text("x = 1\n", encoding="utf-8")
-    _git(repo, "add", "src")
-    _git(repo, "commit", "-q", "-m", "second")
-    head = _git(repo, "rev-parse", "HEAD")
-    session_dir, _g, _h = _session(
-        tmp_path, [_finding("bounds F", 1)], name="c7-cfgroot", repoRoot=str(repo))
-    state = _state(session_dir)
-    pend = state["pending"]
-    anchor = state["_ordersAnchors"][RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])]
-    assert anchor["restoreHead"] == head
+    RD._set_findings(state, [_unit_finding("G", 2, "Important")])
+    _unit_rulings(state, dict(findingKey="G", ruling="guidance", guidance="use the helper"))
+    RD._after_findings_settled(state, state["config"])
+    assert _unit_batch(state) == ["G"]
+    assert state["liftedAtSeq"]["G"] == RD._decision_seq(RD._live_ruling_by_key(state)["G"]) > 0
