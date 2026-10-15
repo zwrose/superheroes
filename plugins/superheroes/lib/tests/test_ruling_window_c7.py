@@ -836,3 +836,61 @@ def test_a_capped_pending_newer_ruling_on_a_merged_member_is_not_hidden_by_an_ol
     RD._set_terminal(state, "capped-with-open-blocker", cap=True)
     ledger, _ = RD._disposition_ledger_by_key(state)
     assert "owner ruling %s" % seq in str(ledger["A"].get("settledReason")), ledger["A"]
+
+
+def test_a_reworded_representative_takes_the_guidance_given_on_its_merged_member():
+    """axis: MERGE + LINEAGE — M (line 2) merged into K (line 1), guidance on M, K reworded at line 1
+    and staged: the staging itself links the new wording, so the resolver sends one row with it."""
+    state = _unit_state({"file": "a.py", "line": 1, "title": "K"},
+                        {"file": "a.py", "line": 2, "title": "M"})
+    k, m = (RD._fix_batch_row_key(f) for f in state["findings"])
+    RD._record_merged_into(state, m, k)
+    _log_ruling(state, m, guidance="FOR-THE-REWORDING")
+    state["rulingsLog"][-1].update(file="a.py", line=2)
+    state["round"] = 3
+    state["rounds"]["3"] = {}
+    reworded = _unit_finding("K reworded", 1, "Important")
+    RD._stage_findings(state, [reworded])
+    assert state["findingLineage"] == {"K reworded": m}
+    RD._set_findings(state, [dict(reworded)])
+    batch = RD._resolve_ruled_batch(state, [dict(reworded)])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["K reworded"]
+    assert RD._live_ruling_by_key(state)["K reworded"]["guidance"] == "FOR-THE-REWORDING"
+
+
+def test_a_ruling_restages_the_latest_wording_of_a_lineage_not_the_first_lexical_one():
+    """axis: RESTAGE — A (Minor, code quality) reworded as Z (Critical, real), both fixed, a ruling on Z:
+    the fixer is sent Z with its severity and consequence, and Z is the version marked reopened."""
+    state = _unit_round([_unit_finding("Q", 1, "Minor")])
+    state["findings"] = []
+    for key, severity, kind, rnd in (("A", "Minor", "code-quality", 1), ("Z", "Critical", "real", 3)):
+        RD._record_disposition(state, key, "fixed", rnd)
+        for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+            if RD._finding_identity_key(entry) == key:
+                entry.update(severity=severity, consequenceKind=kind,
+                             **{session_contract.RAISED_ROUND_FIELD: rnd,
+                                session_contract.RAISED_SEQ_FIELD: 0})
+    state["findingLineage"] = {"Z": "A"}
+    state["sentUnderDecision"] = {"A": 0}
+    _log_ruling(state, "Z", guidance="RESTAGE-Z")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [(RD._fix_batch_row_key(r), r["severity"], r["consequenceKind"]) for r in batch] == [
+        ("Z", "Critical", "real")]
+    assert list(state["restagedAfterDispositionSeq"]) == ["Z"]
+
+
+def test_a_ruling_awaiting_batch_resolution_keeps_the_real_consequence_on_a_same_key_restage():
+    """axis: RESTAGE — a fixed real-consequence finding with a ruling no fixer was sent yet is re-staged
+    as code quality before the batch resolves: the real consequence stays on the ledger row."""
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    RD._record_disposition(state, "A", "fixed", 1)
+    for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        entry[session_contract.RAISED_SEQ_FIELD] = 0
+        entry["consequence"], entry["consequenceKind"] = "data loss", "real"
+    _log_ruling(state, "A", guidance="NOT-YET-SENT")
+    ledger = state[session_contract.DISPOSITION_LEDGER_KEY]
+    entry = RD._seed_ledger_entry(
+        state, ledger, {"A": 0},
+        dict(_unit_finding("A", 1, "Important", kind="code-quality"), consequence="harder to read"),
+        "A", 2)
+    assert entry["consequenceKind"] == "real" and "data loss" in entry["consequence"], entry

@@ -1556,8 +1556,10 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
         entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
-    if isinstance(existing, dict) and (not _disposition_is_current(existing)
-                                       or _restaged_after(state, key, existing)):
+    if isinstance(existing, dict) and (
+            not _disposition_is_current(existing) or _restaged_after(state, key, existing)
+            or _undispatched_ruling(state, _live_ruling_by_key(state),
+                                    {k: ledger[i] for k, i in seen.items()}, key) is not None):
         # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
         # never turns a real one into a craft decision.
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
@@ -1667,9 +1669,17 @@ class _LineageCarry:
         location = self.location_of(finding)
         if location is None or self.at_location.get(location) != 1:
             return
+        ledger_by_key, _fault = _disposition_ledger_by_key(state)
         roots = set()
         for decided_key, (_index, row) in self.decided.items():
-            if self.location_of(row) == location:
+            # A decision binds the finding it was given on and the one that finding was merged
+            # into (the same merge-aware identity the batch resolution reads).
+            places = {self.location_of(row)}
+            rep = _merge_representative(state, ledger_by_key, decided_key)
+            if rep != decided_key:
+                rep_row = _live_finding_by_key(state, rep) or ledger_by_key.get(rep)
+                places.add(self.location_of(rep_row) if isinstance(rep_row, dict) else None)
+            if location in places:
                 roots.add(_lineage_root(lineage, decided_key))
         if len(roots) != 1:
             return
@@ -1677,7 +1687,7 @@ class _LineageCarry:
         # Only a guidance decision carries. A skip (a ``rule`` out-of-scope ruling or an owner-gate
         # skip) never does: a location match does not prove the new finding is the one the owner
         # waived, so it is judged fresh — fixed, or left for the owner.
-        effective = self.effective.get(root)
+        effective = _row_decision(state, self.effective, ledger_by_key, root)
         if not isinstance(effective, dict) or effective.get("ruling") != "guidance":
             return
         group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
@@ -4519,14 +4529,20 @@ def _ruled_row(state, ledger_by_key, decision, sent):
                          and _disposition_is_current(row))):
             return dict(row), False
     sent_before = any(_lineage_root(lineage, k) in sent for k in closure)
+    latest = None  # the most recently raised eligible version, not the first lexical one
     for at in closure:
         ledger_row = ledger_by_key.get(at)
         if ((sent_before or not session_contract.disposition_value(ledger_row))
                 and not (isinstance(ledger_row, dict) and ledger_row.get(session_contract.MERGED_INTO_FIELD))):
             row = _reopened_ledger_row(ledger_by_key, at)
-            if row is not None:
-                return row, True
-    return None, False
+            if row is None:
+                continue
+            raised = (ledger_row.get(session_contract.RAISED_ROUND_FIELD),
+                      ledger_row.get(session_contract.RAISED_SEQ_FIELD))
+            order = tuple(v if _is_plain_int(v) else -1 for v in raised)
+            if latest is None or order > latest[0]:
+                latest = (order, row)
+    return (latest[1], True) if latest else (None, False)
 
 
 def _undispatched_ruling(state, effective, ledger_by_key, key):
