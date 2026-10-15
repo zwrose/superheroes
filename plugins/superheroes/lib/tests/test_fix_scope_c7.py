@@ -618,3 +618,64 @@ def test_t4_edge8_the_strict_schema_lists_unnamed_change_as_a_required_nullable_
     for schema_ in (ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW),
                     ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="findings")):
         ERC.assert_strict_mode_valid(schema_)
+
+
+# --- Review round 1 regressions ------------------------------------------------------------------
+
+def test_a_finding_raised_to_critical_after_its_out_of_scope_ruling_is_never_spent(
+        empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Important")])
+    key = _key("Gate bypass")
+    _decide(state, key, "out-of-scope", 1)
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                           followUp=_follow_up())
+    state["findings"][0]["severity"] = "Critical"  # re-raised as a blocker under the same key
+    for rnd in (2, 3, 4):
+        assert _offer(state, rnd) == ("queued", [key])
+    assert empty_batch_calls == []
+    assert _decisions(state, "out-of-scope-fix-spent") == []
+
+
+def test_a_spent_episode_survives_a_lineage_root_change(empty_batch_calls):
+    state = _staged_state([_finding("Gate bypass", severity="Critical")])
+    key = _key("Gate bypass")
+    _decide(state, key, "out-of-scope", 1)
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                           followUp=_follow_up())
+    assert _offer(state, 2) == ("queued", [key])
+    # synthesis later merges the finding into another; the offer was logged under the old root
+    state["findingLineage"] = {key: _key("Other finding", 9)}
+    status, keys = _offer(state, 3)
+    assert status == "excluded" and keys == []
+    assert len(_decisions(state, "out-of-scope-fix-spent")) == 1
+
+
+def test_audit_targets_carry_the_reviewed_hunks_beside_the_fix_hunks():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near the top", 2), _finding("Far down", 80)]
+    head = {"f.py": [_hunk(1, 4), _hunk(78, 90)]}
+    reviewed = {"f.py": [_hunk(1, 3), _hunk(200, 210)]}
+    top, far = RD._audit_targets(state, state["config"], head, reviewed_hunks_map=reviewed)
+    assert top["reviewedHunks"] == [_hunk(1, 3)]
+    assert far["reviewedHunks"] == []
+    assert RD._audit_targets(state, state["config"], head)[0]["reviewedHunks"] == []
+
+
+def test_the_audit_order_names_the_reviewed_hunks():
+    text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
+                             "dispatch-audits.md")).read()
+    assert "reviewedHunks" in text
+
+
+@pytest.mark.parametrize("value", [[], 5, {"a": 1}, True])
+def test_the_submit_guard_refuses_a_non_string_unnamed_change(value):
+    targets = [{"id": "a"}]
+    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed"}]}
+    assert RD.audit_results_fault(ok, targets) is None
+    ok["results"][0]["unnamedChange"] = "it also stops retrying"
+    assert RD.audit_results_fault(ok, targets) is None
+    ok["results"][0]["unnamedChange"] = None
+    assert RD.audit_results_fault(ok, targets) is None
+    ok["results"][0]["unnamedChange"] = value
+    fault = RD.audit_results_fault(ok, targets)
+    assert fault and "unnamedChange" in fault

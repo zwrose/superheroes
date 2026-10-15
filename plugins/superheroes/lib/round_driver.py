@@ -4427,6 +4427,14 @@ def _out_of_scope_episode(decision):
     return "round:%s" % decision.get("round")
 
 
+def _escalated_since_out_of_scope(ledger_entry, row):
+    """True when ``row`` is Critical now but its out-of-scope ledger entry recorded a lower severity."""
+    if not isinstance(ledger_entry, dict) or not circuit_breaker.is_critical(row.get("severity")):
+        return False
+    recorded = ledger_entry.get("severity")
+    return isinstance(recorded, str) and bool(recorded) and not circuit_breaker.is_critical(recorded)
+
+
 def _drop_spent_out_of_scope_rows(state, rows):
     """``(kept, spent)``: ``rows`` less those whose finding is out of scope and was already offered to
     a fixer in an earlier round of the same episode. A row that passes while out of scope is recorded
@@ -4439,15 +4447,26 @@ def _drop_spent_out_of_scope_rows(state, rows):
     if not isinstance(spent_log, dict):
         spent_log = {}
     kept, spent = [], []
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
     for row in rows:
         key = _fix_batch_row_key(row)
         decision = effective.get(key) if key else None
         if not isinstance(decision, dict) or decision.get("ruling") != "out-of-scope":
             kept.append(row)
             continue
+        if _escalated_since_out_of_scope(ledger_by_key.get(key), row):
+            # Ruled out of scope while below Critical, now a Critical blocker: the ruling never
+            # covered it. Dropping it would empty the batch and let the review certify with the
+            # Critical still open, so it stays in the batch; the round caps bound repeat offers.
+            kept.append(row)
+            continue
         root = _lineage_root(lineage, key)
         episode = _out_of_scope_episode(decision)
+        # A synthesis merge can move the root after the offer was logged under the old one: the
+        # decision's episode is the identity, so look under the key and the root alike.
         held = spent_log.get(root)
+        if not (isinstance(held, dict) and held.get("episode") == episode):
+            held = spent_log.get(key)
         offered = (held.get("rounds") if isinstance(held, dict) and held.get("episode") == episode
                    and isinstance(held.get("rounds"), list) else [])
         earlier = [rnd for rnd in offered if rnd != this_round]
@@ -4458,7 +4477,6 @@ def _drop_spent_out_of_scope_rows(state, rows):
         kept.append(row)
     if spent_log:
         state["outOfScopeFixerRounds"] = spent_log
-    ledger_by_key, _fault = _disposition_ledger_by_key(state)
     for key, row, offered_round in spent:
         held_row = ledger_by_key.get(key)
         if not isinstance(held_row, dict):
@@ -5102,6 +5120,11 @@ def _audit_result_entry_fault(entry, index, target_ids):
     # The grounds test is `audits.has_usable_reason`, the fold's OWN predicate — one function, not a
     # second copy of the rule, so the guard can never accept a reason the fold rejects (or refuse one
     # it would honor). Same shared-home discipline as `has_usable_new_issues` below.
+    unnamed = entry.get("unnamedChange")
+    if unnamed is not None and not isinstance(unnamed, str):
+        return ("%s `unnamedChange` is %s, not a string; expected a plain-words string, or leave the "
+                "field out when the fix changes nothing beyond what the finding names"
+                % (where, type(unnamed).__name__))
     if ruling == "discharged" and not audits.has_usable_reason(entry.get("reason")):
         return ("%s rules `discharged` with no `reason` — a bare discharge is the unproven claim "
                 "the audit fold exists to reject; expected a non-empty `reason` string" % where)
@@ -5559,7 +5582,9 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
     state["fullPanelRan"] = False
-    state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
+    state["_auditTargets"] = _audit_targets(
+        state, config, split.get("auditTargets") or {},
+        reviewed_hunks_map=delta_surface.parse_hunks(reviewed))
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
     _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
@@ -5581,7 +5606,7 @@ def _fix_hunks_over_line(audit_targets_map, file, line):
             if isinstance(hunk, dict) and delta_surface._overlaps(hunk, ranges)]
 
 
-def _audit_targets(state, config, audit_targets_map):
+def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
@@ -5626,6 +5651,10 @@ def _audit_targets(state, config, audit_targets_map):
             if f.get(carried) is not None:
                 row[carried] = f[carried]
         row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
+        # `fixHunks` are whole head-diff hunks (the PR's own changes included); the reviewed version
+        # of the same location is the baseline that tells the fixer's change from the PR's.
+        row["reviewedHunks"] = _fix_hunks_over_line(
+            reviewed_hunks_map, f.get("file"), f.get("line"))
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
             for carried in ("suggestion", "body", break_it.RUN_FIELD):
