@@ -4481,9 +4481,9 @@ def _lifted_fix_rows(state, rows):
     effective = _live_ruling_by_key(state)
     live_keys = {_fix_batch_row_key(f) for f in findings if isinstance(f, dict)}
     # A guidance-named finding that left the live list (scoped synthesis archives it to the ledger)
-    # still rides the batch.
+    # still rides the batch; guidance inherited through the lineage never lifts an archived representative.
     archived = [ledger_by_key[k] for k, d in effective.items()
-                if isinstance(d, dict) and d.get("ruling") == "guidance"
+                if isinstance(d, dict) and d.get("ruling") == "guidance" and d.get("findingKey") == k
                 and k not in live_keys and isinstance(ledger_by_key.get(k), dict)]
     lifted = []
     for finding in list(findings) + archived:

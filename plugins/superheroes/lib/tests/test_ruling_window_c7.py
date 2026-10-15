@@ -1352,3 +1352,16 @@ def test_a_guided_blocker_sent_to_the_fixer_is_recorded_as_delivered():
     RD._after_findings_settled(state, state["config"])
     assert _unit_batch(state) == ["G"]
     assert state["liftedAtSeq"]["G"] == RD._decision_seq(RD._live_ruling_by_key(state)["G"]) > 0
+
+
+def test_batch_composition_never_holds_an_archived_representative_until_it_is_raised_again():
+    """axis: end to end through the fix batch — guidance on A (merged into archived B) never puts B
+    in the batch while B is archived, and reaches the fix once B is raised again."""
+    state = _archived_member_state()
+    RD._after_findings_settled(state, state["config"])
+    assert "B" not in _unit_batch(state)
+    state = _archived_member_state()
+    RD._set_findings(state, [_unit_finding("Z", 4, "Important"),
+                             _unit_finding("B", 5, "Minor", kind="code-quality")])
+    RD._after_findings_settled(state, state["config"])
+    assert "B" in _unit_batch(state)
