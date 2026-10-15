@@ -81,6 +81,7 @@ def _decide(state, key, ruling, round_no, **extra):
            "by": "owner"}
     if ruling == "out-of-scope":
         row["followUp"] = _follow_up()
+        row["severity"] = "Critical"  # the snapshot the rule verb takes; tests drop it for the older shape
     if ruling == "guidance":
         row["guidance"] = "keep the retry behaviour"
     row.update(extra)
@@ -170,7 +171,7 @@ def test_t4_edge2_an_unsequenced_gate_skip_is_one_episode_per_its_round(empty_ba
     state = _staged_state([_finding("Gate bypass", severity="Critical")])
     key = _key("Gate bypass")
     state["rounds"]["1"] = {"judgmentDispositions": [
-        {"id": key, "file": "f.py", "line": 1, "title": "Gate bypass", "disposition": "skip",
+        {"id": key, "file": "f.py", "line": 1, "title": "Gate bypass", "disposition": "skip", "severity": "Critical",
          "reason": "owner accepted it"}]}
     assert _offer(state, 2) == ("queued", [key])
     assert state["outOfScopeFixerRounds"][key]["episode"] == "round:1"
@@ -337,7 +338,7 @@ def test_t4_edge6_an_unauthenticated_clearing_result_stays_unauthenticated():
 
 # --- Part B: the loop ---------------------------------------------------------------------------
 
-def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,)):
+def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_ruling="discharged"):
     key = _key("Null deref")
     offers, seen_targets, history = [], [], {}
 
@@ -364,6 +365,8 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,)):
                       "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
             if rnd in unnamed_rounds:
                 result["unnamedChange"] = UNNAMED
+                if refusal_ruling != "discharged":
+                    result.update(ruling=refusal_ruling, reason="an additional behavior change needs permission")
             out.append(result)
         return out
 
@@ -840,3 +843,41 @@ def test_a_ruling_recorded_after_the_audit_target_stays_pending():
     assert newer > target["ownerRulingSeq"]
     assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
     assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
+
+
+# --- Review round 2 regressions ------------------------------------------------------------------
+
+def test_a_critical_is_never_spent_when_the_decision_has_no_severity_snapshot(empty_batch_calls):
+    # the older decision shape: no severity snapshot on the out-of-scope ruling
+    state = _staged_state([_finding("Gate bypass", severity="Important")])
+    key = _key("Gate bypass")
+    _decide(state, key, "out-of-scope", 1)
+    del state["rulingsLog"][-1]["severity"]
+    RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
+                           followUp=_follow_up())
+    state["round"] = 2
+    compiled, _ = RD.mechanical_compile([dict(_finding("Gate bypass", severity="Critical"))], None)
+    RD._stage_findings(state, compiled)
+    RD._set_findings(state, state["_toVerify"])
+    for rnd in (2, 3, 4):
+        assert _offer(state, rnd) == ("queued", [key])
+    assert empty_batch_calls == []
+    assert _decisions(state, "out-of-scope-fix-spent") == []
+
+
+def test_a_not_discharged_audit_keeps_its_unnamed_change_for_the_next_fixer(captured_state):
+    key, state, offers, seen_targets, history = _unnamed_change_loop(
+        captured_state, allow=False, refusal_ruling="not-discharged")
+    reason = state["rounds"]["2"]["audits"][0]["reason"]
+    assert reason.startswith("an additional behavior change needs permission")
+    assert UNNAMED in reason
+    assert UNNAMED in history[key]["priorAudit"]["reason"]
+
+
+def test_the_next_audit_target_carries_the_last_audit_that_refused(captured_state):
+    key, state, offers, seen_targets, _history = _unnamed_change_loop(
+        captured_state, allow=False)
+    assert "priorAudit" not in seen_targets[0][0]
+    prior = seen_targets[1][0]["priorAudit"]
+    assert prior["ruling"] == "not-discharged" and prior["round"] == 2
+    assert prior["reason"].startswith(UNNAMED_REASON_PREFIX)

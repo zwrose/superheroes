@@ -366,8 +366,12 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             continue
 
         if ruling == "not-discharged":
-            base.update(ruling="not-discharged",
-                        reason=reason.strip() if has_reason else "not discharged")
+            kept_reason = reason.strip() if has_reason else "not discharged"
+            if unnamed_text:
+                # keep the auditor's account of the unnamed change: the next fixer reads it from
+                # the recorded reason (priorAudit.reason), so it knows what to undo.
+                kept_reason += " Unnamed change: " + unnamed_text
+            base.update(ruling="not-discharged", reason=kept_reason)
             audits.append(base)
             if fid is not None:
                 not_discharged.append(fid)

@@ -4440,7 +4440,11 @@ def _escalated_since_out_of_scope(decision, row):
     if not isinstance(decision, dict) or not circuit_breaker.is_critical(row.get("severity")):
         return False
     recorded = decision.get("severity")
-    return isinstance(recorded, str) and bool(recorded) and not circuit_breaker.is_critical(recorded)
+    if isinstance(recorded, str) and recorded.strip().lower() in circuit_breaker._TIER_BY_LOWER:
+        return not circuit_breaker.is_critical(recorded)
+    # A missing or unrecognized snapshot (the older decision shape) is unknown: not spent, so a
+    # Critical stays in the batch (fail toward fixing).
+    return True
 
 
 def _drop_spent_out_of_scope_rows(state, rows):
@@ -5644,6 +5648,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     seen_keys = set()
     effective = _live_ruling_by_key(state)
     ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    history = _finding_history(state)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5682,6 +5687,12 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
         # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
         # ordinary not-discharged loop, with no state of its own.
+        # The finding's last audit rides the target too (derived from the audit history, as the fixer
+        # order's does), so the auditor sees why the last audit refused.
+        slot = history.get(tid)
+        prior = slot.get("priorAudit") if isinstance(slot, dict) else None
+        if isinstance(prior, dict):
+            row["priorAudit"] = {k: prior[k] for k in ("round", "ruling", "reason") if k in prior}
         decision = _row_decision(state, effective, ledger_by_key, tid)
         if isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS:
             owner_ruling = {"ruling": decision["ruling"], "reason": decision.get("reason")}
