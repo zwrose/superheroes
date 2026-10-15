@@ -100,7 +100,7 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
                  if r.get("outcome") == "accepted" and r.get("phase") == RD.P_VERIFIERS}
     assert set(_names(account)) == expected and len(account["reviewers"]) == len(expected)
     for v in account["reviewers"]:
-        assert v["ran"] is True and v["planned"] is True and v["runDir"] is None
+        assert v["ran"] is (not v["name"].startswith("verifiers")) and v["planned"] is True and v["runDir"] is None  # the fixture's verifier submits no verdicts: it never ran
         assert v["vendor"] and v["model"] and "notIndependent" not in v
     assert account["rawFindingsFiles"] == [] and rs.HAND_SUBMIT_NOTE in account["checked"]
     # bites on: a hand-submit row left unbound, which the writer then credits with the session's final head
@@ -493,6 +493,21 @@ def test_a_hand_submit_verifier_gap_sweep_and_scoped_finder_are_listed_as_review
     assert names["verifiers reviewer (round 1)"]["ran"] is True and names["verifiers reviewer (round 1)"]["vendor"] == "codex"
     assert names["gap-sweep reviewer (round 1)"]["ran"] is False  # no recoverable head: a missing review, not a credited one
     assert set(names) >= {"code-reviewer (round 1)", "%s reviewer (round 1)" % round_phases.P_SCOPED.removeprefix("dispatch-")}
+
+
+def test_a_hand_submit_verifier_whose_provenance_failed_is_not_credited_as_run(tmp_path):
+    for prov in ([{"expected": "codex", "ran": None, "outcome": "verdicts-ignored"}], []):
+        session = _hand_session(tmp_path / str(len(prov)), {1: {"code-reviewer": "run"}})
+        path = os.path.join(session, "loop-state.json")
+        state = json.load(open(path))
+        state["rounds"]["1"]["verifierProvenance"] = prov
+        state["_ordersAnchors"] = {"1:%s:0" % round_phases.P_VERIFIERS: {"headSha": HEAD, "vendor": "codex"}}
+        json.dump(state, open(path, "w"))
+        with open(os.path.join(session, "driver-journal.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"cmd": "submit", "outcome": "accepted", "phase": round_phases.P_VERIFIERS, "round": 1, "attempt": 0}) + "\n")
+        names = _names(rs.account_from_session(session, extras(), Fake().readers()))
+        # bites on: crediting a verifier from its emission head alone, which hides a rejected or forfeited verifier
+        assert names["verifiers reviewer (round 1)"]["ran"] is False
 
 
 def test_a_hand_submit_finder_row_carries_the_vendor_its_emission_recorded(tmp_path):

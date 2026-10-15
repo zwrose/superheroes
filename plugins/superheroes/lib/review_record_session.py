@@ -281,10 +281,10 @@ def _status_reviewers(state, setup=None, rows=()):
         out += _audit_reviewers(state, rnd, audits, later)
     for rnd, phase in sorted({(r["round"], r["phase"]) for r in rows if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
                               and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, *_RAW_PHASES[1:])}):
-        prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)] \
-            if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase
+        prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)
+                and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
         head = _panel_head(state, rnd, setup, phase)
-        out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head),
+        out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head) and (bool(prov) or phase != round_phases.P_VERIFIERS),
                              {"vendor": _text(*prov, _panel_head(state, rnd, None, phase, "vendor")) or "unknown", "model": "unknown"}, commit=head, phase=phase))
     return out
 
