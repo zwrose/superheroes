@@ -257,7 +257,8 @@ def _ledger_row(state, key):
 
 def test_a_fix_that_went_against_the_ruling_is_sent_back_restaged(tmp_path, keep_severity):
     """axis: RESTAGE — A is in an emitted order, the ruling arrives, the fix lands and A is archived as
-    fixed; the next round's fixer order still carries A (reopened in the ledger) with the ruling.
+    fixed; the next round's fixer order still carries A with the ruling (the restage lives in driver
+    state; the ledger keeps its fold-time record).
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 5)
     """
@@ -271,7 +272,8 @@ def test_a_fix_that_went_against_the_ruling_is_sent_back_restaged(tmp_path, keep
     state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
     assert state["round"] == 2 and _offered(state, session_dir, key_a)
     assert RD._live_finding_by_key(state, key_a) is None, "A is restaged from the ledger, not live"
-    assert "disposition" not in _ledger_row(state, key_a), "A is open again, not discharged"
+    assert _ledger_row(state, key_a)["disposition"] == "fixed", "the ledger keeps its fold-time record"
+    assert _offered(state, session_dir, key_a), "A is not excluded from round 2's batch as discharged"
     assert "DO-NOT-DELETE-IT" in _order_text(session_dir)
     assert any(d["kind"] == "fix-batch-ruled" and key_a in d["detail"] for d in state["decisions"])
 

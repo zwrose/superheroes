@@ -594,6 +594,8 @@ when it left the live list with no disposition. For any other the ruling names n
 `ruling-no-live-finding` decision records it and the end-of-loop settle takes the finding.
 `state.sentUnderDecision` keeps, by lineage root, the decision `seq` each finding was last sent under,
 so a decision is sent once; a round with no blocker still starts a fixer leg for an owner-named row.
+`state.restagedAfterDispositionSeq` marks a finding restaged from the ledger: the disposition the ruling
+reopened does not exclude it as discharged.
 
 ### Below-blocking findings settle at convergence
 

@@ -308,10 +308,11 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 ## Element v. it restages a finding fixed against a later ruling
 
-- **Guarded element:** `round_driver.py` `_reopened_ledger_row`. Axis: RESTAGE — a finding the fix archived as fixed comes back in the next round's fixer order, open in the ledger, with the ruling.
+- **Guarded element:** `round_driver.py` `_reopened_ledger_row`. Axis: RESTAGE — a finding the fix archived as fixed comes back in the next round's fixer order with the ruling; the resolver does not write the ledger (the restage is marked in driver state, `restagedAfterDispositionSeq`, and the ledger keeps its fold-time record).
 - **Detector (run alone):** `test_ruling_window_c7.py::test_a_fix_that_went_against_the_ruling_is_sent_back_restaged`
+- **Re-recorded** after `c7-l2b-wo-census2`: the resolver no longer drops the disposition in the ledger, so `_reopened_ledger_row` now returns the row for the restage and `sha256(round_driver.py)` (first 16 hex digits) is `6d229dd833dbaef7` before the neutralization and after the restore.
 
-**Neutralization.** Inserted `    return None` as the first statement of `_reopened_ledger_row`.
+**Neutralization.** Inserted `    return None` as the statement after the docstring of `_reopened_ledger_row`.
 
 **Raw red** (exit 1):
 
@@ -321,31 +322,32 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ________ test_a_fix_that_went_against_the_ruling_is_sent_back_restaged _________
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-23/test_a_fix_that_went_against_t0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0')
 keep_severity = None
 
     def test_a_fix_that_went_against_the_ruling_is_sent_back_restaged(tmp_path, keep_severity):
         """axis: RESTAGE — A is in an emitted order, the ruling arrives, the fix lands and A is archived as
-        fixed; the next round's fixer order still carries A (reopened in the ledger) with the ruling.
+        fixed; the next round's fixer order still carries A with the ruling (the restage lives in driver
+        state; the ledger keeps its fold-time record).
     
         bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 5)
         """
         session_dir, gitdir, head_path, key_a, _key_b = _two_important(tmp_path, "c7-restage")
         assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_a, "DO-NOT-DELETE-IT"))["ok"]
-        _drive_one_phase(session_dir, gitdir, [], head_path)   # the fixer folds
-        _drive_one_phase(session_dir, gitdir, [], head_path)   # the audit discharges A
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the fixer folds
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the audit discharges A
         state = _state(session_dir)
         assert _ledger_row(state, key_a)["disposition"] == "fixed"
     
 >       state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:271: 
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:272: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-session_dir = '/tmp/claude-0/pytest-of-root/pytest-23/test_a_fix_that_went_against_t0/c7-restage'
-gitdir = '/tmp/claude-0/pytest-of-root/pytest-23/test_a_fix_that_went_against_t0/c7-restage-gitdir'
-head_path = '/tmp/claude-0/pytest-of-root/pytest-23/test_a_fix_that_went_against_t0/c7-restage-head.diff'
+session_dir = '/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0/c7-restage'
+gitdir = '/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0/c7-restage-gitdir'
+head_path = '/tmp/claude-0/pytest-of-root/pytest-40/test_a_fix_that_went_against_t0/c7-restage-head.diff'
 phase = 'dispatch-fixer', max_steps = 12
 
     def _drive_until(session_dir, gitdir, head_path, phase, max_steps=12):
@@ -355,32 +357,33 @@ phase = 'dispatch-fixer', max_steps = 12
 >           assert not state.get("terminal"), state.get("terminal")
 E           AssertionError: converged
 E           assert not 'converged'
-E            +  where 'converged' = <built-in method get of dict object at 0x7fecd87c2540>('terminal')
-E            +    where <built-in method get of dict object at 0x7fecd87c2540> = {'_advanceUsed': True, '_auditOutcome': {'ambiguous': [], 'audits': [{'auditor': 'codex', 'classKey': 'code-reviewer::...er::::bounds g', 'dimension': 'code-reviewer', 'evidence': 'read src/f00.py', ...}], '_changedSubjects': ['Code'], ...}.get
+E            +  where 'converged' = <built-in method get of dict object at 0x7ff91085f7c0>('terminal')
+E            +    where <built-in method get of dict object at 0x7ff91085f7c0> = {'_advanceUsed': True, '_auditOutcome': {'ambiguous': [], 'audits': [{'auditor': 'codex', 'classKey': 'code-reviewer::...er::::bounds g', 'dimension': 'code-reviewer', 'evidence': 'read src/f00.py', ...}], '_changedSubjects': ['Code'], ...}.get
 
 /home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:114: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_fix_that_went_against_the_ruling_is_sent_back_restaged
-1 failed in 2.23s
+1 failed in 2.69s
 ```
 
-**Restore.** Inverse edit. Restored lines (`round_driver.py:4443-4446`):
+**Restore.** Inverse edit (removed the inserted `return None`). Restored lines (`round_driver.py:4451-4455`):
 
 ```python
 def _reopened_ledger_row(ledger_by_key, key):
     """The finding's own ledger row as an open finding again (its disposition dropped), or None."""
     row = ledger_by_key.get(key)
     if not isinstance(row, dict):
+        return None
 ```
 
-Restore receipt: `sha256(round_driver.py)` first 16 hex digits `d82357d35b914254` before the neutralization and after the restore.
+Restore receipt: `sha256(round_driver.py)` first 16 hex digits `6d229dd833dbaef7` before the neutralization and after the restore.
 
 **Raw green** (exit 0):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
-1 passed in 2.19s
+1 passed in 2.71s
 ```
 
 ## Element vi. no autonomous lift
