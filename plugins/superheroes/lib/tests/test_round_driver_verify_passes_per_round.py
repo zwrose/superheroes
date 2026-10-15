@@ -122,7 +122,7 @@ def _attested_spine(rounds):
         "scriptRan": {"byPhase": {}, "invocations": 1},
         "seatMap": {},
         "artifacts": {"session/x": "abc"},
-        "roster": {"test-reviewer": "recorded"},
+        "roster": {"test-role": "recorded"},
         "rounds": rounds,
         "findings": [],
         "decisions": [],

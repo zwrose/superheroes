@@ -3,7 +3,8 @@
 - §1 — Decide the storage mode, with disclosure
 - §2 — Seed the core + the light hero layers
 - §3 — Verify command first
-- §3.5 — Who it's for and what it's for — asked as its own step
+- §3.5 — Who it's for, and Risk and trust — one sitting
+- §3.6 — Record that item 13 lives in Canon
 - §4 — Optional heavier heroes — provisional defaults disclose
 - §4.4 — Show-it surface — provisional default
 - §4.5 — Engine preferences — per-role defaults
@@ -88,10 +89,26 @@ verify command via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-verify-command -->
 
-## 3.5 — Who it's for and what it's for — asked as its own step
+## 3.5 — Who it's for, and Risk and trust — one sitting
 
-This step is asked, not detected. Ask the owner, in these words: **"Who is this project for, and
-what is it for? A few plain sentences: the people it serves, and what it lets them do."**
+This step is asked, not detected. The advisor leads this sitting with the owner, in product terms:
+no path patterns and no JSON in what it asks or reads back. The same sitting runs here at a new
+project's set-up and, for a project that is already configured, from view-and-tune's "Set up Risk
+and trust" action (`view-and-tune.md` § 2).
+
+**First, who it's for.** Read item 14:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" get --item whoItsFor --cwd .
+```
+
+If it is set, do not ask it again. Offer to read it back: "Who this project is for is already
+recorded. Want me to read it back before the risk questions?" Read it if the owner says yes, change
+it only if the owner asks, and move on to the risk questions.
+
+If it is not set, ask the owner, in these words: **"Who is this project for, and what is it for? A
+few plain sentences: the people it serves, and what it lets them do."**
 
 Record the answer as configuration item 14 through `project_config`:
 
@@ -110,10 +127,77 @@ Read the result as the other `set` calls are read: only `written` or `noop` mean
 saved. If the owner would rather not answer now, leave item 14 unset, say so in the set-up output,
 and go on. The configure view shows item 14 as unset until it is set.
 
-Keep this one sitting. Ask any other question about who the project serves or what it is for here,
-together with this one, and not in a later step.
+**Then the risk questions,** one at a time, in this order:
 
-Then record that item 13 lives in Canon:
+1. Where do money, customer data, access and irreversible actions live in the product?
+2. Which outcomes are unacceptable?
+3. How quickly can a bad change be undone?
+4. What can be run to try the product?
+
+**What the answers become.** The advisor turns the answers to the first three questions into
+**risk areas**. For each part the owner names, the advisor finds the code that implements it and
+writes the area's `covers` patterns itself (a pattern is a repo-relative path or glob; a pattern that
+names a folder covers every file beneath that folder, and `*` also crosses `/`), takes `why` from the
+unacceptable outcomes, and takes `undo` from the answer on undoing. A part where a mistake costs
+money, customer data, safety, access, or something that cannot be undone can each be its own area. Before writing, the advisor
+reads the areas back in product terms: the name, what it covers in the owner's words, why it is
+risky, and how hard a mistake there is to undo. It writes them only on the owner's yes, with the
+whole list in one call, through a quoted here-document as for item 14:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item riskAndTrust --cwd . <<'SUPERHEROES_ANSWER'
+{"riskAreas": [{"name": "<area name>", "covers": ["<repo-relative path pattern>"], "why": "<why a mistake costs>", "undo": "<how hard a mistake is to undo>"}]}
+SUPERHEROES_ANSWER
+```
+
+An unacceptable outcome that belongs to no part of the code is offered to the owner as an addition
+to the threat model (shown as "What we defend against"). The existing threat-model text is never
+rewritten without the owner's yes. A change is written the same way, with the other half:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item riskAndTrust --cwd . <<'SUPERHEROES_ANSWER'
+{"threatModel": "<the threat model as prose>"}
+SUPERHEROES_ANSWER
+```
+
+Each call sets one half, and setting `riskAreas` replaces the whole list. Read the result as the
+other `set` calls are read: only `written` or `noop` means it was saved. Anything else is reported
+to the owner with its `reason` and never worked around.
+
+**The coverage check.** After a `written` or `noop` answer, the advisor runs the reader over the
+project's tracked files:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+git -C "$(git rev-parse --show-toplevel)" ls-files -z | python3 -B "$ROOT_DIR/lib/risk_areas.py" touched --cwd . --paths-file - --nul
+```
+
+and checks that every area in `areas` appears in `touched`. An area that matched nothing is read
+back to the owner in product terms ("Payments covers no file in the project today"), and the
+advisor corrects its `covers` with the owner and writes the whole list again before finishing. An
+area may legitimately cover files that do not exist yet; keeping it as it is, is the owner's call,
+and the advisor says so in the set-up output. No write is refused for covering nothing.
+
+The listing starts from the repository root, so a sitting opened inside a package folder still sees
+every tracked file under its repository-relative path, and `-z` hands the names over unquoted, so a
+file name with accented or non-English characters matches its area like any other.
+
+The answer to the fourth question is checked against what the project's calibration already
+records: the verify command, and test-pilot's profile when test-pilot is set up. A gap is offered to
+the owner through that setting's own configure path. Nothing about it is stored in Risk and trust.
+
+If the owner would rather not answer the risk questions now, leave the risk areas unset and say so in
+the set-up output. Until risk areas are set, the review treats them as not set.
+
+Keep this one sitting. Ask any other question about who the project serves or what it is for here,
+together with these, and not in a later step.
+
+## 3.6 — Record that item 13 lives in Canon
+
+Runs at set-up only, after § 3.5. View-and-tune's "Set up Risk and trust" action runs § 3.5 and
+never this step.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

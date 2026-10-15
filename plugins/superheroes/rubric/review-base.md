@@ -1,4 +1,4 @@
-<!-- rubric-version: 12 -->
+<!-- rubric-version: 13 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -39,7 +39,9 @@ Minor and Nit findings never change the verdict regardless of strictness.
 1. **`file:line` citation required.** No citation → drop.
 2. **Diff-scope rule** (diff modes only): flag only code on `+`/`-` lines. Context
    lines and unchanged code are pre-existing → SKIP. (Audit/sweep mode reviews the
-   whole repo; this rule does not apply there.)
+   whole repo; this rule does not apply there.) The one exception is a break-it test
+   (taxonomy `break-it-test`), which only the test role writes: it cites its new test file at
+   line 1, a file the diff does not hold yet, and its grounds are the changed code it targets.
 3. **Grep-before-flag.** Search the codebase for X under variant names before flagging
    "missing X". A thing that exists under another name is not missing.
 4. **Reachability check on Important findings.** Read the caller(s); if the only
@@ -293,7 +295,8 @@ on each candidate finding before emitting it, dropping (or downgrading) failures
 order:
 
 1. **Citation in scope** — `file:line` is present; in diff modes it lands on a
-   `+`/`-` line (context/unchanged lines are pre-existing → drop).
+   `+`/`-` line (context/unchanged lines are pre-existing → drop) (a break-it test cites its
+   new file; see rule 2).
 2. **Reachable / not already guarded** — read the caller; if the only caller
    already guards the case, drop or downgrade.
 3. **Claimed-missing actually missing** — grep for the symbol under variant

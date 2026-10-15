@@ -145,6 +145,10 @@ SIZE_EXCLUDE_MALFORMED_ENTRY_ABSOLUTE = "size-exclude-entry-absolute"
 _SIZE_EXCLUDE_ACCEPTED_LIST = (
     "a list of repo-relative path globs, such as [\"docs/**\", \"*.generated.ts\"]")
 _SIZE_EXCLUDE_ACCEPTED_GLOB = "a repo-relative glob, no leading /"
+RISK_AREAS_KEY = "riskAreas"
+RISK_AREAS_REASON_MALFORMED = "risk-areas-malformed"
+RISK_AREAS_REASON_UNREADABLE = "risk-areas-unreadable"
+RISK_AREA_FIELDS = ("name", "covers", "why", "undo")
 THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
@@ -311,6 +315,74 @@ def validate_size_exclude(value):
         elif entry.startswith("/"):
             items.append(item(index, SIZE_EXCLUDE_MALFORMED_ENTRY_ABSOLUTE,
                               _SIZE_EXCLUDE_ACCEPTED_GLOB))
+    return items
+
+
+def risk_area_pattern_problem(pattern):
+    """The one canonical-form check for a risk-area ``covers`` pattern: a short reason, or None
+    when acceptable. Every accepted pattern is one a normalised change path can match."""
+    if not isinstance(pattern, str):
+        return "pattern-not-a-string"
+    if not pattern.strip():
+        return "pattern-empty"
+    if pattern != pattern.strip():
+        return "pattern-surrounding-whitespace"
+    if pattern.startswith("/"):
+        return "pattern-absolute"
+    # axis: a leading ./ is refused, because a normalised change path never carries one — see bite-proof record wo_a_1712_risk-areas
+    if pattern.startswith("./"):
+        return "pattern-leading-dot-slash"
+    if "\\" in pattern:
+        return "pattern-backslash"
+    segments = pattern.split("/")
+    if any(segment == "" for segment in segments):
+        return "pattern-empty-segment"
+    if any(segment in ("..", ".") for segment in segments):
+        return "pattern-dot-segment"
+    return None
+
+
+def validate_risk_areas(value):
+    """Return malformed-item dicts for a riskAreas value; empty list means valid. Never raises.
+    Every item is ``{"index": int|None, "field": str|None, "reason": str}``."""
+    def item(index, field, reason):
+        return {"index": index, "field": field, "reason": reason}
+
+    if not isinstance(value, list):
+        return [item(None, None, "risk-areas-not-a-list")]
+    items = []
+    seen = set()
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            items.append(item(index, None, "risk-area-not-an-object"))
+            continue
+        # axis: an area holds exactly name, covers, why and undo — a missing or extra key is malformed — see bite-proof record wo_a_1712_risk-areas
+        for field in RISK_AREA_FIELDS:
+            if field not in entry:
+                items.append(item(index, field, "risk-area-missing-field"))
+        for key in entry:
+            if key not in RISK_AREA_FIELDS:
+                items.append(item(index, str(key), "risk-area-unknown-field"))
+        for field in ("name", "why", "undo"):
+            if field in entry and (not isinstance(entry[field], str) or not entry[field].strip()):
+                items.append(item(index, field, "risk-area-field-not-a-nonempty-string"))
+        if "covers" in entry:
+            covers = entry["covers"]
+            if not isinstance(covers, list) or not covers:
+                items.append(item(index, "covers", "risk-area-covers-not-a-nonempty-list"))
+            else:
+                for pattern in covers:
+                    problem = risk_area_pattern_problem(pattern)
+                    if problem is not None:
+                        items.append(item(index, "covers", problem))
+        name = entry.get("name")
+        if isinstance(name, str) and name.strip():
+            folded = name.strip().casefold()
+            # axis: names are unique by stripped, case-folded text — see bite-proof record wo_a_1712_risk-areas
+            if folded in seen:
+                items.append(item(index, "name", "risk-area-duplicate-name"))
+            else:
+                seen.add(folded)
     return items
 
 
@@ -2344,6 +2416,80 @@ def clear_size_exclude(cwd, *, root=None):
     if result.get("action") in ("written", "noop"):
         return dict(result, cleared=True)
     return result
+
+
+def read_risk_areas(cwd, root=None):
+    """Read ``projectConfiguration.riskAreas`` from core.md. Total and read-only: never raises,
+    never writes. An absent key (or an absent core.md) reads areas None with no malformed items;
+    a valid key reads its areas as stored; a present but invalid key reads declared True, areas
+    None, reason ``risk-areas-malformed``; every other failure reads reason
+    ``risk-areas-unreadable`` with a detail naming the underlying reason or exception."""
+    base = {
+        "declared": False,
+        "areas": None,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    unreadable = RISK_AREAS_REASON_UNREADABLE
+    try:
+        try:
+            path = _size_exclude_core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return dict(base, reason=unreadable,
+                        detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))
+        if path is None:
+            return dict(base, reason="core-md-absent")
+
+        structural = _structural_refusal_at_path(path)
+        if structural is not None:
+            return dict(base, reason=unreadable, detail=structural)
+
+        if not os.path.isfile(path):
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: not a regular file at %s" % path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: %s" % gate_refusal_detail(exc, at=path))
+        try:
+            facts = parse_core(text)
+        except VerifyCommandMalformed as exc:
+            return dict(base, reason=unreadable, detail="VerifyCommandMalformed: %s" % exc)
+        if facts is None:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unparseable: corrupt or unreadable core.md at %s" % path)
+
+        behind = facts["schemaVersion"] > SCHEMA_VERSION
+        # parse_core turns a non-dict projectConfiguration into {}, so the raw block is read here
+        mb = _JSON_BLOCK.search(text)
+        block, duplicate_key = _loads_rejecting_duplicate_keys(mb.group(1)) if mb else (None, None)
+        if duplicate_key is not None:
+            return dict(base, reason=unreadable, behind=behind,
+                        detail="duplicate-core-key:%s" % duplicate_key)
+        if not isinstance(block, dict):
+            return dict(base, reason=unreadable, behind=behind,
+                        detail="core-md-unparseable: json block is not an object at %s" % path)
+        # axis: a projectConfiguration that is not an object reads unreadable, never as a missing key — see bite-proof record wo_a_1712_risk-areas
+        if PROJECT_CONFIGURATION_KEY in block and not isinstance(
+                block[PROJECT_CONFIGURATION_KEY], dict):
+            return dict(base, reason=unreadable, behind=behind,
+                        detail="project-configuration-not-an-object: %s at %s"
+                        % (type(block[PROJECT_CONFIGURATION_KEY]).__name__, path))
+        mapping = block.get(PROJECT_CONFIGURATION_KEY) or {}
+        if RISK_AREAS_KEY not in mapping:
+            return dict(base, behind=behind)
+        raw = mapping[RISK_AREAS_KEY]
+        malformed = validate_risk_areas(raw)
+        if malformed:
+            return dict(base, declared=True, malformed=malformed,
+                        reason=RISK_AREAS_REASON_MALFORMED, behind=behind)
+        return dict(base, declared=True, areas=copy.deepcopy(raw), behind=behind)
+    except Exception as exc:  # total: any other failure is a named read refusal, never a raise
+        return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
 
 
 _THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)

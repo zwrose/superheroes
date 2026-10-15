@@ -13,9 +13,11 @@
 - [The reader clause](#the-reader-clause)
 - [The venue ladder](#the-venue-ladder)
 - [Craft calls and owner calls](#craft-calls-and-owner-calls)
+- [Where a ruling is recorded](#where-a-ruling-is-recorded)
 - [The revisit-trigger registry](#the-revisit-trigger-registry)
 - [The gardening pass](#the-gardening-pass)
 - [The gardening record](#the-gardening-record)
+- [Calibration changes and time complaints](#calibration-changes-and-time-complaints)
 - [Delivery mechanics](#delivery-mechanics)
 - [Formatting — one block per spine section](#formatting--one-block-per-spine-section)
 - [Where the items come from, and the bound on that sweep](#where-the-items-come-from-and-the-bound-on-that-sweep)
@@ -227,27 +229,48 @@ declined with a trigger by default.
 
 1. **Every grading records its scoring durably on the item**. The record carries the band cited,
    the evidence tier, and the resulting tier. Whoever graded it writes it, normally the advisor.
-2. **The misses log captures three classes**. The classes are declined-then-escaped,
-   launched-then-regretted, and mis-tiered. The advisor appends **at the moment the miss is
-   observed**, whether that is a vet, a field report, or an incident, and reads the log at every
+2. **The misses log captures four classes**. The classes are declined-then-escaped,
+   launched-then-regretted, mis-tiered, and the [review escape](../../../rubric/glossary.md#review-escape).
+   The advisor appends **at the moment the miss is observed**, whether that is a vet, a field report,
+   or an incident, and reads the log at every
    [gardening pass](../../../rubric/glossary.md#gardening-pass).
-3. **Every vet receipt states the misses-log appends it made, or `None`,** following that receipt's
+3. **A review escape is logged by the act that observes it.** Four things settle it.
+   - **What triggers one.** A vet of a fix, a detective diagnosis, a field report, or the owner's own
+     report traces a bug to a PR that had a review.
+   - **Who logs it.** The act that observes it logs it, at that moment. The advisor appends it during
+     that vet, while reading that diagnosis or field report, or when the owner reports it. The act's own
+     durable record states the append, as item 4 requires.
+     An escape is logged once per bug: the act reads the misses log first, and when an earlier act
+     already logged that same bug from that PR, it appends nothing and its record says the escape was
+     already logged. A different bug from the same PR is a separate escape and gets its own entry.
+   - **What the entry says.** The PR, a short description of the bug, a link to that PR's
+     [review record](../../../rubric/glossary.md#review-record) (the record is one hop from the PR), the
+     date of the review that record holds, and one call. The call is **missed** when no finding in the
+     record names the bug. It is **seen and left** when a finding names it and its outcome let it
+     through: shown wrong, a craft call, left for the owner, or a ruling. A finding whose outcome is
+     fixed but whose fix did not hold counts as **missed**, because the review did not stop the bug;
+     the entry then names that finding and says its fix did not hold.
+   - **Counting starts at adoption.** A review escape counts only when the review it traces to is dated
+     on or after the project's [adoption day](#calibration-changes-and-time-complaints), so no reviewer
+     seat is judged on reviews from before the project adopted this way of learning. An escape traced
+     to an earlier review is still logged, marked as before adoption, and never counted.
+4. **Every vet receipt states the misses-log appends it made, or `None`,** following that receipt's
    own filled-or-`None` convention. The same line rides the durable record of any field-report
    processing or incident response — so a quiet log is visibly claimed quiet by each observing act
    rather than silently unappended, and the advisor's sole-appender role is auditable from the
    receipts. The receipt carries it as spine field 10 (`skills/showrunner/reference/vet-receipt.md`).
    **The gardening record**, not the vet receipt, is where the window's appends are
    accounted for.
-4. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
+5. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
    with corrected inputs, alongside any recalibration of the instruments. Recalibrations reach the
    owner as proposals to stamp, never as silent re-scores.
-5. **Rubber-stamping is watched by judgment, never by count.** No tally of accepts and rejects is
+6. **Rubber-stamping is watched by judgment, never by count.** No tally of accepts and rejects is
    kept, because agreement can simply mean the proposals were sound. When either the owner or the
    advisor suspects it, the advisor reads a sample of recent decisions back to the owner at a walk.
-6. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
+7. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
    comment. One surface, one pin, already read at every vet. The **gardening record** lands as a
    durable comment on the collector at each pass.
-7. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
+8. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
    ran in, full, light, or micro,** so the receipt corpus can be read by lane. The receipt carries it
    as spine field 9 (`skills/showrunner/reference/vet-receipt.md`). **The grading record does not carry it**, because no lane
    exists at intake.
@@ -429,6 +452,18 @@ appending, the session checks the collector for an existing entry covering the s
 On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
 ordinal 1 and the age subtraction proceeds unchanged.
 
+## Where a ruling is recorded
+
+**A ruling is recorded where it was given, and a ruling given in chat gets the standard chat-ruling
+record.** A ruling given on a durable thread (the collector, an issue, a pull request) is already
+recorded there; a struck collector entry carrying the ruling's date and the owner's words is its
+record. A ruling given in chat has no such thread; the issue contract's
+[Anchor resolution](issue-contract.md#anchor-resolution) defines its record and the permalink an
+issue Anchor cites. **Canon is not a ruling log.** It holds only what passes its test (an answer to an
+owner call a later session needs, a principle, a ceded call or its take-back), written through
+`lib/canon.py`, which refuses go-words, dispositions and bookkeeping and names their home
+([Canon's contract](../../../rubric/canon-contract.md#what-stays-out-and-where-it-goes)).
+
 ## The revisit-trigger registry
 
 **The revisit-trigger registry is one pinned, always-current comment on the project's collector issue, one line per declined item — what was declined; for machinery, how it failed the evidence bar; for product, its classification, ratification, and decline rationale (product work never took the bar); the revisit trigger; and the date with a pointer to the full record — archiving declines from craft calls and owner calls alike.**
@@ -524,8 +559,36 @@ advisor run together to keep calibration honest.
      reclaimed**. When the batch is done and the queue is not empty, the advisor **says how many
      remain and asks whether to draw another batch of about five**. Batches continue on the owner's
      word until the queue is empty or the owner stops.
-3. **Read the [misses log](../../../rubric/glossary.md#misses-log)** and propose any recalibrations for
-   the owner's stamp.
+3. **Read the [misses log](../../../rubric/glossary.md#misses-log), including its review escapes,** and
+   the [keep-or-retire](../../../rubric/glossary.md#keep-or-retire-entry) entries of the **reviewer seats**
+   and of the review record writer. Propose any recalibrations of the grading instruments for the
+   owner's stamp. From the same evidence, propose changes to the
+   [calibration](../../../rubric/glossary.md#calibration).
+   - **A calibration proposal is a batch-2 item**, because it concerns no single PR. It carries the
+     [per-item spine](#the-per-item-spine) and names **the evidence it rests on** (the escapes and seat records, each with its
+     link), **its options**, **what each option costs** (in reviewers, time, or risk left open), and
+     **a recommendation**.
+   - **A proposal to loosen the calibration has exactly the same shape and asks for the same yes as a
+     proposal to tighten it.** A tightening: "make database changes a risk area", resting on two
+     escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
+     window".
+   - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
+     escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
+     record writer's `read --pr <n>` returns it, and each review escape as its review's date
+     (`reviewedAt`) and its call (`missed` or `seen-and-left`). The advisor builds that escape input
+     from the misses log at the pass, one item per review escape in the log, before-adoption ones
+     included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
+     dated by that record and counts only when the date is on or after the adoption day and inside
+     the condition window. The record keeps no first date for a finding, so a catch carried from a
+     review before the adoption day into a later re-review counts by the later date; the advisor
+     weighs that before relying on a seat's count. The advisor reads the counts and judges. Missing
+     evidence reads unmeasured, never zero: the helper's tally contract says which records and escapes
+     it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
+     reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
+     is left out unread. A catch is
+     credited to every seat whose lens the finding names (a fixed finding in the security lens
+     counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
+     in that seat's lens.
 4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
    in one sentence**. Record the **decisions-asked count** for the same window. List the
    [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
@@ -619,7 +682,7 @@ standing rule of the pass, not a ninth duty.
 - the guardian staleness read and any pending triage;
 - the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
 - the open questions the passes carry until settled;
-- and **the misses-log appends made**.
+- and **the misses-log appends made**, the review escapes among them, and the calibration proposals the pass brought.
 
 **What the decisions-asked count counts.** The decisions that needed the owner's word in the window:
 P0 rulings, batched P1 words, launch go-aheads, retirement rulings, and recalibration stamps. **Nothing
@@ -641,6 +704,56 @@ and coarser components on the keep-or-retire list, never automation**. **There i
 The owner's own judgment is the trigger. **The keep-or-retire list is an instrument read by a person
 and never gets a guard.** This section is the one home of that rule.
 
+## Calibration changes and time complaints
+
+The [calibration](../../../rubric/glossary.md#calibration) is what every review runs on. These rules
+say how it changes and what the advisor says when the owner finds a review slow.
+
+- **Only the owner's yes changes the calibration**, whether a proposal tightens or loosens it. While a
+  proposal is unanswered, every review runs on the calibration as it was. Nothing is applied early, in
+  part, or on silence.
+- **Applying an approved change.** The advisor runs `lib/review_learning.py apply` with the proposal and
+  the owner's recorded yes: the answer, the owner's exact words, and where and when they were given. The
+  command records the approval in Canon by Canon's write procedure
+  ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)), then writes the Risk and
+  trust half the proposal changes. A proposal that replaces an earlier Canon ruling names it in an
+  optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
+  about leftovers is the Canon entry alone. The Canon
+  entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
+  which is the next PR it opens. It never goes on the branch of the PR whose sheet carried the proposal.
+  A result other than `applied` is reported to the owner as it is, never as done. A `partial` result
+  means the approval is recorded and the setting is not confirmed written: usually it did not change,
+  but under reason `calibration-unconfirmed` the write may have landed and the setting must be read back
+  before it is reported either way.
+  Every `apply` appends a fresh Canon entry, so after a failed one the advisor reads Canon before
+  anything else. When the result names a `canonEntry`, that entry is already written, so the advisor
+  finishes what remains by hand (committing that entry, or writing and reading back the setting)
+  instead of running `apply` again, which would append a second entry.
+- **From the next review on.** A Risk and trust change takes effect for every review that starts after
+  the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
+  ruling about leftovers binds where Canon's own reading rules say it does.
+- **The adoption day.** The project's adoption day is recorded once, with `lib/review_learning.py adopt`,
+  when the project adopts the plugin release that carries this learning. It lives in the project's
+  configuration (the `projectConfiguration` block, key `reviewLearningSince`) and never moves: a later
+  `adopt` with another date refuses. With no day recorded, every count reads unmeasured. The advisor
+  records the day at the first gardening pass that finds it missing, and says so in that pass's record.
+  Counting starts on that day, so nothing earlier is counted.
+- **When the owner says a review took too long,** the advisor answers with four things:
+  1. whether the calibration is right for that change: the lane, from the PR's
+     [review record](../../../rubric/glossary.md#review-record), and the risk areas the change
+     touches, read with `lib/risk_areas.py touched` over the PR's changed paths;
+  2. whether the review loop followed it: the reviewers that ran, the rounds, and whether the loop
+     stopped at its cap, all from the review record;
+  3. what the review spent its time on: the record's cost (reviewer minutes, summed across the
+     reviewers, not the time the owner waited) and its round count. The record neither times fix
+     rounds nor says which rounds ran a fix, so the answer gives the round count, says that fix work
+     is not recorded, and estimates neither;
+  4. a proposed calibration change, or none, with its reason.
+
+  **The complaint is never treated as an instruction to go faster.** The loop keeps spending the time
+  the calibration calls for until the owner says yes to a change. A proposed change goes through the
+  same yes as any other.
+
 ## Delivery mechanics
 
 **Chat prose. Never a structured-question tool** — recorded owner instruction: *walk me through them
@@ -652,24 +765,94 @@ option letters together are the ruling vocabulary: the owner rules tersely as **
 re-number or re-letter silently re-targets a ruling already given. Assign numbers and letters once;
 carry them forward unchanged.
 
-**Deliver batch 1 first and alone.** **Batch 1 is only what blocks the advisor's own next action**,
-and **explicitly excludes new-issue filings, which are never blocking**. **Batch 2 is everything else.**
-**Deliver batch 2 as soon as batch-1 rulings land** — the advisor **executes what batch 1 unblocked
-alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split exists at
-all, bounded by the section below.
+**Three batches, always in this order.** **Batch 1 holds what blocks work**: only what blocks the
+advisor's own next action, and **never a new-issue filing, which never blocks**. **Batch 2 holds the
+decisions not tied to one PR.** **Batch 3 holds one sheet per PR.** **Batch 1 goes first and alone:
+the advisor stops for its rulings before it delivers batch 2.**
 
-**Batch 3 is the click list, and it comes last.** Once batch-2 rulings have landed and what they
-unblocked has been executed, the walk ends with a third batch: **the pull requests that are ready to
-merge, in merge order**, each carrying **the notable acceptances it commits the owner to** and **the
-exact merge command**. It comes last for a reason an earlier slot cannot fix — **a batch-2 ruling
-routinely sends a vetted pull request back**, so a click list assembled any earlier names pull
-requests that are no longer mergeable, and the owner is left working out which lines still stand.
-**The list is delivered, not requested**: an owner who has to ask for the merge commands by hand is
-doing assembly the advisor was already positioned to do. **What batch 3 asks for is the owner's
-word**, not a craft call the advisor takes on their behalf — who then runs the command, and under
-what preconditions, is the release-and-merge duty's business and is not decided here; see
-[What batch-1 execution may and may not do](#what-batch-1-execution-may-and-may-not-do), which
-reserves merge, release, publish, and force-push from anything execution does on a ruling.
+**Batch 1 goes in the chat and at the top of the index**, and the chat message links to the index.
+The index and the PR sheets are published on the plugin's shared review template. Their data shape,
+and the shape of the advisor's input to a sheet, are the template's, in
+[the review template](../../../theme/review-template.md); this file restates none of it.
+
+**The first answer the advisor reads counts.** The first answer the advisor reads to a batch-1
+question, in the chat or on the index, is the answer, and it counts at once. A batch-1 answer on the
+index is read as soon as it is saved and never waits for "done". The index keeps only the owner's
+last tap, so the advisor reads the index each time it reads the chat for a ruling. This is the one
+exemption from the "done" gate stated in "Reading a PR sheet" below.
+
+**When the two disagree.** When the advisor reads an answer in the chat and an answer on the index to
+the same batch-1 question and they disagree, it acts on neither and asks the owner which one stands.
+If it already acted on the first answer it read before the second arrived, it stops what that answer
+unblocked, says what it already did, and asks.
+
+**Batch 2 comes in the chat**, and only once the batch-1 rulings land, as soon as they do. The advisor **executes what batch
+1 unblocked alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split
+exists at all, bounded by the section below. **No batch-2 item concerns one specific PR.** An item
+about one PR goes on that PR's sheet, or into batch 1 when it blocks work.
+
+**Batch 3 is the PR sheets, and they are built last.** Build them only after the batch-1 and batch-2
+rulings have been carried out. **A ruling routinely sends a vetted pull request back**, so a sheet
+built any earlier describes a PR that is no longer ready, and the owner is left working out which
+sheets still stand. A PR that a ruling sent back has no sheet waiting for answers. Bring each PR
+current with its base before its sheet is published, so the sheet describes the commit that would
+merge. **The sheets are delivered, not requested.**
+
+**Walk a sheet's stops before sending it.** Before a sheet that has a walk is sent, the advisor
+walks its stops. A stop that a pilot run already walked, with that run's evidence, counts as walked,
+and the advisor does not repeat it by hand. The advisor's input to the sheet records which stops
+were walked, how, and why any stop was not; the shape of that record is the template's.
+
+**Reading a PR sheet.** How a sheet saves answers, with its drafts and the last tap counting, is the
+template's: [How answers come back](../../../theme/review-template.md#how-answers-come-back). The
+advisor reads a PR sheet's answers only once the owner says "done" in the chat. Before that, with
+answers saved and no "done", nothing is merged, sent back, filed, or recorded in Canon from the
+sheet. After "done", a "Keep it" on a leftover whose note says to fix it first is treated as open:
+the PR is not merged, and the advisor asks the owner which one stands.
+
+**The merge verdict.** The owner's word to merge a PR is a saved "Merge" verdict on that PR's current
+sheet together with "done" in the chat. Duty 6 in `skills/showrunner/SKILL.md` ("Coordinate releases
+and drive the merge train") is the one full statement of it. Where no "Merge" verdict can be saved on
+the PR's current sheet, because the host cannot show the sheet or the template does not offer a merge
+verdict, there is no word: the merge waits, and the advisor tells the owner why rather than taking a
+chat answer in its place.
+
+**When a PR's head moves after its sheet was published.** The advisor judges the move by the
+[material-consequence](../../../rubric/glossary.md#material-consequence) line
+([owner-vs-craft-line.md](../../../rubric/owner-vs-craft-line.md)), and doubt counts as material.
+A move with no material consequence (a base update with no conflict, a mechanical bring-current of a
+stack, a craft fix) keeps the word: the advisor republishes the sheet for the new head carrying the
+answers and the verdict forward. The advisor builds it with the `carriedForward` input key, whose
+`fromSheet` is the sheet published last, whose `heads` are the new head commit of each PR on the
+sheet, and which carries a `date`, what `moved`, and `whyNotMaterial`; the sheet then shows a dated
+"carried forward" note in place of "This PR changed". The builder refuses a carry across a different
+PR or a different stack membership. The PR body's owner half says the same in one line: what moved,
+and why it is not material. A move that is material, or in doubt, is republished unsigned for the new
+commit: the sheet shows "This PR changed", keeps the answers to unchanged items, and starts the
+verdict over, and a verdict saved on the old sheet never counts. The carry ends the moment the owner
+withdraws: a "Not yet", or a cleared verdict, on the newer sheet covers nothing. A word given for a
+batch of PRs stays good through routine updates. A PR opened after the word gets its own sheet, and a
+layer linked onto a stack after its sheet was published changes the stack, so its sheet is replaced
+by an unsigned one; neither is a head move.
+
+**What the answers commit, after "done".**
+
+- A "Fix in a follow-up" answer, on an item or on a walk problem, is the owner's word to file that
+  follow-up (the filing word in [The tiers and the filing rule](#the-tiers-and-the-filing-rule)). The
+  follow-up carries the owner's note, and one filed for a leftover carries a date to revisit it. It
+  is filed when the advisor finishes the merge.
+- After the merge, the advisor writes each answer and the verdict back to the PR as one comment,
+  which is the PR's receipt: for each item and stop, its title, the answer and any note, then the
+  verdict and the commit the sheet described.
+- An answer that sets a rule for later work, such as a permanent acceptance, an approved calibration
+  change, or a ceded call, is recorded in Canon by Canon's write procedure
+  ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)). Such a ruling is handled
+  as a ruling the advisor receives outside an open pull request it is working on: it is committed to
+  the branch of the next pull request the advisor opens, and never to the PR whose sheet carried it
+  before that PR merges, because a commit there moves the PR's head after the owner's word, which the
+  advisor would then have to judge and republish. A
+  ruling from a sheet whose PR was sent back still holds, and is written the same way. Every other
+  answer stays on the sheet and the PR's receipt.
 
 **Every sitting opens or closes with the "what I decided for you" recap.** One line per craft call
 the advisor has decided under the standing order since the last sitting — **what it was, what was
@@ -679,7 +862,7 @@ one they will not in practice review. **It is a recap, not a batch** — nothing
 word, and an item that needs one is not delivered here in place of the filter and the spine.
 
 **State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
-failed." The same holds for an empty batch 3 and an empty recap: nothing mergeable, and nothing
+failed." The same holds for batch 3 and an empty recap: no PR has a sheet waiting, and nothing
 decided for the owner this window, are each a fact worth stating rather than a blank space.
 
 ## Formatting — one block per spine section
@@ -714,7 +897,8 @@ wiring, dispatches. It **never** includes the four acts showrunner duty 6 reserv
 release, publish, force-push**. **A ruling on a decision never authorizes any of the four.** Who may
 do each one, and on what authority, is stated once, in duty 6 of `skills/showrunner/SKILL.md`
 ("Coordinate releases and drive the merge train"), and it differs by act; the covenant's first
-promise points there too. Read duty 6 rather than a restatement here.
+promise points there too. Read duty 6 rather than a restatement here. A merge comes only from the
+word duty 6 states, a saved "Merge" verdict with "done", never from executing a ruling.
 
 ## The collector preamble — canonical snippet
 
@@ -759,12 +943,13 @@ still appends.
 item.
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
-(1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
-as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; batch 3
-last, assembled only once every batch-2 ruling has landed and what those rulings unblocked has been
-executed = the mergeable pull requests in merge order, each with its notable acceptances and its
-exact merge command; what it asks for is the owner's word, never a craft call; state empty batches
-plainly.
+(1 - a, 2 - b); batch 1 = what blocks work (never new-issue filings), alone, first, in the chat and at the top
+of the index with a link, the first answer the advisor reads, in either place, counts at once (the
+index keeps only the last tap, so read it each time you read the chat), a disagreement → act on
+neither and ask; as soon as batch-1 rulings land, deliver batch 2 in the chat, with no item about
+one PR, while executing what batch 1 unblocked; batch 3 = one sheet per PR, built only after the
+batch-1 and batch-2 rulings are carried out; a PR sheet is read only after "done"; the merge word
+is a saved "Merge" verdict plus "done"; state empty batches plainly.
 **Recap:** every sitting opens or closes with the "what I decided for you" lines — one per craft
 call decided since the last sitting, each vetoable; a recap, not a batch.
 

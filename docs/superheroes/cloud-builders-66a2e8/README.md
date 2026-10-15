@@ -67,7 +67,7 @@ notes are trailer lines only (advisor edit, 2026-10-10). The seam is one-directi
 changes and no #1708 child body changes.
 
 Shared files need no text on #1708's side. #1708's #1710 and #1713 edit `rubric/review-discipline.md`,
-its #1712 edits `lib/project_config.py`, and its #1716 and #1718 edit `owner-decisions.md`; our C6,
-C2 and C8 edit the same files. Our R11 and sequencing bring #1708's merged edits forward into the
+its #1712 edits `lib/project_config.py`, and its #1716 and #1718 edit `owner-decisions.md`; our C6b
+(split from C6 on 2026-10-11), C2 and C8 edit the same files. Our R11 and sequencing bring #1708's merged edits forward into the
 stack (and hold C8 until #1716 and #1718 are on main). #1708's #1732 assesses the charters' size;
 our R11 keeps charter additions to pointer lines.
