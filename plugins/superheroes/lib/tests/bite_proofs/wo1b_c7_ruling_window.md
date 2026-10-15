@@ -520,3 +520,76 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 .                                                                        [100%]
 1 passed in 1.79s
 ```
+
+
+---
+
+## Element viii. a restaged row keeps the guidance link to its ruling
+
+**Test.** `test_ruling_window_c7.py::test_a_restaged_row_keeps_the_guidance_link_to_its_ruling`. **Axis:** the guidance block of the replacement fixer order names the restaged finding by its file, line and title, not by a record id.
+
+**Neutralization.** In `_gate_guidance_entries` replaced `_live_finding_by_key(state, key) or batch_rows.get(key)` with `_live_finding_by_key(state, key)`.
+
+**Raw red** (exit 1):
+
+```
+        assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_a, "DO-NOT-DELETE-IT"))["ok"]
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the fixer folds
+        _drive_one_phase(session_dir, gitdir, [], head_path)  # the audit discharges A
+        state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+        assert RD._live_finding_by_key(state, key_a) is None
+        row = _ledger_row(state, key_a)
+        text = _order_text(session_dir)
+>       assert "### %s:%s \u2014 %s" % (row["file"], row["line"], row["title"]) in text
+E       AssertionError: assert ('### %s:%s — %s' % ('src/f00.py', 1, 'bounds F')) in 'You are the fixer for one round of an auto-fix code-review loop.\n\n## Input\n- Findings to fix: /tmp/pytest-of-root/.../test_a_restaged_row_keeps_the_0/c7-restage-id/round-2/landing/dispatch-fixer/fixer-508e7896192355de.a0.payload.json\n'
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_ruling_window_c7.py:328: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_restaged_row_keeps_the_guidance_link_to_its_ruling
+1 failed, 34 deselected in 35.52s
+```
+
+**Restore.** Inverse edit. `sha256(round_driver.py)` first 16 hex digits `0ee0e0606da6fe21` before the neutralization and after the restore.
+
+**Raw green** (exit 0):
+
+```
+..                                                                       [100%]
+2 passed, 33 deselected in 3.21s
+```
+
+---
+
+## Element ix. a session from the generation before dispatch history is refused at `next`
+
+**Test.** `test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next`. **Axis:** a generation-4 fixture session is refused with `session-from-earlier-version` (no backfill of `sentUnderDecision`).
+
+**Neutralization.** `SESSION_GENERATION = 5` replaced with `SESSION_GENERATION = 4` (and the test's literal `== 5` pin line set aside for the run, so the refusal assertion is the one that bites).
+
+**Raw red** (exit 1):
+
+```
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+out = {'ok': True, 'action': 'dispatch-panel', 'round': 1, 'phase': 'dispatch-panel', ...}
+already_restarted = False
+
+    def _assert_refusal(out, already_restarted):
+>       assert out["ok"] is False, out
+E       AssertionError: {'ok': True, 'action': 'dispatch-panel', 'round': 1, 'phase': 'dispatch-panel', ...}
+E       assert True is False
+
+/home/user/wt-l2b/plugins/superheroes/lib/tests/test_session_pickup_and_upgrade_1721.py:177: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next
+1 failed, 34 deselected in 1.38s
+```
+
+**Restore.** Inverse edits. `sha256(round_driver.py)` first 16 hex digits `0ee0e0606da6fe21` before and after.
+
+**Raw green** (exit 0):
+
+```
+..                                                                       [100%]
+2 passed, 33 deselected in 3.21s
+```

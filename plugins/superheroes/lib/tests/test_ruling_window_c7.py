@@ -311,6 +311,38 @@ def test_a_fix_that_went_against_the_ruling_is_sent_back_restaged(tmp_path, keep
     assert any(d["kind"] == "fix-batch-ruled" and key_a in d["detail"] for d in state["decisions"])
 
 
+def test_a_restaged_row_keeps_the_guidance_link_to_its_ruling(tmp_path, keep_severity):
+    """axis: RESTAGE IDENTITY — the restaged row (live no more, only in the ledger) still renders its
+    ruling under its own file, line and title, the identity a fixer matches guidance by.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element viii)
+    """
+    session_dir, gitdir, head_path, key_a, _key_b = _two_important(tmp_path, "c7-restage-id")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_a, "DO-NOT-DELETE-IT"))["ok"]
+    _drive_one_phase(session_dir, gitdir, [], head_path)  # the fixer folds
+    _drive_one_phase(session_dir, gitdir, [], head_path)  # the audit discharges A
+    state = _drive_until(session_dir, gitdir, head_path, P_FIXER)
+    assert RD._live_finding_by_key(state, key_a) is None
+    row = _ledger_row(state, key_a)
+    text = _order_text(session_dir)
+    assert "### %s:%s \u2014 %s" % (row["file"], row["line"], row["title"]) in text
+    assert "(file not recorded)" not in text and "(no title)" not in text
+
+
+def test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next(tmp_path):
+    """axis: GENERATION GATE — a session saved at generation 4 (before `sentUnderDecision` and
+    `restagedAfterDispositionSeq`) is refused at `next` with `session-from-earlier-version`.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element ix)
+    """
+    from test_session_pickup_and_upgrade_1721 import _assert_refusal, _light_folder
+    assert RD.SESSION_GENERATION == 5
+    session_dir = _light_folder(tmp_path, generation=4)
+    out = RD.cmd_next(session_dir)
+    _assert_refusal(out, already_restarted=False)
+    assert out["reason"] == "session-from-earlier-version"
+
+
 # --- point 2: below-blocking findings settle at convergence --------------------------------------
 
 def _run_recording_fixer_batches(session_dir, gitdir, head_path, max_steps=30):

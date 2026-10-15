@@ -246,7 +246,7 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 # a loaded state is never given the key (the hash-preservation rule above). A saved state whose
 # `sessionGeneration` is absent or is not exactly this integer was started by an earlier plugin
 # version; while it is unfinished, `_upgrade_gate` refuses every command on it.
-SESSION_GENERATION = 4
+SESSION_GENERATION = 5
 SESSION_FROM_EARLIER_VERSION = "session-from-earlier-version"
 RESTART_FRESH_SESSION = "fresh-session"
 UPGRADE_RESTART_MARKER_FILE = "restarted-on-upgrade.json"
@@ -3984,6 +3984,7 @@ def _gate_guidance_entries(state, rnd):
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
     ruling_channel = []
+    batch_rows = {_fix_batch_row_key(row): row for row in batch if isinstance(row, dict)}
     for key in sorted(batch_keys):
         if key in covered_keys:
             continue
@@ -3991,7 +3992,7 @@ def _gate_guidance_entries(state, rnd):
         if live is None:
             continue
         carried_from = live.get("findingKey") if live.get("findingKey") != key else None
-        live_row = _live_finding_by_key(state, key)
+        live_row = _live_finding_by_key(state, key) or batch_rows.get(key)  # restaged: only the batch row
         if live.get("source") == "gate":
             entry = {"id": key, "title": live.get("title"), "file": live.get("file"),
                      "line": live.get("line"), "guidance": live["guidance"].strip(),
