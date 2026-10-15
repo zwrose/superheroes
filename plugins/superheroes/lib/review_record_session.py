@@ -201,25 +201,49 @@ def _panel_rounds_with_status(state):
             if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("seatStatus"), dict)}
 
 
-def _panel_head(state, rnd):
-    """The head the round's panel orders were emitted at (latest attempt). Round 1 carries no emission head: it
-    ran before any fix, at the session-setup head. None when state holds none."""
+def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE):
+    """The head the round's `phase` orders were emitted at (latest attempt). Round 1's panel carries no emission
+    head: it ran before any fix, at the session-setup head (`setup` is the meta's). None when none is recorded."""
     anchors = state.get("_ordersAnchors")
     best = None
     for key, anchor in (anchors.items() if isinstance(anchors, dict) else ()):
         parts = str(key).split(":")
-        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == sc.PANEL_PHASE and parts[2].isdigit() \
+        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase and parts[2].isdigit() \
                 and isinstance(anchor, dict) and isinstance(anchor.get("headSha"), str) and anchor["headSha"]:
             if best is None or int(parts[2]) > best[0]:
                 best = (int(parts[2]), anchor["headSha"])
     if best:
         return best[1]
+    if phase != sc.PANEL_PHASE or str(rnd) != "1":
+        return None
     cfg = state.get("config")
-    head = cfg.get("headSha") if isinstance(cfg, dict) and str(rnd) == "1" else None
-    return head if isinstance(head, str) and head else None
+    return _text(cfg.get("headSha") if isinstance(cfg, dict) else None, setup)
 
 
-def _status_reviewers(state):
+def _lineage_keys(keys, state):
+    """`keys` plus every key sharing a lineage root with one of them (the driver binds a fix decision across it)."""
+    lin = state.get("findingLineage")
+    lin = {k: v for k, v in lin.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(lin, dict) else {}
+
+    def root(k):
+        seen = set()
+        while k in lin and k not in seen:
+            seen.add(k)
+            k = lin[k]
+        return k
+    roots = {root(k) for k in keys if isinstance(k, str)}
+    return set(keys) | {k for k in lin if root(k) in roots} | roots
+
+
+def _audit_reviewers(state, rnd, audits):
+    """One reviewer per auditor vendor whose authenticated audit result the round persisted, at the audits' emission head."""
+    head = _panel_head(state, rnd, phase=round_phases.P_AUDITS)
+    vendors = sorted({a["auditor"] for a in audits if isinstance(a, dict) and isinstance(a.get("auditor"), str) and a["auditor"]})
+    return [_reviewer(state, rnd, f"auditor {v}", "audits ", True, {"vendor": v, "model": "unknown"},
+                      commit=head, phase=round_phases.P_AUDITS) for v in vendors] if head else []
+
+
+def _status_reviewers(state, setup=None):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
     status = _panel_rounds_with_status(state)
@@ -237,12 +261,19 @@ def _status_reviewers(state):
         for seat in sorted(seats):
             if seat in unfilled:
                 continue  # listed below as an unfilled seat
-            ran = seats[seat] == "run"  # any other value is never credited as run
+            commit = _panel_head(state, rnd, setup)
+            ran = seats[seat] == "run" and commit is not None  # any other value, or a panel with no recoverable head, is never credited
+            fell = next((f.get("ran") for f in ((state["rounds"].get(str(rnd)) or {}).get("fellOpen") or ()) if isinstance(f, dict)
+                         and f.get("seat") == seat and isinstance(f.get("ran"), str) and f["ran"]), None) if ran else None
             if not ran and any(r > rnd for r in ran_in.get(seat, ())):
                 continue  # a later round ran this seat: the earlier miss is recovered
-            out.append(_reviewer(state, rnd, seat, "", ran, commit=_panel_head(state, rnd), phase=sc.PANEL_PHASE))
+            out.append(_reviewer(state, rnd, seat, "", ran, {"vendor": fell, "model": "unknown"} if fell else None,
+                                 commit=commit, phase=sc.PANEL_PHASE))
         out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
                 if not any(r > rnd for r in ran_in.get(seat, ()))]
+    for rnd in state["rounds"]:
+        audits = state["rounds"][rnd].get("audits") if isinstance(state["rounds"][rnd], dict) and str(rnd).isdigit() else None
+        out += _audit_reviewers(state, int(rnd), audits) if isinstance(audits, list) else []
     return out
 
 
@@ -353,6 +384,8 @@ def _decided_by(rep, outcome, by_key, rulings, state=None):
     ruling = _latest_ruling(rep, by_key, rulings)
     decided = ruling.get("decidedBy")
     keys = {sc.finding_identity_key(r) for r in _group(rep, by_key)} | {rep.get("id")}
+    if isinstance(state, dict):
+        keys = _lineage_keys(keys, state)
     if isinstance(state, dict) and _superseded_by_gate(ruling, keys, state):
         return None  # a newer owner decision to fix supersedes the ruling: it is not the finding's decision
     raised = [r.get(sc.RAISED_ROUND_FIELD) for r in _group(rep, by_key)]
@@ -493,7 +526,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings = _findings(state)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
-        reviewers, raw = _status_reviewers(state), []
+        reviewers, raw = _status_reviewers(state, meta.get("headSha")), []
     else:
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                     review_record._readers(readers)["engine_run"], raw_dir)
