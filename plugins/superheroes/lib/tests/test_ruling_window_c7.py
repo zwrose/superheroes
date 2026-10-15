@@ -838,24 +838,55 @@ def test_a_capped_pending_newer_ruling_on_a_merged_member_is_not_hidden_by_an_ol
     assert "owner ruling %s" % seq in str(ledger["A"].get("settledReason")), ledger["A"]
 
 
-def test_a_reworded_representative_takes_the_guidance_given_on_its_merged_member():
-    """axis: MERGE + LINEAGE — M (line 2) merged into K (line 1), guidance on M, K reworded at line 1
-    and staged: the staging itself links the new wording, so the resolver sends one row with it."""
+def _rendered_guidance(state):
+    """The owner-guidance text the fixer order carries for the queued batch (the real render path)."""
+    assert RD._queue_fix_batch(state, state["config"], [dict(r) for r in state["findings"]
+                                                          if not r.get(session_contract.MERGED_INTO_FIELD)]
+                               ) == "queued"
+    return RD._gate_guidance_block(RD._gate_guidance_entries(state, state["round"]))
+
+
+def test_guidance_on_a_merged_member_is_rendered_in_the_representatives_fixer_order():
+    """axis: MERGE — M merged into live K, guidance on M: the resolver sends K under M's decision and
+    the rendered order carries that guidance."""
+    state = _unit_round([_unit_finding("K", 1, "Important")])
+    state["findings"].append(_unit_finding("M", 2, "Important"))
+    state["findings"][-1][session_contract.MERGED_INTO_FIELD] = "K"
+    _log_ruling(state, "M", guidance="FROM-THE-MEMBER")
+    assert "FROM-THE-MEMBER" in _rendered_guidance(state)
+
+
+def test_a_reworded_representative_with_decisions_on_it_and_its_member_takes_the_latest_guidance():
+    """axis: MERGE + LINEAGE — M merged into K, guidance on both (M's newer), K reworded at its
+    location and staged: one row N goes out, carrying the newest guidance, with no archived K beside it."""
     state = _unit_state({"file": "a.py", "line": 1, "title": "K"},
                         {"file": "a.py", "line": 2, "title": "M"})
     k, m = (RD._fix_batch_row_key(f) for f in state["findings"])
     RD._record_merged_into(state, m, k)
-    _log_ruling(state, m, guidance="FOR-THE-REWORDING")
-    state["rulingsLog"][-1].update(file="a.py", line=2)
+    for key, text in ((k, "OLD-ON-K"), (m, "NEWER-ON-M")):
+        _log_ruling(state, key, guidance=text)
+        state["rulingsLog"][-1].update(file="a.py", line=1 if key == k else 2)
     state["round"] = 3
     state["rounds"]["3"] = {}
     reworded = _unit_finding("K reworded", 1, "Important")
     RD._stage_findings(state, [reworded])
-    assert state["findingLineage"] == {"K reworded": m}
+    assert state["findingLineage"] == {"K reworded": k}
     RD._set_findings(state, [dict(reworded)])
-    batch = RD._resolve_ruled_batch(state, [dict(reworded)])
-    assert [RD._fix_batch_row_key(r) for r in batch] == ["K reworded"]
-    assert RD._live_ruling_by_key(state)["K reworded"]["guidance"] == "FOR-THE-REWORDING"
+    assert [RD._fix_batch_row_key(r) for r in RD._resolve_ruled_batch(state, [dict(reworded)])] == [
+        "K reworded"]
+    assert "NEWER-ON-M" in _rendered_guidance(state)
+
+
+def test_the_order_renders_the_decision_the_resolver_selected_not_a_later_skip_on_its_key():
+    """axis: RENDER — N carries K's guidance, the owner then skips K (a skip binds K alone), N is merged
+    into P: the order for P still carries the guidance the resolver selected."""
+    state = _unit_round([_unit_finding("P", 1, "Important")])
+    state["findings"].append(_unit_finding("N", 2, "Important"))
+    state["findings"][-1][session_contract.MERGED_INTO_FIELD] = "P"
+    state["findingLineage"] = {"N": "K"}
+    _log_ruling(state, "K", guidance="STILL-BINDING")
+    _log_ruling(state, "K", ruling="out-of-scope")
+    assert "STILL-BINDING" in _rendered_guidance(state)
 
 
 def test_a_ruling_restages_the_latest_wording_of_a_lineage_not_the_first_lexical_one():

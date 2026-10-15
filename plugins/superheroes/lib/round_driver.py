@@ -1669,17 +1669,9 @@ class _LineageCarry:
         location = self.location_of(finding)
         if location is None or self.at_location.get(location) != 1:
             return
-        ledger_by_key, _fault = _disposition_ledger_by_key(state)
         roots = set()
         for decided_key, (_index, row) in self.decided.items():
-            # A decision binds the finding it was given on and the one that finding was merged
-            # into (the same merge-aware identity the batch resolution reads).
-            places = {self.location_of(row)}
-            rep = _merge_representative(state, ledger_by_key, decided_key)
-            if rep != decided_key:
-                rep_row = _live_finding_by_key(state, rep) or ledger_by_key.get(rep)
-                places.add(self.location_of(rep_row) if isinstance(rep_row, dict) else None)
-            if location in places:
+            if self.location_of(row) == location:
                 roots.add(_lineage_root(lineage, decided_key))
         if len(roots) != 1:
             return
@@ -1687,7 +1679,7 @@ class _LineageCarry:
         # Only a guidance decision carries. A skip (a ``rule`` out-of-scope ruling or an owner-gate
         # skip) never does: a location match does not prove the new finding is the one the owner
         # waived, so it is judged fresh — fixed, or left for the owner.
-        effective = _row_decision(state, self.effective, ledger_by_key, root)
+        effective = self.effective.get(root)
         if not isinstance(effective, dict) or effective.get("ruling") != "guidance":
             return
         group = {root} | {k for k in lineage if _lineage_root(lineage, k) == root}
@@ -3950,14 +3942,22 @@ def _gate_guidance_entries(state, rnd):
         # owner-gate decisions stay readable on their own, as they were before the shared reader.
         effective = _effective_decisions(state, with_rules=False)
 
-    ruled_by = {_fix_batch_row_key(row): row.get("ruledBy") for row in batch
-                if isinstance(row, dict) and row.get("ruledBy")}
+    # The decision the resolution point selected for a row is rendered as selected: the row names
+    # it by finding key and sequence, and no lookup by the key alone can pick a different one.
+    selected = {}
+    for row in batch:
+        if isinstance(row, dict) and row.get("ruledBy"):
+            for decision in effective.values():
+                if (decision.get("findingKey") == row["ruledBy"]
+                        and decision.get("seq") == row.get("ruledBySeq")
+                        and decision.get("ruling") in _OWNER_FIX_RULINGS):
+                    selected[_fix_batch_row_key(row)] = decision
 
     def guided(key):
         """The effective decision for ``key`` (the one the resolution point attached to its batch
         row, when a ruling was given to a finding merged into it) when it is a usable ``guidance``,
         else None."""
-        live = effective.get(ruled_by.get(key, key))
+        live = selected.get(key, effective.get(key))
         if not isinstance(live, dict) or live.get("ruling") != "guidance":
             return None
         guidance = live.get("guidance")
@@ -4605,10 +4605,12 @@ def _resolve_ruled_batch(state, rows):
     batch += added
     for row in batch:
         row.pop("ruledBy", None)
+        row.pop("ruledBySeq", None)
         key = _fix_batch_row_key(row)
         decision = _row_decision(state, effective, ledger_by_key, key) if key else None
         if decision is not None and decision is not effective.get(key):
             row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding
+            row["ruledBySeq"] = decision.get("seq")
     return batch
 
 
