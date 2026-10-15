@@ -710,3 +710,20 @@ def test_a_restaged_finding_is_not_settled_by_its_stale_fixed_disposition():
     RD._set_terminal(state, "held")
     ledger, _ = RD._disposition_ledger_by_key(state)
     assert ledger[key]["disposition"] != "fixed", ledger[key]
+
+
+def test_a_restaged_finding_that_is_capped_reads_unresolved_in_the_review_record():
+    """axis: RESTAGE + RECORD — restaged after `fixed`, then the loop caps without a discharge: the
+    review record's per-finding outcome is not `fixed`."""
+    import review_record_session as RRS
+    state = _unit_round([_unit_finding("A", 1, "Important")])
+    key = "A"
+    RD._record_disposition(state, key, "fixed", 1)
+    for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        entry[session_contract.RAISED_SEQ_FIELD] = 0
+    state["restagedAfterDispositionSeq"] = {key: state["dispositionSeqCounter"]}
+    RD._set_terminal(state, "capped-with-open-blocker", cap=True)
+    ledger, _ = RD._disposition_ledger_by_key(state)
+    by_key = {key: ledger[key]}
+    outcome, reason, _rep = RRS._decide(ledger[key], by_key, {})
+    assert outcome != "fixed" and "fixed and audited" not in str(reason), (outcome, reason)
