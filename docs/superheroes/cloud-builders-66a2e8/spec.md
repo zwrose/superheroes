@@ -150,13 +150,13 @@ The guardian's skill says a cloud session cannot reach the project store kept ou
 ### Part D: cleaning up a finished cloud builder
 
 **FR-28.** When a cloud builder's PR is merged, the advisor shall ask that builder to archive its own session. (source: Canon 2026-10-10-ca3e7e0d-11; board · 6 Cleanup)
-  - *Acceptance (Given-When-Then):* Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the platform's one prompt for that session. (source: board · 6 Cleanup)
+  - *Acceptance (Given-When-Then):* Given a merged cloud build, when the advisor has asked the builder to archive itself, then the owner sees the platform's one prompt for that session when the builder's session can archive itself; otherwise the builder says so on its issue. (source: board · 6 Cleanup; owner's ruling "125 a", 2026-10-15)
 
 **FR-29.** When the advisor has asked a cloud builder to archive itself, the advisor shall tell the owner to expect one prompt and to tap Allow once if the builder's session has a tool to archive itself, and otherwise that the builder will say so on its issue and the session stays listed until the owner archives it by hand. (source: board · 6 Cleanup; owner's ruling "124 a", 2026-10-14)
   - *Acceptance (rule):* The advisor's message names the merged build, the one tap when the builder can archive itself, and the hand archive when it cannot. (source: board · 6 Cleanup; owner's ruling "124 a", 2026-10-14)
 
 **FR-30.** When a cloud build's PR is merged, the plugin shall leave nothing behind for that build except its session and its lane record: no branch on the repository, and no checkout or worktree on the owner's machine. (source: Canon 2026-10-10-ca3e7e0d-9; board · 6 Cleanup)
-  - *Acceptance (rule):* The archive prompt is the only step left to the owner. (source: Canon 2026-10-10-ca3e7e0d-11)
+  - *Acceptance (rule):* The archive prompt, or a hand archive when there is no prompt, is the only step left to the owner. (source: Canon 2026-10-10-ca3e7e0d-11; owner's ruling "125 a", 2026-10-15)
 
 **FR-31.** While a cloud build's PR is neither merged nor closed, the plugin shall keep the build's pushed branch. (source: craft, for your veto)
   - *Acceptance (rule):* The plugin does not clean up a builder that hands back or parks. The builder's pushed work stays for the vet, a renewed review or a recovery. (source: craft, for your veto; board · 5 Mid-build trouble)
@@ -371,6 +371,12 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   the session by hand (owner's ruling "124 a", collector item 124). FR-29's statement and
   acceptance say so; FR-28 is unchanged. Sections touched: Part D · cleaning up a finished cloud
   builder (FR-29), Amendments.
+- **2026-10-15 (owner-stamped, substantive):** FR-28's and FR-30's acceptance follow FR-29's
+  conditional form: the owner sees the platform's one prompt only when the builder's session can
+  archive itself, otherwise the builder says so on its issue, and the archive prompt, or a hand
+  archive when there is no prompt, is the only step left to the owner (owner's ruling "125 a",
+  collector item 125). FR-28's and FR-30's statements are unchanged. Sections touched: Part D ·
+  cleaning up a finished cloud builder (FR-28, FR-30), Amendments.
 
 ## Coverage
 
