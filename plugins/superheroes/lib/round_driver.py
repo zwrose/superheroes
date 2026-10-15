@@ -2035,7 +2035,7 @@ def _effective_decisions(state, *, with_rules=True):
             continue
         groups.setdefault(_lineage_root(lineage, key), []).append(indexed)
     by_key = {}
-    for key in set(lineage) | {indexed[1]["findingKey"] for group in groups.values()
+    for key in set(lineage) | set(lineage.values()) | {indexed[1]["findingKey"] for group in groups.values()
                                for indexed in group}:
         best = None
         for indexed in groups.get(_lineage_root(lineage, key), []):
@@ -2166,6 +2166,9 @@ def _record_merged_into(state, key, into_key):
         ledger.append(entry)
     if live is not None:
         _apply_disposition_family(live, family)
+    if key != into_key:
+        # The representative carries guidance given to a member before the merge.
+        state.setdefault("findingLineage", {})[key] = into_key
 
 
 # ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
@@ -4332,7 +4335,7 @@ def _after_findings_settled(state, config):
         if _route_judgment_blockers(state, blocking):
             return
         _queue_fix_batch(state, config, [dict(f) for f in blocking])
-    else:
+    elif _queue_fix_batch(state, config, []) == "empty":
         _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
@@ -4496,16 +4499,6 @@ def _owner_named_row(row, effective):
     return isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS
 
 
-def _holds_only_autonomous_lifts(state, rows):
-    """True when every row is an autonomous lift (``LIFT_REAL_CONSEQUENCE``) no owner decision asks
-    to fix: with no eligible blocker beside them they never start a fixer leg. An owner-named row
-    (``_owner_named_row``) stays."""
-    effective = _live_ruling_by_key(state)
-    return bool(rows) and all(
-        row.get("lifted") == LIFT_REAL_CONSEQUENCE and not _owner_named_row(row, effective)
-        for row in rows)
-
-
 def _lift_into_fix_batch(state, rows, *, owner_named_only=False):
     """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered
     offered set: an autonomous lift joins a fixer leg that is going out, it never starts one.
@@ -4548,8 +4541,11 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
-    if batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):
-        filtered = []
+    if batch_index == 0 and all(row.get("lifted") for row in filtered):
+        # No eligible blocker: an autonomous lift never starts a leg; an owner-named row stays.
+        effective = _live_ruling_by_key(state)
+        filtered = [row for row in filtered
+                    if row.get("lifted") != LIFT_REAL_CONSEQUENCE or _owner_named_row(row, effective)]
     if lift and reset_accumulator and batch_index == 0:
         filtered = _lift_into_fix_batch(state, filtered, owner_named_only=not filtered)
     if not filtered and not offered_nonempty:
@@ -5771,6 +5767,8 @@ def _settle_delta(state, config):
         _queue_fix_batch(state, config, batch)
         return
 
+    if _queue_fix_batch(state, config, []) != "empty":
+        return
     _settle_delta_converged(state, config)
 
 

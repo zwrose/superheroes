@@ -1144,3 +1144,35 @@ def test_an_empty_disposition_fixes_the_gate_blocker_and_never_a_product_choice(
     after = _state(session_dir)
     assert [row["title"] for row in after["_fixBatch"]] == ["tradeoff J"]
     assert after["_fixBatch"][0].get("judgmentFailClosed") is True
+
+
+def test_no_blocker_drops_each_autonomous_lift_beside_an_owner_named_row():
+    """axis: with no eligible blocker in the first batch, an autonomous lift is dropped one by one
+    while the owner-named row stays and starts the leg."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="q", ruling="guidance", guidance="tidy it"))
+    auto = dict(findingKey="r", severity="Minor", lifted=RD.LIFT_REAL_CONSEQUENCE)
+    named = dict(findingKey="q", severity="Minor", lifted=RD.LIFT_GUIDANCE)
+    assert RD._queue_fix_batch(state, state["config"], [auto, named]) == "queued"
+    assert _unit_batch(state) == ["q"]
+
+
+def test_guidance_on_a_minor_starts_a_leg_when_the_round_has_no_blocker():
+    """axis: a round with no blocking finding routes through the chokepoint, so an owner-named Minor
+    gets a fixer leg instead of the round converging over it."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
+    assert not state.get("terminal")
+
+
+def test_guidance_given_before_a_merge_reaches_the_surviving_representative():
+    """axis: guidance recorded on a finding synthesis later merges into another is the effective
+    decision of the representative the fixer order reads."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="use the helper"))
+    RD._record_merged_into(state, "A", "B")
+    live = RD._live_ruling_by_key(state).get("B")
+    assert isinstance(live, dict) and live.get("guidance") == "use the helper"
