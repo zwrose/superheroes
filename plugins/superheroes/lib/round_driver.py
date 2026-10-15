@@ -4223,12 +4223,9 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
         disposition = d.get("disposition")
         reason = d.get("reason")
         if disposition == "skip" and isinstance(reason, str) and reason.strip():
-            # A lifted Minor/Nit product choice put to the owner is not a blocker: its skip is
-            # recorded (disposition and decision below) but never rides the skipped-blocker channel.
-            if circuit_breaker.is_blocking(f.get("severity")):
-                skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
-                                "title": f.get("title"), "severity": f.get("severity"),
-                                "reason": reason.strip()})
+            skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
+                            "title": f.get("title"), "severity": f.get("severity"),
+                            "reason": reason.strip()})
             follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
                           "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
@@ -4266,8 +4263,6 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             _stamp_ruling_seq(state, entry)
             disposition_log.append(entry)
         else:
-            if not circuit_breaker.is_blocking(f.get("severity")):
-                continue  # an undecided lifted product choice is left for the owner, never fixed
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
@@ -4305,13 +4300,9 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
                 and _live_out_of_scope_ruling_for_key(state, member) is None):
             fix_batch.append(dict(live))
             queued.add(member)
-    if not _filter_excluded_discharged_fixes(state, fix_batch)[0] and not no_lift:
-        # An owner guidance/fix decision recorded at this gate on a lifted row still reaches a fixer.
-        guided = [r for r in _split_lifted_rows(state, judgment)[0]
-                  if not _holds_only_autonomous_lifts(state, [r])]
-        fix_batch = judgment + guided if guided else fix_batch
-    if fix_batch:
-        _queue_fix_batch(state, config, fix_batch, lift=not no_lift)
+    # The one chokepoint also serves the everything-skipped case (no rows): an owner-named finding
+    # still reaches a fixer, and only a batch that is empty after that settles here.
+    if _queue_fix_batch(state, config, fix_batch, lift=not no_lift) != "empty":
         return
     # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
     # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
@@ -4338,7 +4329,7 @@ def _after_findings_settled(state, config):
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
     if blocking:
-        if _route_judgment_blockers(state, blocking + _lifted_judgment_rows(state, blocking)):
+        if _route_judgment_blockers(state, blocking):
             return
         _queue_fix_batch(state, config, [dict(f) for f in blocking])
     else:
@@ -4426,24 +4417,31 @@ def _fix_row_roots(state, rows):
     return roots
 
 
+# The effective decisions that are the owner's word to fix a finding: a fix choice at the owner gate
+# and guidance (from the gate or the `rule` verb).
+_OWNER_FIX_RULINGS = ("fix", "guidance")
+
+
 def _lift_marker_for(finding, disposition_row, decision):
     """``LIFT_REAL_CONSEQUENCE`` / ``LIFT_GUIDANCE`` when this live finding must ride the fix batch
     though no blocking row names it, else None.
 
-    Real consequence: the finding states a real consequence and holds no disposition at all (a
-    fixed, refuted, merged or collapsed finding, and an out-of-scope one, never ride). Guidance: the
-    finding's one effective decision is ``guidance`` and it is not fixed or refuted; a stale
-    out-of-scope disposition under a later guidance decision does not block it."""
+    Real consequence: the finding states a real consequence, is not a product choice (``tradeoff``
+    findings are the owner's to name), and holds no disposition at all (a fixed, refuted, merged or
+    collapsed finding, and an out-of-scope one, never ride). Owner-named: the finding's one effective
+    decision is ``guidance`` or ``fix`` and it is not fixed or refuted; a stale out-of-scope
+    disposition under a later such decision does not block it."""
     ruling = decision.get("ruling") if isinstance(decision, dict) else None
     disposition = disposition_row.get("disposition")
     if finding.get(session_contract.MERGED_INTO_FIELD) or disposition_row.get(
             session_contract.MERGED_INTO_FIELD):
         return None
     if (finding.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.REAL
+            and not finding.get("tradeoff")
             and ruling != "out-of-scope" and disposition != "out-of-scope"
             and not _disposition_is_current(disposition_row)):
         return LIFT_REAL_CONSEQUENCE
-    if (ruling == "guidance"
+    if (ruling in _OWNER_FIX_RULINGS
             and not (disposition in ("fixed", "refuted") and _disposition_is_current(disposition_row))):
         return LIFT_GUIDANCE
     return None
@@ -4451,9 +4449,9 @@ def _lift_marker_for(finding, disposition_row, decision):
 
 def _lifted_fix_rows(state, rows):
     """Live findings that join a round's fix batch beside the blocking ``rows``: every undisposed
-    finding with a real consequence, and every finding an effective ``guidance`` decision names, each
-    a copy carrying its ``lifted`` marker, in severity order. A finding already in ``rows`` (under
-    any wording of its lineage) is never added twice."""
+    finding with a real consequence that is not a product choice, and every finding an effective
+    ``guidance`` or ``fix`` decision names, each a copy carrying its ``lifted`` marker, in severity
+    order. A finding already in ``rows`` (under any wording of its lineage) is never added twice."""
     findings = state.get("findings")
     if not isinstance(findings, list):
         return []
@@ -4492,61 +4490,35 @@ def _lifted_fix_rows(state, rows):
     return lifted
 
 
-# The effective decisions that are the owner's word to fix a finding: a fix choice at the owner gate
-# and guidance (from the gate or the `rule` verb).
-_OWNER_FIX_RULINGS = ("fix", "guidance")
-
-
-def _lift_awaits_owner_judgment(row, decision):
-    """True when a lifted row is a product choice (``tradeoff: true``) that no effective owner
-    decision authorizes fixing yet. Such a row never rides an autonomous fix batch: it goes to the
-    owner-judgment gate beside the round's blockers, as a blocking tradeoff does."""
-    ruling = decision.get("ruling") if isinstance(decision, dict) else None
-    return bool(row.get("tradeoff")) and ruling not in _OWNER_FIX_RULINGS
-
-
-def _split_lifted_rows(state, rows):
-    """``(autonomous, awaiting_judgment)``: the lifted rows for the offered ``rows`` after the
-    discharge filter, split by ``_lift_awaits_owner_judgment``. A ledger read fault lifts nothing."""
-    lifted, fault = _filter_excluded_discharged_fixes(state, _lifted_fix_rows(state, rows))
-    if fault is not None or not lifted:
-        return [], []
-    effective = _live_ruling_by_key(state)
-    autonomous, awaiting = [], []
-    for row in lifted:
-        decision = effective.get(_fix_batch_row_key(row))
-        (awaiting if _lift_awaits_owner_judgment(row, decision) else autonomous).append(row)
-    return autonomous, awaiting
-
-
-def _lifted_judgment_rows(state, rows):
-    """The lifted rows beside the blocking ``rows`` that must go to the owner-judgment gate before
-    any fixer leg is composed (``_route_judgment_blockers``)."""
-    rows, _fault = _filter_excluded_discharged_fixes(state, rows)
-    if not rows:
-        return []
-    return _split_lifted_rows(state, rows)[1]
+def _owner_named_row(row, effective):
+    """True when the row's one effective decision is the owner's word to fix it."""
+    decision = effective.get(_fix_batch_row_key(row))
+    return isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS
 
 
 def _holds_only_autonomous_lifts(state, rows):
     """True when every row is an autonomous lift (``LIFT_REAL_CONSEQUENCE``) no owner decision asks
-    to fix: with no eligible blocker beside them they never start a fixer leg. A row whose effective
-    decision is ``guidance`` or ``fix`` is the owner's word, so it stays."""
+    to fix: with no eligible blocker beside them they never start a fixer leg. An owner-named row
+    (``_owner_named_row``) stays."""
     effective = _live_ruling_by_key(state)
     return bool(rows) and all(
-        row.get("lifted") == LIFT_REAL_CONSEQUENCE
-        and (effective.get(_fix_batch_row_key(row)) or {}).get("ruling") not in ("guidance", "fix")
+        row.get("lifted") == LIFT_REAL_CONSEQUENCE and not _owner_named_row(row, effective)
         for row in rows)
 
 
-def _lift_into_fix_batch(state, rows):
-    """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered,
-    non-empty offered set: the lift joins a fixer leg that is going out, it never starts one. A lifted
-    product choice no owner decision authorizes is held out (``_lift_awaits_owner_judgment``) — the
-    settle paths route it to the owner gate first."""
-    lifted, _awaiting = _split_lifted_rows(state, rows)
+def _lift_into_fix_batch(state, rows, *, owner_named_only=False):
+    """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered
+    offered set: an autonomous lift joins a fixer leg that is going out, it never starts one.
+    ``owner_named_only`` (the offered set is empty) keeps only the findings an owner decision names,
+    which may start a leg on their own. A ledger read fault lifts nothing."""
+    lifted, fault = _filter_excluded_discharged_fixes(state, _lifted_fix_rows(state, rows))
+    if fault is not None:
+        return list(rows)
+    if owner_named_only:
+        effective = _live_ruling_by_key(state)
+        lifted = [row for row in lifted if _owner_named_row(row, effective)]
     if not lifted:
-        return rows
+        return list(rows)
     keys = [_fix_batch_row_key(row) for row in lifted]
     _record_round(state, "liftedIntoFixBatch", keys)
     _decision(state, "fix-batch-lifted",
@@ -4560,17 +4532,17 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
 
     The round's first batch (``reset_accumulator`` with ``batch_index`` 0) also takes the lifted
     findings (``_lift_into_fix_batch``) after the blocking rows, under the same cap and slicing —
-    unless ``lift`` is False (stall recovery keeps its composed set exactly).
+    unless ``lift`` is False (stall recovery keeps its composed set exactly). When no offered row
+    survives the exclusions, the findings an owner decision names still make the batch.
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
     setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
     the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
-    is 0; on a continuation the caller enters post-fix), or ``"faulted"`` when a disposition-
-    ledger read fault parked the session.
+    is 0; on a continuation the caller enters post-fix), ``"empty"`` when no row was offered and
+    none is owner-named (nothing recorded; the caller settles), or ``"faulted"`` when a
+    disposition-ledger read fault parked the session.
     """
     cap = _fix_batch_cap(config)
-    if reset_accumulator:
-        state["fixBatch"] = []
     offered_nonempty = bool(rows)
     filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
     if ledger_fault is not None:
@@ -4578,7 +4550,13 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         return "faulted"
     if batch_index == 0 and _holds_only_autonomous_lifts(state, filtered):
         filtered = []
-    if offered_nonempty and not filtered:
+    if lift and reset_accumulator and batch_index == 0:
+        filtered = _lift_into_fix_batch(state, filtered, owner_named_only=not filtered)
+    if not filtered and not offered_nonempty:
+        return "empty"
+    if reset_accumulator:
+        state["fixBatch"] = []
+    if not filtered:
         rec = state["rounds"].setdefault(str(state["round"]), {})
         prior = rec.get("fixBatchExcludedByDischarge") or 0
         _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
@@ -4592,8 +4570,6 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "fix batch emptied by discharged-finding exclusion — "
                       "remaining queue exhausted, the round proceeds to post-fix")
         return "excluded"
-    if lift and reset_accumulator and batch_index == 0 and filtered:
-        filtered = _lift_into_fix_batch(state, filtered)
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
@@ -4713,15 +4689,15 @@ def _reconcile_queue_after_emitted_rulings(state, extra_rows=None):
     return "queue-reconciled"
 
 
-def _close_lifted_only_judgment_gate(state, config):
+def _close_ruled_out_judgment_gate(state, config):
     """A pending owner-judgment gate whose every blocking row (the blocking tradeoffs and the carried
-    mechanical blockers) has since been ruled out holds only lifted non-blocking choices: with no
-    eligible blocker to lift beside, it closes and the round settles as an exclusion-emptied batch —
-    unless a lifted row carries an owner ``guidance``/``fix`` decision, which still goes to the fixer."""
+    mechanical blockers) has since been ruled out has nothing left to put to the owner: it closes and
+    the round settles through the one chokepoint — an exclusion-emptied batch, unless an owner
+    ``guidance``/``fix`` decision names a finding, which still goes to the fixer."""
     if state.get("step") != P_JUDGMENT or state.get("terminal"):
         return
     rows = [f for f in (state.get("_judgmentFindings") or []) + (state.get("_judgmentMechanical") or [])
-            if isinstance(f, dict) and circuit_breaker.is_blocking(f.get("severity"))]
+            if isinstance(f, dict)]
     if not rows:
         return
     remaining, fault = _filter_excluded_discharged_fixes(state, rows)
@@ -4730,7 +4706,7 @@ def _close_lifted_only_judgment_gate(state, config):
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
     state["pending"] = None
-    _queue_fix_batch(state, config, rows + _split_lifted_rows(state, rows)[0])
+    _queue_fix_batch(state, config, rows)
 
 
 def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None,
@@ -4741,7 +4717,7 @@ def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session
     reshaped — the ``extra_rows`` join the later slices of the round (``_fixQueue``), which are
     reconciled."""
     if state.get("step") == P_JUDGMENT:
-        _close_lifted_only_judgment_gate(state, config)
+        _close_ruled_out_judgment_gate(state, config)
         return None
     if state.get("step") != P_FIXER:
         return None
@@ -5790,7 +5766,7 @@ def _settle_delta(state, config):
         nd_targets = [dict(t) for t in audit_targets
                       if isinstance(t, dict) and t.get("id") in nd_ids]
         batch = _union_open_blockers(new_blocking, nd_targets)
-        if _route_judgment_blockers(state, batch + _lifted_judgment_rows(state, batch)):
+        if _route_judgment_blockers(state, batch):
             return
         _queue_fix_batch(state, config, batch)
         return

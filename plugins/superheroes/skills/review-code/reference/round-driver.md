@@ -628,21 +628,24 @@ the current pending attempt, so a result left at a withdrawn attempt's path is n
 
 When a round sends a fixer out, its first fix batch holds the blocking findings and then, after them
 in severity order, every other live finding that either states a real consequence (`consequenceKind:
-"real"`) and has no disposition, or is named by its effective `guidance` decision and is not fixed or
-refuted. Each such row carries `"lifted": "real-consequence"` or `"lifted": "guidance"`; the round
-records `liftedIntoFixBatch` (their keys) and a `fix-batch-lifted` decision. A finding that is fixed,
-refuted, merged, collapsed, or out of scope under its effective decision is never lifted, and a
-code-quality finding with no guidance decision is not. Lifted rows go through the same discharge
-filter and the same `fixBatchCap` slicing as every other row: when the cap is smaller than the
-offered set they wait in `_fixQueue` for a later slice of the same round. The lift never starts a
-fixer leg: a round with no blocking finding converges as before, and its remaining findings are
-settled at the end.
+"real"`), is not a product choice (`tradeoff` is not `true`) and has no disposition, or is named by
+its effective `guidance` or `fix` decision and is not fixed or refuted. Each such row carries
+`"lifted": "real-consequence"` or `"lifted": "guidance"`; the round records `liftedIntoFixBatch`
+(their keys) and a `fix-batch-lifted` decision. A finding that is fixed, refuted, merged, collapsed,
+or out of scope under its effective decision is never lifted, and a code-quality finding with no
+guidance or fix decision is not. Lifted rows go through the same discharge filter and the same
+`fixBatchCap` slicing as every other row: when the cap is smaller than the offered set they wait in
+`_fixQueue` for a later slice of the same round. A lift for a real consequence never starts a fixer
+leg: a round with no blocking finding converges as before, and its remaining findings are settled at
+the end.
 
-A lifted product choice (`tradeoff: true`) whose effective decision is not the owner's word to fix
-it (a `fix` or `guidance` decision) never rides the fix batch on its own: it goes to
-`present-judgment` beside the round's blockers, as a blocking tradeoff does. A skip there is recorded
-as the finding's out-of-scope disposition but, the finding being no blocker, never joins
-`skippedBlockers`.
+A below-blocking product choice (`tradeoff: true`) is never lifted autonomously, and it is never put
+to `present-judgment`, which holds blocking findings only. It rides a fix batch only when its
+effective decision is the owner's word to fix it (a `guidance` or `fix` decision, from `rule` or the
+gate); otherwise it stays live and the end-of-loop settle leaves it for the owner. A row an owner
+decision names does start a fixer leg of its own: when every blocker of the round was skipped at the
+gate or ruled out of scope, the named rows still reach a fixer before the round settles, while a
+round whose only candidates are lifts for a real consequence converges.
 
 A lifted Minor or Nit is audited like any other row of the batch, and its discharge is recorded, but
 it never drives the loop: a not-discharged non-blocking target is held out of the audit outcome's

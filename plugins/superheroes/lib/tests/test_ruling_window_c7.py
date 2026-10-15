@@ -391,8 +391,9 @@ def test_guidance_ruled_at_the_fixer_step_lifts_a_finding_the_batch_lacks(tmp_pa
 
 
 def test_lift_marker_decision_table():
-    """axis: which findings the lift selects."""
+    """axis: which findings the lift selects — a product choice rides only on an owner decision."""
     real = {"consequenceKind": "real"}
+    choice = {"consequenceKind": "real", "tradeoff": True}
     quality = {"consequenceKind": "code-quality"}
     live = lambda ruling: {"ruling": ruling}  # noqa: E731
     fixed = {"disposition": "fixed", "dispositionSeq": 5, "raisedSeq": 1}
@@ -404,6 +405,13 @@ def test_lift_marker_decision_table():
     assert RD._lift_marker_for(quality, {}, live("guidance")) == "guidance"
     assert RD._lift_marker_for(quality, {"disposition": "out-of-scope"}, live("guidance")) == "guidance"
     assert RD._lift_marker_for(quality, fixed, live("guidance")) is None
+    assert RD._lift_marker_for(choice, {}, None) is None
+    assert RD._lift_marker_for(choice, {}, live("out-of-scope")) is None
+    assert RD._lift_marker_for(choice, {}, live("guidance")) == "guidance"
+    assert RD._lift_marker_for(choice, {}, live("fix")) == "guidance"
+    assert RD._lift_marker_for(choice, fixed, live("fix")) is None
+    assert RD._lift_marker_for({"consequenceKind": "real", "tradeoff": None}, {}, None) \
+        == "real-consequence"
 
 
 # --- fail-closed edges ---------------------------------------------------------------------------
@@ -614,8 +622,9 @@ def test_edge6_out_of_scope_and_fixed_findings_are_never_lifted(tmp_path, keep_s
 
 
 def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severity):
-    """axis: the lift never starts a fixer leg. A Minor-only round converges with no fixer leg, and an
-    empty offered set lifts nothing even though real-consequence findings are live."""
+    """axis: an autonomous lift never starts a fixer leg. A Minor-only round converges with no fixer
+    leg, and an empty offered set lifts nothing (and records no exclusion) though real-consequence
+    findings are live."""
     minor_only = tmp_path / "minor-only"
     minor_only.mkdir()
     session_dir, gitdir, head_path = _bootstrap(minor_only, name="c7-e7")
@@ -631,9 +640,11 @@ def test_edge7_a_round_with_no_offered_rows_lifts_nothing(tmp_path, keep_severit
     assert any(f.get("consequenceKind") == "real" for f in state["findings"])
     state["pending"] = None
     state["rounds"]["1"].pop("liftedIntoFixBatch", None)
-    assert RD._queue_fix_batch(state, state["config"], []) == "queued"
-    assert state["_fixBatch"] == [] and state["_fixQueue"] == []
+    before = (state.get("_fixBatch"), state.get("_fixQueue"), state.get("step"))
+    assert RD._queue_fix_batch(state, state["config"], []) == "empty"
+    assert (state.get("_fixBatch"), state.get("_fixQueue"), state.get("step")) == before
     assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+    assert "fixBatchExcludedByDischarge" not in state["rounds"]["1"]
 
 
 # --- review round 1: a lifted product choice, a lifted non-blocking audit, an emitted-time guidance
@@ -654,52 +665,157 @@ def _fold_judgment(tmp_path, session_dir, gitdir, dispositions):
     return RD.cmd_advance(session_dir, git=_RC._fake_git(gitdir), owner_artifact_path=str(path))
 
 
-def test_a_lifted_product_choice_goes_to_the_owner_not_the_fixer(tmp_path, keep_severity):
-    """axis: an undisposed real-consequence Minor carrying `tradeoff: true` is put to the owner gate
-    beside the round's mechanical blocker — never handed to the fixer without an owner decision."""
+def _gate_blocker(title, line):
+    finding = _finding(title, line)
+    finding["tradeoff"] = True
+    return finding
+
+
+def test_an_undecided_product_choice_is_not_lifted_beside_a_blocker(tmp_path, keep_severity):
+    """axis: I1 — an undecided real-consequence Minor product choice never rides the blocker's batch."""
     session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-choice")
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)], name="c7-choice")
     state = _state(session_dir)
-    assert [row["title"] for row in state["_judgmentFindings"]] == ["minor choice"]
-    assert [row["title"] for row in state["_judgmentMechanical"]] == ["blocker B"]
-    assert not state.get("_fixBatch")
+    assert [row["title"] for row in state["_fixBatch"]] == ["blocker B"]
+    assert not state.get("_fixQueue")
+    assert not state.get("_judgmentFindings") and not state.get("_judgmentMechanical")
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
 
 
-def test_a_skipped_lifted_choice_stays_out_and_is_not_a_skipped_blocker(tmp_path, keep_severity):
-    """axis: the owner skips the lifted choice — the blocker alone goes to the fixer, and the Minor's
-    skip is recorded without riding the skipped-blocker channel."""
-    session_dir, gitdir, _h = _session(
+def test_t_ii_a_guided_choice_rides_the_batch_beside_a_blocker(tmp_path, keep_severity):
+    """axis: I1(b) — a product choice a `rule` guidance decision names joins the blocker's batch."""
+    session_dir, gitdir, head_path = _session(
         tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-choice-skip")
-    [jid] = _judgment_ids(_state(session_dir))
-    out = _fold_judgment(tmp_path, session_dir, gitdir,
-                         [{"id": jid, "disposition": "skip", "reason": "keep the current wording"}])
+        to_phase=RD.P_VERIFIERS, name="c7-choice-guided")
+    key_m = _finding_key_by_title(_state(session_dir), "minor choice")
+    assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_m, "DO-THE-CHOICE"))["ok"]
+    _drive_to_phase(session_dir, gitdir, [], head_path, P_FIXER)
+    by_title = _rows_by_title(_state(session_dir))
+    assert set(by_title) == {"blocker B", "minor choice"}
+    assert by_title["minor choice"]["lifted"] == "guidance"
+    assert "DO-THE-CHOICE" in _order_text(session_dir)
+
+
+def test_t_ii_b_a_guided_choice_survives_the_only_blocker_ruled_out_at_the_fixer(
+        tmp_path, keep_severity):
+    """axis: I1(b) — with the only blocker ruled out at the fixer step, the guided choice still gets
+    a fixer leg and the round does not converge past it."""
+    session_dir, _g, _h = _session(
+        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)], name="c7-choice-b-oos")
+    state = _state(session_dir)
+    assert [row["title"] for row in state["_fixBatch"]] == ["blocker B"]
+    key_b = _finding_key_by_title(state, "blocker B")
+    key_m = _finding_key_by_title(state, "minor choice")
+    _strip_fixer_orders_emitted(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", [
+        {"id": key_b, "ruling": "out-of-scope", "reason": "not this change",
+         "followUp": _follow_up()},
+        {"id": key_m, "ruling": "guidance", "reason": "owner call", "guidance": "do the choice"}]))
     assert out.get("ok") is True, out
     after = _state(session_dir)
-    assert after["pending"]["phase"] == P_FIXER
-    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B"]
-    assert not after.get("_fixQueue")
-    assert not after.get("_skippedBlockers")
+    assert after.get("terminal") != "converged"
+    assert after["step"] == P_FIXER
+    assert [row["title"] for row in after["_fixBatch"]] == ["minor choice"]
 
 
-def test_a_lifted_choice_the_owner_approves_rides_the_batch(tmp_path, keep_severity):
-    """axis: once the owner chooses to fix the lifted choice it joins the blocker's batch."""
-    session_dir, gitdir, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-choice-fix")
-    [jid] = _judgment_ids(_state(session_dir))
-    out = _fold_judgment(tmp_path, session_dir, gitdir,
-                         [{"id": jid, "disposition": "fix-as-suggested"}])
-    assert out.get("ok") is True, out
-    after = _state(session_dir)
-    assert after["pending"]["phase"] == P_FIXER
-    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B", "minor choice"]
+def _unit_finding(key, line, severity, *, tradeoff=False, kind="real"):
+    return dict(findingKey=key, title=key, file="a.py", line=line, severity=severity,
+                tradeoff=tradeoff, consequenceKind=kind)
+
+
+def _unit_round(findings):
+    """A state with ``findings`` routed through the driver's own settle entry point."""
+    state = RD.new_state()
+    RD._set_findings(state, [dict(f) for f in findings])
+    RD._after_findings_settled(state, state["config"])
+    return state
+
+
+def _unit_rulings(state, *rows):
+    state.update(rulingSeqCounter=len(rows),
+                 rulingsLog=[dict(row, seq=i) for i, row in enumerate(rows, 1)])
+
+
+def _unit_batch(state):
+    return [row["findingKey"] for row in state.get("_fixBatch") or []]
+
+
+def _unit_gate_ids(state):
+    return RD._judgment_row_ids(state["_judgmentFindings"])
+
+
+@pytest.mark.parametrize("blocker_is_tradeoff", [False, True], ids=["mechanical", "gate-blocker"])
+def test_t_i_an_undecided_product_choice_is_left_for_the_owner(blocker_is_tradeoff):
+    """axis: I1/I2 — an undecided below-blocking product choice never enters the owner gate or a fix
+    batch, and the end-of-loop settle leaves it for the owner."""
+    state = _unit_round([_unit_finding("B", 1, "Important", tradeoff=blocker_is_tradeoff),
+                         _unit_finding("M", 2, "Minor", tradeoff=True)])
+    if blocker_is_tradeoff:
+        assert state["step"] == RD.P_JUDGMENT
+        assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["B"]
+        assert state["_judgmentMechanical"] == []
+        RD._fold_judgment(state, state["config"], {"dispositions": [
+            {"id": _unit_gate_ids(state)[0], "disposition": "fix-as-suggested"}]})
+    assert state["step"] == P_FIXER
+    assert _unit_batch(state) == ["B"] and not state.get("_fixQueue")
+    assert not state.get("_judgmentFindings") and not state.get("_judgmentMechanical")
+    RD._set_terminal(state, "converged")
+    ledger, fault = RD._disposition_ledger_by_key(state)
+    assert fault is None
+    assert ledger["M"]["disposition"] == "left-for-owner", ledger["M"]
+
+
+def test_t_ii_c_a_guided_choice_survives_skipping_the_only_gate_blocker():
+    """axis: I1(b)/I3 — with the gate's only blocker skipped, a guided product choice still reaches
+    the fixer through the chokepoint."""
+    state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
+                         _unit_finding("M", 2, "Minor", tradeoff=True)])
+    assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="apply it"))
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+    assert state["step"] == P_FIXER
+    assert _unit_batch(state) == ["M"]
+    assert not state.get("terminal")
+
+
+def test_an_undecided_choice_does_not_survive_skipping_the_only_gate_blocker():
+    """axis: I1/E4 — with the gate's only blocker skipped and nothing owner-named, the round settles
+    as it always did, with no exclusion counted and no fix batch."""
+    state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
+                         _unit_finding("M", 2, "Minor", tradeoff=True)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+    assert state.get("terminal") == "converged"
+    assert state["step"] != P_FIXER and not state.get("_fixBatch")
+    assert "fixBatchExcludedByDischarge" not in state["rounds"]["1"]
+    assert "liftedIntoFixBatch" not in state["rounds"]["1"]
+
+
+@pytest.mark.parametrize("target,other", [("Q", "M"), ("M", "Q")], ids=["quality", "choice"])
+def test_t_iii_the_fixer_receives_only_the_owner_named_minor(target, other):
+    """axis: I1/I2/I3 — with the mechanical blocker ruled out and the gate's blocker skipped, the
+    fixer batch holds the one Minor an owner decision names and never the other."""
+    state = _unit_round([
+        _unit_finding("B", 1, "Important"),
+        _unit_finding("J", 2, "Important", tradeoff=True),
+        _unit_finding("M", 3, "Minor", tradeoff=True),
+        _unit_finding("Q", 4, "Minor", kind="code-quality")])
+    assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
+    assert [r["findingKey"] for r in state["_judgmentMechanical"]] == ["B"]
+    _unit_rulings(state, dict(findingKey="B", ruling="out-of-scope"),
+                  dict(findingKey=target, ruling="guidance", guidance="apply it"))
+    RD._reconcile_fixer_queue_after_rulings(state, state["config"])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+    assert state["step"] == P_FIXER
+    assert _unit_batch(state) == [target]
+    assert other not in _unit_batch(state) + [r["findingKey"] for r in state.get("_fixQueue") or []]
 
 
 def test_guidance_at_the_judgment_gate_survives_skipping_the_last_blocker(tmp_path, keep_severity):
-    """axis: guidance ruled on a code-quality Minor while the owner gate is open still reaches a
-    fixer when the owner then skips the gate's only blocker."""
+    """axis: I1(b)/I3 — guidance ruled on a code-quality Minor while the owner gate is open still
+    reaches a fixer when the owner then skips the gate's only blocker."""
     blocker = _finding("tradeoff blocker", 1)
     blocker["tradeoff"] = True
     session_dir, gitdir, _h = _session(
@@ -716,16 +832,6 @@ def test_guidance_at_the_judgment_gate_survives_skipping_the_last_blocker(tmp_pa
     assert after["pending"]["phase"] == P_FIXER
     assert [row["title"] for row in after["_fixBatch"]] == ["quality minor"]
     assert "TIDY-THE-MINOR" in _order_text(session_dir)
-
-
-def test_lift_awaits_owner_judgment_decision_table():
-    """axis: which lifted rows wait for the owner."""
-    choice = {"tradeoff": True}
-    assert RD._lift_awaits_owner_judgment(choice, None) is True
-    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "out-of-scope"}) is True
-    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "fix"}) is False
-    assert RD._lift_awaits_owner_judgment(choice, {"ruling": "guidance"}) is False
-    assert RD._lift_awaits_owner_judgment({"tradeoff": None}, None) is False
 
 
 def test_a_not_discharged_lifted_minor_never_keeps_the_loop_fixing(tmp_path, keep_severity):
@@ -839,24 +945,6 @@ def test_guidance_on_an_archived_finding_still_rides_the_next_batch(tmp_path, ke
     assert [(_key(row), row["lifted"]) for row in lifted] == [(quality, RD.LIFT_GUIDANCE)]
 
 
-def test_a_ruled_out_blocker_does_not_pull_a_choice_to_the_owner(tmp_path, keep_severity):
-    """axis: the lift joins a fixer leg that is going out — with the only blocker ruled out, a
-    lifted product choice is not put to the owner."""
-    session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
-        to_phase=RD.P_JUDGMENT, name="c7-oos-blocker")
-    state = _state(session_dir)
-    blocking = RD._blocking(state["findings"])
-    assert [row["title"] for row in RD._lifted_judgment_rows(state, blocking)] == ["minor choice"]
-    state["pending"] = None
-    RD.save_state(session_dir, state)
-    assert _rule(session_dir, _write_ruling_file(tmp_path / "oos-b.json", [
-        {"id": _finding_key_by_title(state, "blocker B"), "ruling": "out-of-scope",
-         "reason": "later", "followUp": _follow_up()}]))["ok"]
-    state = _state(session_dir)
-    assert RD._lifted_judgment_rows(state, RD._blocking(state["findings"])) == []
-
-
 def test_stall_recovery_batch_takes_no_lifted_rows_and_merged_members_never_lift(tmp_path, keep_severity):
     """axis: the stall-recovery batch is exactly its composed set; a synthesis-merged member is
     never lifted as an independent fix."""
@@ -895,18 +983,20 @@ def test_stall_recovery_batch_keeps_no_lift_through_the_owner_judgment_gate(monk
     assert seen and set(seen) == {False}
 
 
-def test_ruling_the_only_blocker_out_clears_a_lifted_only_judgment_gate(tmp_path, keep_severity):
-    """axis: the judgment gate holds one mechanical blocker plus a lifted Minor choice; ruling the
-    blocker out of scope leaves no eligible blocker, so the gate closes and the loop converges
-    instead of still asking the owner about the Minor."""
+def test_ruling_the_gates_blockers_out_clears_the_gate_and_converges(tmp_path, keep_severity):
+    """axis: I2/I3 — the gate holds one mechanical and one tradeoff blocker; ruling both out leaves
+    nothing to put to the owner, so the gate closes and the loop converges without asking about the
+    Minor product choice."""
     session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        tmp_path, [_finding("blocker B", 1), _gate_blocker("tradeoff J", 2),
+                   _choice("minor choice", 3)],
         to_phase=RD.P_JUDGMENT, name="c7-choice-oos")
     state = _state(session_dir)
-    key = _finding_key_by_title(state, "blocker B")
+    assert [row["title"] for row in state["_judgmentFindings"]] == ["tradeoff J"]
     out = _rule(session_dir, _write_ruling_file(tmp_path / "oos.json", [
-        {"id": key, "ruling": "out-of-scope", "reason": "not this change",
-         "followUp": _follow_up()}]))
+        {"id": _finding_key_by_title(state, title), "ruling": "out-of-scope",
+         "reason": "not this change", "followUp": _follow_up()}
+        for title in ("blocker B", "tradeoff J")]))
     assert out.get("ok") is True, out
     after = _state(session_dir)
     assert after.get("terminal") == "converged", after.get("step")
@@ -914,46 +1004,47 @@ def test_ruling_the_only_blocker_out_clears_a_lifted_only_judgment_gate(tmp_path
     assert not after.get("pending")
 
 
-def test_guidance_on_the_lifted_choice_with_the_blocker_out_keeps_the_choice_for_the_fixer(
+def test_guidance_on_the_choice_with_the_gate_blockers_out_keeps_it_for_the_fixer(
         tmp_path, keep_severity):
-    """axis: the judgment gate holds one mechanical blocker plus a lifted Minor choice; one ruling
-    file gives the choice guidance and marks the blocker out of scope, so the owner-guided choice
-    still reaches the fixer and the gate does not converge without it."""
+    """axis: I1(b)/I3 — one ruling file rules the gate's blockers out and gives a Minor product choice
+    guidance: the gate closes through the chokepoint and the guided choice reaches the fixer."""
     session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        tmp_path, [_finding("blocker B", 1), _gate_blocker("tradeoff J", 2),
+                   _choice("minor choice", 3)],
         to_phase=RD.P_JUDGMENT, name="c7-choice-guided-oos")
     state = _state(session_dir)
-    key_b = _finding_key_by_title(state, "blocker B")
-    key_m = _finding_key_by_title(state, "minor choice")
-    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", [
-        {"id": key_b, "ruling": "out-of-scope", "reason": "not this change",
-         "followUp": _follow_up()},
-        {"id": key_m, "ruling": "guidance", "reason": "owner call", "guidance": "do the choice"}]))
+    entries = [{"id": _finding_key_by_title(state, title), "ruling": "out-of-scope",
+                "reason": "not this change", "followUp": _follow_up()}
+               for title in ("blocker B", "tradeoff J")]
+    entries.append({"id": _finding_key_by_title(state, "minor choice"), "ruling": "guidance",
+                    "reason": "owner call", "guidance": "do the choice"})
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mixed.json", entries))
     assert out.get("ok") is True, out
     after = _state(session_dir)
     assert after.get("terminal") != "converged"
-    assert "minor choice" in _rows_by_title(after)
+    assert [row["title"] for row in after["_fixBatch"]] == ["minor choice"]
 
 
-def test_guidance_on_one_lifted_choice_keeps_an_undecided_choice_out_of_the_fixer(
+def test_guidance_on_one_choice_keeps_an_undecided_choice_out_of_the_fixer(
         tmp_path, keep_severity):
-    """axis: the judgment gate holds one blocker plus two lifted Minor choices; the blocker is ruled
-    out and only one choice gets guidance, so the other, undecided choice never reaches the fixer."""
+    """axis: I1 — the gate's blockers are ruled out and only one of two Minor product choices gets
+    guidance, so the undecided one never reaches the fixer."""
     session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("choice M", 2), _choice("choice N", 3)],
+        tmp_path, [_finding("blocker B", 1), _gate_blocker("tradeoff J", 2),
+                   _choice("choice M", 3), _choice("choice N", 4)],
         to_phase=RD.P_JUDGMENT, name="c7-choice-mn")
     state = _state(session_dir)
-    key_b = _finding_key_by_title(state, "blocker B")
-    key_m = _finding_key_by_title(state, "choice M")
-    out = _rule(session_dir, _write_ruling_file(tmp_path / "mn.json", [
-        {"id": key_b, "ruling": "out-of-scope", "reason": "not this change",
-         "followUp": _follow_up()},
-        {"id": key_m, "ruling": "guidance", "reason": "owner call", "guidance": "do the choice"}]))
+    entries = [{"id": _finding_key_by_title(state, title), "ruling": "out-of-scope",
+                "reason": "not this change", "followUp": _follow_up()}
+               for title in ("blocker B", "tradeoff J")]
+    entries.append({"id": _finding_key_by_title(state, "choice M"), "ruling": "guidance",
+                    "reason": "owner call", "guidance": "do the choice"})
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "mn.json", entries))
     assert out.get("ok") is True, out
-    rows = _rows_by_title(_state(session_dir))
+    after = _state(session_dir)
+    rows = _rows_by_title(after)
     assert "choice M" in rows
     assert "choice N" not in rows
-    after = _state(session_dir)
     assert "choice N" in [f.get("title") for f in after.get("findings") or []]
     key_n = _finding_key_by_title(after, "choice N")
     assert key_n not in [r.get("findingKey") for r in after.get("rulingsLog") or []]
@@ -1005,8 +1096,9 @@ def test_an_autonomous_lifted_minor_alone_still_converges():
 
 def test_guidance_survives_skipping_the_gate_when_a_ruled_out_blocker_is_carried(
         tmp_path, keep_severity):
-    """axis: a ruled-out mechanical blocker still carried by the gate does not hide accepted guidance
-    on a Minor from the fixer when the owner then skips the gate's tradeoff blocker."""
+    """axis: I1(b)/I3 — a ruled-out mechanical blocker still carried by the gate does not hide
+    accepted guidance on a Minor from the fixer when the owner then skips the gate's tradeoff
+    blocker."""
     tradeoff = _finding("tradeoff blocker", 2)
     tradeoff["tradeoff"] = True
     session_dir, gitdir, _h = _session(
@@ -1039,13 +1131,16 @@ def test_an_untracked_symlink_outside_the_session_is_dirty_whatever_it_points_at
     assert RD._untracked_outside_session(str(session), str(repo), "?? src/helper.py") is True
 
 
-def test_an_empty_disposition_never_fixes_a_lifted_product_choice(tmp_path, keep_severity):
-    """axis: a lifted Minor product choice the owner left undisposed is not fixed by the fail-closed
-    default; the blocker alone goes to the fixer."""
+def test_an_empty_disposition_fixes_the_gate_blocker_and_never_a_product_choice(
+        tmp_path, keep_severity):
+    """axis: E5/I1 — a gate blocker with no disposition folds as fix-as-suggested (fail closed) and
+    an undecided Minor product choice beside it never rides along."""
     session_dir, gitdir, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _choice("minor choice", 2)],
+        tmp_path, [_gate_blocker("tradeoff J", 1), _choice("minor choice", 2)],
         to_phase=RD.P_JUDGMENT, name="c7-choice-undecided")
+    assert [row["title"] for row in _state(session_dir)["_judgmentFindings"]] == ["tradeoff J"]
     out = _fold_judgment(tmp_path, session_dir, gitdir, [])
     assert out.get("ok") is True, out
     after = _state(session_dir)
-    assert [row["title"] for row in after["_fixBatch"]] == ["blocker B"]
+    assert [row["title"] for row in after["_fixBatch"]] == ["tradeoff J"]
+    assert after["_fixBatch"][0].get("judgmentFailClosed") is True
