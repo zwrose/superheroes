@@ -49,8 +49,8 @@ def test_v0_submit_on_a_generation_three_unfinished_session_refuses(tmp_path):
 
 
 def test_v0_e2_a_current_generation_unfinished_session_is_not_refused(tmp_path):
-    # positive control (e2): generation 4 passes the gate
-    session_dir = _light_folder(tmp_path, generation=4)
+    # positive control (e2): the current generation passes the gate
+    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION)
     out = RD.cmd_next(session_dir)
     assert out.get("reason") != "session-from-earlier-version", out
     assert not os.path.exists(_marker_path(session_dir))
