@@ -1245,3 +1245,18 @@ def test_replacement_guidance_on_a_held_minor_refreshes_the_sent_decision():
                   dict(findingKey="M", ruling="guidance", guidance="SECOND"))
     RD._guidance_named_rows(state, [("M", _unit_finding("M", 2, "Minor", kind="code-quality"))])
     assert state["liftedAtSeq"] == {"M": 2}
+
+
+def test_a_sent_decision_survives_a_merge_into_a_new_representative():
+    """axis: guidance already sent under a finding is still sent after synthesis merges it into
+    another representative, so a blocker-free round does not start a second leg for it."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert _unit_batch(state) == ["M"]
+    RD._record_merged_into(state, "M", "N")
+    state.update(step=None, _fixBatch=[], _fixQueue=[])
+    RD._set_findings(state, [_unit_finding("N", 2, "Minor", kind="code-quality")])
+    RD._after_findings_settled(state, state["config"])
+    assert state.get("terminal") == "converged" and not state.get("_fixBatch")

@@ -4535,7 +4535,8 @@ def _lift_into_fix_batch(state, rows, *, owner_named_only=False):
         lineage = _lineage_map(state)
         lifted = [row for row in lifted if _owner_named_row(row, effective)
                   and _decision_seq(effective[_fix_batch_row_key(row)])
-                  > sent.get(_lineage_root(lineage, _fix_batch_row_key(row)), -1)]
+                  > max((seq for k, seq in sent.items() if _lineage_root(lineage, k)
+                         == _lineage_root(lineage, _fix_batch_row_key(row))), default=-1)]
     if not lifted:
         return list(rows)
     keys = [_fix_batch_row_key(row) for row in lifted]
