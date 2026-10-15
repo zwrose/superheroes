@@ -781,3 +781,62 @@ def test_a_gate_skip_decision_carries_its_ruling_time_severity():
     rows = RD._gate_decision_candidates({"rounds": {"1": {"judgmentDispositions": [
         {"findingKey": key, "disposition": "skip", "reason": "r", "severity": "Important"}]}}})
     assert rows[0]["severity"] == "Important"
+
+
+# --- one binding answer across a synthesis merge (_row_decision) ---------------------------------
+
+def _merged_pair_state():
+    """A is the live representative; B was merged into A. Returns (state, keyA, keyB)."""
+    state = _staged_state([_finding("Rep finding", 1), _finding("Member finding", 2)])
+    key_a, key_b = _key("Rep finding", 1), _key("Member finding", 2)
+    for row in state["findings"]:
+        if RD._finding_key_of(row) == key_b:
+            row[SC.MERGED_INTO_FIELD] = key_a
+    state["fixBatch"] = [f for f in state["findings"] if RD._finding_key_of(f) == key_a]
+    return state, key_a, key_b
+
+
+def test_a_merged_members_newer_guidance_binds_the_spent_out_of_scope_filter():
+    state, key_a, key_b = _merged_pair_state()
+    _decide(state, key_a, "out-of-scope", 1)
+    _decide(state, key_b, "guidance", 1)
+    state["round"] = 3
+    state["outOfScopeFixerRounds"] = {key_a: {"episode": 1, "rounds": [2]}}
+    kept, spent = RD._drop_spent_out_of_scope_rows(state, list(state["fixBatch"]))
+    assert [RD._finding_key_of(r) for r in kept] == [key_a] and spent == []
+
+
+@pytest.mark.parametrize("a_allows", [True, False])
+def test_a_merged_members_newer_ruling_decides_the_allowance_and_the_audit_target(a_allows):
+    state, key_a, key_b = _merged_pair_state()
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    _decide(state, key_a, "guidance", 1, allowsChange=a_allows)
+    _decide(state, key_b, "guidance", 1, allowsChange=not a_allows)
+    (target,) = RD._audit_targets(state, state["config"], {})
+    assert target["ownerRuling"]["allowsChange"] is (not a_allows)
+    state["_auditTargets"] = [target]
+    artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
+                             "evidence": "tests", "unnamedChange": UNNAMED,
+                             "auditorVendor": target.get("auditorVendor")}],
+                "collectionManifest": {key_a: target.get("auditorVendor")}}
+    RD._fold_audits(state, state["config"], artifact)
+    discharged = state["_auditOutcome"]["discharged"]
+    assert (discharged == [key_a]) is (not a_allows)
+
+
+def test_a_ruling_recorded_after_the_audit_target_stays_pending():
+    state, key_a, _key_b = _merged_pair_state()
+    state["config"] = TRD._cfg(fixerVendor="claude")
+    _decide(state, key_a, "guidance", 1, allowsChange=True)
+    (target,) = RD._audit_targets(state, state["config"], {})
+    state["_auditTargets"] = [target]
+    newer = _decide(state, key_a, "guidance", 1, allowsChange=True)
+    artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
+                             "evidence": "tests", "unnamedChange": UNNAMED,
+                             "auditorVendor": target.get("auditorVendor")}],
+                "collectionManifest": {key_a: target.get("auditorVendor")}}
+    RD._fold_audits(state, state["config"], artifact)
+    outcome = state["_auditOutcome"]
+    assert newer > target["ownerRulingSeq"]
+    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"

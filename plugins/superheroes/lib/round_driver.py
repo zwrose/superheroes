@@ -4449,16 +4449,16 @@ def _drop_spent_out_of_scope_rows(state, rows):
     in ``state["outOfScopeFixerRounds"]`` (keyed by lineage root). A spent row's out-of-scope
     disposition is recorded again with the round it was offered in, keeping its ``followUp``."""
     effective = _live_ruling_by_key(state)
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
     lineage = _lineage_map(state)
     this_round = state["round"]
     spent_log = state.get("outOfScopeFixerRounds")
     if not isinstance(spent_log, dict):
         spent_log = {}
     kept, spent = [], []
-    ledger_by_key, _fault = _disposition_ledger_by_key(state)
     for row in rows:
         key = _fix_batch_row_key(row)
-        decision = effective.get(key) if key else None
+        decision = _row_decision(state, effective, ledger_by_key, key) if key else None
         if not isinstance(decision, dict) or decision.get("ruling") != "out-of-scope":
             kept.append(row)
             continue
@@ -5643,6 +5643,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     targets = []
     seen_keys = set()
     effective = _live_ruling_by_key(state)
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5681,9 +5682,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
         # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
         # ordinary not-discharged loop, with no state of its own.
-        decision = effective.get(tid)
+        decision = _row_decision(state, effective, ledger_by_key, tid)
         if isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS:
             owner_ruling = {"ruling": decision["ruling"], "reason": decision.get("reason")}
+            row["ownerRulingSeq"] = _decision_seq(decision)
             for carried in ("guidance", "allowsChange"):
                 if decision.get(carried) is not None:
                     owner_ruling[carried] = decision[carried]
@@ -5783,13 +5785,20 @@ def _fold_audits(state, config, artifact, session_dir=None):
                    if not (isinstance(r, dict) and r.get("id") in no_auditor_ids)]
     # A fix may change behaviour its finding does not name only where the finding's one effective
     # decision is a guidance ruling that says so (`allowsChange`); the owner gate never carries it.
+    # The binding decision is the one fixer dispatch resolves (`_row_decision`, merged members
+    # included), and it authorizes only when it is the decision the auditor's target carried: a
+    # ruling recorded after the audit order went out was never weighed, so it stays pending.
     effective = _live_ruling_by_key(state)
-    change_allowed_ids = [
-        t.get("id") for t in targets
-        if isinstance(t, dict) and isinstance(t.get("id"), str)
-        and isinstance(effective.get(t["id"]), dict)
-        and effective[t["id"]].get("ruling") == "guidance"
-        and effective[t["id"]].get("allowsChange") is True]
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    bound_by_id = {}
+    for t in targets:
+        if isinstance(t, dict) and isinstance(t.get("id"), str):
+            bound = _row_decision(state, effective, ledger_by_key, t["id"])
+            if (isinstance(bound, dict) and bound.get("ruling") == "guidance"
+                    and bound.get("allowsChange") is True
+                    and t.get("ownerRulingSeq") == _decision_seq(bound)):
+                bound_by_id[t["id"]] = bound
+    change_allowed_ids = list(bound_by_id)
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
                                          collection_manifest=collection_manifest,
                                          carry_fields=(session_contract.FINDING_KEY_FIELD,),
@@ -5856,7 +5865,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
     lineage = _lineage_map(state)
     for audit in outcome["audits"]:
         if audit.get("allowedChange") and audit.get("id") in change_allowed_ids:
-            decision = effective[audit["id"]]
+            decision = bound_by_id[audit["id"]]
             sent = state.setdefault("sentUnderDecision", {})
             for at in (audit["id"], decision.get("findingKey")):
                 root = _lineage_root(lineage, at)
