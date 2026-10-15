@@ -3148,18 +3148,22 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
         if key:
             carry.apply(scratch, finding, key)
     # The raised closure: every key this panel raised (compiled or compile-dropped), grown until
-    # nothing is new by each key's merged-into representative and every member of its lineage group.
+    # nothing is new by each key's merged-into representative, every ledger member merged into it, and every member of its lineage group.
     raised_now = _panel_raised_keys(panel_rows)
     ledger_reps = {}
     for entry_key, entry in ledger_by_key.items():
         rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
         ledger_reps[entry_key] = _finding_identity_key(rep) if isinstance(rep, dict) else entry_key
+    merged_members = {}
+    for entry_key, rep_key in ledger_reps.items():
+        merged_members.setdefault(rep_key, set()).add(entry_key)
     pending = set(raised_now)
     while pending:
         key = pending.pop()
         grown = set(_lineage_group(scratch, key))
         if key in ledger_reps:
             grown.add(ledger_reps[key])
+        grown |= merged_members.get(key, set())
         for new_key in grown - raised_now:
             raised_now.add(new_key)
             pending.add(new_key)
