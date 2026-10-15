@@ -626,10 +626,15 @@ def test_a_finding_raised_to_critical_after_its_out_of_scope_ruling_is_never_spe
         empty_batch_calls):
     state = _staged_state([_finding("Gate bypass", severity="Important")])
     key = _key("Gate bypass")
-    _decide(state, key, "out-of-scope", 1)
+    _decide(state, key, "out-of-scope", 1, severity="Important")
     RD._record_disposition(state, key, "out-of-scope", 1, outOfScopeReason="owner deferred it",
                            followUp=_follow_up())
-    state["findings"][0]["severity"] = "Critical"  # re-raised as a blocker under the same key
+    # re-raised as a blocker under the same key, through the real restaging (replaces the ledger entry)
+    state["round"] = 2
+    compiled, _ = RD.mechanical_compile([dict(_finding("Gate bypass", severity="Critical"))], None)
+    RD._stage_findings(state, compiled)
+    RD._set_findings(state, state["_toVerify"])
+    assert _ledger(state)[key]["severity"] == "Critical"
     for rnd in (2, 3, 4):
         assert _offer(state, rnd) == ("queued", [key])
     assert empty_batch_calls == []
@@ -692,3 +697,29 @@ def test_audit_targets_name_the_fixers_own_changed_lines_apart_from_the_prs():
     assert row["fixerDelta"] == ["+    if x is None: return"]
     (row,) = RD._audit_targets(state, state["config"], head)
     assert "fixerDelta" not in row
+
+
+def _delta(reviewed_lines, fixed_lines):
+    def hunk(lines):
+        return [{"start": 1, "end": 5, "text": "\n".join(["@@ -1,3 +1,4 @@"] + lines)}]
+    return RD._fixer_delta_lines(hunk(fixed_lines), hunk(reviewed_lines))
+
+
+def test_fixer_delta_keeps_a_removed_pr_line():
+    assert _delta(["+guard()", "+retry()"], ["+guard()", "+if x is None: return"]) == [
+        "-retry()", "+if x is None: return"]
+    assert _delta(["+guard()", "+retry()"], ["+guard()"]) == ["-retry()"]
+
+
+def test_fixer_delta_keeps_a_repeated_line_and_a_restored_removal():
+    assert _delta(["+charge()"], ["+charge()", "+charge()"]) == ["+charge()"]
+    assert _delta(["-old()", "+new()"], ["+new()"]) == ["+old()"]
+    assert _delta(["+a()"], ["+a()"]) == []
+
+
+def test_a_gate_skip_decision_carries_its_ruling_time_severity():
+    state = _staged_state([_finding("Gate bypass", severity="Important")])
+    key = _key("Gate bypass")
+    rows = RD._gate_decision_candidates({"rounds": {"1": {"judgmentDispositions": [
+        {"findingKey": key, "disposition": "skip", "reason": "r", "severity": "Important"}]}}})
+    assert rows[0]["severity"] == "Important"

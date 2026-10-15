@@ -41,6 +41,7 @@ not re-implemented.
 import argparse
 import binascii
 import copy
+import difflib
 import errno
 import hashlib
 import json
@@ -1981,7 +1982,7 @@ def _gate_decision_candidates(state):
                     row["ruling"] = "fix"
             if ruling == "out-of-scope" and _follow_up_of(item) is not None:
                 session_contract.copy_follow_up_field(item, row)
-            for field in ("file", "line", "title"):
+            for field in ("file", "line", "title", "severity"):
                 if item.get(field) is not None:
                     row[field] = item.get(field)
             out.append(row)
@@ -4251,6 +4252,7 @@ def _fold_judgment(state, config, artifact, _check_aggregate=True):
             follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             skip_entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
                           "title": f.get("title"), "file": f.get("file"), "line": f.get("line"),
+                          "severity": f.get("severity"),
                           "disposition": "skip", "reason": reason.strip()}
             if follow_up is not None:
                 # The skip is a standing decision: its follow-up travels with it, so a later round
@@ -4427,11 +4429,12 @@ def _out_of_scope_episode(decision):
     return "round:%s" % decision.get("round")
 
 
-def _escalated_since_out_of_scope(ledger_entry, row):
-    """True when ``row`` is Critical now but its out-of-scope ledger entry recorded a lower severity."""
-    if not isinstance(ledger_entry, dict) or not circuit_breaker.is_critical(row.get("severity")):
+def _escalated_since_out_of_scope(decision, row):
+    """True when ``row`` is Critical now but the out-of-scope decision recorded a lower severity at
+    ruling time (the decision's own snapshot: the ledger entry is replaced on every restage)."""
+    if not isinstance(decision, dict) or not circuit_breaker.is_critical(row.get("severity")):
         return False
-    recorded = ledger_entry.get("severity")
+    recorded = decision.get("severity")
     return isinstance(recorded, str) and bool(recorded) and not circuit_breaker.is_critical(recorded)
 
 
@@ -4454,7 +4457,7 @@ def _drop_spent_out_of_scope_rows(state, rows):
         if not isinstance(decision, dict) or decision.get("ruling") != "out-of-scope":
             kept.append(row)
             continue
-        if _escalated_since_out_of_scope(ledger_by_key.get(key), row):
+        if _escalated_since_out_of_scope(decision, row):
             # Ruled out of scope while below Critical, now a Critical blocker: the ruling never
             # covered it. Dropping it would empty the batch and let the review certify with the
             # Critical still open, so it stays in the batch; the round caps bound repeat offers.
@@ -5607,14 +5610,21 @@ def _fix_hunks_over_line(audit_targets_map, file, line):
 
 
 def _fixer_delta_lines(fix_hunks, reviewed_hunks):
-    """The changed (``+``/``-``) lines of ``fix_hunks`` that no reviewed hunk at the same location
-    carries: what the fixer changed, apart from the PR's own changes already present when the
-    finding was reviewed."""
+    """What the fixer changed at this location, as an ordered diff of the changed (``+``/``-``)
+    lines the reviewed version carried against those the fixed version carries: a line the fixer
+    added (or restored) rides as ``+``, one it removed as ``-``, and a repeated line counts each time."""
     def changed(hunks):
         return [ln for h in hunks if isinstance(h, dict) and isinstance(h.get("text"), str)
                 for ln in h["text"].splitlines()[1:] if ln[:1] in ("+", "-")]
-    baseline = set(changed(reviewed_hunks))
-    return [ln for ln in changed(fix_hunks) if ln not in baseline]
+    flip = {"+": "-", "-": "+"}
+    before, after = changed(reviewed_hunks), changed(fix_hunks)
+    delta = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+        if op in ("delete", "replace"):
+            delta.extend(flip[ln[0]] + ln[1:] for ln in before[i1:i2])
+        if op in ("insert", "replace"):
+            delta.extend(after[j1:j2])
+    return delta
 
 
 def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
@@ -7919,6 +7929,10 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                     log_row[field] = candidate.get(field)
         session_contract.copy_follow_up_field(entry, log_row)
         session_contract.copy_decided_by_field(entry, log_row)
+        if entry["ruling"] == "out-of-scope":
+            # the severity at ruling time, kept with the decision: a restage replaces the ledger's
+            log_row["severity"] = _severity_for_finding_key(
+                state, key, candidate.get("severity") if isinstance(candidate, dict) else None)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
         if "allowsChange" in entry:
