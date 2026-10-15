@@ -2172,6 +2172,7 @@ def _record_merged_into(state, key, into_key):
         lineage = state.setdefault("findingLineage", {})
         prior = lineage.get(key)
         lineage[key] = into_key
+        (state.get("findingLineageRound") or {}).pop(key, None)  # a merge is not a provisional carry
         if _lineage_root(lineage, key) == key:
             lineage.pop(into_key)
         if prior and (r := _lineage_root(lineage, prior)) != _lineage_root(lineage, into_key):
@@ -4649,6 +4650,11 @@ def _guidance_named_rows(state, named):
         if not isinstance(source, dict):
             continue
         stored = ledger_by_key.get(key)
+        rep = (source.get(session_contract.MERGED_INTO_FIELD)
+               or (stored or {}).get(session_contract.MERGED_INTO_FIELD))
+        rep_row = _live_finding_by_key(state, rep) if rep else None
+        if isinstance(rep_row, dict) and not rep_row.get(session_contract.MERGED_INTO_FIELD):
+            key, source, stored = rep, rep_row, ledger_by_key.get(rep)  # the live representative
         if _lift_marker_for(source, stored if isinstance(stored, dict) else source,
                             effective.get(key)) is None:
             continue
@@ -7836,7 +7842,7 @@ def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
                 WITHDRAW_RESTORE_NOT_CHECKED)
     run_git = git or store_core.run_git
     anchor = _orders_anchor(state, session_dir, rnd, P_FIXER, attempt) or {}
-    bound = anchor.get("headSha")
+    bound = anchor.get("restoreHead") or anchor.get("headSha")
     if not isinstance(bound, str) or not bound:
         return (WITHDRAW_HEAD_UNANCHORED,
                 "the orders of fixer attempt %s carry no head the worktree can be compared "
@@ -10500,6 +10506,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
     if certified_head:
         anchor["headSha"] = certified_head
+    if phase == P_FIXER and (root := _resolve_repo_root(session_dir, state)):
+        anchor["restoreHead"] = store_core.run_git(root, "rev-parse", "HEAD") or None
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
         anchors = {}

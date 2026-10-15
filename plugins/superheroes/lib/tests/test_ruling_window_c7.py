@@ -153,6 +153,7 @@ def _bind_anchor_head(session_dir, head, repo=None):
     pend = state["pending"]
     key = RD._anchor_key(pend["round"], pend["phase"], pend["attempt"])
     anchor = dict(state["_ordersAnchors"][key])
+    anchor.pop("restoreHead", None)
     if head is None:
         anchor.pop("headSha", None)
     else:
@@ -1260,3 +1261,26 @@ def test_a_sent_decision_survives_a_merge_into_a_new_representative():
     RD._set_findings(state, [_unit_finding("N", 2, "Minor", kind="code-quality")])
     RD._after_findings_settled(state, state["config"])
     assert state.get("terminal") == "converged" and not state.get("_fixBatch")
+
+
+def test_withdraw_compares_against_the_actual_attempt_head(tmp_path, keep_severity):
+    """A session head that differs from the checkout's HEAD at emission does not refuse a clean
+    withdrawal: the anchor's restoreHead is the head the attempt actually started from."""
+    session_dir, _gitdir, _head, _kf, _kg = _two_important(tmp_path, name="c7-restore")
+    k = _state(session_dir)["pending"]["attempt"]
+    repo, head = _throwaway_repo(tmp_path)
+    _bind_anchor_head(session_dir, "a" * 40, repo)
+    state = _state(session_dir)
+    key = RD._anchor_key(state["pending"]["round"], state["pending"]["phase"], k)
+    state["_ordersAnchors"][key]["restoreHead"] = head
+    RD.save_state(session_dir, state)
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
+    assert out.get("ok") is True and out.get("restoreCheck") == "checked", out
+
+
+def test_merge_clears_the_provisional_carry_stamp():
+    """A confirmed merge replaces a provisional carry edge, so a later staging cannot revoke it."""
+    state = {"round": 2, "findings": [], "findingLineage": {"B": "O"},
+             "findingLineageRound": {"B": 2}}
+    RD._record_merged_into(state, "B", "R")
+    assert state["findingLineage"]["B"] == "R" and "B" not in state["findingLineageRound"]

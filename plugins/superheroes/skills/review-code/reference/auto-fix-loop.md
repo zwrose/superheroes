@@ -631,13 +631,8 @@ rulings) while a fixer is already dispatched on a batch holding that finding and
 the ruling would change that batch, and the driver refuses it with `ruling-attempt-pending`. Do this
 instead:
 
-1. Stop the fixer.
-2. Restore the worktree to the head the attempt started from: discard its uncommitted changes and
-   reset any commit it made.
-3. Run `withdraw --attempt <K> --reason "<why>"` (it checks the restore and refuses if the worktree
-   is dirty or `HEAD` moved).
-4. Run `rule` with the ruling file.
-5. Run `next`: a fresh fixer attempt is emitted over the reconciled batch, with the new guidance.
+Follow `skills/review-code/reference/round-driver.md` § Withdrawing a stopped fixer attempt
+(`withdraw`): stop the fixer, restore the head, then `withdraw`, `rule`, and `next`.
 
 A ruling whose findings are all outside the dispatched batch needs none of this: `rule` records it
 at once and it binds a later batch. A fixer that has already folded keeps its result; the ruling
