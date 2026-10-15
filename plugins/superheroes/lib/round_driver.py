@@ -4574,7 +4574,8 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         # No eligible blocker: an autonomous lift never starts a leg; an owner-named row stays.
         effective = _live_ruling_by_key(state)
         filtered = [row for row in filtered
-                    if row.get("lifted") != LIFT_REAL_CONSEQUENCE or _owner_named_row(row, effective)]
+                    if row.get("lifted") != LIFT_REAL_CONSEQUENCE or _owner_named_row(row, effective)
+                    or circuit_breaker.is_blocking(row.get("severity"))]
     if lift and reset_accumulator and batch_index == 0:
         filtered = _lift_into_fix_batch(state, filtered, owner_named_only=not filtered)
     if not filtered and not offered_nonempty:
@@ -4652,6 +4653,7 @@ def _guidance_named_rows(state, named):
         stored = ledger_by_key.get(key)
         rep = (source.get(session_contract.MERGED_INTO_FIELD)
                or (stored or {}).get(session_contract.MERGED_INTO_FIELD))
+        rep = _lineage_root(lineage, rep) if rep else None
         rep_row = _live_finding_by_key(state, rep) if rep else None
         if isinstance(rep_row, dict) and not rep_row.get(session_contract.MERGED_INTO_FIELD):
             key, source, stored = rep, rep_row, ledger_by_key.get(rep)  # the live representative
