@@ -4598,16 +4598,20 @@ def _resolve_ruled_batch(state, rows):
             continue
         queued = root in held  # already offered: the ruling is satisfied by that row, not restaged
         held.add(root)
+        own = set()
         if from_ledger and not queued:  # the ledger keeps its disposition; mark it as the one this ruling reopened
             state.setdefault("restagedAfterDispositionSeq", {})[_finding_identity_key(row)] = (
                 state.get("dispositionSeqCounter", 0))
-        else:  # a live/offered rewording carries the ruling: the closure's discharged members are reopened too
-            for member in _ruling_closure(state, ledger_by_key, key) - (set() if queued else {key}):
-                entry = ledger_by_key.get(member)
-                if (isinstance(entry, dict) and entry.get("disposition") in ("fixed", "refuted")
-                        and _disposition_is_current(entry)):
-                    state.setdefault("restagedAfterDispositionSeq", {})[member] = (
-                        state.get("dispositionSeqCounter", 0))
+            own = {key, _finding_identity_key(row)}
+        elif not queued:
+            own = {key}
+        # the closure's discharged members are reopened too, whichever way the ruled row was reached
+        for member in _ruling_closure(state, ledger_by_key, key) - own:
+            entry = ledger_by_key.get(member)
+            if (isinstance(entry, dict) and entry.get("disposition") in ("fixed", "refuted")
+                    and _disposition_is_current(entry)):
+                state.setdefault("restagedAfterDispositionSeq", {})[member] = (
+                    state.get("dispositionSeqCounter", 0))
         if not queued:
             added.append(row)
     added.sort(key=lambda row: circuit_breaker.severity_rank(row.get("severity")))
@@ -5631,7 +5635,8 @@ def _fold_audits(state, config, artifact, session_dir=None):
         reopened = state.get("restagedAfterDispositionSeq")
         if reopened:
             ledger_now, _lf = _disposition_ledger_by_key(state)
-            for member in _ruling_closure(state, ledger_now or {}, tid) - {tid}:
+            for member in (_ruling_closure(state, ledger_now or {}, tid) - {tid}
+                           - set(outcome.get("notDischarged") or [])):
                 reopened.pop(member, None)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
@@ -9895,9 +9900,15 @@ def _standing_rulings_for_orders(state):
     _rows, fault = _read_rulings_log(state)
     if fault is not None:
         return [], "%s: %s" % fault
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    effective = _live_ruling_by_key(state)
+    # One resolution point: a skip a later owner fix/guidance on a merged-in member supersedes (the
+    # same ``_row_decision`` the fix batch binds by) is not a standing ruling.
     return ([{"findingKey": key, "reason": entry.get("reason")}
-             for key, entry in _live_ruling_by_key(state).items()
-             if entry.get("ruling") == "out-of-scope" and entry.get("source") == "rule"], None)
+             for key, entry in effective.items()
+             if entry.get("ruling") == "out-of-scope" and entry.get("source") == "rule"
+             and (ledger_fault is not None
+                  or _row_decision(state, effective, ledger_by_key, key) is entry)], None)
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,

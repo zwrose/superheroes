@@ -906,7 +906,7 @@ def test_a_ruling_restages_the_latest_wording_of_a_lineage_not_the_first_lexical
     batch = RD._resolve_ruled_batch(state, [])
     assert [(RD._fix_batch_row_key(r), r["severity"], r["consequenceKind"]) for r in batch] == [
         ("Z", "Critical", "real")]
-    assert list(state["restagedAfterDispositionSeq"]) == ["Z"]
+    assert set(state["restagedAfterDispositionSeq"]) == {"Z", "A"}  # the discharged ancestor reopens too
 
 
 def test_a_ruling_awaiting_batch_resolution_keeps_the_real_consequence_on_a_same_key_restage():
@@ -1016,3 +1016,61 @@ def test_audit_discharge_of_the_ruled_rewording_supersedes_the_reopened_ancestor
         "results": [{"id": zid, "ruling": "discharged", "reason": "gone"}],
         "collectionManifest": {zid: auditor}})
     assert "A" not in (state.get("restagedAfterDispositionSeq") or {})
+
+
+def test_standing_rulings_omit_a_skip_a_merged_members_newer_guidance_supersedes():
+    """axis: MERGE — M merged into K, K skipped at seq 1, guidance on M at seq 2: the batch binds the
+    guidance and the orders' standing-rulings block no longer tells seats to drop K."""
+    state = _unit_round([_unit_finding("K", 1, "Important")])
+    state["findings"].append(_unit_finding("M", 2, "Important"))
+    state["findings"][-1][session_contract.MERGED_INTO_FIELD] = "K"
+    _log_ruling(state, "K", ruling="out-of-scope")
+    RD._writable_rulings_log(state)[-1]["source"] = "rule"
+    assert [r["findingKey"] for r in RD._standing_rulings_for_orders(state)[0]] == ["K"]
+    _log_ruling(state, "M", guidance="FIX")
+    assert RD._standing_rulings_for_orders(state) == ([], None)
+
+
+def test_late_guidance_on_a_ledger_ancestor_reopens_it_when_a_ledger_rewording_is_restaged():
+    """axis: RESTAGE — A and its rewording Z both archived fixed, guidance on A: Z is restaged and A
+    is marked reopened too, so a failed retry does not settle A as fixed."""
+    state = _unit_round([_unit_finding("Q", 1, "Minor")])
+    state["findings"] = []
+    for key, rnd in (("A", 1), ("Z", 3)):
+        RD._record_disposition(state, key, "fixed", rnd)
+        for entry in state[session_contract.DISPOSITION_LEDGER_KEY]:
+            if RD._finding_identity_key(entry) == key:
+                entry.update(**{session_contract.RAISED_ROUND_FIELD: rnd,
+                                session_contract.RAISED_SEQ_FIELD: 0})
+    state["findingLineage"] = {"Z": "A"}
+    state["sentUnderDecision"] = {"A": 0}
+    _log_ruling(state, "A", guidance="LATE")
+    batch = RD._resolve_ruled_batch(state, [])
+    assert [RD._fix_batch_row_key(r) for r in batch] == ["Z"]
+    assert set(state["restagedAfterDispositionSeq"]) == {"A", "Z"}
+
+
+def test_a_successful_audit_keeps_the_reopening_mark_of_a_member_that_still_fails_audit():
+    """axis: RESTAGE — A reopened, Z (lineage A) discharged while A is not-discharged in the same
+    fold: A's reopening mark survives."""
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "codex", "seatMap": {"hostFamily": "anthropic"}})
+    state["round"] = 2
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = "b" * 40
+    state["rounds"] = {"2": {"verifyResult": "pass"}}
+    z = {"title": "Z", "severity": "Important", "file": "f.py", "line": 1}
+    a = {"title": "A", "severity": "Important", "file": "f.py", "line": 2}
+    state["fixBatch"] = [z, a]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    zid, aid = RD._finding_key_of(z), RD._finding_key_of(a)
+    RD._set_findings(state, [z, a])
+    RD._record_disposition(state, aid, "fixed", 1)
+    state["findingLineage"] = {zid: aid}
+    state["restagedAfterDispositionSeq"] = {aid: state["dispositionSeqCounter"]}
+    state["_newSurface"] = True
+    auditor = state["_auditTargets"][0]["auditorVendor"]
+    RD._fold_audits(state, state["config"], {
+        "results": [{"id": zid, "ruling": "discharged", "reason": "gone"},
+                    {"id": aid, "ruling": "not-discharged", "reason": "still broken"}],
+        "collectionManifest": {zid: auditor, aid: auditor}})
+    assert aid in (state.get("restagedAfterDispositionSeq") or {})
