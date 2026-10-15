@@ -4666,8 +4666,8 @@ def _normalize_native_verdicts(verdicts):
 
 
 def _normalize_native_ruling_branch(branch):
-    optional = ("newIssues", "evidence", "auditorVendor")
-    return _omit_null_optional_fields(branch, optional)
+    contract, _reason = payload_contracts.payload_contract(payload_contracts.P_AUDITS)
+    return _omit_null_optional_fields(branch, contract.get("optional") or ())
 
 
 def _normalize_native_review_branch_for_parser(branch):

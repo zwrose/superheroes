@@ -626,6 +626,25 @@ Report it under "escalated" with the id and why.
 
 The loop's fixers commit without the builder's size count, so the builder recounts the non-test lines after each fixer round (the size rule's count, `lib/size_count.py count --base <build base>`) and reports a crossing of the size rule's lines as it would for its own commit. The rule is in [review-discipline § Size](../../../rubric/review-discipline.md#size).
 
+### A ruling that arrives during a fix
+
+When the owner or advisor rules on a finding (`rule`, see `round-driver.md` § Owner and advisor
+rulings) while a fixer is already dispatched on a batch holding that finding and has not folded,
+the ruling would change that batch, and the driver refuses it with `ruling-attempt-pending`. Do this
+instead:
+
+1. Stop the fixer.
+2. Restore the worktree to the head the attempt started from: discard its uncommitted changes and
+   reset any commit it made.
+3. Run `withdraw --attempt <K> --reason "<why>"` (it checks the restore and refuses if the worktree
+   is dirty or `HEAD` moved).
+4. Run `rule` with the ruling file.
+5. Run `next`: a fresh fixer attempt is emitted over the reconciled batch, with the new guidance.
+
+A ruling whose findings are all outside the dispatched batch needs none of this: `rule` records it
+at once and it binds a later batch. A fixer that has already folded keeps its result; the ruling
+binds the next fix.
+
 ---
 
 ## Verification Rules (for subagents)

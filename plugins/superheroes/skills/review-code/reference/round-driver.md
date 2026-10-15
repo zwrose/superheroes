@@ -35,6 +35,11 @@ artifact. **Prose-driven review** on the read-only path (`--review-only`) is a d
 lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
 is not governed by this loop contract.
 
+Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
+keys of the previous round's fix batch>]}` for a delta round, or `{"on": "wider", "why": "<the
+reason>"}` for a full panel (an unknown fix surface, or a confirmation re-arm). Round 1 records no
+`focus`. The review record lists every wider round with its reason.
+
 Single-vendor environments stay **on** the mandated path: the same driver, the same journal, and,
 when no live vendor sits outside the fixer's and the makers' families, a fix whose audit does not
 run (it is never counted as audited) with `independence: "degraded"` on the terminal certification
@@ -552,9 +557,13 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" rule --session-dir "$SESSION_DIR" \
 The ruling file is JSON: `_provenance` (same shape as owner gate artifacts) plus a non-empty
 `rulings` list. Each entry has `id` (finding id or key), `ruling` (`out-of-scope` or `guidance`),
 `reason`, and for out-of-scope a shaped `followUp`; for guidance a non-empty `guidance` string
-within the gate row byte cap. **Never append a ruling to a seat prompt** — the driver carries
-live guidance in the fixer order's gate block and excludes out-of-scope keys from the fix batch;
-the fix batch sha256 in the order commits to the batch file bytes.
+within the gate row byte cap. A guidance entry may also carry `allowsChange`, a JSON boolean
+(`true` lets the fix change behaviour its finding does not name; anything but a boolean is refused
+with `ruling-file-shape`, and so is `allowsChange` on an `out-of-scope` entry). `rule` copies it onto
+the `rulingsLog` row; owner-gate guidance never carries it. **Never append a ruling to a seat
+prompt** — the driver carries live guidance in the fixer order's gate block and excludes
+out-of-scope keys from the fix batch; the fix batch sha256 in the order commits to the batch file
+bytes.
 
 An entry may also carry `decidedBy`, the decision the ruling rests on:
 `{"kind": "canon" | "residual" | "sheet-answer", "ref": ...}` and nothing else. For `canon` and
@@ -569,8 +578,20 @@ A guidance ruling that supersedes a live out-of-scope ruling clears that disposi
 the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
 fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
 through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
-A ruling while a pending fixer attempt already has emitted orders is refused — a ruling waits until
-that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes unchanged):
+A guidance ruling at that point also brings in a finding the batch does not hold yet (marked
+`lifted: "guidance"`, below).
+
+A `guidance` ruling is accepted at every step that is not terminal. At a step that is not the fixer
+step it only records; the fix batch that holds the finding renders it when that batch is next
+planned. A ruling given while a fixer attempt has already emitted its orders is refused with
+`ruling-attempt-pending` only when one of its targets (or a finding reworded from one) is in the
+batch that attempt was given; the refusal's `detail` names the way out: stop the fixer, restore the
+worktree to the head the attempt started from, run `withdraw`, then `rule` again. A ruling file whose
+every target is outside the emitted batch is recorded at once — it reconciles the later slices of the
+round, a finding its guidance names (or a skip it reopens) that no slice holds joins those later
+slices, and the emitted batch and its file are never reshaped. A file that
+mixes the two is refused whole. A fixer attempt that has already folded keeps its result; the ruling
+binds the next fix. Refusal tokens (each leaves state bytes unchanged):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
@@ -578,7 +599,69 @@ that fixer attempt's result is recorded. Refusal tokens (each leaves state bytes
 `ruling-session-terminal`, `ruling-attempt-pending`,
 `disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
 
+### Withdrawing a stopped fixer attempt (`withdraw`)
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" withdraw --session-dir "$SESSION_DIR" \
+  --attempt <K> --reason "<why>" [--repo-root "$REPO_ROOT"]
+```
+
+`withdraw` closes the pending `dispatch-fixer` attempt the orchestrator has stopped, so a ruling can
+reach the fix. Stop the fixer first and put the worktree back to the head the attempt started from
+(discard its uncommitted changes, and reset any commit it made); then run `withdraw`, `rule`, and
+`next`. The driver checks, in this order, and refuses with a journaled token that leaves
+`loop-state.json` untouched: `withdraw-session-terminal` (the session is over), `withdraw-not-fixer`
+(no pending step, or it is not the fixer), `withdraw-attempt-mismatch` (`--attempt` is not the
+pending attempt), `withdraw-not-emitted` (the attempt emitted no orders, so a ruling can simply be
+recorded), `withdraw-reason-missing` (blank `--reason`).
+
+Then the restore check reads the worktree at `--repo-root` (default: the current directory):
+`withdraw-head-unanchored` when the attempt's orders carry no head to compare with,
+`withdraw-git-unavailable` when git cannot report, `withdraw-worktree-dirty` when a tracked file is
+changed or an untracked file sits outside the session directory, and `withdraw-head-moved` when
+`HEAD` is not the head the driver bound into the attempt's orders. A passing check is recorded as
+`"restoreCheck": "checked"`; a library call with no repo root and no git seam skips it and records
+`"not-checked"`.
+
+On success one commit records the attempt under `state.withdrawnFixerAttempts`
+(`round`, `attempt`, `reason`, `restoreCheck`), adds a `fixer-attempt-withdrawn` decision and journal
+row, and clears the pending step. The step stays at the fixer step with the fix batch and queue where
+they were, so the `rule` that follows reconciles the batch exactly as it does before any emission, and
+`next` emits a fresh attempt. That attempt number is always higher than any withdrawn attempt of the
+round; the withdrawn attempt's order files stay on disk. A withdrawn attempt can never fold:
+`submit`, `record-result` and `record-missing` addressed to it refuse `fixer-attempt-withdrawn`
+(journaled, state unchanged, checked before any other pending-step check), and `advance` folds only
+the current pending attempt, so a result left at a withdrawn attempt's path is not folded.
+
+### Findings that join a round's fix batch (the lift)
+
+When a round sends a fixer out, its first fix batch holds the blocking findings and then, after them
+in severity order, every other live finding that either states a real consequence (`consequenceKind:
+"real"`) and has no disposition, or is named by its effective `guidance` decision and is not fixed or
+refuted. Each such row carries `"lifted": "real-consequence"` or `"lifted": "guidance"`; the round
+records `liftedIntoFixBatch` (their keys) and a `fix-batch-lifted` decision. A finding that is fixed,
+refuted, merged, collapsed, or out of scope under its effective decision is never lifted, and a
+code-quality finding with no guidance decision is not. Lifted rows go through the same discharge
+filter and the same `fixBatchCap` slicing as every other row: when the cap is smaller than the
+offered set they wait in `_fixQueue` for a later slice of the same round. The lift never starts a
+fixer leg: a round with no blocking finding converges as before, and its remaining findings are
+settled at the end.
+
+A lifted product choice (`tradeoff: true`) whose effective decision is not the owner's word to fix
+it (a `fix` or `guidance` decision) never rides the fix batch on its own: it goes to
+`present-judgment` beside the round's blockers, as a blocking tradeoff does. A skip there is recorded
+as the finding's out-of-scope disposition but, the finding being no blocker, never joins
+`skippedBlockers`.
+
+A lifted Minor or Nit is audited like any other row of the batch, and its discharge is recorded, but
+it never drives the loop: a not-discharged non-blocking target is held out of the audit outcome's
+`notDischarged` (listed under `notDischargedNonBlocking`, with a `not-discharged-nonblocking`
+decision) and out of the stall breaker's audit round, so it neither starts another fix, nor parks
+the round at the cap, nor withholds certification.
+
 Owner-gate guidance is held to the same measure. A `fix-with-guidance` disposition whose guidance is over 2000 bytes (stripped UTF-8) is refused at submit with `gate-guidance-oversize`, nothing folds, and the owner resubmits shorter guidance; on the library `run_loop` path the fold parks `cannot-certify` with the same token. A fixer order never truncates guidance: a render that meets guidance over 2000 bytes refuses with `order-render-refused:gate-guidance-oversize`. The same holds for the 8000-byte aggregate: a submit whose fix batch would carry more guidance than one order holds refuses with `gate-guidance-aggregate-oversize` (the library fold parks with it), and the render refuses with `order-render-refused:gate-guidance-aggregate-oversize` (or `ruling-guidance-omitted` when the overflow reaches guidance from a ruling) rather than leave any guidance out.
+
+A finding has one effective decision: the latest of a `rule` ruling and an owner-gate decision (`skip`, `fix-with-guidance`, `fix-as-suggested`), ordered by one shared sequence; a gate entry written before that sequence existed counts as older than every sequenced decision. A later `fix-as-suggested` (or a `fix-with-guidance` with no guidance text) supersedes an earlier skip or guidance; a skip carries its `followUp`. The fixer order renders only that decision — guidance the owner later replaced is never shown beside the new guidance — and a tradeoff whose effective decision is a non-Critical skip is not put to the owner again. Only guidance carries: a skip (a `rule` out-of-scope ruling or an owner-gate skip) binds its own finding only — also inside a lineage made by carried guidance — so a reworded or different finding at its place is judged fresh — fixed, or left for the owner. When a later round raises a finding at the same file and line under different wording, it takes the guidance decision of the finding it rewords (`state.findingLineage`, with a `ruling-carried` entry in the decisions), provided exactly one finding is raised at that place in that round (across every staging of the round, the panel and a gap sweep alike — a carry a later staging of the round makes ambiguous is undone, `ruling-carry-revoked`, with the disposition it inherited), the earlier finding is not itself raised again in that round, and only one earlier decision sits there. Anything less certain carries nothing, and the reworded finding is judged fresh.
 
 ## Batch concurrency — an independent batch goes out together
 
@@ -694,7 +777,11 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   `missing-follow-up-item`, `missing-revisit-trigger` or `missing-class-closure`
   (`follow_up_shape_fault`, `lib/session_contract.py`).
 - Where each is recorded: `fixed` at the audits fold for every target the independent auditor
-  discharged; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
+  discharged — and only for a target whose auditor named no unnamed behaviour change (`unnamedChange`,
+  the behaviour the fix changes that its finding does not name), or whose finding's effective
+  decision is a `guidance` ruling with `allowsChange: true`; any other target is `not-discharged`
+  with the auditor's reason, recorded as `auditUnnamedChange` on the round with an
+  `audit-unnamed-change` decision, and returns to the fix list; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an
   owner-judgment `skip` and an audit-stall `accept-the-disclosed-risk`, both of which now accept an
   **optional `followUp` object**.
@@ -706,6 +793,13 @@ One ledger owns every finding's disposition — the loop seeds it and archives d
   findings are staged, so the end-of-loop settle never counts it a leftover. A finding with a current
   disposition, merged into another, or ruled out of scope is left as it is; an incomplete panel gives
   no credit.
+- An out-of-scope finding is offered to a fixer in at most one round while it stays out of scope
+  (one episode: the decision's sequence number, or its round for a legacy gate decision). The first
+  offer is recorded in `state.outOfScopeFixerRounds`; in a later round of the same episode the
+  finding is left out of the fix batch, its out-of-scope disposition is recorded again naming the
+  round it was offered in, and an `out-of-scope-fix-spent` decision says so. A later `guidance`
+  decision ends the episode. A batch emptied only this way settles through empty-batch convergence
+  and is not counted in `fixBatchExcludedByDischarge`.
 - Without a `followUp` the disposition is still recorded. A **malformed** `followUp`
   is refused at submit with `follow-up-malformed`, so the owner corrects it while still present.
 - A verifier drop, author-justified drop, or synthesis merge whose staged id is missing, maps to

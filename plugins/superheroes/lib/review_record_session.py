@@ -410,6 +410,16 @@ def _refused(rounds):
     return out
 
 
+def _wider_rounds(rounds):
+    """``[{round, why}]`` for every round whose recorded focus is wider, in round order."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        focus = rounds[n].get("focus") if isinstance(rounds[n], dict) else None
+        if isinstance(focus, dict) and focus.get("on") == "wider":
+            out.append({"round": int(n), "why": focus.get("why")})
+    return out
+
+
 def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     _check_extras(extras)
     if not os.path.isdir(session_dir):
@@ -452,6 +462,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     for family in sorted(baseline):
         if not any(isinstance(m, dict) and m.get("family") == family for m in makers):
             makers.append({"family": family, "source": "seat map maker list"})
+    wider = _wider_rounds(rounds)
     last = decisions[-1] if decisions else {}
     cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
     capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
@@ -461,7 +472,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
             "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
-                       "capKind": "ceiling" if ceiling else "rounds", "stoppedAtCap": capped},
+                       "capKind": "ceiling" if ceiling else "rounds", "stoppedAtCap": capped,
+                       **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef"),
             "goAheads": extras.get("goAheads", []), "checked": checked}
