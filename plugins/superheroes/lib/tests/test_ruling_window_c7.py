@@ -330,14 +330,13 @@ def test_a_restaged_row_keeps_the_guidance_link_to_its_ruling(tmp_path, keep_sev
 
 
 def test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next(tmp_path):
-    """axis: GENERATION GATE — a session saved at generation 4 (before `sentUnderDecision` and
+    """axis: GENERATION GATE — a session saved one generation before the current one (before `sentUnderDecision` and
     `restagedAfterDispositionSeq`) is refused at `next` with `session-from-earlier-version`.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element ix)
     """
     from test_session_pickup_and_upgrade_1721 import _assert_refusal, _light_folder
-    assert RD.SESSION_GENERATION == 5
-    session_dir = _light_folder(tmp_path, generation=4)
+    session_dir = _light_folder(tmp_path, generation=RD.SESSION_GENERATION - 1)
     out = RD.cmd_next(session_dir)
     _assert_refusal(out, already_restarted=False)
     assert out["reason"] == "session-from-earlier-version"

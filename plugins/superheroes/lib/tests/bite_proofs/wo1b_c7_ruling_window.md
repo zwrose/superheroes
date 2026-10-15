@@ -562,9 +562,9 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_restaged_r
 
 ## Element ix. a session from the generation before dispatch history is refused at `next`
 
-**Test.** `test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next`. **Axis:** a generation-4 fixture session is refused with `session-from-earlier-version` (no backfill of `sentUnderDecision`).
+**Test.** `test_ruling_window_c7.py::test_a_session_from_the_generation_before_dispatch_history_is_refused_at_next`. **Axis:** a fixture session one generation older than `SESSION_GENERATION` is refused with `session-from-earlier-version` (no backfill of `sentUnderDecision`).
 
-**Neutralization.** `SESSION_GENERATION = 5` replaced with `SESSION_GENERATION = 4` (and the test's literal `== 5` pin line set aside for the run, so the refusal assertion is the one that bites).
+**Neutralization.** `round_driver._generation_is_current` made to return `True` for the run (the upgrade gate waved through), so the refusal assertion is the one that bites; the test no longer restates the generation value.
 
 **Raw red** (exit 1):
 
@@ -585,7 +585,7 @@ FAILED plugins/superheroes/lib/tests/test_ruling_window_c7.py::test_a_session_fr
 1 failed, 34 deselected in 1.38s
 ```
 
-**Restore.** Inverse edits. `sha256(round_driver.py)` first 16 hex digits `0ee0e0606da6fe21` before and after.
+**Restore.** Inverse edits. `sha256(round_driver.py)` restored byte-for-byte from a backup copy.
 
 **Raw green** (exit 0):
 
