@@ -291,7 +291,38 @@ def _latest_ruling(rep, by_key, rulings):
     return max(found, key=lambda r: r["seq"] if _int(r.get("seq")) else -1) if found else {}
 
 
-def _decided_by(rep, outcome, by_key, rulings):
+def _superseded_by_gate(ruling, keys, state):
+    """True when an owner-gate fix decision on one of `keys` is newer than `ruling` (the driver's order: a
+    sequenced decision outranks an unsequenced one, then the later round, and a tie goes to the gate row)."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    rseq, rrnd = ruling.get("seq"), ruling.get("round")
+    for rnd_key, entry in rounds.items():
+        log = entry.get("judgmentDispositions") if isinstance(entry, dict) else None
+        for item in log if isinstance(log, list) else ():
+            if not isinstance(item, dict) or item.get("disposition") not in ("fix-as-suggested", "fix-with-guidance"):
+                continue
+            marker = item.get(sc.FINDING_KEY_FIELD)
+            if not (isinstance(marker, str) and marker in keys) and not (
+                    marker is None and item.get("file") is not None and item.get("line") is not None
+                    and sc.finding_identity_key(item) in keys):
+                continue
+            gseq = item.get("rulingSeq") if _int(item.get("rulingSeq")) else None
+            try:
+                grnd = int(rnd_key)
+            except (TypeError, ValueError):
+                grnd = None
+            if _int(gseq) and _int(rseq):
+                newer = gseq > rseq
+            elif _int(gseq) or _int(rseq):
+                newer = _int(gseq)
+            else:
+                newer = grnd is not None and _int(rrnd) and grnd >= rrnd
+            if newer:
+                return True
+    return False
+
+
+def _decided_by(rep, outcome, by_key, rulings, state=None):
     """The cited decision an outcome rests on: the ledger row's own, else the newest ruling's when that
     ruling postdates the finding's latest raise. The writer re-checks it; this only carries it."""
     if outcome is None:
@@ -303,6 +334,9 @@ def _decided_by(rep, outcome, by_key, rulings):
         return None
     ruling = _latest_ruling(rep, by_key, rulings)
     decided = ruling.get("decidedBy")
+    keys = {sc.finding_identity_key(r) for r in _group(rep, by_key)} | {rep.get("id")}
+    if isinstance(state, dict) and _superseded_by_gate(ruling, keys, state):
+        return None  # a newer owner decision to fix supersedes the ruling: it is not the finding's decision
     raised = [r.get(sc.RAISED_ROUND_FIELD) for r in _group(rep, by_key)]
     # the rulings log and the ledger keep separate counters, so recency is read from the rounds
     # axis: a ruling older than the finding's latest raise decides nothing about it — see bite-proof record c7l3_wo2_session_writer
@@ -373,7 +407,7 @@ def _findings(state):
             reason += f" (merged into {_id(rep, sc.finding_identity_key(rep))})"
         dim = row.get("dimension")
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
-                    "decidedBy": _decided_by(rep, outcome, by_key, rulings) if rep is not None else None,
+                    "decidedBy": _decided_by(rep, outcome, by_key, rulings, state) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail"))})
@@ -475,7 +509,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
                        "capKind": "ceiling" if ceiling else "rounds", "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
-            "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef"),
+            "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "checked": checked}
 
 

@@ -3,6 +3,7 @@ cleanly, and the writer re-checks every cited decision when it writes."""
 import json
 
 import pytest
+import signal
 
 import canon
 import finding_outcomes as FO
@@ -133,6 +134,20 @@ def test_backticks_and_fences_in_a_finding_survive_the_parts(tmp_path):
     body = "```json\n{\"a\": 1}\n```\n" + "`" * 30 + "\n" + ("y" * 70000) + "```\n</details>"
     send(tmp_path, fake, findings=[finding("f-1", body=body)])
     assert parts_of(fake)
+    assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == body
+
+
+def test_a_body_whose_fence_overhead_exceeds_the_reserve_still_splits(tmp_path):
+    # axis: part sizing; a long backtick run growing the fence past the piece so the split never advances
+    fake = Fake()
+    body = "`" * 40000 + "x" * 70000
+    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("the split did not terminate")))
+    signal.alarm(60)  # bounded: a split that never advances fails instead of hanging
+    try:
+        send(tmp_path, fake, findings=[finding("f-1", body=body)])
+    finally:
+        signal.alarm(0)
+    assert parts_of(fake) and all(len(c["body"]) <= rr.MAX_BODY_CHARS for c in fake.comments)
     assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == body
 
 

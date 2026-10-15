@@ -214,6 +214,27 @@ def test_edge_5_a_ruling_older_than_the_findings_latest_raise_is_not_recovered(t
     assert _found(late)["decidedBy"] is None  # the member's re-raise is the group's latest raise
 
 
+def _gate(disposition="fix-as-suggested", seq=2, **over):
+    return {"disposition": disposition, "findingKey": KEY, "rulingSeq": seq, **over}
+
+
+def test_a_newer_owner_decision_to_fix_supersedes_the_ruling_it_follows(tmp_path):
+    rounds = {"1": {"judgmentDispositions": [_gate(seq=2)]}}
+    s = Session(tmp_path, dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling(rnd=1, seq=1)], rounds=rounds)
+    # bites on: a superseded skip's citation restored, so an unfixed finding is promoted to a ruling
+    assert _found(s.seat("code-reviewer").save())["decidedBy"] is None
+    (tmp_path / "older").mkdir()
+    older = Session(tmp_path / "older", dispositionLedger=[ledger_row(**OOS)], rulingsLog=[_ruling(rnd=1, seq=3)],
+                    rounds=rounds)
+    assert _found(older.seat("code-reviewer").save())["decidedBy"] == CANON
+
+
+def test_the_session_base_ref_is_the_default_when_the_extra_is_absent(tmp_path):
+    session = Session(tmp_path, config={"maxRounds": 7, "baseRef": "abc123"}).seat("code-reviewer").save()
+    assert rs.account_from_session(session, extras())["baseRef"] == "abc123"
+    assert rs.account_from_session(session, extras(baseRef="origin/main"))["baseRef"] == "origin/main"
+
+
 @pytest.mark.parametrize("log", ["x", [5, None], [{"findingKey": ["x"], "decidedBy": CANON}],
                                  [_ruling(decided_by=None)], [_ruling(round=None)], [_ruling(round=True)],
                                  [_ruling(decided_by=STANDING)]])

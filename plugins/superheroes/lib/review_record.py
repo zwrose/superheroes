@@ -1156,7 +1156,9 @@ def _part_bodies(text):
             body = _part_body(piece)
             if len(body) <= MAX_BODY_CHARS:
                 break
-            size -= len(body) - MAX_BODY_CHARS
+            # the fence grows with the piece's longest backtick run, so the overflow can exceed the piece:
+            # never step below half, so the size stays positive and the loop advances
+            size = max(size - (len(body) - MAX_BODY_CHARS), size // 2, 1)
         bodies.append(body)
         at += len(piece)
     return bodies

@@ -2179,27 +2179,8 @@ def _set_terminal(state, verdict, *, cap=False):
 def _decision_sources(state):
     """The `sources` dict `finding_outcomes.on_record` reads: the Canon text and the ratified
     residuals. A source that cannot be read is left out — an unresolvable decision is not on record."""
-    sources = {}
     config = state.get("config") if isinstance(state.get("config"), dict) else {}
-    root = config.get("repoRoot")
-    try:
-        import canon
-        # Both copies, so a supersession on the default branch retires an entry the working copy
-        # still holds; a copy that cannot be read refuses and leaves Canon out.
-        _, working, default_text = canon._locate(root)
-        sources["canonText"] = working + "\n" + default_text
-    except Exception:  # noqa: BLE001 — fail closed: no Canon text means no Canon decision
-        sources.pop("canonText", None)
-    try:
-        text, provenance, failure = round_orders.resolve_order_residuals(root, config.get("baseRef"))
-        if not failure and isinstance(text, str) and text.strip():
-            sources["residualText"] = text
-            based = isinstance(provenance, str) and "(base-pinned)" in provenance
-            sources["residualSource"] = "base" if based else "calibration store"
-    except Exception:  # noqa: BLE001 — fail closed: no residual text means no residual decision
-        sources.pop("residualText", None)
-        sources.pop("residualSource", None)
-    return sources
+    return finding_outcomes.decision_sources(config.get("repoRoot"), config.get("baseRef"))
 
 
 def _compile_drop_recorded(state, drop):
