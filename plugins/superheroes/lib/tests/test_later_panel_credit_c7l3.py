@@ -351,3 +351,43 @@ def test_staging_after_the_credit_step_records_one_ruling_carried_for_the_reword
     carried = [d for d in state["decisions"] if d["kind"] == "ruling-carried"]
     assert len(carried) == 1, carried
     assert state["findingLineage"] == {_key("Bug reworded"): _key()}
+
+
+def _dropped_reword_case():
+    """A guided original is fixed; the panel rewords it at its location with no consequence, so
+    compilation drops the reword and only the raw report carries it."""
+    state, _ = _reword_linked_to_a_decided_original()
+    raw = {k: v for k, v in _finding("Bug reworded").items() if k != "consequence"}
+    return state, [], [raw], _key()
+
+
+def _merged_member_reraise_case():
+    """Twin is merged into Bug; Twin holds a lineage link to its reword; the fixer fixed Bug; the
+    panel raises that reword. The representative's group is raised."""
+    state = _round_one_state(_finding(), _finding("Twin", 2))
+    RD._record_merged_into(state, _key("Twin", 2), _key())
+    state["findingLineage"] = {_key("Twin reworded", 2): _key("Twin", 2)}
+    _fix(state, batch=[f for f in state["findings"] if f["title"] == "Bug"])
+    compiled, _ = RD.mechanical_compile([_finding("Twin reworded", 2)], TRD.DIFF)
+    return state, compiled, [], _key()
+
+
+def _lineage_member_of_representative_case():
+    """Twin is merged into Bug; Bug reworded is linked to Bug and fixed; the panel raises Twin, whose
+    representative's lineage group holds the credited key."""
+    state = _round_one_state(_finding(), _finding("Bug reworded", 1), _finding("Twin", 2))
+    RD._record_merged_into(state, _key("Twin", 2), _key())
+    state["findingLineage"] = {_key("Bug reworded"): _key()}
+    _fix(state, batch=[f for f in state["findings"] if f["title"] == "Bug reworded"])
+    compiled, _ = RD.mechanical_compile([_finding("Twin", 2)], TRD.DIFF)
+    return state, compiled, [], _key("Bug reworded")
+
+
+@pytest.mark.parametrize("case", [_dropped_reword_case, _merged_member_reraise_case,
+                                  _lineage_member_of_representative_case])
+def test_the_raised_closure_withholds_credit_from_every_key_the_panel_raised_again(case):
+    """Raised keys grow, to a fixed point, by each key's merged-into representative and lineage group;
+    a ledger entry in that closure is never credited by silence."""
+    state, compiled, raw, credited_key = case()
+    RD._credit_fixes_not_reraised(state, compiled, raw)
+    assert not _credited(state, credited_key)

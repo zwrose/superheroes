@@ -3139,28 +3139,36 @@ def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
     # raised it again. The credit step never writes lineage or decisions; staging owns them.
     ledger_rows, _ = session_contract.read_disposition_ledger(state)
     scratch = copy.deepcopy(state)
-    carry = _LineageCarry(scratch, compiled, ledger_rows)
+    panel_rows = [f for f in compiled if isinstance(f, dict)] if isinstance(compiled, list) else []
+    panel_rows += [f for f in panel_raw if isinstance(f, dict)] if isinstance(panel_raw, (list, tuple)) else []
+    carry = _LineageCarry(scratch, panel_rows, ledger_rows)
     carry.revoke_ambiguous(scratch)
-    for finding in compiled if isinstance(compiled, list) else ():
-        key = _finding_identity_key(finding) if isinstance(finding, dict) else None
+    for finding in panel_rows:
+        key = _finding_identity_key(finding)
         if key:
             carry.apply(scratch, finding, key)
-    raised_now = _panel_raised_keys(compiled) | _panel_raised_keys(panel_raw)
-    reraised_groups = set()
-    for raised_key in raised_now:
-        reraised_groups.update(_lineage_group(scratch, raised_key))
+    # The raised closure: every key this panel raised (compiled or compile-dropped), grown until
+    # nothing is new by each key's merged-into representative and every member of its lineage group.
+    raised_now = _panel_raised_keys(panel_rows)
+    ledger_reps = {}
     for entry_key, entry in ledger_by_key.items():
-        if entry_key in raised_now:
-            rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
-            reraised_groups.add(_finding_identity_key(rep) if isinstance(rep, dict) else entry_key)
-            reraised_groups.update(_lineage_group(scratch, entry_key))
-    raised_now = raised_now | reraised_groups
+        rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
+        ledger_reps[entry_key] = _finding_identity_key(rep) if isinstance(rep, dict) else entry_key
+    pending = set(raised_now)
+    while pending:
+        key = pending.pop()
+        grown = set(_lineage_group(scratch, key))
+        if key in ledger_reps:
+            grown.add(ledger_reps[key])
+        for new_key in grown - raised_now:
+            raised_now.add(new_key)
+            pending.add(new_key)
     reported = _rounds_with_fix_report(state)
     if not reported:
         return
     receipt = {"kind": FULL_PANEL_NOT_RERAISED, "panelRound": state["round"]}
     for key, entry in list(ledger_by_key.items()):
-        if (not isinstance(entry, dict) or key in raised_now
+        if (not isinstance(entry, dict) or key in raised_now or ledger_reps.get(key) in raised_now
                 or entry.get(session_contract.MERGED_INTO_FIELD)
                 or entry.get("disposition") == "out-of-scope"
                 or _disposition_is_current(entry)):
