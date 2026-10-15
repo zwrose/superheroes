@@ -1284,3 +1284,43 @@ def test_merge_clears_the_provisional_carry_stamp():
              "findingLineageRound": {"B": 2}}
     RD._record_merged_into(state, "B", "R")
     assert state["findingLineage"]["B"] == "R" and "B" not in state["findingLineageRound"]
+
+
+def test_guidance_on_a_merged_member_queues_the_live_representative_not_an_archived_root():
+    """axis: B merged into A, then re-raised with C merged into B — guidance on C reaches live B."""
+    state = RD.new_state()
+    RD._record_merged_into(state, "B", "A")
+    RD._set_findings(state, [_unit_finding("B", 2, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "C", "B")
+    _unit_rulings(state, dict(findingKey="C", ruling="guidance", guidance="tidy it"))
+    rows = RD._guidance_named_rows(state, [("C", _unit_finding("C", 3, "Minor", kind="code-quality"))])
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["B"]
+
+
+def test_guidance_on_a_chain_merged_member_still_reaches_the_live_representative():
+    """axis: M merged into N and N into R (A->B->C chain) — guidance on M queues the live R."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("R", 2, "Minor", kind="code-quality")])
+    RD._record_merged_into(state, "N", "R")
+    RD._record_merged_into(state, "M", "N")
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    rows = RD._guidance_named_rows(state, [("M", _unit_finding("M", 3, "Minor", kind="code-quality"))])
+    assert [RD._fix_batch_row_key(row) for row in rows] == ["R"]
+
+
+def test_a_provisional_carry_stays_revocable_after_a_synthesis_merge():
+    """axis: B provisionally takes A's guidance, synthesis merges B into C — the inferred A link
+    keeps its stamp and a later crowded location revokes it, leaving the B->C merge."""
+    state = RD.new_state()
+    state["round"] = 2
+    _unit_rulings(state, dict(findingKey="A", ruling="guidance", guidance="use the helper"))
+    state["findingLineage"] = {"B": "A"}
+    state["findingLineageRound"] = {"B": 2}
+    RD._record_merged_into(state, "B", "C")
+    assert state["findingLineageRound"] == {"A": 2} and state["findingLineage"]["A"] == "C"
+    carry = RD._LineageCarry(state, [], [])
+    carry.raised = {"B": {"file": "a.py", "line": 1}, "D": {"file": "a.py", "line": 1}}
+    carry.decided = {"A": (0, {"file": "a.py", "line": 1})}
+    carry.at_location = {("a.py", 1): 2}
+    carry.revoke_ambiguous(state)
+    assert "A" not in state["findingLineage"] and state["findingLineage"]["B"] == "C"

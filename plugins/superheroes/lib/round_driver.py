@@ -1715,14 +1715,18 @@ class _LineageCarry:
         if not lineage or not isinstance(rounds, dict):
             return
         for key in sorted(lineage):
-            if rounds.get(key) != self.round_no or key not in self.raised:
+            if rounds.get(key) != self.round_no:
                 continue
             root = _lineage_root(lineage, key)
-            group = {root} | {k for k in lineage if k in rounds and _lineage_root(lineage, k) == root}
-            location = self.location_of(self.raised[key])
-            if (location is not None and self.at_location.get(location) == 1
-                    and not ((group - {key}) & self.compiled_keys)):
-                continue
+            if key in self.raised:
+                group = {root} | {k for k in lineage if k in rounds and _lineage_root(lineage, k) == root}
+                location = self.location_of(self.raised[key])
+                if (location is not None and self.at_location.get(location) == 1
+                        and not ((group - {key}) & self.compiled_keys)):
+                    continue
+            elif ((location := self.location_of(self.decided.get(key, (0, {}))[1])) is None
+                    or self.at_location.get(location, 0) <= 1):
+                continue  # a link a merge moved onto the old root: only a crowded location revokes it
             state["findingLineage"].pop(key, None)
             rounds.pop(key, None)
             lineage = _lineage_map(state)
@@ -2172,11 +2176,14 @@ def _record_merged_into(state, key, into_key):
         lineage = state.setdefault("findingLineage", {})
         prior = lineage.get(key)
         lineage[key] = into_key
-        (state.get("findingLineageRound") or {}).pop(key, None)  # a merge is not a provisional carry
+        stamps = state.get("findingLineageRound") or {}
+        stamp = stamps.pop(key, None)  # a merge is not a provisional carry
         if _lineage_root(lineage, key) == key:
             lineage.pop(into_key)
         if prior and (r := _lineage_root(lineage, prior)) != _lineage_root(lineage, into_key):
             lineage[r] = into_key
+            if stamp is not None:
+                stamps.setdefault(r, stamp)  # the inferred link to the old root stays revocable
 
 
 # ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
@@ -4653,10 +4660,18 @@ def _guidance_named_rows(state, named):
         stored = ledger_by_key.get(key)
         rep = (source.get(session_contract.MERGED_INTO_FIELD)
                or (stored or {}).get(session_contract.MERGED_INTO_FIELD))
-        rep = _lineage_root(lineage, rep) if rep else None
+        for _ in range(len(ledger_by_key) + len(lineage) + 1):  # follow mergedInto to the live row
+            nxt = rep and ((_live_finding_by_key(state, rep) or ledger_by_key.get(rep) or {})
+                           .get(session_contract.MERGED_INTO_FIELD))
+            if not nxt or nxt == rep:
+                break
+            rep = nxt
         rep_row = _live_finding_by_key(state, rep) if rep else None
         if isinstance(rep_row, dict) and not rep_row.get(session_contract.MERGED_INTO_FIELD):
-            key, source, stored = rep, rep_row, ledger_by_key.get(rep)  # the live representative
+            # the live representative; a stale merge mark on its ledger row (merged, then re-raised) is dropped
+            key, source = rep, rep_row
+            stored = {k: v for k, v in (ledger_by_key.get(rep) or {}).items()
+                      if k != session_contract.MERGED_INTO_FIELD}
         if _lift_marker_for(source, stored if isinstance(stored, dict) else source,
                             effective.get(key)) is None:
             continue
