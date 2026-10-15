@@ -501,7 +501,11 @@ def test_compact_detective_transcript_injects_charter_recovery(tmp_path, monkeyp
     assert "detective" in out
 
 
-def test_compact_no_charter_transcript_omits_charter_recovery(tmp_path, monkeypatch):
+_SID = "sess-abc_123"
+
+
+def test_compact_no_charter_transcript_emits_generic_recovery_not_charter_recovery(
+        tmp_path, monkeypatch):
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
     path = tmp_path / "transcript.jsonl"
@@ -512,7 +516,128 @@ def test_compact_no_charter_transcript_omits_charter_recovery(tmp_path, monkeypa
         str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
     out_default = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude")
     assert "### Charter recovery" not in out_compact
-    assert out_compact == out_default
+    assert "### Compaction recovery" in out_compact
+    import compaction_directive
+    assert compaction_directive.RECAP_INSTRUCTION[1:] in out_compact
+    assert "### Compaction recovery" not in out_default
+
+
+@pytest.mark.parametrize("source", ["startup", "resume", None])
+def test_generic_recovery_only_on_compact(tmp_path, monkeypatch, source):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", source=source,
+                      session_id=_SID)
+    assert "### Compaction recovery" not in out
+
+
+@pytest.fixture
+def _cfg(tmp_path, monkeypatch):
+    """Isolated config dir; returns this session's checkpoint notes path."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import compaction_directive
+    return compaction_directive.checkpoint_path(_SID)
+
+
+@pytest.mark.parametrize("command", ["architect-discovery", "discovery"])
+def test_compact_discovery_transcript_points_at_architect_discovery_skill(
+        tmp_path, monkeypatch, command):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter(command)])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
+    skill = os.path.join(_PLUGIN_ROOT, "skills", "architect-discovery", "SKILL.md")
+    assert "### Charter recovery" in out
+    assert skill in out
+    assert os.path.isfile(skill)
+    assert os.path.join(_PLUGIN_ROOT, "skills", "discovery", "SKILL.md") not in out
+
+
+def test_charter_recovery_names_checkpoint_file_when_session_id_valid(tmp_path, monkeypatch, _cfg):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact",
+                      session_id=_SID)
+    recovery = out.split("### Charter recovery", 1)[1].split("\n### ", 1)[0]
+    assert _cfg in recovery
+
+
+def test_charter_recovery_omits_checkpoint_file_when_session_id_invalid(tmp_path, monkeypatch, _cfg):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact",
+                      session_id="../x")
+    recovery = out.split("### Charter recovery", 1)[1].split("\n### ", 1)[0]
+    assert "checkpoint" not in recovery.lower()
+    assert "### Checkpoint file" not in out
+
+
+def test_generic_recovery_names_checkpoint_file_when_session_id_valid(tmp_path, monkeypatch, _cfg):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", source="compact",
+                      session_id=_SID)
+    recovery = out.split("### Compaction recovery", 1)[1].split("\n### ", 1)[0]
+    assert _cfg in recovery
+    assert "re-read it" in recovery
+    assert "recap" in recovery
+
+
+def test_generic_recovery_without_session_id_still_asks_for_recap(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", source="compact")
+    recovery = out.split("### Compaction recovery", 1)[1].split("\n### ", 1)[0]
+    assert "recap" in recovery
+    assert "checkpoint" not in recovery.lower()
+
+
+def test_checkpoint_file_record_follows_resolved_roots(tmp_path, monkeypatch, _cfg):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", session_id=_SID)
+    assert ("### Checkpoint file\nThis session's checkpoint notes file: %s "
+            "(if it exists, it holds this session's checkpoint notes; "
+            "/superheroes:checkpoint saves it there — the mod does, where present, "
+            "otherwise the skill writes it)" % _cfg) in out
+    assert (out.index("### Resolved plugin roots") < out.index("### Checkpoint file")
+            < out.index("### Covenant"))
+
+
+@pytest.mark.parametrize("bad", [None, "", "../x", "a" * 129])
+def test_checkpoint_file_record_absent_for_invalid_session_id(tmp_path, _cfg, bad):
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", session_id=bad)
+    assert "### Checkpoint file" not in out
+
+
+def test_checkpoint_file_record_absent_when_config_dir_unresolvable(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", "relative/home")        # no override, HOME not absolute
+    out = sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", session_id=_SID)
+    assert "### Checkpoint file" not in out
+
+
+def test_checkpoint_file_record_respects_char_budget(tmp_path, monkeypatch, _cfg):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    monkeypatch.setattr(sc, "covenant", lambda cwd, plugin_root: "C" * 6000)
+    out = sc.assemble(str(tmp_path), None, "/p", "claude", char_budget=1000, session_id=_SID)
+    assert "### Checkpoint file" in out        # the small record sits ahead of the oversize covenant
+    assert "truncated" in out
+    assert len(out) <= 1000 + 250
+
+
+def test_assemble_old_positional_callers_still_work(tmp_path):
+    assert isinstance(
+        sc.assemble(str(tmp_path), None, _PLUGIN_ROOT, "claude", 9000, "compact"), str)
 
 
 def test_compact_subagent_transcript_omits_charter_recovery(tmp_path, monkeypatch):
@@ -549,3 +674,39 @@ def test_assemble_without_source_omits_charter_recovery(tmp_path, monkeypatch):
 def test_charter_recovery_never_raises_on_garbage_transcript():
     assert sc.charter_recovery(None, "compact", _PLUGIN_ROOT) == ""
     assert sc.charter_recovery("/nonexistent/transcript.jsonl", "compact", _PLUGIN_ROOT) == ""
+
+
+# ------------------------------------- a relative CLAUDE_CONFIG_DIR resolves against assemble's cwd
+def test_relative_override_checkpoint_file_resolves_against_assemble_cwd(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    session = tmp_path / "session"
+    elsewhere = tmp_path / "elsewhere"
+    session.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "cfg")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    want = os.path.join(str(session), "cfg", "superheroes", "checkpoints", _SID + ".md")
+
+    out = sc.assemble(str(session), None, _PLUGIN_ROOT, "claude", session_id=_SID)
+    assert "### Checkpoint file\nThis session's checkpoint notes file: %s " % want in out
+
+    compact = sc.assemble(str(session), None, _PLUGIN_ROOT, "claude", source="compact",
+                          session_id=_SID)
+    recovery = compact.split("### Compaction recovery", 1)[1].split("\n### ", 1)[0]
+    assert want in recovery
+
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    charter = sc.assemble(str(session), str(path), _PLUGIN_ROOT, "claude", source="compact",
+                          session_id=_SID)
+    assert want in charter.split("### Charter recovery", 1)[1].split("\n### ", 1)[0]
+
+
+def test_absolute_override_checkpoint_file_unaffected_by_assemble_cwd(tmp_path, _cfg):
+    session = tmp_path / "session"
+    session.mkdir()
+    out = sc.assemble(str(session), None, _PLUGIN_ROOT, "claude", session_id=_SID)
+    assert "This session's checkpoint notes file: %s " % _cfg in out
+
