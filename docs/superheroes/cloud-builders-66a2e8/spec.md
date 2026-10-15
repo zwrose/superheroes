@@ -381,7 +381,9 @@ is the platform's own wording and is drawn as it appears. (source: board · 6 Cl
   form: one tap from the owner when the builder's session can archive itself, otherwise a hand
   archive of that session, for now (owner's ruling "126 a", collector item 126). Its source moves
   from Canon 2026-10-10-ca3e7e0d-11 to 2026-10-15-dcc2b5e5-1, which supersedes it. Sections
-  touched: Assumptions, Amendments.
+  touched: Constraints, Amendments. This is the eighth amendment since approval: the
+  consolidation re-read is outstanding and owed by the advisor, and the owner's re-stamp of the
+  consolidated body is outstanding and owed by the owner (collector item 127).
 
 ## Coverage
 
