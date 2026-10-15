@@ -4479,14 +4479,8 @@ def _lifted_fix_rows(state, rows):
     lineage = _lineage_map(state)
     held = _fix_row_roots(state, rows)
     effective = _live_ruling_by_key(state)
-    live_keys = {_fix_batch_row_key(f) for f in findings if isinstance(f, dict)}
-    # A guidance-named finding that left the live list (scoped synthesis archives it to the ledger)
-    # still rides the batch; guidance inherited through the lineage never lifts an archived representative.
-    archived = [ledger_by_key[k] for k, d in effective.items()
-                if isinstance(d, dict) and d.get("ruling") == "guidance" and d.get("findingKey") == k
-                and k not in live_keys and isinstance(ledger_by_key.get(k), dict)]
     lifted = []
-    for finding in list(findings) + archived:
+    for finding in findings:
         if not isinstance(finding, dict) or finding.get("summaryEntry"):
             continue
         key = _fix_batch_row_key(finding)
@@ -7873,7 +7867,8 @@ def _withdraw_restore_check(session_dir, state, rnd, attempt, repo_root, git):
                 "the orders of fixer attempt %s carry no head the worktree can be compared "
                 "with" % attempt, WITHDRAW_RESTORE_NOT_CHECKED)
     head = run_git(root, "rev-parse", "HEAD")
-    status = run_git(root, "status", "--porcelain", "--untracked-files=all")
+    status = run_git(root, "status", "--porcelain", "--untracked-files=all",
+                     "--ignore-submodules=none")
     if not head or status is None:
         return (WITHDRAW_GIT_UNAVAILABLE,
                 "git could not report the worktree state at %r" % root,

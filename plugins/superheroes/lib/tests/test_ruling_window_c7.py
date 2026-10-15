@@ -497,6 +497,26 @@ def test_library_withdraw_without_a_repo_records_not_checked(tmp_path, keep_seve
     assert _state(session_dir)["withdrawnFixerAttempts"][0]["restoreCheck"] == "not-checked"
 
 
+@pytest.mark.parametrize("ignore", ["dirty", "all"])
+def test_withdraw_sees_submodule_edits_whatever_the_ignore_setting(tmp_path, keep_severity, ignore):
+    """axis: the restore check reports a tracked edit inside a submodule even when
+    `submodule.<name>.ignore` would hide it from a plain status."""
+    session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-sub-" + ignore)
+    k = _state(session_dir)["pending"]["attempt"]
+    sub, _sub_head = _throwaway_repo(tmp_path, "subsrc")
+    repo, head = _throwaway_repo(tmp_path)
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "vendored")
+    _git(repo, "config", "-f", ".gitmodules", "submodule.vendored.ignore", ignore)
+    _git(repo, "config", "submodule.vendored.ignore", ignore)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "add submodule")
+    head = _git(repo, "rev-parse", "HEAD")
+    _bind_anchor_head(session_dir, head, repo)
+    (repo / "vendored" / "a.txt").write_text("edited by the stopped fixer\n", encoding="utf-8")
+    out = RD.cmd_withdraw(session_dir, k, "owner ruled", repo_root=str(repo))
+    assert out.get("ok") is False and out.get("reason") == "withdraw-worktree-dirty", out
+
+
 def test_withdraw_verb_runs_through_the_command_line(tmp_path, keep_severity, capsys):
     session_dir, _g, _h, _f, _g2 = _two_important(tmp_path, "c7-cli")
     k = _state(session_dir)["pending"]["attempt"]
@@ -928,9 +948,9 @@ def test_a_merged_member_is_never_lifted_by_guidance():
     assert RD._lift_marker_for({merged: "rep", "consequenceKind": "real"}, {}, None) is None
 
 
-def test_guidance_on_an_archived_finding_still_rides_the_next_batch(tmp_path, keep_severity):
-    """axis: guidance on an unresolved Minor that scoped synthesis archived to the ledger is
-    recovered when the next batch is composed for another blocker."""
+def test_guidance_on_an_archived_finding_never_rides_the_next_batch(tmp_path, keep_severity):
+    """axis: guidance never reaches an archived row directly (advisor ruling, issue #1868): a Minor
+    that scoped synthesis archived to the ledger is not lifted into the next batch."""
     session_dir, _g, _h = _minors_session(tmp_path, "c7-archived")
     state = _state(session_dir)
     quality = _finding_key_by_title(state, "quality minor")
@@ -941,8 +961,18 @@ def test_guidance_on_an_archived_finding_still_rides_the_next_batch(tmp_path, ke
     state = _state(session_dir)
     RD._set_findings(state, [blocker])
     assert RD._live_finding_by_key(state, quality) is None
-    lifted = RD._lifted_fix_rows(state, [blocker])
-    assert [(_key(row), row["lifted"]) for row in lifted] == [(quality, RD.LIFT_GUIDANCE)]
+    assert RD._lifted_fix_rows(state, [blocker]) == []
+
+
+def test_replacement_guidance_on_an_archived_member_dispatches_nothing():
+    """axis: A merged into B, both archived, then A's merge mark dropped by a replacing ruling while
+    the lineage A->B survives — the archived member is never lifted or sent to a fixer."""
+    state = _archived_member_state()
+    assert state["findingLineage"]["A"] == "B"
+    assert {_key(r) for r in RD._lifted_fix_rows(state, [])} <= {"Z"}
+    RD._after_findings_settled(state, state["config"])
+    assert "A" not in _unit_batch(state) and "B" not in _unit_batch(state)
+    assert "A" not in (state.get("liftedAtSeq") or {})
 
 
 def test_stall_recovery_batch_takes_no_lifted_rows_and_merged_members_never_lift(tmp_path, keep_severity):
