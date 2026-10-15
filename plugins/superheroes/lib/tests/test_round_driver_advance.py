@@ -698,8 +698,8 @@ def test_record_result_refuses_a_seat_landed_for_another_phase(tmp_path, adapter
     d = _session(tmp_path)
     _land(d, "code-reviewer")
     assert RD.cmd_record_result(d, "code-reviewer")["ok"] is True     # A/B
-    _land(d, "test-reviewer", phase=RD.P_AUDITS)
-    out = RD.cmd_record_result(d, "test-reviewer")
+    _land(d, "test-role", phase=RD.P_AUDITS)
+    out = RD.cmd_record_result(d, "test-role")
     assert out["ok"] is False and out["reason"] == "phase-mismatch"
 
 
@@ -707,8 +707,8 @@ def test_record_result_refuses_an_attempt_that_is_not_the_pending_one(tmp_path, 
     d = _session(tmp_path)
     _land(d, "code-reviewer")
     assert RD.cmd_record_result(d, "code-reviewer", attempt=0)["ok"] is True   # A/B
-    _land(d, "test-reviewer")
-    out = RD.cmd_record_result(d, "test-reviewer", attempt=3)
+    _land(d, "test-role")
+    out = RD.cmd_record_result(d, "test-role", attempt=3)
     assert out["ok"] is False and out["reason"] == "attempt-not-pending"
     assert out["pendingAttempt"] == 0
 
@@ -859,7 +859,7 @@ def test_build_receipt_emits_mixed_old_flat_and_new_by_phase_adapter_provenance(
     """Round 1 legacy flat and round 2 per-phase shapes both ride the receipt and disclosures."""
     state = copy.deepcopy(V2_STATE)
     state["rounds"] = {
-        "1": {"adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer",
+        "1": {"adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-role",
                                                             "echo": "cursor",
                                                             "manifest": "codex"}]}},
         "2": {"adapterProvenance": {"byPhase": {RD.P_VERIFIERS: {
@@ -906,18 +906,18 @@ def test_record_result_refuses_a_payload_fault(tmp_path, adapters):
     d = _session(tmp_path)
     _land(d, "code-reviewer")
     assert RD.cmd_record_result(d, "code-reviewer")["ok"] is True      # A/B
-    adapters.faults["test-reviewer"] = "findings must be a list"
-    _land(d, "test-reviewer")
+    adapters.faults["test-role"] = "findings must be a list"
+    _land(d, "test-role")
     pend = _pending(d)
-    out = RD.cmd_record_result(d, "test-reviewer")
+    out = RD.cmd_record_result(d, "test-role")
     assert out["ok"] is False and out["reason"] == "payload-fault"
     assert out["detail"] == "findings must be a list"
-    spath = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key("test-reviewer"),
+    spath = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key("test-role"),
                           pend["attempt"])
     assert not os.path.exists(spath), "payload-fault must leave no store file"
-    adapters.faults.pop("test-reviewer")
-    _land(d, "test-reviewer")
-    assert RD.cmd_record_result(d, "test-reviewer")["ok"] is True
+    adapters.faults.pop("test-role")
+    _land(d, "test-role")
+    assert RD.cmd_record_result(d, "test-role")["ok"] is True
 
 
 def test_record_result_refuses_bare_payload_fault(tmp_path, adapters):
@@ -1529,7 +1529,7 @@ def test_confirmed_verdict_is_never_downgraded_by_sweep_ingest_silence(tmp_path,
 
 def test_record_result_sweep_stray_refusal_carries_recorded(tmp_path, adapters):
     """T5 — a mid-sweep refusal reports slots ingested before the refusing result."""
-    adapters.rosters[RD.P_PANEL] = ["code-reviewer", "test-reviewer"]
+    adapters.rosters[RD.P_PANEL] = ["code-reviewer", "test-role"]
     d = _session(tmp_path)
     _land(d, "code-reviewer")
     pend = _pending(d)
@@ -1582,7 +1582,7 @@ def test_record_missing_refuses_an_unreadable_evidence_path(tmp_path, adapters):
         fh.write("the seat forfeited at 12:01")
     assert RD.cmd_record_missing(d, "code-reviewer", 0, "forfeit",
                                  evidence_path=evidence)["ok"] is True      # A/B
-    out = RD.cmd_record_missing(d, "test-reviewer", 0, "forfeit",
+    out = RD.cmd_record_missing(d, "test-role", 0, "forfeit",
                                 evidence_path=str(tmp_path / "nope.txt"))
     assert out["ok"] is False and out["reason"] == "evidence-unreadable"
 
@@ -1590,7 +1590,7 @@ def test_record_missing_refuses_an_unreadable_evidence_path(tmp_path, adapters):
 def test_record_missing_refuses_an_unknown_reason_and_an_unknown_seat(tmp_path, adapters):
     d = _session(tmp_path)
     assert RD.cmd_record_missing(d, "code-reviewer", 0, "timeout")["ok"] is True   # A/B
-    bad_reason = RD.cmd_record_missing(d, "test-reviewer", 0, "because")
+    bad_reason = RD.cmd_record_missing(d, "test-role", 0, "because")
     assert bad_reason["ok"] is False and bad_reason["reason"] == "missing-reason"
     unknown = RD.cmd_record_missing(d, "not-a-seat", 0, "timeout")
     assert unknown["ok"] is False and unknown["reason"] == "unknown-seat"
@@ -1599,7 +1599,7 @@ def test_record_missing_refuses_an_unknown_reason_and_an_unknown_seat(tmp_path, 
 def test_record_missing_refuses_an_attempt_that_is_not_pending(tmp_path, adapters):
     d = _session(tmp_path)
     assert RD.cmd_record_missing(d, "code-reviewer", 0, "killed")["ok"] is True    # A/B
-    out = RD.cmd_record_missing(d, "test-reviewer", 7, "killed")
+    out = RD.cmd_record_missing(d, "test-role", 7, "killed")
     assert out["ok"] is False and out["reason"] == "attempt-not-pending"
 
 
@@ -2314,7 +2314,7 @@ def test_advance_refuses_an_incomplete_roster_naming_every_missing_seat(tmp_path
     assert _advance(complete, tmp_path)["ok"] is True
 
     d = _session(tmp_path, name="short")
-    _record_all_panel_seats(d, seats=["code-reviewer", "test-reviewer"])
+    _record_all_panel_seats(d, seats=["code-reviewer", "test-role"])
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "incomplete-roster"
     assert out["seats"] == sorted(["architecture-reviewer", "security-reviewer",
@@ -2330,7 +2330,7 @@ def test_advance_completes_with_a_missing_envelope_for_the_absent_seat(tmp_path,
     """A seat with no artifact is COMPLETE once its absence is recorded — that is the difference
     between 'not yet' and 'never came'."""
     d = _session(tmp_path)
-    _record_all_panel_seats(d, seats=["code-reviewer", "test-reviewer", "architecture-reviewer",
+    _record_all_panel_seats(d, seats=["code-reviewer", "test-role", "architecture-reviewer",
                                       "security-reviewer"])
     assert _advance(d, tmp_path)["reason"] == "incomplete-roster"
     assert RD.cmd_record_missing(d, "premortem-reviewer", 0, "forfeit")["ok"] is True
@@ -3558,30 +3558,30 @@ def test_journal_degraded_marker_is_attestable_and_unrecordable_is_not(tmp_path,
 
 def test_death_between_seat_writes_landing_and_ingest(tmp_path, adapters):
     d = _session(tmp_path)
-    _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != "test-reviewer"])
-    _land(d, "test-reviewer")                       # landed, never ingested — the kill
+    _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != "test-role"])
+    _land(d, "test-role")                       # landed, never ingested — the kill
     out = _advance(d, tmp_path)
     assert out["ok"] is True                        # reconcile ingested it
     pend_round, pend_phase = 1, RD.P_PANEL
-    spath = RR.store_path(d, pend_round, pend_phase, RR.storage_key("test-reviewer"), 0)
+    spath = RR.store_path(d, pend_round, pend_phase, RR.storage_key("test-role"), 0)
     assert os.path.exists(spath)
-    recorded = [e for e in _outcomes(d, "recorded") if e["seat"] == "test-reviewer"]
+    recorded = [e for e in _outcomes(d, "recorded") if e["seat"] == "test-role"]
     assert len(recorded) == 1                       # not double-counted
 
 
 def test_death_between_ingest_and_journal_append(tmp_path, adapters):
     d = _session(tmp_path)
-    _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != "test-reviewer"])
-    _land(d, "test-reviewer")
+    _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != "test-role"])
+    _land(d, "test-role")
     # ingest WITHOUT the journal half — the kill lands between the two commits
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
-    ingested = RR.ingest_landing(d, 1, RD.P_PANEL, "test-reviewer", 0, current_attempt=0,
+    ingested = RR.ingest_landing(d, 1, RD.P_PANEL, "test-role", 0, current_attempt=0,
                                  roster=list(RD.DIMENSIONS), anchor=anchor,
                                  seat_result_schema=RR.seat_result_schema_for_state_version(
                                      _state(d).get("schemaVersion")))
     assert ingested["ok"] is True
     before = open(ingested["storePath"], "rb").read()
-    assert not [e for e in _outcomes(d, "recorded") if e["seat"] == "test-reviewer"]
+    assert not [e for e in _outcomes(d, "recorded") if e["seat"] == "test-role"]
     out = _advance(d, tmp_path)
     assert out["ok"] is True
     # the journal caught up (the store file is authoritative — it was NOT rewritten)
@@ -3596,7 +3596,7 @@ def test_reappend_recorded_row_carries_stored_envelope_revision_identity(tmp_pat
     execution-evidence markers — not the reconcile entry's payloadSha256/casToken alone. Covers
     crash recovery and store-revision-newer-than-journal (CAS mismatch) paths."""
     d = _session(tmp_path)
-    seat = "test-reviewer"
+    seat = "test-role"
     payload = {"findings": [], "confidence": "high", "seat": seat,
                "verificationReceipt": {"ran": True}}
     first_evidence = _execution_evidence(runnerNonce="nonce-first")

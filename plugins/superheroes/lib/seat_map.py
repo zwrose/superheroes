@@ -21,9 +21,13 @@ LENS_SEATS = (
     "architecture-reviewer",
     "code-reviewer",
     "security-reviewer",
-    "test-reviewer",
+    "test-role",
     "premortem-reviewer",
 )
+# Seat keys an owner's saved pins may still name, mapped to the seat that now holds the job. The
+# one home: every pin normalizer reads it, so a pin under the old key is read as the new seat's pin
+# (an explicit pin under the new key wins). Nothing on disk is rewritten.
+LEGACY_SEAT_ALIASES = {"test-reviewer": "test-role"}
 GROUNDING_SEAT = "grounding-seat"
 PANEL_ROSTER = LENS_SEATS + (GROUNDING_SEAT,)
 STRONG_TIER_SEATS = frozenset({"security-reviewer", "architecture-reviewer"})
@@ -31,8 +35,8 @@ STRONG_TIER_REQUIRED = "reviewer-deep"
 CRITICAL_SEATS = frozenset({"security-reviewer", "premortem-reviewer", "code-reviewer"})
 MIN_CRITICAL_FAMILIES = 2
 # The maker's model family is barred from EVERY panel seat (#670, owner-ratified 2026-07-26) — the
-# five lens seats AND the grounding seat, not merely the strong-tier/critical subset. `test-reviewer`
-# was the hole: it is neither strong-tier nor critical, so post-#651 (cursor's first-party models are
+# five lens seats AND the grounding seat, not merely the strong-tier/critical subset. The test
+# role's seat was the hole: it is neither strong-tier nor critical, so post-#651 (cursor's first-party models are
 # ONE `xai` family) a composer-made diff could have cursor-grok reviewing its own tests with no
 # violation recorded. STRONG_TIER_SEATS / CRITICAL_SEATS keep their OTHER jobs (the reviewer-deep bar
 # and the critical-diversity bar) unchanged.
@@ -402,6 +406,10 @@ def normalize_pins(pins):
     normalized: dict = {}
     errors: list[str] = []
     for seat, pin in pins.items():
+        canonical = LEGACY_SEAT_ALIASES.get(seat, seat)
+        if canonical != seat and canonical in pins:
+            continue  # explicit canonical key wins over the legacy alias
+        seat = canonical
         if isinstance(pin, dict):
             normalized[seat] = dict(pin)
         elif isinstance(pin, str):

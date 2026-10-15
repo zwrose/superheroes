@@ -38,7 +38,9 @@ it or dismiss it again for that run. Rendering is read-only — it never confirm
 calibration.
 
 The view also shows the **Spec reviewer seat** block, and lists configuration item 14 right after
-item 10.
+item 10. The Core block shows **Risk and trust**: "What we defend against" (the threat model) and
+"Risk areas", one line per area with its name, why, undo, and covers. It reads "(none set)" when
+there are none, and shows an unreadable line when the stored areas cannot be read.
 
 ## 2 — The tune menu
 
@@ -51,7 +53,36 @@ action that owns it, leaving the rest of the calibration untouched:
   whitespace-only value is refused by name (`verify-command-malformed`) on every read until fixed.
   Set it to the fast iteration check (lint, types, the touched tests), not the full gate; set-up § 3
   says why.
-- **Change the threat model** → `core_md.write_threat_model`, which replaces only that section.
+- **Change Risk and trust** → write only the `riskAndTrust` item, one half per call, with the value
+  as JSON on stdin through a quoted here-document. The threat model (shown as "What we defend
+  against"):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item riskAndTrust --cwd . <<'SUPERHEROES_ANSWER'
+  {"threatModel": "<the threat model as prose>"}
+  SUPERHEROES_ANSWER
+  ```
+
+  The risk areas, as the whole list:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item riskAndTrust --cwd . <<'SUPERHEROES_ANSWER'
+  {"riskAreas": [{"name": "<area name>", "covers": ["<repo-relative path pattern>"], "why": "<why a mistake costs>", "undo": "<how hard a mistake is to undo>"}]}
+  SUPERHEROES_ANSWER
+  ```
+
+  Setting `riskAreas` replaces the whole list. To add or change one area, read the list first
+  (`get --item riskAndTrust` returns `effective.riskAreas`), edit it, and write all of it back. Read
+  the result the same way as the `stackingTool` write below: only `written` or `noop` means it was
+  saved; report anything else to the owner with its `reason` and never work around it. A `covers`
+  pattern that names a folder covers every file beneath that folder, and `*` also crosses `/`. After
+  the whole-list write, run the coverage check in `set-up.md` § 3.5 and correct any area that covers
+  no tracked file.
+- **Set up Risk and trust** → run the sitting in `set-up.md` § 3.5 only (not § 3.6), starting from its who-it's-for
+  step. This is how an already-configured project, including one whose risk areas are not set, takes
+  the sitting.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
   reported to the owner and never worked around.
@@ -500,7 +531,8 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a review-panel seat to a vendor/model** → write the pin under `core.md`'s
   `enginePreferences.seatPins`. Valid seat keys are `architecture-reviewer`, `code-reviewer`,
-  `security-reviewer`, `test-reviewer`, `premortem-reviewer`, and `grounding-seat`; each pin is
+  `security-reviewer`, `test-role`, `premortem-reviewer`, and `grounding-seat` (a pin written under
+  the old `test-reviewer` key is read as the test role's pin); each pin is
   `{vendor, model?, effort?}` — a present `model` or `effort` must be a non-empty string or the whole
   pin is rejected into `invalidSeatPins` (an absent optional field is fine; a vendor-only pin uses the
   seat's default model). It feeds the review-code panel's `seat_map compose --pins`; a pin the
@@ -588,6 +620,18 @@ action that owns it, leaving the rest of the calibration untouched:
   either way, so check `action`, not exit status.
 
 <!-- /decision-point: id=configure-tune-gate-policy -->
+
+### Auto-checkpoint (the compaction mod)
+
+With the compaction mod, an interactive session (or a desktop-app Code session) checkpoints its notes and compacts itself once the context passes a threshold; a heads-up band above the prompt offers **Now** and **Snooze** shortly before. Three plugin settings:
+
+- `autoCheckpointTokens` — the context size at which the checkpoint starts.
+- `autoCheckpointAllowance` — how many tokens before the harness's own auto-compaction the checkpoint must land; the checkpoint runs at the lower of the two.
+- `autoCheckpointMode` — `auto` (checkpoint and compact on its own), `click-only` (the band shows and only **Now** runs it) or `off`.
+
+`/config` shows each setting's current value; the defaults and bounds live in the manifest's `userConfig` (`.claude-plugin/plugin.json`) alone.
+
+The owner changes them in the plugin's rows in `/config`, or with `claude plugin configure superheroes` (`--values-stdin` for a scripted change).
 
 ## 3 — Flip the storage mode, always showing what will move
 
