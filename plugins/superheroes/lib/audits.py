@@ -80,6 +80,9 @@ def _resolve_expected_auditor(fid, finding, expected_auditors):
     return None, False
 
 
+UNNAMED_CHANGE_REASON_PREFIX = "the fix changes behaviour its finding does not name: "
+
+
 def has_usable_unnamed_change(value):
     """True when `value` is a non-blank string — the auditor's plain-words statement of behaviour the
     fix changes that its finding does not name. Absent, null or blank means none."""
@@ -185,7 +188,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             not_discharged.append(fid)
         new_issues.extend(candidates)
         base.update(ruling="not-discharged",
-                    reason="the fix changes behaviour its finding does not name: %s" % text)
+                    reason=UNNAMED_CHANGE_REASON_PREFIX + text)
         audits.append(base)
 
     for f in audited:

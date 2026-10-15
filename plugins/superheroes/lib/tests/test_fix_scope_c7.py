@@ -655,21 +655,10 @@ def test_a_spent_episode_survives_a_lineage_root_change(empty_batch_calls):
     assert len(_decisions(state, "out-of-scope-fix-spent")) == 1
 
 
-def test_audit_targets_carry_the_reviewed_hunks_beside_the_fix_hunks():
-    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
-    state["fixBatch"] = [_finding("Near the top", 2), _finding("Far down", 80)]
-    head = {"f.py": [_hunk(1, 4), _hunk(78, 90)]}
-    reviewed = {"f.py": [_hunk(1, 3), _hunk(200, 210)]}
-    top, far = RD._audit_targets(state, state["config"], head, reviewed_hunks_map=reviewed)
-    assert top["reviewedHunks"] == [_hunk(1, 3)]
-    assert far["reviewedHunks"] == []
-    assert RD._audit_targets(state, state["config"], head)[0]["reviewedHunks"] == []
-
-
-def test_the_audit_order_names_the_reviewed_hunks():
+def test_the_audit_order_names_the_fixer_delta():
     text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
                              "dispatch-audits.md")).read()
-    assert "reviewedHunks" in text
+    assert "fixerDelta" in text and "priorScopeRefusal" in text
 
 
 @pytest.mark.parametrize("value", [[], 5, {"a": 1}, True])
@@ -686,35 +675,87 @@ def test_the_submit_guard_refuses_a_non_string_unnamed_change(value):
     assert fault and "unnamedChange" in fault
 
 
-def test_audit_targets_name_the_fixers_own_changed_lines_apart_from_the_prs():
+def _diff(*files):
+    """A unified diff over {file: [body lines]}, one hunk per file starting at line 1."""
+    out = []
+    for name, body in files:
+        out += ["diff --git a/%s b/%s" % (name, name), "--- a/%s" % name, "+++ b/%s" % name,
+                "@@ -1,%d +1,%d @@" % (len(body), len(body))] + body
+    return "\n".join(out) + "\n"
+
+
+def _delta(reviewed_body, fixed_body, name="f.py", line=2, extra=()):
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near the top", line, file=name)]
+    state["headDiff"] = _diff((name, fixed_body), *extra)
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff=_diff((name, reviewed_body), *extra))
+    return row["fixerDelta"]
+
+
+def test_audit_targets_carry_the_fixers_own_diff_apart_from_the_prs():
+    delta = _delta([" ctx", "+log_request(x)", " ctx"],
+                   [" ctx", "+log_request(x)", "+if x is None: return", " ctx"])
+    assert delta[0].startswith("@@") and "++if x is None: return" in delta
+    assert "++log_request(x)" not in delta and "-+log_request(x)" not in delta
     state = RD.new_state(TRD._cfg(fixerVendor="claude"))
     state["fixBatch"] = [_finding("Near the top", 2)]
-    pr = "@@ -1,3 +1,4 @@\n ctx\n+    log_request(x)\n ctx"
-    fixed = "@@ -1,3 +1,5 @@\n ctx\n+    log_request(x)\n+    if x is None: return\n ctx"
-    head = {"f.py": [{"start": 1, "end": 5, "text": fixed}]}
-    reviewed = {"f.py": [{"start": 1, "end": 4, "text": pr}]}
-    (row,) = RD._audit_targets(state, state["config"], head, reviewed_hunks_map=reviewed)
-    assert row["fixerDelta"] == ["+    if x is None: return"]
-    (row,) = RD._audit_targets(state, state["config"], head)
+    (row,) = RD._audit_targets(state, state["config"], {})
     assert "fixerDelta" not in row
 
 
-def _delta(reviewed_lines, fixed_lines):
-    def hunk(lines):
-        return [{"start": 1, "end": 5, "text": "\n".join(["@@ -1,3 +1,4 @@"] + lines)}]
-    return RD._fixer_delta_lines(hunk(fixed_lines), hunk(reviewed_lines))
+def test_fixer_delta_shows_a_reordering_the_signed_line_sets_cannot():
+    delta = _delta([" start()", "+charge()", " checkpoint()", " finish()"],
+                   [" start()", " checkpoint()", "+charge()", " finish()"])
+    assert delta.index("+ checkpoint()") < delta.index(" +charge()") < delta.index("- checkpoint()")
 
 
-def test_fixer_delta_keeps_a_removed_pr_line():
-    assert _delta(["+guard()", "+retry()"], ["+guard()", "+if x is None: return"]) == [
-        "-retry()", "+if x is None: return"]
-    assert _delta(["+guard()", "+retry()"], ["+guard()"]) == ["-retry()"]
+def test_fixer_delta_shows_a_pure_removal():
+    delta = _delta([" ctx", "+guard()", "+retry()", " ctx"], [" ctx", "+guard()", " ctx"])
+    assert "-+retry()" in delta and not any(d.startswith("++") for d in delta)
 
 
 def test_fixer_delta_keeps_a_repeated_line_and_a_restored_removal():
-    assert _delta(["+charge()"], ["+charge()", "+charge()"]) == ["+charge()"]
-    assert _delta(["-old()", "+new()"], ["+new()"]) == ["+old()"]
-    assert _delta(["+a()"], ["+a()"]) == []
+    assert "++charge()" in _delta([" c", "+charge()"], [" c", "+charge()", "+charge()"])
+    assert "--old()" in _delta([" c", "-old()", "+new()"], [" c", "+new()"])
+    assert _delta([" c", "+a()"], [" c", "+a()"]) == []
+
+
+def test_fixer_delta_is_empty_for_a_target_file_the_fix_left_alone():
+    other = ("g.py", [" c", "+a()"])
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("In f", 2, file="f.py"), _finding("In g", 2, file="g.py")]
+    reviewed = _diff(("f.py", [" c", "+retry()"]), other)
+    state["headDiff"] = _diff(("f.py", [" c", "+retry()"]), ("g.py", [" c", "+a()", "+b()"]))
+    f_row, g_row = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
+    assert f_row["fixerDelta"] == [] and "++b()" in g_row["fixerDelta"]
+
+
+def test_fixer_delta_does_not_invent_changes_where_hunks_merge():
+    def big(guard):
+        return ["diff --git a/f.py b/f.py", "--- a/f.py", "+++ b/f.py",
+                "@@ -7,7 +7,7 @@", " c", "+pr_a()", " c",
+                "@@ -27,7 +27,7 @@", " c", "+pr_b()", guard, " c"]
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["fixBatch"] = [_finding("Near b", 30, file="f.py")]
+    state["headDiff"] = "\n".join(big("+guard()")) + "\n"
+    (row,) = RD._audit_targets(state, state["config"], {}, reviewed_diff="\n".join(big(" c")) + "\n")
+    assert "++guard()" in row["fixerDelta"] and not any("pr_b" in d and d[0] in "+-" for d in row["fixerDelta"])
+
+
+def test_a_scope_refusal_stays_on_the_target_across_the_fixer_retry():
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    finding = _finding("Near the top", 2)
+    state["fixBatch"] = [finding]
+    key = RD._finding_key_of(finding)
+    state["rounds"] = {"2": {"audits": [{
+        "id": key, SC.FINDING_KEY_FIELD: key, "ruling": "not-discharged",
+        "reason": AU.UNNAMED_CHANGE_REASON_PREFIX + "it also disables retry"}]}}
+    (row,) = RD._audit_targets(state, state["config"], {})
+    assert row["priorScopeRefusal"]["round"] == 2
+    assert "disables retry" in row["priorScopeRefusal"]["reason"]
+    state["rounds"]["2"]["audits"][0]["reason"] = "the guard is missing"
+    (row,) = RD._audit_targets(state, state["config"], {})
+    assert "priorScopeRefusal" not in row
 
 
 def test_a_gate_skip_decision_carries_its_ruling_time_severity():

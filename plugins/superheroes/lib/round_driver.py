@@ -5587,7 +5587,7 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     state["fullPanelRan"] = False
     state["_auditTargets"] = _audit_targets(
         state, config, split.get("auditTargets") or {},
-        reviewed_hunks_map=delta_surface.parse_hunks(reviewed))
+        reviewed_diff=reviewed)
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
     _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
@@ -5609,25 +5609,65 @@ def _fix_hunks_over_line(audit_targets_map, file, line):
             if isinstance(hunk, dict) and delta_surface._overlaps(hunk, ranges)]
 
 
-def _fixer_delta_lines(fix_hunks, reviewed_hunks):
-    """What the fixer changed at this location, as an ordered diff of the changed (``+``/``-``)
-    lines the reviewed version carried against those the fixed version carries: a line the fixer
-    added (or restored) rides as ``+``, one it removed as ``-``, and a repeated line counts each time."""
-    def changed(hunks):
-        return [ln for h in hunks if isinstance(h, dict) and isinstance(h.get("text"), str)
-                for ln in h["text"].splitlines()[1:] if ln[:1] in ("+", "-")]
-    flip = {"+": "-", "-": "+"}
-    before, after = changed(reviewed_hunks), changed(fix_hunks)
+def _diff_section(diff_text, file):
+    """The lines of ``file``'s section of a unified diff — header, hunk headers, context and all."""
+    out, inside = [], False
+    for ln in (diff_text or "").splitlines():
+        if ln.startswith("diff --git "):
+            inside = ln == "diff --git a/%s b/%s" % (file, file)
+        if inside:
+            out.append(ln)
+    return out
+
+
+def _line_spans(section):
+    """Per section line, the new-file (start, end) of the hunk it sits in (None before the first hunk)."""
+    spans, cur = [], None
+    for ln in section:
+        m = delta_surface._HUNK.match(ln)
+        if m:
+            start = int(m.group(1))
+            cur = (start, start + max(int(m.group(2) or 1) - 1, 0))
+        spans.append(cur)
+    return spans
+
+
+def _fixer_delta_lines(reviewed_diff, head_diff, file, line):
+    """The fix's own diff at a finding's location: the unified diff between the file's section of the
+    reviewed (pre-fix) diff and of the post-fix head diff, hunk headers and context kept, only the hunks
+    that sit over the finding's line (and margin). Each line keeps the PR diff's own prefix after the
+    diff mark, so ``-+x`` is a PR addition the fixer removed and ``++x`` one it made. A file the fix
+    left alone has identical sections and yields nothing."""
+    ranges = delta_surface.fixed_locations([{"file": file, "line": line}]).get(file)
+    before, after = _diff_section(reviewed_diff, file), _diff_section(head_diff, file)
+    if not ranges or before == after:
+        return []
+    spans_b, spans_a = _line_spans(before), _line_spans(after)
+
+    def over(spans, lo, hi):
+        near = spans[lo:hi] if hi > lo else spans[max(lo - 1, 0):lo + 1]
+        return any(sp and delta_surface._overlaps({"start": sp[0], "end": sp[1]}, ranges)
+                   for sp in near)
+
     delta = []
-    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
-        if op in ("delete", "replace"):
-            delta.extend(flip[ln[0]] + ln[1:] for ln in before[i1:i2])
-        if op in ("insert", "replace"):
-            delta.extend(after[j1:j2])
+    matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    for group in matcher.get_grouped_opcodes(3):
+        if not any(op != "equal" and (over(spans_b, i1, i2) or over(spans_a, j1, j2))
+                   for op, i1, i2, j1, j2 in group):
+            continue
+        first, last = group[0], group[-1]
+        delta.append("@@ -%d,%d +%d,%d @@" % (
+            first[1] + 1, last[2] - first[1], first[3] + 1, last[4] - first[3]))
+        for op, i1, i2, j1, j2 in group:
+            if op == "equal":
+                delta.extend(" " + ln for ln in before[i1:i2])
+                continue
+            delta.extend("-" + ln for ln in before[i1:i2])
+            delta.extend("+" + ln for ln in after[j1:j2])
     return delta
 
 
-def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
+def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
@@ -5642,6 +5682,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
+    history = _finding_history(state)
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
@@ -5672,12 +5713,16 @@ def _audit_targets(state, config, audit_targets_map, reviewed_hunks_map=None):
             if f.get(carried) is not None:
                 row[carried] = f[carried]
         row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
-        # `fixHunks` are whole head-diff hunks (the PR's own changes included); the reviewed version
-        # of the same location is the baseline that tells the fixer's change from the PR's.
-        row["reviewedHunks"] = _fix_hunks_over_line(
-            reviewed_hunks_map, f.get("file"), f.get("line"))
-        if reviewed_hunks_map is not None:
-            row["fixerDelta"] = _fixer_delta_lines(row["fixHunks"], row["reviewedHunks"])
+        # `fixerDelta` is the fix's own diff (reviewed head -> fixed head) over the finding's location.
+        if reviewed_diff is not None:
+            row["fixerDelta"] = _fixer_delta_lines(
+                reviewed_diff, state.get("headDiff"), f.get("file"), f.get("line"))
+        # A scope refusal recorded on an earlier attempt stays open: the baseline advances with each
+        # fixer attempt, so the rejected change no longer shows in `fixerDelta`.
+        prior = (history.get(tid) or history.get(_history_row_key(f)) or {}).get("priorAudit")
+        if (isinstance(prior, dict) and prior.get("ruling") == "not-discharged"
+                and str(prior.get("reason") or "").startswith(audits.UNNAMED_CHANGE_REASON_PREFIX)):
+            row["priorScopeRefusal"] = {"round": prior.get("round"), "reason": prior["reason"]}
         if break_it.is_break_it(f):
             # axis: a re-queued break-it target must still hand the next fixer its exact test block, body and run record
             for carried in ("suggestion", "body", break_it.RUN_FIELD):
