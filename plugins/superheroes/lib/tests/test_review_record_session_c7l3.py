@@ -153,13 +153,30 @@ def test_a_completed_not_discharged_audit_is_a_reviewer_that_ran_and_a_later_aud
     # bites on: a rejection that carries no auditor field read as a planned audit that never ran
     rows = _audit_rounds(tmp_path / "a", {2: [rejected]})
     assert not [n for n in rows if n.startswith("audits auditor (")]
+    assert rows["audits auditor unknown (round 2)"]["ran"] is True and rows["audits auditor unknown (round 2)"]["commit"] == HEAD
     # bites on: a silent audit kept as missing after a later round audited the same target
     rows = _audit_rounds(tmp_path / "b", {2: [silent], 3: [rejected | {"id": "g", "identity": "g"}]})
     assert not [n for n in rows if n.startswith("audits auditor (")]
+    assert rows["audits auditor unknown (round 3)"]["ran"] is True and rows["audits auditor unknown (round 3)"]["commit"] == HEAD
+    # a later audit of a same-title sibling at another line does not recover the silent one: recovery keys on the target id
+    sib = lambda i: {"id": "f.py::t@L%d" % i, "identity": "f.py::t", "auditor": "codex", "ruling": "discharged"}
+    rows = _audit_rounds(tmp_path / "e", {2: [silent | {"id": "f.py::t@L3", "identity": "f.py::t"}], 3: [sib(9)]})
+    assert rows["audits auditor (round 2)"]["ran"] is False
     rows = _audit_rounds(tmp_path / "c", {2: [silent], 3: [ok("g")]})
     assert rows["audits auditor codex (round 3)"]["ran"] is True and "audits auditor (round 2)" not in rows
     # a silent target no later round audited stays missing
     assert _audit_rounds(tmp_path / "d", {2: [silent], 3: [ok("f")]})["audits auditor (round 2)"]["ran"] is False
+
+
+def test_a_seat_with_missing_run_provenance_is_never_credited_with_its_configured_vendor(tmp_path):
+    seat = {"vendor": "codex", "model": CODEX}
+    session = _hand_session(tmp_path, {1: {"code-reviewer": "run"}},
+                            seatMapReceipts=[{"round": "1", "map": {"seats": {"code-reviewer": seat}, "makerFamilies": ["xai"]}}])
+    state = json.load(open(os.path.join(session, "loop-state.json")))
+    state["rounds"]["1"]["fellOpenProvenanceMissing"] = ["code-reviewer"]
+    json.dump(state, open(os.path.join(session, "loop-state.json"), "w"))
+    row = _names(rs.account_from_session(session, extras(), Fake().readers()))["code-reviewer (round 1)"]
+    assert row["vendor"] == "unknown"
 
 
 def test_a_hand_submit_reviewer_is_posted_as_reported_by_the_session_and_a_missing_one_as_missing(tmp_path):

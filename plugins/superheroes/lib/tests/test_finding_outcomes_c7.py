@@ -29,7 +29,7 @@ def _entry(entry_id, supersedes=None, words='owner\'s words: "go"'):
 
 
 def _sheet(answer, option_id=None):
-    return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": None}},
+    return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": ""}},
             "cards": {"c1": {"options": [{"id": option_id}] if answer == "option" and option_id else []}}}
 
 
@@ -223,6 +223,7 @@ def test_residual_decides(text, ref, expected):
     (None, {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("aligned"), "c1", 9, False),
     (_sheet("aligned"), None, 9, False),
+    (_sheet("aligned", "stale-option"), {"pr": 9, "card": "c1"}, 9, False),  # the sheet schema: aligned names no option
 ], ids=lambda v: None)
 def test_e5_sheet_answer_decides(answers, ref, pr, expected):
     assert FO.sheet_answer_decides(answers, ref, pr) is expected

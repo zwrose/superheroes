@@ -86,6 +86,19 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _answer_fits_sheet_schema(doc):
+    """True only when doc fits the sheet schema's own answer definition (theme/sheet.schema.json $defs.answer),
+    checked by sheet_prose's reader of that schema; any failure to read or check it is a misfit."""
+    try:
+        import json
+        import sheet_prose
+        with open(sheet_prose.SCHEMA, encoding="utf-8") as handle:
+            defs = json.load(handle)["$defs"]
+        return not sheet_prose._validate(defs["answer"], doc, "", defs)
+    except Exception:
+        return False
+
+
 def sheet_answer_decides(answers, ref, pr):
     """True only when the cited card of this pull request holds a settled aligned or option answer. An aligned
     answer counts only while the published card (answers["cards"][card]["options"]) is known to offer no options."""
@@ -99,6 +112,8 @@ def sheet_answer_decides(answers, ref, pr):
         return False
     doc = cards.get(card)
     if not isinstance(doc, dict):
+        return False
+    if not _answer_fits_sheet_schema(doc):
         return False
     answer = doc.get("answer")
     published = answers.get("cards")

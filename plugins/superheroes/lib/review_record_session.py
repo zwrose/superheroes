@@ -222,7 +222,8 @@ def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE):
 
 
 def _audit_key(a):
-    return a.get("identity") or a.get("id")
+    """The per-location audit target id: the transport key. The line-less `identity` is shared by same-title siblings."""
+    return a.get("id") or a.get("identity")
 
 
 def _audit_silent(a):
@@ -236,8 +237,9 @@ def _audit_reviewers(state, rnd, audits, later=frozenset()):
     entry, a not-discharged ruling included, is an auditor that ran."""
     head = _panel_head(state, rnd, phase=round_phases.P_AUDITS)
     vendors = sorted({a["auditor"] for a in audits if isinstance(a, dict) and isinstance(a.get("auditor"), str) and a["auditor"]})
+    unnamed = ["unknown"] if any(isinstance(a, dict) and not _audit_silent(a) and not a.get("auditor") for a in audits) else []
     out = [_reviewer(state, rnd, f"auditor {v}", "audits ", True, {"vendor": v, "model": "unknown"},
-                     commit=head, phase=round_phases.P_AUDITS) for v in vendors] if head else []
+                     commit=head, phase=round_phases.P_AUDITS) for v in vendors + unnamed] if head else []
     silent = any(_audit_silent(a) and _audit_key(a) not in later for a in audits)
     return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
 
@@ -266,6 +268,8 @@ def _status_reviewers(state, setup=None):
                          and f.get("seat") == seat and isinstance(f.get("ran"), str) and f["ran"]), None) if ran else None
             if not ran and any(r > rnd for r in ran_in.get(seat, ())):
                 continue  # a later round ran this seat: the earlier miss is recovered
+            if ran and not fell and seat in ((state["rounds"].get(str(rnd)) or {}).get("fellOpenProvenanceMissing") or ()):
+                fell = "unknown"  # the session could not establish which vendor ran: never credit the configured one
             out.append(_reviewer(state, rnd, seat, "", ran, {"vendor": fell, "model": "unknown"} if fell else None,
                                  commit=commit, phase=sc.PANEL_PHASE))
         out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
