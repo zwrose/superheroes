@@ -86,6 +86,10 @@ def has_usable_unnamed_change(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+# The reason an audit entry carries when no result came back for its target (silence, not a ruling).
+NO_AUDIT_RESULT_REASON = "no audit result for this finding — cannot certify the fix discharged"
+
+
 def apply_audit_results(audited, results, expected_auditors=None, collection_manifest=None,
                         carry_fields=(), change_allowed_ids=()):
     """Consume per-finding fix-audit rulings; fail-closed on ambiguity, silence, and malformation.
@@ -228,7 +232,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 if fid is not None:
                     unaudited.append(fid)
                 base.update(ruling="not-discharged",
-                            reason="no audit result for this finding — cannot certify the fix discharged")
+                            reason=NO_AUDIT_RESULT_REASON)
             audits.append(base)
             if fid is not None:
                 not_discharged.append(fid)
@@ -363,6 +367,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             continue
 
         if ruling == "not-discharged":
+            mv = collection_manifest.get(fid) if isinstance(collection_manifest, dict) else None
+            if isinstance(mv, str) and mv and mv == expected_auditor:
+                base["auditor"] = mv  # a completed rejection by the selected auditor is a reviewer that ran
             base.update(ruling="not-discharged",
                         reason=reason.strip() if has_reason else "not discharged")
             audits.append(base)

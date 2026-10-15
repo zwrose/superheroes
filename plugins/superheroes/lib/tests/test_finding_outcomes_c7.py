@@ -29,7 +29,8 @@ def _entry(entry_id, supersedes=None, words='owner\'s words: "go"'):
 
 
 def _sheet(answer, option_id=None):
-    return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": None}}}
+    return {"answers": {"c1": {"answer": answer, "optionId": option_id, "note": ""}},
+            "cards": {"c1": {"options": [{"id": option_id}] if answer == "option" and option_id else []}}}
 
 
 # --- E1: a stated consequence ---------------------------------------------------------------
@@ -202,36 +203,48 @@ def test_residual_decides(text, ref, expected):
 # --- E5: sheet answers ------------------------------------------------------------------------
 
 @pytest.mark.parametrize("answers,ref,pr,expected", [
-    (_sheet("accept"), {"pr": 9, "card": "c1"}, 9, True),
+    (_sheet("aligned"), {"pr": 9, "card": "c1"}, 9, True),
     (_sheet("option", "opt-a"), {"pr": 9, "card": "c1"}, 9, True),
-    (_sheet("accept"), {"pr": 8, "card": "c1"}, 9, False),
-    (_sheet("accept"), {"pr": True, "card": "c1"}, 1, False),
-    (_sheet("accept"), {"pr": 1, "card": "c1"}, True, False),
+    (_sheet("aligned"), {"pr": 8, "card": "c1"}, 9, False),
+    (_sheet("aligned"), {"pr": True, "card": "c1"}, 1, False),
+    (_sheet("aligned"), {"pr": 1, "card": "c1"}, True, False),
     (_sheet("discuss"), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("something-else"), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet(None), {"pr": 9, "card": "c1"}, 9, False),
-    (_sheet("aligned"), {"pr": 9, "card": "c1"}, 9, False),
+    (_sheet("accept"), {"pr": 9, "card": "c1"}, 9, False),  # not in the sheet's answer vocabulary
     (_sheet("option"), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("option", ""), {"pr": 9, "card": "c1"}, 9, False),
     (_sheet("option", 4), {"pr": 9, "card": "c1"}, 9, False),
-    (_sheet("accept"), {"pr": 9, "card": "missing"}, 9, False),
-    (_sheet("accept"), {"pr": 9}, 9, False),
-    ({"answers": {"c1": "accept"}}, {"pr": 9, "card": "c1"}, 9, False),
+    (_sheet("aligned"), {"pr": 9, "card": "missing"}, 9, False),
+    (_sheet("aligned"), {"pr": 9}, 9, False),
+    ({"answers": {"c1": "aligned"}}, {"pr": 9, "card": "c1"}, 9, False),
     ({"answers": []}, {"pr": 9, "card": "c1"}, 9, False),
     ({}, {"pr": 9, "card": "c1"}, 9, False),
     (None, {"pr": 9, "card": "c1"}, 9, False),
-    (_sheet("accept"), "c1", 9, False),
-    (_sheet("accept"), None, 9, False),
+    (_sheet("aligned"), "c1", 9, False),
+    (_sheet("aligned"), None, 9, False),
+    (_sheet("aligned", "stale-option"), {"pr": 9, "card": "c1"}, 9, False),  # the sheet schema: aligned names no option
 ], ids=lambda v: None)
 def test_e5_sheet_answer_decides(answers, ref, pr, expected):
     assert FO.sheet_answer_decides(answers, ref, pr) is expected
+
+
+def test_aligned_counts_only_while_the_published_card_offers_no_options():
+    ref = {"pr": 9, "card": "c1"}
+    base = _sheet("aligned")
+    assert FO.sheet_answer_decides(base, ref, 9) is True
+    # bites on: a saved aligned answer accepted for a card that has since gained options, or for one nothing can check
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": ["allow-leftovers"]}}), ref, 9) is False
+    assert FO.sheet_answer_decides({"answers": base["answers"]}, ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": "x"}), ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={}), ref, 9) is False
 
 
 # --- E6: on_record ----------------------------------------------------------------------------
 
 def _sources(**extra):
     base = {"canonText": _entry(CANON_ID), "residualText": "a known gap",
-            "residualSource": "base", "sheetAnswers": _sheet("accept"), "pr": 9}
+            "residualSource": "base", "sheetAnswers": _sheet("aligned"), "pr": 9}
     base.update(extra)
     return base
 
@@ -313,9 +326,9 @@ def test_e7_unresolved_decided_by_stays_with_owner_with_reason_appended():
                     sources=_sources(), open_reason=OPEN)
     assert out["outcome"] == "left-for-owner"
     assert out["reason"] == OPEN + "; the cited decision is not on record: the cited Canon entry is not on record"
-    assert out["decidedBy"] is None
+    assert out["decidedBy"] == {"kind": "canon", "ref": OTHER_ID}  # the citation stays, for the writer's write-time re-check
     out = FO.settle(finding, ruling={"decidedBy": {"kind": "canon", "ref": CANON_ID}}, open_reason=OPEN)
-    assert out["outcome"] == "left-for-owner"
+    assert out["outcome"] == "left-for-owner" and out["decidedBy"] == {"kind": "canon", "ref": CANON_ID}
     assert out["reason"].endswith("no Canon text was available")
     assert FO.settle(finding, ruling={"note": "no decidedBy"}, open_reason=OPEN)["reason"] == OPEN
 
@@ -447,3 +460,12 @@ def test_compile_break_it_exempt_finding_with_no_consequence_is_dropped():
         [stated], COMPILE_DIFF, scope_exempt={id(stated)})
     assert drops == []
     assert [(f["file"], f["line"]) for f in compiled] == [("g.py", 9)]
+
+
+def test_an_option_answer_counts_only_while_the_published_card_still_offers_that_option():
+    ref = {"pr": 9, "card": "c1"}
+    base = _sheet("option", "opt-a")
+    # bites on: a saved option accepted after the card was republished without it, or for a card nothing can check
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": [{"id": "opt-b"}]}}), ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": []}}), ref, 9) is False
+    assert FO.sheet_answer_decides({"answers": base["answers"]}, ref, 9) is False

@@ -24,6 +24,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import audits as audits_mod  # noqa: E402
 import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
@@ -201,7 +202,49 @@ def _panel_rounds_with_status(state):
             if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("seatStatus"), dict)}
 
 
-def _status_reviewers(state):
+def _panel_head(state, rnd, setup=None, phase=sc.PANEL_PHASE, field="headSha"):
+    """The head the round's `phase` orders were emitted at (latest attempt). Round 1's panel carries no emission
+    head: it ran before any fix, at the session-setup head (`setup` is the meta's). None when none is recorded."""
+    anchors = state.get("_ordersAnchors")
+    best = None
+    for key, anchor in (anchors.items() if isinstance(anchors, dict) else ()):
+        parts = str(key).split(":")
+        if len(parts) == 3 and parts[0] == str(rnd) and parts[1] == phase and parts[2].isdigit() \
+                and isinstance(anchor, dict) and isinstance(anchor.get(field), str) and anchor[field]:
+            if best is None or int(parts[2]) > best[0]:
+                best = (int(parts[2]), anchor[field])
+    if best:
+        return best[1]
+    if phase != sc.PANEL_PHASE or str(rnd) != "1":
+        return None
+    cfg = state.get("config")
+    return _text(cfg.get("headSha") if isinstance(cfg, dict) else None, setup)
+
+
+def _audit_key(a):
+    """The per-location audit target id: the transport key. The line-less `identity` is shared by same-title siblings."""
+    return a.get("id") or a.get("identity")
+
+
+def _audit_silent(a):
+    """An audit entry the round recorded as silence: no result came back, so no auditor ran for that target."""
+    return isinstance(a, dict) and a.get("reason") == audits_mod.NO_AUDIT_RESULT_REASON
+
+
+def _audit_reviewers(state, rnd, audits, later=frozenset()):
+    """One reviewer per auditor vendor whose authenticated audit result the round persisted, at the audits' emission head,
+    and one unrun reviewer for a target the round recorded as silent that no later round `later` audited. Any other
+    entry, a not-discharged ruling included, is an auditor that ran."""
+    head = _panel_head(state, rnd, phase=round_phases.P_AUDITS)
+    vendors = sorted({a["auditor"] for a in audits if isinstance(a, dict) and isinstance(a.get("auditor"), str) and a["auditor"]})
+    unnamed = ["unknown"] if any(isinstance(a, dict) and not _audit_silent(a) and not a.get("auditor") for a in audits) else []
+    out = [_reviewer(state, rnd, f"auditor {v}", "audits ", bool(head), {"vendor": v, "model": "unknown"},
+                     commit=head, phase=round_phases.P_AUDITS) for v in vendors + unnamed]  # no recoverable head: stays a missing review
+    silent = any(_audit_silent(a) and _audit_key(a) not in later for a in audits)
+    return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
+
+
+def _status_reviewers(state, setup=None, rows=()):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
     status = _panel_rounds_with_status(state)
@@ -219,12 +262,30 @@ def _status_reviewers(state):
         for seat in sorted(seats):
             if seat in unfilled:
                 continue  # listed below as an unfilled seat
-            ran = seats[seat] == "run"  # any other value is never credited as run
+            commit = _panel_head(state, rnd, setup)
+            ran = seats[seat] == "run" and commit is not None  # any other value, or a panel with no recoverable head, is never credited
+            fell = next((f.get("ran") for f in ((state["rounds"].get(str(rnd)) or {}).get("fellOpen") or ()) if isinstance(f, dict)
+                         and f.get("seat") == seat and isinstance(f.get("ran"), str) and f["ran"]), None) if ran else None
             if not ran and any(r > rnd for r in ran_in.get(seat, ())):
                 continue  # a later round ran this seat: the earlier miss is recovered
-            out.append(_reviewer(state, rnd, seat, "", ran, phase=sc.PANEL_PHASE))
+            if ran and not fell and seat in ((state["rounds"].get(str(rnd)) or {}).get("fellOpenProvenanceMissing") or ()):
+                fell = "unknown"  # the session could not establish which vendor ran: never credit the configured one
+            out.append(_reviewer(state, rnd, seat, "", ran, {"vendor": fell, "model": "unknown"} if fell else None,
+                                 commit=commit, phase=sc.PANEL_PHASE))
         out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
                 if not any(r > rnd for r in ran_in.get(seat, ()))]
+    by_round = {int(n): rec["audits"] for n, rec in state["rounds"].items()
+                if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("audits"), list)}
+    for rnd, audits in by_round.items():
+        later = {_audit_key(a) for r, rows in by_round.items() if r > rnd for a in rows if isinstance(a, dict) and not _audit_silent(a)}
+        out += _audit_reviewers(state, rnd, audits, later)
+    for rnd, phase in sorted({(r["round"], r["phase"]) for r in rows if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
+                              and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, *_RAW_PHASES[1:])}):
+        prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)
+                and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
+        head = _panel_head(state, rnd, setup, phase)
+        out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head) and (bool(prov) or phase != round_phases.P_VERIFIERS),
+                             {"vendor": _text(*prov, _panel_head(state, rnd, None, phase, "vendor")) or "unknown", "model": "unknown"}, commit=head, phase=phase))
     return out
 
 
@@ -291,25 +352,11 @@ def _latest_ruling(rep, by_key, rulings):
     return max(found, key=lambda r: r["seq"] if _int(r.get("seq")) else -1) if found else {}
 
 
-def _decided_by(rep, outcome, by_key, rulings):
-    """The cited decision an outcome rests on: the ledger row's own, else the newest ruling's when that
-    ruling postdates the finding's latest raise. The writer re-checks it; this only carries it."""
-    if outcome is None:
-        return None
+def _decided_by(rep, outcome):
+    """The cited decision the settled ledger row carries (the driver's settle puts it there); an older ledger
+    without it leaves the finding as settled."""
     held = sc.decided_by_of(rep)
-    if isinstance(held, dict):
-        return held
-    if outcome not in (_LEFT_FOR_OWNER, _RULING):
-        return None
-    ruling = _latest_ruling(rep, by_key, rulings)
-    decided = ruling.get("decidedBy")
-    raised = [r.get(sc.RAISED_ROUND_FIELD) for r in _group(rep, by_key)]
-    # the rulings log and the ledger keep separate counters, so recency is read from the rounds
-    # axis: a ruling older than the finding's latest raise decides nothing about it — see bite-proof record c7l3_wo2_session_writer
-    if isinstance(decided, dict) and _int(ruling.get("round")) and all(_int(r) for r in raised) \
-            and ruling["round"] >= max(raised):
-        return decided
-    return None
+    return held if outcome is not None and isinstance(held, dict) else None
 
 
 def _decide(own, by_key, rulings):
@@ -373,7 +420,7 @@ def _findings(state):
             reason += f" (merged into {_id(rep, sc.finding_identity_key(rep))})"
         dim = row.get("dimension")
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
-                    "decidedBy": _decided_by(rep, outcome, by_key, rulings) if rep is not None else None,
+                    "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail"))})
@@ -441,7 +488,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings = _findings(state)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
-        reviewers, raw = _status_reviewers(state), []
+        reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
     else:
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                     review_record._readers(readers)["engine_run"], raw_dir)
@@ -472,10 +519,10 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None):
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
             "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
-                       "capKind": "ceiling" if ceiling else "rounds", "stoppedAtCap": capped,
+                       "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {})},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
-            "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef"),
+            "refused": _refused(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "checked": checked}
 
 

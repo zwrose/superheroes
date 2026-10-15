@@ -209,7 +209,7 @@ def test_t3_out_of_scope_ruling_settles_by_the_decision_it_cites(tmp_path, monke
     assert ledger[k_unknown]["disposition"] == "left-for-owner"
     assert "not on record" in ledger[k_unknown]["settledReason"]
     assert ledger[k_unknown]["settledReason"].startswith("out of scope: belongs to the next milestone; ")
-    assert "decidedBy" not in ledger[k_unknown]
+    assert ledger[k_unknown]["decidedBy"] == {"kind": "canon", "ref": OTHER_ID}  # kept for the writer's re-check
     assert sources_calls == [True]  # read once, for the whole terminal
 
 

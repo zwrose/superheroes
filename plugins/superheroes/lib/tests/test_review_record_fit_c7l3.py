@@ -3,6 +3,7 @@ cleanly, and the writer re-checks every cited decision when it writes."""
 import json
 
 import pytest
+import signal
 
 import canon
 import finding_outcomes as FO
@@ -133,6 +134,20 @@ def test_backticks_and_fences_in_a_finding_survive_the_parts(tmp_path):
     body = "```json\n{\"a\": 1}\n```\n" + "`" * 30 + "\n" + ("y" * 70000) + "```\n</details>"
     send(tmp_path, fake, findings=[finding("f-1", body=body)])
     assert parts_of(fake)
+    assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == body
+
+
+def test_a_body_whose_fence_overhead_exceeds_the_reserve_still_splits(tmp_path):
+    # axis: part sizing; a long backtick run growing the fence past the piece so the split never advances
+    fake = Fake()
+    body = "`" * 40000 + "x" * 70000
+    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("the split did not terminate")))
+    signal.alarm(60)  # bounded: a split that never advances fails instead of hanging
+    try:
+        send(tmp_path, fake, findings=[finding("f-1", body=body)])
+    finally:
+        signal.alarm(0)
+    assert parts_of(fake) and all(len(c["body"]) <= rr.MAX_BODY_CHARS for c in fake.comments)
     assert rr.read(7, readers=fake.readers())["findings"][0]["body"] == body
 
 
@@ -399,7 +414,7 @@ def test_the_real_source_reader_reads_nothing_for_a_missing_repository_and_never
     assert "canonText" not in FO.decision_sources(str(tmp_path), None)
 
 
-SHEET = {"answers": {"c1": {"answer": "accept", "optionId": None, "note": None}}}
+SHEET = {"answers": {"c1": {"answer": "aligned", "optionId": None, "note": ""}}, "cards": {"c1": {"options": []}}}
 SHEET_BY = {"kind": "sheet-answer", "ref": {"pr": 7, "card": "c1"}}
 
 
@@ -420,6 +435,9 @@ def test_edge8_without_sheet_answers_a_sheet_answer_decision_is_not_on_record():
     cited = finding("r-1", title="r1", outcome="ruling", reason="answered", decidedBy=SHEET_BY)
     assert build(account(findings=[cited]), Fake())["findings"][0]["outcome"] == "left-for-owner"
     assert build(account(findings=[cited], sheetAnswers=SHEET), Fake())["findings"][0]["outcome"] == "ruling"
+    # bites on: a saved aligned answer accepted after the published card gained options
+    gained = dict(SHEET, cards={"c1": {"options": ["allow-leftovers"]}})
+    assert build(account(findings=[cited], sheetAnswers=gained), Fake())["findings"][0]["outcome"] == "left-for-owner"
     unsettled = {"answers": {"c1": {"answer": None}}}
     assert build(account(findings=[cited], sheetAnswers=unsettled), Fake())["findings"][0]["outcome"] == "left-for-owner"
 

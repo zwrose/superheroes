@@ -86,8 +86,22 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _answer_fits_sheet_schema(doc):
+    """True only when doc fits the sheet schema's own answer definition (theme/sheet.schema.json $defs.answer),
+    checked by sheet_prose's reader of that schema; any failure to read or check it is a misfit."""
+    try:
+        import json
+        import sheet_prose
+        with open(sheet_prose.SCHEMA, encoding="utf-8") as handle:
+            defs = json.load(handle)["$defs"]
+        return not sheet_prose._validate(defs["answer"], doc, "", defs)
+    except Exception:
+        return False
+
+
 def sheet_answer_decides(answers, ref, pr):
-    """True only when the cited card of this pull request holds a settled accept or option answer."""
+    """True only when the cited card of this pull request holds a settled aligned or option answer. An aligned
+    answer counts only while the published card (answers["cards"][card]["options"]) is known to offer no options."""
     if not isinstance(answers, dict) or not isinstance(ref, dict):
         return False
     if not (_is_int(pr) and _is_int(ref.get("pr")) and ref["pr"] == pr):
@@ -99,11 +113,18 @@ def sheet_answer_decides(answers, ref, pr):
     doc = cards.get(card)
     if not isinstance(doc, dict):
         return False
+    if not _answer_fits_sheet_schema(doc):
+        return False
     answer = doc.get("answer")
-    if answer == "accept":
-        return True
+    published = answers.get("cards")
+    published = published.get(card) if isinstance(published, dict) else None
+    offered = published.get("options") if isinstance(published, dict) else None
+    if answer == "aligned":
+        return offered == []
     option_id = doc.get("optionId")
-    return answer == "option" and isinstance(option_id, str) and option_id.strip() != ""
+    # an option answer counts only while the published card still offers that option
+    return answer == "option" and isinstance(option_id, str) and option_id.strip() != "" and isinstance(offered, list) \
+        and any((o.get("id") if isinstance(o, dict) else o) == option_id for o in offered)
 
 
 def _sheet_ref_text(ref):
@@ -171,7 +192,8 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
 
     Craft when the only consequence is code quality (it wins over any ruling); a named ruling
     when the latest rulings-log row cites a decision that is on record; otherwise left for the
-    owner, with open_reason and, when a cited decision did not resolve, why. Never reads severity.
+    owner, with open_reason and, when a cited decision did not resolve, why; that leftover keeps the citation,
+    so the record writer can promote it if the decision is on record by write time. Never reads severity.
     """
     outcomes = review_findings_schema.OUTCOMES
     craft, left_for_owner, ruled = outcomes[2], outcomes[3], outcomes[4]
@@ -187,7 +209,7 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
         why = "; the cited decision is not on record: " + text
-    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": None}
+    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
 
 
 def decision_sources(repo_root, base_ref, sheet_answers=None, pr=None):

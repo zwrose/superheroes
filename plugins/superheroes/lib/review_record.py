@@ -56,6 +56,7 @@ MAX_BODY_CHARS = 65000
 GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
+_RULING = rfs.OUTCOMES[-1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
@@ -671,13 +672,13 @@ def _recheck_decisions(findings, sources):
     for f in findings:
         by, outcome, reason = f.get("decidedBy"), f.get("outcome"), f.get("reason")
         new = None
-        if isinstance(by, dict) and outcome in ("ruling", _LEFT_FOR_OWNER):
+        if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             ok, text = finding_outcomes.on_record(by, sources())
-            if outcome == "ruling" and not ok:
+            if outcome == _RULING and not ok:
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
-                new, why = "ruling", text
+                new, why = _RULING, text
         if new is None:
             out.append(f)
             continue
@@ -1156,7 +1157,9 @@ def _part_bodies(text):
             body = _part_body(piece)
             if len(body) <= MAX_BODY_CHARS:
                 break
-            size -= len(body) - MAX_BODY_CHARS
+            # the fence grows with the piece's longest backtick run, so the overflow can exceed the piece:
+            # never step below half, so the size stays positive and the loop advances
+            size = max(size - (len(body) - MAX_BODY_CHARS), size // 2, 1)
         bodies.append(body)
         at += len(piece)
     return bodies
