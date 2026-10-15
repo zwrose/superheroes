@@ -238,8 +238,8 @@ def _audit_reviewers(state, rnd, audits, later=frozenset()):
     head = _panel_head(state, rnd, phase=round_phases.P_AUDITS)
     vendors = sorted({a["auditor"] for a in audits if isinstance(a, dict) and isinstance(a.get("auditor"), str) and a["auditor"]})
     unnamed = ["unknown"] if any(isinstance(a, dict) and not _audit_silent(a) and not a.get("auditor") for a in audits) else []
-    out = [_reviewer(state, rnd, f"auditor {v}", "audits ", True, {"vendor": v, "model": "unknown"},
-                     commit=head, phase=round_phases.P_AUDITS) for v in vendors + unnamed] if head else []
+    out = [_reviewer(state, rnd, f"auditor {v}", "audits ", bool(head), {"vendor": v, "model": "unknown"},
+                     commit=head, phase=round_phases.P_AUDITS) for v in vendors + unnamed]  # no recoverable head: stays a missing review
     silent = any(_audit_silent(a) and _audit_key(a) not in later for a in audits)
     return out + ([_reviewer(state, rnd, "auditor", "audits ", False, commit=head, phase=round_phases.P_AUDITS)] if silent else [])
 

@@ -453,3 +453,24 @@ def test_a_malformed_sheet_answers_or_base_ref_is_refused_naming_the_key(tmp_pat
     assert err.value.args == (rs.BAD_EXTRAS, key)
     out = rs.write_from_session(session, put_extras(tmp_path, extras(**over)), str(tmp_path), Fake().readers())
     assert out["ok"] is False and out["reason"] == rs.BAD_EXTRAS
+
+
+def test_a_rejection_by_the_selected_auditor_records_that_vendor_and_a_headless_audit_stays_a_missing_review(tmp_path):
+    target = {"id": "f", "identity": "f", "file": "x.py", "line": 1, "title": "t", "auditorVendor": "codex"}
+    results = [{"id": "f", "ruling": "not-discharged", "reason": "the fix leaves the defect"}]
+    # bites on: audits.apply_audit_results stamping the executing vendor only on clearing rulings
+    got = audits.apply_audit_results([target], results, expected_auditors={"f": "codex"}, collection_manifest={"f": "codex"})
+    assert got["audits"][0]["auditor"] == "codex"
+    stray = audits.apply_audit_results([target], results, expected_auditors={"f": "codex"}, collection_manifest={"f": "anthropic"})
+    assert "auditor" not in stray["audits"][0]
+    rows = _audit_rounds(tmp_path / "a", {2: got["audits"], 3: [{"id": "f", "identity": "f", "auditor": "codex", "ruling": "discharged"}]})
+    assert rows["audits auditor codex (round 2)"]["ran"] is True and "audits auditor unknown (round 2)" not in rows
+    # bites on: dropping an audit whose head cannot be recovered, which hides a missing review
+    tmp_path = tmp_path / "b"
+    tmp_path.mkdir()
+    session = _hand_session(tmp_path, {1: {"code-reviewer": "run"}})
+    state = json.load(open(os.path.join(session, "loop-state.json")))
+    state["rounds"]["2"] = {"audits": got["audits"]}
+    json.dump(state, open(os.path.join(session, "loop-state.json"), "w"))
+    rows = _names(rs.account_from_session(session, extras(), Fake().readers()))
+    assert rows["audits auditor codex (round 2)"]["ran"] is False

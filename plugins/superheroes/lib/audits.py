@@ -367,6 +367,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             continue
 
         if ruling == "not-discharged":
+            mv = collection_manifest.get(fid) if isinstance(collection_manifest, dict) else None
+            if isinstance(mv, str) and mv and mv == expected_auditor:
+                base["auditor"] = mv  # a completed rejection by the selected auditor is a reviewer that ran
             base.update(ruling="not-discharged",
                         reason=reason.strip() if has_reason else "not discharged")
             audits.append(base)
