@@ -2167,8 +2167,12 @@ def _record_merged_into(state, key, into_key):
     if live is not None:
         _apply_disposition_family(live, family)
     if key != into_key:
-        # The representative carries guidance given to a member before the merge.
-        state.setdefault("findingLineage", {})[key] = into_key
+        # The representative carries guidance given to a member before the merge; a later merge the
+        # other way flips the edge rather than closing a cycle.
+        lineage = state.setdefault("findingLineage", {})
+        if _lineage_root(lineage, into_key) == key:
+            lineage.pop(into_key, None)
+        lineage[key] = into_key
 
 
 # ---- terminal chokepoint + end-of-loop settle -------------------------------------------------
@@ -4499,6 +4503,21 @@ def _owner_named_row(row, effective):
     return isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS
 
 
+def _decision_seq(decision):
+    seq = decision.get("seq") if isinstance(decision, dict) else None
+    return seq if _is_plain_int(seq) else 0
+
+
+def _note_sent_under_decision(state, keys):
+    """Remember the decision each lifted finding was sent to a fixer under, by lineage root: a
+    blocker-free round starts a leg only for an owner-named row with a newer decision."""
+    effective = _live_ruling_by_key(state)
+    lineage = _lineage_map(state)
+    sent = state.setdefault("liftedAtSeq", {})
+    for key in keys:
+        sent[_lineage_root(lineage, key)] = _decision_seq(effective.get(key))
+
+
 def _lift_into_fix_batch(state, rows, *, owner_named_only=False):
     """``rows`` plus the lifted findings, recorded on the round. ``rows`` is the already-filtered
     offered set: an autonomous lift joins a fixer leg that is going out, it never starts one.
@@ -4509,11 +4528,16 @@ def _lift_into_fix_batch(state, rows, *, owner_named_only=False):
         return list(rows)
     if owner_named_only:
         effective = _live_ruling_by_key(state)
-        lifted = [row for row in lifted if _owner_named_row(row, effective)]
+        sent = state.get("liftedAtSeq") or {}
+        lineage = _lineage_map(state)
+        lifted = [row for row in lifted if _owner_named_row(row, effective)
+                  and _decision_seq(effective[_fix_batch_row_key(row)])
+                  > sent.get(_lineage_root(lineage, _fix_batch_row_key(row)), -1)]
     if not lifted:
         return list(rows)
     keys = [_fix_batch_row_key(row) for row in lifted]
     _record_round(state, "liftedIntoFixBatch", keys)
+    _note_sent_under_decision(state, keys)
     _decision(state, "fix-batch-lifted",
               "%d finding(s) with a real consequence or a guidance decision join this round's "
               "fix batch: %s" % (len(keys), ", ".join(keys)))
@@ -4632,6 +4656,7 @@ def _guidance_named_rows(state, named):
         _record_round(state, "liftedIntoFixBatch",
                       list(state["rounds"].get(str(state["round"]), {}).get(
                           "liftedIntoFixBatch") or []) + keys)
+        _note_sent_under_decision(state, keys)
         _decision(state, "fix-batch-lifted",
                   "guidance names %d finding(s) the fix batch did not hold: %s"
                   % (len(keys), ", ".join(keys)))

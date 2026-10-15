@@ -1176,3 +1176,44 @@ def test_guidance_given_before_a_merge_reaches_the_surviving_representative():
     RD._record_merged_into(state, "A", "B")
     live = RD._live_ruling_by_key(state).get("B")
     assert isinstance(live, dict) and live.get("guidance") == "use the helper"
+
+
+def test_guidance_already_sent_to_a_fixer_never_restarts_a_blocker_free_leg():
+    """axis: a blocker-free round starts a leg only for an owner-named row not yet sent under its
+    current decision; once sent it converges, and a newer ruling makes the row eligible again."""
+    state = RD.new_state()
+    RD._set_findings(state, [_unit_finding("M", 2, "Minor", kind="code-quality")])
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"))
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
+    state.update(step=None, _fixBatch=[], _fixQueue=[])
+    RD._after_findings_settled(state, state["config"])
+    assert state.get("terminal") == "converged" and not state.get("_fixBatch")
+    state.pop("terminal")
+    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="tidy it"),
+                  dict(findingKey="M", ruling="guidance", guidance="tidy it differently"))
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
+
+
+def test_a_later_merge_never_makes_the_lineage_a_cycle():
+    """axis: when synthesis later keeps the other finding as representative, the merge edge flips
+    instead of closing a cycle, so guidance still reaches the current representative."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="B", ruling="guidance", guidance="use the helper"))
+    RD._record_merged_into(state, "B", "A")
+    RD._record_merged_into(state, "A", "B")
+    assert RD._lineage_root(RD._lineage_map(state), "A") == RD._lineage_root(
+        RD._lineage_map(state), "B")
+    for key in ("A", "B"):
+        live = RD._live_ruling_by_key(state).get(key)
+        assert isinstance(live, dict) and live.get("guidance") == "use the helper"
+
+
+def test_a_skip_on_a_merged_member_does_not_reach_its_representative():
+    """axis: only guidance follows a merge edge; a skip stays on the finding it was given on."""
+    state = RD.new_state()
+    _unit_rulings(state, dict(findingKey="A", ruling="out-of-scope", reason="later"))
+    RD._record_merged_into(state, "A", "B")
+    assert RD._live_ruling_by_key(state).get("A", {}).get("ruling") == "out-of-scope"
+    assert "B" not in RD._live_ruling_by_key(state)
